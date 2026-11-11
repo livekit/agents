@@ -1,9 +1,4 @@
-"""
-Tests for Gemini 4 (argon) in the Google LLM plugin: thinking is configured with a level
-rather than a token budget, sampling parameters are dropped, the output ceiling is pinned
-because the surfaces disagree on a default, and a turn too large for one request is resumed
-through continuation tokens.
-"""
+"""Gemini model gates in the Google LLM plugin, and Gemini 4 request shaping and long decode."""
 
 from __future__ import annotations
 
@@ -21,6 +16,8 @@ from livekit.plugins.google.llm import (
     LONG_DECODE_MAX_REQUESTS,
     LONG_DECODE_MIN_OUTPUT_TOKENS,
     _ignores_sampling_params,
+    _is_gemini_3_flash_model,
+    _is_gemini_3_model,
     _is_gemini_4_model,
     _requires_thought_signatures,
     _supports_thinking_level,
@@ -126,12 +123,88 @@ class TestModelDetection:
     def test_is_gemini_4(self, model: str, expected: bool) -> None:
         assert _is_gemini_4_model(model) is expected
 
-    async def test_gemini_4_joins_the_gates_gemini_3_already_passed(self) -> None:
-        # thinking_budget returns 400 on argon, so it must take the level path
-        assert _supports_thinking_level(ARGON)
-        assert _requires_thought_signatures(ARGON)
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("gemini-3-pro-preview", True),
+            ("gemini-3-flash-preview", True),
+            ("gemini-3-flash", True),
+            ("gemini-3-pro", True),
+            ("GEMINI-3-FLASH", True),
+            ("gemini-2.5-flash", False),
+            ("gemini-2.5-pro-preview-05-06", False),
+            ("gemini-2.0-flash-001", False),
+            ("gemini-1.5-pro", False),
+            ("gemma-4-31b-it", False),
+            ("gpt-4", False),
+            ("claude-3", False),
+        ],
+    )
+    def test_is_gemini_3(self, model: str, expected: bool) -> None:
+        assert _is_gemini_3_model(model) == expected
 
-    async def test_only_gemini_4_drops_sampling_params(self) -> None:
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("gemini-3-flash-preview", True),
+            ("gemini-3-flash", True),
+            ("GEMINI-3-FLASH", True),
+            ("models/gemini-3-flash-preview", True),
+            ("gemini-3-pro-preview", False),
+            ("gemini-3-pro", False),
+            ("gemini-2.5-flash", False),
+            ("gemini-2.0-flash-001", False),
+        ],
+    )
+    def test_is_gemini_3_flash(self, model: str, expected: bool) -> None:
+        assert _is_gemini_3_flash_model(model) == expected
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            # thinking_budget returns 400 on argon, so it must take the level path
+            (ARGON, True),
+            ("gemini-3-pro-preview", True),
+            ("gemma-4-31b-it", True),
+            ("GEMMA-4-31B-IT", True),
+            ("models/gemma-4-31b-it", True),
+            ("publishers/google/models/gemma-4-26b-a4b-it", True),
+            ("gemini-2.5-flash", False),
+            ("gemma-3-27b-it", False),
+            ("gemma-40-31b-it", False),
+        ],
+    )
+    def test_supports_thinking_level(self, model: str, expected: bool) -> None:
+        assert _supports_thinking_level(model) == expected
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            (ARGON, True),
+            ("gemini-3-pro-preview", True),
+            ("gemini-3-flash-preview", True),
+            ("gemini-3-flash", True),
+            ("gemini-3-pro", True),
+            ("GEMINI-3-FLASH", True),
+            ("gemini-2.5-flash", True),
+            ("gemini-2.5-pro-preview-05-06", True),
+            ("gemini-2.5-flash-preview-04-17", True),
+            ("gemini-2.5-flash-preview-05-20", True),
+            ("GEMINI-2.5-FLASH", True),
+            ("gemini-2.0-flash-001", False),
+            ("gemini-2.0-flash-lite-preview-02-05", False),
+            ("gemini-2.0-pro-exp-02-05", False),
+            ("gemini-1.5-pro", False),
+            ("gemma-4-31b-it", False),
+            ("gpt-4", False),
+            ("claude-3", False),
+        ],
+    )
+    def test_requires_thought_signatures(self, model: str, expected: bool) -> None:
+        """Gemini 2.5+ needs thought signatures passed back in multi-turn function calling."""
+        assert _requires_thought_signatures(model) == expected
+
+    def test_only_gemini_4_drops_sampling_params(self) -> None:
         assert _ignores_sampling_params(ARGON)
         assert not _ignores_sampling_params("gemini-3-pro-preview")
 

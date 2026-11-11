@@ -1,22 +1,7 @@
-"""Regression tests for the ``_last_speaking_time`` anchor behind
-``transcription_delay``.
+"""The ``_last_speaking_time`` anchor behind ``transcription_delay``.
 
-``transcription_delay`` is (wall clock when the final transcript arrived) minus
-(wall clock when the user stopped talking). The second term is the
-``_last_speaking_time`` anchor: a VAD measures it against the local clock — the
-session's auto-loaded default VAD included — and it is the better estimate
-whenever it exists. The provider-derived value (``end_time + input_started_at``,
-clamped to ``now``) takes over when there is no VAD anchor to beat: no VAD at
-all, or a segment the VAD missed.
-
-``turn_detection="stt"`` adds one exception: the provider owns the turn boundary
-there, so a *real* provider timestamp replaces the VAD anchor, as does an explicit
-``END_OF_SPEECH``. A transcript with a missing ``end_time`` does not — the estimate
-would collapse to the transcript-arrival instant and report a ~0 delay.
-
-Every test below runs under both turn detection modes; where the two disagree,
-the expectation is spelled out per mode rather than duplicated into a second
-test.
+A VAD anchor wins whenever it exists; the provider timestamp takes over without one, and in
+``turn_detection="stt"`` a real provider timestamp or ``END_OF_SPEECH`` replaces it.
 """
 
 from __future__ import annotations
@@ -53,6 +38,7 @@ def _make_recognition(
     ar._vad = vad
     ar._turn_detection_mode = mode
     ar._user_turn_committed = False
+    ar._stt_turn_ended = False
     ar._vad_base_turn_detection = False
     ar._user_silence_ev = asyncio.Event()
     ar._speaking = False
@@ -90,6 +76,7 @@ def _make_recognition(
     ar._eou_wait_started_at_ns = None
     ar._eou_wait_rearms = 0
     ar._eou_wait_floor_ns = None
+    ar._eou_wait_not_committed = 0
     ar._eou_detection_span = None
     ar._stt_model = None
     ar._stt_provider = None
@@ -118,13 +105,7 @@ def _preflight_transcript(end_time: float) -> stt.SpeechEvent:
 async def test_vad_anchor_survives_a_transcript_without_timestamps(
     mode: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The reported regression: with the (default) VAD anchor discarded, a
-    provider that sends no timestamps anchors the turn at transcript arrival and
-    transcription_delay reports ~0 instead of the actual STT latency.
-
-    stt turn detection is no exception — there is no provider timestamp to
-    prefer, so the estimate would be nothing but ``now``.
-    """
+    """A transcript without timestamps keeps the VAD anchor rather than reporting ~0 delay."""
     now = time.time()
     # the transcript is stamped with the same clock the anchor was derived from
     monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
@@ -178,7 +159,7 @@ async def test_skewed_provider_timestamp(mode: str, monkeypatch: pytest.MonkeyPa
     if mode == "stt":
         # accepted: the provider owns the boundary here and a skewed timestamp is
         # indistinguishable from a good one, so the delay under-reports
-        assert ar._last_speaking_time == pytest.approx(now, abs=0.05)
+        assert now <= ar._last_speaking_time <= time.time()
     else:
         assert ar._last_speaking_time == vad_anchor
 
@@ -209,11 +190,7 @@ async def test_provider_timestamp_used_without_vad(mode: str) -> None:
 
 @both_modes
 async def test_preflight_transcript_follows_the_same_rules(mode: str) -> None:
-    """Preflight transcripts refresh the anchor on the same rules as finals.
-
-    They land *earlier* than the final, so a discarded anchor here corrupts the
-    turn before the final even arrives.
-    """
+    """Preflight transcripts refresh the anchor on the same rules as finals."""
     now = time.time()
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode=mode)
     ar._last_speaking_time = now - 0.6
@@ -244,11 +221,7 @@ async def test_stt_end_of_speech_anchors_on_a_real_provider_timestamp() -> None:
 
 
 async def test_stt_end_of_speech_prefers_the_provider_speech_end_time() -> None:
-    """``speech_end_time`` is the provider's wall-clock speech end — the same
-    quantity a VAD anchor holds (``StreamAdapter`` builds it as
-    ``now - silence_duration - inference_duration``). It outranks the word
-    timestamps, which only bound the last recognized word.
-    """
+    """``speech_end_time`` is a wall-clock speech end, so it outranks word timestamps."""
     now = time.time()
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
     ar._last_speaking_time = now - 0.6
@@ -268,11 +241,7 @@ async def test_stt_end_of_speech_prefers_the_provider_speech_end_time() -> None:
 
 
 async def test_stt_end_of_speech_clamps_a_future_speech_end_time() -> None:
-    """A provider clock running ahead would push the anchor past ``now``. The
-    metrics survive that (both delays clamp at 0), but ``extra_sleep`` does not:
-    it adds ``last_speaking_time - now`` to the endpointing delay, so an
-    unclamped anchor delays the turn commit by the skew.
-    """
+    """An anchor past ``now`` would delay the turn commit by the clock skew, so it is clamped."""
     now = time.time()
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
     ar._last_speaking_time = now - 0.6
@@ -291,14 +260,7 @@ async def test_stt_end_of_speech_clamps_a_future_speech_end_time() -> None:
 
 
 async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> None:
-    """END_OF_SPEECH commonly carries no alternatives, leaving arrival time as the
-    only estimate — but unlike an untimestamped transcript it is an *explicit*
-    endpointing signal, so the provider is taken at its word and the anchor moves.
-
-    Contrast ``test_vad_anchor_survives_a_transcript_without_timestamps[stt]``,
-    where the same missing ``end_time`` on a FINAL_TRANSCRIPT keeps the VAD anchor:
-    there the provider said nothing about the boundary, here it said "now".
-    """
+    """An untimed END_OF_SPEECH is an explicit boundary, so the anchor moves to its arrival."""
     now = time.time()
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
     ar._last_speaking_time = now - 0.6
@@ -310,13 +272,62 @@ async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> 
     assert ar._user_turn_committed is True
 
 
+@pytest.mark.parametrize("endpoint", ["wall", "word", "arrival"])
+@pytest.mark.parametrize("transcript", [_final_transcript, _preflight_transcript])
+async def test_untimed_transcript_preserves_the_current_stt_endpoint(
+    monkeypatch, endpoint, transcript
+):
+    now = 1010.0
+    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
+    ar = _make_recognition(vad=None, input_started_at=1000.0, mode="stt")
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+    eos = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+    expected = now
+    if endpoint == "wall":
+        eos.speech_end_time = expected = 1009.4
+    elif endpoint == "word":
+        eos.alternatives = [stt.SpeechData(language="en", text="", end_time=9.4)]
+        expected = 1009.4
+    await ar._on_stt_event(eos)
+
+    now = 1010.5
+    await ar._on_stt_event(transcript(end_time=0.0))
+    assert ar._last_speaking_time == pytest.approx(expected)
+    metrics = _compute_end_of_turn_metrics(
+        speech_start_time=1008.0,
+        last_speaking_time=ar._last_speaking_time,
+        last_final_transcript_time=ar._last_final_transcript_time,
+        now=now,
+    )
+    assert metrics.transcription_delay == pytest.approx(now - expected)
+
+    now = 1012.0
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+    now = 1012.5
+    await ar._on_stt_event(transcript(end_time=0.0))
+    assert ar._last_speaking_time == now
+
+
+@both_modes
+async def test_untimed_eos_does_not_inherit_an_earlier_segment_final(mode: str) -> None:
+    """A final can stabilize a segment while the utterance continues."""
+    now = time.time()
+    ar = _make_recognition(vad=None, input_started_at=now - 10.0, mode=mode)
+    await ar._on_stt_event(_final_transcript(end_time=9.0))
+    assert ar._last_speaking_time == pytest.approx(now - 1.0, rel=0, abs=1e-6)
+
+    before_eos = time.time()
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+
+    if mode == "stt":
+        assert before_eos <= ar._last_speaking_time <= time.time()
+    else:
+        assert ar._last_speaking_time == pytest.approx(now - 1.0, rel=0, abs=1e-6)
+
+
 @both_modes
 async def test_wired_vad_speaking_state_reaches_the_transcript_hooks(mode: str) -> None:
-    """``speaking is False`` on the transcript hooks is what arms the
-    false-interruption resume timer (see ``on_final_transcript`` in
-    agent_activity). ``self._vad`` is the resolved, wired VAD — the session's
-    auto-loaded default included — and it drives ``_speaking``, so its state is
-    reported rather than ``None`` (which silently disables the resume path)."""
+    """The wired VAD's speaking state reaches the transcript hooks, never ``None``."""
     now = time.time()
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode=mode)
     ar._speaking = False

@@ -48,7 +48,7 @@ class _RecordingWS:
             raise ConnectionResetError("Cannot write to closing transport")
         self.sent = data
 
-    async def receive(self) -> _FakeWSMsg:
+    async def receive(self, timeout: float | None = None) -> _FakeWSMsg:
         self.receive_calls += 1
         if self.receive_calls > 1:
             raise AssertionError("terminal response must not read another WebSocket frame")
@@ -393,7 +393,13 @@ class _ReplayResponsesWS:
         self._frames = frames
         self.attempts = 0
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(  # noqa: ANN201
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ):
         self.attempts += 1
 
         async def _replay():  # noqa: ANN202
@@ -477,7 +483,7 @@ async def test_incomplete_response_is_non_retryable_and_does_not_update_context(
         )
         assert attempts == 1
         assert llm_model._prev_resp_id == ""
-        assert llm_model._prev_chat_ctx is None
+        assert llm_model._prev_resp_items is None
     finally:
         await llm_model.aclose()
 
@@ -492,7 +498,13 @@ class _StallingResponsesWS:
         self._frames = frames
         self.attempts = 0
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(  # noqa: ANN201
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ):
         self.attempts += 1
         frames = self._frames
 
@@ -555,8 +567,16 @@ class _UsageResponsesWS:
 
     def __init__(self, frames: list[dict]) -> None:
         self._frames = frames
+        self.receive_timeouts: list[float | None] = []
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(  # noqa: ANN201
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ):
+        self.receive_timeouts.append(receive_timeout)
         frames = self._frames
 
         async def _replay():  # noqa: ANN202
@@ -567,6 +587,71 @@ class _UsageResponsesWS:
 
     async def aclose(self) -> None:
         pass
+
+
+async def test_plugin_ws_receive_uses_conn_timeout() -> None:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    transport = _UsageResponsesWS(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+                input_tokens_details={"cached_tokens": 0, "cache_write_tokens": 0},
+                output_tokens_details={"reasoning_tokens": 0},
+            ),
+        ]
+    )
+    llm_model._ws = transport  # type: ignore[assignment]
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=0.05)
+        ) as stream:
+            async for _ in stream:
+                pass
+    finally:
+        await llm_model.aclose()
+
+    assert transport.receive_timeouts == [0.05]
+
+
+async def test_plugin_ws_receive_uses_stream_idle_timeout() -> None:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key", stream_idle_timeout=2.0)
+    transport = _UsageResponsesWS(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+                input_tokens_details={"cached_tokens": 0, "cache_write_tokens": 0},
+                output_tokens_details={"reasoning_tokens": 0},
+            ),
+        ]
+    )
+    llm_model._ws = transport  # type: ignore[assignment]
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=0.05)
+        ) as stream:
+            async for _ in stream:
+                pass
+    finally:
+        await llm_model.aclose()
+
+    assert transport.receive_timeouts == [2.0]
+
+
+def test_plugin_rejects_zero_stream_idle_timeout() -> None:
+    with pytest.raises(ValueError, match="stream_idle_timeout"):
+        ResponsesLLM(model="gpt-4.1", api_key="test-key", stream_idle_timeout=0)
 
 
 async def _usage_from_frames(frames: list[dict]) -> agents_llm.CompletionUsage:
@@ -651,3 +736,129 @@ async def test_completed_response_without_cache_write_reports_zero() -> None:
     )
 
     assert usage.cache_creation_tokens == 0
+
+
+class _ScriptedResponsesWS:
+    """Answers each request with its own scripted response and records the payloads."""
+
+    _base_url = "https://api.openai.com/v1"
+
+    def __init__(self, outputs: list[list[dict]]) -> None:
+        self._outputs = outputs
+        self.payloads: list[dict] = []
+
+    def generate_response(  # noqa: ANN201
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ):
+        self.payloads.append(payload)
+        resp_id = f"resp_{len(self.payloads)}"
+        output = self._outputs[len(self.payloads) - 1]
+        response = {**_RESPONSE_CREATED["response"], "id": resp_id, "status": "completed"}
+        frames = [
+            {"type": "response.created", "sequence_number": 0, "response": response},
+            {
+                "type": "response.completed",
+                "sequence_number": 1,
+                "response": {**response, "output": output},
+            },
+        ]
+
+        async def _replay():  # noqa: ANN202
+            for frame in frames:
+                yield frame
+
+        return _replay()
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _output_message(text: str) -> dict:
+    return {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+
+
+def _output_function_call(call_id: str, name: str) -> dict:
+    return {
+        "type": "function_call",
+        "id": f"fc_{call_id}",
+        "call_id": call_id,
+        "name": name,
+        "arguments": '{"city": "Paris"}',
+        "status": "completed",
+    }
+
+
+async def test_chained_request_sends_only_items_after_previous_response() -> None:
+    ws = _ScriptedResponsesWS(
+        [
+            [
+                _output_function_call("call_1", "get_weather"),
+                _output_message("Let me check."),
+                _output_function_call("call_2", "get_time"),
+            ],
+            [_output_message("It's sunny and 3pm, and tomorrow looks fine.")],
+            [_output_message("You're welcome.")],
+            [],
+        ]
+    )
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    llm_model._ws = ws  # type: ignore[assignment]
+
+    async def _turn() -> None:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0, timeout=5.0)
+        ) as stream:
+            async for _ in stream:
+                pass
+
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Weather and time in Paris?")
+    await _turn()
+
+    # stored the way the agent stores a generation: one message, calls sharing its id, and
+    # each output right after its call
+    chat_ctx.add_message(role="assistant", content="Let me check.", id="item_a")
+    for i, (call_id, name, output) in enumerate(
+        [("call_1", "get_weather", "sunny"), ("call_2", "get_time", "3pm")]
+    ):
+        chat_ctx.items.append(
+            agents_llm.FunctionCall(
+                id=f"item_a/fnc_{i}", call_id=call_id, name=name, arguments='{"city": "Paris"}'
+            )
+        )
+        chat_ctx.items.append(
+            agents_llm.FunctionCallOutput(call_id=call_id, name=name, output=output, is_error=False)
+        )
+    await _turn()
+
+    # an interrupted reply differs from what the server holds
+    chat_ctx.add_message(role="assistant", content="It's sunny and 3pm,", interrupted=True)
+    chat_ctx.add_message(role="user", content="Thanks!")
+    await _turn()
+
+    chat_ctx.add_message(role="assistant", content="You're welcome.")
+    chat_ctx.add_message(role="user", content="Bye")
+    await _turn()
+    await llm_model.aclose()
+
+    first, tools, interrupted, last = ws.payloads
+    assert "previous_response_id" not in first
+    assert tools["previous_response_id"] == "resp_1"
+    assert tools["input"] == [
+        {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+        {"type": "function_call_output", "call_id": "call_2", "output": "3pm"},
+    ]
+    assert "previous_response_id" not in interrupted
+    assert len(interrupted["input"]) == 8
+    assert last["previous_response_id"] == "resp_3"
+    assert last["input"] == [{"role": "user", "content": "Bye"}]

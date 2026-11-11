@@ -1,15 +1,149 @@
 from __future__ import annotations
 
 import json
+import time
 import types
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from livekit import rtc
-from livekit.plugins.mistralai import STT
+from livekit.agents import stt, vad
+from livekit.plugins.mistralai import STT, stt as mistral_stt
 
 pytestmark = pytest.mark.plugin("mistralai")
+
+
+@pytest.mark.no_concurrent
+async def test_endpoint_preserves_vad_time_before_flush(monkeypatch):
+    now = 1010.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    stream = object.__new__(mistral_stt.SpeechStream)
+    stream._speaking = True
+    stream._audio_pending = True
+    stream._input_ch = SimpleNamespace(input_started_at=993.0, start_time_offset=7.0)
+    events = []
+    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+
+    async def vad_events():
+        yield vad.VADEvent(
+            type=vad.VADEventType.END_OF_SPEECH,
+            samples_index=0,
+            timestamp=1.0,
+            speech_duration=0.5,
+            silence_duration=0.3,
+            inference_duration=0.05,
+        )
+
+    async def flush():
+        nonlocal now
+        now += 2.0
+
+    await stream._vad_task(vad_events(), SimpleNamespace(flush_audio=flush))
+    assert events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    assert events[-1].speech_end_time == pytest.approx(1000.7)
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("blocked", ["none", "setup", "send"])
+async def test_local_vad_endpoint_uses_captured_audio_time(monkeypatch, blocked):
+    import asyncio
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+
+    from livekit.agents import APIConnectOptions
+
+    from .stt_reconnect import ReconnectClock, TimedVAD, wait_until
+
+    clock = ReconnectClock(monkeypatch)
+    setup_gate = asyncio.Event()
+    send_gate = asyncio.Event()
+    sending = asyncio.Event()
+
+    @asynccontextmanager
+    async def connection(**kwargs):
+        async with clock.ws_connect() as ws:
+            if blocked == "setup":
+                await setup_gate.wait()
+
+            async def send_audio(data):
+                if blocked == "send":
+                    sending.set()
+                    await send_gate.wait()
+                await ws.send_bytes(data)
+
+            yield SimpleNamespace(
+                send_audio=send_audio,
+                flush_audio=AsyncMock(),
+                request_id="test",
+                _websocket=ws,
+            )
+
+    provider = mistral_stt.STT(api_key="test-key", vad=TimedVAD())
+    stream = mistral_stt.SpeechStream(
+        stt=provider,
+        conn_options=APIConnectOptions(max_retry=0),
+        pool=SimpleNamespace(connection=connection),
+    )
+    stream.start_time_offset = 7.0
+    frame = rtc.AudioFrame.create(16000, 1, 8000)
+    try:
+        for index, captured_at in enumerate((1000.0, 1020.0)):
+            await wait_until(lambda index=index: len(clock.sockets) == index + 1)
+            clock.now = captured_at + 0.5
+            stream.push_frame(frame)
+            if blocked == "send":
+                await wait_until(sending.is_set)
+            clock.now = captured_at + 1.0
+            stream.push_frame(frame)
+            if blocked != "none":
+                clock.now += 9.0
+            setup_gate.set()
+            send_gate.set()
+            async with asyncio.timeout(2):
+                async for event in stream:
+                    if event.type == stt.SpeechEventType.END_OF_SPEECH:
+                        assert event.speech_end_time == pytest.approx(captured_at + 0.7)
+                        break
+                else:
+                    pytest.fail("missing endpoint")
+            if index == 0:
+                setup_gate = asyncio.Event()
+                send_gate = asyncio.Event()
+                sending = asyncio.Event()
+                stream._reconnect_event.set()
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from livekit.agents import APIConnectOptions
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+
+    @asynccontextmanager
+    async def connection(**kwargs):
+        async with clock.ws_connect() as ws:
+            yield SimpleNamespace(send_audio=ws.send_bytes, request_id="test", _websocket=ws)
+
+    provider = mistral_stt.STT(api_key="test-key")
+    stream = mistral_stt.SpeechStream(
+        stt=provider,
+        conn_options=APIConnectOptions(max_retry=0),
+        pool=SimpleNamespace(connection=connection),
+    )
+    try:
+        await clock.check(stream, stream._reconnect_event.set)
+    finally:
+        await stream.aclose()
+        await provider.aclose()
 
 
 def _frame(ms: int = 100, sample_rate: int = 16000) -> rtc.AudioFrame:
