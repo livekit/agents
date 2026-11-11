@@ -642,7 +642,8 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
     def _mute_input(self, identity: str, track_sid: str) -> None:
         """Take a participant out of the mix once what they already sent has played."""
         track_input = self._mixer.inputs.get(identity)
-        if track_input is not None and self._input_sids.get(identity) == track_sid:
+        # the input in the mix, which may be pushed audio from elsewhere rather than the track
+        if track_input is not None and track_input.track_sid == track_sid:
             track_input.ended = True
             self._data_ev.set()
 

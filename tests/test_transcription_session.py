@@ -757,6 +757,37 @@ async def test_unsubscribing_a_replaced_microphone_leaves_its_replacement() -> N
     assert sum(f.duration for f in stt.pushed) == pytest.approx(0.65, abs=0.045)
 
 
+async def test_muting_a_track_leaves_audio_pushed_from_elsewhere() -> None:
+    stt = _ScriptedSTT([])
+    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
+    await session.start()
+
+    async def silent() -> AsyncIterator[rtc.AudioFrame]:
+        await asyncio.Event().wait()
+        yield _tone(_BLOCK, _QUIET)[0]
+
+    session.add_input("alice", silent(), track_sid="TR_a")
+    alice = SimpleNamespace(identity="alice")
+    mic = SimpleNamespace(
+        sid="TR_a", kind=rtc.TrackKind.KIND_AUDIO, source=rtc.TrackSource.SOURCE_MICROPHONE
+    )
+    session._on_track_muted(alice, mic)  # type: ignore[arg-type]
+    await _drained(session)
+
+    # the app pushes alice's audio itself; the room track muting again doesn't touch it
+    frames = _track((0.06, _LOUD))
+    session.push_audio("alice", frames[0])
+    session.push_audio("alice", frames[1])
+    session._on_track_unmuted(alice, mic)  # type: ignore[arg-type]
+    session._on_track_muted(alice, mic)  # type: ignore[arg-type]
+    session.push_audio("alice", frames[2])
+    await asyncio.sleep(0.2)
+    await session.aclose()
+
+    # every pushed block reached the STT; the rest is the silence of waiting for more
+    assert sum(_rms(f) > _LOUD / 2 for f in stt.pushed) == 3
+
+
 async def test_session_mixes_what_a_departing_participant_already_sent() -> None:
     stt = _ScriptedSTT([])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
