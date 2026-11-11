@@ -80,7 +80,18 @@ class _ProcClient:
             pass
         finally:
             loop_monitor.stop_monitoring(loop)
-            loop.run_until_complete(loop.shutdown_default_executor())
+            # shut the loop down the way asyncio.run() does, a thread runner reuses the process
+            try:
+                pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                loop.run_until_complete(loop.shutdown_default_executor())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
 
     async def send(self, msg: Message) -> None:
         await asend_message(self._acch, msg)

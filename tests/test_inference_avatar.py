@@ -30,7 +30,7 @@ def _make_avatar(**kwargs: Any) -> AvatarSession:
     defaults: dict[str, Any] = {
         "model": "lemonslice",
         "api_key": "test-key",
-        "api_secret": "test-secret",
+        "api_secret": "test-secret-long-enough-for-hs256-signing",
         "base_url": "https://example.livekit.cloud/v1",
     }
     defaults.update(kwargs)
@@ -142,6 +142,12 @@ async def _gateway(handler, path: str = "/v1/avatar/sessions"):  # type: ignore[
         await server.close()
 
 
+@pytest.fixture
+def _instant_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    # the first retry otherwise waits a fixed 0.1s, whatever retry_interval says
+    monkeypatch.setattr(APIConnectOptions, "_interval_for_retry", lambda self, n: 0.0)
+
+
 async def _call_create(av: AvatarSession) -> dict[str, Any]:
     return await av._create_session(
         room_name="my-room",
@@ -211,6 +217,7 @@ async def test_avatar_id_from_model_string() -> None:
     assert "image_url" not in captured["body"]
 
 
+@pytest.mark.usefixtures("_instant_retries")
 async def test_idempotency_key_stable_across_retries() -> None:
     keys: list[str] = []
 
@@ -253,6 +260,7 @@ async def test_non_retryable_error_not_retried() -> None:
     assert calls["n"] == 1, "a 403 is non-retryable and must not be retried"
 
 
+@pytest.mark.usefixtures("_instant_retries")
 async def test_server_error_retried_then_raised() -> None:
     calls = {"n": 0}
 

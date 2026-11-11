@@ -23,6 +23,7 @@ import logging
 import multiprocessing as mp
 import os
 import tempfile
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
@@ -87,6 +88,7 @@ if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .simulation import SimulationContext
     from .voice.agent_session import AgentSession, RecordingOptions
+    from .voice.remote_session import SessionHost
     from .voice.report import SessionReport
 
 
@@ -164,6 +166,14 @@ class RunningJobInfo:
     """The server's assignment (room token) arrived."""
     launched_at: float = 0.0
     """A process was acquired from the pool and handed the job."""
+    # the same instants on the host's monotonic clock, for durations a wall clock step
+    # cannot skew; time.monotonic() is system-wide, so comparable across job processes
+    received_mono: float = 0.0
+    accepted_mono: float = 0.0
+    assigned_mono: float = 0.0
+    launched_mono: float = 0.0
+    launched_warm: bool = False
+    """An idle warmed process took the job; False when one had to be spawned."""
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -239,6 +249,9 @@ class JobContext:
         self._handlers_with_filter: list[logging.Handler] = []
 
         self._primary_agent_session: AgentSession | None = None
+        # owned by the job rather than the session, so on_simulation_end can still be
+        # asked for after the agent ends the call
+        self._session_host: SessionHost | None = None
 
         # Lazily built from the job's simulation attributes; None when not under a
         # simulation. _simulation_resolved guards the one-time parse.
@@ -258,6 +271,10 @@ class JobContext:
             self._session_directory = Path(self._tempdir.name)
 
         self._connected = False
+        # monotonic, the first connect() call: the end of the entrypoint's own work before it
+        self._connect_called_mono = 0.0
+        # monotonic, connect() returned: the SDK returns once the primary transport connected
+        self._connected_mono = 0.0
         self._lock = asyncio.Lock()
         self._tagger = Tagger()
         self._recording_initialized = False
@@ -464,6 +481,8 @@ class JobContext:
             events=session._recorded_events,
             chat_history=session.history.copy(),
             model_usage=session.usage.model_usage,
+            agent_name=self.job.agent_name,
+            tags=sorted(self._tagger.tags),
         )
 
         if recorder_io:
@@ -472,6 +491,9 @@ class JobContext:
             if recorder_io.recording_started_at:
                 sr.audio_recording_started_at = recorder_io.recording_started_at
                 sr.duration = sr.timestamp - sr.audio_recording_started_at
+
+        if sr.duration is None and sr.started_at:
+            sr.duration = sr.timestamp - sr.started_at
 
         return sr
 
@@ -691,6 +713,7 @@ class JobContext:
         async with self._lock:
             if self._connected:
                 return
+            self._connect_called_mono = self._connect_called_mono or time.monotonic()
 
             encryption = encryption or e2ee
             room_options = rtc.RoomOptions(
@@ -711,6 +734,7 @@ class JobContext:
                 job_ctx=self,
             ) as connect_span:
                 await self._room.connect(self._info.url, self._info.token, options=room_options)
+                self._connected_mono = time.monotonic()
                 connect_span.set_attributes(
                     {
                         trace_types.ATTR_PARTICIPANT_ID: self._room.local_participant.sid,

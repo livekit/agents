@@ -55,7 +55,8 @@ def encode_by_name(msg_type: type[_ProtoT], src: Any, **overrides: Any) -> _Prot
     """Build ``msg_type`` by copying same-named entries off ``src``, a mapping or an object.
 
     Only fields the proto declares are read, and a field ``src`` has nothing for is
-    left unset. Seconds-since-epoch floats fill Timestamp fields.
+    left unset. Seconds-since-epoch floats fill Timestamp fields, and map values are
+    stringified: every map these protos declare is ``map<string, string>``.
     """
 
     def lookup(name: str) -> Any:
@@ -70,6 +71,8 @@ def encode_by_name(msg_type: type[_ProtoT], src: Any, **overrides: Any) -> _Prot
             continue
         if fd.message_type is not None and fd.message_type.full_name == "google.protobuf.Timestamp":
             value = encode_timestamp(value)
+        elif fd.message_type is not None and fd.message_type.GetOptions().map_entry:
+            value = {k: str(v) for k, v in value.items()}
         kwargs[fd.name] = value
     return msg_type(**kwargs)
 
@@ -94,7 +97,6 @@ def encode_chat_item(item: ChatItem) -> _pb.ChatContext.ChatItem:
                 role=ROLES[item.role],
                 content=content,
                 metrics=encode_metrics(item.metrics),
-                extra={k: str(v) for k, v in item.extra.items()},
             )
         )
     elif item.type == "function_call":

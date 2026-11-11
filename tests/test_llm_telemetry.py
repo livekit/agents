@@ -11,6 +11,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.types import AttributeValue
 
 from livekit.agents import APIConnectionError, llm
 from livekit.agents.telemetry import (
@@ -516,3 +517,132 @@ async def test_llm_node_preserves_noncontent_attributes_when_capture_is_disabled
     assert trace_types.ATTR_GEN_AI_OUTPUT_MESSAGES not in spans[0].attributes
     assert trace_types.ATTR_GEN_AI_REQUEST_MODEL not in spans[0].attributes
     assert trace_types.ATTR_GEN_AI_PROVIDER_NAME not in spans[0].attributes
+
+
+@pytest.mark.parametrize("with_fallback", [False, True], ids=["direct", "fallback"])
+async def test_llm_node_sets_attributes_on_llm_request_span(
+    span_exporter: InMemorySpanExporter,
+    with_fallback: bool,
+) -> None:
+    model: llm.LLM = _UsageLLM()
+    if with_fallback:
+        model = llm.FallbackAdapter([model])
+    prompt_attributes: dict[str, AttributeValue] = {
+        "langfuse.observation.prompt.name": "support-agent",
+        "langfuse.observation.prompt.version": 3,
+    }
+
+    def make_node(annotate: bool) -> LLMNode:
+        async def node(
+            chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+        ) -> AsyncIterator[llm.ChatChunk]:
+            if annotate:
+                # repeated calls merge, the later value winning
+                gen_ai.set_llm_request_attributes(
+                    {"langfuse.observation.prompt.name": "draft-agent", "lk.test.extra": 1}
+                )
+                gen_ai.set_llm_request_attributes(prompt_attributes)
+            async with model.chat(chat_ctx=chat_ctx, tools=tools) as stream:
+                async for chunk in stream:
+                    yield chunk
+
+        return node
+
+    async with model:
+        # the second node sets nothing, and must not inherit the first node's attributes
+        for annotate in (True, False):
+            task, _ = generation.perform_llm_inference(
+                node=make_node(annotate),
+                chat_ctx=llm.ChatContext.empty(),
+                tool_ctx=llm.ToolContext([]),
+                model_settings=ModelSettings(),
+            )
+            assert await task is True
+
+    spans = span_exporter.get_finished_spans()
+    request_spans = [span for span in spans if span.name == "llm_request"]
+    assert len(request_spans) == 2
+    for key, value in prompt_attributes.items():
+        assert request_spans[0].attributes[key] == value
+    assert request_spans[0].attributes["lk.test.extra"] == 1
+    # only the provider call: not llm_node, its attempt span, or a fallback adapter span
+    annotated = [
+        span for span in spans if any(key in (span.attributes or {}) for key in prompt_attributes)
+    ]
+    assert annotated == [request_spans[0]]
+
+
+class _FlakyLLM(_UsageLLM):
+    """Fails its first request, then succeeds (a fallback's recovery probe)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests = 0
+
+    @property
+    def model(self) -> str:
+        return "flaky-model"
+
+    def chat(
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> llm.LLMStream:
+        self.requests += 1
+        return _FlakyLLMStream(
+            self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options
+        )
+
+
+class _FlakyLLMStream(_UsageLLMStream):
+    async def _run(self) -> None:
+        assert isinstance(self._llm, _FlakyLLM)
+        if self._llm.requests == 1:
+            raise APIConnectionError("provider unavailable")
+        await super()._run()
+
+
+async def test_fallback_recovery_probe_does_not_inherit_llm_request_attributes(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    primary = _FlakyLLM()
+    adapter = llm.FallbackAdapter([primary, _UsageLLM()])
+    prompt_attributes: dict[str, AttributeValue] = {"langfuse.observation.prompt.name": "agent"}
+
+    async def node(
+        chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+    ) -> AsyncIterator[llm.ChatChunk]:
+        gen_ai.set_llm_request_attributes(prompt_attributes)
+        async with adapter.chat(chat_ctx=chat_ctx, tools=tools) as stream:
+            async for chunk in stream:
+                yield chunk
+
+    async with adapter:
+        task, _ = generation.perform_llm_inference(
+            node=node,
+            chat_ctx=llm.ChatContext.empty(),
+            tool_ctx=llm.ToolContext([]),
+            model_settings=ModelSettings(),
+        )
+        assert await task is True
+        recovering_task = adapter._status[0].recovering_task
+        assert recovering_task is not None
+        await asyncio.wait_for(recovering_task, timeout=5)
+    assert primary.requests == 2
+
+    request_spans = [s for s in span_exporter.get_finished_spans() if s.name == "llm_request"]
+    [probe] = [s for s in request_spans if s.attributes.get(trace_types.ATTR_FALLBACK_RECOVERY)]
+    [failed, served] = [s for s in request_spans if s is not probe]
+    assert failed.attributes[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == "flaky-model"
+    assert served.attributes[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == "test-model"
+    # the turn's own attempts carry them; the background probe is never served
+    assert failed.attributes["langfuse.observation.prompt.name"] == "agent"
+    assert served.attributes["langfuse.observation.prompt.name"] == "agent"
+    assert "langfuse.observation.prompt.name" not in probe.attributes
+    # only the attributes are dropped: the probe still nests beside the turn's attempts
+    assert probe.parent is not None and probe.parent == served.parent

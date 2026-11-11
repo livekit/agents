@@ -212,6 +212,11 @@ class TTS(tts.TTS):
             instant_mode: Whether to use instant mode.
             audio_format: Output audio format (mp3, wav, or pcm).
         """
+        new_voice = voice if is_given(voice) else self._opts.voice
+        new_instant_mode = instant_mode if is_given(instant_mode) else self._opts.instant_mode
+        if new_instant_mode and new_voice is None:
+            raise ValueError("Hume TTS: instant_mode cannot be enabled without specifying a voice")
+
         if is_given(description):
             self._opts.description = description
         if is_given(speed):

@@ -24,7 +24,7 @@ from livekit.agents.llm.duplex_adapter import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import aio
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 SAMPLE_RATE = 24000
 FRAME_MS = 100
@@ -579,6 +579,55 @@ async def test_words_that_arrive_after_the_last_frame_still_join_their_burst(dup
     assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Hello there."
 
 
+async def test_words_held_past_their_sound_join_the_burst_when_the_stream_ends(duplex) -> None:
+    """Words held past their sound by a quiet first word still reach the transcript when the
+    stream ends mid-sentence."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    await _settle()
+    fake.say("Okay.", start_ms=2000, end_ms=2300)
+    fake.push(0.002, count=3)  # under the gate
+    fake.push(0.001, count=17)
+    await _settle()
+    fake.say(" Sending it.", start_ms=4000, end_ms=4600)
+    fake.push(0.3, count=6)  # its sound plays in full, but by the anchor it is 2 s away
+    await _settle()
+    assert len(generations) == 1
+    assert session._fragments
+
+    fake.audio_ch.close()
+    await _settle()
+
+    assert not session._fragments
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Okay. Sending it."
+
+
+async def test_words_held_past_a_closed_burst_go_out_as_text_when_the_stream_ends(duplex) -> None:
+    """The burst ended on silence with its last words still held, and the stream ends before the
+    unclaimed timeout: no audio is left to run that clock, so they are emitted now."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    await _settle()
+    fake.say("Okay.", start_ms=2000, end_ms=2300)
+    fake.push(0.002, count=3)  # under the gate
+    fake.push(0.001, count=17)
+    await _settle()
+    fake.say(" Sending it.", start_ms=4000, end_ms=4600)
+    fake.push(0.3, count=6)
+    fake.push(0.001, count=8)
+    await _settle()
+    assert len(generations) == 1
+    assert session._fragments
+
+    fake.audio_ch.close()
+    await _settle()
+
+    assert len(generations) == 2
+    assert not session._fragments
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Okay."
+    assert (await asyncio.wait_for(_read(generations[1]), timeout=1)) == (0, " Sending it.")
+
+
 async def test_words_for_sound_already_played_go_out_as_text_on_their_own(duplex) -> None:
     """The burst has ended by the time its last words arrive; by its anchor they sit on sound it
     already played, so they are handed over at once and never anchor the next utterance."""
@@ -669,6 +718,25 @@ async def test_a_function_call_joins_the_speech_in_flight(duplex) -> None:
     assert [c async for c in generations[0].function_stream] == [call]
 
 
+async def test_a_function_call_after_an_interrupt_gets_its_own_generation(duplex) -> None:
+    """The framework stops reading an interrupted generation, so a late call must not join it."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
+    assert len(generations) == 1 and session._burst is not None
+
+    session.interrupt()
+    fake.push(0.3, count=3)  # the model talks on, so the interrupted burst stays open
+    await _settle()
+    call = llm.FunctionCall(call_id="c1", name="save_outcome", arguments="{}")
+    fake.emit("function_call", call)
+    await _settle()
+
+    assert len(generations) == 2
+    assert [c async for c in generations[1].function_stream] == [call]
+
+
 async def test_a_function_call_alone_is_a_generation_over_at_once(duplex) -> None:
     """Nothing speech-shaped exists to end it, so it never waits on the gate."""
     fake, session, generations = duplex
@@ -742,6 +810,9 @@ async def test_the_callers_events_pass_through_and_leave_the_burst_alone(duplex)
 # the chat context
 
 
+# a burst stamps `opened_at` via a dataclass `default_factory=time.time`, which virtual time
+# cannot redirect, so the context order would compare real against virtual clocks
+@pytest.mark.real_time
 async def test_the_adapter_keeps_the_context_under_the_ids_the_framework_uses(duplex) -> None:
     """The framework names the user message after the transcription's item and the assistant
     message after the generation, so the adapter records both under those ids."""
@@ -909,6 +980,18 @@ async def test_a_lone_function_call_is_not_the_reply_the_speech_after_it_is() ->
     await session.aclose()
 
 
+async def test_a_lone_call_is_the_reply_when_the_ask_forces_it() -> None:
+    """Under a tool_choice naming the function, the call answers the ask; the speech needs its result."""
+    fake, session = _askable()
+    session.update_options(tool_choice={"type": "function", "function": {"name": "lookup"}})
+    fut = session.generate_reply()
+    fake.emit("function_call", llm.FunctionCall(call_id="c1", name="lookup", arguments="{}"))
+    generation = await asyncio.wait_for(fut, 1)
+    assert generation.user_initiated
+    assert [c.name async for c in generation.function_stream] == ["lookup"]
+    await session.aclose()
+
+
 async def test_late_words_are_not_the_reply_the_speech_after_them_is() -> None:
     """Words for sound the model already produced cannot answer a request made after it."""
     fake, session = _askable()
@@ -1041,9 +1124,12 @@ async def test_a_duplex_model_refuses_a_text_simulation(monkeypatch: pytest.Monk
         await session.start(Agent(instructions="hi"))
 
 
-async def test_a_duplex_model_starts_outside_a_text_simulation() -> None:
-    from livekit.agents.voice import Agent, AgentSession
-
-    session = AgentSession(llm=_FakeDuplexModel())
-    await session.start(Agent(instructions="hi"))
-    await session.aclose()
+async def test_delegation_passes_through_to_the_duplex_session(duplex) -> None:
+    fake, session, _ = duplex
+    created: list[llm.DelegationCreatedEvent] = []
+    session.on("delegation_created", created.append)
+    fake.emit("delegation_created", llm.DelegationCreatedEvent(id="d1"))
+    assert [d.id for d in created] == ["d1"]
+    assert session._delegation_detection is None
+    with pytest.raises(llm.RealtimeError):
+        session.delegate()  # the fake duplex session cannot delegate

@@ -73,7 +73,7 @@ def _mock_ctx() -> MagicMock:
 
 class TestToolProxyToolset:
     def test_tools_always_two(self):
-        """ToolProxyToolset always exposes exactly search_tools and call_tool."""
+        """ToolProxyToolset always exposes exactly tool_search and call_tool."""
         ts = ToolProxyToolset(
             id="proxy",
             tools=[WeatherToolset(), FinanceToolset()],
@@ -82,6 +82,22 @@ class TestToolProxyToolset:
         tool_names = [t.id for t in ts.tools]
         assert "tool_search" in tool_names
         assert "call_tool" in tool_names
+
+    def test_call_tool_description_names_exposed_search_tool(self):
+        """call_tool's description must reference a tool that is actually exposed.
+
+        The default description previously said ``search_tools``, but the
+        exposed search tool is named ``tool_search`` — a model following the
+        description would emit a call to a nonexistent tool.
+        """
+        ts = ToolProxyToolset(
+            id="proxy",
+            tools=[WeatherToolset(), FinanceToolset()],
+        )
+        description = ts._call_tool.info.raw_schema["description"]
+
+        assert ts._search_tool.id in description
+        assert "search_tools" not in description
 
     async def test_tools_constant_after_search(self):
         """Tool list stays constant even after search — no dynamic loading."""
@@ -96,7 +112,7 @@ class TestToolProxyToolset:
         assert len(ts.tools) == 2  # still just search + call
 
     async def test_search_returns_full_schemas(self):
-        """search_tools returns tool schemas with full JSON schema for parameters."""
+        """tool_search returns tool schemas with full JSON schema for parameters."""
         ts = ToolProxyToolset(
             id="proxy",
             tools=[WeatherToolset(), FinanceToolset()],
@@ -122,7 +138,7 @@ class TestToolProxyToolset:
         assert params["properties"]["city"]["type"] == "string"
 
     async def test_search_returns_raw_tool_schema(self):
-        """search_tools returns full raw_schema parameters for RawFunctionTool."""
+        """tool_search returns full raw_schema parameters for RawFunctionTool."""
         ts = ToolProxyToolset(
             id="proxy",
             tools=[raw_search],
@@ -208,6 +224,20 @@ class TestToolProxyToolset:
 
         with pytest.raises(ToolError, match="unknown tool"):
             await ts._handle_call(_mock_ctx(), {"name": "nonexistent_tool", "parameters": {}})
+
+    async def test_unknown_tool_error_names_exposed_search_tool(self):
+        """The unknown-tool error must reference the exposed search tool."""
+        ts = ToolProxyToolset(
+            id="proxy",
+            tools=[WeatherToolset()],
+        )
+        await ts.setup()
+
+        with pytest.raises(ToolError, match="unknown tool") as exc_info:
+            await ts._handle_call(_mock_ctx(), {"name": "nonexistent_tool", "parameters": {}})
+
+        assert ts._search_tool.id in exc_info.value.message
+        assert "search_tools" not in exc_info.value.message
 
     async def test_call_missing_required_arg_raises_tool_error(self, capsys):
         """Missing required argument produces a detailed ToolError for the LLM."""

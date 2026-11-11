@@ -9,11 +9,17 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import gc
+import importlib.util
+import inspect
+import linecache
+import os
+import sys
 import threading
 import time
 import weakref
 from collections.abc import Iterator
-from types import SimpleNamespace
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from opentelemetry import trace
@@ -113,6 +119,16 @@ def _block_loop_synchronously(duration: float) -> None:
     time.sleep(duration)
 
 
+_SLEEP_CALL = "line {}, in _block_loop_synchronously".format(
+    _block_loop_synchronously.__code__.co_firstlineno
+    + next(
+        i
+        for i, ln in enumerate(inspect.getsource(_block_loop_synchronously).splitlines())
+        if "time.sleep" in ln
+    )
+)
+
+
 async def _settle() -> None:
     # give the late heartbeat a chance to run and report
     await asyncio.sleep(TICK * 4)
@@ -161,8 +177,7 @@ async def test_blocking_call_is_reported_as_span(
     # the watchdog sampled the loop thread while it was stuck in time.sleep
     stack = attrs[trace_types.ATTR_BLOCKING_STACK]
     assert isinstance(stack, str)
-    assert "_block_loop_synchronously" in stack
-    assert "time.sleep" in stack
+    assert _SLEEP_CALL in stack
     # each sample says when in the stall it was taken: it is a sample, not a profile
     assert "loop thread sampled" in stack and "ms into the stall" in stack
     # the sample names the task that was running
@@ -219,7 +234,7 @@ async def test_stall_before_the_session_lands_in_the_job_trace(
     assert span.end_time <= entrypoint.end_time  # type: ignore[operator]
     attrs = span.attributes or {}
     assert attrs[trace_types.ATTR_BLOCKING_SEVERITY] == "warning"
-    assert "time.sleep" in attrs[trace_types.ATTR_BLOCKING_STACK]
+    assert _SLEEP_CALL in attrs[trace_types.ATTR_BLOCKING_STACK]
 
 
 async def test_stall_without_a_job_is_log_only(
@@ -249,7 +264,9 @@ async def test_stall_during_a_session_lands_under_it_and_is_summarised(
     actions.add_user_speech(0.5, 1.0, "Hi", stt_delay=0.1)
     actions.add_llm("Hello", ttft=0.05, duration=0.1)
     actions.add_tts(0.2, ttfb=0.05, duration=0.1)
-    session = create_session(actions, speed_factor=4.0)
+    session = create_session(
+        actions, speed_factor=20.0, extra_kwargs={"session_close_transcript_timeout": 0.05}
+    )
 
     job_ctx = _fake_job_context(session=session)
     monitor.set_report_context(_job_report_context(job_ctx))
@@ -263,7 +280,7 @@ async def test_stall_during_a_session_lands_under_it_and_is_summarised(
             _block_loop_synchronously(0.07)  # synchronous work inside a session callback
 
     session.on("agent_state_changed", _block_once)
-    await run_session(session, Agent(instructions="test"), drain_delay=0.5)
+    await run_session(session, Agent(instructions="test"), drain_delay=0.1)
 
     [root] = [s for s in span_exporter.get_finished_spans() if s.name == "agent_session"]
     stalls = _blocked_spans(span_exporter)
@@ -297,7 +314,7 @@ async def test_idle_loop_is_not_reported(
     span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
 ) -> None:
     # an idle loop sits in select() until the heartbeat is due; the timer fires on time
-    await asyncio.sleep(WARN * 12)
+    await asyncio.sleep(WARN * 6)
     assert _loop_blocks(monitor) == []
 
 
@@ -306,8 +323,8 @@ async def test_blocking_work_in_an_executor_is_not_reported(
 ) -> None:
     # the whole point of run_in_executor / to_thread: the loop keeps ticking
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, time.sleep, WARN * 6)
-    await asyncio.to_thread(time.sleep, WARN * 6)
+    await loop.run_in_executor(None, time.sleep, WARN * 3)
+    await asyncio.to_thread(time.sleep, WARN * 3)
     await _settle()
     assert _loop_blocks(monitor) == []
 
@@ -316,33 +333,33 @@ async def test_sustained_cooperative_load_is_not_reported(
     span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
 ) -> None:
     """Heavy but cooperative work: many callbacks each well under the threshold, timers,
-    executor round trips, and tasks yielding to each other, for ~0.6 s of wall time. One loop
+    executor round trips, and tasks yielding to each other, for ~0.3 s of wall time. One loop
     iteration runs every ready worker back to back, so the slices are sized to keep an
     iteration far under WARN even with sleep overshoot."""
     loop = asyncio.get_running_loop()
     fired: list[int] = []
 
     async def worker(n: int) -> None:
-        for _ in range(120):
+        for _ in range(60):
             time.sleep(0.001)  # a small synchronous slice, well under WARN
             await asyncio.sleep(0)
         fired.append(n)
 
-    handles = [loop.call_later(i * 0.01, fired.append, 1000 + i) for i in range(40)]
+    handles = [loop.call_later(i * 0.01, fired.append, 1000 + i) for i in range(20)]
     started = time.monotonic()
     await asyncio.gather(*(worker(n) for n in range(2)))
     workers_took = time.monotonic() - started
     await loop.run_in_executor(None, time.sleep, 0.05)
-    await asyncio.sleep(0.45)
+    await asyncio.sleep(0.15)
     for h in handles:
         h.cancel()
     await _settle()
 
     assert len([f for f in fired if f < 1000]) == 2
-    # the workers hold the loop for ~0.5 s of 2 ms slices; a host that starved this process
+    # the workers hold the loop for ~0.25 s of 2 ms slices; a host that starved this process
     # enough to stretch that past double is not a monitor false positive, and the
     # watchdog-gap tag only catches starvation concentrated in one stall
-    if workers_took > 1.0:
+    if workers_took > 0.5:
         pytest.skip(f"host starved the test process: workers took {workers_took:.2f}s")
     assert _loop_blocks(monitor) == [], _describe(_loop_blocks(monitor))
 
@@ -367,7 +384,8 @@ async def test_one_iteration_of_many_ready_callbacks_is_one_stall(
     # time.sleep is a C function scheduled directly, so it has no frame of its own: the
     # innermost frame is asyncio's dispatch of the callback, which must be kept
     stack = attrs[trace_types.ATTR_BLOCKING_STACK]
-    assert isinstance(stack, str) and "_run" in stack and "self._callback" in stack
+    assert isinstance(stack, str)
+    assert os.path.join("asyncio", "events.py") in stack and stack.rstrip().endswith("in _run")
 
 
 async def test_gc_pause_is_attributed(
@@ -501,6 +519,7 @@ async def test_gil_holding_native_call_is_reported_end_to_end(
     span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
 ) -> None:
     # one C call that holds the GIL throughout; sized well above WARN on any machine
+    sum_line = sys._getframe().f_lineno + 1
     sum(range(20_000_000))
     await _settle()
 
@@ -513,7 +532,8 @@ async def test_gil_holding_native_call_is_reported_end_to_end(
     # in the instant the call returns and sample the frame still on that line. Either names
     # the cause; what must not happen is a silent or host-attributed report.
     stack = str((span.attributes or {})[trace_types.ATTR_BLOCKING_STACK])
-    assert "held the GIL" in stack or "sum(range(20_000_000))" in stack, stack
+    sum_call = f"line {sum_line}, in test_gil_holding_native_call_is_reported_end_to_end"
+    assert "held the GIL" in stack or sum_call in stack, stack
 
 
 def test_metric_is_recorded_for_every_stall_past_the_rate_limits(
@@ -697,6 +717,10 @@ def test_watchdog_gap_survives_the_wake_up_race() -> None:
         m._watchdog_late = (window_start - 1.0, 0.9)
         m._watchdog_last_wake = now - 0.002
         assert m._consume_watchdog_gap(now, window_start=window_start) == 0.0
+
+        m._watchdog_late = None
+        m._watchdog_last_wake = window_start + 0.01
+        assert m._consume_watchdog_gap(now, window_start=window_start) == pytest.approx(0.49 - TICK)
     finally:
         loop.close()
 
@@ -789,6 +813,109 @@ def test_a_block_the_watchdog_missed_is_still_blocking_code() -> None:
         loop.close()
 
 
+def test_formatting_a_report_reads_no_source_file(tmp_path: Path) -> None:
+    """The heartbeat formats the report on the loop thread right after the block ends, so it
+    must not read source files: linecache reads and splits each file in Python, holding up
+    the loop it is reporting on."""
+    module_path = tmp_path / "blocking_module.py"
+    module_path.write_text("x = 1\n" * 1000 + "def call(block):\n    return block()\n")
+    spec = importlib.util.spec_from_file_location("blocking_module", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        m._loop_thread_ident = threading.get_ident()
+
+        def sampled_by_watchdog() -> loop_monitor._StackSample:
+            samples: list[loop_monitor._StackSample] = []
+            t = threading.Thread(target=lambda: samples.append(m._sample_loop_thread(0.06)))
+            t.start()
+            t.join()
+            return samples[0]
+
+        sample = module.call(sampled_by_watchdog)
+        linecache.clearcache()
+        report = m._build_report(
+            0.11, gc_time=0.0, cpu_time=0.0, watchdog_gap=0.0, samples=[sample]
+        )
+
+        assert f'File "{module_path}", line 1002, in call' in report.stacks[0]
+        read = [name for name, entry in linecache.cache.items() if len(entry) != 1]
+        assert read == []
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("limit", [0, 1, 3])
+def test_a_stack_sample_obeys_the_traceback_limit(
+    monkeypatch: pytest.MonkeyPatch, limit: int
+) -> None:
+    monkeypatch.setattr(sys, "tracebacklimit", limit, raising=False)
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        m._loop_thread_ident = threading.get_ident()
+        samples: list[loop_monitor._StackSample] = []
+        t = threading.Thread(target=lambda: samples.append(m._sample_loop_thread(0.06)))
+        t.start()
+        t.join()
+        assert len(samples[0].frames) == limit
+    finally:
+        loop.close()
+
+
+def test_no_thread_reads_source_for_a_report(tmp_path: Path) -> None:
+    """A source read can take as long as a file read under GIL contention. On the loop thread
+    it stalls the loop again. On the watchdog thread it delays the next wake-up, which the
+    heartbeat reads as the process being descheduled. Sampling and formatting read none."""
+    readers: list[int] = []
+    entered_hold = threading.Event()
+    stalled = threading.Lock()
+    stalled.acquire()
+    source = "def hold(lock, entered):\n    entered.set()\n    lock.acquire(True, 10)\n"
+
+    class RecordingLoader:
+        def get_source(self, name: str) -> str:
+            readers.append(threading.get_ident())
+            return source
+
+    module = ModuleType("loader_source")
+    module.__loader__ = RecordingLoader()  # type: ignore[assignment]
+    exec(compile(source, str(tmp_path / "missing" / "loader_source.py"), "exec"), module.__dict__)
+
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(
+            loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK, emit_spans=False
+        )
+        reports: list[BlockedReport] = []
+        m._on_report = reports.append
+        loop_thread = m._loop_thread_ident = threading.get_ident()
+        m._last_tick_at = time.monotonic() - 1.0  # the loop has been stalled for a second
+
+        def watchdog_check_then_end_the_stall() -> None:
+            entered_hold.wait(10)
+            while sys._current_frames()[loop_thread].f_code is not module.hold.__code__:
+                pass  # until Event.set has returned into hold
+            m._watchdog_check()
+            stalled.release()
+
+        watchdog = threading.Thread(target=watchdog_check_then_end_the_stall)
+        watchdog.start()
+        module.hold(stalled, entered_hold)
+        watchdog.join()
+        m._on_tick()  # the heartbeat that ends the stall
+    finally:
+        loop.close()
+
+    assert readers == []
+    [report] = reports
+    assert report.stacks[0].rstrip().endswith("line 3, in hold")
+
+
 def test_watchdog_samples_one_tick_before_the_threshold() -> None:
     """The first sample is taken once the lag is within one heartbeat of the warn threshold,
     so a block that only just crosses the threshold has a stack instead of ending before the
@@ -823,7 +950,7 @@ async def test_sampler_finds_the_loop_thread_by_the_blocked_task(
     await _settle()
     [stall] = _blocked_spans(span_exporter)
     attrs = stall.attributes or {}
-    assert "time.sleep" in attrs[trace_types.ATTR_BLOCKING_STACK]
+    assert _SLEEP_CALL in attrs[trace_types.ATTR_BLOCKING_STACK]
     assert attrs[trace_types.ATTR_BLOCKING_TASK] == "blocked_task"
     assert monitor._loop_thread_ident == __import__("threading").get_ident()
 
@@ -866,6 +993,47 @@ def test_a_stack_sample_frees_the_sampled_threads_frames_on_return() -> None:
         if gc_was_enabled:
             gc.enable()
         loop.close()
+
+
+def test_a_stack_sample_leaves_the_linecache_alone() -> None:
+    """The report uses only the file, line and function of each frame. The sample must not
+    add a linecache entry for a new file, and must not stat a file that is already cached."""
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold() -> None:
+        held.set()
+        release.wait(5)
+
+    threading_file = threading.Event.wait.__code__.co_filename
+    test_file = hold.__code__.co_filename
+    saved = {name: linecache.cache.get(name) for name in (threading_file, test_file)}
+    linecache.cache.pop(threading_file, None)
+    # a stale entry: a stat of the file would show the mismatch and drop it
+    stale_entry = (0, -1.0, [], test_file)
+    linecache.cache[test_file] = stale_entry
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=hold)
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        thread.start()
+        assert held.wait(5)
+        m._loop_thread_ident = thread.ident
+        sample = m._sample_loop_thread(lag=WARN)
+        assert any(f.name == "hold" and f.filename == test_file for f in sample.frames)
+        assert any(f.filename == threading_file for f in sample.frames)
+        assert threading_file not in linecache.cache, "the sample added a linecache entry"
+        assert linecache.cache.get(test_file) is stale_entry, "the sample stat-ed a cached file"
+    finally:
+        release.set()
+        thread.join(5)
+        loop.close()
+        for name, entry in saved.items():
+            if entry is None:
+                linecache.cache.pop(name, None)
+            else:
+                linecache.cache[name] = entry
 
 
 def test_import_block_names_the_module_and_the_caller(

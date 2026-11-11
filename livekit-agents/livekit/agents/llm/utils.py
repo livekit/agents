@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import bisect
 import copy
 import inspect
 import json
@@ -43,9 +44,14 @@ THINK_TAG_END = "</think>"
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
     """
-    Standard dynamic-programming LCS to get the common subsequence
-    of IDs (in order) that appear in both old_ids and new_ids.
+    Get the longest common subsequence of IDs (in order) that appear in both
+    old_ids and new_ids.
     """
+    lcs_ids = _compute_unique_ids_lcs(old_ids, new_ids)
+    if lcs_ids is not None:
+        return lcs_ids
+
+    # Standard dynamic-programming LCS, O(n*m), for IDs that repeat.
     n, m = len(old_ids), len(new_ids)
     dp = [[0] * (m + 1) for _ in range(n + 1)]
 
@@ -70,6 +76,42 @@ def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
         else:
             j -= 1
 
+    return list(reversed(lcs_ids))
+
+
+def _compute_unique_ids_lcs(old_ids: list[str], new_ids: list[str]) -> list[str] | None:
+    """
+    LCS in O(n log n) when neither list repeats an ID, else None.
+
+    Without repeats, the LCS is the longest increasing subsequence of the
+    positions in new_ids, taken in the order of old_ids.
+    """
+    new_index = {item_id: i for i, item_id in enumerate(new_ids)}
+    if len(new_index) != len(new_ids) or len(set(old_ids)) != len(old_ids):
+        return None
+
+    positions = [new_index[item_id] for item_id in old_ids if item_id in new_index]
+    # tails[k] is the smallest last position of an increasing run of length
+    # k + 1, and tail_at[k] is the index in `positions` that ends that run
+    tails: list[int] = []
+    tail_at: list[int] = []
+    previous = [-1] * len(positions)
+    for at, position in enumerate(positions):
+        k = bisect.bisect_left(tails, position)
+        if k:
+            previous[at] = tail_at[k - 1]
+        if k == len(tails):
+            tails.append(position)
+            tail_at.append(at)
+        else:
+            tails[k] = position
+            tail_at[k] = at
+
+    lcs_ids: list[str] = []
+    at = tail_at[-1] if tail_at else -1
+    while at != -1:
+        lcs_ids.append(new_ids[positions[at]])
+        at = previous[at]
     return list(reversed(lcs_ids))
 
 
@@ -612,6 +654,19 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
     return args_dict
 
 
+def _repaired_arguments_json(json_arguments: str, args_dict: dict[str, Any]) -> str | None:
+    """Return valid JSON for ``args_dict`` when parsing ``json_arguments`` needed a repair.
+
+    Valid arguments return None, so history keeps them exactly as the model wrote them.
+    """
+    try:
+        if from_json(json_arguments) == args_dict:
+            return None
+    except ValueError:
+        pass
+    return json.dumps(args_dict, default=str)
+
+
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
@@ -646,10 +701,10 @@ def prepare_function_arguments(
 
         # write canonical BEFORE validation so a downstream validation failure
         # still leaves valid JSON in chat history
-        if fnc_call is not None:
-            canonical = json.dumps(args_dict, default=str)
-            if canonical != json_arguments:
-                fnc_call.arguments = canonical
+        if fnc_call is not None and (
+            repaired := _repaired_arguments_json(json_arguments, args_dict)
+        ):
+            fnc_call.arguments = repaired
 
     # phase 2: validate + bind
     try:
@@ -945,6 +1000,7 @@ def make_function_call_output(
                 call_id=fnc_call.call_id,
                 output="the tool returned an invalid output",
                 is_error=True,
+                reply_required=reply_required,
             ),
             raw_output=raw_output,
             raw_exception=None,
