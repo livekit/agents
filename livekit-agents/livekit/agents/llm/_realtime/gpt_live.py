@@ -299,6 +299,14 @@ class GPTLiveModel(llm.DuplexModel):
                     "Responses deployment in the same resource; or use delegation='client'"
                 )
 
+        recovery = _resolve_delegation_detection_options(delegation_recovery)
+        # a detector the model made is closed with it; one passed in belongs to the caller
+        self._owned_detector = (
+            recovery["detector"]
+            if recovery is not None
+            and not (isinstance(delegation_recovery, dict) and "detector" in delegation_recovery)
+            else None
+        )
         self._opts = _LiveOptions(
             model=model,
             voice=voice,
@@ -306,7 +314,7 @@ class GPTLiveModel(llm.DuplexModel):
             responses=responses,
             decisions=decisions,
             triggers=triggers if is_given(triggers) else None,
-            delegation_recovery=_resolve_delegation_detection_options(delegation_recovery),
+            delegation_recovery=recovery,
             service_tier=service_tier if is_given(service_tier) else None,
             api_key=api_key,
             base_url=resolved_base_url,
@@ -431,6 +439,8 @@ class GPTLiveModel(llm.DuplexModel):
     async def aclose(self) -> None:
         if self._http_session_owned and self._http_session:
             await self._http_session.close()
+        if self._owned_detector is not None:
+            await self._owned_detector.aclose()
 
 
 class GPTLiveSession(

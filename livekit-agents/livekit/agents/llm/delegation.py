@@ -21,6 +21,7 @@ from .tool_context import (
 
 if TYPE_CHECKING:
     from ..inference.llm import LLMModels
+    from ..metrics import AgentMetrics
 
 DEFAULT_DETECTOR_MODEL = "google/gemma-4-31b-it"
 
@@ -101,18 +102,28 @@ class DelegationDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             max_items: How many of the newest conversation items the model reads.
         """
         super().__init__()
+        # a model made from a name is the detector's own, so aclose closes it
+        self._owned_model: LLM | None = None
         if isinstance(model, str):
             from ..inference import LLM as InferenceLLM
 
-            model = InferenceLLM(model)
+            model = self._owned_model = InferenceLLM(model)
         self._model = model
-        self._model.on("metrics_collected", lambda m: self.emit("metrics_collected", m))
+        self._model.on("metrics_collected", self._forward_metrics)
         self._prompt = prompt
         self._max_items = max_items
 
     @property
     def model(self) -> LLM | DecisionModel:
         return self._model
+
+    async def aclose(self) -> None:
+        self._model.off("metrics_collected", self._forward_metrics)
+        if self._owned_model is not None:
+            await self._owned_model.aclose()
+
+    def _forward_metrics(self, metrics: AgentMetrics) -> None:
+        self.emit("metrics_collected", metrics)
 
     async def detect(self, check: DelegationCheck) -> bool | str:
         """``False`` leaves the turn, ``True`` delegates it, and a string delegates it with that

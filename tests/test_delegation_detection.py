@@ -205,6 +205,32 @@ async def test_the_caller_speaking_holds_the_judgment_without_dropping_it() -> N
     assert len(checks) == 1
 
 
+_USAGE = LLMMetrics(
+    label="detector",
+    request_id="r1",
+    timestamp=0.0,
+    duration=0.0,
+    ttft=0.0,
+    cancelled=False,
+    completion_tokens=1,
+    prompt_tokens=2,
+    prompt_cached_tokens=0,
+    total_tokens=3,
+    tokens_per_second=0.0,
+)
+
+
+async def test_a_closed_detector_stops_forwarding_its_models_usage() -> None:
+    model = FakeLLM()
+    detector = DelegationDetector(model)
+    received: list[object] = []
+    detector.on("metrics_collected", received.append)
+    model.emit("metrics_collected", _USAGE)
+    await detector.aclose()
+    model.emit("metrics_collected", _USAGE)
+    assert received == [_USAGE]
+
+
 async def test_each_detector_used_reports_its_usage_until_the_session_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -212,19 +238,6 @@ async def test_each_detector_used_reports_its_usage_until_the_session_closes(
     first, second = FakeLLM(), FakeLLM()
     detection = {"detector": DelegationDetector(first), "grace_period": 0}
     monkeypatch.setattr(FakeRealtimeSession, "_delegation_detection", property(lambda _: detection))
-    usage = LLMMetrics(
-        label="detector",
-        request_id="r1",
-        timestamp=0.0,
-        duration=0.0,
-        ttft=0.0,
-        cancelled=False,
-        completion_tokens=1,
-        prompt_tokens=2,
-        prompt_cached_tokens=0,
-        total_tokens=3,
-        tokens_per_second=0.0,
-    )
     received: list[object] = []
     async with AgentSession(llm=FakeRealtimeModel()) as session:
         session.on("metrics_collected", lambda ev: received.append(ev.metrics))
@@ -241,8 +254,8 @@ async def test_each_detector_used_reports_its_usage_until_the_session_closes(
             )
             await activity._delegation_check_atask
             received.clear()
-            detector_llm.emit("metrics_collected", usage)
-            assert received == [usage]
-    first.emit("metrics_collected", usage)  # detached once the session closes
-    second.emit("metrics_collected", usage)
-    assert received == [usage]
+            detector_llm.emit("metrics_collected", _USAGE)
+            assert received == [_USAGE]
+    first.emit("metrics_collected", _USAGE)  # detached once the session closes
+    second.emit("metrics_collected", _USAGE)
+    assert received == [_USAGE]
