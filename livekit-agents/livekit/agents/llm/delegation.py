@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypedDict
+
+from livekit import rtc
 
 from ..log import logger
 from ..types import APIConnectOptions
@@ -37,14 +38,14 @@ _SPOKEN_OVER_NOTE = (
 _CONN_OPTIONS = APIConnectOptions(max_retry=0)
 
 DEFAULT_PROMPT = (
-    "A caller talks to a voice agent that cannot act on its own: only its backend can, through "
-    "the backend tools listed in the input, and the voice agent has to hand the backend each such "
+    "A caller talks to a voice agent that cannot act on its own: only its backend can, through its "
+    "tools, listed in the input when known, and the voice agent has to hand the backend each such "
     "request and each answer to the backend's questions. Sometimes it forgets, and answers, "
     "promises or goes quiet instead. True when the caller's last turn asks for something only the "
-    "backend tools can do; or answers a question the agent asked for such work with a yes, a no, a "
+    "backend can do; or answers a question the agent asked for such work with a yes, a no, a "
     "choice or a detail, a bare 'okay', 'mm-hmm' or 'yep' given as that answer included, even said "
     "while the agent was still speaking; or the agent says it is doing or has done something that "
-    "needs the tools; and no tool call has done it yet. False for thanks, small talk and other "
+    "needs the backend; and no tool call has done it yet. False for thanks, small talk and other "
     "turns that answer nothing, a question the conversation already answers, a request the agent "
     "is still collecting details for, work a tool call already did, or a turn after which the "
     "agent asks the caller a new question they have not answered yet."
@@ -72,14 +73,9 @@ class DelegationCheck:
     """The agent's instructions, where a delegation policy usually lives."""
 
 
-DelegationDetectorFn = Callable[[DelegationCheck], Awaitable[bool | str]]
-"""Judges a turn: ``False`` leaves it, ``True`` delegates it, and a string delegates it with that
-string as a note to the delegated work."""
-
-
 class DelegationDetectionOptions(TypedDict, total=False):
-    detector: DelegationDetectorFn
-    """Defaults to ``DelegationDetector()``."""
+    detector: DelegationDetector
+    """Defaults to ``DelegationDetector()``; a subclass overriding ``detect`` judges another way."""
     grace_period: float
     """How long the model has to delegate on its own once it is quiet after the turn; 0.5 s."""
 
@@ -87,7 +83,7 @@ class DelegationDetectionOptions(TypedDict, total=False):
 DEFAULT_GRACE_PERIOD = 0.5
 
 
-class DelegationDetector:
+class DelegationDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(
         self,
         model: LLM | DecisionModel | LLMModels | str = DEFAULT_DETECTOR_MODEL,
@@ -95,7 +91,8 @@ class DelegationDetector:
         prompt: str = DEFAULT_PROMPT,
         max_items: int = 20,
     ) -> None:
-        """Judge whether a turn the model did not delegate needed delegated work.
+        """Judge whether a turn the model did not delegate needed delegated work, reporting the
+        model's usage as ``metrics_collected``.
 
         Args:
             model: An LLM, which answers through a forced tool call; a decision model, which
@@ -103,11 +100,13 @@ class DelegationDetector:
             prompt: The question asked about each turn.
             max_items: How many of the newest conversation items the model reads.
         """
+        super().__init__()
         if isinstance(model, str):
             from ..inference import LLM as InferenceLLM
 
             model = InferenceLLM(model)
         self._model = model
+        self._model.on("metrics_collected", lambda m: self.emit("metrics_collected", m))
         self._prompt = prompt
         self._max_items = max_items
 
@@ -115,7 +114,9 @@ class DelegationDetector:
     def model(self) -> LLM | DecisionModel:
         return self._model
 
-    async def __call__(self, check: DelegationCheck) -> bool | str:
+    async def detect(self, check: DelegationCheck) -> bool | str:
+        """``False`` leaves the turn, ``True`` delegates it, and a string delegates it with that
+        string as a note to the delegated work."""
         tools: list[str] = []
         for tool in check.tools:
             if is_function_tool(tool):

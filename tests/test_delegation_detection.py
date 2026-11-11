@@ -6,7 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit.agents import Agent, AgentSession, llm
-from livekit.agents.llm import DelegationCheck, DelegationDetector, FunctionToolCall
+from livekit.agents.llm import (
+    DelegationCheck,
+    DelegationDetector,
+    FunctionToolCall,
+)
 from livekit.agents.metrics import LLMMetrics
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
@@ -47,10 +51,10 @@ def _reporting(arguments: str) -> FakeLLM:
 
 
 async def test_an_llm_reports_its_verdict_through_a_tool_call() -> None:
-    assert await DelegationDetector(_reporting('{"delegate": true}'))(_check()) is True
-    assert await DelegationDetector(_reporting('{"delegate": false}'))(_check()) is False
+    assert await DelegationDetector(_reporting('{"delegate": true}')).detect(_check()) is True
+    assert await DelegationDetector(_reporting('{"delegate": false}')).detect(_check()) is False
     # an answer it cannot read leaves the turn alone
-    assert await DelegationDetector(_reporting("not json"))(_check()) is False
+    assert await DelegationDetector(_reporting("not json")).detect(_check()) is False
 
 
 class _Decided(llm.DecisionModel):
@@ -66,8 +70,8 @@ class _Decided(llm.DecisionModel):
 
 
 async def test_a_decision_model_delegates_at_even_odds_or_more() -> None:
-    assert await DelegationDetector(_Decided(0.5))(_check()) is True
-    assert await DelegationDetector(_Decided(0.4))(_check()) is False
+    assert await DelegationDetector(_Decided(0.5)).detect(_check()) is True
+    assert await DelegationDetector(_Decided(0.4)).detect(_check()) is False
 
 
 async def test_a_turn_said_over_the_agent_is_marked_and_the_backend_told() -> None:
@@ -84,7 +88,7 @@ async def test_a_turn_said_over_the_agent_is_marked_and_the_backend_told() -> No
             FakeLLMResponse(input=marked, content="", ttft=0, duration=0, tool_calls=[call])
         ]
     )
-    note = await DelegationDetector(model)(check)
+    note = await DelegationDetector(model).detect(check)
     # the caller's words never reach the backend as a developer message
     assert isinstance(note, str) and "Cancel my 3pm." not in note
 
@@ -93,13 +97,19 @@ async def test_a_turn_said_over_the_agent_is_marked_and_the_backend_told() -> No
 # has stopped speaking for the grace period
 
 
+class _Detector(DelegationDetector):
+    def __init__(self, verdict: bool | str) -> None:
+        super().__init__(FakeLLM())
+        self.verdict, self.checks = verdict, list[DelegationCheck]()
+
+    async def detect(self, check: DelegationCheck) -> bool | str:
+        self.checks.append(check)
+        return self.verdict
+
+
 def _activity(verdict: bool | str) -> tuple[AgentActivity, list[DelegationCheck]]:
-    checks: list[DelegationCheck] = []
-
-    async def detector(check: DelegationCheck) -> bool | str:
-        checks.append(check)
-        return verdict
-
+    detector = _Detector(verdict)
+    checks = detector.checks
     activity = AgentActivity(Agent(instructions="test"), AgentSession(llm=FakeRealtimeModel()))
     activity._rt_session = MagicMock()
     activity._rt_session.tools.flatten.return_value = []

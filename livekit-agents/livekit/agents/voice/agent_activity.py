@@ -344,8 +344,8 @@ class AgentActivity(RecognitionHooks):
         self._rt_session: llm.RealtimeSession | None = None
         # a turn the model did not delegate waits to be judged until the agent has stopped speaking
         # for the grace period; the options are read per turn, since a fallback swap changes them
-        # the detector model whose usage this activity reports, since it is what calls it
-        self._delegation_detector_model: llm.LLM | llm.DecisionModel | None = None
+        # the detector whose usage this activity reports, since it is what calls it
+        self._delegation_detector: llm.DelegationDetector | None = None
         self._delegation_check_pending = False
         self._delegation_check_atask: asyncio.Task[None] | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
@@ -1181,11 +1181,11 @@ class AgentActivity(RecognitionHooks):
                     self._session.off("agent_state_changed", self._on_speaking_for_delegation)
                     self._session.off("user_state_changed", self._on_speaking_for_delegation)
                     self._cancel_delegation_check()
-                    if self._delegation_detector_model is not None:
-                        self._delegation_detector_model.off(
+                    if self._delegation_detector is not None:
+                        self._delegation_detector.off(
                             "metrics_collected", self._on_metrics_collected
                         )
-                        self._delegation_detector_model = None
+                        self._delegation_detector = None
                     if isinstance(self._rt_session, _FallbackRealtimeSession):
                         self._rt_session._agent_session = None
                     resources.rt_session = self._rt_session
@@ -1643,9 +1643,9 @@ class AgentActivity(RecognitionHooks):
             self._session.off("agent_state_changed", self._on_speaking_for_delegation)
             self._session.off("user_state_changed", self._on_speaking_for_delegation)
             self._cancel_delegation_check()
-            if self._delegation_detector_model is not None:
-                self._delegation_detector_model.off("metrics_collected", self._on_metrics_collected)
-                self._delegation_detector_model = None
+            if self._delegation_detector is not None:
+                self._delegation_detector.off("metrics_collected", self._on_metrics_collected)
+                self._delegation_detector = None
             if isinstance(self._rt_session, _FallbackRealtimeSession):
                 self._rt_session._agent_session = None
 
@@ -2426,14 +2426,12 @@ class AgentActivity(RecognitionHooks):
             return
         await asyncio.sleep(opts["grace_period"])
         detector = opts["detector"]
-        model = detector.model if isinstance(detector, llm.DelegationDetector) else None
-        if model is not self._delegation_detector_model:
+        if detector is not self._delegation_detector:
             # a fallback swap brings the new model's detector
-            if self._delegation_detector_model is not None:
-                self._delegation_detector_model.off("metrics_collected", self._on_metrics_collected)
-            if model is not None:
-                model.on("metrics_collected", self._on_metrics_collected)
-            self._delegation_detector_model = model
+            if self._delegation_detector is not None:
+                self._delegation_detector.off("metrics_collected", self._on_metrics_collected)
+            detector.on("metrics_collected", self._on_metrics_collected)
+            self._delegation_detector = detector
         check = llm.DelegationCheck(
             chat_ctx=self._agent.chat_ctx.copy(),
             tools=self._rt_session.tools.flatten(),
@@ -2441,7 +2439,7 @@ class AgentActivity(RecognitionHooks):
             instructions=self._render_realtime_instructions(self._agent.instructions),
         )
         try:
-            verdict = await detector(check)
+            verdict = await detector.detect(check)
         except Exception:
             logger.exception("delegation detector failed")
             verdict = False
