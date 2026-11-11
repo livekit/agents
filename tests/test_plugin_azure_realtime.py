@@ -37,6 +37,12 @@ T = TypeVar("T")
 _PCM_20MS = b"\x01\x00" * 480
 
 
+class _NoBackoff(APIConnectOptions):
+    # the first retry otherwise always waits 0.1s, whatever retry_interval says
+    def _interval_for_retry(self, num_retries: int) -> float:
+        return self.retry_interval
+
+
 class _Connection:
     def __init__(self, ws: web.WebSocketResponse, index: int) -> None:
         self.ws = ws
@@ -303,7 +309,7 @@ def _model(fake: _FakeVoiceLive, **kwargs: Any) -> RealtimeModel:
     kwargs.setdefault("api_key", "test-key")
     return RealtimeModel(
         endpoint=fake.endpoint,
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=5.0),
+        conn_options=_NoBackoff(max_retry=3, retry_interval=0.0, timeout=5.0),
         **kwargs,
     )
 
@@ -524,7 +530,7 @@ async def test_session_updates_do_not_discard_pending_replies(voice_live: _FakeV
 async def test_timed_out_reply_is_cancelled_when_it_arrives(
     voice_live: _FakeVoiceLive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(realtime_model, "_GENERATE_REPLY_TIMEOUT", 0.2)
+    monkeypatch.setattr(realtime_model, "_GENERATE_REPLY_TIMEOUT", 0.05)
     voice_live.on_response = _ignore
     async with _session(voice_live) as session:
         generations: list[llm.GenerationCreatedEvent] = []
@@ -558,7 +564,7 @@ async def test_timed_out_reply_is_cancelled_when_it_arrives(
 async def test_discarded_reply_created_before_its_output_is_announced(
     voice_live: _FakeVoiceLive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(realtime_model, "_GENERATE_REPLY_TIMEOUT", 0.2)
+    monkeypatch.setattr(realtime_model, "_GENERATE_REPLY_TIMEOUT", 0.05)
     voice_live.on_response = _ignore
     async with _session(voice_live) as session:
         added: list[llm.RemoteItemAddedEvent] = []
@@ -620,7 +626,7 @@ async def test_cancelled_reply_is_discarded(voice_live: _FakeVoiceLive) -> None:
 async def test_timed_out_reply_is_never_sent(
     voice_live: _FakeVoiceLive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(realtime_model, "_GENERATE_REPLY_TIMEOUT", 0.1)
+    monkeypatch.setattr(realtime_model, "_GENERATE_REPLY_TIMEOUT", 0.05)
     voice_live.accept_gate = asyncio.Event()
     async with _session(voice_live) as session:
         # the connection is still being established when the reply times out
@@ -1225,7 +1231,7 @@ async def test_update_chat_ctx_reports_rejected_items(voice_live: _FakeVoiceLive
 async def test_update_chat_ctx_times_out_without_confirmation(
     voice_live: _FakeVoiceLive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(realtime_model, "_UPDATE_CHAT_CTX_TIMEOUT", 0.2)
+    monkeypatch.setattr(realtime_model, "_UPDATE_CHAT_CTX_TIMEOUT", 0.05)
     voice_live.answer_items = False
     async with _session(voice_live) as session:
         chat_ctx = llm.ChatContext.empty()
@@ -1239,7 +1245,7 @@ async def test_update_chat_ctx_times_out_without_confirmation(
 async def test_retried_item_waits_for_the_pending_creation(
     voice_live: _FakeVoiceLive, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
-    monkeypatch.setattr(realtime_model, "_UPDATE_CHAT_CTX_TIMEOUT", 0.2)
+    monkeypatch.setattr(realtime_model, "_UPDATE_CHAT_CTX_TIMEOUT", 0.05)
     voice_live.answer_items = False
     async with _session(voice_live) as session:
         chat_ctx = llm.ChatContext.empty()
@@ -1250,7 +1256,7 @@ async def test_retried_item_waits_for_the_pending_creation(
         # the retry joins the creation still in flight instead of reporting success
         monkeypatch.setattr(realtime_model, "_UPDATE_CHAT_CTX_TIMEOUT", 5.0)
         retry = asyncio.ensure_future(session.update_chat_ctx(chat_ctx))
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.02)
         assert not retry.done()
 
         conn = voice_live.connections[0]
@@ -1279,7 +1285,7 @@ async def test_failing_replays_exhaust_the_retries(voice_live: _FakeVoiceLive) -
     model = RealtimeModel(
         endpoint=voice_live.endpoint,
         api_key="test-key",
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=5.0),
+        conn_options=_NoBackoff(max_retry=1, retry_interval=0.0, timeout=5.0),
     )
     session = model.session()
     try:
@@ -1387,7 +1393,7 @@ async def test_error_events_are_reported(voice_live: _FakeVoiceLive) -> None:
         await conn.send("error", error={"type": "server_error", "message": "boom"})
 
         await _wait_until(lambda: errors)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.02)
         assert len(errors) == 1
         assert errors[0].recoverable
         assert "boom" in str(errors[0].error)
@@ -1499,7 +1505,7 @@ async def test_exhausted_retries_close_the_session() -> None:
     model = RealtimeModel(
         endpoint="http://127.0.0.1:1",
         api_key="test-key",
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
+        conn_options=_NoBackoff(max_retry=1, retry_interval=0.0, timeout=1.0),
     )
     session = model.session()
     try:

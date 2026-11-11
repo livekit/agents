@@ -84,7 +84,7 @@ fix: format lint-fix ## Run format and lint checks and fix issues automatically 
 
 unit-tests: ## Run hermetic tests: the `unit` and `audio_eot` categories (no cloud accounts)
 	@echo "$(BOLD)$(CYAN)Running unit tests...$(RESET)"
-	PYTHONPATH="$$PWD" uv run pytest --unit --audio_eot $(PYTEST_ARGS)
+	PYTHONPATH="$$PWD" uv run pytest --unit --audio_eot --durations=15 $(PYTEST_ARGS)
 
 # ============================================
 # Development Workflows
