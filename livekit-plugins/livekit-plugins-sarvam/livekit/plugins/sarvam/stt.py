@@ -1272,7 +1272,6 @@ class SpeechStream(stt.SpeechStream):
                 done2, pending2 = await asyncio.wait(
                     [self._message_task, reconnect_task, settled_task],
                     return_when=asyncio.FIRST_COMPLETED,
-                    timeout=self._conn_options.timeout,
                 )
                 done |= done2
                 pending = pending2
@@ -1284,11 +1283,6 @@ class SpeechStream(stt.SpeechStream):
                     )
                     self._reconnect_event.clear()
                     return
-
-                if not done2:
-                    raise APITimeoutError(
-                        "Timed out waiting for the final transcript after audio input ended"
-                    )
 
             # Cancel remaining tasks using LiveKit's utility
             if pending:
@@ -1323,8 +1317,17 @@ class SpeechStream(stt.SpeechStream):
                 )
 
     async def _wait_for_utterance_settled(self) -> None:
+        # The grace is fixed discovery time, so it doesn't count against the caller's
+        # timeout; only an utterance that is actually open is bounded by it.
         await asyncio.sleep(END_OF_INPUT_GRACE)
-        await self._utterance_settled.wait()
+        if self._utterance_settled.is_set():
+            return
+        try:
+            await asyncio.wait_for(self._utterance_settled.wait(), self._conn_options.timeout)
+        except asyncio.TimeoutError:
+            raise APITimeoutError(
+                "Timed out waiting for the final transcript after audio input ended"
+            ) from None
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
