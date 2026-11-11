@@ -56,6 +56,8 @@ EOS_FALLBACK_TIMEOUT = 1.0
 # Sarvam never closes the socket when input ends, so after the final flush the stream
 # waits this long for a just-started utterance to surface before deciding none is open.
 END_OF_INPUT_GRACE = 0.5
+# How long a reconnect waits for the old connection to transcribe an open utterance.
+RECONNECT_SETTLE_TIMEOUT = 2.0
 
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
@@ -923,6 +925,10 @@ class SpeechStream(stt.SpeechStream):
         self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
+        # set once the open utterance has its final transcript or END_OF_SPEECH
+        self._utterance_resolved = asyncio.Event()
+        # samples short of a full chunk; kept on the stream so a reconnect doesn't drop them
+        self._audio_buffer: list[Any] = []
 
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
@@ -983,6 +989,7 @@ class SpeechStream(stt.SpeechStream):
         self._utterance_speech_start_wall = time.time()
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
+        self._utterance_resolved.clear()
 
     def _cancel_eos_fallback(self) -> asyncio.Task[None] | None:
         current_task = asyncio.current_task()
@@ -1047,6 +1054,7 @@ class SpeechStream(stt.SpeechStream):
         self._eos_emitted_for_utterance = True
         self._pending_eos = False
         self._utterance_settled.set()
+        self._utterance_resolved.set()
 
     async def _emit_pending_eos_after_timeout(self) -> None:
         try:
@@ -1171,8 +1179,11 @@ class SpeechStream(stt.SpeechStream):
         try:
             # update_options() ends a connection to reopen it with the new options;
             # the input channel carries on into the next connection
+            connection_start = time.time()
             while await self._run_connection():
-                pass
+                # Sarvam times each connection from zero, so carry the stream timeline on
+                self.start_time_offset += time.time() - connection_start
+                self.start_time = connection_start = time.time()
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED
@@ -1264,6 +1275,7 @@ class SpeechStream(stt.SpeechStream):
                     extra=self._build_log_context(),
                 )
                 self._reconnect_event.clear()
+                await self._settle_utterance_for_reconnect(ws)
                 return True
 
             # Keep listening for server-side terminal errors when audio finishes first.
@@ -1289,6 +1301,7 @@ class SpeechStream(stt.SpeechStream):
                         extra=self._build_log_context(),
                     )
                     self._reconnect_event.clear()
+                    await self._settle_utterance_for_reconnect(ws)
                     return True
 
             # Cancel remaining tasks using LiveKit's utility
@@ -1337,6 +1350,48 @@ class SpeechStream(stt.SpeechStream):
                 "Timed out waiting for the final transcript after audio input ended"
             ) from None
 
+    async def _settle_utterance_for_reconnect(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Close an open utterance on the old connection before it is replaced.
+
+        Only the old connection can transcribe speech it has started on, so its buffered
+        audio and a flush go there, and the turn ends with END_OF_SPEECH either way.
+        """
+        if not self._speaking:
+            return
+
+        import base64
+
+        import numpy as np
+
+        if self._audio_task is not None:
+            await utils.aio.cancel_and_wait(self._audio_task)
+        try:
+            if self._audio_buffer:
+                tail = np.array(self._audio_buffer, dtype=np.int16).tobytes()
+                self._audio_buffer.clear()
+                await ws.send_str(
+                    json.dumps(
+                        {
+                            "audio": {
+                                "data": base64.b64encode(tail).decode("utf-8"),
+                                "encoding": self._audio_encoding,
+                                "sample_rate": self._opts.sample_rate,
+                            }
+                        }
+                    )
+                )
+            await ws.send_str(json.dumps({"type": "flush"}))
+            await asyncio.wait_for(self._utterance_resolved.wait(), RECONNECT_SETTLE_TIMEOUT)
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            self._logger.warning(
+                f"Open utterance not transcribed before reconnect: {e!r}",
+                extra=self._build_log_context(),
+            )
+
+        self._speaking = False
+        self._try_commit_utterance()
+        self._emit_end_of_speech()
+
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process audio frames and send them in chunks."""
@@ -1345,7 +1400,7 @@ class SpeechStream(stt.SpeechStream):
         import numpy as np
 
         # Audio buffering for chunked sending
-        audio_buffer: list[np.int16] = []
+        audio_buffer = self._audio_buffer
         chunk_size = self._chunk_size  # Derived from selected sample rate
         chunks_sent = 0
         flushed = False  # whether the last message sent was a flush
@@ -1405,7 +1460,7 @@ class SpeechStream(stt.SpeechStream):
                             flushed = False
 
                             # Remove sent data from buffer
-                            audio_buffer = audio_buffer[chunk_size:]
+                            del audio_buffer[:chunk_size]
 
                             # Log progress periodically
                             if chunks_sent % 100 == 0:
@@ -1640,10 +1695,12 @@ class SpeechStream(stt.SpeechStream):
             if self._pending_eos:
                 self._pending_final_data = transcript_data
                 self._final_received_for_utterance = True
+                self._utterance_resolved.set()
                 self._try_commit_utterance()
             else:
                 if self._send_final_transcript(transcript_data):
                     self._final_received_for_utterance = True
+                    self._utterance_resolved.set()
 
             self._logger.debug(
                 "Transcript processed successfully",
