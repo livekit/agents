@@ -58,13 +58,13 @@ jobs:
       - name: Install the project
         run: uv sync --all-extras --dev
 
-      - name: Download NLTK data
-        run: uv run python -c "import nltk; nltk.download('punkt_tab')"
-
       - name: Run tests
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: make unit-tests
+
+      - name: Run NLTK tokenizer tests (downloads model data)
+        run: uv run pytest --plugin nltk tests/test_plugin_nltk.py
 
   evaluation:
     # don't run tests for PRs on forks

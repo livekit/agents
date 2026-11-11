@@ -1,0 +1,15 @@
+TEXT = (
+    "Hi! "
+    "LiveKit is a platform for live audio and video applications and services. \n\n"
+    "R.T.C stands for Real-Time Communication... again R.T.C. "
+    "Mr. Theo is testing the sentence tokenizer. "
+    "\nThis is a test. Another test. "
+    "A short sentence.\n"
+    "A longer sentence that is longer than the previous sentence. "
+    "f(x) = x * 2.54 + 42. "
+    "Hey!\n Hi! Hello! "
+    "\n\n"
+    "This is a sentence. 这是一个中文句子。これは日本語の文章です。"
+    "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。"
+    "\nThis is a sentence contains   consecutive spaces."
+)

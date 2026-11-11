@@ -364,6 +364,13 @@ Unit tests are in the `tests` directory and can be run with:
 uv run pytest --unit
 ```
 
+Core tokenizer tests run without NLTK or downloaded model data. Run the NLTK
+plugin tests separately; they download the Punkt model if it is not cached:
+
+```shell
+uv run pytest --plugin nltk tests/test_plugin_nltk.py
+```
+
 Integration tests for each plugin require various API credentials and run automatically in GitHub CI for PRs submitted by project maintainers. See the [tests workflow](.github/workflows/tests.yml) for details.
 
 ### Formatting
