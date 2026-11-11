@@ -4937,15 +4937,18 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             if len(new_fnc_outputs) > 0:
-                # wait all speeches played before updating the tool output and generating the response
-                # most realtime models don't support generating multiple responses at the same time
-                while self._current_speech or self._speech_q:
+                # most realtime models run one response at a time, so a reply waits for the floor;
+                # an interrupted speech asks for none and sends its outputs at once, as the pipeline
+                while not speech_handle.interrupted and (self._current_speech or self._speech_q):
                     if (
                         self._current_speech
                         and not self._current_speech.done()
                         and self._current_speech is not speech_handle
                     ):
-                        await self._current_speech
+                        # an interrupt during the wait also ends it, before the timeout can
+                        await speech_handle.wait_if_not_interrupted(
+                            [self._current_speech._done_fut]
+                        )
                     else:
                         await asyncio.sleep(0)
 
@@ -4998,8 +5001,12 @@ class AgentActivity(RecognitionHooks):
                             self._pending_auto_tool_reply_fut = None
                         auto_reply_fut.set_result(None)
 
-            tool_reply_expected = fnc_executed_ev.has_tool_reply
-            if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:
+            # a model that replies to tool output itself does so even for an interrupted speech
+            auto_reply = self._rt_session.capabilities.auto_tool_reply_generation
+            tool_reply_expected = fnc_executed_ev.has_tool_reply and (
+                auto_reply or not speech_handle.interrupted
+            )
+            if tool_reply_expected and not auto_reply:
                 self._rt_session.interrupt()
 
                 if max_steps_reached:
