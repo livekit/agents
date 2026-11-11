@@ -225,3 +225,6 @@ GeminiTTSModels = Literal[
     "gemini-2.5-flash-lite-preview-tts",
     "gemini-2.5-pro-tts",
 ]
+
+# Decisions API (POST /v1/decisions)
+DecisionModels = Literal["decisions-prerelease"]
