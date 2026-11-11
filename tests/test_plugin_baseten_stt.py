@@ -10,6 +10,7 @@ from aiohttp import web
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, stt
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.baseten import STT
 
 from .stt_reconnect import ReconnectClock
@@ -94,7 +95,11 @@ class _FakeWhisperServer:
 
 
 async def _run_stream(
-    server: _FakeWhisperServer, samples: int, timeout: float = 10.0, max_retry: int = 0
+    server: _FakeWhisperServer,
+    samples: int,
+    timeout: float = 10.0,
+    max_retry: int = 0,
+    language: NotGivenOr[str] = NOT_GIVEN,
 ) -> list[stt.SpeechEvent]:
     app = web.Application()
     app.router.add_get("/ws", server.handle)
@@ -112,9 +117,10 @@ async def _run_stream(
                 http_session=session,
             )
             stream = baseten_stt.stream(
+                language=language,
                 conn_options=APIConnectOptions(
                     max_retry=max_retry, retry_interval=0.01, timeout=timeout
-                )
+                ),
             )
             stream.push_frame(
                 rtc.AudioFrame(
@@ -151,6 +157,14 @@ async def test_end_input_flushes_buffered_audio() -> None:
     assert server.audio_bytes == 768 * 2
     assert server.text_messages == [{"type": "end_audio"}]
     assert _final_texts(events) == ["trailing words"]
+
+
+async def test_stream_language_overrides_the_configured_language() -> None:
+    server = _FakeWhisperServer()
+    await _run_stream(server, samples=512, language="de")
+
+    assert server.metadata is not None
+    assert server.metadata["whisper_params"]["audio_language"] == "de"
 
 
 async def test_slow_flush_still_delivers_the_final_transcript() -> None:
