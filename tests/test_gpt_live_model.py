@@ -1322,6 +1322,55 @@ async def test_a_backend_function_call_is_answered_and_the_response_continued(
         await model.aclose()
 
 
+async def test_a_refused_continuation_ends_the_background_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An error for the continuation's response.create means no response is coming."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(instructions="Be concise.", tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_1"}})
+        )
+        session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
+        await session._append_items(
+            [
+                llm.FunctionCallOutput(
+                    call_id="call_1", name="_get_weather", output="rainy", is_error=False
+                )
+            ]
+        )
+        session._handle_event(_response_event("item_d1", _completed("resp_1")))
+        await asyncio.sleep(0.05)
+        create = ws.sent[-1]
+        assert create["type"] == "response.create" and session.background_work_running
+
+        session._handle_event(
+            {
+                "type": "error",
+                "error": {"code": "function_call_outputs_required", "client_event_id": "other"},
+            }
+        )
+        assert session.background_work_running
+        session._handle_event(
+            {
+                "type": "error",
+                "error": {
+                    "code": "function_call_outputs_required",
+                    "client_event_id": create["event_id"],
+                },
+            }
+        )
+        assert not session.background_work_running
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_a_response_continues_only_once_every_call_has_its_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2462,10 +2511,18 @@ async def test_delegate_is_refused_while_a_request_waits_or_a_function_call_is_o
         await model.aclose()
 
 
-@pytest.mark.parametrize(("value", "expected"), [(False, None), (True, {}), ({}, {})])
-def test_delegation_recovery_is_off_only_when_false(value: object, expected: object) -> None:
+@pytest.mark.parametrize("value", [False, True, {}])
+def test_delegation_recovery_is_off_only_when_false_and_gets_the_default_detector(
+    value: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s" * 32)
     model = GPTLiveModel(api_key="sk-test", delegation_recovery=value)  # type: ignore[arg-type]
-    assert model._opts.delegation_recovery == expected
+    opts = model._opts.delegation_recovery
+    if value is False:
+        assert opts is None
+    else:
+        assert opts is not None and isinstance(opts["detector"], llm.DelegationDetector)
 
 
 def test_delegation_recovery_is_refused_under_decisions() -> None:

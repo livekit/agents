@@ -33,6 +33,9 @@ _SPOKEN_OVER_NOTE = (
     "heard all of it."
 )
 
+# a verdict that arrives late is worth nothing, so a failure is not retried
+_CONN_OPTIONS = APIConnectOptions(max_retry=0)
+
 DEFAULT_PROMPT = (
     "A caller talks to a voice agent that cannot act on its own: only its backend can, through "
     "the backend tools listed in the input, and the voice agent has to hand the backend each such "
@@ -154,7 +157,9 @@ class DelegationDetector:
         input = "\n\n".join(parts)
         if isinstance(self._model, DecisionModel):
             response = await self._model.evaluate(
-                input=input, decisions={"delegate": Probability(self._prompt)}
+                input=input,
+                decisions={"delegate": Probability(self._prompt)},
+                conn_options=_CONN_OPTIONS,
             )
             result = response.results.get("delegate")
             if not isinstance(result, ProbabilityResult):
@@ -185,8 +190,7 @@ class DelegationDetector:
                 ),
                 tools=[report],
                 tool_choice="required",
-                # a verdict that arrives late is worth nothing, so a failure is not retried
-                conn_options=APIConnectOptions(max_retry=0),
+                conn_options=_CONN_OPTIONS,
             ).collect()
             call = next((c for c in collected.tool_calls if c.name == "report"), None)
             try:
@@ -202,3 +206,16 @@ class DelegationDetector:
         if delegate and last is not None and last.id in spoken_over:
             return _SPOKEN_OVER_NOTE
         return delegate
+
+
+def _resolve_delegation_detection_options(
+    config: bool | DelegationDetectionOptions,
+) -> DelegationDetectionOptions | None:
+    """Return the options with every default filled in, or None when recovery is off."""
+    if config is False:
+        return None
+    config = {} if config is True else config
+    return DelegationDetectionOptions(
+        detector=config.get("detector") or DelegationDetector(),
+        grace_period=config.get("grace_period", DEFAULT_GRACE_PERIOD),
+    )

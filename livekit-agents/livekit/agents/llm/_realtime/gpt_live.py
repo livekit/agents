@@ -18,6 +18,7 @@ from openai.types.shared_params import Reasoning
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents.llm.delegation import _resolve_delegation_detection_options
 from livekit.agents.log import logger
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
@@ -305,13 +306,7 @@ class GPTLiveModel(llm.DuplexModel):
             responses=responses,
             decisions=decisions,
             triggers=triggers if is_given(triggers) else None,
-            delegation_recovery=(
-                None
-                if delegation_recovery is False
-                else {}
-                if delegation_recovery is True
-                else delegation_recovery
-            ),
+            delegation_recovery=_resolve_delegation_detection_options(delegation_recovery),
             service_tier=service_tier if is_given(service_tier) else None,
             api_key=api_key,
             base_url=resolved_base_url,
@@ -494,13 +489,13 @@ class GPTLiveSession(
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
-        # the response.create of a delegate() call, until the delegation it starts is created
-        self._delegate_event_id: str | None = None
-        # client delegations delegate() made up; the service never issued their ids
-        self._manual_delegation_ids: set[str] = set()
+        # delegation ids delegate() made up under client delegation; the service never issued them
+        self._local_delegation_ids: set[str] = set()
 
-        # a response.create was sent and its response.created has not arrived yet
-        self._backend_response_requested = False
+        # the response.create of a delegate() call, until the delegation it starts is created
+        self._delegate_request_id: str | None = None
+        # the response.create that continues after tool outputs, until its response starts
+        self._continuation_request_id: str | None = None
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -694,8 +689,8 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
-        self._backend_response_requested = False
-        self._delegate_event_id = None
+        self._continuation_request_id = None
+        self._delegate_request_id = None
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -996,11 +991,11 @@ class GPTLiveSession(
             logger.warning("gpt-live delegation has no id; nothing can answer it")
             return
         manual = (
-            event.client_event_id is not None and event.client_event_id == self._delegate_event_id
+            event.client_event_id is not None and event.client_event_id == self._delegate_request_id
         )
         # Azure never echoes client_event_id, so there any delegation without one ends the wait
         if manual or (self._opts.is_azure and event.client_event_id is None):
-            self._delegate_event_id = None
+            self._delegate_request_id = None
         self._emit_delegation(
             delegation.id,
             source="manual" if manual else "model",
@@ -1037,7 +1032,7 @@ class GPTLiveSession(
 
         if event.type == "response.created":
             self._backend_running_responses[d_id] = set()
-            self._backend_response_requested = False
+            self._continuation_request_id = None
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
@@ -1131,8 +1126,8 @@ class GPTLiveSession(
         ):
             return
         self._backend_response_pending = False
-        self._backend_response_requested = True
-        self.send_event(types.ResponseCreateEvent(event_id=utils.shortuuid("response_create_")))
+        self._continuation_request_id = utils.shortuuid("response_create_")
+        self.send_event(types.ResponseCreateEvent(event_id=self._continuation_request_id))
 
     @property
     def background_work_running(self) -> bool:
@@ -1141,8 +1136,8 @@ class GPTLiveSession(
             self._backend_running_responses
             or self._backend_open_calls
             or self._backend_response_pending
-            or self._backend_response_requested
-            or self._delegate_event_id
+            or self._continuation_request_id
+            or self._delegate_request_id
         )
 
     # metrics and errors
@@ -1190,10 +1185,12 @@ class GPTLiveSession(
         )
 
     def _handle_error(self, error: types.ErrorBody) -> None:
-        if error.client_event_id == self._delegate_event_id or (
-            self._opts.is_azure and error.client_event_id is None
-        ):
-            self._delegate_event_id = None
+        # a refused response.create starts nothing; on Azure an error may carry no id, so any counts
+        azure_no_id = self._opts.is_azure and error.client_event_id is None
+        if azure_no_id or error.client_event_id == self._delegate_request_id:
+            self._delegate_request_id = None
+        if azure_no_id or error.client_event_id == self._continuation_request_id:
+            self._continuation_request_id = None
         logger.error(
             "gpt-live returned an error",
             extra={"lk.pii.error": error.model_dump(exclude_none=True)},
@@ -1299,7 +1296,7 @@ class GPTLiveSession(
         text: str,
         delegation_id: str | None,
     ) -> None:
-        if delegation_id in self._manual_delegation_ids:
+        if delegation_id in self._local_delegation_ids:
             # the service would refuse an id it never issued; without one the model just says it
             delegation_id = None
         self.send_event(
@@ -1323,13 +1320,13 @@ class GPTLiveSession(
 
         if self._opts.delegation == "client":
             delegation_id = utils.shortuuid("lk_delegation_")
-            self._manual_delegation_ids.add(delegation_id)
+            self._local_delegation_ids.add(delegation_id)
             if instructions:
                 self.append_thinking(instructions)
             self._emit_delegation(delegation_id, source="manual", mode="client")
             return
 
-        if self._delegate_event_id is not None:
+        if self._delegate_request_id is not None:
             raise llm.RealtimeError("gpt-live is still waiting for the last delegate() request")
         # a call counts from its output_item.done, before its response completes
         if self._backend_open_calls or any(self._backend_running_responses.values()):
@@ -1342,8 +1339,8 @@ class GPTLiveSession(
                 )
             )
         # its delegation_created comes back from the service, which echoes this id
-        self._delegate_event_id = utils.shortuuid("delegate_")
-        self.send_event(types.ResponseCreateEvent(event_id=self._delegate_event_id))
+        self._delegate_request_id = utils.shortuuid("delegate_")
+        self.send_event(types.ResponseCreateEvent(event_id=self._delegate_request_id))
 
     @property
     def _delegation_detection(self) -> llm.DelegationDetectionOptions | None:

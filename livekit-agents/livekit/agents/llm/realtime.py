@@ -313,7 +313,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
 
     @property
     def _delegation_detection(self) -> DelegationDetectionOptions | None:
-        """The model's options for delegating turns it should have and did not."""
+        """The options for delegating turns the model should have and did not, detector set."""
         return None
 
     # message_id is the ID of the message to truncate (inside the ChatCtx)

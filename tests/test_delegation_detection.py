@@ -7,11 +7,12 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, llm
 from livekit.agents.llm import DelegationCheck, DelegationDetector, FunctionToolCall
+from livekit.agents.metrics import LLMMetrics
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
 
 from .fake_llm import FakeLLM, FakeLLMResponse
-from .fake_realtime import FakeRealtimeModel
+from .fake_realtime import FakeRealtimeModel, FakeRealtimeSession
 
 pytestmark = pytest.mark.unit
 
@@ -102,7 +103,7 @@ def _activity(verdict: bool | str) -> tuple[AgentActivity, list[DelegationCheck]
     activity = AgentActivity(Agent(instructions="test"), AgentSession(llm=FakeRealtimeModel()))
     activity._rt_session = MagicMock()
     activity._rt_session.tools.flatten.return_value = []
-    activity._delegation_opts = {"detector": detector, "grace_period": 0}
+    activity._rt_session._delegation_detection = {"detector": detector, "grace_period": 0}
     return activity, checks
 
 
@@ -154,7 +155,7 @@ def test_a_turn_the_model_delegated_is_not_judged() -> None:
 @pytest.mark.parametrize("event", ["delegation", "new turn"])
 async def test_a_delegation_or_a_new_turn_drops_the_pending_judgment(event: str) -> None:
     activity, checks = _activity(True)
-    activity._delegation_opts["grace_period"] = 10
+    activity._rt_session._delegation_detection["grace_period"] = 10
     _turn(activity)
     pending = activity._delegation_check_atask
     if event == "delegation":
@@ -168,13 +169,13 @@ async def test_a_delegation_or_a_new_turn_drops_the_pending_judgment(event: str)
 
 async def test_the_judgment_waits_for_the_agent_to_stop_speaking() -> None:
     activity, checks = _activity(True)
-    activity._delegation_opts["grace_period"] = 10
+    activity._rt_session._delegation_detection["grace_period"] = 10
     _turn(activity)
     first = activity._delegation_check_atask
     _agent(activity, "listening", "speaking")
     with pytest.raises(asyncio.CancelledError):
         await first
-    activity._delegation_opts["grace_period"] = 0
+    activity._rt_session._delegation_detection["grace_period"] = 0
     _agent(activity, "speaking", "listening")
     await activity._delegation_check_atask
     assert len(checks) == 1
@@ -182,13 +183,56 @@ async def test_the_judgment_waits_for_the_agent_to_stop_speaking() -> None:
 
 async def test_the_caller_speaking_holds_the_judgment_without_dropping_it() -> None:
     activity, checks = _activity(True)
-    activity._delegation_opts["grace_period"] = 10
+    activity._rt_session._delegation_detection["grace_period"] = 10
     _turn(activity)
     first = activity._delegation_check_atask
     _user(activity, "listening", "speaking")  # noise, or the caller starting again
     with pytest.raises(asyncio.CancelledError):
         await first
-    activity._delegation_opts["grace_period"] = 0
+    activity._rt_session._delegation_detection["grace_period"] = 0
     _user(activity, "speaking", "listening")
     await activity._delegation_check_atask
     assert len(checks) == 1
+
+
+async def test_each_detector_used_reports_its_usage_until_the_session_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a fallback swap can change the model, and with it the detector, between two turns
+    first, second = FakeLLM(), FakeLLM()
+    detection = {"detector": DelegationDetector(first), "grace_period": 0}
+    monkeypatch.setattr(FakeRealtimeSession, "_delegation_detection", property(lambda _: detection))
+    usage = LLMMetrics(
+        label="detector",
+        request_id="r1",
+        timestamp=0.0,
+        duration=0.0,
+        ttft=0.0,
+        cancelled=False,
+        completion_tokens=1,
+        prompt_tokens=2,
+        prompt_cached_tokens=0,
+        total_tokens=3,
+        tokens_per_second=0.0,
+    )
+    received: list[object] = []
+    async with AgentSession(llm=FakeRealtimeModel()) as session:
+        session.on("metrics_collected", lambda ev: received.append(ev.metrics))
+        await session.start(Agent(instructions="test"))
+        activity = session._activity
+        assert activity is not None and activity._rt_session is not None
+        for i, detector_llm in enumerate((first, second)):
+            detection["detector"] = DelegationDetector(detector_llm)
+            activity._rt_session.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id=f"u{i}", transcript="Okay.", is_final=True, delegated=False
+                ),
+            )
+            await activity._delegation_check_atask
+            received.clear()
+            detector_llm.emit("metrics_collected", usage)
+            assert received == [usage]
+    first.emit("metrics_collected", usage)  # detached once the session closes
+    second.emit("metrics_collected", usage)
+    assert received == [usage]

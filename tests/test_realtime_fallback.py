@@ -167,6 +167,20 @@ def test_proxies_say_to_active_child() -> None:
     assert primary.active_session.say_calls == ["hello there"]
 
 
+def test_proxies_delegation_recovery_to_active_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    primary = FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary]).session()
+    child = primary.active_session
+    monkeypatch.setattr(type(child), "_delegation_detection", property(lambda self: {}))
+    delegated: list[str | None] = []
+    monkeypatch.setattr(child, "delegate", delegated.append)
+
+    session.delegate("note")
+
+    assert session._delegation_detection == {}
+    assert delegated == ["note"]
+
+
 def test_proxies_start_user_activity_to_active_child() -> None:
     primary = FakeRealtimeModel()
     session = RealtimeModelFallbackAdapter([primary]).session()

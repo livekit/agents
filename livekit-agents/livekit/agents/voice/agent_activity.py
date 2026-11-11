@@ -19,7 +19,6 @@ from livekit.agents.metrics.base import Metadata
 from .. import inference, llm, stt, tts, utils, vad
 from ..llm.async_toolset import AsyncToolset
 from ..llm.chat_context import Instructions
-from ..llm.delegation import DEFAULT_GRACE_PERIOD, DelegationDetectionOptions
 from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
     StopResponse,
@@ -343,9 +342,10 @@ class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
-        # the realtime model's delegation detection, its detector filled in; a turn the model did
-        # not delegate waits to be judged until the agent has stopped speaking for the grace period
-        self._delegation_opts: DelegationDetectionOptions | None = None
+        # a turn the model did not delegate waits to be judged until the agent has stopped speaking
+        # for the grace period; the options are read per turn, since a fallback swap changes them
+        # the detector model whose usage this activity reports, since it is what calls it
+        self._delegation_detector_model: llm.LLM | llm.DecisionModel | None = None
         self._delegation_check_pending = False
         self._delegation_check_atask: asyncio.Task[None] | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
@@ -1181,7 +1181,11 @@ class AgentActivity(RecognitionHooks):
                     self._session.off("agent_state_changed", self._on_speaking_for_delegation)
                     self._session.off("user_state_changed", self._on_speaking_for_delegation)
                     self._cancel_delegation_check()
-                    self._delegation_opts = None
+                    if self._delegation_detector_model is not None:
+                        self._delegation_detector_model.off(
+                            "metrics_collected", self._on_metrics_collected
+                        )
+                        self._delegation_detector_model = None
                     if isinstance(self._rt_session, _FallbackRealtimeSession):
                         self._rt_session._agent_session = None
                     resources.rt_session = self._rt_session
@@ -1303,14 +1307,9 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.on("metrics_collected", self._on_metrics_collected)
             self._rt_session.on("remote_item_added", self._on_remote_item_added)
             self._rt_session.on("error", self._on_error)
-            if (opts := self._rt_session._delegation_detection) is not None:
-                self._delegation_opts = {
-                    **opts,
-                    "detector": opts.get("detector") or llm.DelegationDetector(),
-                }
-                self._rt_session.on("delegation_created", self._on_delegation_created)
-                self._session.on("agent_state_changed", self._on_speaking_for_delegation)
-                self._session.on("user_state_changed", self._on_speaking_for_delegation)
+            self._rt_session.on("delegation_created", self._on_delegation_created)
+            self._session.on("agent_state_changed", self._on_speaking_for_delegation)
+            self._session.on("user_state_changed", self._on_speaking_for_delegation)
 
             # the fallback adapter's session needs the AgentSession to drive interrupt/generate_reply on swap
             if isinstance(self._rt_session, _FallbackRealtimeSession):
@@ -1644,7 +1643,9 @@ class AgentActivity(RecognitionHooks):
             self._session.off("agent_state_changed", self._on_speaking_for_delegation)
             self._session.off("user_state_changed", self._on_speaking_for_delegation)
             self._cancel_delegation_check()
-            self._delegation_opts = None
+            if self._delegation_detector_model is not None:
+                self._delegation_detector_model.off("metrics_collected", self._on_metrics_collected)
+                self._delegation_detector_model = None
             if isinstance(self._rt_session, _FallbackRealtimeSession):
                 self._rt_session._agent_session = None
 
@@ -2377,7 +2378,11 @@ class AgentActivity(RecognitionHooks):
                 msg.metrics = {"started_speaking_at": ev.turn_started_at}
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
-            if ev.delegated is False and self._delegation_opts is not None:
+            if (
+                ev.delegated is False
+                and self._rt_session is not None
+                and self._rt_session._delegation_detection is not None
+            ):
                 self._delegation_check_pending = True
                 self._schedule_delegation_check()
 
@@ -2414,8 +2419,21 @@ class AgentActivity(RecognitionHooks):
         )
 
     async def _delegation_check_task(self) -> None:
-        assert self._delegation_opts is not None and self._rt_session is not None
-        await asyncio.sleep(self._delegation_opts.get("grace_period", DEFAULT_GRACE_PERIOD))
+        assert self._rt_session is not None
+        if (opts := self._rt_session._delegation_detection) is None:
+            # a fallback swapped to a model without delegation recovery
+            self._delegation_check_pending = False
+            return
+        await asyncio.sleep(opts["grace_period"])
+        detector = opts["detector"]
+        model = detector.model if isinstance(detector, llm.DelegationDetector) else None
+        if model is not self._delegation_detector_model:
+            # a fallback swap brings the new model's detector
+            if self._delegation_detector_model is not None:
+                self._delegation_detector_model.off("metrics_collected", self._on_metrics_collected)
+            if model is not None:
+                model.on("metrics_collected", self._on_metrics_collected)
+            self._delegation_detector_model = model
         check = llm.DelegationCheck(
             chat_ctx=self._agent.chat_ctx.copy(),
             tools=self._rt_session.tools.flatten(),
@@ -2423,7 +2441,7 @@ class AgentActivity(RecognitionHooks):
             instructions=self._render_realtime_instructions(self._agent.instructions),
         )
         try:
-            verdict = await self._delegation_opts["detector"](check)
+            verdict = await detector(check)
         except Exception:
             logger.exception("delegation detector failed")
             verdict = False
@@ -2433,8 +2451,9 @@ class AgentActivity(RecognitionHooks):
         logger.info("the realtime model did not delegate a turn that needs it; delegating it")
         try:
             self._rt_session.delegate(verdict if isinstance(verdict, str) else None)
-        except llm.RealtimeError:
-            logger.exception("could not start the delegation the detector asked for")
+        except llm.RealtimeError as e:
+            # a fallback swap during the check can leave a model that cannot delegate
+            logger.warning(f"could not start the delegation the detector asked for: {e}")
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if ev.user_initiated:
