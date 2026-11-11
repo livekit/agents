@@ -58,6 +58,7 @@ class FakeRealtimeSession(RealtimeSession):
         self.audio_cleared = False
         self.pushed_audio: list[rtc.AudioFrame] = []
         self.generate_reply_calls = 0
+        self.generate_reply_instructions: list[str | None] = []
         self.updated_instructions: str | None = None
         self.tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
         self.say_calls: list[str | AsyncIterable[str]] = []
@@ -109,6 +110,9 @@ class FakeRealtimeSession(RealtimeSession):
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]:
         self.generate_reply_calls += 1
+        self.generate_reply_instructions.append(
+            instructions if isinstance(instructions, str) else None
+        )
         fut: asyncio.Future[GenerationCreatedEvent] = asyncio.get_event_loop().create_future()
         self._reply_futs.append(fut)
         return fut
