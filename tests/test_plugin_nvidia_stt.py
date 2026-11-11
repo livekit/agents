@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from livekit.agents import APIConnectionError, APIConnectOptions
+from livekit.agents import APIConnectionError, APIConnectOptions, stt
 from livekit.plugins.nvidia import stt as nvidia_stt
 
 pytestmark = pytest.mark.plugin("nvidia")
@@ -54,6 +54,55 @@ async def test_normal_input_completion_does_not_retry(monkeypatch):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+@pytest.mark.parametrize("is_final", [False, True])
+@pytest.mark.parametrize("offset", [0.0, 7.25])
+async def test_word_timestamps_use_seconds(monkeypatch, is_final, offset):
+    class Service:
+        def streaming_response_generator(self, audio, config):
+            list(audio)
+            yield SimpleNamespace(
+                results=[
+                    SimpleNamespace(
+                        is_final=is_final,
+                        alternatives=[
+                            SimpleNamespace(
+                                transcript="hello world",
+                                words=[
+                                    SimpleNamespace(word="hello", start_time=42120, end_time=42560),
+                                    SimpleNamespace(word="world", start_time=44240, end_time=44480),
+                                ],
+                            )
+                        ],
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(nvidia_stt.auth, "create_riva_auth", lambda **kwargs: None)
+    monkeypatch.setattr(nvidia_stt.riva.client, "ASRService", lambda auth: Service())
+    async with nvidia_stt.STT(api_key="test") as provider, provider.stream() as stream:
+        stream.start_time_offset = offset
+        stream.end_input()
+        await asyncio.wait_for(stream._task, 1)
+        event_type = (
+            stt.SpeechEventType.FINAL_TRANSCRIPT
+            if is_final
+            else stt.SpeechEventType.INTERIM_TRANSCRIPT
+        )
+        transcripts = [event async for event in stream if event.type == event_type]
+
+    assert len(transcripts) == 1
+    speech = transcripts[0].alternatives[0]
+    assert speech.words == ["hello", "world"]
+    assert [word.start_time for word in speech.words] == pytest.approx(
+        [42.12 + offset, 44.24 + offset]
+    )
+    assert [word.end_time for word in speech.words] == pytest.approx(
+        [42.56 + offset, 44.48 + offset]
+    )
+    assert speech.start_time == speech.words[0].start_time
+    assert speech.end_time == speech.words[-1].end_time
 
 
 def test_provider_result_resets_retries_without_transcript():
