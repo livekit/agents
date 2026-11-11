@@ -175,6 +175,22 @@ async def test_end_input_times_out_when_the_utterance_never_finishes(session: _S
                 pass
 
 
+async def test_end_input_grace_does_not_count_against_timeout(
+    session: _Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timeout shorter than the grace still lets a clean stream end."""
+    monkeypatch.setattr(sarvam_stt, "END_OF_INPUT_GRACE", 0.1)
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.02))
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        assert [event async for event in stream] == []
+        assert session.ws.closed
+
+
 async def test_aclose_does_not_flush(session: _Session) -> None:
     async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
         stream = model.stream()
