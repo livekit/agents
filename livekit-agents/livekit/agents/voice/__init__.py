@@ -47,12 +47,9 @@ from .room_io import (
 from .run_result import RunOutputOptions
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer, text_transforms
-from .transcription_session import TranscriptionSession, TranscriptSegment
 
 __all__ = [
     "AgentSession",
-    "TranscriptionSession",
-    "TranscriptSegment",
     "ExpressiveOptions",
     "NonverbalOptions",
     "RecordingOptions",

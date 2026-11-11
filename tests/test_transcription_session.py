@@ -10,6 +10,10 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, APIConnectionError, LanguageCode, NotGivenOr
+from livekit.agents.beta.transcription import TranscriptionSession, TranscriptSegment
+from livekit.agents.beta.transcription.activity import ActivityTimeline, TrackActivity
+from livekit.agents.beta.transcription.attribution import _Attributor
+from livekit.agents.beta.transcription.mixer import _Mixer, _TrackInput
 from livekit.agents.stt import (
     STT,
     RecognizeStream,
@@ -21,10 +25,6 @@ from livekit.agents.stt import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, TimedString
 from livekit.agents.utils.audio import AudioBuffer
 from livekit.agents.utils.audio_gate import AdaptiveNoiseGate
-from livekit.agents.voice.transcription_session import TranscriptionSession, TranscriptSegment
-from livekit.agents.voice.transcription_session.activity import ActivityTimeline, TrackActivity
-from livekit.agents.voice.transcription_session.attribution import _Attributor
-from livekit.agents.voice.transcription_session.mixer import _Mixer, _TrackInput
 
 pytestmark = pytest.mark.unit
 

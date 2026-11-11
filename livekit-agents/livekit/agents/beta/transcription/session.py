@@ -21,7 +21,7 @@ from ...types import (
 )
 from ...utils import aio, log_exceptions, shortuuid
 from ...utils.audio_gate import AdaptiveNoiseGate, AudioGate
-from ..room_io._output import _legacy_transcription_needed
+from ...voice.room_io._output import _legacy_transcription_needed
 from .activity import ActivityTimeline
 from .attribution import AttributionMethod, _Attributor, _Run
 from .mixer import _Mixer, _TrackInput

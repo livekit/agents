@@ -2,15 +2,8 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import (
-    AgentServer,
-    AutoSubscribe,
-    JobContext,
-    TranscriptionSession,
-    TranscriptSegment,
-    cli,
-    inference,
-)
+from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli, inference
+from livekit.agents.beta import TranscriptionSession, TranscriptSegment
 
 load_dotenv()
 
