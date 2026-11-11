@@ -31,7 +31,7 @@ from livekit.plugins.openai.realtime.gpt_live_model import (
 from livekit.plugins.openai.realtime.gpt_live_types import ServiceTier
 from livekit.plugins.openai.tools import WebSearch
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 
 class _FakeWS:
@@ -196,16 +196,14 @@ async def test_a_session_awaiting_config_sends_nothing_until_it_arrives(
 async def test_closing_releases_a_session_still_waiting_for_its_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A session closed before it was ever configured has to finish closing.
-
-    Judged on elapsed time: ``aclose`` suppresses ``CancelledError``, so a deadline never fails.
-    """
+    """A session closed before it was ever configured has to finish closing."""
     _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
     await asyncio.sleep(0.05)
 
+    # judged on elapsed time: aclose suppresses CancelledError, so a deadline never fails
     started = time.perf_counter()
     with contextlib.suppress(asyncio.TimeoutError):
         await asyncio.wait_for(session.aclose(), timeout=2)  # bounds a real hang
@@ -387,51 +385,17 @@ async def test_reconnect_discards_partial_input_audio(
         await model.aclose()
 
 
-async def test_the_mute_state_survives_a_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
-    sockets = [_LifecycleWS(), _LifecycleWS()]
-    connections = iter(sockets)
-
-    async def connect(self: GPTLiveSession) -> _LifecycleWS:
-        return next(connections)
-
-    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
-    model = GPTLiveModel(
-        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
-    )
-    session = model.session()
-    try:
-        await session._update_session()
-        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
-        await session._session_started_fut
-
-        session.mute_input()
-        await asyncio.sleep(0.05)
-        assert [event["type"] for event in sockets[0].sent] == [
-            "session.start",
-            "session.input_audio.mute",
-        ]
-
-        await sockets[0].close()
-        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
-        await asyncio.sleep(0.05)
-
-        # the replacement session starts unmuted, so the mute has to be sent again, and before
-        # anything the app queued while the old connection was going away
-        assert [event["type"] for event in sockets[1].sent] == [
-            "session.start",
-            "session.input_audio.mute",
-        ]
-    finally:
-        for ws in sockets:
-            ws.emit(
-                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
-            )
-        await session.aclose()
-        await model.aclose()
-
-
-async def test_an_unmuted_session_is_not_muted_again_on_reconnect(
-    monkeypatch: pytest.MonkeyPatch,
+# the replacement session starts unmuted: a standing mute is sent again before anything queued,
+# and a mute the app already lifted is not resurrected
+@pytest.mark.parametrize(
+    "calls,resent",
+    [
+        (["mute_input"], ["session.input_audio.mute"]),
+        (["mute_input", "unmute_input"], []),
+    ],
+)
+async def test_the_mute_state_survives_a_reconnect(
+    monkeypatch: pytest.MonkeyPatch, calls: list[str], resent: list[str]
 ) -> None:
     sockets = [_LifecycleWS(), _LifecycleWS()]
     connections = iter(sockets)
@@ -449,21 +413,18 @@ async def test_an_unmuted_session_is_not_muted_again_on_reconnect(
         await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
         await session._session_started_fut
 
-        session.mute_input()
-        session.unmute_input()
+        for call in calls:
+            getattr(session, call)()
         await asyncio.sleep(0.05)
         assert [event["type"] for event in sockets[0].sent] == [
             "session.start",
-            "session.input_audio.mute",
-            "session.input_audio.unmute",
+            *(f"session.input_audio.{call.removesuffix('_input')}" for call in calls),
         ]
 
         await sockets[0].close()
         await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
         await asyncio.sleep(0.05)
-
-        # what the app asked for last wins: the reconnect must not resurrect a stale mute
-        assert [event["type"] for event in sockets[1].sent] == ["session.start"]
+        assert [event["type"] for event in sockets[1].sent] == ["session.start", *resent]
     finally:
         for ws in sockets:
             ws.emit(
@@ -1457,7 +1418,7 @@ async def test_a_continuation_waits_for_every_open_call_in_the_conversation(
 async def test_a_failed_response_releases_the_continuation_it_held_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A response that fails no longer blocks an answered one, and its own calls are discarded."""
+    """A response that fails does not block an answered one, and its own calls are discarded."""
     ws = _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
@@ -1498,11 +1459,20 @@ async def test_a_failed_response_releases_the_continuation_it_held_back(
         await model.aclose()
 
 
-@pytest.mark.parametrize("status", ["missing", None, "incomplete", "in_progress", "failed"])
-async def test_noncompleted_backend_calls_are_not_dispatched(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, status: str | None
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"status": None},
+        {"status": "incomplete"},
+        {"status": "in_progress"},
+        {"status": "failed"},
+        *({field: ...} for field in ("status", "call_id", "name", "arguments")),
+    ],
+)
+async def test_incomplete_backend_calls_are_not_dispatched(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, edit: dict[str, Any]
 ) -> None:
-    """An output_item.done event does not imply that its function call completed."""
+    """A call done without a completed status or a required field is skipped until a complete one."""
     _connect_hook(monkeypatch)
     caplog.set_level(logging.DEBUG, logger=gpt_live_model.logger.name)
     model = GPTLiveModel(api_key="sk-test")
@@ -1514,39 +1484,12 @@ async def test_noncompleted_backend_calls_are_not_dispatched(
         await session._session_started_fut
         session._handle_event(_response_event("item_d1", {"type": "response.created"}))
         event = _function_call_done("call_1")
-        if status == "missing":
-            del event["item"]["status"]
-        else:
-            event["item"]["status"] = status
-        session._handle_event(_response_event("item_d1", event))
-        assert not calls
-        assert not session._backend_running_responses["item_d1"]
-        assert not [item for item in session._history.items if isinstance(item, llm.FunctionCall)]
-
-        # A later completed event for the same call must still be dispatched.
-        session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
-        assert [call.call_id for call in calls] == ["call_1"]
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.parametrize("missing_field", ["call_id", "name", "arguments"])
-async def test_backend_calls_with_missing_fields_are_not_dispatched(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, missing_field: str
-) -> None:
-    _connect_hook(monkeypatch)
-    caplog.set_level(logging.DEBUG, logger=gpt_live_model.logger.name)
-    model = GPTLiveModel(api_key="sk-test")
-    session = model.session()
-    calls: list[llm.FunctionCall] = []
-    session.on("function_call", calls.append)
-    try:
-        await session._update_session()
-        await session._session_started_fut
-        session._handle_event(_response_event("item_d1", {"type": "response.created"}))
-        event = _function_call_done("call_1")
-        del event["item"][missing_field]
+        for key, value in edit.items():
+            # ellipsis drops the field
+            if value is ...:
+                del event["item"][key]
+            else:
+                event["item"][key] = value
         session._handle_event(_response_event("item_d1", event))
         assert not calls
         assert not session._backend_running_responses["item_d1"]
@@ -1918,6 +1861,7 @@ _BACKEND_REQUIRED = (
 @pytest.mark.parametrize(
     "endpoint_path", ["", "/", "/openai", "/openai/", "/openai/v1", "/openai/v1/live/sessions"]
 )
+@pytest.mark.real_time
 async def test_with_azure_connects_to_the_v1_sessions_path_with_an_api_key_header(
     endpoint_path: str,
 ) -> None:
@@ -1946,6 +1890,7 @@ async def test_with_azure_connects_to_the_v1_sessions_path_with_an_api_key_heade
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_with_azure_entra_token_is_a_bearer_and_ignores_the_env_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1966,6 +1911,7 @@ async def test_with_azure_entra_token_is_a_bearer_and_ignores_the_env_api_key(
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_with_azure_falls_back_to_the_azure_env_vars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1980,6 +1926,7 @@ async def test_with_azure_falls_back_to_the_azure_env_vars(
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_with_azure_base_url_keeps_a_gateway_path() -> None:
     async with _live_server() as (base, seen):
         model = GPTLiveModel.with_azure(
@@ -1998,6 +1945,7 @@ async def test_with_azure_base_url_keeps_a_gateway_path() -> None:
 @pytest.mark.parametrize(
     "base_path,expected_path", [("", "/live/sessions"), ("/v1", "/v1/live/sessions")]
 )
+@pytest.mark.real_time
 async def test_openai_handshake_is_unchanged_by_azure_support(
     base_path: str, expected_path: str
 ) -> None:
@@ -2015,6 +1963,7 @@ async def test_openai_handshake_is_unchanged_by_azure_support(
 
 @pytest.mark.usefixtures("_no_provider_env")
 @pytest.mark.parametrize("service_tier", ["ultrafast", "priority"])
+@pytest.mark.real_time
 async def test_a_service_tier_rides_on_the_connection_header(service_tier: ServiceTier) -> None:
     """The tier is asked for at the handshake, not in the session configuration."""
     async with _live_server() as (base, seen):
@@ -2026,6 +1975,7 @@ async def test_a_service_tier_rides_on_the_connection_header(service_tier: Servi
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_azure_carries_the_service_tier_too() -> None:
     async with _live_server() as (base, seen):
         model = GPTLiveModel.with_azure(
@@ -2166,6 +2116,7 @@ def test_inference_requires_a_model() -> None:
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_inference_connects_to_the_gateway_with_a_livekit_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2222,6 +2173,7 @@ def test_inference_accepts_only_the_default_delegation_tier() -> None:
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_inference_takes_gpt_live_options_through_extra_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

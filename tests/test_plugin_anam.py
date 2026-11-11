@@ -1,9 +1,4 @@
-"""Tests for the Anam plugin's AvatarSession.
-
-Covers what ``start()`` hands to the agent and to the Anam API: the audio output that
-replaces the session's audio tail, and the LiveKit token the avatar joins with. The
-Anam API and the base ``AvatarSession.start`` are faked.
-"""
+"""Anam AvatarSession.start hands the agent its audio output and the avatar its LiveKit token."""
 
 from __future__ import annotations
 
