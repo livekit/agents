@@ -30,6 +30,7 @@ from livekit.agents.types import (
     TimedString,
 )
 from livekit.agents.voice import Agent, ModelSettings
+from livekit.agents.voice.transcription.synchronizer import TranscriptSynchronizer
 from livekit.plugins.keyframe import (
     EMOTIONS,
     USERDATA_EMOTION_CUES,
@@ -42,6 +43,7 @@ from livekit.plugins.keyframe import (
     emotion_tts_node,
 )
 
+from .fake_io import FakeTextOutput
 from .fake_llm import FakeLLM
 from .fake_tts import FakeChunkedStream, FakeSynthesizeStream, FakeTTS
 
@@ -283,6 +285,39 @@ async def test_output_downmixes_stereo() -> None:
     n = SR // 10
     await out.capture_frame(_frame(100, channels=2, pcm=struct.pack("<2h", 1000, 3000) * n))
     assert room.audio == struct.pack("<h", 2000) * n
+
+
+async def test_output_finishes_the_segment_when_the_avatar_leaves_during_its_first_frame() -> None:
+    room = _Room()
+    out = await _output_for(room)
+    # TranscriptSynchronizer counts a segment only after the leaf captured its first frame
+    sync = TranscriptSynchronizer(next_in_chain_audio=out, next_in_chain_text=FakeTextOutput())
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def stream_bytes(**_kwargs: Any) -> MagicMock:
+        entered.set()
+        await gate.wait()
+        return room.writer
+
+    room.mock.local_participant.stream_bytes.side_effect = stream_bytes
+    capture = asyncio.create_task(sync.audio_output.capture_frame(_frame(10)))
+    try:
+        await entered.wait()
+        participant = MagicMock(spec=rtc.RemoteParticipant)
+        participant.identity = AVATAR
+        for call in room.mock.on.call_args_list:
+            if call.args[0] == "participant_disconnected":
+                call.args[1](participant)
+        gate.set()
+        await capture
+        sync.audio_output.flush()
+        event = await asyncio.wait_for(sync.audio_output.wait_for_playout(), timeout=1.0)
+        assert event.interrupted
+        assert out._pending_playback_count == 0
+    finally:
+        gate.set()
+        await asyncio.gather(capture, *out._tasks, return_exceptions=True)
+        await sync.aclose()
 
 
 async def test_set_emotion_is_a_reliable_now_message() -> None:

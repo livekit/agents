@@ -68,6 +68,7 @@ class KeyframeAudioOutput(DataStreamAudioOutput):
 
         # skip DataStreamAudioOutput.capture_frame: it would write the raw frame
         await AudioOutput.capture_frame(self, frame)
+        self._capturing = True
 
         cues: list[EmotionCue] = list(frame.userdata.get(USERDATA_EMOTION_CUES) or ())
         if cues and not self._framed:
@@ -148,7 +149,7 @@ class KeyframeAudioOutput(DataStreamAudioOutput):
         return out
 
     def flush(self) -> None:
-        AudioOutput.flush(self)
+        self._end_segment()
         if self._stream_writer is None or not self._started:
             return
 
