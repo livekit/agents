@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import copy
 import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, overload
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 
 FINALIZATION_TIMEOUT = 30.0
 FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT = 3.0
+HANDOFF_TIMEOUT = 10.0
 
 DeepgramModels = Literal[
     "deepgram/nova-3",
@@ -987,6 +989,17 @@ class STT(stt.STT):
         return options
 
 
+@dataclass
+class _STTControl:
+    message: dict[str, Any]
+
+
+@dataclass
+class _STTHandoffPause:
+    ws: aiohttp.ClientWebSocketResponse
+    handoff_id: str
+
+
 class SpeechStream(stt.SpeechStream):
     # a dropped `language_hint` is reported once per stream, not once per seam that finds it
     _language_hint_reported: bool = False
@@ -1012,6 +1025,225 @@ class SpeechStream(stt.SpeechStream):
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._vad: vad.VAD | None = vad_instance
         self._session_update_tasks: set[asyncio.Task[None]] = set()
+        self._handoff_serialized = False
+        self._handoff_lock = asyncio.Lock()
+        self._handoff_resume = asyncio.Event()
+        self._handoff_resume.set()
+        self._handoff_id: str | None = None
+        self._handoff_aborting = False
+        self._handoff_failed = False
+        self._handoff_started = False
+        self._old_close_tasks: set[asyncio.Task[Any]] = set()
+        self._handoff_timeout_task: asyncio.Task[None] | None = None
+        self._handoff_watch_task: asyncio.Task[None] | None = None
+        self._handoff_prepare_task: asyncio.Task[None] | None = None
+        self._handoff_replacement: aiohttp.ClientWebSocketResponse | None = None
+        self._handoff_options: STTOptions | None = None
+        self._handoff_keyterms: list[str] | None = None
+        self._pending_update_acks = 0
+        self._update_uncertain = False
+
+    async def _send_stt_message(self, msg: dict[str, Any], *, audio_duration: float = 0.0) -> None:
+        while True:
+            await self._handoff_resume.wait()
+            async with self._handoff_lock:
+                if not self._handoff_resume.is_set():
+                    continue
+                if self._ws is None or self._ws.closed:
+                    raise ConnectionError("STT WebSocket is closed")
+                await self._ws.send_str(json.dumps(msg))
+                self._speech_duration += audio_duration
+                return
+
+    async def _prepare_handoff_replacement(
+        self, old: aiohttp.ClientWebSocketResponse, handoff_id: str, session: aiohttp.ClientSession
+    ) -> None:
+        candidate: aiohttp.ClientWebSocketResponse | None = None
+        adopted = False
+        try:
+            candidate = await self._connect_ws(
+                session,
+                opts=self._handoff_options,
+                session_keyterms=self._handoff_keyterms,
+                handoff_probe_id=handoff_id,
+            )
+            async with self._handoff_lock:
+                if self._handoff_id != handoff_id or self._ws is not old:
+                    return
+                self._handoff_replacement = candidate
+
+            async def wait_ready() -> None:
+                created_seen = False
+                assert candidate is not None
+                while True:
+                    received = await candidate.receive()
+                    if received.type == aiohttp.WSMsgType.PING:
+                        await candidate.pong(received.data)
+                        continue
+                    if received.type == aiohttp.WSMsgType.PONG:
+                        continue
+                    if received.type != aiohttp.WSMsgType.TEXT:
+                        raise APIConnectionError("replacement STT session closed")
+                    event = json.loads(received.data)
+                    if event.get("type") == "session.created":
+                        created_seen = True
+                    elif (
+                        event.get("type") == "session.handoff.ready"
+                        and event.get("handoff_id") == handoff_id
+                        and created_seen
+                    ):
+                        return
+                    else:
+                        raise APIConnectionError("replacement STT session was refused")
+
+            await asyncio.wait_for(wait_ready(), self._conn_options.timeout)
+            async with self._handoff_lock:
+                if self._handoff_id != handoff_id or self._ws is not old or candidate.closed:
+                    return
+                self._handoff_watch_task = asyncio.create_task(
+                    self._watch_handoff_replacement(old, candidate, handoff_id)
+                )
+                await asyncio.wait_for(
+                    old.send_str(
+                        json.dumps({"type": "session.handoff.complete", "handoff_id": handoff_id})
+                    ),
+                    self._conn_options.timeout,
+                )
+                adopted = True
+        except (APIError, aiohttp.ClientError, ConnectionError, TimeoutError, ValueError):
+            await self._send_handoff_abort(old, handoff_id)
+            await self._abort_handoff(old, handoff_id)
+        finally:
+            if not adopted and candidate is not None:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(candidate.close(), self._conn_options.timeout)
+
+    def _forget_handoff_prepare(self, task: asyncio.Task[None]) -> None:
+        if self._handoff_prepare_task is task:
+            self._handoff_prepare_task = None
+
+    async def _pause_for_handoff(
+        self, ws: aiohttp.ClientWebSocketResponse, handoff_id: str
+    ) -> None:
+        async with self._handoff_lock:
+            if (
+                ws is not self._ws
+                or self._handoff_id is not None
+                or self._handoff_aborting
+                or not handoff_id
+            ):
+                return
+            if self._vad is not None or self._pending_extra is not None:
+                await ws.send_str(
+                    json.dumps({"type": "session.handoff.abort", "handoff_id": handoff_id})
+                )
+                return
+            self._handoff_id = handoff_id
+            self._handoff_failed = False
+            self._handoff_started = False
+            self._handoff_serialized = True
+            self._handoff_options = replace(
+                self._opts, extra_kwargs=copy.deepcopy(self._opts.extra_kwargs)
+            )
+            self._handoff_keyterms = list(self._stt._session_keyterms)
+            try:
+                self._input_ch.send_nowait(cast(Any, _STTHandoffPause(ws, handoff_id)))
+                self._handoff_timeout_task = asyncio.create_task(
+                    self._expire_handoff(ws, handoff_id)
+                )
+            except utils.aio.ChanClosed:
+                await ws.send_str(
+                    json.dumps({"type": "session.handoff.abort", "handoff_id": handoff_id})
+                )
+                self._handoff_id = None
+
+    async def _abort_handoff(self, ws: aiohttp.ClientWebSocketResponse, handoff_id: str) -> None:
+        replacement: aiohttp.ClientWebSocketResponse | None = None
+        async with self._handoff_lock:
+            if ws is self._ws and self._handoff_id == handoff_id:
+                self._handoff_id = None
+                if self._handoff_prepare_task is not None:
+                    if self._handoff_prepare_task is not asyncio.current_task():
+                        self._handoff_prepare_task.cancel()
+                    self._handoff_prepare_task = None
+                if self._handoff_watch_task is not None:
+                    if self._handoff_watch_task is not asyncio.current_task():
+                        self._handoff_watch_task.cancel()
+                    self._handoff_watch_task = None
+                if self._handoff_timeout_task is not None:
+                    self._handoff_timeout_task.cancel()
+                    self._handoff_timeout_task = None
+                if self._handoff_replacement is not None:
+                    replacement = self._handoff_replacement
+                    self._handoff_replacement = None
+                self._handoff_resume.set()
+        if replacement is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(replacement.close(), self._conn_options.timeout)
+
+    async def _expire_handoff(self, ws: aiohttp.ClientWebSocketResponse, handoff_id: str) -> None:
+        await asyncio.sleep(HANDOFF_TIMEOUT)
+        async with self._handoff_lock:
+            if ws is not self._ws or self._handoff_id != handoff_id:
+                return
+            self._handoff_id = None
+            self._handoff_aborting = True
+            if self._handoff_prepare_task is not None:
+                self._handoff_prepare_task.cancel()
+                self._handoff_prepare_task = None
+            if self._handoff_watch_task is not None:
+                self._handoff_watch_task.cancel()
+                self._handoff_watch_task = None
+            replacement = self._handoff_replacement
+            self._handoff_replacement = None
+        try:
+            await asyncio.wait_for(
+                ws.send_str(
+                    json.dumps({"type": "session.handoff.abort", "handoff_id": handoff_id})
+                ),
+                self._conn_options.timeout,
+            )
+        except (aiohttp.ClientError, ConnectionError, TimeoutError):
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(ws.close(), self._conn_options.timeout)
+        if replacement is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(replacement.close(), self._conn_options.timeout)
+        async with self._handoff_lock:
+            self._handoff_aborting = False
+            self._handoff_resume.set()
+
+    async def _send_handoff_abort(
+        self, old: aiohttp.ClientWebSocketResponse, handoff_id: str
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                old.send_str(
+                    json.dumps({"type": "session.handoff.abort", "handoff_id": handoff_id})
+                ),
+                self._conn_options.timeout,
+            )
+        except (aiohttp.ClientError, ConnectionError, TimeoutError):
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(old.close(), self._conn_options.timeout)
+
+    async def _watch_handoff_replacement(
+        self,
+        old: aiohttp.ClientWebSocketResponse,
+        replacement: aiohttp.ClientWebSocketResponse,
+        handoff_id: str,
+    ) -> None:
+        while True:
+            msg = await replacement.receive()
+            if msg.type == aiohttp.WSMsgType.PING:
+                await replacement.pong(msg.data)
+                continue
+            if msg.type == aiohttp.WSMsgType.PONG:
+                continue
+            self._handoff_failed = True
+            await self._send_handoff_abort(old, handoff_id)
+            await self._abort_handoff(old, handoff_id)
+            return
 
     def update_options(
         self,
@@ -1146,11 +1378,21 @@ class SpeechStream(stt.SpeechStream):
             "type": "session.update",
             "settings": settings,
         }
-        # Hold the task: the loop only weakly references it, and a collected one
-        # means self._opts moved on while the server was never told.
-        task = asyncio.create_task(self._send_session_update(update_msg))
-        self._session_update_tasks.add(task)
-        task.add_done_callback(self._session_update_tasks.discard)
+        if self._handoff_serialized:
+            with contextlib.suppress(utils.aio.ChanClosed):
+                self._input_ch.send_nowait(cast(Any, _STTControl(update_msg)))
+        else:
+            task = asyncio.create_task(self._send_session_update(update_msg))
+            self._session_update_tasks.add(task)
+            task.add_done_callback(self._session_update_tasks.discard)
+
+    async def _send_session_update(self, msg: dict[str, Any]) -> None:
+        self._pending_update_acks += 1
+        try:
+            await self._send_stt_message(msg)
+        except (aiohttp.ClientError, ConnectionError):
+            self._update_uncertain = True
+            logger.debug("failed to send session.update, ws may be closing")
 
     def _on_session_keyterms_changed(self) -> None:
         """Re-send this stream's keyterms under its own model's key, formatted fresh so a
@@ -1172,13 +1414,6 @@ class SpeechStream(stt.SpeechStream):
             self._send_live_update(extra=self._pending_extra)
             self._pending_extra = None
 
-    async def _send_session_update(self, msg: dict[str, Any]) -> None:
-        try:
-            if self._ws is not None and not self._ws.closed:
-                await self._ws.send_str(json.dumps(msg))
-        except Exception:
-            logger.debug("failed to send session.update, ws may be closing")
-
     @utils.log_exceptions(logger=logger)
     async def _vad_finalize_task(
         self, ws: aiohttp.ClientWebSocketResponse, stream: vad.VADStream
@@ -1186,10 +1421,10 @@ class SpeechStream(stt.SpeechStream):
         async for ev in stream:
             if ev.type != vad.VADEventType.END_OF_SPEECH:
                 continue
-            if ws.closed:
+            if self._ws is None or self._ws.closed:
                 return
             try:
-                await ws.send_str(json.dumps({"type": "session.finalize"}))
+                await self._send_stt_message({"type": "session.finalize"})
             except Exception:
                 logger.debug("failed to send session.finalize from VAD, ws may be closing")
                 return
@@ -1217,7 +1452,50 @@ class SpeechStream(stt.SpeechStream):
             )
 
             try:
-                async for ev in self._input_ch:
+                iterator = self._input_ch.__aiter__()
+                while True:
+                    await self._handoff_resume.wait()
+                    try:
+                        ev = await iterator.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    if isinstance(ev, _STTHandoffPause):
+                        if ev.handoff_id != self._handoff_id or ev.ws is not self._ws:
+                            continue
+                        if self._session_update_tasks:
+                            await asyncio.gather(*self._session_update_tasks)
+                        for frame in audio_bstream.flush():
+                            await self._send_stt_message(
+                                {
+                                    "type": "input_audio",
+                                    "audio": base64.b64encode(frame.data.tobytes()).decode("utf-8"),
+                                },
+                                audio_duration=frame.duration,
+                            )
+                        async with self._handoff_lock:
+                            if ev.handoff_id != self._handoff_id or ev.ws is not self._ws:
+                                continue
+                            self._handoff_resume.clear()
+                            await ev.ws.send_str(
+                                json.dumps(
+                                    {
+                                        "type": "session.handoff.pause",
+                                        "handoff_id": ev.handoff_id,
+                                    }
+                                )
+                            )
+                        continue
+                    if isinstance(ev, _STTControl):
+                        is_update = ev.message.get("type") == "session.update"
+                        if is_update:
+                            self._pending_update_acks += 1
+                        try:
+                            await self._send_stt_message(ev.message)
+                        except Exception:
+                            if is_update:
+                                self._update_uncertain = True
+                            raise
+                        continue
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(ev, rtc.AudioFrame):
                         if vad_stream is not None:
@@ -1227,14 +1505,13 @@ class SpeechStream(stt.SpeechStream):
                         frames.extend(audio_bstream.flush())
 
                     for frame in frames:
-                        self._speech_duration += frame.duration
                         audio_bytes = frame.data.tobytes()
                         base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
                         audio_msg = {
                             "type": "input_audio",
                             "audio": base64_audio,
                         }
-                        await ws.send_str(json.dumps(audio_msg))
+                        await self._send_stt_message(audio_msg, audio_duration=frame.duration)
 
                 if vad_stream is not None:
                     # the VAD may have ended on its own already (e.g. it closed its stream
@@ -1242,11 +1519,11 @@ class SpeechStream(stt.SpeechStream):
                     with contextlib.suppress(RuntimeError):
                         vad_stream.end_input()
 
-                input_ended.set()
                 finalize_msg = {
                     "type": "session.finalize",
                 }
-                await ws.send_str(json.dumps(finalize_msg))
+                await self._send_stt_message(finalize_msg)
+                input_ended.set()
             except (aiohttp.ClientError, ConnectionError) as e:
                 if input_ended.is_set() or http_session.closed:
                     return
@@ -1289,6 +1566,108 @@ class SpeechStream(stt.SpeechStream):
 
                 data = json.loads(msg.data)
                 msg_type = data.get("type")
+                if msg_type == "session.updated":
+                    if self._pending_update_acks:
+                        self._pending_update_acks -= 1
+                    else:
+                        self._update_uncertain = True
+                    if data.get("success") is not True:
+                        self._update_uncertain = True
+                    continue
+                if msg_type == "session.handoff.request":
+                    handoff_id = data.get("handoff_id")
+                    if isinstance(handoff_id, str):
+                        try:
+                            await asyncio.wait_for(
+                                self._pause_for_handoff(ws, handoff_id), HANDOFF_TIMEOUT
+                            )
+                        except TimeoutError as e:
+                            await ws.close()
+                            raise APIConnectionError("STT handoff could not pause writes") from e
+                    continue
+                if msg_type == "session.handoff.abort":
+                    handoff_id = data.get("handoff_id")
+                    if isinstance(handoff_id, str):
+                        await self._abort_handoff(ws, handoff_id)
+                    continue
+                if msg_type == "session.handoff.drained":
+                    handoff_id = data.get("handoff_id")
+                    if isinstance(handoff_id, str) and handoff_id == self._handoff_id:
+                        if self._pending_update_acks or self._update_uncertain:
+                            await ws.send_str(
+                                json.dumps(
+                                    {"type": "session.handoff.abort", "handoff_id": handoff_id}
+                                )
+                            )
+                            await self._abort_handoff(ws, handoff_id)
+                            continue
+                        if not self._handoff_started:
+                            self._handoff_started = True
+                            self._handoff_prepare_task = asyncio.create_task(
+                                self._prepare_handoff_replacement(ws, handoff_id, http_session)
+                            )
+                            self._handoff_prepare_task.add_done_callback(
+                                self._forget_handoff_prepare
+                            )
+                    continue
+                if msg_type == "session.handoff.accepted":
+                    handoff_id = data.get("handoff_id")
+                    replacement = self._handoff_replacement
+                    if (
+                        isinstance(handoff_id, str)
+                        and handoff_id == self._handoff_id
+                        and replacement is not None
+                        and not replacement.closed
+                    ):
+                        if self._handoff_failed:
+                            continue
+                        watch = self._handoff_watch_task
+                        if watch is not None:
+                            await utils.aio.gracefully_cancel(watch)
+                        async with self._handoff_lock:
+                            if (
+                                self._handoff_id != handoff_id
+                                or replacement.closed
+                                or self._handoff_failed
+                            ):
+                                continue
+                            try:
+                                await asyncio.wait_for(
+                                    ws.send_str(
+                                        json.dumps(
+                                            {
+                                                "type": "session.handoff.switched",
+                                                "handoff_id": handoff_id,
+                                            }
+                                        )
+                                    ),
+                                    self._conn_options.timeout,
+                                )
+                            except (aiohttp.ClientError, ConnectionError, TimeoutError):
+                                pass
+                            if self._handoff_timeout_task is not None:
+                                self._handoff_timeout_task.cancel()
+                                self._handoff_timeout_task = None
+                            old = ws
+                            ws = replacement
+                            monitor = utils.aio.WebSocketMonitor(
+                                ws, liveness_timeout=self._conn_options.liveness_timeout
+                            )
+                            self._ws = replacement
+                            self._handoff_replacement = None
+                            self._handoff_watch_task = None
+                            self._handoff_id = None
+                            self._input_ch.restart_provider_clock()
+                            self._handoff_resume.set()
+                        close_task = asyncio.create_task(old.close())
+                        self._old_close_tasks.add(close_task)
+                        close_task.add_done_callback(self._old_close_tasks.discard)
+                    elif isinstance(handoff_id, str) and handoff_id == self._handoff_id:
+                        await ws.send_str(
+                            json.dumps({"type": "session.handoff.abort", "handoff_id": handoff_id})
+                        )
+                        await self._abort_handoff(ws, handoff_id)
+                    continue
                 if msg_type in ("interim_transcript", "preflight_transcript", "final_transcript"):
                     # Remember finals received before input ends; only the drain starts the timer.
                     with contextlib.suppress(utils.aio.SleepFinished):
@@ -1343,6 +1722,8 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await self._connect_ws(http_session)
             self._ws = ws
+            self._pending_update_acks = 0
+            self._update_uncertain = False
             receiver = asyncio.create_task(recv_task(ws))
             inactivity = asyncio.create_task(wait_for_inactivity())
             tasks = [
@@ -1364,7 +1745,25 @@ class SpeechStream(stt.SpeechStream):
                 transcript_timeout.cancel()
                 await utils.aio.gracefully_cancel(*tasks)
         finally:
+            ws = self._ws or ws
             self._ws = None
+            self._handoff_id = None
+            self._handoff_resume.set()
+            if self._handoff_timeout_task is not None:
+                await utils.aio.gracefully_cancel(self._handoff_timeout_task)
+                self._handoff_timeout_task = None
+            if self._handoff_prepare_task is not None:
+                await utils.aio.gracefully_cancel(self._handoff_prepare_task)
+                self._handoff_prepare_task = None
+            if self._handoff_watch_task is not None:
+                await utils.aio.gracefully_cancel(self._handoff_watch_task)
+                self._handoff_watch_task = None
+            if self._handoff_replacement is not None:
+                await self._handoff_replacement.close()
+                self._handoff_replacement = None
+            if self._old_close_tasks:
+                await utils.aio.gracefully_cancel(*self._old_close_tasks)
+                self._old_close_tasks.clear()
             if self._session_update_tasks:
                 await utils.aio.gracefully_cancel(*self._session_update_tasks)
                 self._session_update_tasks.clear()
@@ -1379,63 +1778,77 @@ class SpeechStream(stt.SpeechStream):
                 await vad_stream.aclose()
 
     async def _connect_ws(
-        self, http_session: aiohttp.ClientSession
+        self,
+        http_session: aiohttp.ClientSession,
+        *,
+        opts: STTOptions | None = None,
+        session_keyterms: list[str] | None = None,
+        handoff_probe_id: str | None = None,
     ) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit Inference STT WebSocket."""
+        current_options = opts is None
+        opts = opts or self._opts
         # the payload is built from a copy: the stream keeps the caller's hint, so a later
         # model or language that can use it sends it again
-        extra = dict(self._opts.extra_kwargs)
-        self._guard_language_hint(extra)
+        extra = dict(opts.extra_kwargs)
+        if current_options:
+            self._guard_language_hint(extra)
+        else:
+            _drop_ineffective_language_hint(opts.model, opts.language, extra, warn=False)
         params: dict[str, Any] = {
+            "handoff_protocol": 1,
             "settings": {
-                "sample_rate": str(self._opts.sample_rate),
-                "encoding": self._opts.encoding,
+                "sample_rate": str(opts.sample_rate),
+                "encoding": opts.encoding,
                 # merge the framework session keyterms into the user's extra_kwargs keyterm key
                 "extra": {
                     **extra,
                     **(
                         _keyterms_extra_for_model(
-                            self._opts.model,
+                            opts.model,
                             extra_kwargs=extra,
-                            session_keyterms=self._stt._session_keyterms,
+                            session_keyterms=session_keyterms
+                            if session_keyterms is not None
+                            else self._stt._session_keyterms,
                         )
                         or {}
                     ),
                 },
             },
         }
+        if handoff_probe_id is not None:
+            params["handoff_probe"] = {"handoff_id": handoff_probe_id}
 
-        if self._opts.model and self._opts.model != "auto":
-            params["model"] = self._opts.model
+        if opts.model and opts.model != "auto":
+            params["model"] = opts.model
 
-        if self._opts.language:
-            params["settings"]["language"] = self._opts.language
+        if opts.language:
+            params["settings"]["language"] = opts.language
 
-        if self._opts.fallback:
+        if opts.fallback:
             models = [
-                {"model": m.get("model"), "extra": m.get("extra_kwargs")}
-                for m in self._opts.fallback
+                {"model": m.get("model"), "extra": m.get("extra_kwargs")} for m in opts.fallback
             ]
             params["fallback"] = {"models": models}
 
-        if self._opts.conn_options:
+        if opts.conn_options:
             params["connection"] = {
-                "timeout": self._opts.conn_options.timeout,
-                "retries": self._opts.conn_options.max_retry,
+                "timeout": opts.conn_options.timeout,
+                "retries": opts.conn_options.max_retry,
             }
 
-        base_url = self._opts.base_url
+        base_url = opts.base_url
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
         headers = {
             **get_inference_headers(),
-            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
+            "Authorization": f"Bearer {create_access_token(opts.api_key, opts.api_secret)}",
         }
         session_id = headers.get(HEADER_SESSION_ID)
         try:
             ws = await asyncio.wait_for(
                 http_session.ws_connect(
-                    f"{base_url}/stt?{urlencode({'model': self._opts.model})}",
+                    f"{base_url}/stt?{urlencode({'model': opts.model})}",
                     headers=headers,
                     autoping=False,
                 ),

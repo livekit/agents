@@ -22,6 +22,399 @@ from livekit.agents.stt import RecognizeStream, SpeechEventType
 pytestmark = pytest.mark.unit
 
 
+async def test_coordinated_handoff_buffers_audio_until_replacement_session() -> None:
+    paused = asyncio.Event()
+    release_drain = asyncio.Event()
+    replacement_audio = asyncio.Event()
+    completion_received = asyncio.Event()
+    allow_completion = asyncio.Event()
+    replacement_created = asyncio.Event()
+    allow_ready = asyncio.Event()
+    connection_count = 0
+    audio_connections: list[int] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connection_count
+        connection_count += 1
+        connection = connection_count
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                await ws.send_json({"type": "session.created"})
+                if connection == 2:
+                    replacement_created.set()
+                    await allow_ready.wait()
+                    await ws.send_json({"type": "session.handoff.ready", "handoff_id": "h1"})
+            elif event["type"] == "input_audio":
+                audio_connections.append(connection)
+                if connection == 1:
+                    await ws.send_json({"type": "session.handoff.request", "handoff_id": "h1"})
+                else:
+                    replacement_audio.set()
+            elif event["type"] == "session.handoff.pause":
+                assert event["handoff_id"] == "h1"
+                paused.set()
+                await release_drain.wait()
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "first", "language": "en"}
+                )
+                await ws.send_json({"type": "session.handoff.drained", "handoff_id": "h1"})
+            elif event["type"] == "session.handoff.complete":
+                await ws.send_json({"type": "session.handoff.drained", "handoff_id": "h1"})
+                completion_received.set()
+                await allow_completion.wait()
+                await ws.send_json({"type": "session.handoff.accepted", "handoff_id": "h1"})
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stream = _make_stt(base_url, session, sample_rate=16000).stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        )
+        frame = rtc.AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=800)
+        try:
+            stream.push_frame(frame)
+            await asyncio.wait_for(paused.wait(), timeout=2.0)
+            stream.push_frame(frame)
+            await asyncio.sleep(0.1)
+            assert audio_connections == [1]
+            release_drain.set()
+            await asyncio.wait_for(replacement_created.wait(), timeout=2.0)
+            await asyncio.sleep(0.1)
+            assert not completion_received.is_set()
+            allow_ready.set()
+            await asyncio.wait_for(completion_received.wait(), timeout=2.0)
+            await asyncio.sleep(0.1)
+            assert audio_connections == [1]
+            assert connection_count == 2
+            allow_completion.set()
+            await asyncio.wait_for(replacement_audio.wait(), timeout=2.0)
+        finally:
+            release_drain.set()
+            allow_ready.set()
+            allow_completion.set()
+            await stream.aclose()
+
+    assert audio_connections == [1, 2]
+
+
+async def test_coordinated_handoff_abort_resumes_old_session() -> None:
+    paused = asyncio.Event()
+    abort_now = asyncio.Event()
+    resumed = asyncio.Event()
+    audio_count = 0
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal audio_count
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                await ws.send_json({"type": "session.created"})
+            elif event["type"] == "input_audio":
+                audio_count += 1
+                if audio_count == 1:
+                    await ws.send_json({"type": "session.handoff.request", "handoff_id": "h1"})
+                else:
+                    resumed.set()
+            elif event["type"] == "session.handoff.pause":
+                paused.set()
+                await abort_now.wait()
+                await ws.send_json({"type": "session.handoff.abort", "handoff_id": "h1"})
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stream = _make_stt(base_url, session, sample_rate=16000).stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        )
+        frame = rtc.AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=800)
+        try:
+            stream.push_frame(frame)
+            await asyncio.wait_for(paused.wait(), timeout=2.0)
+            stream.push_frame(frame)
+            await asyncio.sleep(0.1)
+            assert audio_count == 1
+            abort_now.set()
+            await asyncio.wait_for(resumed.wait(), timeout=2.0)
+        finally:
+            abort_now.set()
+            await stream.aclose()
+
+    assert audio_count == 2
+
+
+async def test_coordinated_handoff_replacement_refusal_resumes_old_session() -> None:
+    paused = asyncio.Event()
+    permit_drain = asyncio.Event()
+    resumed = asyncio.Event()
+    connections = 0
+    audio_connections: list[int] = []
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        nonlocal connections
+        connections += 1
+        connection = connections
+        if connection == 2:
+            return web.Response(status=503)
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                await ws.send_json({"type": "session.created"})
+            elif event["type"] == "input_audio":
+                audio_connections.append(connection)
+                if len(audio_connections) == 1:
+                    await ws.send_json({"type": "session.handoff.request", "handoff_id": "h1"})
+                else:
+                    resumed.set()
+            elif event["type"] == "session.handoff.pause":
+                paused.set()
+                await permit_drain.wait()
+                await ws.send_json({"type": "session.handoff.drained", "handoff_id": "h1"})
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stream = _make_stt(base_url, session, sample_rate=16000).stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        )
+        frame = rtc.AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=800)
+        try:
+            stream.push_frame(frame)
+            await asyncio.wait_for(paused.wait(), timeout=2.0)
+            stream.push_frame(frame)
+            permit_drain.set()
+            await asyncio.wait_for(resumed.wait(), timeout=2.0)
+        finally:
+            permit_drain.set()
+            await stream.aclose()
+
+    assert audio_connections == [1, 1]
+
+
+async def test_coordinated_handoff_times_out_and_resumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import livekit.agents.inference.stt as inference_stt
+
+    monkeypatch.setattr(inference_stt, "HANDOFF_TIMEOUT", 0.1, raising=False)
+    paused = asyncio.Event()
+    resumed = asyncio.Event()
+    audio_count = 0
+    abort_seen = False
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal audio_count, abort_seen
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                await ws.send_json({"type": "session.created"})
+            elif event["type"] == "input_audio":
+                audio_count += 1
+                if audio_count == 1:
+                    await ws.send_json({"type": "session.handoff.request", "handoff_id": "h1"})
+                else:
+                    resumed.set()
+            elif event["type"] == "session.handoff.pause":
+                paused.set()
+            elif event["type"] == "session.handoff.abort":
+                abort_seen = True
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stream = _make_stt(base_url, session, sample_rate=16000).stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        )
+        frame = rtc.AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=800)
+        try:
+            stream.push_frame(frame)
+            await asyncio.wait_for(paused.wait(), timeout=2.0)
+            stream.push_frame(frame)
+            await asyncio.wait_for(resumed.wait(), timeout=2.0)
+        finally:
+            await stream.aclose()
+
+    assert abort_seen
+    assert audio_count == 2
+
+
+async def test_handoff_preserves_order_of_audio_and_later_updates() -> None:
+    paused = asyncio.Event()
+    completed = asyncio.Event()
+    events: list[tuple[int, str, str]] = []
+    connections = 0
+    old_ws: web.WebSocketResponse | None = None
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connections, old_ws
+        connections += 1
+        connection = connections
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        if connection == 1:
+            old_ws = ws
+        async for msg in ws:
+            event = json.loads(msg.data)
+            kind = event["type"]
+            if kind == "session.create":
+                events.append((connection, kind, event["settings"].get("language", "")))
+                await ws.send_json({"type": "session.created"})
+                if connection == 2:
+                    await ws.send_json({"type": "session.handoff.ready", "handoff_id": "h1"})
+            elif kind == "input_audio":
+                events.append((connection, kind, ""))
+                if connection == 1:
+                    await ws.send_json({"type": "session.handoff.request", "handoff_id": "h1"})
+                elif len([e for e in events if e[0] == 2 and e[1] == "input_audio"]) == 2:
+                    completed.set()
+            elif kind == "session.update":
+                events.append((connection, kind, event["settings"].get("language", "")))
+                await ws.send_json({"type": "session.updated", "success": True})
+            elif kind == "session.handoff.pause":
+                paused.set()
+            elif kind == "session.handoff.complete":
+                await ws.send_json({"type": "session.handoff.accepted", "handoff_id": "h1"})
+            elif kind == "session.handoff.switched":
+                pass
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stream = _make_stt(base_url, session, sample_rate=16000, language="en").stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        )
+        frame = rtc.AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=800)
+        try:
+            stream.push_frame(frame)
+            await asyncio.wait_for(paused.wait(), timeout=2.0)
+            stream.push_frame(frame)
+            stream.update_options(language="fr")
+            stream.push_frame(frame)
+            assert old_ws is not None
+            await old_ws.send_json({"type": "session.handoff.drained", "handoff_id": "h1"})
+            await asyncio.wait_for(completed.wait(), timeout=2.0)
+        finally:
+            await stream.aclose()
+
+    assert [e[1:] for e in events if e[0] == 2] == [
+        ("session.create", "en"),
+        ("input_audio", ""),
+        ("session.update", "fr"),
+        ("input_audio", ""),
+    ]
+
+
+async def test_handoff_aborts_when_prior_update_was_rejected() -> None:
+    update_ack = asyncio.Event()
+    paused = asyncio.Event()
+    aborted = asyncio.Event()
+    resumed = asyncio.Event()
+    audio_count = 0
+    connections = 0
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal audio_count, connections
+        connections += 1
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                await ws.send_json({"type": "session.created"})
+            elif event["type"] == "session.update":
+                await ws.send_json({"type": "session.updated", "success": False})
+                update_ack.set()
+            elif event["type"] == "input_audio":
+                audio_count += 1
+                if audio_count == 1:
+                    await ws.send_json({"type": "session.handoff.request", "handoff_id": "h1"})
+                else:
+                    resumed.set()
+            elif event["type"] == "session.handoff.pause":
+                paused.set()
+                await ws.send_json({"type": "session.handoff.drained", "handoff_id": "h1"})
+            elif event["type"] == "session.handoff.abort":
+                aborted.set()
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stream = _make_stt(base_url, session, sample_rate=16000, language="en").stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        )
+        frame = rtc.AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=800)
+        try:
+            await _wait_until_stream_is_live(stream)
+            stream.update_options(language="fr")
+            await asyncio.wait_for(update_ack.wait(), timeout=2.0)
+            stream.push_frame(frame)
+            await asyncio.wait_for(paused.wait(), timeout=2.0)
+            stream.push_frame(frame)
+            await asyncio.wait_for(aborted.wait(), timeout=2.0)
+            await asyncio.wait_for(resumed.wait(), timeout=2.0)
+        finally:
+            await stream.aclose()
+
+    assert connections == 1
+
+
+async def test_handoff_aborts_if_ready_replacement_fails_before_acceptance() -> None:
+    paused = asyncio.Event()
+    resume = asyncio.Event()
+    audio_connections: list[int] = []
+    connections = 0
+    old_ws: web.WebSocketResponse | None = None
+    sockets: list[web.WebSocketResponse] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connections, old_ws
+        connections += 1
+        connection = connections
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        sockets.append(ws)
+        if connection == 1:
+            old_ws = ws
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                await ws.send_json({"type": "session.created"})
+                if connection == 2:
+                    await ws.send_json({"type": "session.handoff.ready", "handoff_id": "h1"})
+            elif event["type"] == "input_audio":
+                audio_connections.append(connection)
+                if len(audio_connections) == 1:
+                    await ws.send_json({"type": "session.handoff.request", "handoff_id": "h1"})
+                else:
+                    resume.set()
+            elif event["type"] == "session.handoff.pause":
+                paused.set()
+            elif event["type"] == "session.handoff.complete":
+                for client in sockets:
+                    if client is not ws:
+                        await client.send_json({"type": "error", "code": 429})
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stream = _make_stt(base_url, session, sample_rate=16000).stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        )
+        frame = rtc.AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=800)
+        try:
+            stream.push_frame(frame)
+            await asyncio.wait_for(paused.wait(), timeout=2.0)
+            stream.push_frame(frame)
+            assert old_ws is not None
+            await old_ws.send_json({"type": "session.handoff.drained", "handoff_id": "h1"})
+            await asyncio.wait_for(resume.wait(), timeout=2.0)
+        finally:
+            await stream.aclose()
+
+    assert audio_connections == [1, 1]
+
+
 def _make_stt(base_url: str, session: aiohttp.ClientSession, **kwargs: Any) -> STT:
     return STT(
         model="deepgram/nova-3",
