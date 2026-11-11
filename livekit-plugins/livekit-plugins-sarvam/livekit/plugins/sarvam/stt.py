@@ -1040,8 +1040,7 @@ class SpeechStream(stt.SpeechStream):
             return None
         if value <= 0:
             return None
-        # Shift into the stream timeline so the value survives reconnects: the base
-        # class advances start_time_offset by the session start -> audio start delay.
+        # Map connection-relative timestamps onto the caller's audio timeline.
         return float(value) + self.start_time_offset
 
     def _reset_utterance_state(self) -> None:
@@ -1283,11 +1282,10 @@ class SpeechStream(stt.SpeechStream):
         try:
             # update_options() and keyterm updates end a connection to reopen it with the
             # new options; the input channel carries on into the next connection
-            connection_start = time.time()
             while await self._run_connection():
-                # Sarvam times each connection from zero, so carry the stream timeline on
-                self.start_time_offset += time.time() - connection_start
-                self.start_time = connection_start = time.time()
+                # Sarvam times each connection from zero, so re-anchor on its first audio
+                self._input_ch.restart_provider_clock()
+                self.start_time = time.time()
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED

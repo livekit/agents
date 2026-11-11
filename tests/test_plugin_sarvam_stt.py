@@ -7,7 +7,9 @@ import json
 import weakref
 from collections.abc import Callable
 from types import SimpleNamespace
+from typing import Any
 
+import aiohttp
 import numpy as np
 import pytest
 
@@ -16,550 +18,443 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    APITimeoutError,
+    stt,
 )
+from livekit.plugins import sarvam
 from livekit.plugins.sarvam import stt as sarvam_stt
 
 pytestmark = pytest.mark.unit
 
 
-class _ErrorResponse:
-    def __init__(self, *, status: int, error_text: str) -> None:
-        self.status = status
-        self._error_text = error_text
-
-    async def __aenter__(self) -> _ErrorResponse:
-        return self
-
-    async def __aexit__(self, *_: object) -> None:
-        return None
-
-    async def text(self) -> str:
-        return self._error_text
-
-
-class _ErrorSession:
-    def __init__(self, *, status: int, error_text: str) -> None:
-        self._status = status
-        self._error_text = error_text
-
-    def post(self, *_: object, **__: object) -> _ErrorResponse:
-        return _ErrorResponse(status=self._status, error_text=self._error_text)
-
-
-class _FakeWS:
-    def __init__(
-        self,
-        messages: list[SimpleNamespace],
-        *,
-        close_code: int | None = None,
-        exception: BaseException | None = None,
-    ) -> None:
-        self._messages = iter(messages)
-        self.close_code = close_code
-        self._exception = exception
-        self.closed = False
-
-    def __aiter__(self) -> _FakeWS:
-        return self
-
-    async def __anext__(self) -> SimpleNamespace:
-        try:
-            return next(self._messages)
-        except StopIteration:
-            raise StopAsyncIteration from None
-
-    async def receive(self) -> SimpleNamespace:
-        try:
-            return next(self._messages)
-        except StopIteration:
-            return SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.CLOSED,
-                data=self.close_code,
-                extra=None,
-            )
-
-    def exception(self) -> BaseException | None:
-        return self._exception
-
-
-def _make_audio_buffer(
-    *, num_samples: int = 1600, sample_rate: int = 16000
-) -> list[rtc.AudioFrame]:
-    data = np.zeros(num_samples, dtype=np.int16).tobytes()
-    return [
-        rtc.AudioFrame(
-            data=data,
-            sample_rate=sample_rate,
-            num_channels=1,
-            samples_per_channel=num_samples,
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_recognize_preserves_native_status_error() -> None:
-    stt = sarvam_stt.STT(api_key="sk_test")
-    stt._session = _ErrorSession(  # type: ignore[assignment]
-        status=422, error_text='{"error":"bad request"}'
-    )
-
-    with pytest.raises(APIStatusError) as excinfo:
-        await stt._recognize_impl(
-            _make_audio_buffer(),
-            conn_options=APIConnectOptions(
-                max_retry=0,
-                retry_interval=0.0,
-                timeout=1.0,
-            ),
-        )
-
-    assert excinfo.value.status_code == 422
-    assert excinfo.value.body == '{"error":"bad request"}'
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_stream_run_preserves_native_api_status_error() -> None:
+def _bare_stream(**conn: Any) -> sarvam_stt.SpeechStream:
+    """A SpeechStream with what `_run` and the message handlers read, and no running task."""
     stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions(
-        max_retry=0,
-        retry_interval=0.0,
-        timeout=1.0,
-    )
+    stream._conn_options = APIConnectOptions(retry_interval=0.0, timeout=1.0, **conn)
     stream._connection_lock = asyncio.Lock()
     stream._connection_state = sarvam_stt.ConnectionState.DISCONNECTED
     stream._logger = sarvam_stt.logger.getChild("SpeechStream")
     stream._client_request_id = None
     stream._server_request_id = None
-
-    async def _raise_native_status_error() -> None:
-        raise APIStatusError(
-            "native provider error",
-            status_code=429,
-            body={"error": "rate_limit"},
-            retryable=False,
-        )
-
-    stream._run_connection = (  # type: ignore[method-assign]
-        _raise_native_status_error
-    )
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
+    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
+    return stream
+
+
+def _audio(num_samples: int = 1600) -> list[rtc.AudioFrame]:
+    return [rtc.AudioFrame(np.zeros(num_samples, dtype=np.int16).tobytes(), 16000, 1, num_samples)]
+
+
+async def test_recognize_preserves_native_status_error() -> None:
+    class _Response:
+        status = 422
+
+        async def __aenter__(self) -> _Response:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def text(self) -> str:
+            return '{"error":"bad request"}'
+
+    stt = sarvam_stt.STT(api_key="sk_test")
+    stt._session = SimpleNamespace(post=lambda *a, **k: _Response())  # type: ignore[assignment]
 
     with pytest.raises(APIStatusError) as excinfo:
-        await stream._run()
+        await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
 
-    assert excinfo.value.status_code == 429
-    assert excinfo.value.body == {"error": "rate_limit"}
+    assert (excinfo.value.status_code, excinfo.value.body) == (422, '{"error":"bad request"}')
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_stream_run_does_not_retry_on_timeout() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions(
-        max_retry=5,
-        retry_interval=0.0,
-        timeout=1.0,
-    )
-    stream._connection_lock = asyncio.Lock()
-    stream._connection_state = sarvam_stt.ConnectionState.DISCONNECTED
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._client_request_id = None
-    stream._server_request_id = None
+_NATIVE = APIStatusError("native", status_code=429, body={"error": "rate_limit"}, retryable=False)
 
+
+@pytest.mark.parametrize(
+    ("error", "expected", "match"),
+    [
+        (_NATIVE, APIStatusError, "native"),
+        (asyncio.TimeoutError("simulated"), APIConnectionError, "Failed to connect to STT"),
+        (RuntimeError("unexpected failure"), APIStatusError, "session failed: unexpected failure"),
+    ],
+)
+async def test_run_fails_once_without_internal_retries(
+    error: BaseException, expected: type[Exception], match: str
+) -> None:
+    stream = _bare_stream(max_retry=5)
     attempts = 0
 
-    async def _raise_timeout() -> None:
+    async def run_connection() -> None:
         nonlocal attempts
         attempts += 1
-        raise asyncio.TimeoutError("simulated timeout")
+        raise error
 
-    stream._run_connection = _raise_timeout  # type: ignore[method-assign]
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-
-    with pytest.raises(APIConnectionError, match="Failed to connect to STT WebSocket"):
+    stream._run_connection = run_connection  # type: ignore[method-assign]
+    with pytest.raises(expected, match=match):
         await stream._run()
 
     assert attempts == 1
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_stream_run_wraps_unexpected_as_status_error() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions(
-        max_retry=0,
-        retry_interval=0.0,
-        timeout=1.0,
-    )
-    stream._connection_lock = asyncio.Lock()
-    stream._connection_state = sarvam_stt.ConnectionState.DISCONNECTED
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._client_request_id = None
-    stream._server_request_id = None
-
-    async def _raise_unexpected() -> None:
-        raise RuntimeError("unexpected failure")
-
-    stream._run_connection = _raise_unexpected  # type: ignore[method-assign]
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-
-    with pytest.raises(APIStatusError, match="STT WebSocket session failed: unexpected failure"):
-        await stream._run()
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_stream_error_message_preserves_raw_payload() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    payload = {
-        "type": "error",
-        "data": {"message": "invalid model", "code": "400", "details": "model not found"},
-    }
-
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "error", "data": {"message": "invalid model", "code": "400", "details": "x"}},
+        {
+            "type": "event",
+            "data": {"event_type": "error", "message": "invalid model", "code": "400"},
+        },
+        {"type": "status", "error": "invalid model", "code": "400"},
+    ],
+    ids=["error", "event-error", "unknown-shape"],
+)
+async def test_error_payloads_raise_with_raw_body(payload: dict[str, Any]) -> None:
     with pytest.raises(APIStatusError) as excinfo:
-        await stream._handle_error_message(payload)
+        await _bare_stream()._handle_message(payload)
 
-    assert excinfo.value.status_code == 400
-    assert excinfo.value.body == payload
-    assert '"message":"invalid model"' in excinfo.value.message
+    assert (excinfo.value.status_code, excinfo.value.body) == (400, payload)
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_process_messages_raises_on_non_json_error_text() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions()
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
+class _FakeWS:
+    def __init__(self, messages: list[SimpleNamespace], *, close_code: int | None = None) -> None:
+        self._messages = iter(messages)
+        self.close_code = close_code
+        self.closed = False
 
-    ws = _FakeWS(
-        [
-            SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.TEXT,
-                data="invalid model: saarass:v3",
-                extra=None,
-            )
-        ]
-    )
+    async def receive(self) -> SimpleNamespace:
+        return next(
+            self._messages,
+            SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=self.close_code, extra=None),
+        )
 
+    def exception(self) -> BaseException | None:
+        return None
+
+
+async def test_non_json_text_raises() -> None:
+    ws = _FakeWS([SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data="invalid model", extra=None)])
     with pytest.raises(APIStatusError, match="Sarvam STT non-JSON error message"):
-        await stream._process_messages(ws)
+        await _bare_stream()._process_messages(ws)
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_process_messages_raises_on_error_close_reason() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions()
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    ws = _FakeWS(
-        [
-            SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.CLOSED,
-                data=None,
-                extra="invalid model: saarass:v3",
-            )
-        ],
-        close_code=1000,
-    )
-
-    with pytest.raises(APIStatusError) as excinfo:
-        await stream._process_messages(ws)
-
-    assert excinfo.value.body == {
-        "msg_type": "CLOSED",
-        "close_code": 1000,
-        "close_reason": "invalid model: saarass:v3",
-    }
-    assert "closed unexpectedly" in excinfo.value.message
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_process_messages_raises_on_non_graceful_close() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions()
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    ws = _FakeWS(
-        [
-            SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.CLOSE,
-                data=4000,
-                extra="Invalid model 'saarass:v3'.",
-            )
-        ],
-        close_code=None,
-    )
-
-    with pytest.raises(APIStatusError) as excinfo:
-        await stream._process_messages(ws)
-
-    assert excinfo.value.status_code == 4000
-    assert excinfo.value.body == {
-        "msg_type": "CLOSE",
-        "close_code": 4000,
-        "close_reason": "Invalid model 'saarass:v3'.",
-    }
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_process_messages_raises_on_post_loop_non_graceful_close() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions()
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    ws = _FakeWS([], close_code=4000)
-
-    with pytest.raises(APIStatusError) as excinfo:
-        await stream._process_messages(ws)
-
-    assert excinfo.value.status_code == 4000
-    assert excinfo.value.body == {
-        "msg_type": "CLOSED",
-        "close_code": 4000,
-        "close_reason": None,
-    }
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_handle_message_treats_event_error_payload_as_error() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    payload = {
-        "type": "event",
-        "data": {"event_type": "error", "message": "invalid model", "code": "400"},
-    }
-
-    with pytest.raises(APIStatusError) as excinfo:
-        await stream._handle_message(payload)
-
-    assert excinfo.value.status_code == 400
-    assert excinfo.value.body == payload
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_handle_message_treats_unknown_error_shape_as_error() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    payload = {
-        "type": "status",
-        "error": "invalid model",
-        "code": "400",
-    }
-
-    with pytest.raises(APIStatusError) as excinfo:
-        await stream._handle_message(payload)
-
-    assert excinfo.value.status_code == 400
-    assert excinfo.value.body == payload
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("liveness_timeout", [3.0, 30.0])
-async def test_sarvam_stt_recognize_forces_single_attempt_conn_options(
-    monkeypatch: pytest.MonkeyPatch,
-    liveness_timeout: float,
+@pytest.mark.parametrize(
+    ("messages", "close_code", "body"),
+    [
+        # a 1000 close with an error reason is still a failure
+        (
+            [SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None, extra="invalid model")],
+            1000,
+            {"msg_type": "CLOSED", "close_code": 1000, "close_reason": "invalid model"},
+        ),
+        (
+            [SimpleNamespace(type=aiohttp.WSMsgType.CLOSE, data=4000, extra="invalid model")],
+            None,
+            {"msg_type": "CLOSE", "close_code": 4000, "close_reason": "invalid model"},
+        ),
+        # the socket iterator ending on a non-graceful close code
+        ([], 4000, {"msg_type": "CLOSED", "close_code": 4000, "close_reason": None}),
+    ],
+    ids=["error-reason", "non-graceful", "after-loop"],
+)
+async def test_unexpected_close_raises(
+    messages: list[SimpleNamespace], close_code: int | None, body: dict[str, Any]
 ) -> None:
-    captured = {}
+    with pytest.raises(APIStatusError) as excinfo:
+        await _bare_stream()._process_messages(_FakeWS(messages, close_code=close_code))
 
-    async def _fake_base_recognize(
-        self: object,
-        buffer: object,
-        *,
-        language: object = sarvam_stt.NOT_GIVEN,
-        conn_options: APIConnectOptions = (sarvam_stt.DEFAULT_API_CONNECT_OPTIONS),
-    ) -> sarvam_stt.stt.SpeechEvent:
-        del self, buffer, language
-        captured["conn_options"] = conn_options
+    assert excinfo.value.body == body
+
+
+async def test_recognize_forces_single_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, APIConnectOptions] = {}
+
+    async def base_recognize(self: object, buffer: object, **kwargs: Any) -> object:
+        captured["conn_options"] = kwargs["conn_options"]
         return sarvam_stt.stt.SpeechEvent(type=sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT)
 
-    monkeypatch.setattr(sarvam_stt.stt.STT, "recognize", _fake_base_recognize)
+    monkeypatch.setattr(sarvam_stt.stt.STT, "recognize", base_recognize)
+    conn = APIConnectOptions(max_retry=9, retry_interval=1.5, timeout=7.0, liveness_timeout=3.0)
+    await sarvam_stt.STT(api_key="sk_test").recognize(_audio(), conn_options=conn)
 
-    stt = sarvam_stt.STT(api_key="sk_test")
-    await stt.recognize(
-        _make_audio_buffer(),
-        conn_options=APIConnectOptions(
-            max_retry=9,
-            retry_interval=1.5,
-            timeout=7.0,
-            liveness_timeout=liveness_timeout,
-        ),
+    assert captured["conn_options"] == APIConnectOptions(
+        max_retry=0, retry_interval=1.5, timeout=7.0, liveness_timeout=3.0
     )
 
-    conn_options = captured["conn_options"]
-    assert conn_options.max_retry == 0
-    assert conn_options.retry_interval == 1.5
-    assert conn_options.timeout == 7.0
-    assert conn_options.liveness_timeout == liveness_timeout
 
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("liveness_timeout", [3.0, 30.0])
-async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
-    monkeypatch: pytest.MonkeyPatch,
-    liveness_timeout: float,
-) -> None:
-    captured = {}
+async def test_stream_forces_single_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
 
     class _DummyStream:
-        def __init__(
-            self,
-            *,
-            stt: object,
-            opts: object,
-            conn_options: APIConnectOptions,
-            api_key: str,
-            http_session: object,
-            user_keyterms: object,
-        ) -> None:
-            del stt, opts, api_key, user_keyterms
-            captured["conn_options"] = conn_options
-            captured["http_session"] = http_session
+        def __init__(self, *, conn_options: APIConnectOptions, http_session: Any, **_: Any) -> None:
+            captured.update(conn_options=conn_options, http_session=http_session)
 
     monkeypatch.setattr(sarvam_stt, "SpeechStream", _DummyStream)
+    conn = APIConnectOptions(max_retry=8, retry_interval=0.2, timeout=4.0, liveness_timeout=3.0)
+    sarvam_stt.STT(api_key="sk_test").stream(conn_options=conn)
+    await captured["http_session"].close()
 
-    stt = sarvam_stt.STT(api_key="sk_test")
-    _ = stt.stream(
-        conn_options=APIConnectOptions(
-            max_retry=8,
-            retry_interval=0.2,
-            timeout=4.0,
-            liveness_timeout=liveness_timeout,
-        )
+    assert captured["conn_options"] == APIConnectOptions(
+        max_retry=0, retry_interval=0.2, timeout=4.0, liveness_timeout=3.0
     )
 
-    try:
-        conn_options = captured["conn_options"]
-        assert conn_options.max_retry == 0
-        assert conn_options.retry_interval == 0.2
-        assert conn_options.timeout == 4.0
-        assert conn_options.liveness_timeout == liveness_timeout
-    finally:
-        await captured["http_session"].close()
 
+async def test_aclose_closes_every_stream_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def idle_run(self: object) -> None:
+        await asyncio.Event().wait()
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_aclose_closes_tracked_stream_sessions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _idle_run(self: object) -> None:
-        del self
-        await asyncio.Event().wait()  # cancelled by aclose()
-
-    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _idle_run)
-
+    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", idle_run)
     stt = sarvam_stt.STT(api_key="sk_test")
-    stream_a = stt.stream()
-    stream_b = stt.stream(language="hi-IN")
-    sessions = [stream_a._session, stream_b._session]
+    closed_first = stt.stream()
+    streams = [closed_first, stt.stream(language="hi-IN")]
+    sessions = [s._session for s in streams]
+    assert not any(s.closed for s in sessions)
 
-    assert all(isinstance(s, sarvam_stt.aiohttp.ClientSession) for s in sessions)
-    assert all(not s.closed for s in sessions)
-    assert len(stt._streams) == 2
-
+    # aclose tolerates a stream the caller already closed
+    await closed_first.aclose()
     await stt.aclose()
 
-    assert all(s.closed for s in sessions), (
-        "STT.aclose() must close every per-stream aiohttp session"
-    )
+    assert all(s.closed for s in sessions)
     assert len(stt._streams) == 0
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_async_context_closes_stream_sessions(
+async def test_aclose_closes_session_of_a_dropped_finished_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _idle_run(self: object) -> None:
-        del self
-        await asyncio.Event().wait()  # cancelled by aclose()
+    async def immediate_run(self: object) -> None:
+        return None
 
-    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _idle_run)
-
-    async with sarvam_stt.STT(api_key="sk_test") as stt:
-        stream = stt.stream()
-        session = stream._session
-        assert not session.closed
-
-    assert session.closed, "exiting `async with` must close per-stream sessions"
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_aclose_tolerates_already_closed_streams(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _idle_run(self: object) -> None:
-        del self
-        await asyncio.Event().wait()  # cancelled by aclose()
-
-    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _idle_run)
-
-    stt = sarvam_stt.STT(api_key="sk_test")
-    stream = stt.stream()
-    session = stream._session
-
-    await stream.aclose()
-    await stt.aclose()  # must not raise on an already-closed stream
-
-    assert session.closed
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_aclose_closes_session_of_garbage_collected_stream(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A finished stream the caller dropped must not take its session to the GC.
-
-    Regression test for the WeakSet hole in the original fix: with weak
-    tracking, a completed ``SpeechStream`` can be collected before
-    ``STT.aclose()`` snapshots the set, leaving its per-stream
-    ``aiohttp.ClientSession`` unreachable and unclosed. Strong ownership keeps
-    the stream (and its session) reachable until ``aclose`` closes it.
-    """
-
-    async def _immediate_run(self: object) -> None:
-        del self  # return immediately: the stream task finishes on its own
-
-    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _immediate_run)
-
+    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", immediate_run)
     stt = sarvam_stt.STT(api_key="sk_test")
     stream = stt.stream()
     session = stream._session
     stream_ref = weakref.ref(stream)
-    del stream  # drop the caller's reference; only the STT's tracking remains
-
-    # Let the stream task and the base metrics task finish so the stream is at
-    # the mercy of the collector (its done-callback cycle needs gc.collect()).
+    del stream
     for _ in range(50):
-        if stream_ref() is None:
-            break
         await asyncio.sleep(0)
     gc.collect()
 
-    if stream_ref() is None:
-        # Weak tracking: the stream really was collected -- the leak scenario.
-        assert len(stt._streams) == 0
-    else:
-        # Strong ownership: the STT retains the finished stream on purpose.
-        assert len(stt._streams) == 1
-
-    assert not session.closed, "session must still be open and owned by the STT"
-
+    # the STT owns finished streams strongly, so a collected stream cannot strand its session
+    assert stream_ref() is not None
+    assert not session.closed
     await stt.aclose()
+    assert session.closed
 
-    assert session.closed, "STT.aclose() must close the session of a stream the caller dropped"
+
+class _WebSocket:
+    """Like Sarvam's endpoint, it never closes the socket on its own."""
+
+    close_code = 1000
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.sent: asyncio.Queue[dict] = asyncio.Queue()
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        self.sent.put_nowait(json.loads(data))
+
+    async def receive(self) -> aiohttp.WSMessage:
+        await self._closed.wait()
+        return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, 1000, "")
+
+    async def close(self) -> None:
+        self.closed = True
+        self._closed.set()
+
+    async def next_message(self) -> dict:
+        return await asyncio.wait_for(self.sent.get(), timeout=2)
+
+
+class _Session:
+    def __init__(self) -> None:
+        self.closed = False
+        self.ws = _WebSocket()
+        self.connections = 0
+
+    async def ws_connect(self, *args: object, **kwargs: object) -> _WebSocket:
+        self.connections += 1
+        return self.ws
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def session(monkeypatch: pytest.MonkeyPatch) -> _Session:
+    monkeypatch.setattr(sarvam_stt, "END_OF_INPUT_GRACE", 0.01)
+    session = _Session()
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda *args, **kwargs: session)
+    return session
+
+
+def _frame(ms: int, value: int, sample_rate: int) -> rtc.AudioFrame:
+    samples = sample_rate * ms // 1000
+    return rtc.AudioFrame(bytes([value, 0]) * samples, sample_rate, 1, samples)
+
+
+async def _expect_audio(ws: _WebSocket, frame: rtc.AudioFrame) -> None:
+    received = b""
+    while len(received) < len(frame.data.tobytes()):
+        message = await ws.next_message()
+        assert "type" not in message
+        assert message["audio"]["sample_rate"] == frame.sample_rate
+        assert message["audio"]["encoding"] == "pcm_s16le"
+        chunk = base64.b64decode(message["audio"]["data"])
+        assert chunk
+        received += chunk
+    assert received == frame.data.tobytes()
+
+
+@pytest.mark.parametrize("flush_signal", [True, False, None])
+@pytest.mark.parametrize(("first_ms", "sample_rate"), [(30, 8000), (75, 16000)])
+async def test_flush_preserves_audio_and_accepts_next_segment(
+    session: _Session, flush_signal: bool | None, first_ms: int, sample_rate: int
+) -> None:
+    async with sarvam.STT(
+        api_key="test-key",
+        flush_signal=flush_signal,
+        sample_rate=sample_rate,
+        input_audio_codec="pcm_s16le",
+    ) as model:
+        stream = model.stream()
+        for value, ms in enumerate([first_ms, 50, 10], start=1):
+            frame = _frame(ms, value, sample_rate)
+            stream.push_frame(frame)
+            stream.flush()
+            await _expect_audio(session.ws, frame)
+            if flush_signal:
+                assert await session.ws.next_message() == {"type": "flush"}
+            assert not session.ws.closed
+
+        stream.end_input()
+        # one flush closes the input: the framework's (flush_signal) or the stream's own
+        assert await session.ws.next_message() == {"type": "flush"}
+        assert [event async for event in stream] == []
+        assert session.ws.sent.empty()
+        assert session.ws.closed
+        assert session.connections == 1
+
+
+@pytest.mark.parametrize("tail_ms", [0, 10])
+@pytest.mark.parametrize("flush_signal", [True, False, None])
+async def test_end_input_drains_audio_before_terminating(
+    session: _Session, tail_ms: int, flush_signal: bool | None
+) -> None:
+    async with sarvam.STT(
+        api_key="test-key", flush_signal=flush_signal, input_audio_codec="pcm_s16le"
+    ) as model:
+        stream = model.stream()
+        tail = _frame(tail_ms, 3, 16000)
+        if tail_ms:
+            stream.push_frame(tail)
+        stream.end_input()
+        if tail_ms:
+            await _expect_audio(session.ws, tail)
+        assert await session.ws.next_message() == {"type": "flush"}
+        assert [event async for event in stream] == []
+        assert session.ws.sent.empty()
+        assert session.ws.closed
+
+
+async def test_end_input_waits_for_the_open_utterance(session: _Session) -> None:
+    """Speech still open at end of input gets its final transcript before the close."""
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await asyncio.sleep(0.05)
+        assert not session.ws.closed  # still waiting on the utterance
+
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}}
+        )
+        events = [event.type async for event in stream]
+
+        assert events == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.RECOGNITION_USAGE,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+        ]
+        assert session.ws.closed
+
+
+async def test_end_input_times_out_when_the_utterance_never_finishes(session: _Session) -> None:
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.2))
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        stream.end_input()
+
+        with pytest.raises(APITimeoutError, match="final transcript"):
+            async for _ in stream:
+                pass
+
+
+async def test_end_input_grace_does_not_count_against_timeout(
+    session: _Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timeout shorter than the grace still lets a clean stream end."""
+    monkeypatch.setattr(sarvam_stt, "END_OF_INPUT_GRACE", 0.1)
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.02))
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        assert [event async for event in stream] == []
+        assert session.ws.closed
+
+
+async def test_aclose_does_not_flush(session: _Session) -> None:
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream.aclose()
+        assert session.ws.sent.empty()
+        assert session.ws.closed
+
+
+@pytest.mark.parametrize("flush_signal", [True, False, None])
+@pytest.mark.parametrize("client_flushed", [True, False])
+async def test_server_end_speech_does_not_flush_next_utterance(
+    session: _Session, flush_signal: bool | None, client_flushed: bool
+) -> None:
+    async with sarvam.STT(
+        api_key="test-key", flush_signal=flush_signal, input_audio_codec="pcm_s16le"
+    ) as model:
+        stream = model.stream()
+        first = _frame(50, 1, 16000)
+        stream.push_frame(first)
+        await _expect_audio(session.ws, first)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        if client_flushed:
+            stream.flush()
+            if flush_signal:
+                assert await session.ws.next_message() == {"type": "flush"}
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+        for ms in [50, 10]:
+            frame = _frame(ms, 2, 16000)
+            stream.push_frame(frame)
+            if ms == 10:
+                stream.flush()
+            await _expect_audio(session.ws, frame)
+        if flush_signal:
+            assert await session.ws.next_message() == {"type": "flush"}
+        assert session.ws.sent.empty()
+        assert not session.ws.closed
 
 
 class _ReconnectWS:
@@ -602,7 +497,7 @@ class _ReconnectSession:
         self.closed = True
 
 
-async def test_sarvam_stt_stream_update_options_reconnects_instead_of_ending(
+async def test_stream_update_options_reconnects_instead_of_ending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _ReconnectSession()
@@ -651,7 +546,7 @@ def _pcm_frame(ms: int, value: int) -> rtc.AudioFrame:
     return rtc.AudioFrame(bytes([value, 0]) * samples, 16000, 1, samples)
 
 
-async def test_sarvam_stt_reconnect_closes_the_open_utterance_on_the_old_connection(
+async def test_reconnect_closes_the_open_utterance_on_the_old_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session, stt = _reconnect_stt(monkeypatch)
@@ -683,7 +578,7 @@ async def test_sarvam_stt_reconnect_closes_the_open_utterance_on_the_old_connect
     await stt.aclose()
 
 
-async def test_sarvam_stt_reconnect_waits_for_the_flushed_transcript(
+async def test_reconnect_waits_for_the_flushed_transcript(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A transcript from earlier in the utterance doesn't end the wait for the flush."""
@@ -709,7 +604,7 @@ async def test_sarvam_stt_reconnect_waits_for_the_flushed_transcript(
     await stt.aclose()
 
 
-async def test_sarvam_stt_reconnect_ends_the_turn_when_no_transcript_arrives(
+async def test_reconnect_ends_the_turn_when_no_transcript_arrives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sarvam_stt, "RECONNECT_SETTLE_TIMEOUT", 0.05)
@@ -729,7 +624,7 @@ async def test_sarvam_stt_reconnect_ends_the_turn_when_no_transcript_arrives(
     await stt.aclose()
 
 
-async def test_sarvam_stt_reconnect_carries_buffered_audio_over(
+async def test_reconnect_carries_buffered_audio_over(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session, stt = _reconnect_stt(monkeypatch)
@@ -754,16 +649,22 @@ async def test_sarvam_stt_reconnect_carries_buffered_audio_over(
     await stt.aclose()
 
 
-async def test_sarvam_stt_reconnect_keeps_transcript_times_on_the_stream_timeline(
+@pytest.mark.virtual_time
+async def test_reconnect_keeps_transcript_times_on_the_stream_timeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session, stt = _reconnect_stt(monkeypatch)
     stream = stt.stream()
     await _wait_until(lambda: len(session.sockets) == 1)
+    stream.push_frame(_pcm_frame(30, 1))
+    await _wait_until(lambda: len(stream._audio_buffer) > 0)
     await asyncio.sleep(0.2)
 
     stream.update_options(language="hi-IN", model="saaras:v4")
     await _wait_until(lambda: len(session.sockets) == 2)
+    # the new connection's clock starts with the first audio it reads
+    stream.push_frame(_pcm_frame(30, 2))
+    await _wait_until(lambda: len(session.sockets[1].audio()) > 0)
     assert stream.start_time_offset >= 0.2
 
     await stream._handle_transcript_data(
