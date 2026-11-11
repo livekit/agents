@@ -187,8 +187,9 @@ def test_agent_speech_end_clears_confirmed_interruption_after_recognition_teardo
     activity._interruption_detected = True
     activity._audio_recognition = MagicMock()
 
-    def _end_agent_speech(*, ended_at: float) -> None:
+    def _end_agent_speech(*, ended_at: float, paused: bool = False) -> None:
         assert ended_at == 10.0
+        assert not paused
         assert activity._interruption_detected
 
     activity._audio_recognition._on_end_of_agent_speech.side_effect = _end_agent_speech

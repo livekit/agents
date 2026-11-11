@@ -464,6 +464,116 @@ class TestDynamicEndpointing:
 
         assert ep._overlapping is False
 
+    @pytest.mark.parametrize(
+        ("turn_delay", "interruption_delay", "expected"),
+        [
+            (0.3, 0.2, 0.4),
+            (0.3, 0.27, 0.435),
+            (0.3, 0.4, 0.3),
+            (1.5, 0.2, 0.3),
+            (0.0, 0.2, 0.3),
+            (0.3, 0.0, 0.3),
+        ],
+    )
+    def test_paused_interruption_uses_original_timing_once(
+        self, turn_delay: float, interruption_delay: float, expected: float
+    ) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.4, alpha=0.5)
+        ep.on_start_of_speech(99.0)
+        ep.on_end_of_speech(100.0)
+        ep.on_start_of_agent_speech(100.0 + turn_delay)
+        user_start = 100.0 + turn_delay + interruption_delay
+        ep.on_start_of_speech(user_start, overlapping=True)
+        ep.on_end_of_agent_speech(user_start + 0.5, paused=True)
+        ep.on_end_of_agent_speech(user_start + 0.6)
+        ep.on_end_of_speech(user_start + 0.7, interruption=False)
+        ep.on_end_of_speech(user_start + 0.8, interruption=False)
+
+        assert ep.min_delay == pytest.approx(0.3)
+
+        ep.on_pause_resolved(interrupted=True)
+        ep.on_pause_resolved(interrupted=True)
+
+        assert ep.min_delay == pytest.approx(expected)
+        assert not ep.overlapping
+
+    def test_resumed_speech_discards_pause_and_false_utterance_history(self) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.4, alpha=0.5)
+        ep.on_start_of_speech(99.0)
+        ep.on_end_of_speech(100.0)
+        ep.on_start_of_agent_speech(100.3)
+        ep.on_start_of_speech(100.57, overlapping=True)
+        ep.on_end_of_agent_speech(101.0, paused=True)
+        ep.on_end_of_speech(101.2)
+        ep.on_start_of_agent_speech(101.3, resumed=True)
+        ep.on_pause_resolved(interrupted=True)
+        ep.on_end_of_agent_speech(105.0)
+        ep.on_start_of_speech(106.0)
+        ep.on_end_of_speech(108.0)
+
+        assert ep.min_delay == pytest.approx(0.3)
+
+        ep.on_start_of_speech(108.5)
+        ep.on_end_of_speech(109.0)
+
+        assert ep.min_delay == pytest.approx(0.4)
+
+    @pytest.mark.parametrize("resolve_before_eos", [False, True])
+    def test_discarded_utterance_cannot_seed_the_next_pause(self, resolve_before_eos: bool) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.4, alpha=0.5)
+        ep.on_start_of_speech(99.0)
+        ep.on_end_of_speech(100.0)
+        ep.on_start_of_agent_speech(100.3)
+        ep.on_start_of_speech(100.57, overlapping=True)
+        ep.on_end_of_agent_speech(101.0, paused=True)
+
+        if resolve_before_eos:
+            ep.on_pause_resolved(interrupted=False)
+        ep.on_end_of_speech(101.2)
+        if not resolve_before_eos:
+            ep.on_pause_resolved(interrupted=False)
+
+        ep.on_start_of_speech(101.7)
+        ep.on_end_of_speech(102.0)
+        assert ep.min_delay == pytest.approx(0.3)
+
+        ep.on_start_of_speech(102.5)
+        ep.on_end_of_speech(103.0)
+        assert ep.min_delay == pytest.approx(0.4)
+
+    @pytest.mark.parametrize("interrupted", [False, True])
+    @pytest.mark.parametrize("resolve_before_eos", [False, True])
+    def test_user_pauses_while_agent_is_paused_wait_for_resolution(
+        self, interrupted: bool, resolve_before_eos: bool
+    ) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.4, alpha=0.5)
+        ep.on_start_of_speech(99.0)
+        ep.on_end_of_speech(100.0)
+        ep.on_start_of_agent_speech(100.3)
+        ep.on_start_of_speech(100.57, overlapping=True)
+        ep.on_end_of_agent_speech(101.0, paused=True)
+        ep.on_end_of_speech(101.2)
+        ep.on_start_of_speech(101.7)
+
+        def resolve() -> None:
+            if interrupted:
+                ep.on_pause_resolved(interrupted=True)
+            else:
+                ep.on_start_of_agent_speech(102.1, resumed=True)
+
+        assert ep.min_delay == pytest.approx(0.3)
+        if resolve_before_eos:
+            resolve()
+        ep.on_end_of_speech(102.0, interruption=False)
+        if not resolve_before_eos:
+            assert ep.min_delay == pytest.approx(0.3)
+            resolve()
+
+        expected = 0.4675 if interrupted else 0.3
+        assert ep.min_delay == pytest.approx(expected)
+        ep.on_pause_resolved(interrupted=True)
+        assert ep.min_delay == pytest.approx(expected)
+
     def test_duplicate_agent_speech_end_does_not_restore_consumed_marker(self) -> None:
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
 
