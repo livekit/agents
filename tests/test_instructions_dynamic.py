@@ -69,6 +69,21 @@ def test_section_free_instructions_equal_their_text():
     assert Instructions(COMMON, audio="", dynamic="") == COMMON
 
 
+@pytest.mark.parametrize("audio", [None, ""])
+@pytest.mark.parametrize("text", [None, ""])
+@pytest.mark.parametrize("dynamic", [None, ""])
+def test_section_free_instructions_work_as_equivalent_string_keys(
+    audio: str | None, text: str | None, dynamic: str | None
+) -> None:
+    instructions = Instructions(COMMON, audio=audio, text=text, dynamic=dynamic)
+
+    assert instructions == COMMON
+    assert hash(instructions) == hash(COMMON)
+    assert {COMMON: "value"}[instructions] == "value"
+    assert {instructions: "value"}[COMMON] == "value"
+    assert len({COMMON, instructions}) == 1
+
+
 def test_str_stays_the_common_text():
     assert str(Instructions(COMMON, dynamic=DYNAMIC)) == COMMON
 
