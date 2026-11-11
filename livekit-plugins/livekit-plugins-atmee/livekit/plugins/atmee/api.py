@@ -50,7 +50,7 @@ WaitFor = Literal["initializing", "avatar_joined"]
 
 # Deprecated: kept for code written against earlier releases.
 AvatarVersion = Literal["v1", "v2"]
-SUPPORTED_AVATAR_VERSIONS: frozenset[str] = frozenset({"v1", "v2"})
+SUPPORTED_AVATAR_VERSIONS: frozenset[str] = frozenset(get_args(AvatarVersion))
 
 # Overall budget of the start call, by the avatar's generation. A v1 start is
 # acknowledged within seconds and its avatar joins within a couple of minutes.
