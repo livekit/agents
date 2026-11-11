@@ -24,7 +24,7 @@ import time
 import weakref
 from dataclasses import dataclass, replace
 from functools import cached_property
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import aiohttp
 
@@ -324,16 +324,31 @@ class TTS(tts.TTS):
                 self.__current_connection.mark_non_current()
                 self.__current_connection = None
 
-    async def _current_connection(self) -> tuple[_Connection | _DialogueConnection, float, bool]:
+    @overload
+    async def _current_connection(
+        self, *, allow_dialogue: Literal[True] = True
+    ) -> tuple[_Connection | _DialogueConnection, float, bool]: ...
+
+    @overload
+    async def _current_connection(
+        self, *, allow_dialogue: Literal[False]
+    ) -> tuple[_Connection | _DialogueConnection, float, bool] | None: ...
+
+    async def _current_connection(
+        self, *, allow_dialogue: bool = True
+    ) -> tuple[_Connection | _DialogueConnection, float, bool] | None:
         """Get the current connection, creating one if needed.
 
         Returns:
-            Tuple of (connection, acquire_time, connection_reused)
+            Tuple of (connection, acquire_time, connection_reused), or None when
+            dialogue acquisition is disabled and the current model is dialogue.
         """
         async with self._connection_lock:
             session = self._ensure_session()
             t0 = time.perf_counter()
             while True:
+                if not allow_dialogue and is_dialogue_model(self._opts.model):
+                    return None
                 if (
                     self.__current_connection
                     and self.__current_connection.is_current
@@ -388,7 +403,7 @@ class TTS(tts.TTS):
         try:
             while not is_dialogue_model(self._opts.model):
                 try:
-                    await self._current_connection()
+                    await self._current_connection(allow_dialogue=False)
                     return
                 except asyncio.CancelledError:
                     raise

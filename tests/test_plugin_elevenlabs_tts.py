@@ -110,7 +110,7 @@ async def test_prewarm_opens_connection(monkeypatch: pytest.MonkeyPatch) -> None
     opened = asyncio.Event()
 
     async def _current_connection(
-        self: object,
+        self: object, *, allow_dialogue: bool = True
     ) -> tuple[SimpleNamespace, float, bool]:
         opened.set()
         return SimpleNamespace(_recv_task=None), 0.0, False
@@ -169,6 +169,65 @@ async def test_option_update_during_connect_discards_stale_socket(
         await tts.aclose()
 
 
+@pytest.mark.parametrize(
+    "model", ["eleven_v3", "eleven_v3_conversational", "eleven_v4", "eleven_v4_turbo"]
+)
+@pytest.mark.parametrize("prewarm", [True, False])
+async def test_model_switch_during_connect_defers_dialogue_only_for_prewarm(
+    monkeypatch: pytest.MonkeyPatch, model: str, prewarm: bool
+) -> None:
+    started = asyncio.Event()
+    resume = asyncio.Event()
+
+    class _StubConnection:
+        def __init__(self, opts: elevenlabs_tts._TTSOptions, session: object) -> None:
+            self.model = opts.model
+            self._closed = False
+            self.is_current = True
+            connections.append(self)
+
+        async def connect(self) -> None:
+            if len(connections) == 1:
+                started.set()
+                await resume.wait()
+
+        async def aclose(self) -> None:
+            self._closed = True
+
+        def mark_non_current(self) -> None:
+            self.is_current = False
+
+    connections: list[_StubConnection] = []
+    monkeypatch.setattr(elevenlabs_tts, "_Connection", _StubConnection)
+    monkeypatch.setattr(elevenlabs_tts, "_DialogueConnection", _StubConnection)
+    async with aiohttp.ClientSession() as session:
+        tts = elevenlabs_tts.TTS(api_key="test-key", http_session=session)
+        if prewarm:
+            tts.prewarm()
+            acquisition = tts._prewarm_task
+            assert acquisition is not None
+        else:
+            acquisition = asyncio.create_task(tts._current_connection())
+
+        try:
+            await asyncio.wait_for(started.wait(), timeout=1)
+            tts.update_options(model=model)
+            resume.set()
+            await asyncio.wait_for(acquisition, timeout=1)
+
+            assert connections[0]._closed
+            assert [conn.model for conn in connections] == (
+                ["eleven_turbo_v2_5"] if prewarm else ["eleven_turbo_v2_5", model]
+            )
+
+            # A real synthesis acquisition must still connect after prewarm stops.
+            await tts._current_connection()
+            assert [conn.model for conn in connections] == ["eleven_turbo_v2_5", model]
+        finally:
+            resume.set()
+            await tts.aclose()
+
+
 @pytest.mark.asyncio
 async def test_prewarm_stops_on_non_retryable_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
     attempts = 0
@@ -178,7 +237,9 @@ async def test_prewarm_stops_on_non_retryable_api_error(monkeypatch: pytest.Monk
     async def _sleep(_delay: float) -> None:
         finished.set()
 
-    async def _current_connection(self: object) -> tuple[SimpleNamespace, float, bool]:
+    async def _current_connection(
+        self: object, *, allow_dialogue: bool = True
+    ) -> tuple[SimpleNamespace, float, bool]:
         nonlocal attempts
         attempts += 1
         raise elevenlabs_tts.APIStatusError("Unauthorized", status_code=401)
@@ -203,7 +264,7 @@ async def test_prewarm_retries_with_exponential_backoff(
     ready = asyncio.Event()
 
     async def _current_connection(
-        self: object,
+        self: object, *, allow_dialogue: bool = True
     ) -> tuple[SimpleNamespace, float, bool]:
         nonlocal attempts
         attempts += 1
@@ -259,7 +320,7 @@ async def test_dialogue_prewarm_defers_connection_until_synthesis(
     connection = _StubConnection()
 
     async def _current_connection(
-        self: object,
+        self: object, *, allow_dialogue: bool = True
     ) -> tuple[_StubConnection, float, bool]:
         nonlocal acquisitions
         acquisitions += 1
@@ -294,7 +355,9 @@ async def test_prewarm_stops_retrying_after_switch_to_dialogue(
     resume = asyncio.Event()
     sleep = asyncio.sleep
 
-    async def _current_connection(self: object) -> tuple[SimpleNamespace, float, bool]:
+    async def _current_connection(
+        self: object, *, allow_dialogue: bool = True
+    ) -> tuple[SimpleNamespace, float, bool]:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -608,7 +671,9 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
 
     connection = _StubConnection()
 
-    async def _current_connection(self: object) -> tuple[object, float, bool]:
+    async def _current_connection(
+        self: object, *, allow_dialogue: bool = True
+    ) -> tuple[object, float, bool]:
         return connection, 0.0, True
 
     original_end_segment = agents_tts.AudioEmitter.end_segment
