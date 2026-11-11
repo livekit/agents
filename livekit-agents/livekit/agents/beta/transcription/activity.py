@@ -10,7 +10,7 @@ _EPSILON = 1e-9
 
 
 @dataclass(frozen=True)
-class TrackActivity:
+class _TrackActivity:
     """One participant's contribution to one block of the mix."""
 
     rms: float
@@ -20,7 +20,7 @@ class TrackActivity:
     """The track the block came from; a participant can switch microphones mid-session."""
 
 
-class ActivityTimeline:
+class _ActivityTimeline:
     """Who was audible in each block of the mixed stream, indexed by the mixer's clock.
 
     The clock is the audio pushed to the STT, so a timestamp the STT reports maps onto a block
@@ -30,7 +30,7 @@ class ActivityTimeline:
     def __init__(self, *, block_duration: float, retention: float) -> None:
         self._block_duration = block_duration
         self._max_blocks = max(1, math.ceil(retention / block_duration))
-        self._blocks: deque[dict[str, TrackActivity]] = deque()
+        self._blocks: deque[dict[str, _TrackActivity]] = deque()
         self._first_index = 0
 
     @property
@@ -47,7 +47,7 @@ class ActivityTimeline:
         """Stream time covered so far, in seconds."""
         return self.end_index * self._block_duration
 
-    def append(self, activity: dict[str, TrackActivity]) -> None:
+    def append(self, activity: dict[str, _TrackActivity]) -> None:
         self._blocks.append(activity)
         while len(self._blocks) > self._max_blocks:
             self._blocks.popleft()
@@ -74,7 +74,7 @@ class ActivityTimeline:
                     scores[identity] = scores.get(identity, 0.0) + activity.rms
         return scores
 
-    def _span(self, start: float, end: float) -> Iterator[dict[str, TrackActivity]]:
+    def _span(self, start: float, end: float) -> Iterator[dict[str, _TrackActivity]]:
         first = math.floor(start / self._block_duration + _EPSILON)
         last = max(first + 1, math.ceil(end / self._block_duration - _EPSILON))
         for index in range(max(first, self._first_index), min(last, self.end_index)):

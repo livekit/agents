@@ -8,7 +8,7 @@ from livekit import rtc
 
 from ...log import logger
 from ...utils.audio_gate import AudioGate, frame_rms
-from .activity import ActivityTimeline, TrackActivity
+from .activity import _ActivityTimeline, _TrackActivity
 
 
 class _TrackInput:
@@ -122,7 +122,7 @@ class _Mixer:
         *,
         sample_rate: int,
         block_size: int,
-        timeline: ActivityTimeline,
+        timeline: _ActivityTimeline,
         max_backlog: int,
         backlog_window: int,
     ) -> None:
@@ -168,7 +168,7 @@ class _Mixer:
 
     def mix(self) -> rtc.AudioFrame:
         mixed = np.zeros(self._block_size, dtype=np.float32)
-        activity: dict[str, TrackActivity] = {}
+        activity: dict[str, _TrackActivity] = {}
 
         # audio that arrived after the mix went on without it stays queued, mixed behind the
         # others' for good; a backlog that never drains is dropped so speech stays in step. A
@@ -190,7 +190,7 @@ class _Mixer:
                 samples_per_channel=self._block_size,
             )
             mixed += samples
-            activity[inp.identity] = TrackActivity(
+            activity[inp.identity] = _TrackActivity(
                 rms=frame_rms(frame), open=inp.gate.update(frame), track_sid=inp.track_sid
             )
 

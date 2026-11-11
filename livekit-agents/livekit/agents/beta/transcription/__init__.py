@@ -1,4 +1,3 @@
-from .attribution import AttributionMethod
-from .session import TranscriptionSession, TranscriptSegment
+from .session import ParticipantTranscribedEvent, TranscriptionSession
 
-__all__ = ["AttributionMethod", "TranscriptSegment", "TranscriptionSession"]
+__all__ = ["ParticipantTranscribedEvent", "TranscriptionSession"]

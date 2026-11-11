@@ -10,8 +10,8 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, APIConnectionError, LanguageCode, NotGivenOr
-from livekit.agents.beta.transcription import TranscriptionSession, TranscriptSegment
-from livekit.agents.beta.transcription.activity import ActivityTimeline, TrackActivity
+from livekit.agents.beta.transcription import ParticipantTranscribedEvent, TranscriptionSession
+from livekit.agents.beta.transcription.activity import _ActivityTimeline, _TrackActivity
 from livekit.agents.beta.transcription.attribution import _Attributor
 from livekit.agents.beta.transcription.mixer import _Mixer, _TrackInput
 from livekit.agents.stt import (
@@ -65,10 +65,10 @@ def _final(text: str, words: list[TimedString] | None = None, **kwargs: object) 
     )
 
 
-def _timeline(blocks: list[dict[str, tuple[float, bool]]]) -> ActivityTimeline:
-    timeline = ActivityTimeline(block_duration=_BLOCK, retention=60.0)
+def _timeline(blocks: list[dict[str, tuple[float, bool]]]) -> _ActivityTimeline:
+    timeline = _ActivityTimeline(block_duration=_BLOCK, retention=60.0)
     for block in blocks:
-        timeline.append({k: TrackActivity(rms, open) for k, (rms, open) in block.items()})
+        timeline.append({k: _TrackActivity(rms, open) for k, (rms, open) in block.items()})
     return timeline
 
 
@@ -157,7 +157,7 @@ async def _drained(session: TranscriptionSession, timeout: float = 5.0) -> None:
     """Wait until nobody is left in the mix."""
 
     async def wait() -> None:
-        while session.participants:
+        while session._mixer.inputs:
             await asyncio.sleep(0.01)
 
     await asyncio.wait_for(wait(), timeout)
@@ -165,21 +165,33 @@ async def _drained(session: TranscriptionSession, timeout: float = 5.0) -> None:
 
 async def _run_session(
     stt: _ScriptedSTT, tracks: dict[str, list[rtc.AudioFrame]]
-) -> list[TranscriptSegment]:
+) -> list[ParticipantTranscribedEvent]:
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    segments: list[TranscriptSegment] = []
-    session.on("transcript_segment", segments.append)
-    await session.start()
-    # frame by frame across participants, in real time as a room delivers them
-    started = time.monotonic()
-    for i in range(max(len(frames) for frames in tracks.values())):
-        if (wait := started + i * _BLOCK - time.monotonic()) > 0:
-            await asyncio.sleep(wait)
-        for identity, frames in tracks.items():
-            if i < len(frames):
-                session.push_audio(identity, frames[i])
+    segments: list[ParticipantTranscribedEvent] = []
+    session.on("participant_transcribed", segments.append)
+    await _start(session)
+    # each participant in real time, as a room delivers them
+    for identity, frames in tracks.items():
+        session._add_input(identity, _paced(frames))
+    await _drained(session)
     await session.aclose()
     return segments
+
+
+class _EmptyRoom:
+    """A room nobody is in; the tests feed the session's inputs themselves."""
+
+    remote_participants: dict[str, object] = {}
+
+    def on(self, *_: object) -> None:
+        pass
+
+    def off(self, *_: object) -> None:
+        pass
+
+
+async def _start(session: TranscriptionSession) -> None:
+    await session.start(room=_EmptyRoom())  # type: ignore[arg-type]
 
 
 # -- timeline -------------------------------------------------------------------------------
@@ -200,18 +212,18 @@ def test_timeline_scores_only_open_blocks() -> None:
 
 
 def test_timeline_knows_which_track_a_span_was_spoken_on() -> None:
-    timeline = ActivityTimeline(block_duration=_BLOCK, retention=60.0)
+    timeline = _ActivityTimeline(block_duration=_BLOCK, retention=60.0)
     for sid in ["TR_old"] * 10 + ["TR_new"] * 10:
-        timeline.append({"a": TrackActivity(0.3, True, track_sid=sid)})
+        timeline.append({"a": _TrackActivity(0.3, True, track_sid=sid)})
     assert timeline.track_sid("a", 0.0, 0.2) == "TR_old"
     assert timeline.track_sid("a", 0.2, 0.4) == "TR_new"
     assert timeline.track_sid("b", 0.0, 0.4) is None
 
 
 def test_timeline_forgets_past_retention() -> None:
-    timeline = ActivityTimeline(block_duration=_BLOCK, retention=0.1)
+    timeline = _ActivityTimeline(block_duration=_BLOCK, retention=0.1)
     for _ in range(10):
-        timeline.append({"a": TrackActivity(0.3, True)})
+        timeline.append({"a": _TrackActivity(0.3, True)})
     assert timeline.end_index == 10
     assert timeline.scores(0.0, 0.1) == {}
     assert timeline.scores(0.1, 0.2) == pytest.approx({"a": 1.5})
@@ -220,7 +232,7 @@ def test_timeline_forgets_past_retention() -> None:
 # -- attribution ----------------------------------------------------------------------------
 
 
-def _turns() -> ActivityTimeline:
+def _turns() -> _ActivityTimeline:
     # a speaks for the first second, b for the second
     return _timeline(
         [{"a": (0.3, True), "b": (0.0, False)}] * 50 + [{"a": (0.0, False), "b": (0.3, True)}] * 50
@@ -231,12 +243,7 @@ def test_single_speaker_keeps_the_whole_transcript() -> None:
     attributor = _Attributor(_turns(), overlap_ratio=0.5)
     alt = _final("hello there.", start_time=0.1, end_time=0.9).alternatives[0]
     [run] = attributor.attribute(alt, fallback=(0.0, 2.0))
-    assert (run.identity, run.text, run.method, run.overlap) == (
-        "a",
-        "hello there.",
-        "single",
-        False,
-    )
+    assert (run.identity, run.text, run.method) == ("a", "hello there.", "single")
 
 
 def test_words_split_a_turn_change_inside_one_utterance() -> None:
@@ -269,7 +276,7 @@ def test_utterance_without_word_timings_goes_to_the_louder_speaker() -> None:
     attributor = _Attributor(timeline, overlap_ratio=0.5)
     alt = _final("talking over each other", start_time=0.0, end_time=1.0).alternatives[0]
     [run] = attributor.attribute(alt, fallback=(0.0, 1.0))
-    assert (run.identity, run.method, run.overlap) == ("a", "utterance", True)
+    assert (run.identity, run.method) == ("a", "utterance")
 
 
 def test_no_timings_uses_the_fallback_span() -> None:
@@ -319,8 +326,8 @@ def test_diarization_never_overrides_a_clear_energy_margin() -> None:
 # -- mixer ----------------------------------------------------------------------------------
 
 
-def _mixer() -> tuple[_Mixer, ActivityTimeline]:
-    timeline = ActivityTimeline(block_duration=_BLOCK, retention=60.0)
+def _mixer() -> tuple[_Mixer, _ActivityTimeline]:
+    timeline = _ActivityTimeline(block_duration=_BLOCK, retention=60.0)
     mixer = _Mixer(
         sample_rate=_SR,
         block_size=int(_SR * _BLOCK),
@@ -462,7 +469,7 @@ async def test_session_attributes_each_participant() -> None:
             "bob": _track((0.6, _QUIET), (0.6, _QUIET), (0.7, _LOUD)),
         },
     )
-    assert [(s.participant_identity, s.text, s.final) for s in segments] == [
+    assert [(s.participant_identity, s.transcript, s.is_final) for s in segments] == [
         ("alice", "Good morning.", True),
         ("bob", "Hi there.", True),
     ]
@@ -473,7 +480,9 @@ async def test_session_attributes_a_participant_who_joins_mid_sentence() -> None
     # no quiet stretch first: the gate must not learn the speech as its floor
     stt = _ScriptedSTT([(1.1, _final("already talking", start_time=0.1, end_time=0.9))])
     segments = await _run_session(stt, {"alice": _track((1.0, _LOUD), (0.2, _QUIET))})
-    assert [(s.participant_identity, s.text) for s in segments] == [("alice", "already talking")]
+    assert [(s.participant_identity, s.transcript) for s in segments] == [
+        ("alice", "already talking")
+    ]
 
 
 async def test_session_closes_an_interim_whose_speaker_changes() -> None:
@@ -493,12 +502,15 @@ async def test_session_closes_an_interim_whose_speaker_changes() -> None:
             "bob": _track((0.6, _QUIET), (0.6, _QUIET), (0.7, _LOUD)),
         },
     )
-    assert [(s.participant_identity, s.text, s.final) for s in segments] == [
+    assert [(s.participant_identity, s.transcript, s.is_final) for s in segments] == [
         ("alice", "hello", False),
         ("alice", "", True),
         ("bob", "hello", True),
     ]
     assert segments[0].id == segments[1].id != segments[2].id
+    # the event keeps the STT's timed words, not plain strings
+    words = segments[2].words
+    assert words is not None and words[0].start_time == pytest.approx(1.3)
 
 
 async def test_session_closes_interim_segments_a_final_drops() -> None:
@@ -521,20 +533,20 @@ async def test_session_closes_interim_segments_a_final_drops() -> None:
             "bob": _track((0.6, _QUIET), (0.6, _QUIET), (0.7, _LOUD)),
         },
     )
-    interims = [s for s in segments if not s.final]
-    assert [(s.participant_identity, s.text) for s in interims] == [
+    interims = [s for s in segments if not s.is_final]
+    assert [(s.participant_identity, s.transcript) for s in interims] == [
         ("alice", "hello"),
         ("bob", "hi"),
     ]
-    finals = {s.id: s for s in segments if s.final}
-    assert finals[interims[0].id].text == "hello"
-    assert finals[interims[1].id].text == ""
+    finals = {s.id: s for s in segments if s.is_final}
+    assert finals[interims[0].id].transcript == "hello"
+    assert finals[interims[1].id].transcript == ""
 
 
 async def test_session_leaves_unheard_speech_unattributed() -> None:
     stt = _ScriptedSTT([(0.5, _final("phantom", start_time=0.1, end_time=0.4))])
     [segment] = await _run_session(stt, {"alice": _track((1.0, _QUIET))})
-    assert (segment.participant_identity, segment.attribution) == (None, "none")
+    assert segment.participant_identity is None
 
 
 async def test_session_mixes_everything_it_was_sent_before_closing() -> None:
@@ -546,13 +558,13 @@ async def test_session_mixes_everything_it_was_sent_before_closing() -> None:
 async def test_session_follows_an_input_stream_until_it_ends() -> None:
     stt = _ScriptedSTT([(1.3, _final("from a stream", start_time=0.7, end_time=1.2))])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    segments: list[TranscriptSegment] = []
-    session.on("transcript_segment", segments.append)
-    await session.start()
+    segments: list[ParticipantTranscribedEvent] = []
+    session.on("participant_transcribed", segments.append)
+    await _start(session)
 
     track = _track((0.6, _QUIET), (0.6, _LOUD), (0.2, _QUIET))
-    session.add_input("carol", _paced(track), track_sid="TR_carol")
-    while "carol" in session.participants:
+    session._add_input("carol", _paced(track), track_sid="TR_carol")
+    while "carol" in session._mixer.inputs:
         await asyncio.sleep(0.01)
     await session.aclose()
 
@@ -563,15 +575,15 @@ async def test_session_follows_an_input_stream_until_it_ends() -> None:
 async def test_session_reopens_the_stt_on_the_mix_clock_after_the_room_empties() -> None:
     stt = _ScriptedSTT([(1.3, _final("back again", start_time=1.1, end_time=1.3))])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    segments: list[TranscriptSegment] = []
-    session.on("transcript_segment", segments.append)
-    await session.start()
+    segments: list[ParticipantTranscribedEvent] = []
+    session.on("participant_transcribed", segments.append)
+    await _start(session)
 
-    session.add_input("alice", _paced(_track((0.6, _QUIET), (0.2, _LOUD))))
+    session._add_input("alice", _paced(_track((0.6, _QUIET), (0.2, _LOUD))))
     await _drained(session)
     await asyncio.sleep(0.1)  # the room stays empty a while; the wall clock runs on
 
-    session.add_input("bob", _paced(_track((0.2, _QUIET), (0.4, _LOUD))))
+    session._add_input("bob", _paced(_track((0.2, _QUIET), (0.4, _LOUD))))
     await _drained(session)
     await session.aclose()
 
@@ -579,41 +591,47 @@ async def test_session_reopens_the_stt_on_the_mix_clock_after_the_room_empties()
     assert len(stt.offsets) == 2
     assert stt.offsets[0] == pytest.approx(0.0, abs=0.025)
     assert stt.offsets[1] == pytest.approx(0.8, abs=0.025)
-    assert [(s.participant_identity, s.text) for s in segments] == [("bob", "back again")]
+    assert [(s.participant_identity, s.transcript) for s in segments] == [("bob", "back again")]
 
 
 async def test_session_sends_a_burst_in_real_time_so_the_stream_dates_it_right() -> None:
     # a second of audio arrives at once and the session closes straight away
     stt = _ScriptedSTT([(1.0, _final("caught up", start_time=0.65, end_time=0.95))])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    segments: list[TranscriptSegment] = []
-    session.on("transcript_segment", segments.append)
-    await session.start()
-    for frame in _track((0.6, _QUIET), (0.4, _LOUD)):
-        session.push_audio("alice", frame)
+    segments: list[ParticipantTranscribedEvent] = []
+    session.on("participant_transcribed", segments.append)
+    await _start(session)
+
+    async def burst() -> AsyncIterator[rtc.AudioFrame]:
+        for frame in _track((0.6, _QUIET), (0.4, _LOUD)):
+            yield frame
+        await asyncio.Event().wait()  # the track stays open
+
+    session._add_input("alice", burst())
+    await asyncio.sleep(0)  # the whole second arrives
     started = time.monotonic()
     await session.aclose()
 
     assert time.monotonic() - started >= 0.9
     assert stt.offsets == [pytest.approx(0.0, abs=0.025)]
-    assert [(s.participant_identity, s.text) for s in segments] == [("alice", "caught up")]
+    assert [(s.participant_identity, s.transcript) for s in segments] == [("alice", "caught up")]
 
 
 async def test_late_untimed_final_stays_within_its_own_stream() -> None:
     # alice's stream ends when she leaves; its untimed final arrives while bob is talking
     stt = _ScriptedSTT([], late=[(0.5, _final("from alice"))])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    segments: list[TranscriptSegment] = []
-    session.on("transcript_segment", segments.append)
-    await session.start()
+    segments: list[ParticipantTranscribedEvent] = []
+    session.on("participant_transcribed", segments.append)
+    await _start(session)
 
-    session.add_input("alice", _paced(_track((0.6, _QUIET), (0.4, 0.1))))
+    session._add_input("alice", _paced(_track((0.6, _QUIET), (0.4, 0.1))))
     await _drained(session)
-    session.add_input("bob", _paced(_track((0.2, _QUIET), (0.8, 0.6))))
+    session._add_input("bob", _paced(_track((0.2, _QUIET), (0.8, 0.6))))
     await _drained(session)
     await session.aclose()
 
-    assert [(s.participant_identity, s.text) for s in segments] == [("alice", "from alice")]
+    assert [(s.participant_identity, s.transcript) for s in segments] == [("alice", "from alice")]
 
 
 async def test_session_recovers_from_a_failed_stt_stream() -> None:
@@ -632,7 +650,7 @@ async def test_session_recovers_from_a_failed_stt_stream() -> None:
     # the failed stream's open interim stands, and a new stream carries on at once
     assert len(stt.offsets) == 2
     assert sum(f.duration for f in stt.pushed) == pytest.approx(2.2, abs=0.005)
-    assert [(s.participant_identity, s.text, s.final) for s in segments] == [
+    assert [(s.participant_identity, s.transcript, s.is_final) for s in segments] == [
         ("alice", "hello", False),
         ("alice", "hello", True),
         ("alice", "again", True),
@@ -667,28 +685,28 @@ async def test_diarization_labels_are_learned_per_stream() -> None:
     overlapped = _final("hi", [_word("hi", 1.5, 1.7, "S0")])
     stt = _ScriptedSTT([(1.15, _final(" ".join(map(str, learn)), learn)), (1.9, overlapped)])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    segments: list[TranscriptSegment] = []
-    session.on("transcript_segment", segments.append)
-    await session.start()
+    segments: list[ParticipantTranscribedEvent] = []
+    session.on("participant_transcribed", segments.append)
+    await _start(session)
 
-    session.add_input("alice", _paced(_track((0.4, _QUIET), (0.8, _LOUD))))
+    session._add_input("alice", _paced(_track((0.4, _QUIET), (0.8, _LOUD))))
     await _drained(session)
-    session.add_input("bob", _paced(_track((0.2, _QUIET), (0.6, _LOUD))))
-    session.add_input("carol", _paced(_track((0.2, _QUIET), (0.6, _LOUD))))
+    session._add_input("bob", _paced(_track((0.2, _QUIET), (0.6, _LOUD))))
+    session._add_input("carol", _paced(_track((0.2, _QUIET), (0.6, _LOUD))))
     await _drained(session)
     await session.aclose()
 
     assert len(stt.offsets) == 2
-    [hi] = [s for s in segments if s.text == "hi"]
-    assert hi.participant_identity in {"bob", "carol"} and hi.attribution == "word"
+    [hi] = [s for s in segments if s.transcript == "hi"]
+    assert hi.participant_identity in {"bob", "carol"}
 
 
 async def test_a_fully_muted_room_stops_sending_audio_to_the_stt() -> None:
     stt = _ScriptedSTT([])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    await session.start()
+    await _start(session)
     # a muted track can keep delivering silent frames; none of them reach the STT
-    session.add_input("alice", _paced(_track((3.0, _QUIET))), track_sid="TR_a")
+    session._add_input("alice", _paced(_track((3.0, _QUIET))), track_sid="TR_a")
     alice = SimpleNamespace(identity="alice")
     mic = SimpleNamespace(
         sid="TR_a", kind=rtc.TrackKind.KIND_AUDIO, source=rtc.TrackSource.SOURCE_MICROPHONE
@@ -704,7 +722,7 @@ async def test_a_fully_muted_room_stops_sending_audio_to_the_stt() -> None:
 
     session._on_track_unmuted(alice, mic)  # type: ignore[arg-type]
     await asyncio.sleep(0.3)
-    assert session.participants == ["alice"]
+    assert list(session._mixer.inputs) == ["alice"]
     await session.aclose()
 
     # back on a new stream, on the mix's clock: the muted stretch isn't in it
@@ -715,7 +733,7 @@ async def test_a_fully_muted_room_stops_sending_audio_to_the_stt() -> None:
 async def test_a_quick_unmute_keeps_what_was_sent_before_the_mute() -> None:
     stt = _ScriptedSTT([])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    await session.start()
+    await _start(session)
     resumed = asyncio.Event()
 
     async def track() -> AsyncIterator[rtc.AudioFrame]:
@@ -725,7 +743,7 @@ async def test_a_quick_unmute_keeps_what_was_sent_before_the_mute() -> None:
         async for frame in _paced(_track((0.2, _LOUD))):
             yield frame
 
-    session.add_input("alice", track(), track_sid="TR_a")
+    session._add_input("alice", track(), track_sid="TR_a")
     alice = SimpleNamespace(identity="alice")
     mic = SimpleNamespace(
         sid="TR_a", kind=rtc.TrackKind.KIND_AUDIO, source=rtc.TrackSource.SOURCE_MICROPHONE
@@ -744,11 +762,11 @@ async def test_a_quick_unmute_keeps_what_was_sent_before_the_mute() -> None:
 async def test_unsubscribing_a_replaced_microphone_leaves_its_replacement() -> None:
     stt = _ScriptedSTT([])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    await session.start()
+    await _start(session)
 
-    session.add_input("alice", _paced(_track((2.0, _QUIET))), track_sid="TR_old")
+    session._add_input("alice", _paced(_track((2.0, _QUIET))), track_sid="TR_old")
     await asyncio.sleep(0.05)
-    session.add_input("alice", _paced(_track((0.6, _QUIET))))  # not a room track
+    session._add_input("alice", _paced(_track((0.6, _QUIET))), track_sid="TR_new")
     old_mic, alice = SimpleNamespace(sid="TR_old"), SimpleNamespace(identity="alice")
     session._on_track_unsubscribed(None, old_mic, alice)  # type: ignore[arg-type]
     await _drained(session)
@@ -757,48 +775,17 @@ async def test_unsubscribing_a_replaced_microphone_leaves_its_replacement() -> N
     assert sum(f.duration for f in stt.pushed) == pytest.approx(0.65, abs=0.045)
 
 
-async def test_muting_a_track_leaves_audio_pushed_from_elsewhere() -> None:
-    stt = _ScriptedSTT([])
-    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    await session.start()
-
-    async def silent() -> AsyncIterator[rtc.AudioFrame]:
-        await asyncio.Event().wait()
-        yield _tone(_BLOCK, _QUIET)[0]
-
-    session.add_input("alice", silent(), track_sid="TR_a")
-    alice = SimpleNamespace(identity="alice")
-    mic = SimpleNamespace(
-        sid="TR_a", kind=rtc.TrackKind.KIND_AUDIO, source=rtc.TrackSource.SOURCE_MICROPHONE
-    )
-    session._on_track_muted(alice, mic)  # type: ignore[arg-type]
-    await _drained(session)
-
-    # the app pushes alice's audio itself; the room track muting again doesn't touch it
-    frames = _track((0.06, _LOUD))
-    session.push_audio("alice", frames[0])
-    session.push_audio("alice", frames[1])
-    session._on_track_unmuted(alice, mic)  # type: ignore[arg-type]
-    session._on_track_muted(alice, mic)  # type: ignore[arg-type]
-    session.push_audio("alice", frames[2])
-    await asyncio.sleep(0.2)
-    await session.aclose()
-
-    # every pushed block reached the STT; the rest is the silence of waiting for more
-    assert sum(_rms(f) > _LOUD / 2 for f in stt.pushed) == 3
-
-
 async def test_session_mixes_what_a_departing_participant_already_sent() -> None:
     stt = _ScriptedSTT([])
     session = TranscriptionSession(stt=stt, publish_transcriptions=False)
-    await session.start()
+    await _start(session)
 
     async def live(frames: list[rtc.AudioFrame]) -> AsyncIterator[rtc.AudioFrame]:
         for frame in frames:
             yield frame
         await asyncio.Event().wait()  # a track stays open until it is unsubscribed
 
-    session.add_input("alice", live(_track((0.5, _LOUD))))
+    session._add_input("alice", live(_track((0.5, _LOUD))))
     await asyncio.sleep(0.05)
     session._on_participant_disconnected(SimpleNamespace(identity="alice"))  # type: ignore[arg-type]
     await _drained(session)
@@ -860,20 +847,18 @@ async def test_publish_adds_legacy_packets_only_for_old_clients(
 
     session = TranscriptionSession(stt=_ScriptedSTT([]))
     room = _FakeRoom(client_protocol)
-    ch = aio.Chan[TranscriptSegment]()
-    segment = TranscriptSegment(
+    ch = aio.Chan[ParticipantTranscribedEvent]()
+    segment = ParticipantTranscribedEvent(
         id="SG_1",
         participant_identity="alice",
         track_sid="TR_a",
-        text="hello",
-        final=True,
+        transcript="hello",
+        is_final=True,
         start_time=0.0,
         end_time=1.0,
         language=LanguageCode("en"),
         words=None,
         confidence=1.0,
-        overlap=False,
-        attribution="single",
     )
     ch.send_nowait(segment)
     ch.close()

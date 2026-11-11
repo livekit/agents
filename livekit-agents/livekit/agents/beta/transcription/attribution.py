@@ -6,16 +6,16 @@ from typing import Literal
 from ...stt import SpeechData
 from ...types import TimedString
 from ...utils import is_given
-from .activity import ActivityTimeline
+from .activity import _ActivityTimeline
 
-AttributionMethod = Literal["single", "word", "utterance", "diarization", "none"]
-"""How a segment's speaker was chosen.
+_AttributionMethod = Literal["single", "word", "utterance", "diarization", "none"]
+"""How a run's speaker was chosen.
 
 - ``single``: only one participant was audible over the whole utterance.
 - ``word``: each word went to the participant loudest over its own timing.
 - ``utterance``: no word timings; the participant loudest over the utterance.
 - ``diarization``: energy was ambiguous; the STT's speaker label decided.
-- ``none``: nobody was audible, the segment has no participant.
+- ``none``: nobody was audible, the run has no participant.
 """
 
 # how far to look either side of a span that caught nobody: STT timings drift by a word or so
@@ -29,8 +29,7 @@ class _Run:
     start_time: float
     end_time: float
     words: list[TimedString] | None
-    overlap: bool
-    method: AttributionMethod
+    method: _AttributionMethod
 
 
 class _SpeakerMap:
@@ -61,7 +60,7 @@ class _SpeakerMap:
 
 
 class _Attributor:
-    def __init__(self, timeline: ActivityTimeline, *, overlap_ratio: float) -> None:
+    def __init__(self, timeline: _ActivityTimeline, *, overlap_ratio: float) -> None:
         self._timeline = timeline
         self._overlap_ratio = overlap_ratio
         self._speakers = _SpeakerMap()
@@ -90,18 +89,18 @@ class _Attributor:
                     labels = [alt.speaker_id]
                 for speaker_id in labels:
                     self._speakers.observe(speaker_id, identity)
-            return [_Run(identity, alt.text, start, end, alt.words, False, "single")]
+            return [_Run(identity, alt.text, start, end, alt.words, "single")]
 
         if words:
             return self._by_word(alt.text, words)
 
-        method: AttributionMethod = "utterance" if identity else "none"
+        method: _AttributionMethod = "utterance" if identity else "none"
         if alt.speaker_id is not None:
             if (identity is None or overlap) and (mapped := self._speakers.resolve(alt.speaker_id)):
                 identity, method = mapped, "diarization"
             elif identity is not None and not overlap:
                 self._speakers.observe(alt.speaker_id, identity)
-        return [_Run(identity, alt.text, start, end, alt.words, overlap, method)]
+        return [_Run(identity, alt.text, start, end, alt.words, method)]
 
     def _choose(self, start: float, end: float) -> tuple[str | None, bool, dict[str, float]]:
         scores = self._timeline.scores(start, end)
@@ -115,19 +114,19 @@ class _Attributor:
         return max(scores, key=lambda identity: scores[identity]), overlap, scores
 
     def _by_word(self, text: str, words: list[_TimedWord]) -> list[_Run]:
-        assigned: list[tuple[str | None, bool, AttributionMethod]] = []
+        assigned: list[tuple[str | None, _AttributionMethod]] = []
         for word in words:
             identity, overlap, _ = self._choose(word.start, word.end)
-            method: AttributionMethod = "word"
+            method: _AttributionMethod = "word"
             if (speaker_id := word.text.speaker_id) is not None:
                 if (identity is None or overlap) and (mapped := self._speakers.resolve(speaker_id)):
                     identity, method = mapped, "diarization"
                 elif identity is not None and not overlap:
                     self._speakers.observe(speaker_id, identity)
-            assigned.append((identity, overlap, method))
+            assigned.append((identity, method))
 
         # a word nobody was audible for is timing drift, not a new speaker: it joins a neighbour
-        identities = [identity for identity, _, _ in assigned]
+        identities = [identity for identity, _ in assigned]
         for i in range(len(identities)):
             if identities[i] is None and i > 0:
                 identities[i] = identities[i - 1]
@@ -141,7 +140,7 @@ class _Attributor:
         for n, first in enumerate(starts):
             last = starts[n + 1] if n + 1 < len(starts) else len(words)
             run_words = words[first:last]
-            methods = {assigned[i][2] for i in range(first, last)}
+            methods = {assigned[i][1] for i in range(first, last)}
             identity = identities[first]
             runs.append(
                 _Run(
@@ -150,7 +149,6 @@ class _Attributor:
                     start_time=run_words[0].start,
                     end_time=run_words[-1].end,
                     words=[word.text for word in run_words],
-                    overlap=any(assigned[i][1] for i in range(first, last)),
                     method="none"
                     if identity is None
                     else ("diarization" if "diarization" in methods else "word"),

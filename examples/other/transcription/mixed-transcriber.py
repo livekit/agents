@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli, inference
-from livekit.agents.beta import TranscriptionSession, TranscriptSegment
+from livekit.agents.beta import ParticipantTranscribedEvent, TranscriptionSession
 
 load_dotenv()
 
@@ -22,10 +22,10 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext) -> None:
     session = TranscriptionSession(stt=inference.STT("deepgram/nova-3"))
 
-    @session.on("transcript_segment")
-    def _on_segment(segment: TranscriptSegment) -> None:
-        if segment.final and segment.text:
-            logger.info(f"{segment.participant_identity} -> {segment.text}")
+    @session.on("participant_transcribed")
+    def _on_transcribed(ev: ParticipantTranscribedEvent) -> None:
+        if ev.is_final and ev.transcript:
+            logger.info(f"{ev.participant_identity} -> {ev.transcript}")
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     await session.start(room=ctx.room)

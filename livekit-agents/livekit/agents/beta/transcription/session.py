@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
-from dataclasses import dataclass, field, replace
+from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import dataclass, field
 from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
@@ -16,14 +18,16 @@ from ...types import (
     ATTRIBUTE_TRANSCRIPTION_FINAL,
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+    NOT_GIVEN,
     TOPIC_TRANSCRIPTION,
+    NotGivenOr,
     TimedString,
 )
-from ...utils import aio, log_exceptions, shortuuid
-from ...utils.audio_gate import AdaptiveNoiseGate, AudioGate
+from ...utils import aio, is_given, log_exceptions, shortuuid
+from ...utils.audio_gate import AdaptiveNoiseGate
 from ...voice.room_io._output import _legacy_transcription_needed
-from .activity import ActivityTimeline
-from .attribution import AttributionMethod, _Attributor, _Run
+from .activity import _ActivityTimeline
+from .attribution import _Attributor, _Run
 from .mixer import _Mixer, _TrackInput
 
 _SAMPLE_RATE = 16000
@@ -36,7 +40,8 @@ _RETENTION = 30.0
 # suppression has run, and a participant who joins mid-sentence still opens their gate
 _MIC_MAX_FLOOR = 0.01
 
-# a second participant at least this loud, relative to the loudest, marks a segment overlapping
+# a second participant at least this loud, relative to the loudest, leaves energy ambiguous, so
+# the STT's speaker label decides when it has one
 _OVERLAP_RATIO = 0.5
 
 # how long the mix waits past a block's due time for a participant whose audio is late
@@ -67,34 +72,35 @@ _TRANSCRIBED_KINDS = {
 }
 
 
-@dataclass
-class TranscriptSegment:
-    """A stretch of one participant's speech.
+class ParticipantTranscribedEvent(BaseModel):
+    """A stretch of one participant's speech, transcribed.
 
-    An STT utterance is split into one segment per speaker turn inside it. Interim segments are
-    replaced by later ones with the same ``id``; a final segment closes it. When a later
-    transcript splits the utterance differently, a segment it no longer contains is closed as
-    final with empty ``text``.
+    An STT utterance is split into one event per speaker turn inside it.
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: Literal["participant_transcribed"] = "participant_transcribed"
     id: str
+    """The stretch of speech this transcribes. Interim events are replaced by later ones with the
+    same ``id``, and a final one closes it. When a later transcript splits the utterance
+    differently, an ``id`` it no longer contains is closed by a final event with an empty
+    ``transcript``."""
     participant_identity: str | None
     """Who spoke; None when nobody was audible for it."""
     track_sid: str | None
-    text: str
-    final: bool
+    transcript: str
+    is_final: bool
     start_time: float
     """Seconds into the mixed stream."""
     end_time: float
-    language: LanguageCode
-    words: list[TimedString] | None
-    confidence: float
-    overlap: bool
-    """Another participant was audibly speaking at the same time."""
-    attribution: AttributionMethod
+    language: LanguageCode | None = None
+    words: list[TimedString] | None = None
+    confidence: float = 0.0
+    created_at: float = Field(default_factory=time.time)
 
 
-EventTypes = Literal["transcript_segment"]
+EventTypes = Literal["participant_transcribed"]
 
 
 @dataclass
@@ -112,7 +118,7 @@ class _StreamState:
     """Where the stream's audio ended on the mix's clock; None while it is open."""
     last_final_end: float = 0.0
     utterance_id: str = field(default_factory=lambda: shortuuid("SG_"))
-    segments: dict[str, TranscriptSegment] = field(default_factory=dict)
+    segments: dict[str, ParticipantTranscribedEvent] = field(default_factory=dict)
     # a segment's id belongs to one speaker: a run that changes hands gets a new one
     segment_ids: dict[tuple[int, str | None], str] = field(default_factory=dict)
 
@@ -124,24 +130,20 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
     whoever was audible when it was spoken, using a per-participant energy gate. Any streaming
     STT works; word timings and diarization make the attribution finer when the STT has them.
 
-    Emits ``transcript_segment`` with a :class:`TranscriptSegment`.
+    Emits ``participant_transcribed`` with a :class:`ParticipantTranscribedEvent`.
     """
 
     def __init__(
         self,
         *,
         stt: STT,
-        gate: Callable[[], AudioGate] | None = None,
-        participant_identities: Iterable[str] | None = None,
+        participant_identities: NotGivenOr[list[str]] = NOT_GIVEN,
         publish_transcriptions: bool = True,
     ) -> None:
         """Create a transcription session.
 
         Args:
             stt: A streaming STT. Wrap a non-streaming one with ``stt.StreamAdapter``.
-            gate: Builds the gate that decides when each participant is speaking. Defaults to
-                :class:`~livekit.agents.utils.audio_gate.AdaptiveNoiseGate` with its floor
-                capped for microphones.
             participant_identities: Only transcribe these participants, when given. Agents are
                 never transcribed.
             publish_transcriptions: Publish segments to the room on ``lk.transcription``,
@@ -157,14 +159,13 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
             )
 
         self._stt = stt
-        self._gate_factory = gate or (lambda: AdaptiveNoiseGate(max_floor=_MIC_MAX_FLOOR))
         self._block_size = int(_SAMPLE_RATE * _BLOCK_DURATION)
         self._participant_identities = (
-            set(participant_identities) if participant_identities is not None else None
+            set(participant_identities) if is_given(participant_identities) else None
         )
         self._publish = publish_transcriptions
 
-        self._timeline = ActivityTimeline(block_duration=_BLOCK_DURATION, retention=_RETENTION)
+        self._timeline = _ActivityTimeline(block_duration=_BLOCK_DURATION, retention=_RETENTION)
         self._mixer = _Mixer(
             sample_rate=_SAMPLE_RATE,
             block_size=self._block_size,
@@ -183,14 +184,14 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         self._input_sids: dict[str, str | None] = {}
         self._mix_atask: asyncio.Task[None] | None = None
         self._recv_atasks: set[asyncio.Task[None]] = set()
-        self._publish_ch: aio.Chan[TranscriptSegment] | None = None
+        self._publish_ch: aio.Chan[ParticipantTranscribedEvent] | None = None
         self._publish_atask: asyncio.Task[None] | None = None
         self._started = False
         self._closing = False
         self._stt_failures = 0
         self._reopen_at = 0.0
 
-        self._history: list[TranscriptSegment] = []
+        self._history: list[ParticipantTranscribedEvent] = []
         # kept past a participant leaving: their last words are attributed after they've gone
         self._track_sids: dict[str, str] = {}
         # a muted track is out of the mix, so nobody waits on it and a room where everyone is
@@ -198,34 +199,24 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         self._muted_tracks: set[str] = set()
 
     @property
-    def history(self) -> list[TranscriptSegment]:
+    def history(self) -> list[ParticipantTranscribedEvent]:
         """Every final segment so far, in order."""
         return list(self._history)
 
-    @property
-    def participants(self) -> list[str]:
-        """Identities currently being transcribed."""
-        return list(self._mixer.inputs)
-
-    async def start(self, *, room: rtc.Room | None = None) -> None:
+    async def start(self, *, room: rtc.Room) -> None:
         """Start transcribing.
 
         Args:
-            room: Transcribe this room's participants as they come and go. Without it, audio
-                comes only from :meth:`add_input` and :meth:`push_audio`.
+            room: The room whose participants are transcribed as they come and go.
         """
         if self._started:
             raise RuntimeError("TranscriptionSession already started")
         self._started = True
 
-        self._mix_atask = asyncio.create_task(self._mix_task())
-
-        if room is None:
-            return
-
         self._room = room
+        self._mix_atask = asyncio.create_task(self._mix_task())
         if self._publish:
-            self._publish_ch = aio.Chan[TranscriptSegment]()
+            self._publish_ch = aio.Chan[ParticipantTranscribedEvent]()
             self._publish_atask = asyncio.create_task(self._publish_task(room, self._publish_ch))
 
         room.on("track_published", self._on_track_published)
@@ -241,7 +232,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                 else:
                     self._on_track_published(publication, participant)
 
-    def add_input(
+    def _add_input(
         self,
         identity: str,
         frames: AsyncIterable[rtc.AudioFrame],
@@ -252,7 +243,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
 
         The participant leaves the mix once the stream ends and its audio has played out.
         """
-        self.remove_input(identity)
+        self._remove_input(identity)
         track_input = self._new_input(identity, track_sid)
         task = asyncio.create_task(self._forward_input(track_input, frames))
         self._input_atasks[identity] = task
@@ -265,19 +256,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
 
         task.add_done_callback(_on_done)
 
-    def push_audio(
-        self, identity: str, frame: rtc.AudioFrame, *, track_sid: str | None = None
-    ) -> None:
-        """Push one frame of a participant's audio, adding the participant if it is new."""
-        if self._closing:
-            return
-        track_input = self._mixer.inputs.get(identity)
-        if track_input is None or track_input.ended:
-            track_input = self._new_input(identity, track_sid)
-        track_input.push(frame)
-        self._data_ev.set()
-
-    def remove_input(self, identity: str) -> None:
+    def _remove_input(self, identity: str) -> None:
         """Stop transcribing a participant, discarding audio of theirs not yet mixed."""
         if task := self._input_atasks.pop(identity, None):
             task.cancel()
@@ -319,7 +298,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         track_input = _TrackInput(
             identity,
             track_sid=track_sid,
-            gate=self._gate_factory(),
+            gate=AdaptiveNoiseGate(max_floor=_MIC_MAX_FLOOR),
             sample_rate=_SAMPLE_RATE,
             block_size=self._block_size,
             max_blocks=round(_MAX_BUFFER / _BLOCK_DURATION),
@@ -463,7 +442,10 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                 # it failed while the mix was feeding it; the next block opens a new one
                 self._end_stream()
             # what it last showed and never finalized stands as said
-            open_segments = [replace(segment, final=True) for segment in state.segments.values()]
+            open_segments = [
+                segment.model_copy(update={"is_final": True, "created_at": time.time()})
+                for segment in state.segments.values()
+            ]
             state.segments = {}
             for segment in open_segments:
                 self._emit(segment)
@@ -500,12 +482,14 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         else:
             state.segments = {segment.id: segment for segment in segments}
 
-    def _emit(self, segment: TranscriptSegment) -> None:
-        self.emit("transcript_segment", segment)
+    def _emit(self, segment: ParticipantTranscribedEvent) -> None:
+        self.emit("participant_transcribed", segment)
         if self._publish_ch is not None and segment.participant_identity is not None:
             self._publish_ch.send_nowait(segment)
 
-    def _segment(self, id: str, run: _Run, alt: SpeechData, final: bool) -> TranscriptSegment:
+    def _segment(
+        self, id: str, run: _Run, alt: SpeechData, final: bool
+    ) -> ParticipantTranscribedEvent:
         track_sid: str | None = None
         if run.identity is not None:
             # the track the words were spoken on, which a microphone switch since then hasn't
@@ -513,27 +497,27 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
             track_sid = self._timeline.track_sid(
                 run.identity, run.start_time, run.end_time
             ) or self._track_sids.get(run.identity)
-        return TranscriptSegment(
+        return ParticipantTranscribedEvent(
             id=id,
             participant_identity=run.identity,
             track_sid=track_sid,
-            text=run.text,
-            final=final,
+            transcript=run.text,
+            is_final=final,
             start_time=run.start_time,
             end_time=run.end_time,
             language=alt.language,
             words=run.words,
             confidence=alt.confidence,
-            overlap=run.overlap,
-            attribution=run.method,
         )
 
     @log_exceptions(logger=logger)
-    async def _publish_task(self, room: rtc.Room, ch: aio.Chan[TranscriptSegment]) -> None:
+    async def _publish_task(
+        self, room: rtc.Room, ch: aio.Chan[ParticipantTranscribedEvent]
+    ) -> None:
         async for segment in ch:
             assert segment.participant_identity is not None
             attributes = {
-                ATTRIBUTE_TRANSCRIPTION_FINAL: str(segment.final).lower(),
+                ATTRIBUTE_TRANSCRIPTION_FINAL: str(segment.is_final).lower(),
                 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID: segment.id,
             }
             if segment.track_sid:
@@ -546,7 +530,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                     sender_identity=segment.participant_identity,
                     attributes=attributes,
                 )
-                await writer.write(segment.text)
+                await writer.write(segment.transcript)
                 await writer.aclose()
 
                 # clients too old to read lk.transcription still get the deprecated packet
@@ -558,11 +542,11 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                             segments=[
                                 rtc.TranscriptionSegment(
                                     id=segment.id,
-                                    text=segment.text,
+                                    text=segment.transcript,
                                     start_time=0,
                                     end_time=0,
-                                    final=segment.final,
-                                    language=str(segment.language),
+                                    final=segment.is_final,
+                                    language=str(segment.language or ""),
                                 )
                             ],
                         )
@@ -606,7 +590,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         if publication.muted:
             self._muted_tracks.add(publication.sid)
         stream = rtc.AudioStream.from_track(track=track, sample_rate=_SAMPLE_RATE, num_channels=1)
-        self.add_input(participant.identity, _track_frames(stream), track_sid=publication.sid)
+        self._add_input(participant.identity, _track_frames(stream), track_sid=publication.sid)
         if publication.muted:
             self._mute_input(participant.identity, publication.sid)
 
@@ -642,7 +626,6 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
     def _mute_input(self, identity: str, track_sid: str) -> None:
         """Take a participant out of the mix once what they already sent has played."""
         track_input = self._mixer.inputs.get(identity)
-        # the input in the mix, which may be pushed audio from elsewhere rather than the track
         if track_input is not None and track_input.track_sid == track_sid:
             track_input.ended = True
             self._data_ev.set()
@@ -661,20 +644,15 @@ def _segment_id(state: _StreamState, index: int, identity: str | None) -> str:
     return state.segment_ids[key]
 
 
-def _cleared(segment: TranscriptSegment) -> TranscriptSegment:
-    return TranscriptSegment(
-        id=segment.id,
-        participant_identity=segment.participant_identity,
-        track_sid=segment.track_sid,
-        text="",
-        final=True,
-        start_time=segment.start_time,
-        end_time=segment.end_time,
-        language=segment.language,
-        words=None,
-        confidence=0.0,
-        overlap=False,
-        attribution=segment.attribution,
+def _cleared(segment: ParticipantTranscribedEvent) -> ParticipantTranscribedEvent:
+    return segment.model_copy(
+        update={
+            "transcript": "",
+            "is_final": True,
+            "words": None,
+            "confidence": 0.0,
+            "created_at": time.time(),
+        }
     )
 
 
