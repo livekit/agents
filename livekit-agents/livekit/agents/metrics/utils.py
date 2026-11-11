@@ -61,6 +61,7 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 if metrics.input_token_details.cached_tokens_details
                 else 0,
                 "output_tokens": metrics.output_tokens,
+                "reasoning_tokens": metrics.reasoning_tokens or 0,
                 "output_text_tokens": metrics.output_token_details.text_tokens,
                 "output_audio_tokens": metrics.output_token_details.audio_tokens,
                 "output_image_tokens": metrics.output_token_details.image_tokens,
