@@ -28,6 +28,7 @@ from livekit.plugins.atmee import (
     AtmeeException,
     AtmeeNoCapacityError,
 )
+from livekit.plugins.atmee.avatar import _AvatarAudioOutput
 
 pytestmark = [pytest.mark.unit, pytest.mark.plugin("atmee")]
 
@@ -348,6 +349,38 @@ async def test_avatar_version_is_accepted_but_ignored(
         "avatar_version is deprecated and ignored, the avatar's own engine decides how it renders"
     ) == 2
     assert all("avatarVersion" not in (c.json or {}) for c in fake.requests)
+    assert atmee.SUPPORTED_AVATAR_VERSIONS == {"v1", "v2"} and atmee.AvatarVersion
+
+
+@pytest.mark.parametrize("image", ["https://cdn.example/v.jpg", b"jpeg"])
+async def test_create_avatar_still_works_but_is_deprecated(
+    fake: FakeAtmee, caplog: pytest.LogCaptureFixture, image: str | bytes
+) -> None:
+    fake.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
+    api = AtmeeAPI(session=fake.session, conn_options=FAST)
+    assert await api.create_avatar("Val", image) == AVATAR_ID
+    call = fake.calls("POST", "/v1/avatars")[0]
+    if isinstance(image, str):
+        assert call.json["assets"] == {"image": {"url": image}}
+    else:
+        assert call.headers["Content-Type"].startswith("multipart/form-data")
+    assert "create_avatar is deprecated" in caplog.text
+
+
+async def test_a_reply_in_progress_reaches_the_avatar_at_16k(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the avatar took over mid-reply: the agent still sends the TTS's own rate
+    rates: list[int] = []
+
+    async def capture(self: Any, frame: rtc.AudioFrame) -> None:
+        rates.append(frame.sample_rate)
+
+    monkeypatch.setattr(DataStreamAudioOutput, "capture_frame", capture)
+    out = _AvatarAudioOutput(room=FakeRoom(), destination_identity="a", sample_rate=16000)  # type: ignore[arg-type]
+    for rate in (24000, 24000, 24000, 16000):
+        await out.capture_frame(rtc.AudioFrame(bytes(rate // 5), rate, 1, rate // 10))
+    assert rates and set(rates) == {16000}
 
 
 @pytest.mark.parametrize("trigger", ["avatar_left", "agent_session_closed"])

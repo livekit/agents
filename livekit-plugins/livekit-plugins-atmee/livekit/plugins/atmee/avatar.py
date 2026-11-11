@@ -56,6 +56,23 @@ DEFAULT_MAX_DURATION_SECONDS = 3600
 _TOKEN_TTL_SLACK = timedelta(minutes=10)
 
 
+class _AvatarAudioOutput(DataStreamAudioOutput):
+    """Sends the avatar 16 kHz audio. A reply already in progress when the
+    avatar takes over the agent's voice keeps the rate it started with."""
+
+    _resampler: rtc.AudioResampler | None = None
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        if frame.sample_rate == SAMPLE_RATE:
+            return await super().capture_frame(frame)
+        if self._resampler is None:
+            self._resampler = rtc.AudioResampler(
+                frame.sample_rate, SAMPLE_RATE, num_channels=frame.num_channels
+            )
+        for resampled in self._resampler.push(frame):
+            await super().capture_frame(resampled)
+
+
 class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
     """An Atmee avatar session: render an Atmee avatar into your agent's room.
 
@@ -344,11 +361,12 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         room.on("participant_disconnected", self._on_participant_disconnected)
 
         agent_session.output.replace_audio_tail(
-            DataStreamAudioOutput(
+            _AvatarAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,
                 sample_rate=SAMPLE_RATE,
                 wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+                wait_playback_start=True,
             ),
         )
 

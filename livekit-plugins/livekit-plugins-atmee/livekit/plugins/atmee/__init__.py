@@ -28,6 +28,7 @@ See https://docs.livekit.io/agents/models/avatar/plugins/atmee/ for more informa
 """
 
 from .api import (
+    SUPPORTED_AVATAR_VERSIONS,
     AtmeeAPI,
     AtmeeAvatarNotReadyError,
     AtmeeAvatarWarmingError,
@@ -35,11 +36,13 @@ from .api import (
     AtmeeNoCapacityError,
     AvatarInfo,
     AvatarSessionInfo,
+    AvatarVersion,
 )
 from .avatar import AvatarSession
 from .version import __version__
 
 __all__ = [
+    "SUPPORTED_AVATAR_VERSIONS",
     "AtmeeAPI",
     "AtmeeAvatarNotReadyError",
     "AtmeeAvatarWarmingError",
@@ -48,6 +51,7 @@ __all__ = [
     "AvatarInfo",
     "AvatarSession",
     "AvatarSessionInfo",
+    "AvatarVersion",
     "__version__",
 ]
 

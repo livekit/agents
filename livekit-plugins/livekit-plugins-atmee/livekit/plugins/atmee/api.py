@@ -24,8 +24,10 @@ never reaches a browser.
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal, get_args
 from urllib.parse import urlsplit
 
@@ -45,6 +47,10 @@ from .log import logger
 DEFAULT_API_URL = "https://api.atmanity.us"
 
 WaitFor = Literal["initializing", "avatar_joined"]
+
+# Deprecated: kept for code written against earlier releases.
+AvatarVersion = Literal["v1", "v2"]
+SUPPORTED_AVATAR_VERSIONS: frozenset[str] = frozenset({"v1", "v2"})
 
 # Overall budget of the start call, by the avatar's generation. A v1 start is
 # acknowledged within seconds and its avatar joins within a couple of minutes.
@@ -349,6 +355,47 @@ class AtmeeAPI:
 
     # --- avatars -----------------------------------------------------------
 
+    async def create_avatar(
+        self,
+        name: str,
+        image: str | Path | bytes,
+        *,
+        description: str | None = None,
+        content_type: str | None = None,
+        avatar_version: NotGivenOr[str] = NOT_GIVEN,
+    ) -> str:
+        """Deprecated: create avatars in the Atmee studio or with the Atmee API.
+
+        Creates a v1 avatar from a portrait (a file path, the image bytes or
+        an ``https://`` URL) and returns its id.
+        """
+        logger.warning(
+            "create_avatar is deprecated, create avatars in the Atmee studio or with the Atmee API"
+        )
+        if isinstance(image, str) and image.startswith(("http://", "https://")):
+            manifest = {"schemaVersion": 1, "name": name, "assets": {"image": {"url": image}}}
+            if description:
+                manifest["description"] = description
+            created = await self._request(
+                "POST", "/v1/avatars", json=manifest, retry=False, total_timeout=120.0
+            )
+        else:
+            if isinstance(image, bytes):
+                blob = image
+                filename = "portrait" + (mimetypes.guess_extension(content_type or "") or ".jpg")
+            else:
+                blob, filename = await asyncio.to_thread(Path(image).read_bytes), Path(image).name
+            form = aiohttp.FormData()
+            form.add_field("name", name)
+            if description:
+                form.add_field("description", description)
+            ctype = content_type or mimetypes.guess_type(filename)[0] or "image/jpeg"
+            form.add_field("file", blob, filename=filename, content_type=ctype)
+            created = await self._request(
+                "POST", "/v1/avatars", data=form, retry=False, total_timeout=120.0
+            )
+        return str(created.get("avatarId") or created.get("id") or "")
+
     async def get_avatar(self, avatar_id: str) -> AvatarInfo:
         return await self._get_avatar(avatar_id)
 
@@ -389,6 +436,7 @@ class AtmeeAPI:
         path: str,
         *,
         json: dict[str, Any] | None = None,
+        data: aiohttp.FormData | None = None,
         params: dict[str, str] | None = None,
         retry: bool = True,
         total_timeout: float | None = None,
@@ -421,6 +469,7 @@ class AtmeeAPI:
                     f"{self._api_url}{path}",
                     headers={"X-Api-Key": self._api_key, "Accept": "application/json"},
                     json=json,
+                    data=data,
                     params=params,
                     timeout=aiohttp.ClientTimeout(
                         sock_connect=self._conn_options.timeout, total=attempt_timeout
