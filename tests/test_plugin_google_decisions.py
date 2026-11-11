@@ -142,6 +142,7 @@ async def test_every_kind_is_decoded_with_distributions_and_usage() -> None:
         ("out_of_range_score", "frustration"),
         ("shifted_levels", "frustration"),
         ("unindexed_levels", "frustration"),
+        ("repeated_level", "frustration"),
     ],
 )
 async def test_invalid_answer_is_reported_per_decision(failure: str, broken: str) -> None:
@@ -163,8 +164,11 @@ async def test_invalid_answer_is_reported_per_decision(failure: str, broken: str
         answers["frustration"]["score"] = 3.1
     elif failure == "shifted_levels":
         answers["frustration"]["probabilities"] = {"1": 0.1, "2": 0.4, "3": 0.5}
-    else:
+    elif failure == "unindexed_levels":
         answers["frustration"]["probabilities"] = {"low": 0.1, "mid": 0.4, "high": 0.5}
+    else:
+        # "00" names level 0 a second time and would replace its probability
+        answers["frustration"]["probabilities"] = {"0": 0.1, "00": 0.9, "1": 0.4, "2": 0.5}
     model, requests = model_for(body)
 
     response = await model.evaluate(input="", decisions=QUESTIONS)

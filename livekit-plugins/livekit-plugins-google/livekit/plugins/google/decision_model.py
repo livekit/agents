@@ -171,10 +171,14 @@ def _decode_answer(answer: genai_decisions.Answer, definition: Decision) -> Deci
             provider_data={"confidence": answer.confidence},
         )
     if isinstance(answer, genai_decisions.ScoreAnswer):
-        try:
-            probabilities = {int(level): p for level, p in answer.probabilities.items()}
-        except ValueError:
-            raise APIError("score distribution is not keyed by level", retryable=False) from None
+        # Only canonical indices: int() would also take "00" or " 1", merging two keys
+        # into one level and silently dropping a probability.
+        if any(
+            not (level.isascii() and level.isdigit()) or str(int(level)) != level
+            for level in answer.probabilities
+        ):
+            raise APIError("score distribution is not keyed by level", retryable=False)
+        probabilities = {int(level): p for level, p in answer.probabilities.items()}
         # The legend only describes levels; the requested levels are the scale. A score
         # answering another kind of decision is rejected by the shared validation.
         return ScoreResult(
