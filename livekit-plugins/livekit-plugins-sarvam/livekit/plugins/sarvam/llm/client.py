@@ -190,6 +190,8 @@ class LLM(OpenAILLM):
 
         # Resolve base URL: explicit > model-derived
         resolved_base_url = base_url if is_given(base_url) else _resolve_base_url(validated_model)
+        # an explicit base_url pins the endpoint; model changes never move it
+        self._sarvam_endpoint_pinned = is_given(base_url)
 
         # ---- Merge auth / telemetry headers (always enforced) ----
         merged_headers: dict[str, str] = {}
@@ -270,7 +272,8 @@ class LLM(OpenAILLM):
 
         Validates the new model and recreates the underlying client when the
         API version changes (``/v1`` ↔ ``/v2``).  When both old and new models
-        share the same endpoint, the client is **not** recreated.
+        share the same endpoint, the client is **not** recreated, and neither is
+        one created with an explicit ``base_url``, which stays in use.
         """
         if not is_given(model):
             return
@@ -278,7 +281,7 @@ class LLM(OpenAILLM):
         new_model = _validate_model(model)
         new_version = _api_version(new_model)
 
-        if new_version != self._sarvam_api_version:
+        if new_version != self._sarvam_api_version and not self._sarvam_endpoint_pinned:
             # Endpoint changed — recreate the client pointing at the new URL
             new_base_url = _resolve_base_url(new_model)
             self._client = _create_sarvam_client(
