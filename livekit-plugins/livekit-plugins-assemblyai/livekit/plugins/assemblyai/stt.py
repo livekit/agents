@@ -429,8 +429,11 @@ class STT(stt.STT):
             config.language_codes = _normalize_language_codes(language, config.speech_model)
         elif language:
             logger.warning(
-                "language is ignored: language steering is only supported with the "
-                f"{', '.join(_U3_PRO_MODELS)} models"
+                "language %r is ignored: model %r doesn't support language steering, "
+                "use one of the %s models",
+                language,
+                config.speech_model,
+                ", ".join(_U3_PRO_MODELS),
             )
         stream = SpeechStream(
             stt=self,
