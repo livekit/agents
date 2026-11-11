@@ -49,6 +49,9 @@ _SILENCE_RMS = 0.0006
 # long enough that a pause between sentences does not split an utterance in two
 _MIN_SILENCE_DURATION = 0.8
 _MIN_SILENCE_MS = _MIN_SILENCE_DURATION * 1000
+# the service rejects an input audio burst over 5 s of audio, whatever its encoding, and audio
+# queued before session.started goes out in one burst when the session starts
+_MAX_QUEUED_INPUT_AUDIO_SAMPLES = 4 * SAMPLE_RATE
 
 # the asks generate_reply sends as commentary. each ends with the same two sentences, which make
 # the model speak now rather than wait for the caller; what precedes them says what to speak
@@ -496,6 +499,9 @@ class GPTLiveSession(
         # client delegations delegate() made up; the service never issued their ids
         self._manual_delegation_ids: set[str] = set()
 
+        # a response.create was sent and its response.created has not arrived yet
+        self._backend_response_requested = False
+
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
 
@@ -509,6 +515,35 @@ class GPTLiveSession(
 
     def send_event(self, event: types.ClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
+            self._msg_ch.send_nowait(event)
+
+    def _trim_queued_audio(self) -> None:
+        if self._msg_ch.closed:
+            return
+        queued: list[types.ClientEvent | dict[str, Any]] = []
+        while not self._msg_ch.empty():
+            queued.append(self._msg_ch.recv_nowait())
+
+        kept: list[types.ClientEvent | dict[str, Any]] = []
+        kept_samples = dropped_samples = 0
+        for event in reversed(queued):
+            if isinstance(event, types.InputAudioAppendEvent):
+                samples = len(event.audio) * 3 // 4 // (2 * NUM_CHANNELS)
+                if dropped_samples or kept_samples + samples > _MAX_QUEUED_INPUT_AUDIO_SAMPLES:
+                    dropped_samples += samples
+                    continue
+                kept_samples += samples
+            kept.append(event)
+
+        if dropped_samples:
+            logger.info(
+                "gpt-live dropped queued input audio at session start",
+                extra={
+                    "dropped_s": dropped_samples / SAMPLE_RATE,
+                    "kept_s": kept_samples / SAMPLE_RATE,
+                },
+            )
+        for event in reversed(kept):
             self._msg_ch.send_nowait(event)
 
     def _build_delegation(self) -> types.Delegation:
@@ -659,6 +694,7 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
+        self._backend_response_requested = False
         self._delegate_event_id = None
         self._usage_total = types.Usage()
         self._session_id = None
@@ -724,19 +760,21 @@ class GPTLiveSession(
             start = self._session_start_event()
             self._session_start_sent = True
             await self._ws_send(ws_conn, start)
-            if self._input_muted:
+            muted = self._input_muted
+            # the protocol asks for session.started before any audio or command goes out
+            started = self._session_started_fut
+            await asyncio.wait([started])
+            if started.cancelled():
+                await _close_ws()
+                return
+            if muted:
                 # a new connection is a new session, and a session starts unmuted, so the mute
                 # the app asked for is re-applied before this one can hear anything
-                if not self._session_started_fut.done():
-                    await self._session_started_fut
                 await self._ws_send(
                     ws_conn, types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_"))
                 )
-
+            self._trim_queued_audio()
             async for msg in self._msg_ch:
-                # the protocol asks for session.started before any audio or command goes out
-                if not self._session_started_fut.done():
-                    await self._session_started_fut
                 await self._ws_send(ws_conn, msg)
 
             await _close_ws()
@@ -890,7 +928,7 @@ class GPTLiveSession(
                 message_id=utils.shortuuid("speech_"),
                 # the service runs one delegation at a time, so work already running covers the
                 # turn: the model starts none for it, and it would queue behind the work anyway
-                delegated=role == "user" and self._backend_busy,
+                delegated=role == "user" and self.background_work_running,
             )
             self._history.insert(
                 llm.ChatMessage(
@@ -942,7 +980,7 @@ class GPTLiveSession(
                 is_final=True,
                 turn_started_at=speech.started_at,
                 delegated=(
-                    speech.delegated or self._backend_busy
+                    speech.delegated or self.background_work_running
                     if self._opts.delegation != "decisions"
                     else None
                 ),
@@ -999,6 +1037,7 @@ class GPTLiveSession(
 
         if event.type == "response.created":
             self._backend_running_responses[d_id] = set()
+            self._backend_response_requested = False
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
@@ -1092,7 +1131,19 @@ class GPTLiveSession(
         ):
             return
         self._backend_response_pending = False
+        self._backend_response_requested = True
         self.send_event(types.ResponseCreateEvent(event_id=utils.shortuuid("response_create_")))
+
+    @property
+    def background_work_running(self) -> bool:
+        # client work is the application's, so nothing here knows whether it still runs
+        return bool(
+            self._backend_running_responses
+            or self._backend_open_calls
+            or self._backend_response_pending
+            or self._backend_response_requested
+            or self._delegate_event_id
+        )
 
     # metrics and errors
 
@@ -1293,16 +1344,6 @@ class GPTLiveSession(
         # its delegation_created comes back from the service, which echoes this id
         self._delegate_event_id = utils.shortuuid("delegate_")
         self.send_event(types.ResponseCreateEvent(event_id=self._delegate_event_id))
-
-    @property
-    def _backend_busy(self) -> bool:
-        # client work is the application's, so nothing here knows whether it still runs
-        return bool(
-            self._delegate_event_id
-            or self._backend_running_responses
-            or self._backend_open_calls
-            or self._backend_response_pending
-        )
 
     @property
     def _delegation_detection(self) -> llm.DelegationDetectionOptions | None:
