@@ -60,7 +60,7 @@ open so a decision outage never blocks the conversation:
 from livekit.agents import APIConnectOptions, APIError, llm
 from livekit.plugins import perplexity
 
-decider = perplexity.DecisionModel()  # pplx-decider-flash-v1.2
+decider = perplexity.DecisionModel()  # pplx-decider-flash-v1.3
 
 async def on_user_turn_completed(self, turn_ctx, new_message):
     conversation = turn_ctx.copy()
