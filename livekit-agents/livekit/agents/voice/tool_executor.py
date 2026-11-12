@@ -308,6 +308,10 @@ class _ToolExecutor:
         self._tool_options: AsyncToolOptions = _resolve_async_tool_options(async_tool_options)
 
     def set_owning_activity(self, activity: AgentActivity | None) -> None:
+        for task in self._running_tasks.values():
+            # a running tool's hold moves with the activity that will speak its result
+            task.ctx.session._release_away_timer_hold(self._owning_activity)
+            task.ctx.session._create_away_timer_hold(activity)
         self._owning_activity = activity
 
     def set_tool_options(self, options: AsyncToolOptions) -> None:
@@ -453,6 +457,7 @@ class _ToolExecutor:
 
         session = run_ctx.session
         _RunningTasks.setdefault(session, {})[call_id] = running_task
+        session._create_away_timer_hold(self._owning_activity)
 
         session._tool_execution_updated(
             ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=run_ctx.function_call)),
@@ -462,6 +467,7 @@ class _ToolExecutor:
             self._running_tasks.pop(call_id, None)
             if (session_tasks := _RunningTasks.get(session)) is not None:
                 session_tasks.pop(call_id, None)
+            session._release_away_timer_hold(self._owning_activity)
             # detach so a stashed RunContext can't drive the executor post-completion
             run_ctx._detach_executor()
 

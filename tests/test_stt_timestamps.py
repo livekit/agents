@@ -5,7 +5,7 @@ onto the session timeline through ``start_time_offset`` and anchors the pipeline
 session input start. A custom node that forwards provider timestamps untouched counts from
 its first audio: the pipeline is anchored on the first frame pushed, and a stream with no
 declared offset starts its timeline there too. Either way ``input_started_at + end_time`` is the wall-clock
-end of the recognized speech, also after a handoff (AGT-3678) and when the first audio
+end of the recognized speech, also after a handoff and when the first audio
 arrives long after the stream opened.
 """
 
@@ -43,7 +43,7 @@ async def test_speech_timestamps_follow_first_audio(
     """``stopped_speaking_at`` is the wall-clock end of the last word on every stream.
 
     ``default`` reuses the pipeline across the handoff, ``delegate`` overrides ``stt_node``
-    and calls the default one (a new pipeline per agent, the AGT-3678 setup), ``custom``
+    and calls the default one (a new pipeline per agent), ``custom``
     forwards the provider's stream-relative timestamps as they are.
     """
     now = 1000.0
