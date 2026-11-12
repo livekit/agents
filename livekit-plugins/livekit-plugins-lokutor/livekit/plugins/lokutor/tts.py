@@ -281,7 +281,7 @@ class ChunkedStream(tts.ChunkedStream):
             # Keep only the exception type, and drop the cause: an aiohttp
             # transport error can carry the request URL, headers or a response
             # body, and `from e` would preserve all of it on __cause__ for any
-            # telemetry that walks the chain. See REVIEW.md.
+            # telemetry that walks the chain.
             raise APIConnectionError(type(e).__name__) from None
 
 
@@ -373,7 +373,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Keep only the exception type, and drop the cause: an aiohttp
             # transport error can carry the request URL, headers or a response
             # body, and `from e` would preserve all of it on __cause__ for any
-            # telemetry that walks the chain. See REVIEW.md.
+            # telemetry that walks the chain.
             raise APIConnectionError(type(e).__name__) from None
         finally:
             await utils.aio.cancel_and_wait(*tasks)

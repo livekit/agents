@@ -257,13 +257,13 @@ class SpeechStream(stt.SpeechStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.WSServerHandshakeError as e:
-            # 401 bad key, 402 no balance, 429 the account's concurrent sessions are in use.
+            # 401 bad key, 402 no balance: final. 429, the account's concurrent sessions in use, is
+            # retryable (APIStatusError's rule): a reconnect's old session is likely about to be released.
             raise APIStatusError(
                 "Lokutor STT refused the connection",
                 status_code=e.status,
                 request_id=None,
                 body=None,
-                retryable=e.status >= 500,
             ) from None
         except Exception as e:
             raise APIConnectionError(type(e).__name__) from None
@@ -279,6 +279,11 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._input_done = False
         self._done = False
+        # start_time_offset restarts at this connection's first frame (restart_provider_clock), so
+        # transcript times count from here too. The last connection's usage was reported when it ended.
+        self._audio_sent = 0.0
+        self._audio_reported = 0.0
+        self._utterance_floor = 0.0
         ws = await self._connect_ws()
         try:
             await ws.send_str(json.dumps({"language": self._api_lang}))
@@ -300,6 +305,10 @@ class SpeechStream(stt.SpeechStream):
                 await utils.aio.gracefully_cancel(send_task, recv_task)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except aiohttp.ClientError as e:
+            # A send on a socket that dropped mid-stream raises before the receiver sees the close;
+            # as a connection error it is retried like any other drop.
+            raise APIConnectionError(type(e).__name__) from None
         finally:
             self._report_usage()
             await ws.close()
@@ -389,6 +398,9 @@ class SpeechStream(stt.SpeechStream):
 
     def _on_transcript(self, text: str, final: bool) -> None:
         if not text:
+            # An empty final after interims (a cough, noise) still closes the utterance they opened.
+            if final and self._speaking:
+                self._end_utterance()
             return
         if not self._speaking:
             self._speaking = True
@@ -413,13 +425,16 @@ class SpeechStream(stt.SpeechStream):
             )
         )
         if final:
-            self._event_ch.send_nowait(
-                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id)
-            )
-            self._report_usage()
-            self._utterance_floor = self._audio_sent
-            self._speaking = False
-            self._request_id = ""
+            self._end_utterance()
+
+    def _end_utterance(self) -> None:
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id)
+        )
+        self._report_usage()
+        self._utterance_floor = self._audio_sent
+        self._speaking = False
+        self._request_id = ""
 
     def _report_usage(self) -> None:
         duration = self._audio_sent - self._audio_reported

@@ -208,6 +208,8 @@ async def test_stream_refused_at_the_handshake_raises_a_status_error():
                     async for _ in stream:
                         pass
                 assert err.value.status_code == 429
+                # The account's sessions are in use: a reconnect may find one released.
+                assert err.value.retryable
                 await stream.aclose()
         finally:
             await runner.cleanup()
@@ -292,6 +294,7 @@ async def test_stream_closed_before_done_is_an_error():
         await _stream_against(ws_stt)
 
 
+@pytest.mark.virtual_time
 async def test_stream_that_stalls_after_end_times_out():
     # A server that accepts "end" and then says nothing, without closing, must not hold the
     # stream open forever.
@@ -648,7 +651,6 @@ async def test_a_retry_ends_the_utterance_the_dropped_connection_left_open():
         await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
         if connections["n"] == 1:
             await ws.send_str(json.dumps({"type": "transcript", "data": "hola", "isFinal": False}))
-            await asyncio.sleep(0.05)
             await ws.close()
             return ws
         async for msg in ws:
@@ -680,6 +682,131 @@ async def test_a_retry_ends_the_utterance_the_dropped_connection_left_open():
 
     kinds = [e.type for e in events if e.type != stt.SpeechEventType.RECOGNITION_USAGE]
     T = stt.SpeechEventType
+    assert kinds == [
+        T.START_OF_SPEECH,
+        T.INTERIM_TRANSCRIPT,
+        T.END_OF_SPEECH,
+        T.START_OF_SPEECH,
+        T.FINAL_TRANSCRIPT,
+        T.END_OF_SPEECH,
+    ]
+    ids = [e.request_id for e in events if e.type in (T.INTERIM_TRANSCRIPT, T.FINAL_TRANSCRIPT)]
+    assert ids[0] != ids[1]
+
+
+async def _stream_with_retry(ws_stt, frames: int = 10) -> list[stt.SpeechEvent]:
+    from livekit.plugins.lokutor import STT
+
+    app = web.Application()
+    app.router.add_get("/ws/stt", ws_stt)
+    runner, base = await _serve(app)
+    try:
+        async with aiohttp.ClientSession() as session:
+            s = STT(api_key="sk-test", base_url=base, http_session=session)
+            stream = s.stream(
+                conn_options=APIConnectOptions(max_retry=1, retry_interval=0.01, timeout=5.0)
+            )
+            for _ in range(frames):
+                stream.push_frame(_frame())
+            stream.end_input()
+            try:
+                return [ev async for ev in stream]
+            finally:
+                await stream.aclose()
+    finally:
+        await runner.cleanup()
+
+
+async def test_transcript_times_after_a_retry_count_from_the_new_connection():
+    # start_time_offset restarts at the new connection's first frame, so the audio the dropped
+    # connection carried must not be counted again in the next transcript's times.
+    connections = {"n": 0}
+    second_audio = {"bytes": 0}
+
+    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
+        connections["n"] += 1
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive()
+        await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
+        if connections["n"] == 1:
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    break
+            await ws.close()
+            return ws
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                second_audio["bytes"] += len(msg.data)
+            elif msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("type") == "end":
+                await ws.send_str(
+                    json.dumps({"type": "transcript", "data": "Hola.", "isFinal": True})
+                )
+                await ws.send_str(json.dumps({"type": "status", "data": "done"}))
+                await ws.close()
+        return ws
+
+    events = await _stream_with_retry(ws_stt)
+    final = next(e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT)
+    alt = final.alternatives[0]
+    assert alt.end_time - alt.start_time == pytest.approx(second_audio["bytes"] / 32000, abs=0.01)
+
+
+async def test_a_send_failure_is_retried():
+    # A socket that drops mid-stream can fail a send before the receiver sees the close: that is
+    # a connection error, retried, not the end of the stream.
+    real_send = aiohttp.ClientWebSocketResponse.send_bytes
+    calls = {"n": 0}
+
+    async def failing_once(self, data, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        return await real_send(self, data, *args, **kwargs)
+
+    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive()
+        await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("type") == "end":
+                await ws.send_str(
+                    json.dumps({"type": "transcript", "data": "Hola.", "isFinal": True})
+                )
+                await ws.send_str(json.dumps({"type": "status", "data": "done"}))
+                await ws.close()
+        return ws
+
+    with patch.object(aiohttp.ClientWebSocketResponse, "send_bytes", failing_once):
+        events = await _stream_with_retry(ws_stt)
+    assert any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in events)
+
+
+async def test_an_empty_final_still_ends_the_utterance():
+    # Interims then an empty final (a cough, noise): the consumer must still get END_OF_SPEECH,
+    # or the next utterance would continue this one.
+    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive()
+        await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("type") == "end":
+                await ws.send_str(
+                    json.dumps({"type": "transcript", "data": "eh", "isFinal": False})
+                )
+                await ws.send_str(json.dumps({"type": "transcript", "data": "", "isFinal": True}))
+                await ws.send_str(
+                    json.dumps({"type": "transcript", "data": "Hola.", "isFinal": True})
+                )
+                await ws.send_str(json.dumps({"type": "status", "data": "done"}))
+                await ws.close()
+        return ws
+
+    events = await _stream_against(ws_stt)
+    T = stt.SpeechEventType
+    kinds = [e.type for e in events if e.type != T.RECOGNITION_USAGE]
     assert kinds == [
         T.START_OF_SPEECH,
         T.INTERIM_TRANSCRIPT,
