@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/inference/eot/base.py
+  s_d1fb2a31e94a5c::t_ff16d408aef50f 388-392,416
+tests/test_turn_detector.py
+  s_d1fb2a31e94a5c::t_801ba398fb59d8 457-481
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1b40b101c4b68250d3cb897be4046240058c921b",
+  "prompts": {},
+  "sessions": {
+    "s_d1fb2a31e94a5c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_d1fb2a31e94a5c",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
