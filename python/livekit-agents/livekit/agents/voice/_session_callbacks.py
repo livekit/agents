@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 from livekit import rtc
 
 from .. import _core, llm, stt, tts
-from .._bindings import chat_request, core_leg, tool_specs
+from .._bindings import chat_request, tool_specs
 from .._generated.agent_run import FunctionToolInfo
 from .._generated.amd import AMDPredictionEvent
 from .._generated.avatar_errors import AvatarError
@@ -258,7 +258,7 @@ class DefaultPipeline:
         assert isinstance(model, llm.LLM), "llm_node needs an LLM (not a realtime model)"
         choice = model_settings.tool_choice
         return _core.llm_node(
-            core_leg(model),
+            model,
             chat_ctx.items,
             chat_ctx,
             tools=tool_specs(tools),
@@ -279,10 +279,10 @@ class DefaultPipeline:
         if session.stt is None:
             raise RuntimeError("stt_node called but no STT is available")
         return _core.stt_node(
-            core_leg(session.stt),
+            session.stt,
             audio,
             conn_options=session.conn_options.stt_conn_options,
-            vad=core_leg(session.vad),
+            vad=session.vad,
             calls=_NodeCallsVar.get(None),
         )
 
@@ -295,9 +295,7 @@ class DefaultPipeline:
             raise RuntimeError("tts_node called but no TTS is available")
         conn_options = session.conn_options.tts_conn_options
         calls = _NodeCallsVar.get(None)
-        # the native engine, as the session itself runs it: a native TTS has no Python provider
-        # hooks for the core to call
-        frames = _core.tts_node(core_leg(session.tts), text, conn_options=conn_options, calls=calls)
+        frames = _core.tts_node(session.tts, text, conn_options=conn_options, calls=calls)
         return (_stamped(frame) async for frame in frames)
 
     async def transcription_node(

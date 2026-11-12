@@ -398,6 +398,33 @@ async def test_avatar_output_keeps_sdk_room_and_validation_contract() -> None:
     await output.aclose()
 
 
+async def test_a_provider_wrapper_reaches_the_core_as_its_native_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wherever a Python provider reaches the core, the core runs what its `_core_leg()` names:
+    the gateway TTS's engine, never the wrapper as a plugin (which has no provider hooks)."""
+    from livekit.agents import APIConnectOptions, APIError, inference
+
+    proxied: list[str] = []
+    for hook in ("_core_stream", "_core_synthesize"):
+        monkeypatch.setattr(
+            inference.TTS, hook, lambda *_a, hook=hook, **_k: proxied.append(hook), raising=True
+        )
+    model = inference.TTS(
+        "cartesia/sonic-3", base_url="http://127.0.0.1:9/v1", api_key="k", api_secret="s"
+    )
+    stream = _core.TtsStream(tts=model, conn_options=APIConnectOptions(max_retry=0))
+    stream.push_text("Hello there.")
+    stream.end_input()
+    with pytest.raises(APIError):
+        while await stream.recv() is not None:
+            pass
+    await stream.aclose()
+    await model.aclose()
+
+    assert proxied == [], "the core ran the wrapper as a plugin"
+
+
 async def test_realtime_chain_accepts_host_and_native_members() -> None:
     class Provider(RealtimeModel):
         def session(self, *, turn_detection_disabled: bool = False) -> NoReturn:

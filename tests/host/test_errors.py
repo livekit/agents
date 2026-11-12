@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 import pytest
 from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 from livekit import rtc
 from livekit.agents import (
@@ -619,6 +620,107 @@ async def test_a_tts_node_over_the_default_runs_the_native_tts(rejecting_gateway
     await model.aclose()
 
     assert errors
+    assert all(isinstance(e.error, APIStatusError) and e.error.status_code == 401 for e in errors)
+
+
+async def test_agent_run_runs_the_native_llm(rejecting_gateway: str) -> None:
+    """`agent.run()` hands the core the gateway LLM itself, not its Python wrapper."""
+    model = inference.LLM(
+        "openai/gpt-4.1-mini", base_url=rejecting_gateway, api_key="key", api_secret="secret"
+    )
+    with pytest.raises(APIStatusError) as raised:
+        await Agent(instructions="Help.", llm=model).run("hello")
+    await model.aclose()
+
+    assert raised.value.status_code == 401
+
+
+@pytest.mark.parametrize("wrap", ["fallback", "stream_adapter"])
+async def test_an_adapter_over_the_native_tts_runs_it_natively(wrap: str) -> None:
+    """Behind an adapter, and through a `tts_node` over the default, the gateway TTS still makes
+    its own request: the gateway sees it."""
+    requests: list[str] = []
+
+    async def reject(request: web.Request) -> web.Response:
+        requests.append(request.path)
+        return web.json_response({"error": "invalid api key"}, status=401)
+
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", reject)
+    async with TestServer(app) as gateway:
+        model = inference.TTS(
+            "cartesia/sonic-3", base_url=str(gateway.make_url("/v1")), api_key="k", api_secret="s"
+        )
+        voice = tts.FallbackAdapter([model]) if wrap == "fallback" else tts.StreamAdapter(tts=model)
+        async with VoiceSession(tts=voice, vad=None) as session:
+            session.output.audio = FakeAudioOutput()
+
+            @session.tts_node
+            def node(
+                ctx: RunContext, text: AsyncIterable[str], model_settings: ModelSettings
+            ) -> Any:
+                return session.default.tts_node(ctx, text, model_settings)
+
+            await session.start(Agent(instructions="Help."))
+            await session.say("Hello there.")
+        await model.aclose()
+
+    assert requests, "the gateway TTS never made a request"
+
+
+class _CountedLLM(inference.LLM):
+    calls = 0
+
+    def chat(self, **kwargs: Any) -> Any:
+        type(self).calls += 1
+        return super().chat(**kwargs)
+
+
+async def test_an_inference_llm_subclass_replacing_chat_runs_it_and_the_gateway(
+    rejecting_gateway: str,
+) -> None:
+    model = _CountedLLM(
+        "openai/gpt-4.1-mini", base_url=rejecting_gateway, api_key="key", api_secret="secret"
+    )
+    errors: list[llm.LLMError] = []
+    model.on("error", errors.append)
+
+    async with VoiceSession(llm=model, vad=None) as session:
+        await session.start(Agent(instructions="Help."))
+        await session.generate_reply(user_input="hello")
+    await model.aclose()
+
+    assert _CountedLLM.calls >= 1, "the subclass's chat was bypassed"
+    assert errors
+    assert all(isinstance(e.error, APIStatusError) and e.error.status_code == 401 for e in errors)
+
+
+class _CountedSTT(inference.STT):
+    calls = 0
+
+    def stream(self, **kwargs: Any) -> Any:
+        type(self).calls += 1
+        return super().stream(**kwargs)
+
+
+async def test_an_inference_stt_subclass_replacing_stream_runs_it_and_the_gateway(
+    rejecting_gateway: str,
+) -> None:
+    model = _CountedSTT(
+        "deepgram/nova-3", base_url=rejecting_gateway, api_key="key", api_secret="secret"
+    )
+    errors: list[stt.STTError] = []
+    model.on("error", errors.append)
+    microphone = FakeAudioInput()
+
+    async with VoiceSession(stt=model, llm=FakeLLM(["Hi!"])) as session:
+        session.input.audio = microphone
+        await session.start(Agent(instructions="Help."))
+        microphone.speak(0.5)
+        await until(lambda: any(not e.recoverable for e in errors), "no unrecoverable STT error")
+    await model.aclose()
+
+    assert _CountedSTT.calls >= 1, "the subclass's stream was bypassed"
     assert all(isinstance(e.error, APIStatusError) and e.error.status_code == 401 for e in errors)
 
 

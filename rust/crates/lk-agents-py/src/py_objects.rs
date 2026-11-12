@@ -178,7 +178,20 @@ pub struct HostNative {
 
 inventory::collect!(HostNative);
 
+/// The native value the core runs for `obj`: `obj` itself when it is a registered native class,
+/// else the native its `_core_leg()` names. A host facade over a native engine (`inference.TTS`)
+/// names that engine, so wherever a provider reaches the core, it runs as the session would run
+/// it; a plugin, or a facade subclass replacing what the engine would bypass, names itself and is
+/// proxied.
 pub fn native<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> Option<std::sync::Arc<T>> {
+    if let Some(native) = registered::<T>(obj) {
+        return Some(native);
+    }
+    let leg = obj.call_method0(pyo3::intern!(obj.py(), "_core_leg")).ok()?;
+    if leg.is(obj) { None } else { registered::<T>(&leg) }
+}
+
+fn registered<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> Option<std::sync::Arc<T>> {
     let id = std::any::TypeId::of::<T>();
     for n in inventory::iter::<HostNative> {
         if (n.trait_id)() != id {
