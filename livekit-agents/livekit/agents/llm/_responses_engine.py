@@ -564,7 +564,20 @@ class ResponsesLLMStream(llm.LLMStream):
                     ],
                 ),
             )
-        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
+        elif isinstance(event.item, ResponseOutputMessage):
+            metadata: dict[str, Any] = {}
+            annotations = [
+                annotation.model_dump()
+                for part in event.item.content
+                if part.type == "output_text"
+                for annotation in part.annotations
+            ]
+            if annotations:
+                metadata["annotations"] = annotations
+            if event.item.phase is not None:
+                metadata["phase"] = event.item.phase
+            if not metadata:
+                return None
             # Models like gpt-5.3-codex label assistant messages as intermediate
             # `commentary` or the `final_answer`
             chunk = llm.ChatChunk(
@@ -572,7 +585,7 @@ class ResponsesLLMStream(llm.LLMStream):
                 delta=llm.ChoiceDelta(
                     role="assistant",
                     content=None,
-                    extra={"openai": {"phase": event.item.phase}},
+                    extra={"openai": metadata},
                 ),
             )
         return chunk
