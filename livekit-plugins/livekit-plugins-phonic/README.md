@@ -173,3 +173,7 @@ RealtimeModel(
 If you already have an agent set up on the Phonic platform, you can use the `phonic_agent` option to specify the agent name. As a note, configuration options you set in the LiveKit Agents SDK will override the agent settings set on the Phonic platform. This means the system prompt you have set on the Phonic platform will be ignored in favor of the `instructions` field set on the LiveKit `Agent`. Likewise, options explicitly set in the `RealtimeModel` constructor will override the Phonic agent's settings.
 
 If you have Webhook tools set up on the Phonic platform, you can use `phonic_tools` to make them available to your agent, together with Phonic's [built-in tools](#built-in-tools). Custom function tools you define on the LiveKit `Agent` are also supported and run over the websocket.
+
+### Caller keypad input
+
+On phone calls, the plugin forwards the caller's keypad presses to the agent. Digits are buffered until the caller pauses for 2 seconds (or presses 32 keys), then sent as one user turn, `(User pressed 1234# on the keypad)`, which the agent replies to. Every key, including `*` and `#`, is passed through as typed. You don't need your own `sip_dtmf_received` handler for this.

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import get_job_context, llm, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -55,6 +55,9 @@ CONVERSATION_HISTORY_PREFIX = (
 PHONIC_INPUT_FRAME_MS = 20
 WS_CLOSE_NORMAL = 1000
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
+# Caller keypad presses are buffered and sent as one user turn once the caller pauses.
+KEYPAD_INTER_DIGIT_TIMEOUT_SEC = 2.0
+KEYPAD_MAX_DIGITS = 32
 
 
 # Phonic's built-in tools, referenced by name in ``phonic_tools``. A configs_for_tools entry for one of
@@ -552,6 +555,14 @@ class RealtimeSession(llm.RealtimeSession):
         self._configs_for_tools: dict[str, PhonicToolConfig] = {}
         self._system_prompt_postfix: str = ""
         self._pending_user_text: str | None = None
+
+        self._keypad_digits = ""
+        self._keypad_flush_handle: asyncio.TimerHandle | None = None
+        self._keypad_send_tasks: set[asyncio.Task[None]] = set()
+        job_ctx = get_job_context(required=False)
+        self._room: rtc.Room | None = job_ctx.room if job_ctx else None
+        if self._room is not None:
+            self._room.on("sip_dtmf_received", self._on_sip_dtmf_received)
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -1189,6 +1200,13 @@ class RealtimeSession(llm.RealtimeSession):
     async def aclose(self) -> None:
         self._session_should_close.set()
         self._send_ch.close()
+
+        if self._room is not None:
+            self._room.off("sip_dtmf_received", self._on_sip_dtmf_received)
+        if self._keypad_flush_handle is not None:
+            self._keypad_flush_handle.cancel()
+        for task in list(self._keypad_send_tasks):
+            await utils.aio.cancel_and_wait(task)
         self._instructions_ready.set()
         self._tools_ready.set()
         self._ready_to_start.set()
@@ -1502,6 +1520,42 @@ class RealtimeSession(llm.RealtimeSession):
         self.emit(
             "input_speech_stopped",
             llm.InputSpeechStoppedEvent(user_transcription_enabled=True),
+        )
+
+    def _on_sip_dtmf_received(self, ev: rtc.SipDTMF) -> None:
+        if (
+            ev.participant is None
+            or ev.participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+        ):
+            return
+        # Every key, including * and #, is part of what the caller typed.
+        self._keypad_digits += ev.digit
+        if self._keypad_flush_handle is not None:
+            self._keypad_flush_handle.cancel()
+            self._keypad_flush_handle = None
+        if len(self._keypad_digits) >= KEYPAD_MAX_DIGITS:
+            self._flush_keypad_digits()
+        else:
+            self._keypad_flush_handle = asyncio.get_event_loop().call_later(
+                KEYPAD_INTER_DIGIT_TIMEOUT_SEC, self._flush_keypad_digits
+            )
+
+    def _flush_keypad_digits(self) -> None:
+        self._keypad_flush_handle = None
+        digits, self._keypad_digits = self._keypad_digits, ""
+        if not digits or self._session_should_close.is_set():
+            return
+        task = asyncio.create_task(self._send_keypad_input(digits), name="phonic-keypad-input")
+        self._keypad_send_tasks.add(task)
+        task.add_done_callback(self._keypad_send_tasks.discard)
+
+    async def _send_keypad_input(self, digits: str) -> None:
+        await self._ready_to_start.wait()
+        if self._session_should_close.is_set() or not self._socket:
+            return
+        logger.info("Sending caller keypad input", extra={"lk.pii.digits": digits})
+        await self._socket.send_generate_reply(
+            GenerateReplyPayload(user_message=f"(User pressed {digits} on the keypad)")
         )
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> typing.Iterator[rtc.AudioFrame]:
