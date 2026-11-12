@@ -149,6 +149,9 @@ pub struct Initialization;
 impl lk_agents_abi::worker::ipc_host::ProcessInitialization for Initialization {
     fn init(_role: lk_agents_abi::worker::ipc_host::ProcessRole) {
         reinit();
+        // The sentence rules compile once per process (about 10ms), here rather than on the first
+        // reply's way to the voice; a forked child inherits them compiled.
+        drop(lk_agents_core::tokenize::sentences::SentenceSplitter::default());
     }
 }
 

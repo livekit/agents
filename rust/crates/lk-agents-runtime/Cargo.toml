@@ -61,6 +61,10 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "m
 name = "tls"
 path = "src/tls_tests.rs"
 
+[[test]]
+name = "sentence_speed"
+path = "src/sentence_speed_tests.rs"
+
 [features]
 media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]
 media-images = ["lk-agents-media/images", "lk-agents-inference/images"]
