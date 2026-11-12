@@ -1136,6 +1136,7 @@ class _DialogueConnection(_Connection):
         return _dialogue_multi_stream_url(self._opts)
 
     async def _send_json(self, data: dict[str, Any]) -> None:
+        """Send a dialogue message and record when it was sent for idle retirement."""
         assert self._ws is not None
         await self._ws.send_json(data)
         self._last_send = asyncio.get_event_loop().time()
