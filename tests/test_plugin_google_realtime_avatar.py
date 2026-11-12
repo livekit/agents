@@ -15,7 +15,7 @@ from google.genai import types
 from livekit import rtc
 from livekit.agents import utils
 from livekit.agents.voice.io import PlaybackFinishedEvent
-from livekit.plugins.google.realtime import AvatarSession
+from livekit.plugins.google.realtime import AvatarSession, _avatar_stream
 from livekit.plugins.google.realtime._avatar_stream import AvatarStreamDecoder
 from livekit.plugins.google.realtime.avatar import _AvatarPlayoutOutput
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
@@ -334,3 +334,21 @@ async def test_reply_audio_closes_only_after_its_fragments_are_decoded(
         while not gen.audio_ch.empty():
             received += gen.audio_ch.recv_nowait().duration
         assert received >= 1.5
+
+
+async def test_reply_audio_closes_when_the_avatar_stream_fails_to_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failing_open(file: AvatarStreamDecoder, **kwargs: object) -> None:
+        file.read(4096)
+        raise av.error.InvalidDataError(0, "malformed fragment")
+
+    monkeypatch.setattr(_avatar_stream.av, "open", failing_open)
+    async with _avatar_session(monkeypatch) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+        assert not session._route_avatar_media(_video_message(b"\x00" * 4096))
+        session._handle_server_content(types.LiveServerContent(generation_complete=True))
+
+        await _wait_for(lambda: gen.audio_ch.closed)

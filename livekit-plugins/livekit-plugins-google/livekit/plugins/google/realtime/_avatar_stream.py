@@ -55,11 +55,11 @@ class AvatarStreamDecoder:
 
     def call_when_drained(self, callback: Callable[[], None]) -> None:
         """Run `callback` on the event loop once every frame pushed so far is dispatched."""
-        if self._closed:
-            callback()
-            return
         with self._lock:
-            self._drain_waiters.append((self._written, callback))
+            if not self._closed:
+                self._drain_waiters.append((self._written, callback))
+                return
+        callback()
 
     async def aclose(self) -> None:
         if self._closed:
@@ -67,10 +67,14 @@ class AvatarStreamDecoder:
         self._closed = True
         self._buffer.close()
         await asyncio.to_thread(self._thread.join)
-        with self._lock:
-            waiters, self._drain_waiters = self._drain_waiters, []
-        for _, callback in waiters:
+        for callback in self._take_waiters():
             callback()
+
+    def _take_waiters(self) -> list[Callable[[], None]]:
+        with self._lock:
+            self._closed = True
+            waiters, self._drain_waiters = self._drain_waiters, []
+        return [callback for _, callback in waiters]
 
     def read(self, size: int = -1) -> bytes:
         # the demuxer reads again only after it has yielded every packet it already read
@@ -144,3 +148,5 @@ class AvatarStreamDecoder:
         finally:
             if container is not None:
                 container.close()
+            for callback in self._take_waiters():
+                self._schedule(callback)
