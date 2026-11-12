@@ -52,6 +52,8 @@ bytes_per_frame = {
 
 
 SUPPORTED_SAMPLE_RATE = 24000
+# Gradium's default model delay, used until the server's ready message arrives
+DEFAULT_DELAY_IN_FRAMES = 10
 
 
 def _api_error(msg_data: dict[str, Any]) -> APIError:
@@ -298,8 +300,8 @@ class SpeechStream(stt.SpeechStream):
     def delay_in_frames(self) -> int:
         """Steps the model lags behind the audio, from the server's ready message."""
         if self._ready_msg is not None:
-            return int(self._ready_msg.get("delay_in_frames", 6))
-        return 6
+            return int(self._ready_msg.get("delay_in_frames", DEFAULT_DELAY_IN_FRAMES))
+        return DEFAULT_DELAY_IN_FRAMES
 
     @property
     def frame_size(self) -> int:

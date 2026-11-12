@@ -13,6 +13,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError, APIStatusError
 from livekit.agents.stt import SpeechEventType
+from livekit.plugins.gradium.stt import DEFAULT_DELAY_IN_FRAMES
 
 pytestmark = pytest.mark.plugin("gradium")
 
@@ -179,10 +180,10 @@ async def test_endpoint_uses_end_text_timing(monkeypatch, stop_s):
     send({"type": "text", "text": "hello", "start_s": 0.1})
     if stop_s is not None:
         send({"type": "end_text", "stop_s": stop_s})
-    for _ in range(7):
+    for _ in range(DEFAULT_DELAY_IN_FRAMES + 1):
         send({"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]})
     send({"type": "text", "text": "again", "start_s": 1.0})
-    for _ in range(7):
+    for _ in range(DEFAULT_DELAY_IN_FRAMES + 1):
         send({"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]})
     ws = SimpleNamespace(receive=messages.get, send_str=AsyncMock(), close=AsyncMock())
     monkeypatch.setattr(gradium_stt.SpeechStream, "_connect_ws", AsyncMock(return_value=ws))
@@ -233,6 +234,9 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
     stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
     stream.start_time_offset = 7.0
 
+    # vad_flush pads the model delay (80 ms frames) of silence after each turn
+    padding = DEFAULT_DELAY_IN_FRAMES * 0.08
+
     def sent_duration(ws):
         return sum(
             len(base64.b64decode(data["audio"])) / (24000 * 2)
@@ -249,10 +253,10 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
         step = {"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]}
         ws.respond(step)
         if vad_flush:
-            await wait_until(lambda: sent_duration(ws) >= provider_start + 1.48 - 1e-6)
+            await wait_until(lambda: sent_duration(ws) >= provider_start + 1.0 + padding - 1e-6)
         # The boundary precedes the padding, even when its reply arrives after it.
         ws.respond({"type": "end_text", "stop_s": provider_start + 0.4})
-        for _ in range(6):
+        for _ in range(DEFAULT_DELAY_IN_FRAMES):
             ws.respond(step)
         async for event in stream:
             if event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
@@ -270,7 +274,7 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
                 await check_turn(
                     index,
                     captured_at=1000.0 + index,
-                    provider_start=index * (1.48 if vad_flush else 1.0),
+                    provider_start=index * (1.0 + padding if vad_flush else 1.0),
                     expected_end=7.4 + index,
                 )
             stream.update_options(buffer_size_seconds=0.1)
@@ -544,8 +548,8 @@ async def test_vad_start_of_speech_without_text_still_ends_the_turn():
     collector = _EventCollector(stream)
     try:
         session.ws.incoming.put_nowait(_step(0.2))
-        # the first positive step starts the countdown, delay_in_frames (6) more end the turn
-        for _ in range(7):
+        # the first positive step starts the countdown, delay_in_frames more end the turn
+        for _ in range(DEFAULT_DELAY_IN_FRAMES + 1):
             session.ws.incoming.put_nowait(_step(0.95))
         session.ws.incoming.put_nowait(_step(0.2))
 
@@ -606,8 +610,8 @@ async def test_vad_start_of_speech_with_vad_bucket_zero():
             return step
 
         session.ws.incoming.put_nowait(bucket_zero_step(0.2))
-        # the first positive step starts the countdown, delay_in_frames (6) more end the turn
-        for _ in range(7):
+        # the first positive step starts the countdown, delay_in_frames more end the turn
+        for _ in range(DEFAULT_DELAY_IN_FRAMES + 1):
             session.ws.incoming.put_nowait(bucket_zero_step(0.95))
 
         events = await collector.wait_for(3)
@@ -638,7 +642,7 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
 
 
 async def test_final_transcript_uses_delay_in_frames_from_ready():
-    """A positive VAD finalizes after the model delay the server announced (3), not 6."""
+    """A positive VAD finalizes after the model delay the server announced (3), not the fallback."""
     frames = [READY, _text("hello", 0.1)] + [_vad_step(i, SILENT) for i in range(4)]
     stt, _, _ = _make_stt(frames)
 
