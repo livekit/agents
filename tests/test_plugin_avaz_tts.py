@@ -294,6 +294,7 @@ async def test_synthesize(server: tuple[FakeAvaz, str], make_tts: Any) -> None:
     assert _duration(frames) == _approx_duration(0.24)
 
 
+@pytest.mark.virtual_time
 async def test_text_pause_longer_than_timeout(server: tuple[FakeAvaz, str], make_tts: Any) -> None:
     fake, _ = server
     tts = make_tts()
@@ -415,6 +416,7 @@ async def test_invalid_audio_fails(
     assert len(fake.connections) == 1
 
 
+@pytest.mark.virtual_time
 async def test_no_response_after_flush_times_out(
     server: tuple[FakeAvaz, str], make_tts: Any
 ) -> None:
@@ -429,6 +431,7 @@ async def test_no_response_after_flush_times_out(
         await asyncio.wait_for(stream, 5)
 
 
+@pytest.mark.virtual_time
 async def test_stream_closed_before_flush_fails(
     server: tuple[FakeAvaz, str], make_tts: Any
 ) -> None:
