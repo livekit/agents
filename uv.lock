@@ -3687,7 +3687,7 @@ requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "protobuf", specifier = ">=5.29.6" },
     { name = "rime-api", specifier = ">=0.3.0" },
-    { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'realtime'", specifier = ">=0.1.0a29" },
+    { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'realtime'", specifier = ">=0.1.0a30" },
     { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'stt'", specifier = ">=0.1.0a29" },
 ]
 provides-extras = ["realtime", "stt"]
@@ -5927,7 +5927,7 @@ wheels = [
 
 [[package]]
 name = "rimelabs-sdk"
-version = "0.1.0a29"
+version = "0.1.0a30"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
@@ -5936,9 +5936,9 @@ dependencies = [
     { name = "rime-api" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/14/c3/8f3d9ef51a88af4eed8486d1cacc883633a1212936d0689a633effedcf67/rimelabs_sdk-0.1.0a29.tar.gz", hash = "sha256:d7c3b3af429e598b2743a842623de25f740db0b23d914c7c98600e713abfd2e1", size = 243865, upload-time = "2026-11-03T19:12:13.088Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/09/18/a8992bc3b3d90f4e3b301a6997e7eab6d421be50c9991f0f7547d613e6a6/rimelabs_sdk-0.1.0a30.tar.gz", hash = "sha256:733c636f5c28d283ed4ced5fda40751bcff0102332a86273b3645938a042fc74", size = 252431, upload-time = "2026-11-12T06:54:28.674Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/b6/dc92855616eba08397f8b1c33c3ec658c7e7b0bbdd21454c8511b08dc849/rimelabs_sdk-0.1.0a29-py3-none-any.whl", hash = "sha256:05aa3bc074ab4ec1cf32a5a42eb1e118bb3294299c625a5b08870cdd42f886bd", size = 78733, upload-time = "2026-11-03T19:12:11.827Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/d5/12980acee6f6cd04a8189f3e0170797f8b893446675561b8ac370f0cf9cd/rimelabs_sdk-0.1.0a30-py3-none-any.whl", hash = "sha256:c43dfdf63f0d3101ef65da87ae0b9533e4e57e407cb353e274abe283d05a78c3", size = 83458, upload-time = "2026-11-12T06:54:27.188Z" },
 ]
 
 [[package]]

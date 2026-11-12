@@ -276,6 +276,7 @@ class RealtimeModel(llm.RealtimeModel):
         )
 
     def _merge_turn_update(self, update: r.TurnDetectionUpdate) -> None:
+        """Merge mutable interruption settings into the next session's configuration."""
         if not isinstance(update, r.TurnDetectionUpdate) or isinstance(update, r.TurnDetection):
             raise RimeInputError("Use TurnDetectionUpdate for mutable interruption settings")
         values = {

@@ -237,7 +237,7 @@ Python Rime SDK. Use Python 3.11 or later. TTS still supports Python 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra requires `rimelabs-sdk>=0.1.0a29`. For source development:
+The realtime extra requires `rimelabs-sdk>=0.1.0a30`. For source development:
 
 ```sh
 uv sync --package livekit-plugins-rime --extra realtime --inexact
@@ -606,10 +606,10 @@ history snapshot isolation, and cancellation during acknowledged updates.
 Validate typed replies and audio playback against the target Prism deployment
 separately. Caller-interruption checks require a speech fixture with nonzero audio.
 
-### Upcoming Prism SDK settings
+### Prism speech and interruption settings
 
-The next SDK and plugin release adds `speed` to `RealtimeModel` and
-`update_options`. Values range from 0.85 through 1.3. It also accepts SDK
+Set `speed` through `RealtimeModel` or `update_options`. Values range from
+0.85 through 1.3. The model also accepts SDK
 `TurnDetection` settings at connect time and `TurnDetectionUpdate` for live
 changes to interruption word counts and phrase lists. The silence floor is
 connect-only. An empty phrase list clears it; omitted settings stay unchanged.
@@ -622,8 +622,6 @@ and server timestamps through `rime_server_event_received`. Partial captions
 use the cumulative transcript when present, including an empty correction;
 older events still append their delta.
 
-Use the matching new Python SDK for these options. The five unreleased Prism
-features require the next Prism image. Default requests omit the new settings
-and retain support for older images. Before publishing this plugin, raise its
-SDK dependency floor to the actual SDK release that contains these additions.
-The full validation run against the new image is still pending.
+These options require `rimelabs-sdk>=0.1.0a30` and a Prism deployment that supports
+them, such as build `20261111`. Default requests omit the new settings and retain
+support for older images. Full end-to-end validation remains pending.
