@@ -198,10 +198,17 @@ class _VADStream(vad.VADStream):
                 self._opts.prefix_padding_duration * self._input_sample_rate
             )
 
-            self._speech_buffer.resize(
+            new_size = (
                 int(self._opts.max_buffered_speech * self._input_sample_rate)
                 + self._prefix_padding_samples
             )
+            if new_size != len(self._speech_buffer):
+                # Copy into a new array rather than ndarray.resize(): on Python 3.14 its
+                # reference check rejects this buffer because it is held by an attribute.
+                speech_buffer = np.zeros(new_size, dtype=self._speech_buffer.dtype)
+                kept = min(len(self._speech_buffer), new_size)
+                speech_buffer[:kept] = self._speech_buffer[:kept]
+                self._speech_buffer = speech_buffer
 
             # Resizing may discard samples that the write cursor still counted.
             self._speech_buffer_index = min(self._speech_buffer_index, len(self._speech_buffer))
