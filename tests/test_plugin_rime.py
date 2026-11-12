@@ -4638,6 +4638,75 @@ class TestRealtime:
                 assert not ran
                 assert peer.requests.empty()
 
+    @pytest.mark.parametrize("role", ["user", "assistant", "system"])
+    @pytest.mark.parametrize("length", [4000, 4001, 6500])
+    async def test_history_text_survives_startup_edit_and_restart(self, role, length):
+        async with peer_model(context_mode="strict") as (peer, model, _):
+            adapter = RealtimeModelFallbackAdapter([model])
+            session = adapter.session()
+            original = llm.ChatContext([llm.ChatMessage(role=role, content=["x" * length])])
+            try:
+                await session._update_session(instructions="Help", chat_ctx=original)
+                assert peer.server_items[0]["text"] == "x" * length
+                target = original.copy()
+                target.items[0].content = ["y" * length]
+                await session.update_chat_ctx(target)
+                assert peer.server_items[0]["text"] == "y" * length
+                await adapter.restart_session()
+                assert [item["text"] for item in peer.server_items] == ["y" * length]
+                assert (await model._get_history())[0].text == "y" * length
+            finally:
+                await session.aclose()
+
+    @pytest.mark.parametrize("via_fallback", [False, True])
+    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
+    async def test_long_typed_input_reaches_generation(self, via_fallback, context_mode):
+        async with peer_model(context_mode=context_mode) as (peer, model, _):
+            realtime_model = RealtimeModelFallbackAdapter([model]) if via_fallback else model
+            async with AgentSession(llm=realtime_model) as session:
+                await session.start(Agent(instructions="test"))
+                text = "x" * 6500
+                speech = session.generate_reply(user_input=text)
+                request = await peer.next()
+                assert peer.server_items[-1]["text"] == text
+                response = await peer.start(request)
+                await peer.message(response)
+                await peer.end(response)
+                await asyncio.wait_for(speech.wait_for_playout(), 3)
+                assert any(
+                    isinstance(item, llm.ChatMessage) and item.text_content == text
+                    for item in session.history.items
+                )
+
+    async def test_long_history_server_refusal_preserves_confirmed_state(self):
+        async with peer_model(context_mode="strict") as (peer, model, _):
+            async with AgentSession(llm=model) as session:
+                agent = Agent(instructions="test")
+                await session.start(agent)
+                await agent.update_chat_ctx(messages("keep"))
+                target = agent.chat_ctx.copy()
+                target.add_message(role="user", content="x" * 70000)
+                faults = []
+                model._session.on("rime_server_event_received", faults.append)
+                peer.refusals["conversation.item.create"] = ("item_too_long", "event")
+                with pytest.raises(PrismHistoryUpdateError) as caught:
+                    await agent.update_chat_ctx(target)
+                assert not peer.refusals
+                assert caught.value.recoverable
+                assert caught.value.status == "rejected"
+                assert [item["text"] for item in peer.server_items] == ["keep"]
+                assert [item.text_content for item in model._session.chat_ctx.items] == ["keep"]
+                await wait_until(
+                    lambda: any(
+                        isinstance(event.payload, r.FaultEvent)
+                        and event.payload.error.code == "item_too_long"
+                        for event in faults
+                    )
+                )
+                target.items[-1].content = ["y" * 6500]
+                await agent.update_chat_ctx(target)
+                assert [item["text"] for item in peer.server_items] == ["keep", "y" * 6500]
+
     @pytest.mark.parametrize(
         "edit", ["append", "prepend", "middle", "delete", "replace", "reorder"]
     )
@@ -4705,7 +4774,6 @@ class TestRealtime:
             "image",
             "encoding",
             "developer",
-            "long",
         ],
     )
     async def test_invalid_batch_sends_nothing_and_keeps_conversation_usable(self, invalid):
@@ -4736,8 +4804,6 @@ class TestRealtime:
                 )
             elif invalid == "developer":
                 target.add_message(role="developer", content="Unsupported role")
-            elif invalid == "long":
-                target.add_message(role="user", content="x" * 4001)
             else:
                 target.add_message(role="system", content=chr(0xD800))
             before = len(peer.history_operations)
@@ -6182,7 +6248,7 @@ class TestRealtime:
                 await agent.update_chat_ctx(messages("keep"))
                 before = len(peer.history_operations)
                 with pytest.raises(PrismHistoryUpdateError) as caught:
-                    await agent.update_chat_ctx(messages("x" * 4001))
+                    await agent.update_chat_ctx(messages(chr(0xD800)))
                 assert caught.value.recoverable
                 assert caught.value.code == "history_update_rejected"
                 assert len(peer.history_operations) == before
@@ -6839,7 +6905,7 @@ class TestRealtime:
                 if failure == "rejected":
                     peer.fail_history_at = 1
                 speech = session.generate_reply(
-                    user_input="refused input" if failure == "rejected" else "x" * 4001
+                    user_input="refused input" if failure == "rejected" else chr(0xD800)
                 )
                 await asyncio.wait_for(speech.wait_for_playout(), 3)
                 assert peer.requests.empty() and not peer.server_items

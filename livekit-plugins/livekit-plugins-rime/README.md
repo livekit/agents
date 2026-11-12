@@ -402,7 +402,8 @@ filler. Replace the map with `model.update_options(tool_fillers=...)`, or pass
 ### History and recovery
 
 `agent.update_chat_ctx()` supports user, assistant, and system text messages and
-completed tool calls/results. Each imported message has at most 4000 characters.
+completed tool calls/results. Prism enforces its context limit; the plugin does
+not impose a 4,000-character cap on imported messages or typed input.
 An imported result must immediately follow its call. Images, video, developer
 messages are unsupported. LiveKit configuration and handoff
 records stay local. Importing history does not execute tools or start a reply.
