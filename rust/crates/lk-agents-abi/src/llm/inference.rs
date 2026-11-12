@@ -217,12 +217,13 @@ pub trait InferenceLlmFacade {
 ))]
 pub trait GatewayLLMStream {}
 
-/// Accumulates the streamed choices of one OpenAI-compatible completion into chunks, filtering
-/// the model's thinking tags: `inference.LLMStream` over a plugin's own client.
+/// Accumulates the streamed choices of one OpenAI-compatible completion into chunks:
+/// `inference.LLMStream` over a plugin's own client. The model's own syntax (reasoning, template
+/// tokens) is taken out above every provider, not here.
 #[crate::host(class(name = "LlmChoiceParser"))]
 pub trait ChoiceParser: Send + Sized + 'static {
     #[host(new)]
-    fn new(model: String) -> Self;
+    fn new() -> Self;
 
     /// The chunk `choice` (one streamed choice of completion `id`) completes, if any.
     #[host(call)]

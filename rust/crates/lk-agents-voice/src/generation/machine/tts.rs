@@ -50,10 +50,9 @@ impl StreamingTts {
 
     /// Capturing a transcript delta completed; only now does the feed include its words.
     pub fn captured(&mut self, chunk: Visible) -> StreamingTtsEffect {
-        self.words.raw.push_str(&chunk.raw);
-        self.words.text.push_str(&chunk.text);
-        self.words.tags.extend(chunk.tags);
-        StreamingTtsEffect::Push(chunk.raw)
+        let said = chunk.said.clone();
+        self.words.extend(chunk);
+        StreamingTtsEffect::Push(said)
     }
 
     /// A rejected text push ends feeding. Its error follows the source read already in flight.
@@ -84,31 +83,181 @@ impl StreamingTts {
     }
 }
 
-/// Stamped words own an aligned transcript after the first stamp. An unstamped segment falls back
-/// to generated text. Closing flushes the transcript exactly once.
+/// Stamped words own an aligned transcript after the first stamp: each of the voice's timed words
+/// is mapped onto the next spoken word of the transcript, so the transcript keeps its own text
+/// (markdown, emoji, code) and paces it on the voice's timings. An unstamped segment falls back to
+/// the transcript whole. Closing flushes it exactly once.
 #[derive(Clone, Default)]
 pub struct AlignedTranscript {
+    /// The transcript shown so far, as the transcript chain got it.
     pub words: String,
     pub stamped: bool,
     pub closed: bool,
+    /// Where the next stamp maps: the chunk of `said.shown`, and the byte within it.
+    chunk: usize,
+    byte: usize,
+    /// Stamps that found no word yet (a voice that expanded "$5" to "five dollars"): the words
+    /// the next matching stamp skips over take their time.
+    held: Vec<TranscriptChunk>,
+}
+
+/// How far ahead a stamp may find its word: a voice that read "$5" as "five dollars" stamps words
+/// the transcript does not have, and one that merged two words skips one.
+const LOOKAHEAD: usize = 4;
+
+/// A piece of the transcript still to show: silent text, or one spoken word with its lead.
+struct Pending {
+    chunk: TranscriptChunk,
+    /// The word, normalized for matching; `None` for silent text.
+    word: Option<String>,
+    /// Where the cursor is once this piece is shown.
+    next: (usize, usize),
+}
+
+fn normalized(word: &str) -> String {
+    word.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
 }
 
 impl AlignedTranscript {
-    pub fn word(&mut self, word: &TranscriptChunk) -> AlignedTranscriptEffect {
-        self.stamped = true;
-        self.words.push_str(&word.text);
-        AlignedTranscriptEffect::CaptureTimed(word.clone())
+    /// The pieces from the cursor on: silent chunks whole, spoken chunks word by word.
+    fn pending(&self, said: &Visible) -> Vec<Pending> {
+        let mut out = Vec::new();
+        let (mut chunk, mut byte) = (self.chunk, self.byte);
+        while let Some(piece) = said.shown.get(chunk) {
+            let rest = &piece.text[byte.min(piece.text.len())..];
+            if !piece.spoken || rest.is_empty() {
+                if !rest.is_empty() || byte == 0 {
+                    out.push(Pending {
+                        chunk: TranscriptChunk { text: rest.to_owned(), ..piece.clone() },
+                        word: None,
+                        next: (chunk + 1, 0),
+                    });
+                }
+                (chunk, byte) = (chunk + 1, 0);
+                continue;
+            }
+            // one word with the blank before it; a trailing blank goes with the last word
+            let lead = rest.len() - rest.trim_start().len();
+            let len = rest[lead..].find(char::is_whitespace).map_or(rest.len(), |i| lead + i);
+            let tail = rest[len..].len() - rest[len..].trim_start().len();
+            let end = if len + tail == rest.len() { rest.len() } else { len };
+            let expression = if byte == 0 { piece.expression.clone() } else { None };
+            out.push(Pending {
+                chunk: TranscriptChunk { expression, ..TranscriptChunk::new(&rest[..end]) },
+                word: Some(normalized(&rest[lead..len])),
+                next: if byte + end == piece.text.len() {
+                    (chunk + 1, 0)
+                } else {
+                    (chunk, byte + end)
+                },
+            });
+            if byte + end == piece.text.len() {
+                (chunk, byte) = (chunk + 1, 0);
+            } else {
+                byte += end;
+            }
+        }
+        out
     }
 
-    pub fn end(&mut self, fallback: &str) -> Vec<AlignedTranscriptEffect> {
+    /// `said` is what the voice was given so far, as the transcript shows it. The stamp releases
+    /// the transcript up to the word it says, its silent text first, at no cost. A stamp that
+    /// finds no word nearby is held; the words the next matching stamp skips over take the held
+    /// stamps' time. Too many held stamps map by position, so the transcript never drifts far.
+    pub fn word(
+        &mut self,
+        stamp: &TranscriptChunk,
+        said: &Visible,
+    ) -> Vec<AlignedTranscriptEffect> {
+        self.stamped = true;
+        let pending = self.pending(said);
+        let words: Vec<usize> =
+            pending.iter().enumerate().filter(|(_, p)| p.word.is_some()).map(|(i, _)| i).collect();
+        if words.is_empty() {
+            // the voice is ahead of the transcript it was given: show what it said
+            self.words.push_str(&stamp.text);
+            return vec![AlignedTranscriptEffect::CaptureTimed(stamp.clone())];
+        }
+        let said_word = normalized(&stamp.text);
+        let found = words
+            .iter()
+            .take(LOOKAHEAD)
+            .copied()
+            .find(|&i| pending[i].word.as_deref() == Some(said_word.as_str()));
+        let upto = match found {
+            Some(i) => i,
+            None if self.held.len() < LOOKAHEAD => {
+                self.held.push(stamp.clone());
+                return Vec::new();
+            }
+            // nothing matches for long: map the oldest held stamp onto the next word
+            None => {
+                self.held.push(stamp.clone());
+                let oldest = self.held.remove(0);
+                return self.release(pending, words[0], &oldest, &oldest);
+            }
+        };
+        // the words skipped over take the held stamps' span, the matched one its own stamp
+        let skipped = std::mem::take(&mut self.held);
+        let span = TranscriptChunk {
+            start_time: skipped.first().map_or(stamp.start_time, |h| h.start_time),
+            end_time: skipped.last().map_or(stamp.start_time, |h| h.end_time),
+            ..TranscriptChunk::default()
+        };
+        self.release(pending, upto, &span, stamp)
+    }
+
+    /// Show `pending` up to `upto`: silent text at its stamp's start, the last word at `stamp`,
+    /// any words before it over `skipped`.
+    fn release(
+        &mut self,
+        pending: Vec<Pending>,
+        upto: usize,
+        skipped: &TranscriptChunk,
+        stamp: &TranscriptChunk,
+    ) -> Vec<AlignedTranscriptEffect> {
+        let mut effects = Vec::new();
+        for (i, piece) in pending.into_iter().take(upto + 1).enumerate() {
+            let (start_time, end_time) = match piece.word {
+                Some(_) if i == upto => (stamp.start_time, stamp.end_time),
+                Some(_) => (skipped.start_time, skipped.end_time),
+                None => (skipped.start_time, skipped.start_time),
+            };
+            self.words.push_str(&piece.chunk.text);
+            (self.chunk, self.byte) = piece.next;
+            effects.push(AlignedTranscriptEffect::CaptureTimed(TranscriptChunk {
+                start_time,
+                end_time,
+                ..piece.chunk
+            }));
+        }
+        effects
+    }
+
+    /// With nothing stamped, the transcript is forwarded whole, as off the aligned path; after
+    /// stamps, what no stamp reached is shown at the end.
+    pub fn end(&mut self, said: &Visible) -> Vec<AlignedTranscriptEffect> {
         if std::mem::replace(&mut self.closed, true) {
             return Vec::new();
         }
         let mut effects = Vec::new();
-        if !self.stamped {
-            self.words.push_str(fallback);
+        if self.stamped {
+            let rest: Vec<TranscriptChunk> = self
+                .pending(said)
+                .into_iter()
+                .map(|p| p.chunk)
+                .filter(|c| !c.text.is_empty())
+                .collect();
+            for chunk in &rest {
+                self.words.push_str(&chunk.text);
+            }
+            if !rest.is_empty() {
+                effects.push(AlignedTranscriptEffect::Capture(rest));
+            }
+        } else {
+            self.words.push_str(&said.shown_text());
             effects.push(AlignedTranscriptEffect::WarnUnaligned);
-            effects.push(AlignedTranscriptEffect::Capture(fallback.to_owned()));
+            effects.push(AlignedTranscriptEffect::Capture(said.shown.clone()));
         }
         effects.push(AlignedTranscriptEffect::Flush);
         effects
@@ -312,7 +461,8 @@ impl SynthesisLoss {
         match aligned {
             Some(aligned) if aligned.stamped => {
                 // Once stamps were accepted, model text can never become their fallback.
-                self.pending = Some(LossText::Stamped(aligned.words));
+                // history keeps the transcript plain
+                self.pending = Some(LossText::Stamped(crate::transcription::plain(&aligned.words)));
                 effects.push(SynthesisLossEffect::Drain {
                     opening: lost.opening,
                     text: DrainedText::Discard,
@@ -320,7 +470,7 @@ impl SynthesisLoss {
             }
             aligned => {
                 if aligned.is_some_and(|a| !a.closed) {
-                    effects.push(SynthesisLossEffect::Capture(lost.opening.text.clone()));
+                    effects.push(SynthesisLossEffect::Capture(lost.opening.shown.clone()));
                 }
                 let (played, synchronized) = (lost.played, lost.synchronized);
                 self.pending = Some(LossText::Generated { played, synchronized });
@@ -350,3 +500,7 @@ impl SynthesisLoss {
         vec![SynthesisLossEffect::Heard(Heard { text, complete: true, ..sink })]
     }
 }
+
+#[cfg(test)]
+#[path = "tts_tests.rs"]
+mod tests;

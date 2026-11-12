@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from livekit.agents.tts import TTS
     from livekit.agents.voice._session_bindings import RemoteSessionAccess
     from livekit.agents.voice.agent_session import VoiceSession, _AgentHooks, _DynamicInstructions
-    from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
+    from livekit.agents.voice.io import AudioInput, AudioOutput, TranscriptionOutput, VideoInput
 
     from ..types import NotGivenOr
     from .agent_run import FunctionToolInfo
@@ -185,7 +185,7 @@ class VoiceSessionArgs:
     """How often camera frames reach the model; `None`: every frame."""
     host_video_sampler: bool = False
     """A custom `video_sampler` callable: the host pumps and gates; the session reads no camera."""
-    host_transcription_output: TextOutput | None = None
+    host_transcription_output: TranscriptionOutput | None = None
     using_default_vad: bool = False
     hook_bound: float | None = None
     """The end-of-turn hook's bound, in seconds; `None` is no hook and no wait."""

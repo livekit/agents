@@ -55,7 +55,7 @@ class TTS(tts.TTS):
             sample_rate (int): Sample rate of audio. Defaults to 16000.
             api_key (str): Speechmatics API key. If not provided, will look for SPEECHMATICS_API_KEY in environment.
             base_url (str): Base URL for Speechmatics TTS API. Defaults to "https://preview.tts.speechmatics.com"
-            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to `livekit.agents.tokenize.basic.WordTokenizer`.
+            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to `livekit.agents.tokenize.WordTokenizer`.
             http_session (http.HttpSession): Optional HTTP session to use for requests.
         """
         super().__init__(
@@ -71,7 +71,7 @@ class TTS(tts.TTS):
             )
 
         if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+            word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
             voice=voice,

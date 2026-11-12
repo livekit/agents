@@ -1,5 +1,5 @@
 use super::ReplyExecution;
-use crate::voice::generation::forward::{TextLeg, first_text_started_speaking};
+use crate::voice::generation::forward::{TextLeg, capture, first_text_started_speaking};
 use crate::voice::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
 use crate::voice::generation::playout::{
     Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding,
@@ -10,7 +10,7 @@ use crate::voice::session::Tx;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::llm::realtime as rt;
 use lk_agents_abi::llm::realtime::Event;
-use lk_agents_abi::voice::io::TextOutput;
+use lk_agents_abi::voice::io::TranscriptionOutput;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::machine::activity::realtime::RealtimeWake;
 use lk_agents_voice::generation::effects::RealtimeGenerationEffect;
@@ -20,6 +20,7 @@ use lk_agents_voice::generation::machine::realtime_generation::{
 use lk_agents_voice::generation::{GenEvent, TurnAccumulator, TurnStats};
 use lk_agents_voice::tool_executor::StepNext;
 use lk_agents_voice::trace::GenerationStep;
+use lk_agents_voice::transcription::SegmentText;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -75,6 +76,7 @@ pub(crate) async fn realtime_generation_task(
         voiced: None,
         backlog: std::collections::VecDeque::new(),
         leg: None,
+        segment: None,
     };
     loop {
         let nodes = &ctx.resources.output_nodes;
@@ -94,7 +96,7 @@ pub(crate) async fn realtime_generation_task(
         let played =
             perform_audio_forwarding(shared, handle, audio_out.as_deref(), &mut generation).await;
         generation.unvoice().await;
-        generation.end_message();
+        generation.end_message().await;
         if !generation.state.carried_message()
             && let Some(text) = &generation.text_out
         {
@@ -247,7 +249,7 @@ struct Generation<'a> {
     state: RealtimeGeneration,
     /// The calls, dispatched as they arrive.
     tools: &'a mut ToolStep,
-    text_out: Option<Arc<dyn TextOutput>>,
+    text_out: Option<Arc<dyn TranscriptionOutput>>,
     /// The TTS a text message is spoken with, when an audio output plays it.
     tts: Option<Arc<dyn lk_agents_abi::Tts>>,
     /// The text message the TTS is speaking now.
@@ -256,13 +258,16 @@ struct Generation<'a> {
     backlog: std::collections::VecDeque<Event>,
     /// The open message's transcript leg, flushed at its `MessageDone`.
     leg: Option<TextLeg<'a>>,
+    /// The open message's text, read once for the transcript.
+    segment: Option<SegmentText>,
 }
 
 /// A text message spoken by the TTS: its text goes in as it streams, its audio is the message's.
 struct Voiced {
     sink: lk_agents_abi::TtsSink,
     source: lk_agents_net::owned::Owned<lk_agents_abi::TtsSource>,
-    transforms: Option<lk_agents_voice::transcription::Pipeline>,
+    /// The message's text, read for what the voice says.
+    said: SegmentText,
     /// The message's text is all in.
     input_done: bool,
     /// Its last frame came.
@@ -276,10 +281,22 @@ impl Generation<'_> {
         self.tools.dispatch(self.shared, self.handle, self.ctx, call);
     }
 
-    fn end_message(&mut self) {
+    /// The open message ended: what its text held settles into the transcript, then the flush.
+    async fn end_message(&mut self) {
+        let tail = self.segment.take().map(|mut segment| segment.finish());
         if let Some(leg) = self.leg.take() {
+            if let Some(tail) = tail {
+                capture(Some(&leg), &tail.shown).await;
+            }
             leg.flush();
         }
+    }
+
+    /// A delta of the open message's text into its transcript.
+    async fn capture_text(&mut self, delta: &str) {
+        let Some(segment) = self.segment.as_mut() else { return };
+        let visible = segment.push(delta);
+        capture(self.leg.as_ref(), &visible.shown).await;
     }
 
     /// Drain already received events into the core before asking what the server may retain.
@@ -295,7 +312,9 @@ impl Generation<'_> {
     /// The current message turned out to be text: the TTS speaks it, from the words so far.
     async fn voice_message(&mut self, idx: usize, words: String) -> Result<(), DriverError> {
         let tts = self.tts.clone().expect("the core admitted a configured TTS");
-        let text = super::tts::transformed(self.shared, &words);
+        let mut said = SegmentText::new(self.ctx.views(self.shared));
+        let text = said.push(&words).said;
+        let fed = text.clone();
         let segment = idx as u32;
         self.shared.trace(GenerationStep::TtsRequested { speech: self.handle.id(), segment, text });
         let (sink, source) = {
@@ -332,11 +351,8 @@ impl Generation<'_> {
             lk_agents_voice::trace::ProviderKind::Tts,
             &mut source,
         );
-        let shared = self.shared;
-        let mut transforms = (!shared.tts_transforms.is_empty())
-            .then(|| lk_agents_voice::transcription::Pipeline::new(&shared.tts_transforms));
-        super::tts::push_text(&sink, &mut transforms, &words)?;
-        self.voiced = Some(Voiced { sink, source, transforms, input_done: false, ended: false });
+        super::tts::push_text(&sink, &fed)?;
+        self.voiced = Some(Voiced { sink, source, said, input_done: false, ended: false });
         Ok(())
     }
 
@@ -362,25 +378,23 @@ impl Generation<'_> {
                 Some(Event::TextDelta(d)) => {
                     self.state.synthesized_text(&d.delta);
                     if !self.handle.interrupted()
-                        && let Some(leg) = &self.leg
+                        && let Some(segment) = self.segment.as_mut()
                     {
-                        leg.capture(&d.delta).await;
+                        let visible = segment.push(&d.delta);
+                        capture(self.leg.as_ref(), &visible.shown).await;
                     }
-                    if let Err(e) = super::tts::push_text(&v.sink, &mut v.transforms, &d.delta) {
+                    let said = v.said.push(&d.delta).said;
+                    if let Err(e) = super::tts::push_text(&v.sink, &said) {
                         break Err(e);
                     }
                 }
                 // Its text is all in; the boundary is the audio's end.
                 Some(Event::MessageDone(m)) => {
-                    super::tts::end_input(&v.sink, &mut v.transforms);
-                    v.input_done = true;
+                    end_voice_input(&v.sink, &mut v.said, &mut v.input_done);
                     self.backlog.push_back(Event::MessageDone(m));
                 }
                 Some(ev) => self.backlog.push_back(ev),
-                None => {
-                    super::tts::end_input(&v.sink, &mut v.transforms);
-                    v.input_done = true;
-                }
+                None => end_voice_input(&v.sink, &mut v.said, &mut v.input_done),
             }
         };
         drop(pending);
@@ -429,6 +443,8 @@ impl Segment for Generation<'_> {
         // One control event per poll, so a continuously ready provider cannot starve the playback
         // receipt polled beside this future. Next-media events wait until their binding is admitted.
         let mut deferred_media = false;
+        // a message's end settles its transcript, which awaits: done once the poll is over
+        let mut ended = false;
         std::future::poll_fn(|cx| {
             if self.state.finished() || deferred_media {
                 return std::task::Poll::Ready(());
@@ -446,7 +462,7 @@ impl Segment for Generation<'_> {
             };
             match self.state.control(event) {
                 Some(RealtimeGenerationControl::ToolCall(call)) => self.dispatch_call(call),
-                Some(RealtimeGenerationControl::End) => self.end_message(),
+                Some(RealtimeGenerationControl::End) => ended = true,
                 Some(RealtimeGenerationControl::Defer(event)) => {
                     self.backlog.push_front(event);
                     deferred_media = true;
@@ -460,6 +476,9 @@ impl Segment for Generation<'_> {
             std::task::Poll::Pending
         })
         .await;
+        if ended {
+            self.end_message().await;
+        }
     }
 
     fn started_speaking(&mut self, at: f64) {
@@ -480,7 +499,7 @@ impl Segment for Generation<'_> {
                     Some(ev) => ev,
                     // The channel closed: the session ended, or the loop released this speech.
                     None => {
-                        self.end_message();
+                        self.end_message().await;
                         self.state.closed();
                         return Ok(Next::End);
                     }
@@ -493,14 +512,13 @@ impl Segment for Generation<'_> {
             };
             match self.state.handle(ev, observed) {
                 Some(RealtimeGenerationEffect::OpenText) => {
-                    self.end_message();
+                    self.end_message().await;
                     let speech = self.handle.id();
                     self.leg = Some(TextLeg::new(self.text_out.clone(), None, self.shared, speech));
+                    self.segment = Some(SegmentText::new(self.ctx.views(self.shared)));
                 }
                 Some(RealtimeGenerationEffect::Text(delta)) => {
-                    if let Some(leg) = &self.leg {
-                        leg.capture(&delta).await;
-                    }
+                    self.capture_text(&delta).await;
                     first_text_started_speaking(
                         self.shared,
                         self.handle,
@@ -517,11 +535,11 @@ impl Segment for Generation<'_> {
                     self.voice_message(segment, text).await?
                 }
                 Some(RealtimeGenerationEffect::Boundary) => {
-                    self.end_message();
+                    self.end_message().await;
                     return Ok(Next::Boundary);
                 }
                 Some(RealtimeGenerationEffect::End) => {
-                    self.end_message();
+                    self.end_message().await;
                     return Ok(Next::End);
                 }
                 Some(RealtimeGenerationEffect::ToolCall(call)) => self.dispatch_call(call),
@@ -678,3 +696,10 @@ fn response(
 #[cfg(test)]
 #[path = "realtime_generation_tests.rs"]
 mod tests;
+
+/// A voiced message's text is all in: what its reading held is said, then the input ends.
+fn end_voice_input(sink: &lk_agents_abi::TtsSink, said: &mut SegmentText, input_done: &mut bool) {
+    let _ = super::tts::push_text(sink, &said.finish().said);
+    sink.end_input();
+    *input_done = true;
+}

@@ -97,8 +97,7 @@ impl StreamAdapter {
         clock: Arc<dyn Clock>,
         budget: lk_agents_abi::ApiConnectOptions,
     ) -> Arc<dyn Tts> {
-        let splitter: SplitterFactory =
-            Arc::new(|expressive| Box::new(super::sentences::sentence_splitter(None, expressive)));
+        let splitter = splitter_for(tts.as_ref());
         Self::adapted(
             tts,
             splitter,
@@ -198,12 +197,17 @@ impl StreamAdapter {
         let processor =
             || expressive.then(|| (self.text_processor)(&self.tts.markup_provider())).flatten();
         let lowering = processor();
+        // A host tokenizer knows nothing of the voice's tags: its sentences are glued here until
+        // none ends inside one, as the native splitter does.
+        let markup = sentences.as_ref().and_then(|_| {
+            super::sentences::markup_vocabulary(&self.tts.markup_provider(), lowering.is_some())
+        });
         let split = match sentences {
             Some(stream) => Split::Host(HostSentences::read(stream, cx)),
             None => Split::Native((self.splitter)(lowering.is_some())),
         };
         let sentences =
-            Sentences::new(rx, split, processor(), self.pacing, Arc::clone(&self.clock));
+            Sentences::new(rx, split, processor(), markup, self.pacing, Arc::clone(&self.clock));
         let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
         let source = AdapterSource {
             tts: self.tts.clone(),
@@ -546,8 +550,7 @@ impl TtsStreamAdapter for StreamAdapter {
         sentence_tokenizer: Option<Arc<dyn HostSentenceTokenizer>>,
         text_pacing: Option<TextPacing>,
     ) -> Self {
-        let splitter: SplitterFactory =
-            Arc::new(|xml_aware| Box::new(super::sentences::sentence_splitter(None, xml_aware)));
+        let splitter = splitter_for(tts.as_ref());
         let pacing = match text_pacing {
             Some(TextPacing::Pacer(pacer)) => Some(pacer),
             Some(TextPacing::On(true)) => Some(SentenceStreamPacer::default()),
@@ -596,3 +599,12 @@ impl TtsStreamAdapter for StreamAdapter {
 #[cfg(test)]
 #[path = "sentence_adapter_tests.rs"]
 mod tests;
+
+/// The adapter's default splitter, keeping whole the markup `tts` speaks while it flows.
+pub(crate) fn splitter_for(tts: &dyn Tts) -> SplitterFactory {
+    let markup_provider = tts.markup_provider();
+    Arc::new(move |expressive| {
+        let markup = super::sentences::markup_vocabulary(&markup_provider, expressive);
+        Box::new(super::sentences::sentence_splitter(None, markup))
+    })
+}

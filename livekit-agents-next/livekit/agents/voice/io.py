@@ -129,6 +129,13 @@ class AudioOutput(
         if self.next_in_chain is not None:
             self.next_in_chain.begin_segment(segment)
 
+    def _withdraw_capture(self) -> None:
+        # a capture raised or was cancelled before any audio of its segment was taken: no report
+        # will come for the segment it opened, at this link or below
+        _core._core_playback_withdraw_capture(self._tracker)
+        if self.next_in_chain is not None:
+            self.next_in_chain._withdraw_capture()
+
     @property
     def playback_segment(self) -> PlaybackSegment | None:
         """Latch this key when accepting audio and retain it with delayed playback reports."""
@@ -209,8 +216,8 @@ class AudioOutput(
         return f"{self.__class__.__name__}(label={self.label!r}, next={self.next_in_chain!r})"
 
 
-class TextOutput(ABC):
-    def __init__(self, *, label: str, next_in_chain: TextOutput | None) -> None:
+class TranscriptionOutput(ABC):
+    def __init__(self, *, label: str, next_in_chain: TranscriptionOutput | None) -> None:
         self.__label = label
         self.__next_in_chain = next_in_chain
 
@@ -219,7 +226,7 @@ class TextOutput(ABC):
         return self.__label
 
     @property
-    def next_in_chain(self) -> TextOutput | None:
+    def next_in_chain(self) -> TranscriptionOutput | None:
         return self.__next_in_chain
 
     @abstractmethod
@@ -316,7 +323,7 @@ class AgentOutput:
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
         self._audio: AudioOutput | _core.DataStreamAudioOutput | None = None
-        self._transcription: TextOutput | None = None
+        self._transcription: TranscriptionOutput | None = None
         self._audio_enabled = True
         self._transcription_enabled = True
 
@@ -336,11 +343,11 @@ class AgentOutput:
         self.audio = sink
 
     @property
-    def transcription(self) -> TextOutput | None:
+    def transcription(self) -> TranscriptionOutput | None:
         return self._transcription
 
     @transcription.setter
-    def transcription(self, sink: TextOutput | None) -> None:
+    def transcription(self, sink: TranscriptionOutput | None) -> None:
         self._transcription = sink
         if self._session._core is not None:
             self._session._core.set_transcription_output(sink)

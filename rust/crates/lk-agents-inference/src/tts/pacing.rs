@@ -8,6 +8,8 @@ use lk_agents_abi::tts::stream_pacer::{
 };
 use lk_agents_abi::utils::clock::{Clock, Ts, before, secs};
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
+use lk_agents_core::lexer::Vocabulary;
+use lk_agents_core::tokenize::sentences::speakable_alone;
 use lk_agents_net::env::ProcessEnv;
 use tokio::sync::mpsc;
 
@@ -204,6 +206,10 @@ pub(crate) struct Sentences {
     split: Split,
     /// Markup normalized before splitting, so a marker is never split across two sentences.
     normalize: Option<Box<dyn SentenceTextProcessor>>,
+    /// The voice's tags: a host tokenizer's sentence that ends inside one, or says nothing but
+    /// markup, waits in `glued` for the next.
+    markup: Option<Vocabulary>,
+    glued: String,
     /// Split, not yet paced.
     split_out: VecDeque<String>,
     split_done: bool,
@@ -222,6 +228,7 @@ impl Sentences {
         rx: mpsc::UnboundedReceiver<AdapterInput>,
         split: Split,
         normalize: Option<Box<dyn SentenceTextProcessor>>,
+        markup: Option<Vocabulary>,
         pacing: Option<SentenceStreamPacer>,
         clock: Arc<dyn Clock>,
     ) -> Self {
@@ -232,6 +239,8 @@ impl Sentences {
             input_closed: false,
             split,
             normalize,
+            markup,
+            glued: String::new(),
             split_out: VecDeque::new(),
             split_done: false,
             pacer,
@@ -353,8 +362,21 @@ impl Sentences {
 
     fn split_read(&mut self, next: Result<Option<String>, ProviderError>) {
         match next {
-            Ok(Some(sentence)) => self.split_out.push_back(sentence),
-            Ok(None) => self.split_done = true,
+            Ok(Some(sentence)) => match &self.markup {
+                Some(markup) => {
+                    self.glued.push_str(&sentence);
+                    if speakable_alone(&self.glued, markup) {
+                        self.split_out.push_back(std::mem::take(&mut self.glued));
+                    }
+                }
+                None => self.split_out.push_back(sentence),
+            },
+            Ok(None) => {
+                if !self.glued.is_empty() {
+                    self.split_out.push_back(std::mem::take(&mut self.glued));
+                }
+                self.split_done = true;
+            }
             Err(error) => {
                 self.failed = Some(error);
                 self.split_done = true;

@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use crate::tokenize::py_strip;
 use crate::tokenize::word::{WordTokenizerOptions, is_punctuation, split_words};
 
 // Offsets follow the reference's arithmetic, in characters, not bytes.
@@ -20,11 +19,7 @@ pub fn replace_words(
         replacements.into_iter().map(|(key, value)| (key.to_lowercase(), value)).collect();
 
     // Punctuated token text, so `rstrip` can measure the punctuation to keep.
-    let opts = WordTokenizerOptions {
-        ignore_punctuation: false,
-        split_character: false,
-        retain_format: false,
-    };
+    let opts = WordTokenizerOptions { ignore_punctuation: false, retain_format: false };
     let mut words: Vec<(Vec<char>, usize, usize)> = split_words(text, opts)
         .into_iter()
         .map(|w| (w.text.chars().collect(), w.start, w.end))
@@ -68,67 +63,6 @@ pub fn replace_words(
     Some((chars.into_iter().collect(), processed_index))
 }
 
-/// `split_paragraphs`: the text between blank lines, each with its span in the original.
-// Offsets use `text.index(stripped)` (the first occurrence), as the reference does. Empty
-// paragraphs are dropped.
-pub fn split_paragraphs(text: &str) -> Vec<(String, usize, usize)> {
-    let chars: Vec<char> = text.chars().collect();
-
-    // `r"\n\s*\n"` by hand, leftmost-first and non-overlapping.
-    let mut splits: Vec<(usize, usize)> = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '\n' {
-            let mut j = i + 1;
-            while j < chars.len() && crate::tokenize::is_py_space(chars[j]) && chars[j] != '\n' {
-                j += 1;
-            }
-            if j < chars.len() && chars[j] == '\n' {
-                splits.push((i, j + 1));
-                i = j + 1;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    let mut out: Vec<(String, usize, usize)> = Vec::new();
-    let push = |slice_start: usize, slice_end: usize, out: &mut Vec<_>| {
-        let slice: String = chars[slice_start..slice_end].iter().collect();
-        let stripped = py_strip(&slice);
-        if stripped.is_empty() {
-            return;
-        }
-        // `.index(stripped)` -- the first occurrence, in characters. See the note above.
-        let within = char_find(&slice, stripped).unwrap_or(0);
-        let start = slice_start + within;
-        out.push((stripped.to_owned(), start, start + stripped.chars().count()));
-    };
-
-    if splits.is_empty() {
-        push(0, chars.len(), &mut out);
-        return out;
-    }
-
-    let mut start = 0;
-    for (split_start, split_end) in &splits {
-        push(start, *split_start, &mut out);
-        start = *split_end;
-    }
-    push(start, chars.len(), &mut out);
-    out
-}
-
-/// In **characters**.
-fn char_find(haystack: &str, needle: &str) -> Option<usize> {
-    haystack.find(needle).map(|byte| haystack[..byte].chars().count())
-}
-
-/// The paragraphs of `text`.
-pub fn tokenize_paragraphs(text: &str) -> Vec<String> {
-    split_paragraphs(text).into_iter().map(|(paragraph, _, _)| paragraph).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,16 +104,5 @@ mod tests {
         // "world" is held back, so only "hello" was considered and the emit stops after "hi".
         assert_eq!(out, "hi world");
         assert_eq!(idx, 2);
-    }
-
-    // Catches: "fixing" `text.index(stripped)` (first occurrence).
-    #[test]
-    fn the_offset_is_the_first_occurrence_as_the_reference_finds_it() {
-        let out = split_paragraphs("a a");
-        assert_eq!(out, vec![("a a".to_owned(), 0, 3)]);
-
-        // The recovered index is relative to the slice.
-        let out = split_paragraphs("x\n\n  a  ");
-        assert_eq!(out, vec![("x".to_owned(), 0, 1), ("a".to_owned(), 5, 6)]);
     }
 }

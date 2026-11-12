@@ -5,7 +5,7 @@ use crate::tts::stream_pacer::{HostSentenceStream, SentenceStreamPacer};
 use crate::tts::types::Tts;
 
 /// No default implementation on purpose: segmentation boundaries are audible, and the reference's
-/// default is blingfire's, not a hand-rolled punctuation splitter.
+/// default is `tokenize.SentenceTokenizer`'s, not a hand-rolled punctuation splitter.
 pub trait SentenceSplitter: Send {
     /// Partial text stays buffered.
     fn push(&mut self, text: &str) -> Vec<String>;
@@ -13,8 +13,8 @@ pub trait SentenceSplitter: Send {
     fn flush(&mut self) -> Vec<String>;
 }
 
-/// Called once per stream with `xml_aware`: on only while markup flows, so a marker is never split
-/// across two sentences (`StreamAdapter._tokenizer_for`).
+/// Called once per stream with whether it is expressive: markup is kept whole only while it
+/// flows, so a marker is never split across two sentences.
 pub type SplitterFactory = Arc<dyn Fn(bool) -> Box<dyn SentenceSplitter> + Send + Sync>;
 
 /// Provider text transformations supplied by the owning speech core.
@@ -58,7 +58,7 @@ pub trait TtsStreamAdapter: Send + Sync + Sized + 'static {
     type Stream;
 
     /// `tts` synthesizes each sentence of the text pushed; `sentence_tokenizer` splits it
-    /// (blingfire by default); `text_pacing` releases sentences as the audio plays out.
+    /// (`tokenize.SentenceTokenizer`'s by default); `text_pacing` releases sentences as the audio plays out.
     #[host(new)]
     fn new(
         env: &Self::Env,
@@ -103,7 +103,7 @@ pub trait TtsStreamAdapterFacade {
     ///
     /// Args:
     ///     tts: The non-streaming TTS.
-    ///     sentence_tokenizer: What splits the text; blingfire's sentences by default.
+    ///     sentence_tokenizer: What splits the text; `tokenize.SentenceTokenizer`'s sentences by default.
     ///     text_pacing: Batches sentences as the audio plays out; ``True`` for the default
     ///         ``SentenceStreamPacer``.
     #[host(new, resolve(tts = ".._bindings.core_leg"))]

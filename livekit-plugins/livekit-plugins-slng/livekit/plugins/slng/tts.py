@@ -374,7 +374,7 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         )
 
         if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+            word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
             model_endpoint=resolved_model_endpoint,

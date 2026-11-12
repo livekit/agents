@@ -198,6 +198,7 @@ impl TranscriptMachine {
                 confidence: Some(word.confidence),
                 start_time_offset: Some(0.0),
                 speaker_id: word.speaker_id.clone(),
+                ..TranscriptChunk::default()
             })
             .collect();
 

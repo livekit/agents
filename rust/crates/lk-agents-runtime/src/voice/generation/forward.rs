@@ -1,5 +1,4 @@
 use super::ReplyExecution;
-use super::llm::extend;
 use super::playout::{
     Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding, silent, unheard,
 };
@@ -8,7 +7,7 @@ use crate::telemetry;
 use crate::voice::nodes::OutputNodes;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
-use lk_agents_abi::voice::io::TextOutput;
+use lk_agents_abi::voice::io::TranscriptionOutput;
 use lk_agents_abi::{AudioFrame, Tts};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
@@ -240,8 +239,8 @@ impl Pump<'_> {
         let mut aligned =
             aligned_path.then(|| Aligned { leg: text_out, state: Default::default() });
         let deltas = if aligned_path { None } else { text_out };
-        capture(deltas, &first.text).await;
-        // With no audio output the first words start the turn speaking, text output or not.
+        capture(deltas, &first.shown).await;
+        // With no audio output the first words start the turn speaking, transcription output or not.
         first_text_started_speaking(
             shared,
             self.handle,
@@ -336,7 +335,7 @@ async fn recover_lost_voice(
             SynthesisLossEffect::Fail(error) => return Err(error),
             SynthesisLossEffect::ReleaseVoice => *voice = Voice::Silent,
             SynthesisLossEffect::CutShort => acc.cut_short(),
-            SynthesisLossEffect::Capture(text) => capture(text_out, &text).await,
+            SynthesisLossEffect::Capture(chunks) => capture(text_out, &chunks).await,
             SynthesisLossEffect::Drain { opening, text } => {
                 let text = match text {
                     DrainedText::Forward => text_out,
@@ -398,7 +397,7 @@ impl Segment for Frames<'_> {
 /// `perform_text_forwarding`'s sink for one segment: a once-only flush issued from all three end
 /// points. `buffered` queues the words behind the audio synthesised before authorization.
 pub(super) struct TextLeg<'a> {
-    out: Option<Arc<dyn TextOutput>>,
+    out: Option<Arc<dyn TranscriptionOutput>>,
     buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
     state: parking_lot::Mutex<TextLegState>,
     shared: &'a Arc<SessionShared>,
@@ -407,7 +406,7 @@ pub(super) struct TextLeg<'a> {
 
 impl<'a> TextLeg<'a> {
     pub(super) fn new(
-        out: Option<Arc<dyn TextOutput>>,
+        out: Option<Arc<dyn TranscriptionOutput>>,
         buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
         shared: &'a Arc<SessionShared>,
         speech: SpeechId,
@@ -420,9 +419,10 @@ impl<'a> TextLeg<'a> {
     }
 
     /// Errors are dropped: a text stream that will not open must not silence the agent.
-    pub(super) async fn capture(&self, delta: &str) {
-        if self.state().should_forward(delta.is_empty()) {
-            self.forward(SynthesisEvent::Text(delta.to_owned())).await;
+    pub(super) async fn capture(&self, chunk: &lk_agents_abi::TranscriptChunk) {
+        let empty = chunk.text.is_empty() && chunk.expression.is_none();
+        if self.state().should_forward(empty) {
+            self.forward(SynthesisEvent::Text(chunk.clone())).await;
         }
     }
 
@@ -443,9 +443,10 @@ impl<'a> TextLeg<'a> {
         }
         let Some(out) = self.out.as_deref() else { return };
         let (text, start_time) = match event {
-            SynthesisEvent::Text(text) => {
-                let _ = out.capture_text(&telemetry::Cx::NONE, &text).await;
-                (text, None)
+            // a piece of the transcript, spoken or not, with no timing of its own
+            SynthesisEvent::Text(chunk) => {
+                let _ = out.capture_timed(&telemetry::Cx::NONE, &chunk).await;
+                (chunk.text, None)
             }
             SynthesisEvent::TimedText(word) => {
                 let _ = out.capture_timed(&telemetry::Cx::NONE, &word).await;
@@ -469,9 +470,14 @@ impl<'a> TextLeg<'a> {
     }
 }
 
-pub(super) async fn capture(text_out: Option<&TextLeg<'_>>, delta: &str) {
+pub(super) async fn capture(
+    text_out: Option<&TextLeg<'_>>,
+    chunks: &[lk_agents_abi::TranscriptChunk],
+) {
     if let Some(out) = text_out {
-        out.capture(delta).await;
+        for chunk in chunks {
+            out.capture(chunk).await;
+        }
     }
 }
 
@@ -513,8 +519,8 @@ pub(super) async fn take_text(
             }
             return true;
         };
-        capture(text_out, &more.text).await;
-        extend(words, &more);
+        capture(text_out, &more.shown).await;
+        words.extend(more);
     }
 }
 
@@ -531,13 +537,13 @@ pub(super) async fn drain_segment_text(
 /// Settles the segment's text chain; `true` when its words went through, `false` when it was
 /// cancelled (asked, or by the speech's interruption).
 pub(super) async fn finish_text(
-    text: &dyn TextOutput,
+    text: &dyn TranscriptionOutput,
     handle: &SpeechHandle,
     cancel: bool,
 ) -> Result<bool, DriverError> {
     if cancel {
         text.cancel_flush();
-        text.wait_for_flush().await.map_err(DriverError::TextOutput)?;
+        text.wait_for_flush().await.map_err(DriverError::TranscriptionOutput)?;
         return Ok(false);
     }
     let mut completion = text.wait_for_flush();
@@ -550,10 +556,10 @@ pub(super) async fn finish_text(
     })
     .await;
     match outcome {
-        Some(result) => result.map(|()| true).map_err(DriverError::TextOutput),
+        Some(result) => result.map(|()| true).map_err(DriverError::TranscriptionOutput),
         None => {
             text.cancel_flush();
-            completion.await.map(|()| false).map_err(DriverError::TextOutput)
+            completion.await.map(|()| false).map_err(DriverError::TranscriptionOutput)
         }
     }
 }

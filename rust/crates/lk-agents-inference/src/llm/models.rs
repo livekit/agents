@@ -1,3 +1,4 @@
+use lk_agents_core::lexer::{Hidden, ModelSyntax, Span};
 /// Reasoning models don't support sampling parameters.
 /// <https://platform.openai.com/docs/guides/reasoning>
 const REASONING_UNSUPPORTED_PARAMS: &[&str] = &[
@@ -51,8 +52,21 @@ const MIN_REASONING_EFFORT: &[(&str, &str)] = &[
 ];
 
 /// Models whose reasoning is delimited by something other than the default `<think>` pair.
-const MODEL_THINK_TAGS: &[(&str, (&str, &str))] =
-    &[("google/gemma-4-31b-it", ("<|channel>thought", "<channel|>"))];
+/// What a model writes that is not for the person, where it differs from `<think>`.
+const MODEL_SYNTAX: &[(&str, ModelSyntax)] = &[
+    (
+        "google/gemma-4-31b-it",
+        ModelSyntax {
+            spans: &[Span {
+                open: "<|channel>thought",
+                close: Some("<channel|>"),
+                why: Hidden::Reasoning,
+            }],
+            ..ModelSyntax::DEFAULT
+        },
+    ),
+    ("openai/gpt-oss-120b", ModelSyntax::HARMONY),
+];
 
 /// Strip any provider prefix: `openai/o3-pro` -> `o3-pro`.
 pub fn bare_model_name(model: &str) -> &str {
@@ -111,16 +125,13 @@ pub fn min_reasoning_effort(model: &str) -> Option<&'static str> {
     MIN_REASONING_EFFORT.iter().find(|(m, _)| *m == name).map(|(_, effort)| *effort)
 }
 
-/// The default think-tag pair, from `llm/utils.py`'s `THINK_TAG_START`/`THINK_TAG_END`.
-pub const DEFAULT_THINK_TAGS: (&str, &str) = ("<think>", "</think>");
-
-/// The think tags for a model, keyed on the full model string including the provider prefix.
-pub fn think_tags(model: &str) -> (&'static str, &'static str) {
-    MODEL_THINK_TAGS
+/// A model's own syntax, keyed on the full model string including the provider prefix.
+pub fn model_syntax(model: &str) -> ModelSyntax {
+    MODEL_SYNTAX
         .iter()
         .find(|(m, _)| *m == model)
         .map(|(_, tags)| *tags)
-        .unwrap_or(DEFAULT_THINK_TAGS)
+        .unwrap_or(ModelSyntax::DEFAULT)
 }
 
 #[cfg(test)]
@@ -248,9 +259,10 @@ mod tests {
 
     // Catches: stripping the provider prefix before the think-tag lookup.
     #[test]
-    fn think_tags_are_keyed_on_the_full_prefixed_model_string() {
-        assert_eq!(think_tags("google/gemma-4-31b-it"), ("<|channel>thought", "<channel|>"));
-        assert_eq!(think_tags("gemma-4-31b-it"), DEFAULT_THINK_TAGS);
-        assert_eq!(think_tags("openai/gpt-4o"), DEFAULT_THINK_TAGS);
+    fn model_syntax_is_keyed_on_the_full_prefixed_model_string() {
+        assert_eq!(model_syntax("google/gemma-4-31b-it").spans[0].open, "<|channel>thought");
+        assert_eq!(model_syntax("gemma-4-31b-it"), ModelSyntax::DEFAULT);
+        assert_eq!(model_syntax("openai/gpt-4o"), ModelSyntax::DEFAULT);
+        assert!(model_syntax("openai/gpt-oss-120b").turns.is_some());
     }
 }

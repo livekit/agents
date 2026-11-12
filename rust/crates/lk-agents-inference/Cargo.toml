@@ -20,9 +20,8 @@ parking_lot.workspace = true
 # Chat formatting, strict tool schemas and JSON repair: the gateway LLM's, the realtime model's and
 # the judges' request bodies.
 lk-agents-core = { path = "../lk-agents-core" }
-# Resampling, TTS framing and decoding on the media pool; `blingfire` for a fallback TTS member
-# without a duplex path, which streams through its sentences.
-lk-agents-media = { path = "../lk-agents-media", features = ["blingfire"] }
+# Resampling, TTS framing and decoding on the media pool.
+lk-agents-media = { path = "../lk-agents-media" }
 serde = { workspace = true }
 # `preserve_order`: gateway request bodies are assembled as maps and the reference emits them in
 # declaration order.

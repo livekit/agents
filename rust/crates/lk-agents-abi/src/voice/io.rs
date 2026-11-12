@@ -65,6 +65,12 @@ pub trait PlaybackObserver: Send + Sync {
         let _ = (segment, word);
     }
 
+    /// A synchroniser below took the clear of `segment`'s audio: `heard` is what its transcript
+    /// showed was heard by then, and it shows no more. Ignored by default.
+    fn on_transcript_cleared(&self, segment: PlaybackSegment, heard: &str) {
+        let _ = (segment, heard);
+    }
+
     /// The sink's playback count was reset (`_reset_playback_count`); parked waits are released
     /// as interrupted.
     fn on_playback_reset(&self) {}
@@ -117,6 +123,11 @@ pub trait PlaybackTracker: PlaybackObserver + Send + Sync {
     /// `AudioOutput.flush`'s `super()` half: the segment is closed; its playout is still owed.
     fn note_flush(&self);
 
+    /// The open segment holds nothing the sink took (a refused or cancelled capture opened it):
+    /// close it and settle it unreported, so no wait or later segment waits for its report. The
+    /// segment, when it was still owed.
+    fn withdraw_capture(&self) -> Option<PlaybackSegment>;
+
     /// `_reset_playback_count`: a parked `wait_for_playout` is released as interrupted at what
     /// the open segment played.
     fn reset(&self);
@@ -140,6 +151,9 @@ pub trait PlaybackTracker: PlaybackObserver + Send + Sync {
     /// A synchroniser's release of `word` by `segment`'s playback, fanned out like a playback
     /// event.
     fn transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TranscriptChunk);
+
+    /// A synchroniser's account of `segment` at a clear, fanned out like a playback event.
+    fn transcript_cleared(&self, segment: PlaybackSegment, heard: &str);
 
     /// Forward this node's events to `observer` (`next.on("playback_finished", ...)`). Pass the
     /// parent's tracker, not the node, so the chain isn't a reference cycle.
@@ -193,6 +207,10 @@ pub trait PlaybackReports {
     #[host(function, name = "_core_playback_note_capture")]
     fn note_capture(tracker: Arc<dyn PlaybackTracker>) -> PlaybackSegment {
         tracker.note_captured(Duration::ZERO)
+    }
+    #[host(function, name = "_core_playback_withdraw_capture")]
+    fn withdraw_capture(tracker: Arc<dyn PlaybackTracker>) {
+        tracker.withdraw_capture();
     }
     #[host(function, name = "_core_playback_started")]
     fn started(
@@ -355,6 +373,18 @@ pub trait AudioOutput: Send + Sync {
         Ok(())
     }
 
+    /// A clear with nothing taken since the last flush: the segment a refused or cancelled capture
+    /// opened is withdrawn at every link, which report nothing of it. Synchronous, as
+    /// `begin_segment` is: the binding's release reads the tracker right after.
+    #[host(call, name = "_withdraw_capture")]
+    fn withdraw_capture(&self) -> Result<()> {
+        self.tracker().withdraw_capture();
+        match self.next_in_chain() {
+            Some(next) => next.withdraw_capture(),
+            None => Ok(()),
+        }
+    }
+
     /// The rate this sink requires, or `None` if it takes any.
     #[host(read_once, getter = "sample_rate")]
     fn sample_rate(&self) -> Option<u32> {
@@ -444,13 +474,13 @@ pub trait AudioOutputExt: AudioOutput {
 
 impl<T: AudioOutput + ?Sized> AudioOutputExt for T {}
 
-/// `io.TextOutput`: one link in the transcript chain; `flush` is the whole protocol.
-#[crate::host(proxy(host = "livekit.agents.voice.io.TextOutput"))]
-pub trait TextOutput: Send + Sync {
+/// `io.TranscriptionOutput`: one link in the transcript chain; `flush` is the whole protocol.
+#[crate::host(proxy(host = "livekit.agents.voice.io.TranscriptionOutput"))]
+pub trait TranscriptionOutput: Send + Sync {
     #[host(read_once, getter = "label")]
     fn label(&self) -> &str;
 
-    fn next_in_chain(&self) -> Option<Arc<dyn TextOutput>> {
+    fn next_in_chain(&self) -> Option<Arc<dyn TranscriptionOutput>> {
         None
     }
 

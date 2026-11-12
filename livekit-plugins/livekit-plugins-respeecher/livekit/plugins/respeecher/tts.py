@@ -158,7 +158,7 @@ class TTS(tts.TTS):
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+            tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
         )
         self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,

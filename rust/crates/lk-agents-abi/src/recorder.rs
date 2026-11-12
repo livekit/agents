@@ -11,6 +11,9 @@ pub enum RecordingFailure {
     Invalid(&'static str),
     #[error("recording encoding failed: {0}")]
     Encode(String),
+    #[error("recording file could not be created: {0}")]
+    #[host(kind = "OSError")]
+    Create(String),
     #[error("recording write failed: {0}")]
     #[host(kind = "OSError")]
     Io(String),

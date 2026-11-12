@@ -66,7 +66,7 @@ mod realtime_cut_after_text_failure {
                 llm_text: None,
                 transcription: true,
             }),
-            text_output_raises: true,
+            transcription_output_raises: true,
             ..Setup::default()
         };
         let run = simulate(async {

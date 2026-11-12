@@ -270,8 +270,8 @@ impl PlanSpec {
             }
             ctx.insert(msg.clone());
         }
-        // On, the guide replaces last turn's instead of stacking; off, it goes and past turns lose
-        // their markup.
+        // On, the guide replaces last turn's instead of stacking; off, it goes. History is never
+        // rewritten: what the voice recorded is already plain.
         match self.expressive.as_deref() {
             Some(guide) => {
                 if !guide.trim().is_empty() {
@@ -280,7 +280,6 @@ impl PlanSpec {
             }
             None => {
                 lk_agents_core::tts::markup::remove_expressive_instructions(&mut ctx);
-                lk_agents_core::tts::markup::strip_assistant_markup(&mut ctx);
             }
         }
 
@@ -719,7 +718,7 @@ mod expressive_tests {
     // Catches: the guide stacking a copy per turn instead of replacing the last one in place, and
     // an expressive-off turn keeping the guide or the past markup.
     #[test]
-    fn the_guide_is_upserted_when_on_and_removed_with_the_markup_when_off() {
+    fn the_guide_is_upserted_when_on_and_removed_when_off_leaving_history_alone() {
         let t0 = SystemTime::UNIX_EPOCH;
         let t1 = t0 + Duration::from_secs(5);
         let mut record = ChatContext::new(Vec::new());
@@ -742,6 +741,7 @@ mod expressive_tests {
 
         let off = request(&record, None, t1);
         assert!(off.chat_ctx.items.iter().all(|it| it.id() != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID));
-        assert!(!texts(&off.chat_ctx).contains("<expr"), "markup stripped when off");
+        // history is never rewritten: the voice records it plain, and a developer's text is theirs
+        assert!(texts(&off.chat_ctx).contains("<expr"), "history left as it was");
     }
 }

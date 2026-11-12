@@ -324,6 +324,9 @@ pub struct SessionShared {
     pub(in crate::voice) output: lk_agents_net::signal::Cell<Outputs>,
     pub(in crate::voice) recorder:
         lk_agents_net::signal::Cell<Option<crate::voice::recorder::RecorderTap>>,
+    /// What the outputs still have to play, for a recorder attached while it plays.
+    pub(in crate::voice) unplayed:
+        Arc<parking_lot::Mutex<lk_agents_voice::unplayed_audio::UnplayedAudio>>,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
     pub(in crate::voice) tts_transforms: Vec<lk_agents_abi::voice::session_options::TextTransform>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool

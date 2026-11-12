@@ -25,7 +25,9 @@ use lk_agents_abi::{
     turn::interruption::InterruptionSource,
     turn::keyterms::{DetectionLlm, KeytermDetectionConfig, SttContextConfig},
     utils::video::FakeFrame,
-    voice::room_io::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig},
+    voice::room_io::{
+        AudioInputConfig, AudioOutputConfig, RoomIoConfig, TranscriptionOutputConfig,
+    },
     voice::session_options::{
         EndpointingKwargs, InterruptionKwargs, PreemptiveKwargs, SessionConnOptions, SessionKwargs,
         TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
@@ -178,8 +180,8 @@ pub struct Setup {
     /// The transcript synchroniser between the two outputs: the agent's words are shown paced
     /// against its audio rather than as they are generated, which is the default with a room.
     pub sync_transcription: bool,
-    /// The host's transcription output raises on every capture, as a Python `io.TextOutput` can.
-    pub text_output_raises: bool,
+    /// The host's transcription output raises on every capture, as a Python `io.TranscriptionOutput` can.
+    pub transcription_output_raises: bool,
     /// An audio output that reports a cut a few scheduler hops late, as a host source does.
     pub lagging_output: bool,
     /// `tts_text_transforms`: `None` is not given (markdown and emoji filtered), `Some` the set
@@ -222,6 +224,12 @@ pub struct Setup {
     pub chunked_tts: bool,
     /// Whether the voice says it aligns its words to its audio, and whether it then does.
     pub tts_alignment: TtsAlignment,
+    /// The markup dialect the voice speaks (`""` for none): which tags are markup to its
+    /// transcript.
+    pub tts_markup: &'static str,
+    /// The model opens each reply with reasoning and a delivery marker, as an expressive model
+    /// does: what every leg must read once and never show.
+    pub expressive_model: bool,
     /// `VoiceSession(use_tts_aligned_transcript=)`; `None` is not given.
     pub aligned_transcript: Option<bool>,
     /// `Agent(use_tts_aligned_transcript=)` on the first agent and on every agent a handoff
@@ -355,7 +363,7 @@ pub struct NodeSetup {
     pub stt: bool,
     /// The `llm_node` answers this text itself (a node returning a `str`), never calling the model.
     pub llm_text: Option<&'static str>,
-    /// `transcription_node`, opened per segment over the session's text output.
+    /// `transcription_node`, opened per segment over the session's transcription output.
     pub transcription: bool,
 }
 
@@ -485,13 +493,15 @@ impl Default for Setup {
             room_camera: false,
             failing_processors: None,
             sync_transcription: false,
-            text_output_raises: false,
+            transcription_output_raises: false,
             lagging_output: false,
             ivr: None,
             amd: None,
             stt_model: 0,
             tts_latency: None,
             tts_alignment: TtsAlignment::None,
+            tts_markup: "",
+            expressive_model: false,
             aligned_transcript: None,
             agent_aligned_transcript: None,
             keyterms: Vec::new(),
@@ -733,6 +743,8 @@ pub struct Run {
     /// Which recognition stream each utterance is on: an `SttInterim` names the utterance, and the
     /// fake behind it is reached through its stream.
     utterances: BTreeMap<u32, u32>,
+    /// The chats an expressive model has opened its reply on (`Setup::expressive_model`).
+    expressive_opened: std::collections::BTreeSet<u32>,
     /// Each attached microphone, and how many frames it has carried.
     mics: BTreeMap<u32, (Mic, u16)>,
     /// The host replaced the room's microphone: the person's track is no longer what the session
@@ -778,6 +790,11 @@ impl Run {
     /// An acquire's lease take applied with its answer still owed (`FakeStore::take_unanswered`).
     pub fn lease_take_unanswered(&self) -> bool {
         self.store.as_ref().is_some_and(fakes::FakeStore::take_unanswered)
+    }
+
+    /// The text streams the agent has sent into the room, in the order it opened them.
+    pub fn room_text_streams(&self) -> Vec<fakes::room::RecordedTextStream> {
+        self.room.local_participant().text_streams()
     }
 }
 

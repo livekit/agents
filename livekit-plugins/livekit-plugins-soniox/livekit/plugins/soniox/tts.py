@@ -127,7 +127,7 @@ class TTS(tts.TTS):
             http_session (http.HttpSession): Optional HttpSession to use for requests.
             tokenizer (tokenize.SentenceTokenizer): Tokenizer used to buffer input into complete
                 sentences before sending. Defaults to
-                `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
+                `livekit.agents.tokenize.SentenceTokenizer`.
             stream_idle_timeout (float): Seconds without a new sentence before the current
                 stream is finalized; the next sentence starts a fresh stream. Prevents slow
                 LLM gaps from hitting the server's per-stream timeout (observed ~8-18s).
@@ -168,7 +168,7 @@ class TTS(tts.TTS):
         self._sentence_tokenizer = (
             tokenizer
             if is_given(tokenizer)
-            else tokenize.blingfire.SentenceTokenizer(retain_format=True)
+            else tokenize.SentenceTokenizer(retain_format=True)
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 

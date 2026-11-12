@@ -1,6 +1,6 @@
 use super::session::Timebase;
 use super::transcription::{TranscriptSyncConfig, TranscriptSynchronizer};
-use lk_agents_abi::voice::io::{AudioOutput, TextOutput};
+use lk_agents_abi::voice::io::{AudioOutput, TranscriptionOutput};
 use lk_agents_abi::voice::room_owner::RoomIo;
 use lk_agents_abi::{HOST_TEARDOWN_TIMEOUT, Spawner};
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(super) struct SessionOutputs {
     pub audio: Option<Arc<dyn AudioOutput>>,
-    pub text: Option<Arc<dyn TextOutput>>,
+    pub text: Option<Arc<dyn TranscriptionOutput>>,
     synchronizer: Option<Arc<TranscriptSynchronizer>>,
     time: Timebase,
 }
@@ -18,7 +18,7 @@ impl SessionOutputs {
     pub fn new(
         room: &dyn RoomIo,
         audio: Option<Arc<dyn AudioOutput>>,
-        text: Option<Arc<dyn TextOutput>>,
+        text: Option<Arc<dyn TranscriptionOutput>>,
         speed: f64,
         time: Timebase,
         spawner: Arc<dyn Spawner>,
@@ -38,7 +38,7 @@ impl SessionOutputs {
                     clock: time.clock(),
                     spawner,
                 });
-                (Some(sync.audio_output()), Some(sync.text_output()), Some(sync))
+                (Some(sync.audio_output()), Some(sync.transcription_output()), Some(sync))
             }
             (audio, text) => (audio, text, None),
         };

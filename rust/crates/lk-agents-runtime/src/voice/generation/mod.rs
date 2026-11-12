@@ -33,6 +33,17 @@ pub(crate) struct ReplyResources {
 }
 
 impl ReplyExecution {
+    /// How the voice reads this reply: the bound TTS's markup and the session's text transforms.
+    pub fn views(
+        &self,
+        shared: &crate::voice::session::SessionShared,
+    ) -> lk_agents_voice::transcription::SpeechViews {
+        let markup = self.resources.tts.as_ref().map_or_else(Default::default, |tts| {
+            lk_agents_abi::tts::markup::Markup::from_provider_key(&tts.markup_provider())
+        });
+        lk_agents_voice::transcription::SpeechViews::new(markup, &shared.tts_transforms)
+    }
+
     /// What the reply's host calls run under: the speech's turn, else the session.
     pub fn turn_cx(&self, shared: &crate::voice::session::SessionShared) -> telemetry::Cx {
         shared.turn_cx(self.span)

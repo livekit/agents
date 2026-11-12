@@ -124,7 +124,7 @@ class TTS(tts.TTS):
             sample_rate: Sample rate for audio output. Defaults to 22050
             num_channels: Number of audio channels. Defaults to 1 (mono)
             phrase_replacement_config_id: Optional ID for phrase replacement configuration
-            word_tokenizer: Tokenizer for processing text. Defaults to `livekit.agents.tokenize.basic.WordTokenizer`.
+            word_tokenizer: Tokenizer for processing text. Defaults to `livekit.agents.tokenize.WordTokenizer`.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -155,7 +155,7 @@ class TTS(tts.TTS):
         if is_given(word_tokenizer):
             resolved_word_tokenizer = word_tokenizer
         else:
-            resolved_word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+            resolved_word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
             base_url=resolved_base_url,

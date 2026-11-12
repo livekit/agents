@@ -37,6 +37,7 @@ use wire::FallbackModel;
 // gateway said `done`.
 
 pub mod emitter;
+pub(crate) mod fed;
 pub mod pacing;
 mod provider_options;
 mod pump;
@@ -366,10 +367,11 @@ impl GatewayTts {
             markup: wire::markup_provider(&pump.opts.model).and_then(|provider| {
                 lk_agents_core::tts::markup::text_processor(provider.as_str())
             }),
-            sentences: Box::new(sentences::sentence_splitter(
-                Some(pump.provider.map_or("", InferenceProvider::as_str)),
-                expressive,
-            )),
+            sentences: {
+                let key = pump.provider.map_or("", InferenceProvider::as_str);
+                let markup = sentences::markup_vocabulary(key, expressive);
+                Box::new(sentences::sentence_splitter(Some(key), markup))
+            },
         };
         self.tasks.spawn(self.spawner.as_ref(), "tts stream", pump.run());
 

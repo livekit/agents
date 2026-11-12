@@ -1,23 +1,65 @@
-use lk_agents_abi::tts::markup::{EMOTION_TAG, MarkerKind, TranscriptionExpression};
+use lk_agents_abi::tts::markup::{EMOTION_TAG, ExpressiveTag, MarkerKind, TranscriptionExpression};
 use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TranscriptChunk};
 
-use crate::tts::markup::expr::{ExpressiveTag, split_expr};
+use crate::lexer::{EXPR, Kind, Lexer, Projector, Rules, Tag, Token, View, Vocabulary};
 use crate::tts::markup::mood::{DEFAULT_MOOD, match_mood};
 use crate::tts::markup::provider::ALL_MARKUP_TAGS;
-use crate::tts::markup::strip::extract_and_strip;
 
-/// Strip the union of every provider's expressive XML markup (provider-agnostic): the sinks no
-/// longer know the provider. Square brackets are prose here and are left alone.
-pub fn split_all_markup(text: &str) -> (String, Vec<ExpressiveTag>) {
-    // Every markup shape starts with `<`: skip the scan for the common, markup-free chunk.
-    if !text.contains('<') {
-        return (text.to_string(), Vec::new());
+/// Every provider's tags: a transcript sink that does not know the voice's provider.
+fn every_provider() -> Vocabulary {
+    Vocabulary::names(ALL_MARKUP_TAGS.iter().copied())
+}
+
+fn tag_rules(vocab: Vocabulary) -> Rules {
+    Rules { tags: Some(vocab), ..Rules::default() }
+}
+
+const SHOWN: View = View::Display { keep_emoji: true };
+
+/// The marker a tag published: an expr marker's type and label, a native tag's name and value.
+fn expressive(tag: &Tag) -> Option<ExpressiveTag> {
+    if tag.closing {
+        return None;
     }
-    let (text, expr_tags) = split_expr(text);
-    let (clean, raw_tags) = extract_and_strip(&text, &ALL_MARKUP_TAGS);
-    let mut tags = expr_tags;
-    tags.extend(raw_tags.into_iter().map(|(t, v)| ExpressiveTag::new(t, v)));
-    (clean, tags)
+    Some(if tag.name == EXPR {
+        ExpressiveTag::new(tag.attr("type").unwrap_or(""), tag.attr("label").unwrap_or(""))
+    } else {
+        let value = tag.attrs.first().map_or("", |(_, v)| v.as_str());
+        ExpressiveTag::new(tag.name.clone(), value)
+    })
+}
+
+/// The delivery a tag asks for from here on: an expression marker's label, or a native emotion or
+/// expression tag's value. What the room publishes as `lk.expression`.
+pub fn delivery(tag: &Tag) -> Option<String> {
+    let marker = expressive(tag)?;
+    let kind = MarkerKind::from_wire(&marker.kind);
+    (kind == Some(MarkerKind::Expression) || marker.kind == EMOTION_TAG).then_some(marker.value)
+}
+
+fn tags_of(tokens: &[Token]) -> Vec<ExpressiveTag> {
+    tokens
+        .iter()
+        .filter_map(|t| match &t.kind {
+            Kind::Tag(tag) => expressive(tag),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `text` without the tags of `vocab`, and the markers they carried, in order.
+fn split(vocab: Vocabulary, text: &str) -> (String, Vec<ExpressiveTag>) {
+    if !text.contains('<') {
+        return (text.to_owned(), Vec::new());
+    }
+    let tokens = Lexer::all(tag_rules(vocab), text);
+    (Projector::new(SHOWN).text(&tokens), tags_of(&tokens))
+}
+
+/// Strip every provider's markup: the sink does not know the provider. Square brackets are prose
+/// here and are left alone.
+pub fn split_all_markup(text: &str) -> (String, Vec<ExpressiveTag>) {
+    split(every_provider(), text)
 }
 
 /// [`split_all_markup`] returning only the clean text (tags discarded).
@@ -27,34 +69,44 @@ pub fn strip_all_markup(text: &str) -> String {
 
 /// Strip only the `<expr/>` dialect, leaving all other markup untouched.
 pub fn strip_expr_markup(text: &str) -> String {
-    split_expr(text).0
+    split(Vocabulary::LiveKit, text).0
 }
 
 /// Only the `<expr/>` dialect stripped, with its markers: the provider-native tags stay in the
-/// words. With markers the text loses its trailing blanks, and a marker heading it takes the blank
-/// after it along.
+/// words. With markers the text loses its trailing blanks.
 pub fn split_expr_markup(text: &str) -> (String, Vec<ExpressiveTag>) {
-    let (clean, tags) = split_expr(text);
+    let (clean, tags) = split(Vocabulary::LiveKit, text);
     if tags.is_empty() {
         return (text.to_owned(), tags);
     }
-    let clean = clean.trim_end_matches([' ', '\t']);
-    let clean = if text.trim_start().starts_with("<expr") {
-        clean.trim_start_matches([' ', '\t'])
-    } else {
-        clean
-    };
-    (clean.to_owned(), tags)
+    (clean.trim_end_matches([' ', '\t']).to_owned(), tags)
+}
+
+/// A segment's leading expression/emotion tag.
+fn leading_expression(tags: &[ExpressiveTag]) -> Option<&ExpressiveTag> {
+    tags.iter().find(|t| {
+        MarkerKind::from_wire(&t.kind) == Some(MarkerKind::Expression) || t.kind == EMOTION_TAG
+    })
+}
+
+/// A segment's leading expression as `<expr/>` markup, for a transcript whose words never carried
+/// it (a voice's stamped words): the room reads it back as the same `lk.expression`.
+pub fn expression_markup(tags: &[ExpressiveTag]) -> Option<String> {
+    let expression = leading_expression(tags)?;
+    let kind = MarkerKind::Expression.as_str();
+    Some(format!("<expr type=\"{kind}\" label=\"{}\"/>", expression.value))
 }
 
 /// The `lk.expression` attribute from a segment's leading expression/emotion tag.
 pub fn expression_attribute(tags: &[ExpressiveTag]) -> Option<(&'static str, String)> {
-    let expression = tags.iter().find(|t| {
-        MarkerKind::from_wire(&t.kind) == Some(MarkerKind::Expression) || t.kind == EMOTION_TAG
-    })?;
+    delivery_attribute(&leading_expression(tags)?.value)
+}
+
+/// The `lk.expression` attribute for a delivery label.
+pub fn delivery_attribute(label: &str) -> Option<(&'static str, String)> {
     // `match_mood`'s fallback is `DEFAULT_MOOD`, so `"mood"` is never null on the wire
-    let mood = match_mood(&expression.value, Some(DEFAULT_MOOD)).unwrap_or(DEFAULT_MOOD);
-    let value = TranscriptionExpression { expression: &expression.value, mood: mood.as_str() };
+    let mood = match_mood(label, Some(DEFAULT_MOOD)).unwrap_or(DEFAULT_MOOD);
+    let value = TranscriptionExpression { expression: label, mood: mood.as_str() };
     let json = serde_json::to_string(&value).ok()?;
     Some((ATTRIBUTE_TRANSCRIPTION_EXPRESSION, json))
 }
@@ -73,79 +125,58 @@ fn attribute_map(
     pair.map(|(key, json)| std::collections::BTreeMap::from([(key.to_owned(), json)]))
 }
 
-/// Stateful, provider-agnostic markup stripper for one transcript segment. A partial trailing tag
-/// is held back until it closes.
-#[derive(Debug, Default)]
+/// One transcript segment's markup stripper: a tag split across chunks is held until it closes, a
+/// cut one never shown. A trailing blank is held until more text or the segment's end, so text
+/// cut between two chunks never ends in a separator.
+#[derive(Debug)]
 pub struct TranscriptMarkupStripper {
-    buf: String,
+    lexer: Lexer,
+    shown: Projector,
     tags: Vec<ExpressiveTag>,
-    seam_after_strip: bool,
+    blank: String,
 }
 
-/// Stateful, provider-agnostic markup stripper for one transcript segment.
+impl Default for TranscriptMarkupStripper {
+    fn default() -> Self {
+        TranscriptMarkupStripper {
+            lexer: Lexer::new(tag_rules(every_provider())),
+            shown: Projector::new(SHOWN),
+            tags: Vec::new(),
+            blank: String::new(),
+        }
+    }
+}
+
 impl TranscriptMarkupStripper {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Strip `text` and record its tags. Trailing whitespace is held so a tag opening the next
-    /// chunk is still deduped against it; `end_of_segment` releases it.
-    fn consume(&mut self, text: &str, end_of_segment: bool) -> String {
-        let owned;
-        let text = if self.seam_after_strip && text.starts_with([' ', '\t']) {
-            // A tag was stripped at the held whitespace: collapse it with the following run.
-            owned = format!("{}{}", &text[..1], text[1..].trim_start_matches([' ', '\t']));
-            owned.as_str()
-        } else {
-            text
-        };
-
-        let (clean, tags) = split_all_markup(text);
-        let any_tags = !tags.is_empty();
-        self.tags.extend(tags);
-
-        let held = if end_of_segment { "" } else { &clean[rstrip_spaces_tabs(&clean).len()..] };
-        // Only when this chunk ended on a tag (#6717). `endswith(">")` is the reference's
-        // approximation, wrong for a trailing wrapping tag; kept for parity.
-        self.seam_after_strip =
-            any_tags && !held.is_empty() && rstrip_spaces_tabs(text).ends_with('>');
-
-        let emit = clean[..clean.len() - held.len()].to_string();
-        self.buf = held.to_string();
-        emit
-    }
-
-    /// Is the buffer's tail a partial XML tag? Only a tag-shaped `<` is held (`"3 < 5"` must not
-    /// stall, #6116), and never a `[` (#6590).
-    fn has_open_tag(&self) -> bool {
-        let Some(last_lt) = self.buf.rfind('<') else { return false };
-        if self.buf.rfind('>').is_none_or(|gt| last_lt > gt) {
-            return match self.buf[last_lt + 1..].chars().next() {
-                None => true,
-                Some('/') => true,
-                Some(c) => c.is_alphabetic(),
-            };
+    fn take(&mut self, tokens: Vec<Token>) -> String {
+        self.tags.extend(tags_of(&tokens));
+        let text = self.shown.text(&tokens);
+        if text.is_empty() {
+            return text;
         }
-        false
+        let mut out = std::mem::take(&mut self.blank);
+        out.push_str(&text);
+        let kept = out.trim_end_matches([' ', '\t']).len();
+        self.blank = out.split_off(kept);
+        out
     }
 
     /// Feed a chunk; return the clean text ready to emit (may be empty).
     pub fn push(&mut self, text: &str) -> String {
-        self.buf.push_str(text);
-        if self.has_open_tag() {
-            return String::new();
-        }
-        let buf = std::mem::take(&mut self.buf);
-        self.consume(&buf, false)
+        let tokens = self.lexer.push(text);
+        self.take(tokens)
     }
 
-    /// Drain any buffered text at segment end; return the remaining clean text.
+    /// The segment ended: whatever was held settles.
     pub fn flush(&mut self) -> String {
-        if self.buf.is_empty() {
-            return String::new();
-        }
-        let buf = std::mem::take(&mut self.buf);
-        self.consume(&buf, true)
+        let tokens = self.lexer.finish();
+        let mut out = self.take(tokens);
+        out.push_str(&std::mem::take(&mut self.blank));
+        out
     }
 
     /// The markup tags stripped so far, in document order.
@@ -278,9 +309,4 @@ fn retext(token: &TranscriptChunk, text: String) -> TranscriptChunk {
 
 fn retext_owned(token: TranscriptChunk, text: String) -> TranscriptChunk {
     TranscriptChunk { text, ..token }
-}
-
-/// The only two characters `TranscriptMarkupStripper` holds back.
-fn rstrip_spaces_tabs(s: &str) -> &str {
-    s.trim_end_matches([' ', '\t'])
 }

@@ -157,3 +157,16 @@ async fn aclose_ends_a_pending_next_and_closes_the_host_stream() {
     assert_eq!(next.await.unwrap().unwrap(), None);
     assert!(*host.closed.lock());
 }
+
+/// A paced stream whose input ends with no sentence ends instead of waiting forever.
+/// https://github.com/livekit/agents/pull/3146
+#[tokio::test(start_paused = true)]
+async fn an_input_that_ends_without_a_sentence_ends_the_paced_stream() {
+    let (host, audio) = (Arc::new(Host::default()), Arc::new(Audio::default()));
+    let paced = paced(&host, &audio);
+    host.end();
+    let next = tokio::time::timeout(Duration::from_secs(30), paced.next(telemetry::Cx::NONE))
+        .await
+        .expect("an empty input must end the paced stream");
+    assert_eq!(next.unwrap(), None);
+}

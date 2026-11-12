@@ -382,6 +382,7 @@ impl Run {
                         timing: self.setup.timing(),
                         streaming: !self.setup.chunked_tts,
                         alignment: self.setup.tts_alignment,
+                        markup: self.setup.tts_markup,
                     },
                 ) as Arc<Tts>))
             }
@@ -438,7 +439,10 @@ impl Run {
                 .ok()?,
             Input::SetTranscriptionOutput { attach } => api
                 .set_transcription_output(attach.then(|| {
-                    fakes::FakeTextOutput::new(registry.clone(), self.setup.text_output_raises) as _
+                    fakes::FakeTranscriptionOutput::new(
+                        registry.clone(),
+                        self.setup.transcription_output_raises,
+                    ) as _
                 }))
                 .ok()?,
             Input::Recorder { attach } => {

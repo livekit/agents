@@ -356,7 +356,7 @@ class TTS(tts.TTS):
         self._sentence_tokenizer: tokenize.SentenceTokenizer | None = None
         if websocket_v1_url is None:
             self._sentence_tokenizer = (
-                tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+                tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
             )
         self._websocket_v1_adapter = (
             WebSocketV1Adapter(

@@ -920,7 +920,7 @@ class TTS(tts.TTS):
                 Defaults to "wss://api.inworld.ai/".
             http_session (http.HttpSession, optional): The HTTP session to use.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use for streaming.
-                Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
+                Defaults to `livekit.agents.tokenize.SentenceTokenizer`.
             retain_format (bool, optional): Whether to retain the format of the text when tokenizing.
                 Defaults to True.
             max_connections (int, optional): Maximum number of concurrent WebSocket connections.
@@ -999,7 +999,7 @@ class TTS(tts.TTS):
         self._sentence_tokenizer = (
             tokenizer
             if is_given(tokenizer)
-            else tokenize.blingfire.SentenceTokenizer(
+            else tokenize.SentenceTokenizer(
                 retain_format=retain_format if is_given(retain_format) else True
             )
         )

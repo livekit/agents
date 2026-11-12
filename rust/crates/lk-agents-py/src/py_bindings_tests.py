@@ -548,7 +548,7 @@ def test_generated_room_options_preserve_sdk_defaults_and_their_legs() -> None:
     assert options.get_audio_input_options() is microphone
     assert options.get_audio_output_options() is None
     assert options.get_video_input_options() == VideoInputOptions()
-    assert options.get_text_output_options() is not None
+    assert options.get_transcription_output_options() is not None
 
 
 def test_generated_session_events_validate_and_preserve_control_and_serialization() -> None:

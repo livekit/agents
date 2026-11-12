@@ -142,7 +142,7 @@ class TTS(tts.TTS):
                 Defaults to True unless ``chunk_length_schedule`` is provided.
             apply_text_normalization (Literal["auto", "off", "on"]): This parameter controls text normalization with three modes: ‘auto’, ‘on’, and ‘off’. When set to ‘auto’, the system will automatically decide whether to apply text normalization (e.g., spelling out numbers). With ‘on’, text normalization will always be applied, while with ‘off’, it will be skipped.
             apply_language_text_normalization (bool): This parameter controls language text normalization. This helps with proper pronunciation of text in some supported languages.
-            word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer when auto_mode=False, `livekit.agents.tokenize.blingfire.SentenceTokenizer` otherwise.
+            word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to `livekit.agents.tokenize.WordTokenizer` when auto_mode=False, `livekit.agents.tokenize.SentenceTokenizer` otherwise.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
@@ -176,9 +176,9 @@ class TTS(tts.TTS):
 
         if not is_given(word_tokenizer):
             word_tokenizer = (
-                tokenize.basic.WordTokenizer(ignore_punctuation=False)
+                tokenize.WordTokenizer(ignore_punctuation=False)
                 if not auto_mode
-                else tokenize.blingfire.SentenceTokenizer()
+                else tokenize.SentenceTokenizer()
             )
         elif auto_mode and not isinstance(word_tokenizer, tokenize.SentenceTokenizer):
             logger.warning(
@@ -1452,7 +1452,7 @@ def _to_timed_words(
 
     timestamps = start_times_ms + [start_times_ms[-1] + durations_ms[-1]]  # N+1
 
-    words = tokenize.basic.split_words(text, ignore_punctuation=False, split_character=True)
+    words = tokenize.split_words(text, ignore_punctuation=False)
     if not words:
         return [], text
 

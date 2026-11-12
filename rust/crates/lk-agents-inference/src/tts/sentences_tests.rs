@@ -1,60 +1,46 @@
 use super::*;
 use lk_agents_abi::SentenceSplitter as _;
 
-// Every expectation below is **measured against the reference**, not reasoned about: each was
-// produced by running the same chunks through
-// `tokenize.blingfire.SentenceTokenizer(retain_format=True).stream()`, which is what the
-// reference's `StreamAdapter` builds. PLAN.md G3's "audible one" was that this file and that
-// stream disagreed, so agreeing with it is the property under test.
-
-fn drive(chunks: &[&str]) -> Vec<String> {
-    let mut s = SentenceBuffer::new();
-    let mut out = Vec::new();
-    for c in chunks {
-        out.extend(s.push(c));
-    }
+fn drive(s: &mut SentenceBuffer, chunks: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = chunks.iter().flat_map(|c| s.push(c)).collect();
     out.extend(s.flush());
     out
 }
 
 // Catches: losing text at a chunk boundary. The model writes tokens, not sentences, so a
-// sentence usually arrives across several pushes -- and every character has to come back out.
-//
-// Note the leading space on the tail: `retain_format` is on, so the whitespace between
-// sentences belongs to the one that follows it and is *not* trimmed away.
+// sentence usually arrives across several pushes, and every character has to come back out.
+// `retain_format` is on, so the whitespace between sentences belongs to the one that follows.
 #[test]
 fn a_sentence_split_across_chunks_comes_back_whole() {
     assert_eq!(
-        drive(&["Hel", "lo the", "re. How ", "are you? I am", " well."]),
+        drive(
+            &mut SentenceBuffer::default(),
+            &["Hel", "lo the", "re. How ", "are you? I am", " well."]
+        ),
         vec!["Hello there. How are you?", " I am well."]
     );
 }
 
-// Catches the bug this file was fixed for, in the form it actually took. The old test here was
-// named `a_short_sentence_is_emitted_rather_than_merged_forward` and its comment argued that
-// "the floor belongs to the tokenizer the caller configured, not here" -- which was true when
-// this type was one splitter among several, and false once `DriverBuilder` made it *the*
-// tokenizer on the agent-speech path. `min_sentence_len = 20` merges "Sure." forward, which is
-// what stops the synthesiser breathing after it.
+// Catches: the floor not applying on the agent-speech path, where this is the tokenizer. "Sure."
+// is one word under the four-word floor, so it merges forward and the synthesiser does not
+// breathe after it.
 #[test]
 fn a_short_sentence_is_merged_forward_not_spoken_alone() {
-    assert_eq!(drive(&["Sure. ", "Let me look."]), vec!["Sure. Let me look."]);
+    assert_eq!(
+        drive(&mut SentenceBuffer::default(), &["Sure. ", "Let me look."]),
+        vec!["Sure. Let me look."]
+    );
 }
 
-// Catches: the codepoint spans this crate converts from BlingFire's byte offsets disagreeing
-// with the character drain in `TokenBuffer`. Two long Cyrillic sentences (two bytes per
-// letter), so the first is emitted on `push` and the buffer is cut after it -- a byte-based
-// cut on either side lands mid-codepoint (a panic on the audio path) or leaves half a
-// sentence behind, and the second push then resolves against a corrupted remainder. The old
-// form of this test (`"Готово. "` + `"Дальше что?"`, 19 characters) never reached the cut:
-// it was one span held to the flush, and indistinguishable from the "Sure." test above.
+// Catches: a cut by bytes rather than characters. Two Cyrillic sentences (two bytes per
+// letter): the first goes out once the second starts, and the rest is carried over intact.
 #[test]
 fn a_multibyte_buffer_is_cut_at_the_codepoint_and_carried_over_correctly() {
-    let mut s = SentenceBuffer::new();
+    let mut s = SentenceBuffer::default();
     assert_eq!(
         s.push("Это первое достаточно длинное предложение."),
         Vec::<String>::new(),
-        "nothing follows it yet"
+        "it could still go on"
     );
     assert_eq!(
         s.push(" А это второе достаточно длинное предложение."),
@@ -63,37 +49,29 @@ fn a_multibyte_buffer_is_cut_at_the_codepoint_and_carried_over_correctly() {
     assert_eq!(s.flush(), vec![" А это второе достаточно длинное предложение."]);
 }
 
-// Catches: the last span being emitted early. A sentence is only complete when something
-// follows it, so `push` alone never releases the tail -- `flush` is what does.
+// Catches: the last sentence going out before the text ends, or a flush that repeats it.
 #[test]
 fn the_final_sentence_is_held_until_flush() {
-    let mut s = SentenceBuffer::new();
-    assert_eq!(
-        s.push("This is a sufficiently long first sentence."),
-        Vec::<String>::new(),
-        "nothing follows it yet"
-    );
+    let mut s = SentenceBuffer::default();
+    assert_eq!(s.push("This is a sufficiently long first sentence."), Vec::<String>::new());
     let out = s.push(" And this is a sufficiently long second one.");
     assert_eq!(out, vec!["This is a sufficiently long first sentence."]);
     assert_eq!(s.flush(), vec![" And this is a sufficiently long second one."]);
     assert_eq!(s.flush(), Vec::<String>::new(), "flush is not repeatable");
 }
 
-// Catches: the `retain_format` knob not reaching the tokenizer through `SentenceBufferOptions`.
-// The default (`true`, what the reference's `StreamAdapter` asks for) is pinned by the leading
-// space `a_sentence_split_across_chunks_comes_back_whole` expects; this is the other setting.
+// Catches: `retain_format` off not reaching the stream.
 #[test]
 fn retain_format_off_collapses_newlines_through_the_buffer() {
-    let opts = SentenceBufferOptions { retain_format: false, ..Default::default() };
-    let mut s = SentenceBuffer::with_options(opts);
-    let mut out = s.push("This is a sufficiently long first sentence.\n\n");
-    out.extend(s.push("And this is a sufficiently long second one."));
-    out.extend(s.flush());
-    assert!(!out.iter().any(|t| t.contains('\n')), "newlines survived: {out:?}");
+    let opts = SentenceOptions::default();
+    let out = drive(
+        &mut SentenceBuffer::with_options(opts),
+        &["This is a sufficiently long first sentence.\n\n", "And this is a second one."],
+    );
+    assert_eq!(out, ["This is a sufficiently long first sentence.", "And this is a second one."]);
 }
 
-// `tests/test_tokenizer.py`, ported: `blingfire.SentenceTokenizer(min_sentence_len=20)` fed
-// `TEXT` in chunks of 1, 2, 4, ... characters, expected `EXPECTED_MIN_20_BLINGFIRE`.
+// `tests/test_tokenizer.py`'s text, fed in chunks of 1, 2, 4, ... characters.
 const TEXT: &str = concat!(
     "Hi! ",
     "LiveKit is a platform for live audio and video applications and services. \n\n",
@@ -110,18 +88,7 @@ const TEXT: &str = concat!(
     "\nThis is a sentence contains   consecutive spaces."
 );
 
-const EXPECTED_MIN_20_BLINGFIRE: [&str; 8] = [
-    "Hi! LiveKit is a platform for live audio and video applications and services.",
-    "R.T.C stands for Real-Time Communication... again R.T.C. Mr. Theo is testing the sentence tokenizer.",
-    "This is a test. Another test.",
-    "A short sentence. A longer sentence that is longer than the previous sentence. f(x) = x * 2.54 + 42.",
-    "Hey! Hi! Hello! This is a sentence.",
-    "这是一个中文句子。これは日本語の文章です。",
-    "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。",
-    "This is a sentence contains   consecutive spaces.",
-];
-
-/// "divide text by chunks of arbitrary length (1-4)": the reference's `[1, 2, 4]` pattern.
+/// The reference's `[1, 2, 4]` chunking.
 fn reference_chunks(text: &str) -> Vec<String> {
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
@@ -137,88 +104,64 @@ fn reference_chunks(text: &str) -> Vec<String> {
     out
 }
 
-// `test_streamed_sent_tokenizer[blingfire]`. Same text, same chunking, same eight tokens: the
-// one buffer over the one model reproduces the Python stream exactly.
+// The public tokenizer's stream says what its `tokenize` says, chunk for chunk.
 #[test]
-fn streamed_sentence_tokenizer_matches_the_reference() {
-    let opts = SentenceBufferOptions {
-        min_sentence_len: 20,
-        min_token_len: 20,
-        min_ctx_len: 10,
-        retain_format: false,
-        ..Default::default()
-    };
-    let mut s = SentenceBuffer::with_options(opts);
-    let mut out = Vec::new();
-    for chunk in reference_chunks(TEXT) {
-        out.extend(s.push(&chunk));
-    }
-    out.extend(s.flush());
-    assert_eq!(out, EXPECTED_MIN_20_BLINGFIRE);
-}
-
-// Catches: the tokenizer leaf failing a turn. A NUL cannot cross the C boundary; the answer is
-// the text whole -- held by the buffer, said at the flush -- not a panic and not silence.
-#[test]
-fn blingfire_as_a_tokenizer_hands_back_what_it_cannot_split() {
-    use lk_agents_core::tokenize::Tokenize as _;
-    let tok = Blingfire { min_sentence_len: 1, retain_format: false };
-    let spans = tok.tokenize("Hello there. How are you?");
+fn streamed_sentence_tokenizer_matches_its_split() {
+    use lk_agents_abi::tokenize::bindings::SpeechSentenceStream;
+    let tokenizer = SpeechSentenceTokenizer::new(4, None, false, None);
+    let mut s = tokenizer.stream();
+    let chunks = reference_chunks(TEXT);
+    let mut out: Vec<String> =
+        chunks.iter().flat_map(|c| SpeechSentenceStream::push(&mut s, c.clone())).collect();
+    out.extend(SpeechSentenceStream::flush(&mut s));
     assert_eq!(
-        spans.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(),
-        ["Hello there.", "How are you?"]
+        out,
+        [
+            "Hi! LiveKit is a platform for live audio and video applications and services.",
+            "R.T.C stands for Real-Time Communication... again R.T.C. Mr. Theo is testing the \
+             sentence tokenizer.",
+            "This is a test.",
+            "Another test. A short sentence.",
+            "A longer sentence that is longer than the previous sentence. f(x) = x * 2.54 + 42.",
+            "Hey! Hi! Hello! This is a sentence.",
+            "这是一个中文句子。",
+            "これは日本語の文章です。",
+            "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。",
+            "This is a sentence contains   consecutive spaces.",
+        ]
     );
-    assert_eq!((spans[1].start, spans[1].end), (12, 25));
-    let held = tok.tokenize("a\0b");
-    assert_eq!(held.len(), 1);
-    assert_eq!(held[0].text, "a\0b");
-    assert_eq!(tok.tokenize("   "), Vec::<lk_agents_core::tokenize::Span>::new());
+    assert_eq!(out, tokenizer.tokenize(TEXT.to_owned(), None));
 }
 
-// A-31, under the real model. Catches: a `<break time="1s"/>` arriving one character at a
-// time being cut at a chunk boundary, or split off its sentence. This is what
-// `SentenceBufferOptions::from_config(markup.sentence_tokenizer(true))` turns on. The floor
-// is the reference's default; at `min_token_len = 1` the reference emits `"Hello"` alone.
+// Catches: a `<break time="1s"/>` arriving one character at a time being cut, or split off
+// its sentence.
 #[test]
 fn a_break_tag_mid_sentence_never_splits() {
-    let opts = SentenceBufferOptions {
-        min_sentence_len: 1,
-        min_token_len: 20,
-        min_ctx_len: 5,
-        retain_format: false,
-        xml_aware: true,
-        ..Default::default()
+    let opts = SentenceOptions {
+        min_words: 1,
+        markup: Some(lk_agents_core::lexer::Vocabulary::All),
+        ..SentenceOptions::default()
     };
-    let mut s = SentenceBuffer::with_options(opts);
     let text = "Hello <break time=\"1s\"/> there my friend. Second sentence here.";
-    let mut out = Vec::new();
-    for ch in text.chars() {
-        out.extend(s.push(&ch.to_string()));
-    }
-    out.extend(s.flush());
-    assert_eq!(out, vec!["Hello <break time=\"1s\"/> there my friend.", "Second sentence here."]);
-    for token in &out {
-        assert!(
-            !lk_agents_core::tokenize::xml::has_unclosed_tags(token),
-            "a token split a tag: {token:?}"
-        );
-    }
+    let by_char: Vec<String> = text.chars().map(String::from).collect();
+    let pieces: Vec<&str> = by_char.iter().map(String::as_str).collect();
+    assert_eq!(
+        drive(&mut SentenceBuffer::with_options(opts), &pieces),
+        ["Hello <break time=\"1s\"/> there my friend.", "Second sentence here."]
+    );
 }
 
-// Catches: the provider knobs not reaching the buffer. Expressive: the floor is the cap and
-// the wrap is on; plain: per-sentence emission and no wrap.
+// Catches: the provider limits not reaching the stream. Expressive batches up to the cap; plain
+// speaks sentence by sentence and never batches past it.
 #[test]
-fn from_config_applies_the_three_provider_knobs() {
-    let expressive = SentenceTokenizerConfig {
-        max_token_len: Some(900),
-        min_token_len: Some(900),
-        xml_aware: true,
-    };
-    let got = SentenceBufferOptions::from_config(expressive);
-    assert_eq!((got.max_token_len, got.min_token_len, got.xml_aware), (Some(900), 900, true));
-    assert_eq!((got.min_sentence_len, got.min_ctx_len, got.retain_format), (20, 10, true));
-    let plain =
-        SentenceTokenizerConfig { max_token_len: Some(900), min_token_len: None, xml_aware: false };
-    let got = SentenceBufferOptions::from_config(plain);
-    assert_eq!((got.max_token_len, got.min_token_len, got.xml_aware), (Some(900), 20, false));
+fn a_provider_cap_bounds_the_batches() {
+    let text = "This is one more sentence. ".repeat(80);
+    let expressive = drive(
+        &mut sentence_splitter(Some("inworld"), markup_vocabulary("inworld", true)),
+        &[&text],
+    );
+    assert!(expressive.len() > 1 && expressive.iter().all(|c| c.chars().count() <= 900));
+    assert!(expressive[0].chars().count() > 880, "batched up to the cap: {}", expressive[0]);
+    let plain = drive(&mut sentence_splitter(Some("inworld"), None), &[&text]);
+    assert_eq!(plain.len(), 80);
 }

@@ -130,10 +130,10 @@ async def _text_session(agent: Agent[Any, Any], *messages: str, context: Any = N
 
 
 async def _voice(agent: Agent[Any, Any], *messages: str, context: Any = None) -> Settled:
-    from .fake_io import FakeTextOutput
+    from .fake_io import FakeTranscriptionOutput
 
     async with VoiceSession(context=context) as session:
-        session.output.transcription = FakeTextOutput()
+        session.output.transcription = FakeTranscriptionOutput()
         await session.start(agent)
         for message in messages:
             result = await session._run(user_input=message)
@@ -819,7 +819,7 @@ async def test_a_typed_output_is_validated_and_retried_before_acceptance(run: En
 
 
 async def test_a_verbatim_voice_question_reaches_the_transcription_output() -> None:
-    from .fake_io import FakeTextOutput
+    from .fake_io import FakeTranscriptionOutput
 
     agent = Agent(instructions="Help", llm=Script(call("ask", {}, "question")))
 
@@ -828,7 +828,7 @@ async def test_a_verbatim_voice_question_reaches_the_transcription_output() -> N
         """Ask for the date."""
         return InputRequired("Which date?", verbatim=True)
 
-    output = FakeTextOutput()
+    output = FakeTranscriptionOutput()
     async with VoiceSession() as session:
         session.output.transcription = output
         await session.start(agent)

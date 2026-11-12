@@ -89,7 +89,7 @@ class TTS(tts.TTS):
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 44100.
             api_key (str | None, optional): The Resemble API key. If not provided, it will be read from the RESEMBLE_API_KEY environment variable.
             http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, a new session will be created.
-            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
+            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.SentenceTokenizer`.
             use_streaming (bool, optional): Whether to use streaming or not. Defaults to True.
         """  # noqa: E501
         super().__init__(
@@ -107,7 +107,7 @@ class TTS(tts.TTS):
         self._api_key = api_key
 
         if tokenizer is None:
-            tokenizer = tokenize.blingfire.SentenceTokenizer()
+            tokenizer = tokenize.SentenceTokenizer()
 
         if voice_uuid is None:
             voice_uuid = DEFAULT_VOICE_UUID

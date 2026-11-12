@@ -32,6 +32,7 @@ mod llm;
 mod nodes;
 mod output;
 pub mod realtime;
+mod recorder;
 pub mod room;
 pub(crate) mod storage;
 mod stt;
@@ -46,10 +47,11 @@ pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{COMPLETION_TOKENS, FakeLlm};
 pub use nodes::FakeNodes;
 pub use output::{
-    FakeAudioInput, FakeAudioOutput, FakeRecorder, FakeSoundStream, FakeTextOutput, FakeVideoInput,
+    FakeAudioInput, FakeAudioOutput, FakeSoundStream, FakeTranscriptionOutput, FakeVideoInput,
     HALF, room_camera,
 };
 pub use realtime::{FakeDuplex, FakeRealtime, RealtimeDelays, ServerSetup, Vad as RealtimeVad};
+pub use recorder::FakeRecorder;
 pub use storage::{FakeStore, death_resends, storage_faults, worker_deaths};
 pub use stt::FakeStt;
 pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};

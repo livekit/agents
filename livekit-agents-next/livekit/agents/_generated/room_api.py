@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
     from livekit import rtc
-    from livekit.agents.voice.io import TextOutput
+    from livekit.agents.voice.io import TranscriptionOutput
 
     from ..types import NotGivenOr
     from ..voice.agent_session import VoiceSession as HostVoiceSession
@@ -67,7 +67,7 @@ class AudioOutputOptions:
 
 
 @dataclass
-class TextOutputOptions:
+class TranscriptionOutputOptions:
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
     """False to disable transcription synchronization with audio output.
         Otherwise, transcription is emitted as quickly as available.
@@ -76,8 +76,8 @@ class TextOutputOptions:
     """Speed factor of transcription synchronization with audio output.
         Only effective if `sync_transcription` is True.
     """
-    next_in_chain: TextOutput | None = None
-    """The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
+    next_in_chain: TranscriptionOutput | None = None
+    """The next transcription output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
     json_format: bool = False
     """Send the transcription as JSON dict for each chunk, including start and end timestamps if it's a TranscriptChunk."""
 
@@ -92,7 +92,7 @@ class RoomOptions:
     """The video input options. If not provided, default to False."""
     audio_output: NotGivenOr[AudioOutputOptions | bool] = NOT_GIVEN
     """The audio output options. If not provided, default to True."""
-    text_output: NotGivenOr[TextOutputOptions | bool] = NOT_GIVEN
+    transcription_output: NotGivenOr[TranscriptionOutputOptions | bool] = NOT_GIVEN
     """The transcription output options. If not provided, default to True."""
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
     """Participant kinds accepted for auto subscription. If not provided,
@@ -129,15 +129,15 @@ class RoomOptions:
             return self.audio_output
         return AudioOutputOptions() if self.audio_output is not False else None
 
-    def get_text_output_options(self) -> TextOutputOptions | None:
-        if isinstance(self.text_output, TextOutputOptions):
-            return self.text_output
-        return TextOutputOptions() if self.text_output is not False else None
+    def get_transcription_output_options(self) -> TranscriptionOutputOptions | None:
+        if isinstance(self.transcription_output, TranscriptionOutputOptions):
+            return self.transcription_output
+        return TranscriptionOutputOptions() if self.transcription_output is not False else None
 
 
 TextInputOptions.__module__ = "livekit.agents.voice.room_io"
 AudioInputOptions.__module__ = "livekit.agents.voice.room_io"
 VideoInputOptions.__module__ = "livekit.agents.voice.room_io"
 AudioOutputOptions.__module__ = "livekit.agents.voice.room_io"
-TextOutputOptions.__module__ = "livekit.agents.voice.room_io"
+TranscriptionOutputOptions.__module__ = "livekit.agents.voice.room_io"
 RoomOptions.__module__ = "livekit.agents.voice.room_io"

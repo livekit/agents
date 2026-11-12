@@ -4,6 +4,34 @@ fn mono(samples: &[i16], rate: u32) -> PcmFrame {
     PcmFrame::new(samples.to_vec(), rate, 1)
 }
 
+/// Recording waits for conversion history before writing silence over it. https://github.com/livekit/agents/pull/7079
+#[test]
+fn pending_resampler_audio_is_written_once_at_its_original_position() {
+    let pcm: Vec<_> = (0..4800).map(|i| ((i % 100) * 200) as i16).collect();
+    let mut reference = crate::Resampler::new(48_000, 24_000, 1, Quality::Medium).unwrap();
+    let mut expected = reference.push(&pcm).unwrap().to_vec();
+    assert!(expected.len() < 2400, "the fixture must leave conversion history pending");
+    let emitted = expected.len();
+    expected.extend_from_slice(reference.flush().unwrap());
+    let mut recorder = Recorder::new(PcmRecordingEncoder::default(), 24_000, 0.0);
+    recorder.on_input_frame(0.1, &mono(&pcm, 48_000));
+    let settled = recorder.settle_until(0.8, None);
+    assert!(
+        settled <= emitted as f64 / 24_000.0 + 1e-9,
+        "pending samples cannot be treated as silence"
+    );
+    recorder.flush_until(settled).unwrap();
+    recorder.flush_resamplers().unwrap();
+    recorder.flush_until(0.1).unwrap();
+    let recorded = &recorder.encoder().pcm;
+    assert_eq!(
+        recorded.as_chunks::<2>().0.iter().map(|pair| pair[0]).collect::<Vec<_>>(),
+        expected
+    );
+    assert!(recorded.as_chunks::<2>().0.iter().all(|pair| pair[1] == 0));
+    assert_eq!(recorder.dropped_samples(), [0, 0]);
+}
+
 /// A gap between two placements is silence, not the second placement moved earlier;
 /// concatenating makes the agent answer before the user finishes.
 #[test]
@@ -184,7 +212,11 @@ fn an_input_frame_is_backdated_by_its_own_duration() {
 fn both_channels_reach_the_encoder() {
     let mut r = Recorder::new(PcmRecordingEncoder::default(), 10, 100.0);
     r.on_input_frame(100.1, &mono(&[16384], 10));
-    r.on_output_placed(&Placed { started_at: 100.0, frame: PcmFrame::new(vec![-16384], 10, 1) });
+    r.on_output_placed(&Placed {
+        started_at: 100.0,
+        frame: PcmFrame::new(vec![-16384], 10, 1),
+        continues: false,
+    });
     assert!(r.flush_until(100.1).expect("encoded").is_empty(), "the double buffers");
     assert_eq!(r.encoder().pcm, vec![16384, -16384]);
     assert_eq!(r.dropped_samples(), [0, 0]);
@@ -200,7 +232,11 @@ fn dropped_audio_is_reported_up_to_the_recorder() {
     r.on_input_frame(101.0, &mono(&[16384; 10], 10));
     r.flush_until(102.0).expect("encoded");
     // an output report for a moment already written: three samples with nowhere to go
-    r.on_output_placed(&Placed { started_at: 100.2, frame: PcmFrame::new(vec![16384; 3], 10, 1) });
+    r.on_output_placed(&Placed {
+        started_at: 100.2,
+        frame: PcmFrame::new(vec![16384; 3], 10, 1),
+        continues: false,
+    });
     r.flush_until(103.0).expect("encoded");
     assert_eq!(r.dropped_samples(), [0, 3]);
 }

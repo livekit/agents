@@ -8,6 +8,7 @@ pub mod agent_tool;
 pub mod approval;
 pub mod assertions;
 pub mod effects;
+pub mod lexer;
 pub mod llm;
 pub mod mcp;
 pub mod metrics;

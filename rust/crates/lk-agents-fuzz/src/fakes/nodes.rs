@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
-use lk_agents_abi::voice::io::TextOutput;
+use lk_agents_abi::voice::io::TranscriptionOutput;
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::nodes::TextNode;
 use lk_agents_abi::{
@@ -157,7 +157,10 @@ fn missing(leg: &str) -> ProviderError {
 
 impl NodeFactory for FakeNodes {
     /// `transcription_node` as the default: each delta down the leg below, then the flush.
-    fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError> {
+    fn text_node(
+        &self,
+        below: Arc<dyn TranscriptionOutput>,
+    ) -> Result<Arc<dyn TextNode>, HostError> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<TranscriptChunk>>();
         let completion = tokio::sync::watch::channel(None).0;
         let done = completion.clone();

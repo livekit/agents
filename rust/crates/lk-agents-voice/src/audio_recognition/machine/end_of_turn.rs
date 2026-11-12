@@ -13,7 +13,7 @@ use crate::events::{
 };
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{EotPrediction, SpeechEvent, SpeechEventType, Ts};
-use lk_agents_core::tokenize::{WordTokenizerOptions, count_words};
+use lk_agents_core::tokenize::spoken_words;
 use std::time::Duration;
 
 impl AudioRecognition {
@@ -469,7 +469,7 @@ impl AudioRecognition {
         eff
     }
 
-    /// Words are counted with `split_character` off, unlike the interruption guard, so CJK text hits `max_duration` long before `max_words`.
+    /// Words are counted as the interruption guard counts them: their spoken length.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub(super) fn check_user_turn_limit(
         &mut self,
@@ -486,7 +486,7 @@ impl AudioRecognition {
             let started_at = self.speech_start_time.unwrap_or(now);
             eff.extend(self.arm_turn_limit(started_at));
         }
-        self.turn_tracker.words += count_words(transcript, WordTokenizerOptions::default());
+        self.turn_tracker.words += spoken_words(transcript);
         self.turn_tracker.transcript =
             format!("{} {}", self.turn_tracker.transcript, transcript).trim().to_owned();
 

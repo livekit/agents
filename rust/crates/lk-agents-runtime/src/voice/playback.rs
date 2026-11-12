@@ -90,6 +90,10 @@ impl PlaybackTracker for Tracker {
         self.update(PlaybackSegments::flush)
     }
 
+    fn withdraw_capture(&self) -> Option<PlaybackSegment> {
+        self.segments.modify(PlaybackSegments::withdraw)
+    }
+
     fn reset(&self) {
         self.segments.modify(PlaybackSegments::reset);
         self.on_playback_reset();
@@ -146,6 +150,13 @@ impl PlaybackTracker for Tracker {
         }
     }
 
+    fn transcript_cleared(&self, segment: PlaybackSegment, heard: &str) {
+        let observers = self.observers.lock().clone();
+        for o in observers {
+            o.on_transcript_cleared(segment, heard);
+        }
+    }
+
     fn observe(&self, observer: Arc<dyn PlaybackObserver>) {
         self.observers.lock().push(observer);
     }
@@ -188,6 +199,10 @@ impl PlaybackObserver for Tracker {
 
     fn on_transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TranscriptChunk) {
         self.transcript_shown(segment, word);
+    }
+
+    fn on_transcript_cleared(&self, segment: PlaybackSegment, heard: &str) {
+        self.transcript_cleared(segment, heard);
     }
 
     /// A reset below is told above, not repeated: each node's count is its own.

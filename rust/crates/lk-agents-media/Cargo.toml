@@ -9,8 +9,6 @@ build = "build/mod.rs"
 # Synchronous CPU work; the runtime owns scheduling, admission, I/O and asynchronous delivery.
 [features]
 default = []
-# Vendored sentence and word tokenization, including the C++ wrapper and models.
-blingfire = []
 # Compiles the hand-written ffmpeg bindings and the demux/decode + encode/mux loops.
 # Cold build is MINUTES when it also builds the vendored source tree. See build/mod.rs.
 ffmpeg = []
@@ -30,7 +28,7 @@ lk-agents-telemetry = { path = "../lk-agents-telemetry" }
 image = { workspace = true, optional = true }
 
 [build-dependencies]
-# Compiles the native wrappers when `ffmpeg` or `blingfire` is enabled.
+# Compiles the native wrappers when `ffmpeg` is enabled.
 cc = "1"
 pkg-config = "0.3"
 sha2 = "0.10"

@@ -22,7 +22,6 @@ lk-agents-host-derive = { path = "../../ai_slop/lk-agents-host-derive" }
 # the workspace and make every workspace test build compile ffmpeg.
 lk-agents-runtime = { path = "../lk-agents-runtime", features = [
     "media-images",
-    "media-blingfire",
 ] }
 
 indexmap.workspace = true

@@ -1,11 +1,9 @@
-/// Returned because the blingfire tokenizer lives outside this crate.
+/// Returned because the sentence tokenizer lives outside this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SentenceTokenizerConfig {
     pub max_token_len: Option<usize>,
-    /// Under expressive this equals `max_token_len`, so sentences batch up to that size.
-    pub min_token_len: Option<usize>,
-    /// Only under expressive: xml-aware tokenization would stall streaming on a stray `<`.
-    pub xml_aware: bool,
+    /// Under expressive, sentences batch up to `max_token_len` rather than a spoken minimum.
+    pub batch_to_max: bool,
 }
 
 /// The selected provider dialect, retained in resource descriptions.

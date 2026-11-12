@@ -300,10 +300,11 @@ class InferenceLlmChunks:
     async def aclose(self) -> None: ...
 
 class LlmChoiceParser:
-    """Accumulates the streamed choices of one OpenAI-compatible completion into chunks, filtering
-    the model's thinking tags: `inference.LLMStream` over a plugin's own client.
+    """Accumulates the streamed choices of one OpenAI-compatible completion into chunks:
+    `inference.LLMStream` over a plugin's own client. The model's own syntax (reasoning, template
+    tokens) is taken out above every provider, not here.
     """
-    def __new__(cls, model: str) -> Self: ...
+    def __new__(cls) -> Self: ...
     def parse(self, id: str, choice: object) -> ChatChunk | None:
         """The chunk `choice` (one streamed choice of completion `id`) completes, if any."""
 

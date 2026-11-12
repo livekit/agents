@@ -37,7 +37,7 @@ fn reattaching_one_physical_output_does_not_duplicate_recorder_playback() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let tap = RecorderTap::new(recorder.clone(), clock.clone());
     let first_observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
-        Arc::new(RecorderPlaybackObserver::new(tap.clone(), original));
+        Arc::new(RecorderPlaybackObserver::new(Some(tap.clone()), original, &Default::default()));
     output.observe(first_observer.clone());
     let first = PlaybackSegment { attachment: original.0, segment: 1 };
     assert!(output.begin_segment(first));
@@ -45,7 +45,7 @@ fn reattaching_one_physical_output_does_not_duplicate_recorder_playback() {
     output.note_flush();
     // The first operation still owes its report when the same host object is reattached.
     let next_observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
-        Arc::new(RecorderPlaybackObserver::new(tap, replacement));
+        Arc::new(RecorderPlaybackObserver::new(Some(tap), replacement, &Default::default()));
     output.observe(next_observer.clone());
     let now = lk_agents_abi::Clock::now(clock.as_ref());
     let completed = PlaybackFinished {

@@ -12,21 +12,27 @@ use crate::{
 /// What two clocks' rounding may leave between a stamp and the playhead, in seconds.
 const EPSILON: f64 = 1e-6;
 
+/// The journal's stamps are whole milliseconds: what one may hide of the time since a report.
+const STAMP_SECS: f64 = 1e-3;
+
 // A paced word is released at the middle of its estimated audio, an aligned word at its stamp. A
 // finish is a playhead too: a cut shows words started before the cut point, and a whole finish
-// releases the remaining words at once.
+// releases the remaining words at once. Between the sink's reports the playhead moves with
+// elapsed time: a speaker that played to `p` by its last report (its start, or a stretch played)
+// has played no further than `p` plus the time since, whether or not it reports progress.
 
 pub struct TranscriptFollowsAudio;
 
 impl Rule for TranscriptFollowsAudio {
     const CONTRACT: Contract = Contract {
         id: "transcript_follows_audio",
-        guarantee: "A synchronised transcript shows no word before the segment has played up to where the word's audio starts, except the rest of a segment the sink reported finished whole.",
-        examples: &[shown_as_played, rest_shown_at_the_end],
+        guarantee: "A synchronised transcript shows no word before the segment could have played up to where the word's audio starts (the sink's last reported playhead plus the time since that report), except the rest of a segment the sink reported finished whole.",
+        examples: &[shown_as_played, rest_shown_at_the_end, shown_as_time_passes],
         counterexamples: &[
             shown_ahead_of_the_voice,
             shown_ahead_then_cut,
             shown_whole_with_no_finish,
+            shown_ahead_of_the_time_since_the_start,
         ],
         probe: None,
     };
@@ -50,11 +56,19 @@ impl Rule for TranscriptFollowsAudio {
                     );
                 }
             };
-            for (_, step) in internal.speech(speech.id).steps() {
+            // When the sink last reported where it was: its start or a stretch it played.
+            let mut reported: Option<u64> = None;
+            for (at, step) in internal.speech(speech.id).steps() {
                 let Step::Playout(step) = step else { continue };
                 match step {
+                    PlayoutStep::PlaybackStarted { .. } | PlayoutStep::AudioPlayed { .. } => {
+                        reported = Some(at.at_ms);
+                    }
                     PlayoutStep::TranscriptShown { text, start, played, .. } => {
-                        let played = played.as_secs_f64();
+                        let since = reported.map_or(0.0, |r| {
+                            at.at_ms.saturating_sub(r) as f64 / 1000.0 + STAMP_SECS
+                        });
+                        let played = played.as_secs_f64() + since;
                         // Its stamps excuse nothing: a word stamped as ending where it starts
                         // (a whole finish's clamp) is still owed that finish next (seed 19354).
                         if *start > played + EPSILON {
@@ -66,6 +80,7 @@ impl Rule for TranscriptFollowsAudio {
                     // The segment played on: what was shown ahead was not its end. (A start is
                     // journalled at a finish the sink reported without one.)
                     PlayoutStep::PlaybackProgressed { .. } => {
+                        reported = Some(at.at_ms);
                         judge(check, &mut ahead, f64::NEG_INFINITY)
                     }
                     PlayoutStep::PlaybackFinished { interrupted, position, .. } => {
@@ -111,6 +126,22 @@ fn speech() -> Authored {
     Authored::new().speech(1, Handle::finished())
 }
 
+fn started() -> Step {
+    Step::Playout(PlayoutStep::PlaybackStarted { speech: SpeechId(1) })
+}
+
+/// A sink that reports no progress: each word shown once the time since the start reached it.
+fn shown_as_time_passes() -> Recording {
+    speech()
+        .journal(started())
+        .later(250)
+        .journal(shown("one", 0.0, 0))
+        .later(300)
+        .journal(shown(" two", 0.4, 0))
+        .journal(finished(800, false))
+        .done()
+}
+
 /// Each word shown once the segment had played past its start.
 fn shown_as_played() -> Recording {
     speech()
@@ -151,5 +182,16 @@ fn shown_ahead_then_cut() -> Recording {
         .journal(progressed(60))
         .journal(shown(" two", 0.1, 60))
         .journal(finished(60, true))
+        .done()
+}
+
+/// A sink that reports no progress: a word shown 100 ms after the start with its audio 2.5 s in,
+/// and the segment playing on.
+fn shown_ahead_of_the_time_since_the_start() -> Recording {
+    speech()
+        .journal(started())
+        .later(100)
+        .journal(shown(" twelve", 2.5, 0))
+        .journal(progressed(3_000))
         .done()
 }

@@ -71,7 +71,7 @@ pub struct AudioOutputRef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TextOutputRef {
+pub struct TranscriptionOutputRef {
     pub id: ResourceId,
     pub label: String,
 }

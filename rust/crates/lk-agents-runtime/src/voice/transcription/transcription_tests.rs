@@ -79,21 +79,21 @@ impl Chain {
         });
         // As the session's first activation does: both legs attached open the gate.
         sync.audio_output().on_attached();
-        sync.text_output().on_attached();
+        sync.transcription_output().on_attached();
         let shown = watch::Sender::new(Vec::new());
         sync.audio_output().tracker().observe(Arc::new(Shown(shown.clone())));
         Chain { sync, leaf, shown, output }
     }
 
     async fn text(&self, text: &str) {
-        let out = self.sync.text_output();
+        let out = self.sync.transcription_output();
         out.capture_text(&lk_agents_abi::telemetry::Cx::NONE, text).await.unwrap();
         out.flush();
     }
 
     /// Words the voice aligned: each with where its audio starts and ends.
     async fn aligned(&self, words: &[(&str, f64, f64)]) {
-        let out = self.sync.text_output();
+        let out = self.sync.transcription_output();
         for (word, start, end) in words {
             let text = TranscriptChunk {
                 start_time: Some(*start),

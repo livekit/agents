@@ -186,7 +186,7 @@ class TTS(tts.TTS):
                 httpx_client=self._httpx_client,
             )
 
-        self._tokenizer = tokenizer if is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
+        self._tokenizer = tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
         self._opts = _TTSOptions(
             voice_id=voice_id,
             model=model,

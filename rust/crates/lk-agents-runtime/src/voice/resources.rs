@@ -1,9 +1,10 @@
 use lk_agents_abi::resources::{
-    AudioOutputRef, LlmRef, RealtimeRef, ResourceId, SttRef, TextOutputRef, TtsRef, VadRef,
-    VideoInputRef,
+    AudioOutputRef, LlmRef, RealtimeRef, ResourceId, SttRef, TranscriptionOutputRef, TtsRef,
+    VadRef, VideoInputRef,
 };
 use lk_agents_abi::voice::io::{
-    AudioInput, AudioOutput, AudioOutputCapabilities, AudioOutputExt, TextOutput, VideoInput,
+    AudioInput, AudioOutput, AudioOutputCapabilities, AudioOutputExt, TranscriptionOutput,
+    VideoInput,
 };
 use lk_agents_abi::{AudioFrame, Llm, ProviderId, RealtimeSession, StreamInput, Stt, Tts, Vad};
 use parking_lot::Mutex;
@@ -21,7 +22,7 @@ enum Resource {
     Tts(Arc<dyn Tts>),
     Realtime(Arc<dyn RealtimeSession>),
     AudioOutput(Arc<dyn AudioOutput>),
-    TextOutput(Arc<dyn TextOutput>),
+    TranscriptionOutput(Arc<dyn TranscriptionOutput>),
     AudioInput(Arc<dyn AudioInput>),
     VideoInput(Arc<dyn VideoInput>),
     AudioSink(Arc<dyn StreamInput<AudioFrame>>),
@@ -181,17 +182,22 @@ impl Resources {
         AudioOutputRef { id: self.insert(Resource::AudioOutput(out)), label, capabilities }
     }
 
-    pub fn register_text_output(&self, out: Arc<dyn TextOutput>) -> TextOutputRef {
+    pub fn register_transcription_output(
+        &self,
+        out: Arc<dyn TranscriptionOutput>,
+    ) -> TranscriptionOutputRef {
         let label = out.label().to_owned();
-        TextOutputRef { id: self.insert(Resource::TextOutput(out)), label }
+        TranscriptionOutputRef { id: self.insert(Resource::TranscriptionOutput(out)), label }
     }
 
     pub fn audio_output(&self, id: ResourceId) -> Option<Arc<dyn AudioOutput>> {
         self.get(id, |r| if let Resource::AudioOutput(o) = r { Some(Arc::clone(o)) } else { None })
     }
 
-    pub fn text_output(&self, id: ResourceId) -> Option<Arc<dyn TextOutput>> {
-        self.get(id, |r| if let Resource::TextOutput(o) = r { Some(Arc::clone(o)) } else { None })
+    pub fn transcription_output(&self, id: ResourceId) -> Option<Arc<dyn TranscriptionOutput>> {
+        self.get(id, |r| {
+            if let Resource::TranscriptionOutput(o) = r { Some(Arc::clone(o)) } else { None }
+        })
     }
 
     pub fn register_audio_input(&self, input: Arc<dyn AudioInput>) -> ResourceId {
@@ -251,7 +257,7 @@ impl Resources {
                 | Resource::TranscriptionNode(_)
                 | Resource::Realtime(_)
                 | Resource::AudioOutput(_)
-                | Resource::TextOutput(_)
+                | Resource::TranscriptionOutput(_)
                 | Resource::AudioInput(_)
                 | Resource::VideoInput(_)
                 | Resource::AudioSink(_),
@@ -273,7 +279,7 @@ impl Resources {
             Resource::Tts(_) => "tts",
             Resource::Realtime(_) => "realtime",
             Resource::AudioOutput(_) => "audio output",
-            Resource::TextOutput(_) => "text output",
+            Resource::TranscriptionOutput(_) => "transcription output",
             Resource::AudioInput(_) => "audio input",
             Resource::VideoInput(_) => "video input",
             Resource::AudioSink(_) => "audio sink",

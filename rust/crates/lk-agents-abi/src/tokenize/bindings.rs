@@ -26,11 +26,11 @@ pub trait TokenizerCallback: Send + Sync {
 }
 #[crate::host(functions(pid = false))]
 pub trait TokenizeFunctions {
-    #[host(function, path = "livekit.agents.tokenize.basic")]
+    /// The words of `text`, each with its character offsets: what `WordTokenizer` splits.
+    #[host(function, path = "livekit.agents.tokenize")]
     fn split_words(
         text: String,
         #[host(kw, default = true)] ignore_punctuation: bool,
-        #[host(default = false)] split_character: bool,
         #[host(default = false)] retain_format: bool,
     ) -> Vec<super::TokenSpan>;
 
@@ -40,184 +40,134 @@ pub trait TokenizeFunctions {
         replacements: indexmap::IndexMap<String, String>,
         #[host(default = false)] hold_last_word: bool,
     ) -> Option<ReplacedWords>;
-
-    #[host(function, path = "livekit.agents.tokenize.basic")]
-    fn tokenize_paragraphs(text: String) -> Vec<String>;
-
-    /// `hyphenate_word(word)`: the pieces, broken at the possible hyphenation points.
-    #[host(function, path = "livekit.agents.tokenize.basic")]
-    fn hyphenate_word(word: String) -> Vec<String>;
 }
 
-/// Tokenization through an application tokenizer: the host calls the voice core's steps request.
-#[crate::host(functions(pid = false))]
-pub trait HostTokenization {
-    #[host(function)]
-    fn xml_tokenize(
-        tokenize_fnc: Arc<dyn TokenizerCallback>,
-        text: String,
-    ) -> Result<Vec<super::TokenSpan>, HostError>;
-}
-
-/// `tokenize.basic.WordTokenizer`'s engine.
-#[crate::host(class(name = "BasicWordTokenizer", pid = false))]
-pub trait WordTokenizer: Send + Sized + 'static {
+/// `tokenize.SentenceTokenizer`'s engine.
+#[crate::host(class(name = "SpeechSentenceTokenizer", pid = false))]
+pub trait SpeechSentenceTokenizer: Send + Sized + 'static {
+    #[host(class(name = "SpeechSentenceStream"))]
+    type Stream;
     #[host(new)]
     fn new(
-        #[host(kw, default = true)] ignore_punctuation: bool,
-        #[host(default = false)] split_character: bool,
-        #[host(default = false)] retain_format: bool,
-    ) -> Self;
-    #[host(call)]
-    fn tokenize(
-        &self,
-        text: String,
-        #[host(kw, default = None)] language: Option<String>,
-    ) -> Vec<String>;
-    #[host(call, name = "_core_split")]
-    fn split(&self, text: String) -> Vec<super::TokenSpan>;
-    #[host(getter, name = "_core_min_token_len")]
-    fn min_token_len(&self) -> usize;
-    #[host(getter, name = "_core_min_ctx_len")]
-    fn min_ctx_len(&self) -> usize;
-}
-
-/// `tokenize.basic.SentenceTokenizer`'s engine.
-#[crate::host(class(name = "BasicSentenceTokenizer", pid = false))]
-pub trait SentenceTokenizer: Send + Sized + 'static {
-    #[host(new)]
-    fn new(
-        #[host(kw, default = "english")] language: String,
-        #[host(default = 20)] min_sentence_len: usize,
-        #[host(default = 10)] stream_context_len: usize,
-        #[host(default = false)] retain_format: bool,
-    ) -> Self;
-    #[host(call)]
-    fn tokenize(
-        &self,
-        text: String,
-        #[host(kw, default = None)] language: Option<String>,
-    ) -> Vec<String>;
-    #[host(call, name = "_core_split")]
-    fn split(&self, text: String) -> Vec<super::TokenSpan>;
-    #[host(getter, name = "_core_min_token_len")]
-    fn min_token_len(&self) -> usize;
-    #[host(getter, name = "_core_min_ctx_len")]
-    fn min_ctx_len(&self) -> usize;
-    #[host(getter, name = "_core_max_token_len")]
-    fn max_token_len(&self) -> Option<usize>;
-    #[host(getter, name = "_core_xml_aware")]
-    fn xml_aware(&self) -> bool;
-}
-
-/// `tokenize.blingfire.SentenceTokenizer`'s engine.
-#[crate::host(class(name = "BlingfireSentenceTokenizer", pid = false))]
-pub trait BlingfireSentenceTokenizer: Send + Sized + 'static {
-    #[host(new)]
-    fn new(
-        #[host(kw, default = 20)] min_sentence_len: usize,
-        #[host(default = 10)] stream_context_len: usize,
+        #[host(kw, default = 4)] min_words: usize,
+        #[host(default = None)] clause_words: Option<usize>,
         #[host(default = false)] retain_format: bool,
         #[host(default = None)] max_token_len: Option<usize>,
-        #[host(default = None)] min_token_len: Option<usize>,
-        #[host(default = false)] xml_aware: bool,
     ) -> Self;
-    /// The sentences of `text`, markup kept whole when `xml_aware`.
+    /// The sentences of `text`, batched as the stream batches them.
     #[host(call)]
     fn tokenize(
         &self,
         text: String,
         #[host(kw, default = None)] language: Option<String>,
     ) -> Vec<String>;
-    #[host(call, name = "_core_split")]
-    fn split(&self, text: String) -> Vec<super::TokenSpan>;
-    #[host(getter, name = "_core_min_token_len")]
-    fn min_token_len(&self) -> usize;
-    #[host(getter, name = "_core_min_ctx_len")]
-    fn min_ctx_len(&self) -> usize;
+    #[host(call, name = "_core_stream")]
+    fn stream(&self) -> Self::Stream;
     #[host(getter, name = "_core_max_token_len")]
     fn max_token_len(&self) -> Option<usize>;
-    #[host(getter, name = "_core_xml_aware")]
-    fn xml_aware(&self) -> bool;
 }
 
-/// Really naive implementation of a word tokenizer: words split on whitespace, punctuation
-/// stripped unless asked to keep it.
-#[crate::host(facade(
-    path = "livekit.agents.tokenize.basic",
-    name = "WordTokenizer",
-    base = "tokenize._CoreWordTokenizer",
-    native = WordTokenizer
-))]
-pub trait BasicWords {
+/// `tokenize.SentenceTokenizer`'s stream: a sentence goes out once no text to come could
+/// change it.
+#[crate::host(class(name = "SpeechSentenceStream", pid = false))]
+pub trait SpeechSentenceStream: Send + Sized + 'static {
+    /// The sentences ``text`` completes.
+    #[host(call)]
+    fn push(&mut self, text: String) -> Vec<String>;
+    #[host(call)]
+    fn flush(&mut self) -> Vec<String>;
+}
+
+/// `tokenize.WordTokenizer`'s engine.
+#[crate::host(class(name = "SpeechWordTokenizer", pid = false))]
+pub trait SpeechWordTokenizer: Send + Sized + 'static {
+    #[host(class(name = "SpeechWordStream"))]
+    type Stream;
     #[host(new)]
     fn new(
         #[host(kw, default = true)] ignore_punctuation: bool,
-        #[host(default = false)] split_character: bool,
         #[host(default = false)] retain_format: bool,
     ) -> Self;
+    #[host(call)]
     fn tokenize(
         &self,
         text: String,
         #[host(kw, default = None)] language: Option<String>,
     ) -> Vec<String>;
+    #[host(call, name = "_core_stream")]
+    fn stream(&self) -> Self::Stream;
 }
 
-/// Really naive implementation of a sentence tokenizer: rule-based, and only English is really
-/// tested.
-#[crate::host(facade(
-    path = "livekit.agents.tokenize.basic",
-    name = "SentenceTokenizer",
-    base = "tokenize._CoreSentenceTokenizer",
-    native = SentenceTokenizer
-))]
-pub trait BasicSentences {
-    #[host(new)]
-    fn new(
-        #[host(kw, default = "english")] language: String,
-        #[host(default = 20)] min_sentence_len: usize,
-        #[host(default = 10)] stream_context_len: usize,
-        #[host(default = false)] retain_format: bool,
-    ) -> Self;
-    fn tokenize(
-        &self,
-        text: String,
-        #[host(kw, default = None)] language: Option<String>,
-    ) -> Vec<String>;
+/// `tokenize.WordTokenizer`'s stream: a word goes out once the next one proves it whole.
+#[crate::host(class(name = "SpeechWordStream", pid = false))]
+pub trait SpeechWordStream: Send + Sized + 'static {
+    /// The words ``text`` completes.
+    #[host(call)]
+    fn push(&mut self, text: String) -> Vec<String>;
+    #[host(call)]
+    fn flush(&mut self) -> Vec<String>;
 }
 
-/// Sentences split by the BlingFire model, batched for speech.
+/// Splits text into words: at whitespace, with each Chinese or Japanese character a word of its
+/// own. Thai, Lao, Khmer and Burmese split only at whitespace.
+///
+/// The stream emits a word once the next one proves it whole. Subclass it for a custom
+/// tokenizer: override `tokenize`, and the inherited `stream` emits each of its words once the
+/// next one starts; override `stream` too to stream them yourself.
 ///
 /// Args:
-///     min_sentence_len: minimum length for a span to be treated as its own sentence; shorter
-///         spans are merged forward into the next one.
-///     stream_context_len: minimum buffered text before the stream emits.
-///     retain_format: keep original whitespace/formatting in emitted tokens.
-///     max_token_len: hard cap on emitted token length; a token is flushed before appending a
-///         sentence that would exceed it.
-///     min_token_len: minimum length a token must reach before it is emitted. Sentences are
-///         batched until the running token reaches this length, so raising it (e.g. toward
-///         ``max_token_len``) yields larger, fewer chunks. Defaults to ``min_sentence_len``.
-///     xml_aware: treat XML markup as atomic: never split a tag across tokens and keep tags
-///         attached to the following sentence. Only enable when the input carries markup (e.g.
-///         expressive TTS): a stray "<" in plain text can otherwise hold back streaming.
+///     ignore_punctuation: drop punctuation from the words; a word of punctuation alone is
+///         dropped.
+///     retain_format: keep the whitespace before each word, so the words join back to the text.
 #[crate::host(facade(
-    path = "livekit.agents.tokenize.blingfire",
-    name = "SentenceTokenizer",
-    base = "tokenize._CoreSentenceTokenizer",
-    native = BlingfireSentenceTokenizer
+    path = "livekit.agents.tokenize",
+    name = "WordTokenizer",
+    base = "tokenize._WordTokenizerBase",
+    native = SpeechWordTokenizer
 ))]
-pub trait BlingfireSentences {
+pub trait SpeechWords {
     #[host(new)]
     fn new(
-        #[host(kw, default = 20)] min_sentence_len: usize,
-        #[host(default = 10)] stream_context_len: usize,
+        #[host(kw, default = true)] ignore_punctuation: bool,
+        #[host(default = false)] retain_format: bool,
+    ) -> Self;
+    fn tokenize(
+        &self,
+        text: String,
+        #[host(kw, default = None)] language: Option<String>,
+    ) -> Vec<String>;
+}
+
+/// Splits text into sentences for speech, batched so short ones are not spoken alone.
+///
+/// The stream emits a sentence as soon as no text to come could change where it ends. Subclass
+/// it for a custom tokenizer: override `tokenize`, and the inherited `stream` emits each of its
+/// sentences once the next one starts; override `stream` too to stream them yourself.
+///
+/// Args:
+///     min_words: sentences are batched until a chunk holds this many spoken words. A Chinese or
+///         Japanese character counts as a word, and Thai about every three characters.
+///     clause_words: a sentence running past this many words without an end breaks at its next
+///         clause mark (``,`` ``;`` ``:`` and their fullwidth forms, never inside a number such as
+///         ``1,000``). ``None`` breaks only at sentence ends.
+///     retain_format: keep original whitespace/formatting in emitted tokens.
+///     max_token_len: cap on a chunk's length in characters: batching stops before a sentence
+///         that would pass it. A single longer sentence goes whole.
+#[crate::host(facade(
+    path = "livekit.agents.tokenize",
+    name = "SentenceTokenizer",
+    base = "tokenize._SentenceTokenizerBase",
+    native = SpeechSentenceTokenizer
+))]
+pub trait SpeechSentences {
+    #[host(new)]
+    fn new(
+        #[host(kw, default = 4)] min_words: usize,
+        #[host(default = None)] clause_words: Option<usize>,
         #[host(default = false)] retain_format: bool,
         #[host(default = None)] max_token_len: Option<usize>,
-        #[host(default = None)] min_token_len: Option<usize>,
-        #[host(default = false)] xml_aware: bool,
     ) -> Self;
-    /// The sentences of `text`, markup kept whole when `xml_aware`.
+    /// The sentences of `text`, batched as the stream batches them.
     fn tokenize(
         &self,
         text: String,
@@ -233,7 +183,6 @@ pub trait BufferedTokens: Send + Sized + 'static {
         #[host(kw)] min_token_len: usize,
         min_ctx_len: usize,
         #[host(default = None)] max_token_len: Option<usize>,
-        #[host(default = false)] xml_aware: bool,
     ) -> Self;
     /// The tokens ``text`` proves complete, batched.
     #[host(call)]

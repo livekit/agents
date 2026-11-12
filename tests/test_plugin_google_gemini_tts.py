@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from livekit.agents import tokenize, tts
+from livekit.agents import tts
 from livekit.plugins.google.beta.gemini_tts import TTS
 
 pytestmark = pytest.mark.plugin("google")
@@ -185,10 +185,7 @@ async def test_markers_reach_the_plugin_through_the_stream_adapter(
     mock_stream.side_effect = _audio_response()
 
     google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
-    adapter = tts.StreamAdapter(
-        tts=google_tts,
-        sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True, xml_aware=True),
-    )
+    adapter = tts.StreamAdapter(tts=google_tts)
     assert adapter.markup._provider_key() == "gemini"
 
     try:

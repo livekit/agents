@@ -195,9 +195,8 @@ impl VoiceDriver {
 
         // A final is the interruption failsafe if VAD failed; with no VAD a non-empty interim is
         // the onset.
-        let words = ev.best_alternative().map_or(0, |a| {
-            crate::agent_session::machine::activity::false_interruption::count_min_words(&a.text)
-        });
+        let words =
+            ev.best_alternative().map_or(0, |a| lk_agents_core::tokenize::spoken_words(&a.text));
         let has_vad = self.input.sinks.contains_key(&AudioChannel::Vad);
         let text = ev.best_alternative().map_or("", |a| a.text.as_str());
         match ev.kind {

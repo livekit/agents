@@ -117,6 +117,13 @@ debug = 1
 [profile.dev.package."*"]
 debug = 0
 
+# Rule sets compile their regexes at startup and in tests; an unoptimized regex compiler
+# makes the sentence splitter's mutation test take 20 s instead of 3.
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.regex-syntax]
+opt-level = 3
+
 # Generated Python adapters are the largest codegen unit. The fast path keeps
 # line tables in the runtime and decision crates; python-debug restores them here.
 # Basic optimization keeps the generated adapters within macOS’s unwind-table limit.

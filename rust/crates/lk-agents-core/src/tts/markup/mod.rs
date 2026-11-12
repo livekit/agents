@@ -1,34 +1,32 @@
 use lk_agents_abi::tts::markup as abi;
 use lk_agents_abi::tts::markup::{MarkupClass, MarkupFunctions, TranscriptStripper};
-use provider::ProviderExt;
+pub(crate) use provider::ProviderExt;
 use std::collections::BTreeMap;
 
 mod chat;
-mod expr;
 mod instructions;
+mod lower;
 mod mood;
 mod mood_data;
 mod prompts;
 mod provider;
-mod strip;
 mod transcript;
 
 pub use chat::{
     ChatMessageExt, EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, chat_message_text_content,
-    remove_expressive_instructions, strip_assistant_markup, strip_message_markup,
+    remove_expressive_instructions,
 };
-pub use expr::ExpressiveTag;
 pub use instructions::{
     NonverbalOptions, NonverbalSounds, Pace, SpeechSteering, allowed_prosody, allowed_sounds,
     steering_instructions,
 };
+pub use lk_agents_abi::tts::markup::ExpressiveTag;
 pub use mood::{DEFAULT_MOOD, MOOD_PRIORITY, Mood, match_mood};
 pub use provider::{NonverbalField, Provider, supported_nonverbals};
-pub use strip::{convert_expression_tags, extract_and_strip};
 pub use transcript::{
-    CuePlan, TranscriptMarkupStripper, drop_bracket_cues, drop_bracket_cues_plan,
-    expression_attribute, expression_attribute_map, split_all_markup, split_expr_markup,
-    strip_all_markup, strip_expr_markup,
+    CuePlan, TranscriptMarkupStripper, delivery, delivery_attribute, drop_bracket_cues,
+    drop_bracket_cues_plan, expression_attribute, expression_attribute_map, expression_markup,
+    split_all_markup, split_expr_markup, strip_all_markup, strip_expr_markup,
 };
 
 pub use lk_agents_abi::tts::markup::{Markup, SentenceTokenizerConfig};
@@ -50,11 +48,11 @@ impl MarkupExt for Markup {
     }
 
     fn normalize(&self, text: &str) -> String {
-        expr::normalize_markup(self.0, text)
+        lower::normalize(self.0, text)
     }
 
     fn convert(&self, text: &str) -> String {
-        expr::convert_markup(self.0, text)
+        lower::convert(self.0, text)
     }
 
     fn max_input_len(self) -> Option<usize> {
@@ -65,8 +63,7 @@ impl MarkupExt for Markup {
         let max_len = self.max_input_len();
         SentenceTokenizerConfig {
             max_token_len: max_len,
-            min_token_len: if expressive { max_len } else { None },
-            xml_aware: expressive,
+            batch_to_max: expressive && max_len.is_some(),
         }
     }
 
@@ -83,14 +80,9 @@ pub fn nonverbals_of(provider: &str) -> std::collections::BTreeMap<NonverbalFiel
         .collect()
 }
 
-/// `(max_token_len, min_token_len, xml_aware)` for `sentence_tokenizer(provider, expressive=)`; the
-/// shim builds the blingfire tokenizer from it.
-pub fn sentence_tokenizer_of(
-    provider: &str,
-    expressive: bool,
-) -> (Option<usize>, Option<usize>, bool) {
-    let c = Markup::from_provider_key(provider).sentence_tokenizer(expressive);
-    (c.max_token_len, c.min_token_len, c.xml_aware)
+/// `sentence_tokenizer(provider, expressive=)` for a `_provider_key()`.
+pub fn sentence_tokenizer_of(provider: &str, expressive: bool) -> SentenceTokenizerConfig {
+    Markup::from_provider_key(provider).sentence_tokenizer(expressive)
 }
 
 #[cfg(test)]

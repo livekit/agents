@@ -6,7 +6,7 @@ use crate::telemetry;
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::metrics::base::{AgentMetrics, ConnectionAcquired};
 use lk_agents_abi::utils::stream::{CallLedger, RetryReport};
-use lk_agents_abi::voice::io::{IoError, TextOutput};
+use lk_agents_abi::voice::io::{IoError, TranscriptionOutput};
 use lk_agents_abi::voice::nodes::{NodeChunk, NodeFactory, ProviderCalls, SessionNodes, TextNode};
 use lk_agents_abi::{
     AudioFrame, ChatRequest, ChoiceDelta, Clock, Closed, HOST_TEARDOWN_TIMEOUT, LanguageCode, Llm,
@@ -46,7 +46,10 @@ impl lk_agents_abi::voice::nodes::AgentNodes for AgentNodes {
 }
 
 impl NodeFactory for AgentNodes {
-    fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError> {
+    fn text_node(
+        &self,
+        below: Arc<dyn TranscriptionOutput>,
+    ) -> Result<Arc<dyn TextNode>, HostError> {
         let (complete, completion) = signal::once();
         Ok(Arc::new(TranscriptionNode {
             opener: self.opener()?,
@@ -240,7 +243,7 @@ type Completion = Option<Result<(), IoError>>;
 /// its flush. What the node yields goes down the leg below, flushed once the node has ended.
 struct TranscriptionNode {
     opener: Opener,
-    below: Arc<dyn TextOutput>,
+    below: Arc<dyn TranscriptionOutput>,
     /// The open segment's input, while the node reads it.
     segment: Mutex<Option<ChannelSink<TranscriptChunk>>>,
     /// Moved into the node's drain task as it opens, so the task's end, however it comes, ends

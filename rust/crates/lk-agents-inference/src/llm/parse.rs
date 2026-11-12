@@ -1,4 +1,3 @@
-use super::thinking::{FilterState, strip_thinking_tokens};
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChoiceDelta, Extra, FunctionToolCall, LlmChunk, Role};
@@ -90,34 +89,6 @@ pub struct WireCompletionTokensDetails {
     pub reasoning_tokens: Option<u32>,
 }
 
-/// [`strip_thinking_tokens`] over one stream: the tags and the state carried across
-/// SSE events. `None` means nothing visible yet; `Some("")` only for an empty input.
-#[derive(Debug, Clone)]
-pub struct TagFilter {
-    start_tag: &'static str,
-    end_tag: &'static str,
-    state: FilterState,
-}
-
-impl TagFilter {
-    pub fn new(start_tag: &'static str, end_tag: &'static str) -> Self {
-        TagFilter { start_tag, end_tag, state: FilterState::default() }
-    }
-
-    pub fn for_model(model: &str) -> Self {
-        let (start, end) = crate::llm::models::think_tags(model);
-        TagFilter::new(start, end)
-    }
-
-    pub fn strip(&mut self, content: Option<String>, is_final: bool) -> Option<String> {
-        let state = std::mem::take(&mut self.state);
-        let (start, end) = (self.start_tag, self.end_tag);
-        let out = strip_thinking_tokens(content.as_deref(), start, end, state, is_final);
-        self.state = out.state;
-        out.visible
-    }
-}
-
 /// The five fields `_run` resets per attempt, and the logic that folds choices into them.
 #[derive(Debug, Default)]
 pub struct ChoiceAccumulator {
@@ -134,16 +105,10 @@ impl ChoiceAccumulator {
     }
 
     /// `_parse_choice`. `None` means "this choice produced nothing to forward".
-    pub fn parse_choice(
-        &mut self,
-        id: &str,
-        choice: &WireChoice,
-        filter: &mut TagFilter,
-    ) -> Option<LlmChunk> {
+    pub fn parse_choice(&mut self, id: &str, choice: &WireChoice) -> Option<LlmChunk> {
         // livekit/agents#688: Azure content filtering sends a choice with no delta.
         let delta = choice.delta.as_ref()?;
-
-        let content = filter.strip(delta.content.clone(), choice.finish_reason.is_some());
+        let content = delta.content.clone();
 
         // Every call the delta closes, in order: a provider may send several calls in one delta.
         let mut closed = Vec::new();
@@ -250,15 +215,15 @@ pub fn usage_chunk(chunk: &WireChunk) -> Option<LlmChunk> {
     })
 }
 
-/// `_core.LlmChoiceParser`: one completion's accumulator and its model's thinking-tag filter.
+/// `_core.LlmChoiceParser`: one completion's accumulator. The model's own syntax is taken out
+/// above every provider, by [`ModelText`](crate::llm::model_text::ModelText).
 pub struct ChoiceParser {
     accumulator: ChoiceAccumulator,
-    filter: TagFilter,
 }
 
 impl lk_agents_abi::llm::inference::ChoiceParser for ChoiceParser {
-    fn new(model: String) -> Self {
-        ChoiceParser { accumulator: ChoiceAccumulator::new(), filter: TagFilter::for_model(&model) }
+    fn new() -> Self {
+        ChoiceParser { accumulator: ChoiceAccumulator::new() }
     }
 
     fn parse(
@@ -268,7 +233,7 @@ impl lk_agents_abi::llm::inference::ChoiceParser for ChoiceParser {
     ) -> Result<Option<LlmChunk>, Invalid> {
         let choice: WireChoice =
             serde_json::from_value(choice).map_err(|e| Invalid(format!("choice: {e}")))?;
-        Ok(self.accumulator.parse_choice(&id, &choice, &mut self.filter))
+        Ok(self.accumulator.parse_choice(&id, &choice))
     }
 }
 

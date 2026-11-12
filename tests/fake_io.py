@@ -10,7 +10,7 @@ from livekit.agents.voice.io import (
     AudioOutput,
     AudioOutputCapabilities,
     PlaybackSegment,
-    TextOutput,
+    TranscriptionOutput,
 )
 
 
@@ -155,8 +155,8 @@ class FakeAudioOutput(AudioOutput):
         )
 
 
-class FakeTextOutput(TextOutput):
-    def __init__(self, *, next_in_chain: TextOutput | None = None) -> None:
+class FakeTranscriptionOutput(TranscriptionOutput):
+    def __init__(self, *, next_in_chain: TranscriptionOutput | None = None) -> None:
         super().__init__(label="FakeIO", next_in_chain=next_in_chain)
         self._pushed_text = ""
         self._messages: list[str] = []

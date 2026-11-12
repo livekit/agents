@@ -1,14 +1,13 @@
 use super::{is_local_proxy_participant, publishes_on_behalf_of};
 use crate::room_io::MAX_STREAM_BYTES;
 use crate::room_io::effects::RoomTranscriptionEffect;
-use crate::transcription::{Visible, VisibleStream};
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, TrackSid, TrackSource};
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TranscriptChunk,
 };
-use lk_agents_core::tts::markup::expression_attribute;
+use lk_agents_core::tts::markup::delivery_attribute;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// The microphone view observed by the performer when a transcript's subject changes.
@@ -67,8 +66,8 @@ pub struct RoomTranscriptionWriter {
     /// The segment's visible text: accumulated for deltas, the latest for replacements.
     text: String,
     expression: Option<(&'static str, String)>,
-    /// The one place a delta becomes visible text. Per segment; replacements split whole.
-    visible: VisibleStream,
+    /// A host's plain strings, read for markup.
+    host: crate::transcription::HostText,
     pending: Vec<RoomTranscriptionEffect>,
     raw_bytes: usize,
 }
@@ -83,7 +82,7 @@ impl RoomTranscriptionWriter {
             segment,
             text: String::new(),
             expression: None,
-            visible: VisibleStream::new(),
+            host: Default::default(),
             pending: Vec::new(),
             raw_bytes: 0,
         }
@@ -117,35 +116,33 @@ impl RoomTranscriptionWriter {
         self.pending.push(effect);
     }
 
-    pub fn visible_of(&mut self, raw: &str) -> Visible {
-        if self.is_delta_stream {
-            self.visible.push(raw)
-        } else {
-            // A replacement is whole text every time; don't hold a trailing space back.
-            Visible::of(raw)
-        }
+    /// A host's plain string: its markup taken out, its delivery kept. The chunk it was read as.
+    pub fn capture_text(&mut self, text: &str) -> TranscriptChunk {
+        let chunk = self.host.push(text);
+        self.capture(&chunk);
+        chunk
     }
 
-    /// Visible text: the first of a segment opens it, the rest extend (or replace) it. Blank text
-    /// (a tag still held, a markup-only chunk) opens nothing.
-    pub fn capture(&mut self, visible: Visible, timing: Option<&TranscriptChunk>) {
+    /// A piece of the transcript: the first of a segment opens it, the rest extend (or replace)
+    /// it. A piece with no text (a delivery alone) opens nothing.
+    pub fn capture(&mut self, chunk: &TranscriptChunk) {
         if self.writing == Writing::Closed {
             return;
         }
         if self.expression.is_none() {
-            self.expression = expression_attribute(&visible.tags);
+            self.expression = chunk.expression.as_deref().and_then(delivery_attribute);
         }
-        if visible.is_blank() {
+        if chunk.text.is_empty() {
             return;
         }
         let opening = self.writing != Writing::Segment;
         if opening {
             self.text.clear();
         }
-        let payload = encode(&visible.text, self.json_format, timing);
+        let payload = encode(&chunk.text, self.json_format, Some(chunk));
         let segment = self.segment.clone();
         if self.is_delta_stream {
-            self.text.push_str(&visible.text);
+            self.text.push_str(&chunk.text);
             if opening {
                 // The leading expression also goes on the opening header, so a frontend can
                 // colour the turn at once.
@@ -158,7 +155,7 @@ impl RoomTranscriptionWriter {
             }
             self.send(RoomTranscriptionEffect::Write { payload });
         } else {
-            self.text = visible.text;
+            self.text.clone_from(&chunk.text);
             self.send(RoomTranscriptionEffect::OpenStream {
                 segment,
                 is_final: false,
@@ -172,15 +169,9 @@ impl RoomTranscriptionWriter {
         self.writing = Writing::Segment;
     }
 
-    /// The segment's text is complete: whatever the stripper held is visible now, then the end.
-    /// `next_segment` belongs to the following text, including when this segment was empty.
+    /// The segment's text is complete. `next_segment` belongs to the following text, including
+    /// when this segment was empty.
     pub fn end_segment(&mut self, next_segment: String) {
-        if self.is_delta_stream {
-            let held = self.visible.flush();
-            if !held.is_blank() {
-                self.capture(held, None);
-            }
-        }
         match self.writing {
             Writing::Closed => {}
             Writing::Idle => self.reset(Writing::Idle),
@@ -238,7 +229,7 @@ impl RoomTranscriptionWriter {
         self.text.clear();
         self.expression.take();
         self.writing = next;
-        self.visible = VisibleStream::new();
+        self.host.reset();
         self.raw_bytes = 0;
     }
 }
@@ -592,11 +583,9 @@ mod tests {
     #[test]
     fn text_first_released_at_segment_end_keeps_its_reserved_identity() {
         let mut writer = RoomTranscriptionWriter::new(true, false, "SG_first".into());
-        // Trailing whitespace is held by the markup stripper until the segment ends.
-        let visible = writer.visible_of(" ");
-        writer.capture(visible, None);
-        assert!(writer.take_effects().is_empty());
-        writer.end_segment("SG_next".into());
+        // was: a trailing blank was held by the markup stripper until the segment ended; the
+        // transcript arrives settled now, so it is written at once, under the reserved identity
+        writer.capture(&TranscriptChunk::new(" "));
         assert_eq!(
             writer.take_effects(),
             [
@@ -611,6 +600,12 @@ mod tests {
                     text: " ".into(),
                     is_final: false,
                 },
+            ]
+        );
+        writer.end_segment("SG_next".into());
+        assert_eq!(
+            writer.take_effects(),
+            [
                 RoomTranscriptionEffect::CloseStream { is_final: true, expression: None },
                 RoomTranscriptionEffect::PublishLegacy {
                     segment: "SG_first".into(),
@@ -619,8 +614,7 @@ mod tests {
                 },
             ]
         );
-        let visible = writer.visible_of("next");
-        writer.capture(visible, None);
+        writer.capture(&TranscriptChunk::new("next"));
         assert!(matches!(
             &writer.take_effects()[0],
             RoomTranscriptionEffect::OpenStream { segment, .. } if segment == "SG_next"
@@ -630,16 +624,14 @@ mod tests {
     #[test]
     fn disconnection_retires_the_open_identity_and_closed_outputs_cannot_reopen() {
         let mut writer = RoomTranscriptionWriter::new(true, false, "SG_first".into());
-        let visible = writer.visible_of("first");
-        writer.capture(visible, None);
+        writer.capture(&TranscriptChunk::new("first"));
         writer.clear_effects();
         writer.disconnected("SG_reconnected".into());
         assert_eq!(
             writer.take_effects(),
             [RoomTranscriptionEffect::CloseStream { is_final: true, expression: None }]
         );
-        let visible = writer.visible_of("reconnected");
-        writer.capture(visible, None);
+        writer.capture(&TranscriptChunk::new("reconnected"));
         assert!(matches!(
             &writer.take_effects()[0],
             RoomTranscriptionEffect::OpenStream { segment, .. } if segment == "SG_reconnected"
@@ -648,8 +640,7 @@ mod tests {
         writer.clear_effects();
         writer.end_segment("SG_unused".into());
         writer.disconnected("SG_also_unused".into());
-        let visible = writer.visible_of("late");
-        writer.capture(visible, None);
+        writer.capture(&TranscriptChunk::new("late"));
         assert!(writer.closed());
         assert!(writer.take_effects().is_empty());
     }
@@ -662,14 +653,14 @@ mod tests {
         let mut writer = RoomTranscriptionWriter::new(false, false, "SG_1".into());
         let subject = Subject::default();
         for text in ["the", "the cat", "the cat sat"] {
-            let visible = writer.visible_of(text);
-            writer.capture(visible, None);
+            let visible = TranscriptChunk::new(text);
+            writer.capture(&visible);
             admission.submit(&mut writer, &subject).unwrap();
         }
         for n in 0..8 {
-            let visible = writer.visible_of("next");
+            let visible = TranscriptChunk::new("next");
             writer.end_segment(format!("SG_{}", n + 2));
-            writer.capture(visible, None);
+            writer.capture(&visible);
             admission.submit(&mut writer, &subject).unwrap();
         }
         let effects = queued(&mut admission);
@@ -696,8 +687,8 @@ mod tests {
         let mut writer = RoomTranscriptionWriter::new(true, false, "SG_1".into());
         let subject = Subject::default();
         for text in ["one ", "two ", "three"] {
-            let visible = writer.visible_of(text);
-            writer.capture(visible, None);
+            let visible = TranscriptChunk::new(text);
+            writer.capture(&visible);
             admission.submit(&mut writer, &subject).unwrap();
         }
         assert_eq!(
@@ -723,8 +714,7 @@ mod tests {
         let mut admission = Admission::default();
         let mut writer = RoomTranscriptionWriter::new(true, false, "SG_1".into());
         let first = Subject { participant: Some("first".into()), ..Subject::default() };
-        let visible = writer.visible_of("hello");
-        writer.capture(visible, None);
+        writer.capture(&TranscriptChunk::new("hello"));
         admission.submit(&mut writer, &first).unwrap();
         writer.end_segment("SG_2".into());
         admission.submit(&mut writer, &Subject::default()).unwrap();
@@ -739,8 +729,8 @@ mod tests {
         let subject = Subject::default();
         let mut failures = 0;
         for n in 0..4 {
-            let visible = writer.visible_of(&"x".repeat(MAX_STREAM_BYTES / 3));
-            writer.capture(visible, None);
+            let visible = TranscriptChunk::new("x".repeat(MAX_STREAM_BYTES / 3));
+            writer.capture(&visible);
             writer.end_segment(format!("SG_{}", n + 2));
             failures += usize::from(admission.submit(&mut writer, &subject).is_err());
         }

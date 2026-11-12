@@ -105,7 +105,7 @@ class TTSv2(tts.TTS):
                 linear16 streaming path.
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
             base_url (str): Base URL for Deepgram Flux TTS API. Defaults to "https://api.deepgram.com/v2/speak"
-            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
+            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to `livekit.agents.tokenize.WordTokenizer`.
             http_session (http.HttpSession): Optional HTTP session to use for requests.
             mip_opt_out (bool): Opt out of the Deepgram Model Improvement Program. Defaults to
                 False (requests may be used to improve models). See https://dpgr.am/deepgram-mip
@@ -122,7 +122,7 @@ class TTSv2(tts.TTS):
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
 
         if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+            word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptionsV2(
             model=model,

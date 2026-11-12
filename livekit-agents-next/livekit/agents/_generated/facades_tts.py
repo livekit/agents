@@ -176,7 +176,7 @@ class StreamAdapter(TTS):
 
         Args:
             tts: The non-streaming TTS.
-            sentence_tokenizer: What splits the text; blingfire's sentences by default.
+            sentence_tokenizer: What splits the text; `tokenize.SentenceTokenizer`'s sentences by default.
             text_pacing: Batches sentences as the audio plays out; ``True`` for the default
                 ``SentenceStreamPacer``.
         """

@@ -22,7 +22,8 @@ use lk_agents_net::transport::HttpRequest;
 use request::build_request;
 use tokio::sync::mpsc;
 
-use crate::llm::parse::{ChoiceAccumulator, TagFilter, WireChunk, usage_chunk};
+use crate::llm::model_text::SaidText;
+use crate::llm::parse::{ChoiceAccumulator, WireChunk, usage_chunk};
 use futures_util::StreamExt;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
 pub use lk_agents_core::request::Policy;
@@ -121,7 +122,7 @@ impl GatewayLlm {
         let (tx, rx) = mpsc::channel(OBSERVATION_QUEUE);
         Ok(LlmChunks {
             id: self.requests.fetch_add(1, Ordering::Relaxed),
-            think_tags: models::think_tags(&opts.model),
+            model_syntax: models::model_syntax(&opts.model),
             phase: Phase::Pending(policy),
             rx,
             reporter: Reporter { tx, clock: self.clock.clone() },
@@ -382,7 +383,8 @@ struct Accepted {
     attempts: Request,
     /// The current attempt's response assembly; a retry starts over.
     choices: ChoiceAccumulator,
-    filter: TagFilter,
+    /// What the attempt has said: once anything has, a failure is final.
+    said: SaidText,
     /// Since when the consumer has been waiting, if it is.
     demand: Option<Ts>,
 }
@@ -390,7 +392,7 @@ struct Accepted {
 /// One request's chunks, in order, then its outcome.
 pub struct LlmChunks {
     id: u64,
-    think_tags: (&'static str, &'static str),
+    model_syntax: lk_agents_core::lexer::ModelSyntax,
     phase: Phase,
     rx: mpsc::Receiver<Stamped<Event>>,
     reporter: Reporter<Event>,
@@ -474,7 +476,7 @@ impl LlmChunks {
         self.phase = Phase::Accepted(Box::new(Accepted {
             attempts,
             choices: ChoiceAccumulator::new(),
-            filter: TagFilter::new(self.think_tags.0, self.think_tags.1),
+            said: SaidText::new(self.model_syntax, None),
             demand: None,
         }));
         self.now = now;
@@ -526,10 +528,12 @@ impl LlmChunks {
                 a.attempts.progress(attempt, at);
                 if a.attempts.current() == Some(attempt) {
                     for choice in &chunk.choices {
-                        if let Some(parsed) =
-                            a.choices.parse_choice(&chunk.id, choice, &mut a.filter)
-                        {
-                            if parsed.has_response() {
+                        if let Some(parsed) = a.choices.parse_choice(&chunk.id, choice) {
+                            // reasoning is never shown, so an attempt that only reasoned retries
+                            let delta = parsed.delta.as_ref();
+                            let text = delta.and_then(|d| d.content.as_deref()).unwrap_or("");
+                            let calls = delta.is_some_and(|d| !d.tool_calls.is_empty());
+                            if !a.said.push(text).is_empty() || calls {
                                 a.attempts.delivered();
                             }
                             self.ready.push_back(parsed);
@@ -556,7 +560,7 @@ impl LlmChunks {
                 Step::Launch(attempt) => {
                     if let Phase::Accepted(a) = &mut self.phase {
                         a.choices = ChoiceAccumulator::new();
-                        a.filter = TagFilter::new(self.think_tags.0, self.think_tags.1);
+                        a.said = SaidText::new(self.model_syntax, None);
                     }
                     self.start_attempt(attempt);
                 }

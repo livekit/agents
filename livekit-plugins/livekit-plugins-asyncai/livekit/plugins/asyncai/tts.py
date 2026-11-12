@@ -98,7 +98,7 @@ class TTS(tts.TTS):
                 read from the ASYNCAI_API_KEY environment variable.
             http_session (http.HttpSession | None, optional): An existing HttpSession to
                 use. If not provided, the job's shared session is used.
-            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
+            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.SentenceTokenizer`.
             base_url (str, optional): The base URL for the Async API. Defaults to "https://api.async.com".
         """
 
@@ -133,7 +133,7 @@ class TTS(tts.TTS):
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
         self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+            tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
         )
 
     @property

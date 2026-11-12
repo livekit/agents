@@ -147,13 +147,9 @@ class TTS(tts.TTS):
             ),
             allow_insecure_base_url=allow_insecure_base_url,
         )
-        if is_given(tokenizer):
-            self._sentence_tokenizer = tokenizer
-        else:
-            try:
-                self._sentence_tokenizer = tokenize.blingfire.SentenceTokenizer()
-            except Exception:
-                self._sentence_tokenizer = tokenize.basic.SentenceTokenizer()
+        self._sentence_tokenizer = (
+            tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
+        )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._pools: dict[TTSSessionConfig, utils.ConnectionPool[AsyncStreamingTTSSession]] = {}

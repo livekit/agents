@@ -138,7 +138,7 @@ class TTS(tts.TTS):
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
             credentials (google.auth.credentials.Credentials, optional): A credentials object to use directly, e.g. from Workload Identity Federation, where credentials are obtained in memory and never exist on disk. Takes precedence over ``credentials_info`` and ``credentials_file``. Default is NOT_GIVEN.
-            tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
+            tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Defaults to `livekit.agents.tokenize.SentenceTokenizer`.
             custom_pronunciations (CustomPronunciations, optional): Custom pronunciations for the TTS. Default is None.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
             enable_ssml (bool, optional): Whether to enable SSML support. Default is False.
@@ -200,7 +200,7 @@ class TTS(tts.TTS):
                 voice_params.name = "Charon"
 
         if not is_given(tokenizer):
-            tokenizer = tokenize.blingfire.SentenceTokenizer()
+            tokenizer = tokenize.SentenceTokenizer()
 
         pronunciations = None if not is_given(custom_pronunciations) else custom_pronunciations
 

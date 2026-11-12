@@ -32,16 +32,16 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-      - name: Test cache publication, locations, archives, and native tokenization
+      - name: Test cache publication, locations and archives
         shell: bash
-        run: cargo test --locked --manifest-path rust/Cargo.toml -p lk-agents-media --features blingfire
+        run: cargo test --locked --manifest-path rust/Cargo.toml -p lk-agents-media
       - name: Build native debug symbols with the platform compiler
         shell: bash
         env:
           LK_AGENTS_NATIVE_DEBUG: '1'
-        run: cargo test --locked --manifest-path rust/Cargo.toml -p lk-agents-media --features blingfire
+        run: cargo test --locked --manifest-path rust/Cargo.toml -p lk-agents-media
       - name: Reuse native artifacts with a different Cargo target directory
         shell: bash
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/second cargo target
-        run: cargo test --locked --manifest-path rust/Cargo.toml -p lk-agents-media --features blingfire
+        run: cargo test --locked --manifest-path rust/Cargo.toml -p lk-agents-media

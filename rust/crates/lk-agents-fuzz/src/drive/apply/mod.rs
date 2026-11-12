@@ -653,6 +653,24 @@ impl Run {
             }
             _ => return false,
         };
+        // an expressive model opens its reply with reasoning and a delivery marker
+        let expressive;
+        let input = match input {
+            Input::LlmText { chat, text: AgentText(text) }
+                if self.setup.expressive_model
+                    && !text.is_empty()
+                    && self.expressive_opened.insert(chat.nth) =>
+            {
+                expressive = Input::LlmText {
+                    chat: *chat,
+                    text: AgentText(format!(
+                        "<think>planning the reply</think><expr type=\"expression\" label=\"warm\"/>{text}"
+                    )),
+                };
+                &expressive
+            }
+            _ => input,
+        };
         if !self.record.live().has(slot.kind, slot.nth) || !self.deliver_to(slot, input) {
             return false;
         }

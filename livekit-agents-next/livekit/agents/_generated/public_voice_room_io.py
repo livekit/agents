@@ -9,7 +9,7 @@ from .room_api import (
     AudioOutputOptions as AudioOutputOptions,
     RoomOptions as RoomOptions,
     TextInputOptions as TextInputOptions,
-    TextOutputOptions as TextOutputOptions,
+    TranscriptionOutputOptions as TranscriptionOutputOptions,
     VideoInputOptions as VideoInputOptions,
 )
 from .room_input_events import (
@@ -25,6 +25,6 @@ __all__: list[str] = [
     "AudioInputOptions",
     "VideoInputOptions",
     "AudioOutputOptions",
-    "TextOutputOptions",
+    "TranscriptionOutputOptions",
     "RoomOptions",
 ]

@@ -47,6 +47,8 @@ pub struct FakeWs {
     stall_sends: bool,
     /// Hold each handshake until notified: a slow connect.
     connect_gate: Option<Arc<tokio::sync::Notify>>,
+    /// Answer only once the client flushed its input, as the gateway finishes a synthesis.
+    after_flush: bool,
 }
 
 impl FakeWs {
@@ -60,6 +62,7 @@ impl FakeWs {
             hang_connect: false,
             stall_sends: false,
             connect_gate: None,
+            after_flush: false,
         }
     }
 
@@ -82,6 +85,13 @@ impl FakeWs {
     /// Finish each handshake only once `gate` is notified.
     pub fn connect_on(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
         self.connect_gate = Some(gate);
+        self
+    }
+
+    /// Hold the script until the client sends its final `session.flush`: a gateway answers a
+    /// synthesis once its input is complete.
+    pub fn after_flush(mut self) -> Self {
+        self.after_flush = true;
         self
     }
 
@@ -135,8 +145,11 @@ impl WsTransport for FakeWs {
             closed: Default::default(),
             stall: self.stall_sends,
         });
-        let receiver =
-            Box::new(FakeWsReceiver { incoming: self.incoming.clone(), keep_open: self.keep_open });
+        let receiver = Box::new(FakeWsReceiver {
+            incoming: self.incoming.clone(),
+            keep_open: self.keep_open,
+            flushed: self.after_flush.then(|| self.sent.clone()),
+        });
         Ok((sender, receiver))
     }
 }
@@ -181,12 +194,21 @@ impl WsSender for FakeWsSender {
 struct FakeWsReceiver {
     incoming: Incoming,
     keep_open: bool,
+    /// What the client sent, when the script waits for its flush.
+    flushed: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 #[async_trait]
 impl WsReceiver for FakeWsReceiver {
     async fn recv(&mut self) -> Result<WsMessage, TransportError> {
         loop {
+            let waiting = self.flushed.as_ref().is_some_and(|sent| {
+                !sent.lock().iter().any(|frame| frame.contains("\"session.flush\""))
+            });
+            if waiting {
+                tokio::task::yield_now().await;
+                continue;
+            }
             if let Some(msg) = self.incoming.lock().pop_front() {
                 return msg;
             }

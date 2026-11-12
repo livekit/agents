@@ -96,7 +96,7 @@ class TTS(tts.TTS):
             )
         self._api_key = resolved_key
         if tokenizer is None:
-            tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+            tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
         self._opts = _TTSOptions(
             voice=voice,
             language=language,

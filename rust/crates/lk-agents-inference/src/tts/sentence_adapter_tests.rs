@@ -665,8 +665,8 @@ fn a_source_that_never_reaches_a_real_sentence_cannot_wedge_the_worker_it_runs_o
 }
 
 // Catches: markup spoken aloud by a non-streaming TTS under expressive (the adapter is its
-// only lowering path), a sentence split inside a marker (the splitter not asked to be
-// xml-aware), and a synthesis with expressive off lowered.
+// only lowering path), a sentence split inside a marker (the splitter not asked to keep markup
+// whole), and a synthesis with expressive off lowered.
 
 #[tokio::test]
 async fn under_expressive_each_sentence_is_lowered_to_the_providers_markup() {
@@ -675,12 +675,12 @@ async fn under_expressive_each_sentence_is_lowered_to_the_providers_markup() {
     for on in [true, false] {
         let tts =
             Arc::new(FakeTts { markup: "cartesia", ..Arc::into_inner(FakeTts::new(1)).unwrap() });
-        let xml_aware = Arc::new(AtomicBool::new(!on));
-        let seen = xml_aware.clone();
+        let expressive = Arc::new(AtomicBool::new(!on));
+        let seen = expressive.clone();
         let adapter = StreamAdapter::new(
             tts.clone(),
-            Arc::new(move |xml| {
-                seen.store(xml, Ordering::Relaxed);
+            Arc::new(move |on| {
+                seen.store(on, Ordering::Relaxed);
                 Box::new(DotSplitter::default())
             }),
             lk_agents_core::tts::markup::text_processor_factory(),
@@ -693,7 +693,7 @@ async fn under_expressive_each_sentence_is_lowered_to_the_providers_markup() {
         sink.push(said.into()).unwrap();
         sink.end_input();
         let out = drain(source).await.unwrap();
-        assert_eq!(xml_aware.load(Ordering::Relaxed), on, "xml-aware only while markup flows");
+        assert_eq!(expressive.load(Ordering::Relaxed), on, "markup kept only while it flows");
         let want = if on {
             markup.convert(&markup.normalize(said)).trim().to_owned()
         } else {
@@ -706,4 +706,126 @@ async fn under_expressive_each_sentence_is_lowered_to_the_providers_markup() {
             assert_ne!(tts.texts()[0], said, "cartesia lowers `expr` to its own tags");
         }
     }
+}
+
+/// A sentence's TTFB runs from its submission to the provider, not from its first token.
+/// https://github.com/livekit/agents/pull/6300
+#[tokio::test]
+async fn ttfb_excludes_sentence_accumulation() {
+    let clock = Arc::new(lk_agents_abi::utils::clock::VirtualClock::new());
+    let adapter = StreamAdapter::new(
+        FakeTts::new(2),
+        Arc::new(|_| Box::new(DotSplitter::default())),
+        lk_agents_core::tts::markup::text_processor_factory(),
+        clock.clone(),
+    );
+    let (sink, mut source) =
+        adapter.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
+    sink.push("one".into()).unwrap();
+    clock.advance(Duration::from_secs(2));
+    sink.push(" two.".into()).unwrap();
+    sink.end_input();
+    while bounded("frame", source.next()).await.unwrap().is_some() {}
+
+    let ttfbs: Vec<Option<f64>> = source
+        .take_call_metrics(true)
+        .unwrap()
+        .into_iter()
+        .map(|m| match m {
+            AgentMetrics::Tts(t) => t.ttfb,
+            other => panic!("not a TTS record: {other:?}"),
+        })
+        .collect();
+    assert_eq!(ttfbs.len(), 1, "{ttfbs:?}");
+    let ttfb = ttfbs[0].expect("a first frame");
+    assert!(ttfb < 0.5, "TTFB {ttfb} includes the 2 s the sentence took to accumulate");
+}
+
+/// A user's sentence tokenizer: the sentences it was told to yield, whatever the text pushed.
+struct UserSentences(Mutex<VecDeque<String>>);
+
+impl lk_agents_abi::tts::stream_pacer::HostSentenceStream for UserSentences {
+    fn push_text(&self, _text: String) {}
+    fn flush(&self) {}
+    fn end_input(&self) {}
+    fn next(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::tokenize::TokenData>, ProviderError>,
+    > {
+        let token = self.0.lock().pop_front();
+        Box::pin(async move {
+            Ok(token.map(|token| lk_agents_abi::tokenize::TokenData {
+                segment_id: String::new(),
+                token,
+            }))
+        })
+    }
+    fn aclose(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+// Catches: a user's sentence tokenizer cutting inside a voice tag under expressive. Each half
+// is lowered alone, so the voice reads the second half of the tag aloud; a sentence of markup
+// alone is a synthesis with nothing to say.
+#[tokio::test]
+async fn a_user_tokenizer_never_splits_the_voices_tags() {
+    let markup = Markup::from_provider_key("cartesia");
+    let tts = Arc::new(FakeTts { markup: "cartesia", ..Arc::into_inner(FakeTts::new(1)).unwrap() });
+    let adapter = StreamAdapter::new(
+        tts.clone(),
+        Arc::new(|_| Box::new(DotSplitter::default())),
+        lk_agents_core::tts::markup::text_processor_factory(),
+        Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()),
+    );
+    let user = [
+        "Ha <expr type=\"sound\" ",
+        "label=\"laugh\"/> that was funny.",
+        "<expr type=\"emotion\" label=\"happy\"/>",
+        "See you soon.",
+    ];
+    let host = UserSentences(Mutex::new(user.iter().map(|s| (*s).to_owned()).collect()));
+    let (sink, source) = adapter
+        .open(&lk_agents_abi::telemetry::Cx::NONE, true, Some(Arc::new(host)))
+        .unwrap()
+        .split();
+    sink.end_input();
+    drain(source).await.unwrap();
+    let lowered = |s: &str| markup.convert(&markup.normalize(s)).trim().to_owned();
+    assert_eq!(
+        tts.texts(),
+        vec![
+            lowered("Ha <expr type=\"sound\" label=\"laugh\"/> that was funny."),
+            lowered("<expr type=\"emotion\" label=\"happy\"/>See you soon."),
+        ]
+    );
+}
+
+// Catches: a user tokenizer's sentences held to the end of the reply behind a wrapper the
+// model never closed.
+#[tokio::test]
+async fn an_unclosed_wrapper_does_not_hold_a_user_tokenizers_reply() {
+    let tts = Arc::new(FakeTts { markup: "cartesia", ..Arc::into_inner(FakeTts::new(1)).unwrap() });
+    let adapter = StreamAdapter::new(
+        tts.clone(),
+        Arc::new(|_| Box::new(DotSplitter::default())),
+        lk_agents_core::tts::markup::text_processor_factory(),
+        Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()),
+    );
+    let mut user = vec!["<expr type=\"prosody\" label=\"slow\">Slowly now.".to_owned()];
+    user.extend((0..40).map(|n| format!(" This is sentence number {n} of the reply.")));
+    let host = UserSentences(Mutex::new(user.into()));
+    let (sink, source) = adapter
+        .open(&lk_agents_abi::telemetry::Cx::NONE, true, Some(Arc::new(host)))
+        .unwrap()
+        .split();
+    sink.end_input();
+    drain(source).await.unwrap();
+    assert!(tts.texts().len() > 1, "the whole reply waited for its end: {:?}", tts.texts());
 }

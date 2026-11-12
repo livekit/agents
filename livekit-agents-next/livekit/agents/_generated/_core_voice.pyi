@@ -20,7 +20,7 @@ from livekit.agents.tts import TTS
 from livekit.agents.voice._session_bindings import SessionHost
 from livekit.agents.voice.agent_session import _SessionNodes
 from livekit.agents.voice.avatar import AudioReceiver, AvatarSession, VideoGenerator
-from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
+from livekit.agents.voice.io import AudioInput, AudioOutput, TranscriptionOutput, VideoInput
 from livekit.agents.voice.room_io import RemoteParticipant, TrackPublication
 from livekit.rtc import Room, RpcInterceptor, RpcInvocationData, VideoFrame
 
@@ -262,6 +262,8 @@ def _core_playback_begin(tracker: PlaybackTracker, segment: PlaybackSegment) -> 
 def _core_playback_current_segment(tracker: PlaybackTracker) -> PlaybackSegment | None: ...
 
 def _core_playback_note_capture(tracker: PlaybackTracker) -> PlaybackSegment: ...
+
+def _core_playback_withdraw_capture(tracker: PlaybackTracker) -> None: ...
 
 def _core_playback_started(
     tracker: PlaybackTracker,
@@ -625,7 +627,7 @@ class VoiceSession:
         """Select the destination for subsequent output segments. Current work retains its admitted
         binding, including when the same endpoint object is selected again.
         """
-    def set_transcription_output(self, sink: TextOutput | None) -> None:
+    def set_transcription_output(self, sink: TranscriptionOutput | None) -> None:
         """`session.output.transcription = ..` after `start()`: the next reply forwards into the new
         leg; one in flight keeps the leg it started with.
         """

@@ -177,11 +177,13 @@ impl RecordingFile<crate::ffmpeg::OggOpusEncoder, std::fs::File> {
         t0: Option<f64>,
         limits: FileLimits,
     ) -> Result<Self, RecordingFailure> {
-        let io = |error: std::io::Error| RecordingFailure::Io(error.to_string());
+        let created = |error: std::io::Error| {
+            RecordingFailure::Create(format!("{}: {error}", path.display()))
+        };
         if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(io)?;
+            std::fs::create_dir_all(parent).map_err(created)?;
         }
-        let file = std::fs::File::create(path).map_err(io)?;
+        let file = std::fs::File::create(path).map_err(created)?;
         let encoder = crate::ffmpeg::OggOpusEncoder::new(sample_rate, 2, bitrate)?;
         Ok(Self::new(encoder, file, sample_rate, t0, limits))
     }
@@ -296,22 +298,17 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
                 }
             }
             RecordingCommand::PlaybackStarted(created_at) => placer.on_playback_started(created_at),
-            RecordingCommand::Progress(started_at, offset, duration) => {
-                let (mut start, mut offset, mut remaining) = (started_at, offset, duration);
-                loop {
-                    between()?;
-                    let Some(placed) =
-                        placer.on_playback_progressed_chunk(start, offset, remaining, block)
-                    else {
-                        break;
-                    };
-                    let advanced = placed.started_at - start + placed.frame.duration();
-                    recorder.on_output_placed(&placed);
-                    start += advanced;
-                    offset += advanced;
-                    remaining -= advanced;
-                }
-            }
+            // The same report each time: the placer resumes after what it placed, so the chunks
+            // tile the report's own sample range with no rounding between them.
+            RecordingCommand::Progress(started_at, offset, duration) => loop {
+                between()?;
+                let Some(placed) =
+                    placer.on_playback_progressed_chunk(started_at, offset, duration, block)
+                else {
+                    break;
+                };
+                recorder.on_output_placed(&placed);
+            },
             RecordingCommand::PlaybackFinished(now, position) => loop {
                 between()?;
                 let Some(placed) = placer.on_playback_finished_chunk(now, position, block) else {
@@ -387,3 +384,7 @@ fn write<W: Write>(
     summary.bytes_written += bytes.len() as u64;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "file_tests.rs"]
+mod tests;

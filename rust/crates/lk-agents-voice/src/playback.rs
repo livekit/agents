@@ -92,6 +92,22 @@ impl PlaybackSegments {
         self.selected = None;
     }
 
+    /// The open segment holds nothing the sink took: a capture it refused, or one cancelled before
+    /// it took the frame, opened it. Its report will never come, so it is closed, and settled here
+    /// unreported: the segment, when it was still owed.
+    pub fn withdraw(&mut self) -> Option<PlaybackSegment> {
+        let segment = self.selected.filter(|_| self.capturing)?;
+        self.flush();
+        self.uncleared = Duration::ZERO;
+        let at = self.pending.iter().position(|s| *s == segment)?;
+        self.pending.remove(at);
+        self.finished += 1;
+        if at == 0 {
+            self.progressed = Duration::ZERO;
+        }
+        Some(segment)
+    }
+
     /// `_reset_playback_count`, plus: a parked wait is released with `interrupted` at what the
     /// open segment played (never the previous segment's finish), rather than left waiting.
     pub fn reset(&mut self) {
@@ -208,6 +224,34 @@ mod tests {
         s.captured(Duration::ZERO);
         s.flush();
         assert!(s.begin(PlaybackSegment { attachment: 4, segment: 2 }));
+    }
+
+    #[test]
+    fn a_withdrawn_capture_owes_no_report_and_frees_the_next_begin() {
+        let mut s = PlaybackSegments::default();
+        let refused = PlaybackSegment { attachment: 4, segment: 1 };
+        let next = PlaybackSegment { attachment: 4, segment: 2 };
+        assert!(s.begin(refused));
+        s.captured(HEARD);
+        let wait = s.wait();
+        assert_eq!(s.withdraw(), Some(refused));
+        assert!(s.settled(wait).is_some(), "a wait on the withdrawn segment is released");
+        assert!(!s.is_pending(refused));
+        assert!(!s.finished(refused, finished()), "a late report of it is refused");
+        assert!(s.begin(next));
+        s.captured(HEARD);
+        s.flush();
+        assert!(s.finished(next, finished()), "the next segment reports first in line");
+    }
+
+    #[test]
+    fn withdrawing_after_the_segment_reported_only_closes_it() {
+        let mut s = PlaybackSegments::default();
+        let segment = s.captured(HEARD);
+        assert!(s.finished(segment, finished()));
+        assert_eq!(s.withdraw(), None);
+        assert_eq!(s.withdraw(), None, "nothing is open");
+        assert_ne!(s.captured(HEARD), segment, "the next capture opens a segment of its own");
     }
 
     #[test]

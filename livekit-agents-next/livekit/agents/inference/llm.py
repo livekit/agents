@@ -121,7 +121,7 @@ class LLMStream(llm.LLMStream):
         )
         client = self._client.with_options(max_retries=0)
         retryable = True
-        parser = _core.LlmChoiceParser(self._model)
+        parser = _core.LlmChoiceParser()
         try:
             messages, _ = await self._chat_ctx.to_provider_format(format="openai")
             schemas = self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema)

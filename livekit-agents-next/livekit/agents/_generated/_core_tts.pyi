@@ -86,7 +86,7 @@ class TtsStreamAdapter:
         text_pacing: TextPacing | None = None,
     ) -> Self:
         """`tts` synthesizes each sentence of the text pushed; `sentence_tokenizer` splits it
-        (blingfire by default); `text_pacing` releases sentences as the audio plays out.
+        (`tokenize.SentenceTokenizer`'s by default); `text_pacing` releases sentences as the audio plays out.
         """
     @property
     def capabilities(self) -> TTSCapabilities:

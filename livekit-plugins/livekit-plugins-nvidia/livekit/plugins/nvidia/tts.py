@@ -70,7 +70,7 @@ class TTS(tts.TTS):
             sample_rate=16000,
             use_ssl=use_ssl,
             language_code=language_code,
-            word_tokenizer=tokenize.blingfire.SentenceTokenizer(),
+            word_tokenizer=tokenize.SentenceTokenizer(),
         )
         self._tts_service: riva.client.SpeechSynthesisService | None = None
 

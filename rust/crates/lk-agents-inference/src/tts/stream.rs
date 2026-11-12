@@ -134,6 +134,21 @@ mod tests {
         assert!(stream.push_text("late".into()).is_err());
         assert_eq!(*input.0.lock(), ["text"], "aclose must not speak pending text");
     }
+
+    /// Only a synthesis of text with words and no audio is a "no audio" failure.
+    /// https://github.com/livekit/agents/pull/2420
+    #[test]
+    fn only_text_with_words_requires_audio() {
+        use lk_agents_abi::tts::streams::SynthesisChecks as _;
+        for text in ["", " ", "\n\t "] {
+            assert_eq!(SynthesisChecks::validate_synthesis(text, 0.0, None), None, "{text:?}");
+        }
+        assert_eq!(
+            SynthesisChecks::validate_synthesis("Hello there.", 0.0, None).as_deref(),
+            Some("no audio frames were pushed for text: Hello there.")
+        );
+        assert_eq!(SynthesisChecks::validate_synthesis("Hello there.", 0.4, None), None);
+    }
 }
 
 pub struct SynthesisChecks;

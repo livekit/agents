@@ -32,6 +32,15 @@ class TranscriptChunk:
     start_time_offset: float | None = None
     """The source offset already applied by the stream adapter."""
     speaker_id: str | None = None
+    spoken: bool = True
+    """Whether the voice says this text. `False` is text the transcript shows with no speech
+    (markdown syntax, an emoji the voice skips, code, a link's URL): shown as soon as what comes
+    before it was heard, and never paced.
+    """
+    expression: str | None = None
+    """The delivery the model asked for from here on (an expression marker's label): what the
+    room publishes as `lk.expression`. The marker itself never reaches a transcript.
+    """
 
 
 TranscriptChunk.__annotations__ = get_annotations(TranscriptChunk, eval_str=True)

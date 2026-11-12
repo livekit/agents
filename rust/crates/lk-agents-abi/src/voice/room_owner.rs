@@ -1,4 +1,4 @@
-use crate::voice::io::{AudioInput, AudioOutput, Result, TextOutput, VideoInput};
+use crate::voice::io::{AudioInput, AudioOutput, Result, TranscriptionOutput, VideoInput};
 use crate::voice::room_io::{
     DeleteRoomRequested, ParticipantInfo, ParticipantLinked, ParticipantUnlinked, RoomIoConfig,
     TextInput,
@@ -81,7 +81,7 @@ pub trait RoomIo: Send + Sync {
     fn audio_input_leg(&self) -> Option<Arc<dyn RoomAudioInputPort>>;
     fn video_input(&self) -> Option<Arc<dyn RoomVideoInputPort>>;
     fn audio_output(&self) -> Option<Arc<dyn AudioOutput>>;
-    fn transcription_output(&self) -> Option<Arc<dyn TextOutput>>;
+    fn transcription_output(&self) -> Option<Arc<dyn TranscriptionOutput>>;
     fn wants_transcript_sync(&self, external_audio: bool) -> bool;
     fn linked_participant(&self) -> Option<ParticipantIdentity>;
     /// Starts the room's IO; its startup spans (the participant, its track, the agent's

@@ -12,19 +12,17 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
 type TokenizeFunctionsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::TokenizeFunctions;
-type TokenizeFunctionsTokenizeParagraphsOutput = ::std::vec::Vec<::std::string::String>;
-type TokenizeFunctionsHyphenateWordOutput = ::std::vec::Vec<::std::string::String>;
 
+/// The words of `text`, each with its character offsets: what `WordTokenizer` splits.
 #[pyfunction]
-#[pyo3(signature = (text, *, ignore_punctuation = true, split_character = false, retain_format = false))]
+#[pyo3(signature = (text, *, ignore_punctuation = true, retain_format = false))]
 pub fn split_words<'py>(
     py: Python<'py>,
     text: ::std::string::String,
     ignore_punctuation: bool,
-    split_character: bool,
     retain_format: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::split_words(text, ignore_punctuation, split_character, retain_format));
+    let out = py.detach(|| <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::split_words(text, ignore_punctuation, retain_format));
     ::pyo3::PyResult::Ok(
         ::pyo3::types::PyList::new(
             py,
@@ -62,355 +60,181 @@ pub fn replace_words<'py>(
         .transpose()
 }
 
-#[pyfunction]
-#[pyo3(signature = (text))]
-pub fn tokenize_paragraphs(
-    py: Python<'_>,
-    text: ::std::string::String,
-) -> PyResult<TokenizeFunctionsTokenizeParagraphsOutput> {
-    let out = py.detach(|| <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::tokenize_paragraphs(text));
-    ::pyo3::PyResult::Ok(out)
-}
-
-/// `hyphenate_word(word)`: the pieces, broken at the possible hyphenation points.
-#[pyfunction]
-#[pyo3(signature = (word))]
-pub fn hyphenate_word(
-    py: Python<'_>,
-    word: ::std::string::String,
-) -> PyResult<TokenizeFunctionsHyphenateWordOutput> {
-    let out = py.detach(|| <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::hyphenate_word(word));
-    ::pyo3::PyResult::Ok(out)
-}
-
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
-type HostTokenizationImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::HostTokenization;
+type SpeechSentenceTokenizerImpl = <crate::generated::implementations::Selected as super::Implementations>::SpeechSentenceTokenizer;
 
-#[pyfunction]
-#[pyo3(signature = (tokenize_fnc, text))]
-pub fn xml_tokenize<'py>(
-    py: Python<'py>,
-    tokenize_fnc: Bound<'_, PyAny>,
-    text: ::std::string::String,
-) -> PyResult<Bound<'py, PyAny>> {
-    let tokenize_fnc =
-        crate::generated::tokenize::TokenizerCallbackProxy::from_host(tokenize_fnc.as_any())?;
-    let out = py.detach(|| <HostTokenizationImpl as ::lk_agents_abi::tokenize::bindings::HostTokenization>::xml_tokenize(tokenize_fnc, text)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(&e))?;
-    ::pyo3::PyResult::Ok(
-        ::pyo3::types::PyList::new(
-            py,
-            out.into_iter()
-                .map(|x| crate::generated::records::tokenizer::token_span_to_py(py, x))
-                .collect::<PyResult<Vec<_>>>()?,
-        )?
-        .into_any(),
-    )
-}
-
-// Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
-type BasicWordTokenizerImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::WordTokenizer;
-type WordTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::String>;
-
-/// `tokenize.basic.WordTokenizer`'s engine.
-#[pyclass(frozen, name = "BasicWordTokenizer", module = "livekit.agents._core")]
-pub struct BasicWordTokenizer(pub(crate) ::std::sync::Arc<BasicWordTokenizerImpl>);
-
-#[pymethods]
-impl BasicWordTokenizer {
-    #[new]
-    #[pyo3(signature = (*, ignore_punctuation = true, split_character = false, retain_format = false))]
-    fn new(
-        py: Python<'_>,
-        ignore_punctuation: bool,
-        split_character: bool,
-        retain_format: bool,
-    ) -> PyResult<BasicWordTokenizer> {
-        let out = py.detach(|| {
-            <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::new(
-                ignore_punctuation,
-                split_character,
-                retain_format,
-            )
-        });
-        ::pyo3::PyResult::Ok(BasicWordTokenizer(::std::sync::Arc::new(out)))
-    }
-
-    #[pyo3(signature = (text, *, language = None))]
-    fn tokenize(
-        &self,
-        py: Python<'_>,
-        text: ::std::string::String,
-        language: ::std::option::Option<::std::string::String>,
-    ) -> PyResult<WordTokenizerTokenizeOutput> {
-        let out = py.detach(|| <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::tokenize(&self.0, text, language));
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[pyo3(name = "_core_split")]
-    #[pyo3(signature = (text))]
-    fn split<'py>(
-        &self,
-        py: Python<'py>,
-        text: ::std::string::String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let out = py.detach(|| {
-            <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::split(
-                &self.0, text,
-            )
-        });
-        ::pyo3::PyResult::Ok(
-            ::pyo3::types::PyList::new(
-                py,
-                out.into_iter()
-                    .map(|x| crate::generated::records::tokenizer::token_span_to_py(py, x))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )
-    }
-
-    #[getter]
-    #[pyo3(name = "_core_min_token_len")]
-    fn min_token_len(&self, py: Python<'_>) -> PyResult<usize> {
-        let out = py.detach(|| <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::min_token_len(&self.0));
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    #[pyo3(name = "_core_min_ctx_len")]
-    fn min_ctx_len(&self, py: Python<'_>) -> PyResult<usize> {
-        let out = py.detach(|| <BasicWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::WordTokenizer>::min_ctx_len(&self.0));
-        ::pyo3::PyResult::Ok(out)
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
-type BasicSentenceTokenizerImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::SentenceTokenizer;
-
-fn _extract_sentence_tokenizer_new_min_sentence_len(
+fn _extract_speech_sentence_tokenizer_new_min_words(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<SentenceTokenizerNewMinSentenceLenInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "min_sentence_len")
+) -> PyResult<SpeechSentenceTokenizerNewMinWordsInput> {
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "min_words")
 }
-type SentenceTokenizerNewMinSentenceLenInput = usize;
+type SpeechSentenceTokenizerNewMinWordsInput = usize;
 
-fn _extract_sentence_tokenizer_new_stream_context_len(
+fn _extract_speech_sentence_tokenizer_new_clause_words(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<SentenceTokenizerNewStreamContextLenInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "stream_context_len")
-}
-type SentenceTokenizerNewStreamContextLenInput = usize;
-type SentenceTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::String>;
-type SentenceTokenizerMaxTokenLenOutput = ::std::option::Option<usize>;
-
-/// `tokenize.basic.SentenceTokenizer`'s engine.
-#[pyclass(frozen, name = "BasicSentenceTokenizer", module = "livekit.agents._core")]
-pub struct BasicSentenceTokenizer(pub(crate) ::std::sync::Arc<BasicSentenceTokenizerImpl>);
-
-#[pymethods]
-impl BasicSentenceTokenizer {
-    #[new]
-    #[pyo3(signature = (*, language = "english".to_owned(), min_sentence_len = 20, stream_context_len = 10, retain_format = false))]
-    fn new(
-        py: Python<'_>,
-        language: ::std::string::String,
-        #[pyo3(from_py_with = _extract_sentence_tokenizer_new_min_sentence_len)]
-        min_sentence_len: SentenceTokenizerNewMinSentenceLenInput,
-        #[pyo3(from_py_with = _extract_sentence_tokenizer_new_stream_context_len)]
-        stream_context_len: SentenceTokenizerNewStreamContextLenInput,
-        retain_format: bool,
-    ) -> PyResult<BasicSentenceTokenizer> {
-        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::new(language, min_sentence_len, stream_context_len, retain_format));
-        ::pyo3::PyResult::Ok(BasicSentenceTokenizer(::std::sync::Arc::new(out)))
-    }
-
-    #[pyo3(signature = (text, *, language = None))]
-    fn tokenize(
-        &self,
-        py: Python<'_>,
-        text: ::std::string::String,
-        language: ::std::option::Option<::std::string::String>,
-    ) -> PyResult<SentenceTokenizerTokenizeOutput> {
-        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::tokenize(&self.0, text, language));
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[pyo3(name = "_core_split")]
-    #[pyo3(signature = (text))]
-    fn split<'py>(
-        &self,
-        py: Python<'py>,
-        text: ::std::string::String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::split(&self.0, text));
-        ::pyo3::PyResult::Ok(
-            ::pyo3::types::PyList::new(
-                py,
-                out.into_iter()
-                    .map(|x| crate::generated::records::tokenizer::token_span_to_py(py, x))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )
-    }
-
-    #[getter]
-    #[pyo3(name = "_core_min_token_len")]
-    fn min_token_len(&self, py: Python<'_>) -> PyResult<usize> {
-        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::min_token_len(&self.0));
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    #[pyo3(name = "_core_min_ctx_len")]
-    fn min_ctx_len(&self, py: Python<'_>) -> PyResult<usize> {
-        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::min_ctx_len(&self.0));
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    #[pyo3(name = "_core_max_token_len")]
-    fn max_token_len(&self, py: Python<'_>) -> PyResult<SentenceTokenizerMaxTokenLenOutput> {
-        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::max_token_len(&self.0));
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    #[pyo3(name = "_core_xml_aware")]
-    fn xml_aware(&self, py: Python<'_>) -> PyResult<bool> {
-        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::xml_aware(&self.0));
-        ::pyo3::PyResult::Ok(out)
+) -> PyResult<SpeechSentenceTokenizerNewClauseWordsInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<usize>(obj.as_any(), "clause_words")).map(Some)
     }
 }
+type SpeechSentenceTokenizerNewClauseWordsInput = ::std::option::Option<usize>;
 
-// Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
-type BlingfireSentenceTokenizerImpl = <crate::generated::implementations::Selected as super::Implementations>::BlingfireSentenceTokenizer;
-
-fn _extract_blingfire_sentence_tokenizer_new_min_sentence_len(
+fn _extract_speech_sentence_tokenizer_new_max_token_len(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<BlingfireSentenceTokenizerNewMinSentenceLenInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "min_sentence_len")
-}
-type BlingfireSentenceTokenizerNewMinSentenceLenInput = usize;
-
-fn _extract_blingfire_sentence_tokenizer_new_stream_context_len(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<BlingfireSentenceTokenizerNewStreamContextLenInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "stream_context_len")
-}
-type BlingfireSentenceTokenizerNewStreamContextLenInput = usize;
-
-fn _extract_blingfire_sentence_tokenizer_new_max_token_len(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<BlingfireSentenceTokenizerNewMaxTokenLenInput> {
+) -> PyResult<SpeechSentenceTokenizerNewMaxTokenLenInput> {
     if obj.is_none() {
         Ok(None)
     } else {
         (crate::py_values::number_from_py::<usize>(obj.as_any(), "max_token_len")).map(Some)
     }
 }
-type BlingfireSentenceTokenizerNewMaxTokenLenInput = ::std::option::Option<usize>;
+type SpeechSentenceTokenizerNewMaxTokenLenInput = ::std::option::Option<usize>;
+type SpeechSentenceTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::String>;
+type SpeechSentenceTokenizerMaxTokenLenOutput = ::std::option::Option<usize>;
 
-fn _extract_blingfire_sentence_tokenizer_new_min_token_len(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<BlingfireSentenceTokenizerNewMinTokenLenInput> {
-    if obj.is_none() {
-        Ok(None)
-    } else {
-        (crate::py_values::number_from_py::<usize>(obj.as_any(), "min_token_len")).map(Some)
-    }
-}
-type BlingfireSentenceTokenizerNewMinTokenLenInput = ::std::option::Option<usize>;
-type BlingfireSentenceTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::String>;
-type BlingfireSentenceTokenizerMaxTokenLenOutput = ::std::option::Option<usize>;
-
-/// `tokenize.blingfire.SentenceTokenizer`'s engine.
-#[pyclass(frozen, name = "BlingfireSentenceTokenizer", module = "livekit.agents._core")]
-pub struct BlingfireSentenceTokenizer(pub(crate) ::std::sync::Arc<BlingfireSentenceTokenizerImpl>);
+/// `tokenize.SentenceTokenizer`'s engine.
+#[pyclass(frozen, name = "SpeechSentenceTokenizer", module = "livekit.agents._core")]
+pub struct SpeechSentenceTokenizer(pub(crate) ::std::sync::Arc<SpeechSentenceTokenizerImpl>);
 
 #[pymethods]
-impl BlingfireSentenceTokenizer {
+impl SpeechSentenceTokenizer {
     #[new]
-    #[pyo3(signature = (*, min_sentence_len = 20, stream_context_len = 10, retain_format = false, max_token_len = None, min_token_len = None, xml_aware = false))]
+    #[pyo3(signature = (*, min_words = 4, clause_words = None, retain_format = false, max_token_len = None))]
     fn new(
         py: Python<'_>,
-        #[pyo3(from_py_with = _extract_blingfire_sentence_tokenizer_new_min_sentence_len)]
-        min_sentence_len: BlingfireSentenceTokenizerNewMinSentenceLenInput,
-        #[pyo3(from_py_with = _extract_blingfire_sentence_tokenizer_new_stream_context_len)]
-        stream_context_len: BlingfireSentenceTokenizerNewStreamContextLenInput,
+        #[pyo3(from_py_with = _extract_speech_sentence_tokenizer_new_min_words)]
+        min_words: SpeechSentenceTokenizerNewMinWordsInput,
+        #[pyo3(from_py_with = _extract_speech_sentence_tokenizer_new_clause_words)]
+        clause_words: SpeechSentenceTokenizerNewClauseWordsInput,
         retain_format: bool,
-        #[pyo3(from_py_with = _extract_blingfire_sentence_tokenizer_new_max_token_len)]
-        max_token_len: BlingfireSentenceTokenizerNewMaxTokenLenInput,
-        #[pyo3(from_py_with = _extract_blingfire_sentence_tokenizer_new_min_token_len)]
-        min_token_len: BlingfireSentenceTokenizerNewMinTokenLenInput,
-        xml_aware: bool,
-    ) -> PyResult<BlingfireSentenceTokenizer> {
-        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::new(min_sentence_len, stream_context_len, retain_format, max_token_len, min_token_len, xml_aware));
-        ::pyo3::PyResult::Ok(BlingfireSentenceTokenizer(::std::sync::Arc::new(out)))
+        #[pyo3(from_py_with = _extract_speech_sentence_tokenizer_new_max_token_len)] max_token_len: SpeechSentenceTokenizerNewMaxTokenLenInput,
+    ) -> PyResult<SpeechSentenceTokenizer> {
+        let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::new(min_words, clause_words, retain_format, max_token_len));
+        ::pyo3::PyResult::Ok(SpeechSentenceTokenizer(::std::sync::Arc::new(out)))
     }
 
-    /// The sentences of `text`, markup kept whole when `xml_aware`.
+    /// The sentences of `text`, batched as the stream batches them.
     #[pyo3(signature = (text, *, language = None))]
     fn tokenize(
         &self,
         py: Python<'_>,
         text: ::std::string::String,
         language: ::std::option::Option<::std::string::String>,
-    ) -> PyResult<BlingfireSentenceTokenizerTokenizeOutput> {
-        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::tokenize(&self.0, text, language));
+    ) -> PyResult<SpeechSentenceTokenizerTokenizeOutput> {
+        let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::tokenize(&self.0, text, language));
         ::pyo3::PyResult::Ok(out)
     }
 
-    #[pyo3(name = "_core_split")]
-    #[pyo3(signature = (text))]
-    fn split<'py>(
-        &self,
-        py: Python<'py>,
-        text: ::std::string::String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::split(&self.0, text));
-        ::pyo3::PyResult::Ok(
-            ::pyo3::types::PyList::new(
-                py,
-                out.into_iter()
-                    .map(|x| crate::generated::records::tokenizer::token_span_to_py(py, x))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )
-    }
-
-    #[getter]
-    #[pyo3(name = "_core_min_token_len")]
-    fn min_token_len(&self, py: Python<'_>) -> PyResult<usize> {
-        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::min_token_len(&self.0));
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    #[pyo3(name = "_core_min_ctx_len")]
-    fn min_ctx_len(&self, py: Python<'_>) -> PyResult<usize> {
-        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::min_ctx_len(&self.0));
-        ::pyo3::PyResult::Ok(out)
+    #[pyo3(name = "_core_stream")]
+    fn stream(&self, py: Python<'_>) -> PyResult<super::tokenize::SpeechSentenceStream> {
+        let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::stream(&self.0));
+        ::pyo3::PyResult::Ok(super::tokenize::SpeechSentenceStream(out))
     }
 
     #[getter]
     #[pyo3(name = "_core_max_token_len")]
-    fn max_token_len(
-        &self,
-        py: Python<'_>,
-    ) -> PyResult<BlingfireSentenceTokenizerMaxTokenLenOutput> {
-        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::max_token_len(&self.0));
+    fn max_token_len(&self, py: Python<'_>) -> PyResult<SpeechSentenceTokenizerMaxTokenLenOutput> {
+        let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::max_token_len(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
+type SpeechSentenceStreamImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SpeechSentenceStream;
+type SpeechSentenceStreamPushOutput = ::std::vec::Vec<::std::string::String>;
+type SpeechSentenceStreamFlushOutput = ::std::vec::Vec<::std::string::String>;
+
+/// `tokenize.SentenceTokenizer`'s stream: a sentence goes out once no text to come could
+/// change it.
+#[pyclass(name = "SpeechSentenceStream", module = "livekit.agents._core")]
+pub struct SpeechSentenceStream(pub(crate) SpeechSentenceStreamImpl);
+
+#[pymethods]
+impl SpeechSentenceStream {
+    /// The sentences ``text`` completes.
+    #[pyo3(signature = (text))]
+    fn push(&mut self, text: ::std::string::String) -> PyResult<SpeechSentenceStreamPushOutput> {
+        let out = <SpeechSentenceStreamImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceStream>::push(&mut self.0, text);
         ::pyo3::PyResult::Ok(out)
     }
 
-    #[getter]
-    #[pyo3(name = "_core_xml_aware")]
-    fn xml_aware(&self, py: Python<'_>) -> PyResult<bool> {
-        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::xml_aware(&self.0));
+    fn flush(&mut self) -> PyResult<SpeechSentenceStreamFlushOutput> {
+        let out = <SpeechSentenceStreamImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceStream>::flush(&mut self.0);
+        ::pyo3::PyResult::Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
+type SpeechWordTokenizerImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SpeechWordTokenizer;
+type SpeechWordTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::String>;
+
+/// `tokenize.WordTokenizer`'s engine.
+#[pyclass(frozen, name = "SpeechWordTokenizer", module = "livekit.agents._core")]
+pub struct SpeechWordTokenizer(pub(crate) ::std::sync::Arc<SpeechWordTokenizerImpl>);
+
+#[pymethods]
+impl SpeechWordTokenizer {
+    #[new]
+    #[pyo3(signature = (*, ignore_punctuation = true, retain_format = false))]
+    fn new(
+        py: Python<'_>,
+        ignore_punctuation: bool,
+        retain_format: bool,
+    ) -> PyResult<SpeechWordTokenizer> {
+        let out = py.detach(|| <SpeechWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechWordTokenizer>::new(ignore_punctuation, retain_format));
+        ::pyo3::PyResult::Ok(SpeechWordTokenizer(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (text, *, language = None))]
+    fn tokenize(
+        &self,
+        py: Python<'_>,
+        text: ::std::string::String,
+        language: ::std::option::Option<::std::string::String>,
+    ) -> PyResult<SpeechWordTokenizerTokenizeOutput> {
+        let out = py.detach(|| <SpeechWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechWordTokenizer>::tokenize(&self.0, text, language));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[pyo3(name = "_core_stream")]
+    fn stream(&self, py: Python<'_>) -> PyResult<super::tokenize::SpeechWordStream> {
+        let out = py.detach(|| <SpeechWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechWordTokenizer>::stream(&self.0));
+        ::pyo3::PyResult::Ok(super::tokenize::SpeechWordStream(out))
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
+type SpeechWordStreamImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SpeechWordStream;
+type SpeechWordStreamPushOutput = ::std::vec::Vec<::std::string::String>;
+type SpeechWordStreamFlushOutput = ::std::vec::Vec<::std::string::String>;
+
+/// `tokenize.WordTokenizer`'s stream: a word goes out once the next one proves it whole.
+#[pyclass(name = "SpeechWordStream", module = "livekit.agents._core")]
+pub struct SpeechWordStream(pub(crate) SpeechWordStreamImpl);
+
+#[pymethods]
+impl SpeechWordStream {
+    /// The words ``text`` completes.
+    #[pyo3(signature = (text))]
+    fn push(&mut self, text: ::std::string::String) -> PyResult<SpeechWordStreamPushOutput> {
+        let out =
+            <SpeechWordStreamImpl as ::lk_agents_abi::tokenize::bindings::SpeechWordStream>::push(
+                &mut self.0,
+                text,
+            );
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    fn flush(&mut self) -> PyResult<SpeechWordStreamFlushOutput> {
+        let out =
+            <SpeechWordStreamImpl as ::lk_agents_abi::tokenize::bindings::SpeechWordStream>::flush(
+                &mut self.0,
+            );
         ::pyo3::PyResult::Ok(out)
     }
 }
@@ -452,7 +276,7 @@ pub struct TokenBuffer(pub(crate) TokenBufferImpl);
 #[pymethods]
 impl TokenBuffer {
     #[new]
-    #[pyo3(signature = (tokenize_fnc, *, min_token_len, min_ctx_len, max_token_len = None, xml_aware = false))]
+    #[pyo3(signature = (tokenize_fnc, *, min_token_len, min_ctx_len, max_token_len = None))]
     fn new(
         py: Python<'_>,
         tokenize_fnc: Bound<'_, PyAny>,
@@ -462,7 +286,6 @@ impl TokenBuffer {
         min_ctx_len: BufferedTokensNewMinCtxLenInput,
         #[pyo3(from_py_with = _extract_buffered_tokens_new_max_token_len)]
         max_token_len: BufferedTokensNewMaxTokenLenInput,
-        xml_aware: bool,
     ) -> PyResult<TokenBuffer> {
         let tokenize_fnc =
             crate::generated::tokenize::TokenizerCallbackProxy::from_host(tokenize_fnc.as_any())?;
@@ -472,7 +295,6 @@ impl TokenBuffer {
                 min_token_len,
                 min_ctx_len,
                 max_token_len,
-                xml_aware,
             )
         });
         ::pyo3::PyResult::Ok(TokenBuffer(out))

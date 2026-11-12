@@ -257,7 +257,7 @@ pub struct TtsStreamAdapter(pub(crate) ::std::sync::Arc<TtsStreamAdapterImpl>);
 #[pymethods]
 impl TtsStreamAdapter {
     /// `tts` synthesizes each sentence of the text pushed; `sentence_tokenizer` splits it
-    /// (blingfire by default); `text_pacing` releases sentences as the audio plays out.
+    /// (`tokenize.SentenceTokenizer`'s by default); `text_pacing` releases sentences as the audio plays out.
     #[new]
     #[pyo3(signature = (*, tts, sentence_tokenizer = None, text_pacing = None))]
     fn new(

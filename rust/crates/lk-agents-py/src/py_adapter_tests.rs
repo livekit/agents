@@ -32,10 +32,10 @@ mod models {
             let output = configured.audio_output.unwrap().publish;
             assert_eq!(output.source, TrackSource::ScreenshareAudio);
             assert_eq!(output.name, "speaker");
-            assert_eq!(configured.text_output.unwrap().sync_transcription, Some(false));
+            assert_eq!(configured.transcription_output.unwrap().sync_transcription, Some(false));
             let disabled = read("disabled").unwrap();
             assert!(disabled.audio_input.is_none() && disabled.audio_output.is_none());
-            assert!(disabled.text_output.is_none());
+            assert!(disabled.transcription_output.is_none());
             assert!(!disabled.text_input && !disabled.video_input);
             assert!(read("default").unwrap().audio_input.unwrap().auto_gain_control);
             assert!(read("selector").unwrap().audio_input.unwrap().auto_gain_control);

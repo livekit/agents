@@ -46,7 +46,7 @@ fn conversation_updates_publish_once_per_cycle_and_include_view_only_edits() {
 #[test]
 fn terminal_provider_release_does_not_reacquire_resources_from_stale_selection_slots() {
     use crate::agent_session::effects::VoiceEffect;
-    use lk_agents_abi::resources::{ResourceId, TextOutputRef};
+    use lk_agents_abi::resources::{ResourceId, TranscriptionOutputRef};
 
     let mut driver = driver();
     driver.take_outbox();
@@ -55,7 +55,7 @@ fn terminal_provider_release_does_not_reacquire_resources_from_stale_selection_s
         Some(VoiceEvent::Host(Sent {
             origin: VoiceCommandOrigin::Host,
             command: Command::Activity(ActivityCommand::SetTranscriptionOutput(Some(
-                TextOutputRef { id, label: "owned transcript output".into() },
+                TranscriptionOutputRef { id, label: "owned transcript output".into() },
             ))),
         })),
         Now { at: lk_agents_abi::Ts::ZERO, wall: std::time::UNIX_EPOCH },

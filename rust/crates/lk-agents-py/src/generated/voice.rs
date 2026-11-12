@@ -1125,6 +1125,27 @@ pub fn _core_playback_note_capture<'py>(
 }
 
 #[pyfunction]
+#[pyo3(signature = (tracker))]
+pub fn _core_playback_withdraw_capture(py: Python<'_>, tracker: Bound<'_, PyAny>) -> PyResult<()> {
+    crate::py_calls::check_pid()?;
+    let tracker = crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(
+        tracker.as_any(),
+    )
+    .ok_or_else(|| {
+        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+            "tracker",
+            ": expected a `_core.PlaybackTracker`"
+        ))
+    })?;
+    py.detach(|| {
+        <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::withdraw_capture(
+            tracker,
+        )
+    });
+    Ok(())
+}
+
+#[pyfunction]
 #[pyo3(signature = (tracker, segment, created_at))]
 pub fn _core_playback_started(
     py: Python<'_>,
@@ -3219,7 +3240,7 @@ impl VoiceSession {
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         let sink = sink
-            .map(|v| crate::generated::voice::TextOutputProxy::from_host(v.as_any()))
+            .map(|v| crate::generated::voice::TranscriptionOutputProxy::from_host(v.as_any()))
             .transpose()?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::set_transcription_output(&self.0, sink)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
@@ -7277,6 +7298,40 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         })
     }
 
+    fn withdraw_capture(&self) -> ::std::result::Result<(), ::lk_agents_abi::voice::io::IoError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_withdraw_capture")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let () = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(())
+        })
+    }
+
     fn sample_rate(&self) -> ::std::option::Option<u32> {
         ::std::clone::Clone::clone(&self.sample_rate)
     }
@@ -7428,9 +7483,9 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/voice/io.rs.
 
-/// [`::lk_agents_abi::voice::io::TextOutput`] over a host `livekit.agents.voice.io.TextOutput`.
+/// [`::lk_agents_abi::voice::io::TranscriptionOutput`] over a host `livekit.agents.voice.io.TranscriptionOutput`.
 #[derive(Clone)]
-pub struct TextOutputProxy {
+pub struct TranscriptionOutputProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
@@ -7440,13 +7495,13 @@ pub struct TextOutputProxy {
     label: ::std::string::String,
 }
 
-impl TextOutputProxy {
+impl TranscriptionOutputProxy {
     /// A registered native class as itself, any other host object behind this proxy.
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::TextOutput>> {
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::TextOutput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>(obj)
         {
             return Ok(native);
         }
@@ -7457,9 +7512,9 @@ impl TextOutputProxy {
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::TextOutput>> {
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::TextOutput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>(obj)
         {
             return Ok(native);
         }
@@ -7469,7 +7524,7 @@ impl TextOutputProxy {
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::TextOutput>> {
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -7485,7 +7540,7 @@ impl TextOutputProxy {
             let v = obj.getattr("label")?;
             v.extract::<::std::string::String>()?
         };
-        Ok(TextOutputProxy {
+        Ok(TranscriptionOutputProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
             context,
             notifier: ::std::default::Default::default(),
@@ -7494,7 +7549,7 @@ impl TextOutputProxy {
     }
 }
 
-impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
+impl ::lk_agents_abi::voice::io::TranscriptionOutput for TranscriptionOutputProxy {
     fn label(&self) -> &str {
         &self.label
     }
@@ -7511,7 +7566,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         let text_arg = ::std::clone::Clone::clone(text);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "TextOutput.capture_transcript",
+            "TranscriptionOutput.capture_transcript",
             &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
@@ -7553,7 +7608,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         let text_arg = text.to_owned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "TextOutput.capture_text",
+            "TranscriptionOutput.capture_text",
             &crate::py_calls::calling_context(&self.context),
             &[],
             cx,
@@ -7587,7 +7642,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "TextOutput.flush",
+            "TranscriptionOutput.flush",
             &crate::py_calls::calling_context(&self.context),
             &[],
             false,
@@ -7602,7 +7657,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "TextOutput.on_attached",
+            "TranscriptionOutput.on_attached",
             &crate::py_calls::calling_context(&self.context),
             &[],
             false,
@@ -7621,7 +7676,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "TextOutput.on_detached",
+            "TranscriptionOutput.on_detached",
             &crate::py_calls::calling_context(&self.context),
             &[],
             false,

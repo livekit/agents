@@ -91,9 +91,9 @@ impl Run {
                 },
             }),
             video_input: setup.room_camera,
-            text_output: Some(TextOutputConfig {
+            transcription_output: Some(TranscriptionOutputConfig {
                 sync_transcription: Some(setup.sync_transcription),
-                ..TextOutputConfig::default()
+                ..TranscriptionOutputConfig::default()
             }),
             ..RoomIoConfig::default()
         };
@@ -111,6 +111,7 @@ impl Run {
                     timing: setup.timing(),
                     streaming: !setup.chunked_tts,
                     alignment: setup.tts_alignment,
+                    markup: setup.tts_markup,
                 },
             ) as Arc<Tts>
         });
@@ -223,7 +224,10 @@ impl Run {
                 },
             ),
             host_transcription_output: legs.is_none().then(|| {
-                fakes::FakeTextOutput::new(registry.clone(), setup.text_output_raises) as _
+                fakes::FakeTranscriptionOutput::new(
+                    registry.clone(),
+                    setup.transcription_output_raises,
+                ) as _
             }),
             hook_bound: setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
             max_unrecoverable_errors: setup.max_unrecoverable_errors,
@@ -379,6 +383,7 @@ impl Run {
             streams: BTreeMap::new(),
             handles: BTreeMap::new(),
             utterances: BTreeMap::new(),
+            expressive_opened: Default::default(),
             mics: host_mic
                 .into_iter()
                 .map(|(_, frames, nth)| (nth, (Mic::Host(frames), 0)))

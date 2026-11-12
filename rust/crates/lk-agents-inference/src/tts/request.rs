@@ -1,9 +1,10 @@
+use super::fed::{Fed, TextLog};
 use crate::{retry, telemetry};
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::utils::stream::{Entry, ProviderStream};
+use lk_agents_abi::utils::stream::Entry;
 use lk_agents_abi::{
-    ApiConnectOptions, BoxFuture, Clock, Closed, DuplexStream, StreamInput, StreamOutput,
-    SynthesizedAudio, Ts, Tts, TtsSink, TtsSource,
+    ApiConnectOptions, BoxFuture, Clock, DuplexStream, StreamInput, SynthesizedAudio, Tts, TtsSink,
+    TtsSource,
 };
 use lk_agents_net::signal;
 use std::sync::Arc;
@@ -60,17 +61,13 @@ pub async fn stream(
     let attempt = ApiConnectOptions { max_retry: 0, ..options };
     let provider = tts.with_conn_options(&attempt).unwrap_or_else(|| tts.clone());
     let stop = tokio_util::sync::CancellationToken::new();
-    let input = Arc::new(Input {
-        state: signal::Shared::new(InputState { entries: Vec::new(), sink: None, error: None }),
-        stop: stop.clone(),
-    });
+    let input = Arc::new(Input { entries: signal::Shared::new(Vec::new()), stop: stop.clone() });
     let (cx, pending) = (cx.clone(), input.clone());
     let open = Arc::new(move || {
         let (provider, cx, input) = (provider.clone(), cx.clone(), pending.clone());
         Box::pin(async move {
             let (sink, source) = provider.stream(&cx, expressive).await?.split();
-            let sink: Arc<dyn StreamInput<String>> = Arc::from(sink);
-            Ok(Box::new(Attempt { input, sink, source, installed: false }) as TtsSource)
+            Ok(Box::new(Fed::new(input, sink, source)) as TtsSource)
         }) as BoxFuture<'static, _>
     });
     let output = retry::stream(&options, clock, open, |_| true, report(tts, observer), stop).await;
@@ -87,68 +84,27 @@ fn report(tts: Arc<dyn Tts>, observer: Option<retry::Observer>) -> retry::Observ
 }
 
 struct Input {
-    /// A failed child sink wakes the attempt reading it.
-    state: signal::Shared<InputState>,
+    entries: signal::Shared<Vec<Entry<String>>>,
     stop: tokio_util::sync::CancellationToken,
-}
-
-struct InputState {
-    entries: Vec<Entry<String>>,
-    sink: Option<Arc<dyn StreamInput<String>>>,
-    error: Option<ProviderError>,
 }
 
 impl Input {
     fn send(&self, entry: Entry<String>) -> Result<(), ProviderError> {
-        let sink = self.state.with(|state| {
-            if self.stop.is_cancelled() || matches!(state.entries.last(), Some(Entry::EndInput)) {
+        self.entries.modify(|entries| {
+            if self.stop.is_cancelled() || matches!(entries.last(), Some(Entry::EndInput)) {
                 return Err(lk_agents_abi::errors::ApiError::new("synthesis input is closed")
-                    .with_retryable(false));
+                    .with_retryable(false)
+                    .into());
             }
-            state.entries.push(entry.clone());
-            Ok(state.sink.clone())
-        })?;
-        let Some(sink) = sink else { return Ok(()) };
-        let sent = match entry {
-            Entry::Item(text) => sink.push(text),
-            Entry::Flush => sink.flush(),
-            Entry::EndInput => {
-                sink.end_input();
-                Ok(())
-            }
-        };
-        if let Err(error) = sent {
-            let previous = self.state.modify(|state| state.error.replace(error));
-            drop(previous);
-        }
-        Ok(())
+            entries.push(entry);
+            Ok(())
+        })
     }
+}
 
-    async fn install(&self, sink: Arc<dyn StreamInput<String>>) -> Result<(), ProviderError> {
-        let mut cursor = 0;
-        loop {
-            let mut previous = None;
-            let entries = self.state.with(|state| {
-                if cursor == state.entries.len() {
-                    previous = Some((state.error.take(), state.sink.replace(sink.clone())));
-                    return None;
-                }
-                Some(state.entries[cursor..].to_vec())
-            });
-            let Some(entries) = entries else {
-                // The replaced sink and error drop outside the lock.
-                drop(previous);
-                return Ok(());
-            };
-            for entry in entries {
-                sink.send(entry).await?;
-                cursor += 1;
-            }
-        }
-    }
-
-    async fn failure(&self) -> ProviderError {
-        self.state.wait_until(|state| state.error.take()).await
+impl TextLog for Input {
+    fn entry(&self, index: usize) -> BoxFuture<'_, Entry<String>> {
+        Box::pin(self.entries.wait_until(move |entries| entries.get(index).cloned()))
     }
 }
 
@@ -163,51 +119,5 @@ impl StreamInput<String> for Sink {
     }
     fn end_input(&self) {
         let _ = self.0.send(Entry::EndInput);
-    }
-}
-
-struct Attempt {
-    input: Arc<Input>,
-    sink: Arc<dyn StreamInput<String>>,
-    source: TtsSource,
-    installed: bool,
-}
-
-impl StreamOutput<SynthesizedAudio> for Attempt {
-    fn next(&mut self) -> BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
-        Box::pin(async move {
-            if !self.installed {
-                self.input.install(self.sink.clone()).await?;
-                self.installed = true;
-            }
-            tokio::select! {
-                biased;
-                error = self.input.failure() => Err(error),
-                next = self.source.next() => next,
-            }
-        })
-    }
-    fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
-        let previous = self.input.state.with(|state| state.sink.take());
-        drop(previous);
-        self.sink.end_input();
-        self.source.close(deadline)
-    }
-}
-impl ProviderStream<SynthesizedAudio> for Attempt {
-    fn started_time(&self) -> Option<f64> {
-        self.source.started_time()
-    }
-    fn take_call_metrics(
-        &mut self,
-        in_flight: bool,
-    ) -> Option<Vec<lk_agents_abi::metrics::base::AgentMetrics>> {
-        self.source.take_call_metrics(in_flight)
-    }
-    fn call_ledger(&self) -> Option<lk_agents_abi::utils::stream::CallLedger> {
-        self.source.call_ledger()
-    }
-    fn report_retries(&mut self, report: lk_agents_abi::utils::stream::RetryReport) {
-        self.source.report_retries(report);
     }
 }

@@ -526,9 +526,10 @@ mod tts {
         fb.aclose();
     }
 
-    // Catches: a `TokenLog` still pointing at a provider the chain has finished with.
+    // Catches: a token pushed after the input ended reaching a provider the chain has finished
+    // with, or accepted as if it would be spoken.
     #[tokio::test]
-    async fn the_child_sink_is_released_when_the_stream_that_owns_it_ends() {
+    async fn a_token_after_the_input_ended_is_refused_and_reaches_no_provider() {
         let (good, pushed) = built("good", 24_000, 1, 1, 0, false);
         let fb = tts_chain(vec![good]);
 
@@ -542,7 +543,7 @@ mod tts {
         drain_tts(&mut source).await;
 
         let before = pushed.lock().len();
-        sink.push("late".into()).expect("push");
+        assert!(sink.push("late".into()).is_err(), "the input is over");
         assert_eq!(
             pushed.lock().len(),
             before,

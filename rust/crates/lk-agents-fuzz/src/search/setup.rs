@@ -64,7 +64,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         room_camera: false,
         failing_processors: None,
         sync_transcription: rng.bool(),
-        text_output_raises: false,
+        transcription_output_raises: false,
         lagging_output: false,
         pausable_output: rng.bool(),
         speech_gap_ms: rng.bool().then(|| ms(rng)),
@@ -101,6 +101,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         conn: None,
         chunked_tts: false,
         tts_alignment: TtsAlignment::None,
+        tts_markup: "",
+        expressive_model: false,
         aligned_transcript: None,
         agent_aligned_transcript: None,
         tools_refuse_cancel: false,
@@ -209,5 +211,10 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     });
     // A call in four is stressed: its fakes panic or hang now and then, its waits probed.
     setup.stress = (rng.u8(0..4) == 0).then(|| rng.u64(..));
+    // The voice's dialect, drawn last so every seed keeps the setup it drew before: under one, the
+    // fake model writes reasoning and markup into its replies.
+    setup.tts_markup =
+        ["", "", "cartesia", "inworld", "xai", "fishaudio", "gemini"][rng.usize(0..7)];
+    setup.expressive_model = !setup.tts_markup.is_empty();
     setup
 }

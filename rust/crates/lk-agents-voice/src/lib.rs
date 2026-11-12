@@ -31,6 +31,7 @@ pub mod tool_executor;
 pub mod trace;
 pub mod transcription;
 pub mod turn;
+pub mod unplayed_audio;
 pub mod workflows;
 
 pub mod tokenize;

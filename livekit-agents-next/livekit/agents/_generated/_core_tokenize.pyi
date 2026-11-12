@@ -16,9 +16,9 @@ def split_words(
     text: str,
     *,
     ignore_punctuation: bool = True,
-    split_character: bool = False,
     retain_format: bool = False,
-) -> list[TokenSpan]: ...
+) -> list[TokenSpan]:
+    """The words of `text`, each with its character offsets: what `WordTokenizer` splits."""
 
 def replace_words(
     text: str,
@@ -26,76 +26,41 @@ def replace_words(
     hold_last_word: bool = False,
 ) -> ReplacedWords | None: ...
 
-def tokenize_paragraphs(text: str) -> list[str]: ...
-
-def hyphenate_word(word: str) -> list[str]:
-    """`hyphenate_word(word)`: the pieces, broken at the possible hyphenation points."""
-
-def xml_tokenize(
-    tokenize_fnc: Callable[[str], Iterable[TokenizerToken]],
-    text: str,
-) -> list[TokenSpan]: ...
-
-class BasicWordTokenizer:
-    """`tokenize.basic.WordTokenizer`'s engine."""
+class SpeechSentenceTokenizer:
+    """`tokenize.SentenceTokenizer`'s engine."""
     def __new__(
         cls,
         *,
-        ignore_punctuation: bool = True,
-        split_character: bool = False,
-        retain_format: bool = False,
-    ) -> Self: ...
-    def tokenize(self, text: str, *, language: str | None = None) -> list[str]: ...
-    def _core_split(self, text: str) -> list[TokenSpan]: ...
-    @property
-    def _core_min_token_len(self) -> int: ...
-    @property
-    def _core_min_ctx_len(self) -> int: ...
-
-class BasicSentenceTokenizer:
-    """`tokenize.basic.SentenceTokenizer`'s engine."""
-    def __new__(
-        cls,
-        *,
-        language: str = "english",
-        min_sentence_len: int = 20,
-        stream_context_len: int = 10,
-        retain_format: bool = False,
-    ) -> Self: ...
-    def tokenize(self, text: str, *, language: str | None = None) -> list[str]: ...
-    def _core_split(self, text: str) -> list[TokenSpan]: ...
-    @property
-    def _core_min_token_len(self) -> int: ...
-    @property
-    def _core_min_ctx_len(self) -> int: ...
-    @property
-    def _core_max_token_len(self) -> int | None: ...
-    @property
-    def _core_xml_aware(self) -> bool: ...
-
-class BlingfireSentenceTokenizer:
-    """`tokenize.blingfire.SentenceTokenizer`'s engine."""
-    def __new__(
-        cls,
-        *,
-        min_sentence_len: int = 20,
-        stream_context_len: int = 10,
+        min_words: int = 4,
+        clause_words: int | None = None,
         retain_format: bool = False,
         max_token_len: int | None = None,
-        min_token_len: int | None = None,
-        xml_aware: bool = False,
     ) -> Self: ...
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        """The sentences of `text`, markup kept whole when `xml_aware`."""
-    def _core_split(self, text: str) -> list[TokenSpan]: ...
-    @property
-    def _core_min_token_len(self) -> int: ...
-    @property
-    def _core_min_ctx_len(self) -> int: ...
+        """The sentences of `text`, batched as the stream batches them."""
+    def _core_stream(self) -> SpeechSentenceStream: ...
     @property
     def _core_max_token_len(self) -> int | None: ...
-    @property
-    def _core_xml_aware(self) -> bool: ...
+
+class SpeechSentenceStream:
+    """`tokenize.SentenceTokenizer`'s stream: a sentence goes out once no text to come could
+    change it.
+    """
+    def push(self, text: str) -> list[str]:
+        """The sentences ``text`` completes."""
+    def flush(self) -> list[str]: ...
+
+class SpeechWordTokenizer:
+    """`tokenize.WordTokenizer`'s engine."""
+    def __new__(cls, *, ignore_punctuation: bool = True, retain_format: bool = False) -> Self: ...
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]: ...
+    def _core_stream(self) -> SpeechWordStream: ...
+
+class SpeechWordStream:
+    """`tokenize.WordTokenizer`'s stream: a word goes out once the next one proves it whole."""
+    def push(self, text: str) -> list[str]:
+        """The words ``text`` completes."""
+    def flush(self) -> list[str]: ...
 
 class TokenBuffer:
     def __new__(
@@ -105,7 +70,6 @@ class TokenBuffer:
         min_token_len: int,
         min_ctx_len: int,
         max_token_len: int | None = None,
-        xml_aware: bool = False,
     ) -> Self: ...
     def push(self, text: str) -> list[str]:
         """The tokens ``text`` proves complete, batched."""

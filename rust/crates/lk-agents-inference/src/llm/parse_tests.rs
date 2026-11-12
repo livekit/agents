@@ -8,7 +8,7 @@ fn chunk(v: serde_json::Value) -> WireChunk {
 fn parse(acc: &mut ChoiceAccumulator, v: serde_json::Value) -> Option<LlmChunk> {
     let c = chunk(v);
     let choice = c.choices.first().cloned().unwrap_or_default();
-    acc.parse_choice(&c.id, &choice, &mut TagFilter::new("<think>", "</think>"))
+    acc.parse_choice(&c.id, &choice)
 }
 
 fn text_of(chunk: &LlmChunk) -> Option<&str> {
@@ -33,7 +33,7 @@ fn a_null_tool_calls_list_decodes_as_empty() {
     .expect("a null tool_calls must not fail the chunk");
     let mut acc = ChoiceAccumulator::new();
     let got = acc
-        .parse_choice(&c.id, c.choices.first().unwrap(), &mut TagFilter::new("<think>", "</think>"))
+        .parse_choice(&c.id, c.choices.first().unwrap())
         .expect("the content delta must survive");
     assert_eq!(text_of(&got), Some("Hi"));
     // The same for `choices`.
@@ -222,55 +222,90 @@ fn a_usage_chunk_carries_no_delta() {
     assert!(!got.has_response());
 }
 
-fn strip_all(filter: &mut TagFilter, chunks: &[&str]) -> String {
-    let mut out = String::new();
-    for (i, chunk) in chunks.iter().enumerate() {
-        let is_final = i + 1 == chunks.len();
-        if let Some(visible) = filter.strip(Some((*chunk).to_owned()), is_final) {
-            out.push_str(&visible);
+/// Argument fragments before the tool name and null name/argument fragments still deliver each
+/// call once with its exact name and arguments. https://github.com/livekit/agents/issues/8248
+/// https://github.com/livekit/agents/issues/864
+#[test]
+fn arguments_before_tool_name_are_preserved() {
+    let mut acc = ChoiceAccumulator::new();
+    let mut emitted = Vec::new();
+    for delta in [
+        json!({"index": 0, "function": {"arguments": "{\"stray\""}}),
+        json!({"index": 0, "id": "call_1", "function": {"name": "get_weather", "arguments": null}}),
+        json!({"index": 0, "function": {"name": null, "arguments": null}}),
+        json!({"index": 0, "function": {"arguments": "{\"city\""}}),
+        json!({"index": 0, "function": {"name": "", "arguments": ":\"Paris\"}"}}),
+        json!({"index": 1, "id": "call_2", "function": {"name": "get_time", "arguments": null}}),
+        json!({"index": 1, "function": {"arguments": "{}"}}),
+    ] {
+        let got =
+            parse(&mut acc, json!({"id": "c", "choices": [{"delta": {"tool_calls": [delta]}}]}));
+        emitted.extend(got.iter().flat_map(|c| calls(c).to_vec()));
+    }
+    let done = parse(
+        &mut acc,
+        json!({"id": "c", "choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+    );
+    emitted.extend(done.iter().flat_map(|c| calls(c).to_vec()));
+    let got: Vec<_> = emitted
+        .iter()
+        .map(|c| (c.call_id.as_str(), c.name.as_str(), c.arguments.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [("call_1", "get_weather", r#"{"city":"Paris"}"#), ("call_2", "get_time", "{}")]
+    );
+}
+
+/// List-shaped content parts (`[{"type": "text", "text": ...}]`) decode like scalar chunks.
+/// https://github.com/livekit/agents/issues/6323
+#[test]
+#[ignore = "https://github.com/livekit/agents/issues/6323 reproduces: list-shaped delta content fails to decode the chunk"]
+fn structured_text_parts_decode_like_scalar_content() {
+    let mut acc = ChoiceAccumulator::new();
+    let mut visible = String::new();
+    for parts in [
+        json!([{"type": "text", "text": "<thi"}]),
+        json!([{"type": "text", "text": "nk>plan"}, {"type": "text", "text": "</think>Hel"}]),
+        json!([{"type": "text", "text": "lo"}]),
+    ] {
+        let c: WireChunk =
+            serde_json::from_value(json!({"id": "c", "choices": [{"delta": {"content": parts}}]}))
+                .expect("list-shaped content decodes");
+        let choice = c.choices.first().cloned().unwrap_or_default();
+        if let Some(chunk) = acc.parse_choice(&c.id, &choice) {
+            visible.push_str(text_of(&chunk).unwrap_or_default());
         }
     }
-    out
+    assert_eq!(visible, "<think>plan</think>Hello");
 }
 
-// Catches, per row: the reasoning block emitted; a tag matched per chunk rather than across
-// them; a partial marker held forever when it is not a tag (or when the stream ends on it); a
-// stream ending mid-block emitting what it held; the text between two blocks lost; a panic on a
-// multi-byte boundary.
+/// A tool call after a text preamble is visible before `finish_reason`, so the preamble's speech
+/// is not held until the arguments finish. https://github.com/livekit/agents/issues/5826
 #[test]
-fn the_thinking_filter_hides_exactly_the_blocks() {
-    for (chunks, want) in [
-        (&["<think>I should be brief</think>Hello there"][..], "Hello there"),
-        (&["<thi", "nk>hidden", " more hidden</thi", "nk>", "visible"], "visible"),
-        (&["if a < b then", " done"], "if a < b then done"),
-        (&["trailing <thi"], "trailing <thi"),
-        (&["visible<think>cut off here"], "visible"),
-        (&["<think>one</think>middle<think>two</think>end"], "middleend"),
-        (&["héllo 🎉 wörld"], "héllo 🎉 wörld"),
+#[ignore = "https://github.com/livekit/agents/issues/5826 reproduces: tool-only deltas emit nothing until finish_reason"]
+fn tool_boundary_is_visible_before_completion() {
+    let mut acc = ChoiceAccumulator::new();
+    let preamble =
+        parse(&mut acc, json!({"id": "c", "choices": [{"delta": {"content": "One moment."}}]}));
+    assert_eq!(preamble.as_ref().and_then(text_of), Some("One moment."));
+    let mut before_finish = Vec::new();
+    for delta in [
+        json!({"index": 0, "id": "call_1", "function": {"name": "lookup", "arguments": ""}}),
+        json!({"index": 0, "function": {"arguments": "{\"q\":"}}),
+        json!({"index": 0, "function": {"arguments": "\"x\"}"}}),
     ] {
-        assert_eq!(
-            strip_all(&mut TagFilter::new("<think>", "</think>"), chunks),
-            want,
-            "{chunks:?}"
-        );
+        before_finish.extend(parse(
+            &mut acc,
+            json!({"id": "c", "choices": [{"delta": {"tool_calls": [delta]}}]}),
+        ));
     }
-}
-
-// Catches: `Some("")` collapsing to `None`.
-#[test]
-fn an_empty_delta_stays_an_empty_delta_and_a_hidden_one_stays_none() {
-    let mut f = TagFilter::new("<think>", "</think>");
-    assert_eq!(f.strip(Some(String::new()), false), Some(String::new()));
-    // Inside a block: content arrived, nothing is visible.
-    assert_eq!(f.strip(Some("<think>hidden".to_owned()), false), None);
-    assert_eq!(f.strip(None, false), None);
-}
-
-// Catches: the tag table being ignored (Gemma's delimiters are not `<think>`).
-#[test]
-fn for_model_takes_the_tags_from_the_table() {
-    let mut f = TagFilter::for_model("google/gemma-4-31b-it");
-    let (start, end) = crate::llm::models::think_tags("google/gemma-4-31b-it");
-    let got = strip_all(&mut f, &[&format!("{start}hidden{end}shown")]);
-    assert_eq!(got, "shown", "the model's own tags were not used");
+    assert!(!before_finish.is_empty(), "nothing marks the tool call until the stream finishes");
+    let done = parse(
+        &mut acc,
+        json!({"id": "c", "choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+    )
+    .expect("the finish reason closes the call");
+    assert_eq!(calls(&done).len(), 1);
+    assert_eq!(calls(&done)[0].arguments, r#"{"q":"x"}"#);
 }

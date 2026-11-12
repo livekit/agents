@@ -1,5 +1,5 @@
-//! Builds (or finds) the trimmed static ffmpeg and the C shims for the `ffmpeg` and `blingfire`
-//! features, from `LK_CODECS_FFMPEG_PREFIX`, `vendor/ffmpeg-<pin>/` or `vendor/fetch.sh`.
+//! Builds (or finds) the trimmed static ffmpeg and the C shims for the `ffmpeg`
+//! feature, from `LK_CODECS_FFMPEG_PREFIX`, `vendor/ffmpeg-<pin>/` or `vendor/fetch.sh`.
 //! The configure line is LGPL-only: never add `--enable-gpl` or `--enable-nonfree`.
 
 #![allow(
@@ -10,15 +10,11 @@
     reason = "a build script reads native configuration and talks to Cargo through stdout"
 )]
 
-mod blingfire;
 mod cache;
 mod settings;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=LK_AGENTS_NATIVE_DEBUG");
-    if std::env::var_os("CARGO_FEATURE_BLINGFIRE").is_some() {
-        blingfire::build();
-    }
 
     println!("cargo:rerun-if-changed=csrc/lk_agents_media.c");
     println!("cargo:rerun-if-changed=vendor/ffmpeg.pin");

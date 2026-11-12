@@ -12,7 +12,7 @@ use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_core::tokenize::{WordTokenizerOptions, count_words};
+use lk_agents_core::tokenize::spoken_words;
 use std::time::Duration;
 
 pub use paused_speech::PausedSpeech;
@@ -209,12 +209,6 @@ pub enum InterruptRefusal {
     /// The current speech is already interrupted.
     AlreadyInterrupted,
     NotAllowed,
-}
-
-/// Splits per character so a CJK utterance can reach `min_words`. The one word count for
-/// interruption, commit and transcript triggers.
-pub fn count_min_words(text: &str) -> usize {
-    count_words(text, WordTokenizerOptions { split_character: true, ..Default::default() })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -606,7 +600,7 @@ impl VoiceDriver {
         }
         // Guard 4: skipped with no transcript source; counts the final plus the live interim.
         let min_words = options.min_words() as usize;
-        if stt_enabled && min_words > 0 && count_min_words(&turn.current_transcript()) < min_words {
+        if stt_enabled && min_words > 0 && spoken_words(&turn.current_transcript()) < min_words {
             return Err(R::TooFewWords);
         }
         // Guard 5.

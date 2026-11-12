@@ -64,7 +64,6 @@ path = "src/tls_tests.rs"
 [features]
 media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]
 media-images = ["lk-agents-media/images", "lk-agents-inference/images"]
-media-blingfire = ["lk-agents-media/blingfire"]
 # Test-only: what a deterministic simulation installs on a session (`VoiceSession::probe`) and
 # reads back from it, and storage's fault wrappers it runs the voice lane's SQLite backend under.
 # Enabled by the fuzzer.

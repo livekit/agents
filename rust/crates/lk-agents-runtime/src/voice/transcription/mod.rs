@@ -1,7 +1,7 @@
 use crate::telemetry;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputCapabilities, AudioOutputExt, PlaybackEvent, PlaybackFinished,
-    PlaybackObserver, PlaybackSegment, PlaybackTracker, Result, TextOutput,
+    PlaybackObserver, PlaybackSegment, PlaybackTracker, Result, TranscriptionOutput,
 };
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TranscriptChunk};
 use lk_agents_net::signal;
@@ -19,6 +19,13 @@ use tokio::sync::mpsc;
 /// `TranscriptSync` deciding, this executing. Nothing holds the facade, so no reference cycle.
 struct Synchronizer {
     clock: Arc<dyn Clock>,
+    spawner: Arc<dyn Spawner>,
+    me: Weak<Synchronizer>,
+    /// The tick the decisions asked for next; replacing it cancels the one it replaces.
+    pacing: Mutex<Option<OwnedTask<()>>>,
+    /// The playback last reported started or moving and not yet finished: the words a pause or a
+    /// tick shows are its.
+    playing: Mutex<Option<PlaybackSegment>>,
     /// The synchronizer's decisions.
     state: Mutex<TranscriptSync>,
     /// `None` once closed: dropping the sender is what ends the forwarder.
@@ -55,17 +62,20 @@ impl Synchronizer {
         reported: Option<PlaybackSegment>,
     ) -> Option<Heard> {
         match effect {
-            TranscriptSyncEffect::PublishWord { word, start_time, end_time } => {
+            TranscriptSyncEffect::PublishWord { chunk, start_time, end_time } => {
                 let shown = TranscriptChunk {
                     start_time: Some(start_time),
                     end_time: Some(end_time),
-                    ..TranscriptChunk::new(word)
+                    ..chunk
                 };
                 self.tracker.transcript_shown(reported, &shown);
                 self.send(TranscriptOutput::Word(TranscriptChunk { start_time: None, ..shown }));
             }
             TranscriptSyncEffect::FlushTranscript => self.send(TranscriptOutput::Flush),
             TranscriptSyncEffect::ReportHeard(heard) => return Some(heard),
+            TranscriptSyncEffect::ReportCleared { segment, heard } => {
+                self.tracker.transcript_cleared(segment, &heard.text)
+            }
             TranscriptSyncEffect::Warn(warning) => {
                 log::warn!(target: lk_agents_abi::LOG_TARGET, "{}", warning.message());
             }
@@ -76,6 +86,18 @@ impl Synchronizer {
             }
             TranscriptSyncEffect::RetireText { admitted } => {
                 self.apply(TranscriptSyncEvent::TextRetired { admitted }, reported);
+            }
+            TranscriptSyncEffect::TickAt(at) => {
+                let (me, clock) = (self.me.clone(), Arc::clone(&self.clock));
+                let tick = self.spawner.spawn(async move {
+                    clock.wait_until(at).await;
+                    if let Some(sync) = me.upgrade() {
+                        let playing = *sync.playing.lock();
+                        sync.apply(TranscriptSyncEvent::Tick(sync.clock.now()), playing);
+                    }
+                });
+                let replaced = self.pacing.lock().replace(tick);
+                drop(replaced);
             }
             _ => unreachable!("a chain operation must be performed by its owning output"),
         }
@@ -109,7 +131,7 @@ impl Synchronizer {
 
     /// The forwarder: the only task and the only place the text sink is awaited.
     async fn forward(
-        next: Option<Arc<dyn TextOutput>>,
+        next: Option<Arc<dyn TranscriptionOutput>>,
         mut rx: mpsc::UnboundedReceiver<TranscriptOutput>,
     ) {
         while let Some(out) = rx.recv().await {
@@ -132,9 +154,6 @@ pub struct SyncedAudioOutput {
     tracker: Arc<dyn PlaybackTracker>,
     next: Arc<dyn AudioOutput>,
     observer: Mutex<Option<Arc<dyn PlaybackObserver>>>,
-    /// The playback last reported started or moving and not yet finished: the words a pause
-    /// shows are its.
-    playing: Mutex<Option<PlaybackSegment>>,
 }
 
 /// [`Weak`] so the tracker doesn't keep the chain alive.
@@ -162,7 +181,6 @@ impl SyncedAudioOutput {
             sync,
             next: next.clone(),
             observer: Mutex::new(None),
-            playing: Mutex::new(None),
         });
         let observer: Arc<dyn PlaybackObserver> = Arc::new(AudioEvents(Arc::downgrade(&node)));
         next.tracker().observe(observer.clone());
@@ -176,15 +194,17 @@ impl SyncedAudioOutput {
         match ev {
             PlaybackEvent::Started(e) => {
                 if self.tracker.playback_started(e.segment, e.created_at) {
-                    *self.playing.lock() = Some(e.segment);
-                    self.sync.apply(TranscriptSyncEvent::PlaybackStarted, Some(e.segment));
+                    *self.sync.playing.lock() = Some(e.segment);
+                    let at = self.sync.clock.now();
+                    self.sync.apply(TranscriptSyncEvent::PlaybackStarted { at }, Some(e.segment));
                 }
             }
             PlaybackEvent::Progressed(e) => {
                 if self.tracker.playback_progressed(e.segment, e.started_at, e.offset, e.duration) {
-                    *self.playing.lock() = Some(e.segment);
+                    *self.sync.playing.lock() = Some(e.segment);
+                    let (position, at) = (e.offset + e.duration, self.sync.clock.now());
                     self.sync.apply(
-                        TranscriptSyncEvent::PlaybackProgressed(e.offset + e.duration),
+                        TranscriptSyncEvent::PlaybackProgressed { position, at },
                         Some(e.segment),
                     );
                 }
@@ -193,7 +213,7 @@ impl SyncedAudioOutput {
                 if !self.tracker.accepts_report(*segment) {
                     return;
                 }
-                self.playing.lock().take_if(|playing| playing == segment);
+                self.sync.playing.lock().take_if(|playing| playing == segment);
                 let position = e.playback_position;
                 let finished =
                     TranscriptSyncEvent::PlaybackFinished { position, interrupted: e.interrupted };
@@ -239,7 +259,8 @@ impl AudioOutput for SyncedAudioOutput {
             // Counted before it passes: the sink below may report its playback from inside the
             // capture, and that playback is this segment's.
             let secs = lk_agents_abi::voice::rtc::frame_duration(frame).as_secs_f64();
-            self.sync.apply(TranscriptSyncEvent::AudioCaptureStarted { secs }, None);
+            let segment = self.tracker.current_segment();
+            self.sync.apply(TranscriptSyncEvent::AudioCaptureStarted { secs, segment }, None);
             self.next.capture_frame(frame).await
         })
     }
@@ -251,7 +272,24 @@ impl AudioOutput for SyncedAudioOutput {
 
     fn clear_buffer(&self) {
         self.next.clear_buffer();
-        self.sync.apply(TranscriptSyncEvent::AudioCleared, None);
+        // Words the clear still shows are the playback's that was moving.
+        let (playing, at) = (*self.sync.playing.lock(), self.sync.clock.now());
+        self.sync.apply(TranscriptSyncEvent::AudioCleared { at }, playing);
+    }
+
+    /// The refused frame was counted as its segment's audio, and none of it will play: the
+    /// segment ends cut, with nothing heard, so the next speech's audio opens its own.
+    fn withdraw_capture(&self) -> Result<()> {
+        let below = self.next.withdraw_capture();
+        if let Some(segment) = self.tracker.withdraw_capture() {
+            self.sync.apply(TranscriptSyncEvent::AudioEnded, None);
+            let finished = TranscriptSyncEvent::PlaybackFinished {
+                position: std::time::Duration::ZERO,
+                interrupted: true,
+            };
+            self.sync.apply(finished, Some(segment));
+        }
+        below
     }
 
     fn on_attached(&self) {
@@ -266,22 +304,26 @@ impl AudioOutput for SyncedAudioOutput {
 
     fn pause(&self) {
         self.next.pause();
-        let playing = *self.playing.lock();
-        self.sync.apply(TranscriptSyncEvent::PlaybackPaused, playing);
+        let playing = *self.sync.playing.lock();
+        self.sync.apply(TranscriptSyncEvent::PlaybackPaused { at: self.sync.clock.now() }, playing);
     }
 
     fn resume(&self) {
         self.next.resume();
+        let playing = *self.sync.playing.lock();
+        self.sync
+            .apply(TranscriptSyncEvent::PlaybackResumed { at: self.sync.clock.now() }, playing);
     }
 }
 
-/// `_SyncedTextOutput`.
-pub struct SyncedTextOutput {
+/// `_SyncedTranscriptionOutput`.
+pub struct SyncedTranscriptionOutput {
     sync: Arc<Synchronizer>,
-    next: Option<Arc<dyn TextOutput>>,
+    next: Option<Arc<dyn TranscriptionOutput>>,
+    host: parking_lot::Mutex<lk_agents_voice::transcription::HostText>,
 }
 
-impl SyncedTextOutput {
+impl SyncedTranscriptionOutput {
     /// `aligned` records whether the caller used the timed API.
     async fn capture(&self, text: &TranscriptChunk, aligned: bool) -> Result<()> {
         let effects = self
@@ -296,9 +338,10 @@ impl SyncedTextOutput {
                         next.capture_timed(&telemetry::Cx::NONE, &text).await?;
                     }
                 }
+                // a settled piece passes on whole: whether it is spoken, and its delivery
                 TranscriptSyncEffect::Capture { text, aligned: false } => {
                     if let Some(next) = &self.next {
-                        next.capture_text(&telemetry::Cx::NONE, &text.text).await?;
+                        next.capture_timed(&telemetry::Cx::NONE, &text).await?;
                     }
                 }
                 effect => {
@@ -310,12 +353,12 @@ impl SyncedTextOutput {
     }
 }
 
-impl TextOutput for SyncedTextOutput {
+impl TranscriptionOutput for SyncedTranscriptionOutput {
     fn label(&self) -> &str {
         "TranscriptSynchronizer"
     }
 
-    fn next_in_chain(&self) -> Option<Arc<dyn TextOutput>> {
+    fn next_in_chain(&self) -> Option<Arc<dyn TranscriptionOutput>> {
         self.next.clone()
     }
 
@@ -332,10 +375,13 @@ impl TextOutput for SyncedTextOutput {
         _cx: &telemetry::Cx,
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move { self.capture(&TranscriptChunk::new(text), false).await })
+        // a host's plain string: read for markup, which no voice reading took out
+        let chunk = self.host.lock().push(text);
+        Box::pin(async move { self.capture(&chunk, false).await })
     }
 
     fn flush(&self) {
+        self.host.lock().reset();
         let effects = self.sync.state.lock().handle(TranscriptSyncEvent::FlushText);
         for effect in effects {
             match effect {
@@ -378,7 +424,7 @@ pub struct TranscriptSyncConfig {
     /// The audio sink below; a bare leaf is wrapped in an [`AudioSinkProxy`].
     pub audio_next: Arc<dyn AudioOutput>,
     /// The transcript sink below this node. `None` for the console path, which prints locally.
-    pub text_next: Option<Arc<dyn TextOutput>>,
+    pub text_next: Option<Arc<dyn TranscriptionOutput>>,
     pub speed: f64,
     pub hyphenator: Arc<dyn Hyphenator>,
     pub clock: Arc<dyn Clock>,
@@ -388,7 +434,7 @@ pub struct TranscriptSyncConfig {
 pub struct TranscriptSynchronizer {
     sync: Arc<Synchronizer>,
     audio: Arc<SyncedAudioOutput>,
-    text: Arc<SyncedTextOutput>,
+    text: Arc<SyncedTranscriptionOutput>,
     /// Forwards released words to the text sink; ends once the close drops its sender.
     _forwarder: OwnedTask<()>,
 }
@@ -412,22 +458,31 @@ impl TranscriptSynchronizer {
         let opts = TranscriptPacerOptions { speed, hyphenator };
         let (tx, rx) = mpsc::unbounded_channel();
         let (done, forwarder_done) = signal::signal(false);
-        let sync = Arc::new(Synchronizer {
+        let forwarder_spawner = Arc::clone(&spawner);
+        let sync = Arc::new_cyclic(|me| Synchronizer {
             state: Mutex::new(TranscriptSync::new(opts)),
             clock,
+            spawner,
+            me: me.clone(),
+            pacing: Mutex::new(None),
+            playing: Mutex::new(None),
             tx: Mutex::new(Some(tx)),
             forwarder_done,
             tracker: Arc::new(crate::voice::playback::Tracker::new()),
         });
         // The task holds only the done flag, so it never keeps the synchronizer alive.
         let sink = text_next.clone();
-        let forwarder = spawner.spawn(async move {
+        let forwarder = forwarder_spawner.spawn(async move {
             Synchronizer::forward(sink, rx).await;
             done.set(true);
         });
 
         let audio = SyncedAudioOutput::new(sync.clone(), audio_next);
-        let text = Arc::new(SyncedTextOutput { sync: sync.clone(), next: text_next });
+        let text = Arc::new(SyncedTranscriptionOutput {
+            sync: sync.clone(),
+            next: text_next,
+            host: Default::default(),
+        });
         TranscriptSynchronizer { sync, audio, text, _forwarder: forwarder }
     }
 
@@ -437,7 +492,7 @@ impl TranscriptSynchronizer {
     }
 
     /// The node to install as `session.output.transcription`.
-    pub fn text_output(&self) -> Arc<dyn TextOutput> {
+    pub fn transcription_output(&self) -> Arc<dyn TranscriptionOutput> {
         self.text.clone()
     }
 
@@ -449,6 +504,9 @@ impl TranscriptSynchronizer {
             match effect {
                 TranscriptSyncEffect::CloseSender => {
                     self.sync.tx.lock().take();
+                    // Nothing more is forwarded, so nothing more is paced.
+                    let pacing = self.sync.pacing.lock().take();
+                    drop(pacing);
                 }
                 TranscriptSyncEffect::BeginWait => self.sync.wait_for_forwarded_words().await,
                 effect => {

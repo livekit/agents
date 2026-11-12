@@ -53,6 +53,41 @@ mod tests {
         }
     }
 
+    /// Transcript markup stripping keeps literal brackets and leaves no double space at a cue.
+    /// https://github.com/livekit/agents/pull/6590 https://github.com/livekit/agents/pull/6717
+    #[test]
+    fn markup_stripping_keeps_brackets_and_cues_do_not_double_spaces() {
+        for (parts, expected) in [
+            (["Index [", "12] stays  literal"], "Index [12] stays  literal"),
+            (["Hello <expr type=\"sound\" label=\"laugh\"/>", " world"], "Hello world"),
+        ] {
+            let mut stripper = markup::TranscriptMarkupStripper::new();
+            let mut text = parts.iter().map(|part| stripper.push(part)).collect::<String>();
+            text.push_str(&stripper.flush());
+            assert_eq!(text, expected);
+        }
+    }
+
+    /// Aligned transcripts keep brackets literal unless expressive, where a cue leaves no gap.
+    /// https://github.com/livekit/agents/pull/6590 https://github.com/livekit/agents/pull/6717
+    #[test]
+    fn aligned_brackets_are_literal_without_expressive_and_cues_do_not_double_spaces() {
+        for (expressive, parts, expected) in [
+            (false, ["Index [", "12] stays  literal"], "Index [12] stays  literal"),
+            (true, ["Hello [lau", "gh] world"], "Hello world"),
+            (true, ["Hello [laugh]", " world"], "Hello world"),
+        ] {
+            let mut normalizer = AudioTranscriptNormalizer::new(expressive);
+            let mut out = Vec::new();
+            for (i, part) in parts.iter().enumerate() {
+                normalizer.push_alignment("s".into(), vec![token(part, i as f64)]);
+                out.extend(normalizer.take_audio_transcript("s", false));
+            }
+            out.extend(normalizer.take_audio_transcript("s", true));
+            assert_eq!(out.iter().map(|t| t.text.as_str()).collect::<String>(), expected);
+        }
+    }
+
     #[test]
     fn interleaved_segments_close_only_their_own_partial_cues_and_keep_word_timing() {
         let mut normalizer = AudioTranscriptNormalizer::new(true);

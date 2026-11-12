@@ -2,7 +2,7 @@ use lk_agents_abi::Closed;
 use lk_agents_abi::voice::io::{IoError, Result};
 pub use lk_agents_abi::voice::room_io::{
     AudioInputConfig, AudioOutputConfig, DEFAULT_PARTICIPANT_KINDS, DeleteRoomRequested,
-    ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput, TextOutputConfig,
+    ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput, TranscriptionOutputConfig,
 };
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, ParticipantKind};
 use std::collections::BTreeMap;
@@ -25,7 +25,7 @@ pub fn accepted_kinds(config: &RoomIoConfig) -> &[ParticipantKind] {
 /// Whether the agent transcript follows audio playout: an unset `sync_transcription` means yes
 /// when there is an audio output.
 pub fn wants_transcript_sync(config: &RoomIoConfig, has_audio_output: bool) -> bool {
-    let Some(text) = &config.text_output else { return false };
+    let Some(text) = &config.transcription_output else { return false };
     text.sync_transcription != Some(false) && has_audio_output
 }
 

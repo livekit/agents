@@ -22,6 +22,8 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 serde.workspace = true
 
 regex = "1.13.1"
+# BlingFire's sentence rules run as one lazy DFA, longest match per rule.
+regex-automata = "0.4"
 # Tool discovery's keyword patterns: Python `re` semantics (backreferences, lookaround).
 fancy-regex = "0.19.0"
 log.workspace = true
@@ -31,6 +33,7 @@ chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 thiserror.workspace = true
 
 [dev-dependencies]
+fastrand = "2"
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde", "testkit"] }
 
 [lints]

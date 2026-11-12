@@ -1,7 +1,7 @@
 use crate::agent_session::effects::Timer;
-use crate::agent_session::machine::activity::false_interruption::count_min_words;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{ChatContext, EotPrediction, Ts};
+use lk_agents_core::tokenize::spoken_words;
 use std::time::Duration;
 
 pub mod effects;
@@ -98,7 +98,7 @@ pub fn decide_commit(i: &CommitInputs<'_>) -> UserTurnCommitDecision {
         && !i.manual_turn_detection
         && i.min_interruption_words > 0
         && i.current_speech.is_some_and(|s| s.allow_interruptions && !s.interrupted)
-        && count_min_words(i.new_transcript) < i.min_interruption_words
+        && spoken_words(i.new_transcript) < i.min_interruption_words
     {
         return UserTurnCommitDecision {
             verdict: UserTurnCommitVerdict::TooFewWords,

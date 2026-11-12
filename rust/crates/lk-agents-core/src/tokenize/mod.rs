@@ -1,49 +1,27 @@
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::tokenize::TokenSpan;
-use lk_agents_abi::tokenize::bindings::{BufferedTokens, HostTokenization, TokenizerCallback};
+use lk_agents_abi::tokenize::bindings::{BufferedTokens, TokenizerCallback};
 use std::sync::Arc;
 
 pub use lk_agents_abi::tokenize::language;
 mod replace;
+#[cfg(test)]
+mod replace_tests;
 
-mod sentence;
+pub mod sentences;
 
 mod token_buffer;
 mod word;
-pub mod xml;
 
-pub use replace::{replace_words, split_paragraphs, tokenize_paragraphs};
-pub use sentence::{BasicSentenceTokenizer, basic_split_sentences};
+pub use replace::replace_words;
+pub use sentences::spoken_words;
 
-pub use token_buffer::sealed;
-pub use token_buffer::{
-    NativeTokenBuffer, Span, TokenBuffer, TokenBufferOptions, TokenBufferStep, Tokenize, Words,
-    spans_from_tokens,
-};
+use token_buffer::{Span, TokenBuffer, TokenBufferOptions, TokenBufferStep, spans_from_tokens};
 pub use word::{
-    BasicWordTokenizer, PUNCTUATIONS, Word, WordTokenizerOptions, count_words, is_char_based,
-    is_punctuation, is_py_space, py_strip, split_words, split_words_of,
+    PUNCTUATIONS, SpeechWordTokenizer, Word, WordStream, WordTokenizerOptions, is_punctuation,
+    is_py_space, py_strip, split_words, split_words_of,
 };
 
 // Offsets are characters, and `str.isspace()` is not `char::is_whitespace()`.
-
-pub struct HostTokenizer;
-
-impl HostTokenization for HostTokenizer {
-    fn xml_tokenize(
-        tokenize_fnc: Arc<dyn TokenizerCallback>,
-        text: String,
-    ) -> Result<Vec<TokenSpan>, HostError> {
-        let plan = xml::Tokenization::new(&text);
-        let spans = plan
-            .input()
-            .map(|input| {
-                supplied_spans(tokenize_fnc.as_ref(), input).unwrap_or_else(|_| fallback(input))
-            })
-            .unwrap_or_default();
-        Ok(plan.finish(spans).into_iter().map(TokenSpan::from).collect())
-    }
-}
 
 fn supplied_spans(tokenizer: &dyn TokenizerCallback, text: &str) -> Result<Vec<Span>, HostError> {
     tokenizer.tokenize(text).map(|tokens| spans_from_tokens(text, tokens))
@@ -56,7 +34,6 @@ fn fallback(text: &str) -> Vec<Span> {
 pub struct BufferedTokenStream {
     inner: TokenBuffer,
     tokenizer: Arc<dyn TokenizerCallback>,
-    xml_aware: bool,
 }
 
 impl BufferedTokens for BufferedTokenStream {
@@ -65,10 +42,9 @@ impl BufferedTokens for BufferedTokenStream {
         min_token_len: usize,
         min_ctx_len: usize,
         max_token_len: Option<usize>,
-        xml_aware: bool,
     ) -> Self {
-        let opts = TokenBufferOptions { min_token_len, min_ctx_len, max_token_len, xml_aware };
-        Self { inner: TokenBuffer::new(opts), tokenizer: tokenize_fnc, xml_aware }
+        let opts = TokenBufferOptions { min_token_len, min_ctx_len, max_token_len };
+        Self { inner: TokenBuffer::new(opts), tokenizer: tokenize_fnc }
     }
     fn push(&mut self, text: String) -> Result<Vec<String>, HostError> {
         let step = self.inner.push(&text);
@@ -81,8 +57,7 @@ impl BufferedTokens for BufferedTokenStream {
 }
 
 impl BufferedTokenStream {
-    /// An XML-aware stream keeps going on the fallback; a plain one reports the callback's error
-    /// once the step completes.
+    /// The callback's error is reported once the step completes, the buffer left consistent.
     fn drive(&mut self, mut step: TokenBufferStep) -> Result<Vec<String>, HostError> {
         let mut failed = None;
         loop {
@@ -97,8 +72,8 @@ impl BufferedTokenStream {
                 }
                 TokenBufferStep::Done(out) => {
                     return match failed {
-                        Some(error) if !self.xml_aware => Err(error),
-                        _ => Ok(out),
+                        Some(error) => Err(error),
+                        None => Ok(out),
                     };
                 }
             };

@@ -5,6 +5,7 @@ use lk_agents_abi::{
     errors::{ApiError, ProviderError},
     utils::stream::{Closed, StreamInput, StreamOutput},
 };
+use lk_agents_core::tts::markup::TranscriptMarkupStripper;
 use tokio::sync::mpsc;
 
 use super::{
@@ -36,6 +37,8 @@ pub struct FakeTts {
     /// Off, the session adapts the voice sentence by sentence.
     streaming: bool,
     alignment: TtsAlignment,
+    /// The markup dialect the voice speaks (`""` for none).
+    markup: &'static str,
 }
 
 pub struct TtsOptions {
@@ -43,13 +46,14 @@ pub struct TtsOptions {
     pub timing: Timing,
     pub streaming: bool,
     pub alignment: TtsAlignment,
+    pub markup: &'static str,
 }
 
 impl FakeTts {
     pub fn new(registry: Arc<Registry>, options: TtsOptions) -> Arc<Self> {
-        let TtsOptions { latency, timing, streaming, alignment } = options;
+        let TtsOptions { latency, timing, streaming, alignment, markup } = options;
         let latency = latency.map(|seed| Mutex::new(fastrand::Rng::with_seed(seed)));
-        Arc::new(FakeTts { registry, latency, timing, streaming, alignment })
+        Arc::new(FakeTts { registry, latency, timing, streaming, alignment, markup })
     }
 }
 
@@ -71,6 +75,9 @@ struct SynthesisState {
     /// Seconds of audio produced so far: where the next chunk's words start.
     spoken: f64,
     samples_per_char: f64,
+    /// The words the voice says, its markup taken as instructions: a real voice never stamps a
+    /// tag, even one split across pushes.
+    said: TranscriptMarkupStripper,
 }
 
 impl Synthesis {
@@ -84,8 +91,11 @@ impl Synthesis {
         let total = ((text.chars().count() as f64 * state.samples_per_char) as usize)
             .max(SAMPLES_PER_CHUNK);
         let span = total as f64 / f64::from(SAMPLE_RATE);
-        let mut timed_transcript =
-            if self.stamps { stamps(&text, state.spoken, span) } else { Vec::new() };
+        let mut timed_transcript = if self.stamps {
+            stamps(&state.said.push(&text), state.spoken, span)
+        } else {
+            Vec::new()
+        };
         let mut text = Some(text);
         let mut left = total;
         while left > 0 {
@@ -189,6 +199,10 @@ impl Tts for FakeTts {
         1
     }
 
+    fn markup_provider(&self) -> String {
+        self.markup.to_owned()
+    }
+
     fn synthesize<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
@@ -230,6 +244,7 @@ impl Tts for FakeTts {
                     chunks: 0,
                     spoken: 0.0,
                     samples_per_char: 0.0,
+                    said: TranscriptMarkupStripper::new(),
                 }),
                 stamps: self.alignment == TtsAlignment::Words,
             });

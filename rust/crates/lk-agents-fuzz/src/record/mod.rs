@@ -371,8 +371,20 @@ pub enum RecorderCall {
     CaptureFrame,
     PlaybackStarted,
     PlaybackProgressed,
-    PlaybackFinished,
+    /// Where the sink said the segment stopped.
+    PlaybackFinished {
+        position_ms: u64,
+    },
     Flush,
+    /// The recording, written through this flush, holds silence `at_ms` into it where the sink
+    /// reported audio played.
+    Unheard {
+        at_ms: u64,
+    },
+    /// Played audio reached the recording after its place was written, and was dropped.
+    Late {
+        samples: u64,
+    },
 }
 
 /// What one audio sample says about where it came from.

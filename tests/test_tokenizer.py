@@ -2,70 +2,10 @@
 
 import pytest
 
-from livekit.agents.tokenize import TokenSpan, basic, blingfire
+from livekit.agents import tokenize
+from livekit.agents.tokenize import TokenSpan
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.mark.parametrize(
-    "text, expected",
-    [
-        ("Version 1.2.3 is out today.", ["Version 1.2.3 is out today."]),
-        ("The server is at 192.168.1.1 right now.", ["The server is at 192.168.1.1 right now."]),
-        ("One 1. Two 2. Three 3.", ["One 1.", "Two 2.", "Three 3."]),
-    ],
-)
-async def test_sentence_stream_preserves_numbers_and_the_final_character(
-    text: str, expected: list[str]
-) -> None:
-    tokenizer = basic.SentenceTokenizer(min_sentence_len=0, stream_context_len=1)
-    assert tokenizer.tokenize(text) == expected
-    stream = tokenizer.stream()
-    try:
-        for char in text:
-            stream.push_text(char)
-        stream.end_input()
-        assert [event.token async for event in stream] == expected
-    finally:
-        await stream.aclose()
-
-
-@pytest.mark.parametrize(
-    "text, expected",
-    [
-        ("مرحبا، كيف حالك؟", ["مرحبا", "كيف", "حالك"]),
-        ("आप कैसे हैं।", ["आप", "कैसे", "हैं"]),
-        ("你好，我很好。", ["你", "好", "我", "很", "好"]),
-    ],
-)
-async def test_word_stream_preserves_unicode_words_and_removes_punctuation(
-    text: str, expected: list[str]
-) -> None:
-    tokenizer = basic.WordTokenizer(ignore_punctuation=True, split_character=True)
-    assert tokenizer.tokenize(text) == expected
-    stream = tokenizer.stream()
-    try:
-        for char in text:
-            stream.push_text(char)
-        stream.end_input()
-        assert [event.token async for event in stream] == expected
-    finally:
-        await stream.aclose()
-
-
-async def test_blingfire_stream_emits_each_sentence_without_losing_the_tail() -> None:
-    tokenizer = blingfire.SentenceTokenizer(min_sentence_len=1, stream_context_len=1)
-    text = "Hello there. How are you? I am fine."
-    expected = ["Hello there.", "How are you?", "I am fine."]
-    assert tokenizer.tokenize(text) == expected
-    stream = tokenizer.stream()
-    try:
-        for char in text:
-            stream.push_text(char)
-        stream.end_input()
-        assert [event.token async for event in stream] == expected
-    finally:
-        await stream.aclose()
 
 
 def test_supplied_tokenizer_offsets_preserve_stream_batching_without_an_event_loop() -> None:
@@ -113,14 +53,36 @@ def test_supplied_tokenizer_error_returns_the_original_exception() -> None:
     assert raised.value is error
 
 
-def test_xml_tokenizer_error_preserves_markup_instead_of_failing() -> None:
-    from livekit.agents import _core
+@pytest.mark.parametrize(
+    "tokenizer",
+    [
+        tokenize.SentenceTokenizer(),
+        tokenize.SentenceTokenizer(min_words=1, clause_words=4, max_token_len=40),
+        tokenize.SentenceTokenizer(retain_format=True),
+    ],
+)
+async def test_the_sentence_stream_says_what_tokenize_says(
+    tokenizer: tokenize.SentenceTokenizer,
+) -> None:
+    text = (
+        "Sure. Let me look that up for you, it should only take a moment. "
+        "The total is 1,000 dollars, due at 12:30; after that, we close.\n\n"
+        "这是一个中文句子，很长很长。Okay!"
+    )
+    stream = tokenizer.stream()
+    try:
+        for char in text:
+            stream.push_text(char)
+        stream.end_input()
+        assert [event.token async for event in stream] == tokenizer.tokenize(text)
+    finally:
+        await stream.aclose()
 
-    def fail(text: str) -> list[str]:
-        raise ValueError("tokenizer failed")
 
-    text = "Hello <break/> world."
-    buffer = _core.TokenBuffer(fail, min_token_len=1, min_ctx_len=1, xml_aware=True)
-    assert buffer.push(text) == []
-    assert buffer.flush() == [text]
-    assert _core.xml_tokenize(fail, text) == [TokenSpan(text, 0, len(text))]
+async def test_a_sentence_streams_before_the_input_ends() -> None:
+    stream = tokenize.SentenceTokenizer().stream()
+    try:
+        stream.push_text("This first sentence is long enough. And")
+        assert (await anext(stream)).token == "This first sentence is long enough."
+    finally:
+        await stream.aclose()

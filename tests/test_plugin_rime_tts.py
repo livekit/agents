@@ -1276,10 +1276,7 @@ async def test_v1_uses_custom_tokenizer_behavior() -> None:
     from livekit.agents import tokenize
 
     async with _RimeV1Server() as server:
-        tokenizer = tokenize.basic.SentenceTokenizer(
-            min_sentence_len=1000,
-            stream_context_len=1,
-        )
+        tokenizer = tokenize.SentenceTokenizer(min_words=1000)
         tts = _v1_tts(server, tokenizer=tokenizer)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
         try:
@@ -1302,7 +1299,7 @@ async def test_v1_tokenizer_failure_closes_stream(
 ) -> None:
     from livekit.agents import APIError, tokenize
 
-    tokenizer = tokenize.basic.SentenceTokenizer()
+    tokenizer = tokenize.SentenceTokenizer()
     tokens = tokenizer.stream()
 
     def fail(*args: Any, **kwargs: Any) -> None:

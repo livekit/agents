@@ -2,7 +2,7 @@ use super::*;
 use crate::telemetry;
 use lk_agents_abi::llm::fallback::RealtimeLeg;
 use lk_agents_abi::voice::events::UserTurnResult;
-use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput, VideoInput};
+use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TranscriptionOutput, VideoInput};
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::session::{
     CommitSuperseded, IdleRefused, NotAnImage, NotInterruptible, UnknownCloseReason,
@@ -64,7 +64,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             .or_else(|| args.console.as_ref().map(|c| c.clone().as_audio_output()));
         let rtc_room = room.rtc();
         // An audio leg the host set replaces the room's, which is then neither published nor
-        // subscribed. The room's text output stays: it paces a host transcription leg.
+        // subscribed. The room's transcription output stays: it paces a host transcription leg.
         if host_audio_input.is_some() {
             config.audio_input = None;
         }
@@ -100,7 +100,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             .transpose()?;
 
         // Read before the config moves into `RoomIo`.
-        let sync_speed = config.text_output.as_ref().map(|t| t.transcription_speed_factor);
+        let sync_speed = config.transcription_output.as_ref().map(|t| t.transcription_speed_factor);
         let room_link = lk_agents_voice::agent_session::room::RoomLinkConfig {
             close_on_disconnect: config.close_on_disconnect,
             delete_room_on_close: config.delete_room_on_close,
@@ -444,9 +444,9 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 
     fn set_transcription_output(
         &self,
-        sink: Option<Arc<dyn TextOutput>>,
+        sink: Option<Arc<dyn TranscriptionOutput>>,
     ) -> Result<(), SessionRefused> {
-        let sink = sink.map(|s| self.resources.register_text_output(s));
+        let sink = sink.map(|s| self.resources.register_transcription_output(s));
         self.send(ActivityCommand::SetTranscriptionOutput(sink))
     }
 

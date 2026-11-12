@@ -5,19 +5,18 @@ use std::{
 };
 
 use lk_agents_abi::SpawnerExt as _;
-use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
 use lk_agents_abi::utils::video::FakeFrame;
 use lk_agents_abi::voice::io;
 use lk_agents_abi::voice::io::{
     AudioInput, AudioOutput, AudioOutputCapabilities, PlaybackFinished, PlaybackTracker,
-    TextOutput, VideoInput,
+    TranscriptionOutput, VideoInput,
 };
 use lk_agents_abi::{AudioFrame, Ts};
 
 use super::{Control, Registry};
 use crate::{
     input::Input,
-    record::{Detail, Kind, RecorderCall, Sink, Tag},
+    record::{Detail, Kind, Sink, Tag},
 };
 
 // Each attached output carries its own index, so sink calls on a replaced instance are
@@ -490,28 +489,28 @@ impl AudioOutput for FakeAudioOutput {
     }
 }
 
-pub struct FakeTextOutput {
+pub struct FakeTranscriptionOutput {
     id: u32,
     registry: Arc<Registry>,
     raises: bool,
 }
 
-impl FakeTextOutput {
+impl FakeTranscriptionOutput {
     pub fn new(registry: Arc<Registry>, raises: bool) -> Arc<Self> {
         let id = registry.new_output(false);
-        Arc::new(FakeTextOutput { id, registry, raises })
+        Arc::new(FakeTranscriptionOutput { id, registry, raises })
     }
 }
 
-impl Drop for FakeTextOutput {
+impl Drop for FakeTranscriptionOutput {
     fn drop(&mut self) {
         self.registry.mark_closed(super::Slot { kind: Kind::Output, nth: self.id });
     }
 }
 
-impl TextOutput for FakeTextOutput {
+impl TranscriptionOutput for FakeTranscriptionOutput {
     fn label(&self) -> &str {
-        "fake::text_output"
+        "fake::transcription_output"
     }
 
     fn on_attached(&self) {
@@ -529,7 +528,7 @@ impl TextOutput for FakeTextOutput {
     ) -> lk_agents_abi::BoxFuture<'a, io::Result<()>> {
         Box::pin(async move {
             if self.raises {
-                return Err(io::IoError::Rtc("the host text output raised".into()));
+                return Err(io::IoError::Rtc("the host transcription output raised".into()));
             }
             self.registry.record_sink(Sink::Text { output: self.id, text: text.to_string() });
             Ok(())
@@ -538,38 +537,6 @@ impl TextOutput for FakeTextOutput {
 
     fn flush(&self) {
         self.registry.record_sink(Sink::TextFlush { output: self.id });
-    }
-}
-
-pub struct FakeRecorder {
-    registry: Arc<Registry>,
-}
-
-impl FakeRecorder {
-    pub fn new(registry: Arc<Registry>) -> Arc<Self> {
-        Arc::new(FakeRecorder { registry })
-    }
-}
-
-impl AudioRecorder for FakeRecorder {
-    fn on_input_frame(&self, _now: f64, _frame: &AudioFrame) {
-        self.registry.record_sink(Sink::Recorder(RecorderCall::InputFrame));
-    }
-    fn capture_frame(&self, _now: f64, _frame: &AudioFrame) {
-        self.registry.record_sink(Sink::Recorder(RecorderCall::CaptureFrame));
-    }
-    fn on_playback_started(&self, _created_at: f64) {
-        self.registry.record_sink(Sink::Recorder(RecorderCall::PlaybackStarted));
-    }
-    fn on_playback_progressed(&self, _started_at: f64, _offset: f64, _duration: f64) {
-        self.registry.record_sink(Sink::Recorder(RecorderCall::PlaybackProgressed));
-    }
-    fn on_playback_finished(&self, _now: f64, _playback_position: f64) {
-        self.registry.record_sink(Sink::Recorder(RecorderCall::PlaybackFinished));
-    }
-    fn flush(&self, _now: f64) -> Result<(), RecordingFailure> {
-        self.registry.record_sink(Sink::Recorder(RecorderCall::Flush));
-        Ok(())
     }
 }
 

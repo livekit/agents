@@ -8,7 +8,7 @@ use crate::voice::VoiceRuntimeEvent;
 use crate::voice::resources::Resources;
 use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
+use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TranscriptionOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::voice::session_options::TextTransformSet;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamInput, Stt, Tts, Vad};
@@ -168,7 +168,7 @@ pub struct DriverBuilder {
     pub video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     pub recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
     pub audio_out: Option<Arc<dyn AudioOutput>>,
-    pub text_out: Option<Arc<dyn TextOutput>>,
+    pub text_out: Option<Arc<dyn TranscriptionOutput>>,
 
     pub room_events: Option<Rx<RoomEvent>>,
     pub room_io_events: Option<Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>>,
@@ -357,7 +357,7 @@ impl DriverBuilder {
         let vad = self.vad.clone().map(|v| resources.register_vad(v));
         let outputs = lk_agents_voice::agent_session::Outputs::new(
             self.audio_out.clone().map(|o| resources.register_audio_output(o)),
-            self.text_out.clone().map(|o| resources.register_text_output(o)),
+            self.text_out.clone().map(|o| resources.register_transcription_output(o)),
         );
         let (shared, publications) =
             self.shared(&queue, closing, outputs.clone(), session_id.clone(), executor.tasks());
@@ -520,6 +520,7 @@ impl DriverBuilder {
             time: self.time.clone(),
             output: publications.output.cell(),
             recorder: publications.recorder.cell(),
+            unplayed: Default::default(),
             tts_transforms: self
                 .config
                 .effective()
@@ -713,8 +714,12 @@ pub fn stt_leg(
     adapter(stt.with_conn_options(&conn).unwrap_or(stt), vad, clock)
 }
 
+/// One attempt per call, its stream carrying only what the model says to the person: the model's
+/// reasoning, template tokens and text-form tool calls are taken out here, under any `llm_node`
+/// override, so an override's own output is its own.
 pub fn llm_leg(llm: Arc<dyn Llm>, conn: Option<lk_agents_abi::ApiConnectOptions>) -> Arc<dyn Llm> {
-    llm.with_conn_options(&conn.unwrap_or_default()).unwrap_or(llm)
+    let llm = llm.with_conn_options(&conn.unwrap_or_default()).unwrap_or(llm);
+    lk_agents_inference::llm::model_text::ModelText::wrap(llm)
 }
 
 /// One attempt per call, adapted by the executor when it has no duplex path.

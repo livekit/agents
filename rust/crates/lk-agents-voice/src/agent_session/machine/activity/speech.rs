@@ -453,7 +453,7 @@ impl VoiceDriver {
         let turn_toolset = spec.toolset.clone().unwrap_or_else(|| Arc::clone(&advertised));
         let expressive = match &spec.source {
             ReplySource::Realtime => None,
-            source => self.session.expressive_guide(matches!(source, ReplySource::Llm)),
+            _ => self.session.expressive_guide(),
         };
         let mut plan = crate::generation::PlanSpec {
             record: spec.chat_ctx.clone(),

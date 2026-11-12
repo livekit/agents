@@ -58,7 +58,7 @@ The `websocket_protocol` option accepts `binary` or `json`. It defaults to `bina
 The speaker defaults to `lyra` for Coda and `cove` for Mist across all transports. This also
 applies when the model is omitted and defaults to Coda. An explicit speaker is preserved.
 The plugin uses
-`livekit.agents.tokenize.blingfire.SentenceTokenizer` by default and configures it to emit one
+`livekit.agents.tokenize.SentenceTokenizer` by default and configures it to emit one
 complete sentence at a time. Pass `tokenizer` to select another LiveKit sentence tokenizer. A
 custom tokenizer must emit complete sentence units that are safe for Rime text normalization.
 

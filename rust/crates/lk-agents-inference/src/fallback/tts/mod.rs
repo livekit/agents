@@ -5,6 +5,7 @@ use crate::fallback::channel::{ServeAttempt, drain_probe, next_or_stop};
 use crate::fallback::traced::{self, Traced};
 use crate::fallback::{ChainPolicy, resampling_plan};
 use crate::telemetry;
+use crate::tts::fed::{Fed, TextLog};
 use crate::tts::sentence_adapter::StreamAdapter;
 use crate::tts::stream::TtsStream;
 use async_trait::async_trait;
@@ -14,7 +15,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::fallback as port;
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
 use lk_agents_abi::types::provider::NativeLabel;
-use lk_agents_abi::utils::stream::ProviderStream;
+use lk_agents_abi::utils::stream::{Entry, ProviderStream};
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_abi::{StreamInput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
@@ -28,13 +29,6 @@ use tokio_util::sync::CancellationToken;
 
 // A failure after output remains a failure: delivered audio cannot be replayed.
 
-fn send(sink: &dyn StreamInput<String>, token: &Token) {
-    let _ = match token {
-        Token::Text(text) => sink.push(text.clone()),
-        Token::Flush => sink.flush(),
-    };
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     Text(String),
@@ -42,10 +36,8 @@ pub enum Token {
     Flush,
 }
 
-/// The pushed-token log as the host's `SynthesizeStream` keeps it: the text a recovering stream
-/// replays.
-///
-/// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
+/// The pushed-token log as the host's `SynthesizeStream` keeps it (`self._pushed_tokens`): the
+/// text each attempt and recovering stream replays. The text leg may not drop (§1.2d), so nothing
 /// here is lossy or bounded.
 pub struct TokenLog {
     inner: signal::Shared<TokenLogState>,
@@ -63,7 +55,6 @@ struct TokenLogState {
     ended: bool,
     /// The request finished (its task's guard dropped): no more text can arrive.
     finished: bool,
-    main: Option<Arc<dyn StreamInput<String>>>,
 }
 
 impl TokenLog {
@@ -85,54 +76,38 @@ impl TokenLog {
         self.inner.modify(|s| s.finished = true);
     }
 
-    /// Catch up a fresh child sink (`tts:428-434`): it is installed once it has every token, so
-    /// a token pushed during the failover is neither replayed twice nor lost. The sink is called
-    /// with no lock held: a host TTS's sink takes the GIL.
-    fn set_main(&self, sink: TtsSink) {
-        let sink: Arc<dyn StreamInput<String>> = Arc::from(sink);
-        let mut sent = 0;
-        let ended = loop {
-            let missing = self.inner.with(|s| {
-                if s.tokens.len() == sent {
-                    s.main = Some(Arc::clone(&sink));
-                    return Err(s.ended);
-                }
-                Ok(s.tokens[sent..].to_vec())
-            });
-            let missing = match missing {
-                Ok(missing) => missing,
-                Err(ended) => break ended,
-            };
-            missing.iter().for_each(|t| send(sink.as_ref(), t));
-            sent += missing.len();
-        };
-        if ended {
-            sink.end_input();
-        }
-    }
-
-    fn clear_main(&self) {
-        let main = self.inner.with(|s| s.main.take());
-        drop(main);
-    }
-
-    pub fn push(&self, token: Token) {
-        let main = self.inner.with(|s| {
-            s.tokens.push(token.clone());
-            s.main.clone()
-        });
-        if let Some(sink) = main {
-            send(sink.as_ref(), &token);
-        }
+    /// Refused once the input ended: a late token reaches no provider.
+    pub fn push(&self, token: Token) -> Result<(), ProviderError> {
+        self.inner.modify(|s| {
+            if s.ended {
+                return Err(ApiError::new("synthesis input is closed")
+                    .with_retryable(false)
+                    .into());
+            }
+            s.tokens.push(token);
+            Ok(())
+        })
     }
 
     pub fn end(&self) {
-        let main = self.inner.modify(|s| {
-            s.ended = true;
-            s.main.clone()
-        });
-        if let Some(sink) = main {
-            sink.end_input();
+        self.inner.modify(|s| s.ended = true);
+    }
+}
+
+impl TextLog for TokenLog {
+    fn entry(&self, index: usize) -> BoxFuture<'_, Entry<String>> {
+        Box::pin(self.inner.wait_until(move |s| match s.tokens.get(index) {
+            Some(token) => Some(token.clone().into()),
+            None => (s.ended && index == s.tokens.len()).then_some(Entry::EndInput),
+        }))
+    }
+}
+
+impl From<Token> for Entry<String> {
+    fn from(token: Token) -> Self {
+        match token {
+            Token::Text(text) => Entry::Item(text),
+            Token::Flush => Entry::Flush,
         }
     }
 }
@@ -152,15 +127,14 @@ struct LoggingSink(Arc<TokenLog>);
 impl StreamInput<String> for LoggingSink {
     fn push(&self, item: String) -> Result<(), ProviderError> {
         // `tts:409-410` records only non-empty strings.
-        if !item.is_empty() {
-            self.0.push(Token::Text(item));
+        if item.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        self.0.push(Token::Text(item))
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        self.0.push(Token::Flush);
-        Ok(())
+        self.0.push(Token::Flush)
     }
 
     fn end_input(&self) {
@@ -213,9 +187,7 @@ impl TtsBackend {
         Arc::new(TtsBackend {
             label: tts.label(),
             inner: tts.clone(),
-            splitter: Arc::new(|expressive| {
-                Box::new(crate::tts::sentences::sentence_splitter(None, expressive))
-            }),
+            splitter: crate::tts::sentence_adapter::splitter_for(tts.as_ref()),
             text_processor: Arc::new(lk_agents_core::tts::markup::text_processor),
             clock,
         })
@@ -265,8 +237,8 @@ impl Backend for TtsBackend {
             TtsReq::Stream { log, expressive, .. } => {
                 tts.stream(inner, *expressive).await.map(|s| {
                     let (sink, source) = s.split();
-                    log.set_main(sink);
-                    source
+                    let log: Arc<dyn TextLog> = log.clone();
+                    Box::new(Fed::new(log, sink, source)) as TtsSource
                 })
             }
         };
@@ -311,10 +283,19 @@ impl Backend for TtsBackend {
                 }
                 let (sink, source) = tts.stream(&cx, *expressive).await?.split();
                 // A private replay channel; unlike STT, the probe does not join the live leg.
-                for t in &tokens {
-                    send(sink.as_ref(), t);
+                // Each entry is awaited: a slow input holds the replay instead of refusing it.
+                let entries = tokens.into_iter().map(Entry::from).chain([Entry::EndInput]);
+                let replay = async {
+                    for entry in entries {
+                        sink.send(entry).await?;
+                    }
+                    Ok::<_, ProviderError>(())
+                };
+                tokio::select! {
+                    biased;
+                    () = stop.cancelled() => return Ok(false),
+                    replayed = replay => replayed?,
                 }
-                sink.end_input();
                 source
             }
         };
@@ -452,9 +433,6 @@ impl ServeAttempt<TtsBackend, SynthesizedAudio> for TtsLeg {
             };
             let outcome =
                 self.forward_audio(&chain, index, &mut source, resampler, tx, &stop).await;
-            if let Some(log) = self.log.as_ref() {
-                log.clear_main();
-            }
             // An attempt that failed before any audio still anchors the request.
             self.anchor_started(&source);
             source.close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;

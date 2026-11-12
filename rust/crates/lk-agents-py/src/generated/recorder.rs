@@ -162,6 +162,9 @@ inventory::submit! {
 impl crate::py_errors::HostException for ::lk_agents_abi::recorder::RecordingFailure {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         match self {
+            Self::Create(..) => {
+                ::pyo3::exceptions::PyOSError::new_err(::std::string::ToString::to_string(self))
+            }
             Self::Io(..) => {
                 ::pyo3::exceptions::PyOSError::new_err(::std::string::ToString::to_string(self))
             }

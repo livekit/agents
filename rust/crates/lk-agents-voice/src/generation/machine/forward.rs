@@ -90,7 +90,7 @@ impl TurnAccumulator {
                 TurnAccumulatorEffect::End { interrupted }
             }
             TurnAccumulatorEvent::Chunk { words, caller_frames, interrupted } => {
-                if !caller_frames && words.raw.is_empty() && words.text.is_empty() {
+                if !caller_frames && words.is_blank() {
                     TurnAccumulatorEffect::Read
                 } else if interrupted {
                     TurnAccumulatorEffect::End { interrupted: true }
@@ -158,14 +158,14 @@ pub struct SegmentPlan {
     pub route: SegmentRoute,
     pub transcript: Option<TranscriptPlan>,
     audio_output: bool,
-    text_output: bool,
+    transcription_output: bool,
 }
 
 impl SegmentPlan {
     pub fn new(
         kind: VoiceKind,
         audio_output: bool,
-        text_output: bool,
+        transcription_output: bool,
         aligned_requested: bool,
         aligned_provider: bool,
     ) -> Self {
@@ -173,12 +173,12 @@ impl SegmentPlan {
         let synthesis = matches!(route, SegmentRoute::Synthesis);
         Self {
             route,
-            transcript: (synthesis || text_output).then_some(TranscriptPlan {
+            transcript: (synthesis || transcription_output).then_some(TranscriptPlan {
                 deferred: synthesis,
                 aligned: synthesis && aligned_requested && aligned_provider,
             }),
             audio_output,
-            text_output,
+            transcription_output,
         }
     }
 
@@ -193,7 +193,7 @@ impl SegmentPlan {
         delivered: bool,
     ) -> bool {
         self.audio_output
-            && self.text_output
+            && self.transcription_output
             && delivered
             && leg.is_some_and(|leg| leg.forwarded)
             && heard.frames == 0

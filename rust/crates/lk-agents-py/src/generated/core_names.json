@@ -14,9 +14,6 @@
     "AvatarRunner",
     "BM25Index",
     "BackgroundAudioPlayer",
-    "BasicSentenceTokenizer",
-    "BasicWordTokenizer",
-    "BlingfireSentenceTokenizer",
     "ByteStreamSender",
     "ChatRequest",
     "ConnectionPoolState",
@@ -81,6 +78,10 @@
     "Shutdown",
     "SpanKind",
     "SpeechHandle",
+    "SpeechSentenceStream",
+    "SpeechSentenceTokenizer",
+    "SpeechWordStream",
+    "SpeechWordTokenizer",
     "StaleHandle",
     "StatusCode",
     "Storage",
@@ -162,6 +163,7 @@
     "_core_playback_note_capture",
     "_core_playback_progressed",
     "_core_playback_started",
+    "_core_playback_withdraw_capture",
     "_core_realtime_connection_metrics",
     "_core_remote_token",
     "_core_restore_text_session_state",
@@ -219,7 +221,6 @@
     "format_log_record",
     "host_log_level",
     "http_error_display",
-    "hyphenate_word",
     "inference_api_key",
     "inference_api_secret",
     "inference_credentials",
@@ -279,7 +280,6 @@
     "to_provider_format",
     "to_strict_json_schema",
     "to_xml",
-    "tokenize_paragraphs",
     "tool_proxy_arguments",
     "tool_report",
     "tool_search_loaded",
@@ -294,7 +294,6 @@
     "video_queue_frames",
     "wait_for_agent",
     "wait_for_participant",
-    "wait_for_track_publication",
-    "xml_tokenize"
+    "wait_for_track_publication"
   ]
 }

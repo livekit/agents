@@ -655,6 +655,27 @@ mod stepped {
         assert_eq!(launched(&chunks), Vec::<u32>::new());
     }
 
+    // Catches: reasoning counted as output: the person never sees it, so an attempt that only
+    // reasoned before failing is retried, and the first said word ends retries.
+    #[tokio::test]
+    async fn an_attempt_that_only_reasoned_is_retried() {
+        let mut chunks = start(policy());
+        reading(&mut chunks, 0, at(0));
+        chunks.step(Event::Chunk { attempt: 0, chunk: text("<think>the user wants") }, at(5));
+        chunks.step(Event::Chunk { attempt: 0, chunk: text(" X</thi") }, at(6));
+        chunks.step(Event::Failed { attempt: 0, failure: failure() }, at(7));
+        assert_eq!(outcome(&mut chunks), None, "nothing was said: retried");
+        chunks.step(Event::AttemptClosed { attempt: 0 }, at(8));
+        let due = chunks.wake_at().unwrap();
+        chunks.step(Event::Wake, due);
+        assert_eq!(launched(&chunks), vec![1]);
+        // the retry starts its own reading: a said word now makes a failure final
+        reading(&mut chunks, 1, due);
+        chunks.step(Event::Chunk { attempt: 1, chunk: text("<think>x</think>Hi") }, due);
+        chunks.step(Event::Failed { attempt: 1, failure: failure() }, due);
+        assert!(!error(&mut chunks).retryable);
+    }
+
     // Catches: replay guarded on any chunk instead of on output the consumer can act on: the
     // gateway's metadata-only leading delta or a tool call whose arguments are still streaming
     // made a failure final, while a completed tool call must never be issued twice.

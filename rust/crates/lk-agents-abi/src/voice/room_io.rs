@@ -71,15 +71,15 @@ pub struct AudioOutputConfig {
     pub publish: TrackPublishOptions,
 }
 
-/// `TextOutputOptions` as the core reads it; `next_in_chain` is the host's alone.
+/// `TranscriptionOutputOptions` as the core reads it; `next_in_chain` is the host's alone.
 #[crate::host(record(
     module = "room_options",
-    host_type = "livekit.agents.voice.room_io.TextOutputOptions",
+    host_type = "livekit.agents.voice.room_io.TranscriptionOutputOptions",
     boundary,
     extract
 ))]
 #[derive(Debug, Clone, PartialEq)]
-pub struct TextOutputConfig {
+pub struct TranscriptionOutputConfig {
     /// `None` is `NOT_GIVEN`: synchronise if there is an audio output. `Some(false)` disables it.
     #[host(read_as = crate::Maybe<bool>, normalize = crate::voice::room_io::sync_transcription_from_wire)]
     pub sync_transcription: Option<bool>,
@@ -88,9 +88,9 @@ pub struct TextOutputConfig {
     pub json_format: bool,
 }
 
-impl Default for TextOutputConfig {
+impl Default for TranscriptionOutputConfig {
     fn default() -> Self {
-        TextOutputConfig {
+        TranscriptionOutputConfig {
             sync_transcription: None,
             transcription_speed_factor: 1.0,
             json_format: false,
@@ -125,8 +125,8 @@ pub struct RoomIoConfig {
     pub audio_input: Option<AudioInputConfig>,
     #[host(call = "get_audio_output_options")]
     pub audio_output: Option<AudioOutputConfig>,
-    #[host(call = "get_text_output_options")]
-    pub text_output: Option<TextOutputConfig>,
+    #[host(call = "get_transcription_output_options")]
+    pub transcription_output: Option<TranscriptionOutputConfig>,
 }
 
 impl Default for RoomIoConfig {
@@ -140,7 +140,7 @@ impl Default for RoomIoConfig {
             video_input: false,
             audio_input: Some(AudioInputConfig::default()),
             audio_output: Some(AudioOutputConfig::default()),
-            text_output: Some(TextOutputConfig::default()),
+            transcription_output: Some(TranscriptionOutputConfig::default()),
         }
     }
 }
@@ -397,7 +397,7 @@ pub struct AudioOutputOptions {
     dataclass,
     deferred
 ))]
-pub struct TextOutputOptions {
+pub struct TranscriptionOutputOptions {
     /// False to disable transcription synchronization with audio output.
     ///     Otherwise, transcription is emitted as quickly as available.
     pub sync_transcription: crate::Maybe<bool>,
@@ -405,8 +405,8 @@ pub struct TextOutputOptions {
     ///     Only effective if `sync_transcription` is True.
     #[host(default = 1.0)]
     pub transcription_speed_factor: f64,
-    /// The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it.
-    #[host(default = None, annotation = "livekit.agents.voice.io.TextOutput | None")]
+    /// The next transcription output in the chain for the agent. If provided, the agent's transcription will be passed to it.
+    #[host(default = None, annotation = "livekit.agents.voice.io.TranscriptionOutput | None")]
     pub next_in_chain: Option<crate::HostRef>,
     /// Send the transcription as JSON dict for each chunk, including start and end timestamps if it's a TranscriptChunk.
     #[host(default = false)]
@@ -441,9 +441,9 @@ pub struct TextOutputOptions {
     toggle = "audio_output"
 ))]
 #[python(method(
-    name = "get_text_output_options",
-    ret = "TextOutputOptions | None",
-    toggle = "text_output"
+    name = "get_transcription_output_options",
+    ret = "TranscriptionOutputOptions | None",
+    toggle = "transcription_output"
 ))]
 pub struct RoomOptions {
     /// The text input options. If not provided, default to True.
@@ -459,8 +459,8 @@ pub struct RoomOptions {
     #[host(annotation = "AudioOutputOptions | bool")]
     pub audio_output: crate::Maybe<crate::HostRef>,
     /// The transcription output options. If not provided, default to True.
-    #[host(annotation = "TextOutputOptions | bool")]
-    pub text_output: crate::Maybe<crate::HostRef>,
+    #[host(annotation = "TranscriptionOutputOptions | bool")]
+    pub transcription_output: crate::Maybe<crate::HostRef>,
     /// Participant kinds accepted for auto subscription. If not provided,
     ///     accept `DEFAULT_PARTICIPANT_KINDS`.
     #[host(annotation = "list[rtc.ParticipantKind.ValueType]")]

@@ -149,7 +149,7 @@ class TTS(tts.TTS):
             early_stop_threshold (NotGivenOr[float]): Early stopping threshold for batch
                 processing (0-1). Unset uses Fish's server default (1.0).
             tokenizer (tokenize.SentenceTokenizer): Sentence tokenizer used to detect
-                sentence boundaries. Defaults to ``tokenize.blingfire.SentenceTokenizer()``.
+                sentence boundaries. Defaults to ``tokenize.SentenceTokenizer()``.
             http_session (http.HttpSession | None): Optional HTTP session.
         """
         if is_given(sample_rate):
@@ -221,13 +221,13 @@ class TTS(tts.TTS):
             max_session_duration=300,
             mark_refreshed_on_get=True,
         )
-        # min_sentence_len=1 emits each sentence as soon as the next one starts,
+        # min_words=1 emits each sentence as soon as its end is certain,
         # rather than batching short sentences together — minimizes TTFB on the
         # first sentence and keeps Fish synthesizing continuously.
         self._sentence_tokenizer = (
             tokenizer
             if is_given(tokenizer)
-            else tokenize.blingfire.SentenceTokenizer(min_sentence_len=1)
+            else tokenize.SentenceTokenizer(min_words=1)
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 

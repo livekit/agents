@@ -1,36 +1,21 @@
 from __future__ import annotations
 
+import functools
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
 from typing import overload
 
-from . import _core
-from ._generated import public_tokenize as _public
-from ._generated.public_tokenize import *  # noqa: F403
+from . import _core, _generated
+from ._generated.tokenizer import TokenData, TokenSpan
 from .utils import aio, shortuuid
 
 __all__ = [
-    "SentenceTokenizer",
     "SentenceStream",
-    "WordTokenizer",
     "WordStream",
     "BufferedSentenceStream",
     "BufferedWordStream",
     "replace_words",
-    "basic",
-    "blingfire",
 ]
-__all__ += _public.__all__
-
-
-class SentenceTokenizer(ABC):
-    @abstractmethod
-    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        pass
-
-    @abstractmethod
-    def stream(self, *, language: str | None = None) -> SentenceStream:
-        pass
 
 
 class _TokenStream(ABC):
@@ -69,19 +54,6 @@ class SentenceStream(_TokenStream):
     pass
 
 
-class WordTokenizer(ABC):
-    @abstractmethod
-    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        pass
-
-    @abstractmethod
-    def stream(self, *, language: str | None = None) -> WordStream:
-        pass
-
-    def format_words(self, words: list[str]) -> str:
-        return " ".join(words)
-
-
 class WordStream(_TokenStream):
     pass
 
@@ -90,35 +62,14 @@ class WordStream(_TokenStream):
 TokenizeCallable = Callable[[str], list[str] | list[TokenSpan]]
 
 
-class BufferedTokenStream(_TokenStream):
-    """Streamed text cut into tokens by a tokenizer."""
+class _NativeTokenStream(_TokenStream):
+    """The tokens a native buffer emits as the text streams in."""
 
     def __init__(
-        self,
-        *,
-        tokenize_fnc: TokenizeCallable,
-        min_token_len: int,
-        min_ctx_len: int,
-        max_token_len: int | None = None,
-        xml_aware: bool = False,
+        self, buffer: _core.TokenBuffer | _core.SpeechSentenceStream | _core.SpeechWordStream
     ) -> None:
-        """
-        Args:
-            tokenize_fnc: Cuts a text into tokens.
-            min_token_len: The shortest token emitted; shorter ones are batched.
-            min_ctx_len: The text buffered before tokenizing.
-            max_token_len: The longest token emitted.
-            xml_aware: Never split an XML tag across tokens; only when the input carries
-                markup, as a stray "<" in plain text holds streaming until flush.
-        """
         super().__init__()
-        self._buffer = _core.TokenBuffer(
-            tokenize_fnc,
-            min_token_len=min_token_len,
-            min_ctx_len=min_ctx_len,
-            max_token_len=max_token_len,
-            xml_aware=xml_aware,
-        )
+        self._buffer = buffer
         self._current_segment_id = shortuuid()
 
     def _send(self, tokens: list[str]) -> None:
@@ -143,6 +94,34 @@ class BufferedTokenStream(_TokenStream):
         self._event_ch.close()
 
 
+class BufferedTokenStream(_NativeTokenStream):
+    """Streamed text cut into tokens by a tokenizer."""
+
+    def __init__(
+        self,
+        *,
+        tokenize_fnc: TokenizeCallable,
+        min_token_len: int,
+        min_ctx_len: int,
+        max_token_len: int | None = None,
+    ) -> None:
+        """
+        Args:
+            tokenize_fnc: Cuts a text into tokens.
+            min_token_len: The shortest token emitted; shorter ones are batched.
+            min_ctx_len: The text buffered before tokenizing.
+            max_token_len: The longest token emitted.
+        """
+        super().__init__(
+            _core.TokenBuffer(
+                tokenize_fnc,
+                min_token_len=min_token_len,
+                min_ctx_len=min_ctx_len,
+                max_token_len=max_token_len,
+            )
+        )
+
+
 class BufferedSentenceStream(BufferedTokenStream, SentenceStream):
     def __init__(
         self,
@@ -151,14 +130,12 @@ class BufferedSentenceStream(BufferedTokenStream, SentenceStream):
         min_token_len: int,
         min_ctx_len: int,
         max_token_len: int | None = None,
-        xml_aware: bool = False,
     ) -> None:
         super().__init__(
             tokenize_fnc=tokenizer,
             min_token_len=min_token_len,
             min_ctx_len=min_ctx_len,
             max_token_len=max_token_len,
-            xml_aware=xml_aware,
         )
 
 
@@ -222,32 +199,63 @@ def replace_words(
     return _replace_words()
 
 
-class _CoreSentenceTokenizer(SentenceTokenizer):
-    _native: _core.BasicSentenceTokenizer | _core.BlingfireSentenceTokenizer
+class _SpeechSentenceStream(_NativeTokenStream, SentenceStream):
+    """`SentenceTokenizer`'s stream: a sentence goes out once no text to come could change it."""
+
+
+class _SentenceTokenizerBase:
+    """What `SentenceTokenizer` streams with: its own native stream, or the `tokenize` of a
+    subclass that overrides it."""
+
+    _native: _core.SpeechSentenceTokenizer
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        raise NotImplementedError
 
     def stream(self, *, language: str | None = None) -> SentenceStream:
+        native = self._native
+        # A subclass's own `tokenize` decides its sentences; the generated ones are native.
+        if type(self).tokenize.__module__.startswith(_generated.__name__):
+            return _SpeechSentenceStream(native._core_stream())
+        # each of the subclass's sentences goes out once the next one starts
         return BufferedSentenceStream(
-            tokenizer=self._native._core_split,
-            min_token_len=self._native._core_min_token_len,
-            min_ctx_len=self._native._core_min_ctx_len,
-            max_token_len=self._native._core_max_token_len,
-            xml_aware=self._native._core_xml_aware,
+            tokenizer=functools.partial(self.tokenize, language=language),
+            min_token_len=1,
+            min_ctx_len=1,
+            max_token_len=native._core_max_token_len,
         )
 
 
-class _CoreWordTokenizer(WordTokenizer):
-    _native: _core.BasicWordTokenizer
+class _SpeechWordStream(_NativeTokenStream, WordStream):
+    """`WordTokenizer`'s stream: a word goes out once the next one proves it whole."""
+
+
+class _WordTokenizerBase:
+    """What `WordTokenizer` streams with: its own native stream, or the `tokenize` of a
+    subclass that overrides it."""
+
+    _native: _core.SpeechWordTokenizer
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        raise NotImplementedError
 
     def stream(self, *, language: str | None = None) -> WordStream:
+        # A subclass's own `tokenize` decides its words; the generated one is native.
+        if type(self).tokenize.__module__.startswith(_generated.__name__):
+            return _SpeechWordStream(self._native._core_stream())
+        # each of the subclass's words goes out once the next one starts
         return BufferedWordStream(
-            tokenizer=self._native._core_split,
-            min_token_len=self._native._core_min_token_len,
-            min_ctx_len=self._native._core_min_ctx_len,
+            tokenizer=functools.partial(self.tokenize, language=language),
+            min_token_len=1,
+            min_ctx_len=1,
         )
+
+    def format_words(self, words: list[str]) -> str:
+        return " ".join(words)
 
 
 # imported last: these modules subclass the definitions above
-from ._generated import (  # noqa: E402
-    public_tokenize_basic as basic,
-    public_tokenize_blingfire as blingfire,
-)
+from ._generated import public_tokenize as _public  # noqa: E402
+from ._generated.public_tokenize import *  # noqa: E402, F403
+
+__all__ += _public.__all__

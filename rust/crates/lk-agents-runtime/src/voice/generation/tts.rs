@@ -18,7 +18,6 @@ use lk_agents_voice::generation::{GenEvent, TurnAccumulator};
 use lk_agents_voice::trace::{GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::Visible;
-use lk_agents_voice::transcription::{Pipeline, TextTransform as _};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -135,7 +134,6 @@ impl TtsInference<'_, '_, '_> {
             source,
             rx: self.rx,
             text_out: self.text_out,
-            transforms: None,
             state: StreamingTts::new(state.opening.clone(), state.input_done),
             text_buffer: SynthesisText::new(state.opening.text.clone()),
             tts_data,
@@ -235,22 +233,20 @@ async fn synthesize(
     done: &mut Synthesized,
 ) -> (Result<Heard, Failed>, bool) {
     let sink = streaming.sink;
-    // Post-transform: the journal says what the synthesiser was given.
-    let text = transformed(shared, &streaming.state.words.raw);
+    // the journal says what the synthesiser was given
+    let text = streaming.state.words.said.clone();
     let segment = streaming.tts_data.segment as u32;
     shared.trace(GenerationStep::TtsRequested { speech: handle.id(), segment, text });
-    streaming.transforms =
-        (!shared.tts_transforms.is_empty()).then(|| Pipeline::new(&shared.tts_transforms));
-    let error = push_text(sink, &mut streaming.transforms, &streaming.state.words.raw).err();
+    let error = push_text(sink, &streaming.state.words.said).err();
     if streaming.state.opening_pushed(error) {
-        end_input(sink, &mut streaming.transforms);
+        sink.end_input();
     }
     let heard = playback.run(shared, handle, &mut streaming).await;
     take_tts_calls(&mut streaming.tts_data, shared, handle, &mut streaming.source, true);
     let Streaming { state, source, rx, text_out, tts_data, aligned, .. } = streaming;
     let StreamingTts { words, input_done, .. } = state;
     sink.end_input();
-    let fed = transformed(shared, &words.raw);
+    let fed = words.said.clone();
     // An interrupted reply leaves the close to finish as the session's cleanup.
     let _ = super::llm::until_interrupted(handle, source.close()).await;
     let produced = tts_data.produced();
@@ -285,28 +281,12 @@ async fn synthesize(
     }
 }
 
-/// One text chunk through the segment's filters. Empty output is normal (a filter mid-pattern).
-pub(super) fn push_text(
-    sink: &lk_agents_abi::TtsSink,
-    transforms: &mut Option<Pipeline>,
-    chunk: &str,
-) -> Result<(), ProviderError> {
-    if chunk.is_empty() {
+/// What the voice says of one piece. Empty is normal: a piece that was markup or held text.
+pub(super) fn push_text(sink: &lk_agents_abi::TtsSink, said: &str) -> Result<(), ProviderError> {
+    if said.is_empty() {
         return Ok(());
     }
-    match transforms {
-        Some(p) => p.push(chunk).into_iter().try_for_each(|piece| sink.push(piece)),
-        None => sink.push(chunk.to_owned()),
-    }
-}
-
-/// The input is over: the filters' tail, then `end_input` (not `flush`: a `StreamAdapter` holds its
-/// final frame until input is done).
-pub(super) fn end_input(sink: &lk_agents_abi::TtsSink, transforms: &mut Option<Pipeline>) {
-    for piece in transforms.as_mut().map(|p| p.flush()).unwrap_or_default() {
-        let _ = sink.push(piece);
-    }
-    sink.end_input();
+    sink.push(said.to_owned())
 }
 
 /// `next()` is created **once** per frame into `pending` and borrowed by `select!`, so a winning
@@ -319,7 +299,6 @@ struct Streaming<'a, 'b> {
     source: lk_agents_net::owned::Owned<lk_agents_abi::TtsSource>,
     rx: &'a mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
     text_out: Option<&'a TextLeg<'a>>,
-    transforms: Option<Pipeline>,
     state: StreamingTts,
     text_buffer: SynthesisText,
     tts_data: SynthesisMetrics,
@@ -337,7 +316,7 @@ impl Segment for Streaming<'_, '_> {
             Read::Failed(error) => return Err(DriverError::from(error)),
             Read::Provider => {}
         }
-        let Streaming { sink, source, rx, text_out, transforms, state, text_buffer, .. } = self;
+        let Streaming { sink, source, rx, text_out, state, text_buffer, .. } = self;
         let mut pending = Box::pin(source.next());
         let chunk = loop {
             if state.input_done {
@@ -348,7 +327,7 @@ impl Segment for Streaming<'_, '_> {
                 event = rx.recv() => event,
                 got = &mut pending => break got,
             };
-            feed_text(event, state, (*sink, transforms), *text_out, text_buffer).await;
+            feed_text(event, state, sink, *text_out, text_buffer).await;
         };
         drop(pending);
         take_tts_calls(&mut self.tts_data, self.shared, self.handle, &mut self.source, false);
@@ -357,7 +336,7 @@ impl Segment for Streaming<'_, '_> {
             Ok(None) => {
                 self.state.source_ended();
                 if let Some(a) = self.aligned.as_deref_mut() {
-                    a.ended(&self.state.words.text).await;
+                    a.ended(&self.state.words).await;
                 }
                 return Ok(Next::End);
             }
@@ -367,13 +346,13 @@ impl Segment for Streaming<'_, '_> {
             self.acc.record_tts(self.tts_data.segment, stats);
         }
         if let Some(a) = self.aligned.as_deref_mut() {
-            a.chunk(&chunk).await;
+            a.chunk(&chunk, &self.state.words).await;
         }
         // An `is_final` frame ends the segment's audio; a pooled connection never closes.
         if self.state.frame(chunk.is_final)
             && let Some(a) = self.aligned.as_deref_mut()
         {
-            a.ended(&self.state.words.text).await;
+            a.ended(&self.state.words).await;
         }
         Ok(Next::Frame(chunk.frame))
     }
@@ -429,7 +408,7 @@ impl Streaming<'_, '_> {
 async fn feed_text(
     event: Option<SpeechSegmentEvent>,
     state: &mut StreamingTts,
-    (sink, transforms): (&lk_agents_abi::TtsSink, &mut Option<Pipeline>),
+    sink: &lk_agents_abi::TtsSink,
     text_out: Option<&TextLeg<'_>>,
     text_buffer: &SynthesisText,
 ) {
@@ -441,16 +420,17 @@ async fn feed_text(
     while let Some(effect) = effects.pop_front() {
         match effect {
             StreamingTtsEffect::Capture(chunk) => {
-                capture(text_out, &chunk.text).await;
+                capture(text_out, &chunk.shown).await;
                 text_buffer.append(&chunk.text);
                 effects.push_front(state.captured(chunk));
             }
-            StreamingTtsEffect::Push(raw) => {
-                if let Err(error) = push_text(sink, transforms, &raw) {
+            StreamingTtsEffect::Push(said) => {
+                if let Err(error) = push_text(sink, &said) {
                     state.push_failed(error);
                 }
             }
-            StreamingTtsEffect::EndInput => end_input(sink, transforms),
+            // not `flush`: a `StreamAdapter` holds its final frame until input is done
+            StreamingTtsEffect::EndInput => sink.end_input(),
             StreamingTtsEffect::FlushText => {
                 if let Some(out) = text_out {
                     out.flush();
@@ -458,18 +438,6 @@ async fn feed_text(
             }
         }
     }
-}
-
-/// Run whole on a scratch pipeline. The duplex path journals this, so `TtsRequested{text}` is what
-/// the TTS was given.
-pub(super) fn transformed(shared: &Arc<SessionShared>, raw: &str) -> String {
-    if shared.tts_transforms.is_empty() {
-        return raw.to_owned();
-    }
-    let mut p = Pipeline::new(&shared.tts_transforms);
-    let mut out = p.push(raw);
-    out.extend(p.flush());
-    out.concat()
 }
 
 /// Provider-owned sentence metrics are observations, not a second synthesis record.
@@ -543,7 +511,7 @@ impl SynthesisTextSnapshot {
 /// Text and audio share a queue so aligned captions cannot overtake their audio. Each audio event
 /// holds a permit until playback consumes it, backpressuring the synthesiser.
 pub(super) enum SynthesisEvent {
-    Text(String),
+    Text(lk_agents_abi::TranscriptChunk),
     TimedText(lk_agents_abi::TranscriptChunk),
     FlushText,
     Audio(Result<Next, DriverError>, SynthesisTextSnapshot, tokio::sync::OwnedSemaphorePermit),
@@ -674,14 +642,15 @@ pub(super) struct Aligned<'a> {
 }
 
 impl Aligned<'_> {
-    async fn chunk(&mut self, chunk: &SynthesizedAudio) {
+    async fn chunk(&mut self, chunk: &SynthesizedAudio, said: &Visible) {
         for word in &chunk.timed_transcript {
-            let effect = self.state.word(word);
-            self.apply(effect).await;
+            for effect in self.state.word(word, said) {
+                self.apply(effect).await;
+            }
         }
     }
 
-    async fn ended(&mut self, fallback: &str) {
+    async fn ended(&mut self, fallback: &Visible) {
         for effect in self.state.end(fallback) {
             self.apply(effect).await;
         }
@@ -694,7 +663,7 @@ impl Aligned<'_> {
                     leg.capture_timed(&word).await;
                 }
             }
-            AlignedTranscriptEffect::Capture(text) => capture(self.leg, &text).await,
+            AlignedTranscriptEffect::Capture(chunks) => capture(self.leg, &chunks).await,
             AlignedTranscriptEffect::WarnUnaligned => log::warn!(
                 target: lk_agents_abi::LOG_TARGET,
                 "no aligned transcript was returned from tts, forwarding the generated text \

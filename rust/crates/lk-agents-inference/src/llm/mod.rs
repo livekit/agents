@@ -1,9 +1,9 @@
 pub mod algorithms;
 pub mod gateway;
+pub mod model_text;
 pub mod models;
 pub mod parse;
 pub mod request;
-pub mod thinking;
 
 /// Open a completion whose single stream owns all retry decisions. A fallback chain's terminal
 /// errors are final, so its own loop is never replayed by this request.

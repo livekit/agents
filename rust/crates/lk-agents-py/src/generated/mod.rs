@@ -136,10 +136,12 @@ pub trait Implementations: 'static {
         >;
     type LocalInteraction: ::lk_agents_abi::text_session::LocalInteraction;
     type TokenizeFunctions: ::lk_agents_abi::tokenize::bindings::TokenizeFunctions;
-    type HostTokenization: ::lk_agents_abi::tokenize::bindings::HostTokenization;
-    type WordTokenizer: ::lk_agents_abi::tokenize::bindings::WordTokenizer;
-    type SentenceTokenizer: ::lk_agents_abi::tokenize::bindings::SentenceTokenizer;
-    type BlingfireSentenceTokenizer: ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer;
+    type SpeechSentenceTokenizer: ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer<
+            Stream = Self::SpeechSentenceStream,
+        >;
+    type SpeechSentenceStream: ::lk_agents_abi::tokenize::bindings::SpeechSentenceStream;
+    type SpeechWordTokenizer: ::lk_agents_abi::tokenize::bindings::SpeechWordTokenizer<Stream = Self::SpeechWordStream>;
+    type SpeechWordStream: ::lk_agents_abi::tokenize::bindings::SpeechWordStream;
     type BufferedTokens: ::lk_agents_abi::tokenize::bindings::BufferedTokens;
     type LanguageFunctions: ::lk_agents_abi::tokenize::language::LanguageFunctions;
     type SearchDocument: ::lk_agents_abi::tokenize::search::SearchDocument;
@@ -387,12 +389,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<text_session::CoreLocalInteraction>()?;
     m.add_function(wrap_pyfunction!(tokenize::split_words, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::replace_words, m)?)?;
-    m.add_function(wrap_pyfunction!(tokenize::tokenize_paragraphs, m)?)?;
-    m.add_function(wrap_pyfunction!(tokenize::hyphenate_word, m)?)?;
-    m.add_function(wrap_pyfunction!(tokenize::xml_tokenize, m)?)?;
-    m.add_class::<tokenize::BasicWordTokenizer>()?;
-    m.add_class::<tokenize::BasicSentenceTokenizer>()?;
-    m.add_class::<tokenize::BlingfireSentenceTokenizer>()?;
+    m.add_class::<tokenize::SpeechSentenceTokenizer>()?;
+    m.add_class::<tokenize::SpeechSentenceStream>()?;
+    m.add_class::<tokenize::SpeechWordTokenizer>()?;
+    m.add_class::<tokenize::SpeechWordStream>()?;
     m.add_class::<tokenize::TokenBuffer>()?;
     m.add_function(wrap_pyfunction!(tokenize::normalize_language, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::base_language, m)?)?;
@@ -449,6 +449,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_playback_begin, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_current_segment, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_note_capture, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::_core_playback_withdraw_capture, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_started, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_progressed, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_finished, m)?)?;

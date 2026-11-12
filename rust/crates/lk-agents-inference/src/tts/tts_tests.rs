@@ -932,3 +932,55 @@ async fn a_synthesis_stopped_while_opening_closes_its_pooled_connection() {
     assert!(pooled.is_closed(), "the checked-out connection was closed");
     assert_eq!(ws.connect_count(), 1);
 }
+
+/// Refuses its first connection, then serves `inner`.
+struct RefusesFirst {
+    attempts: AtomicU32,
+    inner: FakeWs,
+}
+
+#[async_trait::async_trait]
+impl WsTransport for RefusesFirst {
+    async fn connect(
+        &self,
+        url: &str,
+        headers: Headers,
+    ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(TransportError::Connect("gateway unreachable".into()));
+        }
+        self.inner.connect(url, headers).await
+    }
+}
+
+/// After a failed prewarm, the next one still pools the socket the first synthesis reuses.
+/// https://github.com/livekit/agents/pull/6969
+#[tokio::test]
+async fn a_prewarm_after_a_failed_one_pools_the_socket_the_first_synthesis_reuses() {
+    let gateway = Arc::new(RefusesFirst {
+        attempts: AtomicU32::new(0),
+        inner: FakeWs::new(vec![]).keep_open(),
+    });
+    let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
+    let tts = GatewayTts::new(
+        opts(),
+        gateway.clone(),
+        spawner,
+        Arc::new(lk_agents_net::clock::RealClock::new()),
+    );
+    for _ in 0..2 {
+        tts.prewarm();
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+    }
+    gateway.inner.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
+    gateway.inner.feed(text(json!({"type": "done"})));
+    let mut source =
+        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello there.").await.unwrap();
+    let first = source.next().await.unwrap().expect("the reply's first audio");
+    let connection = first.connection.expect("the first frame reports the connection");
+    assert!(connection.reused, "the synthesis opened its own socket: the prewarm was suppressed");
+    while source.next().await.unwrap().is_some() {}
+    assert_eq!(gateway.inner.connect_count(), 1, "one socket after the refused one");
+}

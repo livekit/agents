@@ -12,9 +12,7 @@ pub mod cores {
     pub use lk_agents_core::metrics::provider::{LlmMetricState, ProviderMetrics, TtsMetricState};
     pub use lk_agents_core::request::ConnectOptionsRules;
     pub use lk_agents_core::text::Languages;
-    pub use lk_agents_core::tokenize::{
-        BasicSentenceTokenizer, BasicWordTokenizer, BufferedTokenStream, HostTokenizer,
-    };
+    pub use lk_agents_core::tokenize::{BufferedTokenStream, SpeechWordTokenizer, WordStream};
     pub use lk_agents_core::tool_outcome::ToolReports;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
     pub use lk_agents_core::tts::markup::{ProviderMarkup, SpeechMarkup, TranscriptMarkupStripper};

@@ -1302,20 +1302,19 @@ impl InferenceLlmChunks {
 type LlmChoiceParserImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ChoiceParser;
 
-/// Accumulates the streamed choices of one OpenAI-compatible completion into chunks, filtering
-/// the model's thinking tags: `inference.LLMStream` over a plugin's own client.
+/// Accumulates the streamed choices of one OpenAI-compatible completion into chunks:
+/// `inference.LLMStream` over a plugin's own client. The model's own syntax (reasoning, template
+/// tokens) is taken out above every provider, not here.
 #[pyclass(name = "LlmChoiceParser", module = "livekit.agents._core")]
 pub struct LlmChoiceParser(pub(crate) LlmChoiceParserImpl);
 
 #[pymethods]
 impl LlmChoiceParser {
     #[new]
-    #[pyo3(signature = (model))]
-    fn new(py: Python<'_>, model: ::std::string::String) -> PyResult<LlmChoiceParser> {
+    fn new(py: Python<'_>) -> PyResult<LlmChoiceParser> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::new(model)
-        });
+        let out =
+            py.detach(<LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::new);
         ::pyo3::PyResult::Ok(LlmChoiceParser(out))
     }
 

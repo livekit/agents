@@ -155,20 +155,6 @@ impl SessionChatCtx {
         &self.agent
     }
 
-    /// A turn ran with expressive off: the markup in the agent's past assistant messages goes for
-    /// good, so it no longer few-shots the LLM.
-    pub fn strip_assistant_markup(&mut self) {
-        self.view_revision += 1;
-        for c in &mut self.items {
-            if c.agent == self.agent
-                && c.visibility.model()
-                && let ChatItem::Message(msg) = &mut c.item
-            {
-                lk_agents_core::tts::markup::strip_message_markup(msg);
-            }
-        }
-    }
-
     pub fn version(&self) -> u64 {
         self.version
     }

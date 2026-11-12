@@ -121,7 +121,7 @@ class TTS(tts.TTS):
             pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations. Defaults to None.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
-            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
+            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.SentenceTokenizer`.
             text_pacing (tts.SentenceStreamPacer | bool, optional): Stream pacer for the TTS. Set to True to use the default pacer, False to disable.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
         """  # noqa: E501
@@ -171,7 +171,7 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+            tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
         )
         self._stream_pacer: tts.SentenceStreamPacer | None = None
         if text_pacing is True:

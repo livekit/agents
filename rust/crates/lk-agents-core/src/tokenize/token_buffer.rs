@@ -1,8 +1,6 @@
 use std::borrow::Cow;
 
 use crate::tokenize::word::{WordTokenizerOptions, split_words};
-use crate::tokenize::xml;
-use lk_agents_abi::SentenceSplitter;
 use lk_agents_abi::tokenize::TokenSpan;
 use lk_agents_abi::tokenize::bindings::TokenizerToken;
 
@@ -58,7 +56,7 @@ pub trait Tokenize: sealed::NativeTokenizer {
 }
 
 /// Minus the tokenizer (`retain_format` is a tokenizer setting).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenBufferOptions {
     /// Batch complete tokens until the running token reaches this many characters.
     pub min_token_len: usize,
@@ -66,18 +64,12 @@ pub struct TokenBufferOptions {
     pub min_ctx_len: usize,
     /// Emit before a token would take the batch past this (an oversized token goes whole).
     pub max_token_len: Option<usize>,
-    /// Never split a tag; hold a token with an unclosed one.
-    pub xml_aware: bool,
 }
 
 impl TokenBufferOptions {
-    /// `basic.WordTokenizer.stream()`: emit each word once a following one proves it whole.
-    pub const WORDS: TokenBufferOptions = TokenBufferOptions {
-        min_token_len: 1,
-        min_ctx_len: 1,
-        max_token_len: None,
-        xml_aware: false,
-    };
+    /// A word stream: emit each word once a following one proves it whole.
+    pub const WORDS: TokenBufferOptions =
+        TokenBufferOptions { min_token_len: 1, min_ctx_len: 1, max_token_len: None };
 }
 
 /// One tokenization requested from the queue owner, or the completed operation's text.
@@ -96,7 +88,7 @@ enum Operation {
 #[derive(Debug, Clone)]
 enum Phase {
     Idle,
-    Awaiting { operation: Operation, plan: xml::Tokenization, emitted: Vec<String> },
+    Awaiting { operation: Operation, emitted: Vec<String> },
 }
 
 /// Pure buffering state. Its owner supplies the spans of each requested text.
@@ -135,28 +127,17 @@ impl TokenBuffer {
     }
 
     pub fn accept(&mut self, spans: Vec<Span>) -> TokenBufferStep {
-        let Phase::Awaiting { operation, plan, emitted } =
+        let Phase::Awaiting { operation, emitted } =
             std::mem::replace(&mut self.phase, Phase::Idle)
         else {
             panic!("no tokenization is pending");
         };
-        self.apply(operation, emitted, plan.finish(spans))
+        self.apply(operation, emitted, spans)
     }
 
     fn request(&mut self, operation: Operation, emitted: Vec<String>) -> TokenBufferStep {
-        let plan = if self.opts.xml_aware {
-            xml::Tokenization::new(&self.in_buf)
-        } else {
-            xml::Tokenization::Plain(self.in_buf.clone())
-        };
-        match plan.input() {
-            Some(text) => {
-                let text = text.to_owned();
-                self.phase = Phase::Awaiting { operation, plan, emitted };
-                TokenBufferStep::Tokenize(text)
-            }
-            None => self.apply(operation, emitted, plan.finish(Vec::new())),
-        }
+        self.phase = Phase::Awaiting { operation, emitted };
+        TokenBufferStep::Tokenize(self.in_buf.clone())
     }
 
     fn apply(
@@ -171,7 +152,8 @@ impl TokenBuffer {
                 let (Some(first), Some(_second)) = (spans.next(), spans.next()) else {
                     return TokenBufferStep::Done(emitted);
                 };
-                if self.opts.xml_aware && xml::has_unclosed_tags(&first.text) {
+                // A first token that covers no text proves nothing complete.
+                if first.end == 0 {
                     return TokenBufferStep::Done(emitted);
                 }
                 self.absorb(&first.text, &mut emitted);
@@ -244,15 +226,6 @@ impl<T: Tokenize> NativeTokenBuffer<T> {
                 TokenBufferStep::Done(out) => return out,
             };
         }
-    }
-}
-
-impl<T: Tokenize + Send> SentenceSplitter for NativeTokenBuffer<T> {
-    fn push(&mut self, text: &str) -> Vec<String> {
-        NativeTokenBuffer::push(self, text)
-    }
-    fn flush(&mut self) -> Vec<String> {
-        NativeTokenBuffer::flush(self)
     }
 }
 

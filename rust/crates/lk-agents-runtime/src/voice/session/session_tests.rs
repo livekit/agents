@@ -1081,7 +1081,7 @@ struct ClosingTextFactory(Arc<PendingTextCleanup>);
 impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
     fn text_node(
         &self,
-        below: Arc<dyn lk_agents_abi::voice::io::TextOutput>,
+        below: Arc<dyn lk_agents_abi::voice::io::TranscriptionOutput>,
     ) -> Result<Arc<dyn lk_agents_abi::voice::nodes::TextNode>, lk_agents_abi::errors::HostError>
     {
         let state = self.0.clone();
@@ -1135,7 +1135,7 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
 
 struct TextDestination(AtomicBool);
 
-impl lk_agents_abi::voice::io::TextOutput for TextDestination {
+impl lk_agents_abi::voice::io::TranscriptionOutput for TextDestination {
     fn label(&self) -> &str {
         "text destination"
     }

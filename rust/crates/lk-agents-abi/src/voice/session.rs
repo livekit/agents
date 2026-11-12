@@ -3,7 +3,7 @@
 //! decisions behind each command are `lk-agents-voice`'s.
 
 use crate::errors::HostError;
-use crate::voice::io::{AudioInput, AudioOutput, TextOutput, VideoInput};
+use crate::voice::io::{AudioInput, AudioOutput, TranscriptionOutput, VideoInput};
 use crate::voice::session_options::{
     Expressive, ResolvedSessionOptions, SessionConnOptions, SessionKwargs, SessionLegs,
     TurnHandlingKwargs, UpdateKwargs,
@@ -379,7 +379,7 @@ pub struct VoiceSessionArgs {
     #[host(default = false)]
     pub host_video_sampler: bool,
     #[host(default = None)]
-    pub host_transcription_output: Option<Arc<dyn TextOutput>>,
+    pub host_transcription_output: Option<Arc<dyn TranscriptionOutput>>,
     #[host(default = false)]
     pub using_default_vad: bool,
     /// The end-of-turn hook's bound, in seconds; `None` is no hook and no wait.
@@ -662,7 +662,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(call)]
     fn set_transcription_output(
         &self,
-        sink: Option<Arc<dyn TextOutput>>,
+        sink: Option<Arc<dyn TranscriptionOutput>>,
     ) -> Result<(), SessionRefused>;
 
     /// `Agent.update_tools()` on a running agent. All three parts go together: the agent hosts

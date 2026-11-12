@@ -22,6 +22,8 @@ lk-agents-telemetry = { path = "../lk-agents-telemetry" }
 lk-agents-abi = { path = "../lk-agents-abi", features = ["testkit"] }
 lk-agents-core = { path = "../lk-agents-core" }
 lk-agents-runtime = { path = "../lk-agents-runtime", default-features = false, features = ["dst"] }
+# The recorder fake writes the session's recording with the real timeline, to check it.
+lk-agents-media = { path = "../lk-agents-media" }
 # The avatar fake's audio and video frames hold their tag as shared bytes.
 bytes = "1"
 tokio = { workspace = true, features = ["test-util", "io-util"] }

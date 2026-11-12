@@ -8,7 +8,7 @@ use crate::telemetry;
 use futures_util::FutureExt as _;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::io::IoError;
-use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
+use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TranscriptionOutput};
 use lk_agents_abi::voice::room_io::{
     ParticipantInfo, ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput,
 };
@@ -97,7 +97,7 @@ impl RoomIo {
         spawner: Arc<dyn Spawner>,
         ids: Arc<SegmentIds>,
         config: RoomIoConfig,
-        text_next_in_chain: Option<Arc<dyn TextOutput>>,
+        text_next_in_chain: Option<Arc<dyn TranscriptionOutput>>,
         pool: Option<lk_agents_media::pool::MediaPool>,
     ) -> Arc<Self> {
         let pre_connect = config.audio_input.as_ref().filter(|a| a.pre_connect_audio).map(|a| {
@@ -133,7 +133,7 @@ impl RoomIo {
             ParticipantAudioOutput::new(room.clone(), clock.clone(), spawner.clone(), a.clone())
         });
 
-        let (user_tr, agent_tr) = match &config.text_output {
+        let (user_tr, agent_tr) = match &config.transcription_output {
             Some(t) => (
                 Some(ParticipantTranscriptionOutput::new(
                     room.clone(),
@@ -807,8 +807,8 @@ impl room_owner::RoomIo for RoomIo {
         self.audio_output.clone().map(|a| a as Arc<dyn AudioOutput>)
     }
 
-    fn transcription_output(&self) -> Option<Arc<dyn TextOutput>> {
-        self.agent_tr.clone().map(|a| a as Arc<dyn TextOutput>)
+    fn transcription_output(&self) -> Option<Arc<dyn TranscriptionOutput>> {
+        self.agent_tr.clone().map(|a| a as Arc<dyn TranscriptionOutput>)
     }
 
     fn wants_transcript_sync(&self, external_audio: bool) -> bool {

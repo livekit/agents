@@ -1,28 +1,26 @@
 use crate::transcription::Heard;
 use crate::transcription::effects::TranscriptPacerEffect;
 use crate::transcription::machine::synchronizer::{Hyphenator, Liang};
-use lk_agents_core::tokenize::{
-    NativeTokenBuffer as TokenBuffer, TokenBufferOptions, WordTokenizerOptions, Words, split_words,
-};
-use lk_agents_core::tts::markup::TranscriptMarkupStripper;
+use lk_agents_abi::TranscriptChunk;
+use lk_agents_core::tokenize::{WordStream, WordTokenizerOptions, split_words};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// The synchroniser's tokenizer settings: tokens must reassemble the input, punctuation is paced,
-/// and CJK/Thai split per character.
+/// The synchroniser's tokenizer settings: tokens must reassemble the input and punctuation is
+/// paced.
 pub const SYNC_TOKENIZER: WordTokenizerOptions =
-    WordTokenizerOptions { ignore_punctuation: false, split_character: true, retain_format: true };
+    WordTokenizerOptions { ignore_punctuation: false, retain_format: true };
 
 /// Hyphens (syllables) per second at `speed = 1.0`, before a segment's own rate is known.
 pub const STANDARD_SPEECH_RATE: f64 = 3.83;
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub(in crate::transcription) enum TranscriptPacerEvent {
-    /// One text delta, raw. `start_time` and `end_time` are the TTS's alignment for it, when the
-    /// TTS aligns.
+    /// One piece of the transcript: a spoken word's text, or text with no speech. `start_time`
+    /// and `end_time` are the TTS's alignment for it, when the TTS aligns.
     Text {
-        raw: String,
+        chunk: TranscriptChunk,
         start_time: Option<f64>,
         end_time: Option<f64>,
     },
@@ -42,6 +40,11 @@ pub(in crate::transcription) enum TranscriptPacerEvent {
     /// was heard so far is reported, and the audio that follows plays on from there, so the words
     /// left (and those still to come) pace against it.
     PlaybackSplit {
+        position: Duration,
+    },
+    /// The sink's audio was cleared at `position`: what was heard by then is reported, and its
+    /// transcript stands there. Only the playout's finish (or a close) follows.
+    Cleared {
         position: Duration,
     },
     Close,
@@ -89,6 +92,9 @@ pub(in crate::transcription) enum TranscriptPacerState {
     AudioEnded,
     /// Both inputs ended; waiting for the playout to finish.
     InputsEnded,
+    /// The sink's audio was cleared: no word is shown any more, and the playout's finish reports
+    /// the words heard among those shown.
+    Cleared,
     /// `Heard` was produced. Only `Close` is left.
     Finished,
     Closed,
@@ -96,9 +102,8 @@ pub(in crate::transcription) enum TranscriptPacerState {
 
 #[derive(Debug, Clone, PartialEq)]
 struct Planned {
-    word: String,
-    /// The token's visible text, from the segment's one stateful stripper.
-    visible: String,
+    /// What the transcript shows for it.
+    chunk: TranscriptChunk,
     hyphens: usize,
     offset: usize,
     /// The TTS's `start_time` for the delta this word came from, or the segment start.
@@ -127,8 +132,9 @@ pub(in crate::transcription) struct TranscriptPacer {
     opts: TranscriptPacerOptions,
     speed: f64,
     /// A token is emitted once a following one proves it complete.
-    words: TokenBuffer<Words>,
-    stripper: TranscriptMarkupStripper,
+    words: WordStream,
+    /// A delivery that arrived with no word yet: the next planned piece carries it.
+    expression: Option<String>,
     queue: VecDeque<Planned>,
     /// Hyphens planned since `base` moved (or since the segment start).
     offset: usize,
@@ -159,8 +165,8 @@ impl TranscriptPacer {
             state: TranscriptPacerState::Streaming,
             opts,
             speed,
-            words: TokenBuffer::new(Words(SYNC_TOKENIZER), TokenBufferOptions::WORDS),
-            stripper: TranscriptMarkupStripper::new(),
+            words: WordStream::new(SYNC_TOKENIZER),
+            expression: None,
             queue: VecDeque::new(),
             offset: 0,
             base: None,
@@ -205,6 +211,11 @@ impl TranscriptPacer {
         matches!(self.state, TranscriptPacerState::Finished | TranscriptPacerState::Closed)
     }
 
+    /// Its audio was cleared: it shows nothing more and awaits its playout's finish.
+    pub fn is_cleared(&self) -> bool {
+        self.state == TranscriptPacerState::Cleared
+    }
+
     /// One event in, its effects out. The state x event table:
     ///
     /// | state \ event | Text | TextEnd | Audio | AudioEnd | Position | Finished | Split | Close |
@@ -213,12 +224,16 @@ impl TranscriptPacer {
     /// | TextEnded | warn | warn | count | -> InputsEnded (1) | release | early (3) | split | cut |
     /// | AudioEnded | plan | -> InputsEnded (1) | warn | warn | release | early (3) | finish (2) | cut |
     /// | InputsEnded | warn | warn | warn | warn | release | finish | finish (2) | cut |
+    /// | Cleared | - | - | - | - | - | settle (4) | - | cut |
     /// | Finished | warn | warn | warn | warn | warn | warn | warn | -> Closed |
     /// | Closed | warn | warn | warn | warn | warn | warn | warn | warn |
     ///
     /// (1) re-estimates the speed. A segment whose inputs ended with no audio shows its text whole
     /// at once: nothing will play it. (2) Interrupted: with its audio over, nothing plays on after
-    /// the cut. (3) Finishes, warned too early.
+    /// the cut. (3) Finishes, warned too early. (4) Interrupted wherever the sink says it
+    /// stopped: the words heard among those shown, with nothing more shown. `Cleared` comes from
+    /// any state but `Finished` and `Closed`; it releases up to its position and reports the words
+    /// heard there.
     ///
     /// Positions are the sink's, in its current playout; the pacer moves them past the last
     /// split.
@@ -235,6 +250,14 @@ impl TranscriptPacer {
             (S::Closed, _) => warn(&mut out, TranscriptPacerWarning::AfterClose),
             (S::Finished, TranscriptPacerEvent::Close) => self.state = S::Closed,
             (S::Finished, _) => warn(&mut out, TranscriptPacerWarning::AfterFinished),
+            (S::Cleared, TranscriptPacerEvent::Close) => self.cut(&mut out),
+            (S::Cleared, TranscriptPacerEvent::PlaybackFinished { position, .. }) => {
+                self.settle(self.origin + position, &mut out)
+            }
+            (S::Cleared, _) => {}
+            (_, TranscriptPacerEvent::Cleared { position }) => {
+                self.clear(self.origin + position, &mut out)
+            }
             (_, TranscriptPacerEvent::Position(p)) => self.release(self.origin + p, &mut out),
             (_, TranscriptPacerEvent::Paused) => self.paused(&mut out),
             (_, TranscriptPacerEvent::Close) => self.cut(&mut out),
@@ -252,8 +275,8 @@ impl TranscriptPacer {
             }
             (
                 S::Streaming | S::AudioEnded,
-                TranscriptPacerEvent::Text { raw, start_time, end_time },
-            ) => self.plan(&raw, start_time, end_time),
+                TranscriptPacerEvent::Text { chunk, start_time, end_time },
+            ) => self.plan(chunk, start_time, end_time),
             (S::Streaming, TranscriptPacerEvent::TextEnd) => {
                 self.end_text();
                 self.state = S::TextEnded;
@@ -277,7 +300,7 @@ impl TranscriptPacer {
         (self, out)
     }
 
-    fn plan(&mut self, raw: &str, start_time: Option<f64>, end_time: Option<f64>) {
+    fn plan(&mut self, chunk: TranscriptChunk, start_time: Option<f64>, end_time: Option<f64>) {
         self.saw_text = true;
         if let Some(t) = start_time {
             // An aligned delta is a word boundary: the held word belongs to the previous onset.
@@ -287,22 +310,34 @@ impl TranscriptPacer {
             self.limit = end_time.filter(|end| *end >= t);
             self.offset = 0;
         }
-        let tokens = self.words.push(raw);
-        self.plan_tokens(tokens);
+        if chunk.expression.is_some() {
+            self.expression.clone_from(&chunk.expression);
+        }
+        if chunk.spoken {
+            let tokens = self.words.push(&chunk.text);
+            self.plan_tokens(tokens);
+        } else {
+            // text with no speech: the word before it is whole, and it costs no time
+            let held = self.words.flush();
+            self.plan_tokens(held);
+            self.plan_piece(TranscriptChunk { expression: None, ..chunk }, 0);
+        }
     }
 
     fn plan_tokens(&mut self, tokens: Vec<String>) {
         for word in tokens {
-            let visible = self.stripper.push(&word);
-            self.plan_word(word, visible);
+            let hyphens = self.hyphens(&word);
+            self.plan_piece(TranscriptChunk::new(word), hyphens);
         }
     }
 
-    fn plan_word(&mut self, word: String, visible: String) {
-        let hyphens = self.hyphens(&visible);
+    fn plan_piece(&mut self, mut chunk: TranscriptChunk, hyphens: usize) {
+        if chunk.text.is_empty() && self.expression.is_none() {
+            return;
+        }
+        chunk.expression = self.expression.take();
         self.queue.push_back(Planned {
-            word,
-            visible,
+            chunk,
             hyphens,
             offset: self.offset,
             base: self.base,
@@ -324,14 +359,13 @@ impl TranscriptPacer {
             .sum()
     }
 
-    /// The text ended: the held partial word is a whole word now, and so is a held tag.
+    /// The text ended: the held partial word is a whole word now, and a delivery with no word
+    /// after it still reaches the transcript.
     fn end_text(&mut self) {
         let tail = self.words.flush();
         self.plan_tokens(tail);
-        let held = self.stripper.flush();
-        if !held.is_empty() {
-            // A fragment held as a possible tag that never closed: plain text after all.
-            self.plan_word(String::new(), held);
+        if self.expression.is_some() {
+            self.plan_piece(TranscriptChunk::silent(""), 0);
         }
     }
 
@@ -371,29 +405,12 @@ impl TranscriptPacer {
             let held = self.words.flush();
             self.plan_tokens(held);
         }
-        while let Some(front) = self.queue.front() {
-            let (start, end) = match (self.front, front.base) {
-                (Some(timed), _) => timed,
-                (None, Some(base)) => {
-                    let (start, end) = (front.due(self.speed), front.end(self.speed));
-                    // The next stamped delta starts where this one's audio is over: a token paced
-                    // past it (the space after a word) must not hold it back.
-                    match self.queue.get(1).and_then(|w| w.base).filter(|next| *next > base) {
-                        Some(next) => (start.min(next), end.min(next).max(start.min(next))),
-                        None => (start, end),
-                    }
-                }
-                (None, None) => {
-                    let start = self.cursor.unwrap_or(0.0).max(front.arrived);
-                    (start, start + front.hyphens as f64 / self.speed)
-                }
-            };
+        while let Some((start, end, shown_at)) = self.front_times() {
             // Only a word whose audio has started is in its delay (what a pause shows).
             if start > now + 1e-9 {
                 break;
             }
             self.front = Some((start, end));
-            let shown_at = if front.base.is_some() { start } else { (start + end) / 2.0 };
             if shown_at > now + 1e-9 {
                 break;
             }
@@ -402,6 +419,56 @@ impl TranscriptPacer {
             self.cursor = Some(end);
             self.forward(word, start, end, out);
         }
+    }
+
+    /// The front word's `(start, end, shown_at)` in the segment's time, at the speed known now
+    /// unless its start already fixed it.
+    fn front_times(&self) -> Option<(f64, f64, f64)> {
+        let front = self.queue.front()?;
+        let (start, end) = match (self.front, front.base) {
+            (Some(timed), _) => timed,
+            (None, Some(base)) => {
+                let (start, end) = (front.due(self.speed), front.end(self.speed));
+                // The next stamped delta starts where this one's audio is over: a token paced
+                // past it (the space after a word) must not hold it back.
+                match self.queue.get(1).and_then(|w| w.base).filter(|next| *next > base) {
+                    Some(next) => (start.min(next), end.min(next).max(start.min(next))),
+                    None => (start, end),
+                }
+            }
+            (None, None) => {
+                let start = self.cursor.unwrap_or(0.0).max(front.arrived);
+                (start, start + front.hyphens as f64 / self.speed)
+            }
+        };
+        let shown_at = if front.base.is_some() { start } else { (start + end) / 2.0 };
+        Some((start, end, shown_at))
+    }
+
+    /// The next playhead, in the sink's current playout, at which a position would release
+    /// something: the front word's start or its showing, or the end of the aligned delta whose
+    /// last word is held. `None` when nothing waits on the playhead.
+    pub fn next_due(&self) -> Option<Duration> {
+        if self.is_cleared() {
+            return None;
+        }
+        let now = self.position.as_secs_f64();
+        let front = self.front_times().map(
+            |(start, _, shown_at)| {
+                if start > now + 1e-9 { start } else { shown_at }
+            },
+        );
+        let held = self.limit.filter(|end| *end > now);
+        let due = match (front, held) {
+            (Some(a), Some(b)) => a.min(b),
+            (due, None) | (None, due) => due?,
+        };
+        Some(Duration::from_secs_f64(due.max(0.0)).saturating_sub(self.origin))
+    }
+
+    /// The audio the sink was sent in its current playout: no playhead estimate passes it.
+    pub fn audio_sent(&self) -> Duration {
+        Duration::from_secs_f64(self.audio_secs).saturating_sub(self.origin)
     }
 
     /// The word whose delay had begun is still shown; only the next word waits.
@@ -424,16 +491,21 @@ impl TranscriptPacer {
         if let Some((_, end)) = self.forwarded.last_mut() {
             *end = end.min(start_time);
         }
-        self.forwarded.push((word.visible, end_time));
-        if !word.word.is_empty() {
-            out.push(TranscriptPacerEffect::Forward { word: word.word, start_time, end_time });
-        }
+        self.forwarded.push((word.chunk.text.clone(), end_time));
+        out.push(TranscriptPacerEffect::Forward { chunk: word.chunk, start_time, end_time });
     }
 
     /// The words shown whose audio had ended by `position`.
+    /// As history keeps it: plain, and ending at the last word heard.
     fn heard(&self, position: Duration) -> String {
         let at = position.as_secs_f64() + 1e-9;
-        self.forwarded.iter().take_while(|(_, end)| *end <= at).map(|(w, _)| w.as_str()).collect()
+        let shown: String = self
+            .forwarded
+            .iter()
+            .take_while(|(_, end)| *end <= at)
+            .map(|(w, _)| w.as_str())
+            .collect();
+        crate::transcription::plain(shown.trim_end())
     }
 
     /// The playout ended. Complete: everything left is heard, at once. Cut: what was forwarded by
@@ -463,8 +535,27 @@ impl TranscriptPacer {
             Heard::cut(self.heard(position), position, self.frames)
         } else {
             let all: String = self.forwarded.iter().map(|(w, _)| w.as_str()).collect();
-            Heard::complete(all, position, self.frames)
+            Heard::complete(crate::transcription::plain(&all), position, self.frames)
         };
+        out.push(TranscriptPacerEffect::Heard(heard));
+        self.state = TranscriptPacerState::Finished;
+    }
+
+    /// The audio was cleared at `position`: the words due by then are shown, the rest never are,
+    /// and the words heard are reported.
+    fn clear(&mut self, position: Duration, out: &mut Vec<TranscriptPacerEffect>) {
+        self.release(position, out);
+        self.queue.clear();
+        out.push(TranscriptPacerEffect::Flush);
+        let heard = Heard::cut(self.heard(position), position, self.frames);
+        out.push(TranscriptPacerEffect::Heard(heard));
+        self.state = TranscriptPacerState::Cleared;
+    }
+
+    /// A cleared playout's finish at `position`: the words heard among those shown.
+    fn settle(&mut self, position: Duration, out: &mut Vec<TranscriptPacerEffect>) {
+        out.push(TranscriptPacerEffect::Flush);
+        let heard = Heard::cut(self.heard(position), position, self.frames);
         out.push(TranscriptPacerEffect::Heard(heard));
         self.state = TranscriptPacerState::Finished;
     }

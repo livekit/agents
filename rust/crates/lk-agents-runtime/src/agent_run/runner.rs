@@ -49,7 +49,8 @@ impl AgentRunner for Runner {
         lk_agents_core::agent::validate(&definition).map_err(|e| Invalid(e.to_string()))?;
         Ok(Runner {
             definition,
-            llm,
+            // what the model writes that is not for the person never reaches the run
+            llm: lk_agents_inference::llm::model_text::ModelText::wrap(llm),
             host,
             clock: env.clock.clone(),
             running: Mutex::new(Vec::new()),

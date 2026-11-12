@@ -167,11 +167,20 @@ async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool
 }
 
 /// `flush()` then `clear_buffer()`: a cut segment reports `Clear`, never `Flush`+`End`. With
-/// nothing pushed since the last flush there is no segment to close, and a second flush would end
-/// a synchronised segment that has none of its audio.
+/// nothing taken since the last flush there is no segment to close, and a second flush would end
+/// a synchronised segment that has none of its audio; a capture refused or cancelled since may
+/// still have opened one, which no sink will report, so it is withdrawn.
 fn clear_sink(shared: &Arc<SessionShared>, speech: SpeechId, out: &dyn AudioOutput, open: bool) {
     shared.trace(PlayoutStep::SinkCalled { speech: Some(speech), call: SinkCall::Clear });
-    if open { out.cut() } else { out.clear_buffer() }
+    if open {
+        out.cut();
+    } else {
+        out.clear_buffer();
+        if let Err(error) = out.withdraw_capture() {
+            log::error!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str();
+                "failed to withdraw a refused capture from the audio output");
+        }
+    }
 }
 
 /// Built at the first off-rate frame. A sink that takes any rate gets the frames untouched. A rate
@@ -220,6 +229,10 @@ impl PlaybackObserver for SinkReports {
         word: &lk_agents_abi::TranscriptChunk,
     ) {
         let _ = self.0.send(SinkReport::Shown(segment, word.clone()));
+    }
+
+    fn on_transcript_cleared(&self, segment: PlaybackSegment, heard: &str) {
+        let _ = self.0.send(SinkReport::Cleared { segment, heard: heard.to_owned() });
     }
 
     fn on_playback_reset(&self) {
@@ -523,8 +536,11 @@ impl Playing<'_> {
             self.settle(segment);
             match pushed {
                 Some(Ok(())) => {
-                    self.state
-                        .captured(self.out.tracker().current_segment(), frame_duration(frame));
+                    let segment = self.out.tracker().current_segment();
+                    self.state.captured(segment, frame_duration(frame));
+                    if let Some(segment) = segment {
+                        self.shared.unplayed.lock().captured(segment, frame);
+                    }
                     if let Some(tap) = self.shared.recorder_tap() {
                         tap.recorder.capture_frame(tap.now(), frame);
                     }

@@ -14,15 +14,9 @@ pub(super) use lk_agents_voice::generation::machine::llm::LlmGenerationData;
 use lk_agents_voice::generation::machine::llm::{LlmRead, before_read};
 use lk_agents_voice::generation::{GenEvent, ReplySource};
 use lk_agents_voice::trace::{FailureClass, GenerationStep, ProviderKind};
-use lk_agents_voice::transcription::Visible;
+use lk_agents_voice::transcription::{SpeechViews, Visible};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-
-pub(super) fn extend(acc: &mut Visible, more: &Visible) {
-    acc.raw.push_str(&more.raw);
-    acc.text.push_str(&more.text);
-    acc.tags.extend(more.tags.iter().cloned());
-}
 
 /// `_produce_segments`. The dispatched tools come back on every path, failure included.
 pub(super) async fn produce_segments(
@@ -41,19 +35,20 @@ pub(super) async fn produce_segments(
         }
         ReplySource::Text(text) => {
             if !text.is_empty() {
-                send_segment(&tx, text);
+                send_segment(&tx, text, &ctx.views(shared));
             }
         }
         // The caller's frames are the segment, with words or without.
-        ReplySource::Audio { text, .. } => send_segment(&tx, text),
-        ReplySource::TextStream => forward_text_stream(handle, &tx).await,
+        ReplySource::Audio { text, .. } => send_segment(&tx, text, &ctx.views(shared)),
+        ReplySource::TextStream => forward_text_stream(handle, &tx, &ctx.views(shared)).await,
     }
-    (Ok(LlmGenerationData::new(shared.time.wall_secs(), String::new(), None)), tools)
+    let views = ctx.views(shared);
+    (Ok(LlmGenerationData::new(shared.time.wall_secs(), String::new(), None, views)), tools)
 }
 
 /// One whole segment. A closed receiver means the voice gave up; dropping the chunk is right.
-fn send_segment(tx: &mpsc::UnboundedSender<SpeechSegmentEvent>, text: &str) {
-    let _ = tx.send(SpeechSegmentEvent::Chunk(Visible::of(text)));
+fn send_segment(tx: &mpsc::UnboundedSender<SpeechSegmentEvent>, text: &str, views: &SpeechViews) {
+    let _ = tx.send(SpeechSegmentEvent::Chunk(Visible::of(text, views)));
     let _ = tx.send(SpeechSegmentEvent::End);
 }
 
@@ -63,6 +58,7 @@ fn send_segment(tx: &mpsc::UnboundedSender<SpeechSegmentEvent>, text: &str) {
 async fn forward_text_stream(
     handle: &SpeechHandle,
     tx: &mpsc::UnboundedSender<SpeechSegmentEvent>,
+    views: &SpeechViews,
 ) {
     let Some(mut rx) = handle.take_text_stream() else { return };
     loop {
@@ -77,7 +73,7 @@ async fn forward_text_stream(
             break;
         };
         if !chunk.is_empty() {
-            send_segment(tx, &chunk);
+            send_segment(tx, &chunk, views);
         }
     }
 }
@@ -207,7 +203,7 @@ impl LlmInference<'_> {
             provider: id.provider,
             model: id.model,
         });
-        LlmGenerationData::new(started_at, label, metadata)
+        LlmGenerationData::new(started_at, label, metadata, self.ctx.views(shared))
     }
 
     fn request_finished(&self, error: Option<&ProviderError>) {

@@ -41,5 +41,6 @@ def test_transcript_export_strips_assistant_expressions_without_changing_saved_h
     exported = context.to_dict(strip_markup=True)["items"]
 
     assert exported[0]["content"] == [MARKED]
-    assert exported[1]["content"] == [" " + CLEAN]
+    # a leading marker leaves no blank behind
+    assert exported[1]["content"] == [CLEAN]
     assert context.to_dict()["items"][1]["content"] == [MARKED]

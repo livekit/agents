@@ -1,6 +1,6 @@
 use crate::telemetry;
 use lk_agents_abi::OwnedTask;
-use lk_agents_abi::voice::io::TextOutput;
+use lk_agents_abi::voice::io::TranscriptionOutput;
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{
     ParticipantIdentity, RoomEvent, RtcRoom, StreamTextOptions, TextStreamWriter, TrackSid,
@@ -147,7 +147,7 @@ impl Performer {
     }
 }
 
-/// `_ParticipantTranscriptionOutput`: the `io.TextOutput` in front of the writer; its effects are
+/// `_ParticipantTranscriptionOutput`: the `io.TranscriptionOutput` in front of the writer; its effects are
 /// performed in order by one task, off the caller.
 pub struct ParticipantTranscriptionOutput {
     room: Arc<dyn RtcRoom>,
@@ -158,7 +158,7 @@ pub struct ParticipantTranscriptionOutput {
     changed: signal::Producer<()>,
     /// The performer's own: it ends with the performer, however it ends.
     performer_done: signal::Cell<bool>,
-    next_in_chain: Option<Arc<dyn TextOutput>>,
+    next_in_chain: Option<Arc<dyn TranscriptionOutput>>,
     /// The performer, which holds the output only while it works: once the output is gone it
     /// closes its writer and ends.
     performer: Mutex<Option<OwnedTask>>,
@@ -172,7 +172,7 @@ impl ParticipantTranscriptionOutput {
         ids: Arc<SegmentIds>,
         is_delta_stream: bool,
         json_format: bool,
-        next_in_chain: Option<Arc<dyn TextOutput>>,
+        next_in_chain: Option<Arc<dyn TranscriptionOutput>>,
     ) -> Arc<Self> {
         let segment = ids.next_segment_id();
         let (done, performer_done) = signal::signal(false);
@@ -408,11 +408,11 @@ impl ParticipantTranscriptionOutput {
     }
 }
 
-impl TextOutput for ParticipantTranscriptionOutput {
+impl TranscriptionOutput for ParticipantTranscriptionOutput {
     fn label(&self) -> &str {
         "RoomIO"
     }
-    fn next_in_chain(&self) -> Option<Arc<dyn TextOutput>> {
+    fn next_in_chain(&self) -> Option<Arc<dyn TranscriptionOutput>> {
         self.next_in_chain.clone()
     }
     fn capture_text<'a>(
@@ -421,7 +421,7 @@ impl TextOutput for ParticipantTranscriptionOutput {
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         let cx = cx.clone();
-        Box::pin(async move { self.capture_timed(&cx, &TranscriptChunk::new(text)).await })
+        Box::pin(async move { self.capture(&cx, Captured::Host(text)).await })
     }
 
     fn capture_timed<'a>(
@@ -430,33 +430,7 @@ impl TextOutput for ParticipantTranscriptionOutput {
         text: &'a TranscriptChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         let cx = cx.clone();
-        Box::pin(async move {
-            let (shown, refused) = {
-                let mut writer = self.writer.lock();
-                let WriterState { core, admission, .. } = &mut *writer;
-                match core.admit_text(&text.text) {
-                    Ok(()) => {
-                        let visible = core.visible_of(&text.text);
-                        let shown = visible.text.clone();
-                        core.capture(visible, Some(text));
-                        (shown, self.submit(&mut writer))
-                    }
-                    Err(error) => {
-                        admission.fail(core, error.clone());
-                        (String::new(), Some(error))
-                    }
-                }
-            };
-            if let Some(error) = refused {
-                self.latched(error);
-            }
-            if let Some(next) = &self.next_in_chain
-                && !shown.is_empty()
-            {
-                next.capture_timed(&cx, &TranscriptChunk { text: shown, ..text.clone() }).await?;
-            }
-            Ok(())
-        })
+        Box::pin(async move { self.capture(&cx, Captured::Chunk(text)).await })
     }
 
     fn flush(&self) {
@@ -464,6 +438,50 @@ impl TextOutput for ParticipantTranscriptionOutput {
         if let Some(next) = &self.next_in_chain {
             next.flush();
         }
+    }
+}
+
+/// What reached the room: a settled piece of the transcript, or a host's plain string.
+enum Captured<'a> {
+    Chunk(&'a TranscriptChunk),
+    Host(&'a str),
+}
+
+impl ParticipantTranscriptionOutput {
+    async fn capture(&self, cx: &telemetry::Cx, captured: Captured<'_>) -> Result<()> {
+        let raw = match captured {
+            Captured::Chunk(chunk) => chunk.text.as_str(),
+            Captured::Host(text) => text,
+        };
+        let (shown, refused) = {
+            let mut writer = self.writer.lock();
+            let WriterState { core, admission, .. } = &mut *writer;
+            match core.admit_text(raw) {
+                Ok(()) => {
+                    let shown = match captured {
+                        Captured::Chunk(chunk) => {
+                            core.capture(chunk);
+                            chunk.clone()
+                        }
+                        Captured::Host(text) => core.capture_text(text),
+                    };
+                    (Some(shown), self.submit(&mut writer))
+                }
+                Err(error) => {
+                    admission.fail(core, error.clone());
+                    (None, Some(error))
+                }
+            }
+        };
+        if let Some(error) = refused {
+            self.latched(error);
+        }
+        if let Some(next) = &self.next_in_chain
+            && let Some(shown) = shown.filter(|c| !c.text.is_empty())
+        {
+            next.capture_timed(cx, &shown).await?;
+        }
+        Ok(())
     }
 }
 

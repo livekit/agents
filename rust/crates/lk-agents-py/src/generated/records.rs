@@ -12803,34 +12803,39 @@ pub mod room_options {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/room_io.rs.
-    pub fn text_output_config_from_py(
+    pub fn transcription_output_config_from_py(
         obj: &pyo3::Bound<'_, pyo3::PyAny>,
-    ) -> pyo3::PyResult<::lk_agents_abi::voice::room_io::TextOutputConfig> {
+    ) -> pyo3::PyResult<::lk_agents_abi::voice::room_io::TranscriptionOutputConfig> {
         let sync_transcription = ::lk_agents_abi::voice::room_io::sync_transcription_from_wire(
-            crate::py_values::attr_with(obj, "TextOutputConfig", "sync_transcription", |v| {
-                if crate::py_values::is_not_given(v)? {
-                    Ok(::lk_agents_abi::Maybe::NotGiven)
-                } else {
-                    (v.extract::<bool>()).map(::lk_agents_abi::Maybe::Given)
-                }
-            })?,
+            crate::py_values::attr_with(
+                obj,
+                "TranscriptionOutputConfig",
+                "sync_transcription",
+                |v| {
+                    if crate::py_values::is_not_given(v)? {
+                        Ok(::lk_agents_abi::Maybe::NotGiven)
+                    } else {
+                        (v.extract::<bool>()).map(::lk_agents_abi::Maybe::Given)
+                    }
+                },
+            )?,
         );
         let transcription_speed_factor = crate::py_values::attr_with(
             obj,
-            "TextOutputConfig",
+            "TranscriptionOutputConfig",
             "transcription_speed_factor",
             |v| {
                 crate::py_values::number_from_py::<f64>(
                     v,
-                    "TextOutputConfig.transcription_speed_factor",
+                    "TranscriptionOutputConfig.transcription_speed_factor",
                 )
             },
         )?;
         let json_format =
-            crate::py_values::attr_with(obj, "TextOutputConfig", "json_format", |v| {
+            crate::py_values::attr_with(obj, "TranscriptionOutputConfig", "json_format", |v| {
                 v.extract::<bool>()
             })?;
-        let value = ::lk_agents_abi::voice::room_io::TextOutputConfig {
+        let value = ::lk_agents_abi::voice::room_io::TranscriptionOutputConfig {
             sync_transcription,
             transcription_speed_factor,
             json_format,
@@ -12923,13 +12928,15 @@ pub mod room_options {
                 (crate::generated::records::room_options::audio_output_config_from_py(v)).map(Some)
             })?
         };
-        let text_output = {
-            let member = crate::py_calls::call(&obj.getattr("get_text_output_options")?, (), None)?;
+        let transcription_output = {
+            let member =
+                crate::py_calls::call(&obj.getattr("get_transcription_output_options")?, (), None)?;
             let v = &member;
             (if v.is_none() {
                 Ok(None)
             } else {
-                (crate::generated::records::room_options::text_output_config_from_py(v)).map(Some)
+                (crate::generated::records::room_options::transcription_output_config_from_py(v))
+                    .map(Some)
             })?
         };
         let value = ::lk_agents_abi::voice::room_io::RoomIoConfig {
@@ -12941,7 +12948,7 @@ pub mod room_options {
             video_input,
             audio_input,
             audio_output,
-            text_output,
+            transcription_output,
         };
         Ok(value)
     }
@@ -22687,6 +22694,16 @@ pub mod transcript {
                     (v.extract::<::std::string::String>()).map(Some)
                 }
             })?,
+            spoken: crate::py_values::attr_with(obj, "TranscriptChunk", "spoken", |v| {
+                v.extract::<bool>()
+            })?,
+            expression: crate::py_values::attr_with(obj, "TranscriptChunk", "expression", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
         })
     }
 
@@ -22701,6 +22718,8 @@ pub mod transcript {
             confidence,
             start_time_offset,
             speaker_id,
+            spoken,
+            expression,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
@@ -22735,6 +22754,14 @@ pub mod transcript {
         kwargs.set_item(
             "speaker_id",
             match speaker_id {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item("spoken", ::pyo3::IntoPyObjectExt::into_bound_py_any(spoken, py)?)?;
+        kwargs.set_item(
+            "expression",
+            match expression {
                 None => py.None().into_bound(py),
                 Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
             },
@@ -26082,7 +26109,8 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::voice::TextOutputProxy::from_host(v.as_any())).map(Some)
+                        (crate::generated::voice::TranscriptionOutputProxy::from_host(v.as_any()))
+                            .map(Some)
                     }
                 },
             )?,

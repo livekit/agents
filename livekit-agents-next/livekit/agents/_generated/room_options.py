@@ -17,7 +17,7 @@ if TYPE_CHECKING:
         AudioOutputOptions as _HostAudioOutputConfig,
         AudioOutputOptions as _HostAudioOutputOptionsWire,
         RoomOptions as _HostRoomIoConfig,
-        TextOutputOptions as _HostTextOutputConfig,
+        TranscriptionOutputOptions as _HostTranscriptionOutputConfig,
     )
     from livekit.rtc import TrackPublishOptions as _HostAudioTrackPublishOptions
 
@@ -27,7 +27,7 @@ AudioInputConfig: TypeAlias = "_HostAudioInputConfig"
 AudioOutputConfig: TypeAlias = "_HostAudioOutputConfig"
 
 
-TextOutputConfig: TypeAlias = "_HostTextOutputConfig"
+TranscriptionOutputConfig: TypeAlias = "_HostTranscriptionOutputConfig"
 
 
 RoomIoConfig: TypeAlias = "_HostRoomIoConfig"

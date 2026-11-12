@@ -38,7 +38,7 @@ async def test_input_gen_close_does_not_mask_api_error() -> None:
     tts._client = client
 
     stream = tts.stream()
-    input_stream = tokenize.basic.SentenceTokenizer().stream()
+    input_stream = tokenize.SentenceTokenizer().stream()
     try:
         with pytest.raises(APITimeoutError):
             await stream._run_stream(

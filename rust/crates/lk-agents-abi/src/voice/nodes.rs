@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::errors::{HostError, ProviderError};
 use crate::types::connect::ApiConnectOptionsError;
 use crate::utils::stream::StreamOutput;
-use crate::voice::io::TextOutput;
+use crate::voice::io::TranscriptionOutput;
 use crate::{
     ApiConnectOptions, AudioFrame, ChatItem, ChatRequest, HostRef, Llm, LlmChunk, LlmStream,
     SpeechEvent, Stt, SttSink, SttSource, SynthesizedAudio, ToolChoice, ToolSpec, TranscriptChunk,
@@ -185,7 +185,10 @@ pub trait DefaultNodes {
     class = "AgentNodes"
 ))]
 pub trait NodeFactory: Send + Sync {
-    fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError>;
+    fn text_node(
+        &self,
+        below: Arc<dyn TranscriptionOutput>,
+    ) -> Result<Arc<dyn TextNode>, HostError>;
     /// `llm_node(chat_ctx, tools, model_settings)`: its chunks, strings and flushes as chunks; it
     /// runs under `cx`, the step's `llm_node` span.
     fn llm_node<'a>(

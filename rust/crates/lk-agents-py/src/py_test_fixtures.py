@@ -13,7 +13,7 @@ def room_options_for_native(case):
         AudioInputOptions,
         AudioOutputOptions,
         RoomOptions,
-        TextOutputOptions,
+        TranscriptionOutputOptions,
     )
 
     if case == "configured":
@@ -30,11 +30,11 @@ def room_options_for_native(case):
                     source=rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO
                 ),
             ),
-            text_output=TextOutputOptions(sync_transcription=False),
+            transcription_output=TranscriptionOutputOptions(sync_transcription=False),
         )
     elif case == "disabled":
         options = RoomOptions(
-            audio_input=False, audio_output=False, text_input=False, text_output=False
+            audio_input=False, audio_output=False, text_input=False, transcription_output=False
         )
     elif case == "selector":
         options = RoomOptions(audio_input=AudioInputOptions(noise_cancellation=lambda _: None))

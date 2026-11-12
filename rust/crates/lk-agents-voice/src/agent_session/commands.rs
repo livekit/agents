@@ -532,7 +532,7 @@ pub enum ActivityCommand {
     /// once.
     SetAudioOutput(Option<lk_agents_abi::resources::AudioOutputRef>),
     /// A reply in flight keeps its leg.
-    SetTranscriptionOutput(Option<lk_agents_abi::resources::TextOutputRef>),
+    SetTranscriptionOutput(Option<lk_agents_abi::resources::TranscriptionOutputRef>),
     /// **Not a handoff**: only the providers change; the streaming legs reopen as a handoff reopens
     /// them.
     UpdateModels(Box<ModelUpdate>),

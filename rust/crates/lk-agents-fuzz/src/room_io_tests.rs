@@ -1,9 +1,9 @@
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::io::{
-    AudioInput, AudioOutput, AudioOutputExt, PlaybackFinished, TextOutput, VideoInput,
+    AudioInput, AudioOutput, AudioOutputExt, PlaybackFinished, TranscriptionOutput, VideoInput,
 };
 use lk_agents_abi::voice::room_io::{
-    AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextInput, TextOutputConfig,
+    AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextInput, TranscriptionOutputConfig,
 };
 use lk_agents_abi::voice::room_owner::{RoomIo as _, RoomIoEvent};
 use lk_agents_abi::voice::rtc::{
@@ -78,7 +78,7 @@ fn config() -> RoomIoConfig {
         video_input: false,
         audio_input: None,
         audio_output: Some(AudioOutputConfig::default()),
-        text_output: None,
+        transcription_output: None,
     }
 }
 
@@ -418,7 +418,10 @@ async fn saturated_room_events_are_reported_to_the_selection_caller() {
 async fn a_transcript_burst_leaves_the_room_audio_output_open() {
     let (room, clock) = fake_room("transcript-burst");
     room.add_participant("person", ParticipantKind::Standard);
-    let config = RoomIoConfig { text_output: Some(TextOutputConfig::default()), ..config() };
+    let config = RoomIoConfig {
+        transcription_output: Some(TranscriptionOutputConfig::default()),
+        ..config()
+    };
     let io = room_io(room.clone(), clock, config);
     io.clone().start(lk_agents_abi::telemetry::Cx::NONE);
     io.wait_for_ready().await.unwrap();

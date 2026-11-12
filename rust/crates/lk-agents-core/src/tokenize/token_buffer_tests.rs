@@ -36,7 +36,7 @@ fn sentences(opts: TokenBufferOptions) -> TokenBuffer<Dots> {
 }
 
 const PER_SENTENCE: TokenBufferOptions =
-    TokenBufferOptions { min_token_len: 1, min_ctx_len: 1, max_token_len: None, xml_aware: false };
+    TokenBufferOptions { min_token_len: 1, min_ctx_len: 1, max_token_len: None };
 
 fn drive<T: Tokenize>(buf: &mut TokenBuffer<T>, chunks: &[String]) -> Vec<String> {
     let mut out: Vec<String> = chunks.iter().flat_map(|c| buf.push(c)).collect();
@@ -71,6 +71,20 @@ fn supplied_spans_drive_requests_without_retaining_a_tokenizer() {
         TokenBufferStep::Done(vec!["word".into()])
     );
     assert_eq!(state.flush(), TokenBufferStep::Done(vec![]));
+}
+
+// Catches: re-requesting the same text forever when a tokenizer's first token is empty.
+#[test]
+fn an_empty_first_token_holds_the_text_until_flush() {
+    let mut state = super::TokenBuffer::new(TokenBufferOptions::WORDS);
+    assert_eq!(state.push("-c"), TokenBufferStep::Tokenize("-c".into()));
+    let spans = vec![
+        Span { text: String::new(), start: 0, end: 0 },
+        Span { text: "c".into(), start: 1, end: 2 },
+    ];
+    assert_eq!(state.accept(spans.clone()), TokenBufferStep::Done(vec![]));
+    assert_eq!(state.flush(), TokenBufferStep::Tokenize("-c".into()));
+    assert_eq!(state.accept(spans), TokenBufferStep::Done(vec!["c".into()]));
 }
 
 // --- The hold-back rules, one at a time.
@@ -176,7 +190,7 @@ fn multibyte_text_is_sliced_and_counted_by_character() {
 fn the_tokens_do_not_depend_on_how_the_text_was_chunked() {
     let text = "Hello there, my 友人! How are you? I am well, thanks.";
     let opts = TokenBufferOptions { min_token_len: 15, ..PER_SENTENCE };
-    let whole = drive_str(&mut sentences(opts), &[text]);
+    let whole = drive_str(&mut sentences(opts.clone()), &[text]);
     let per_char: Vec<String> = text.chars().map(String::from).collect();
     assert_eq!(drive(&mut sentences(opts), &per_char), whole);
     assert_eq!(whole, vec!["Hello there, my 友人!", "How are you? I am well, thanks."]);
@@ -188,11 +202,7 @@ fn the_tokens_do_not_depend_on_how_the_text_was_chunked() {
 #[test]
 fn words_spans_tile_the_input_and_reassemble_it() {
     let text = "  Hello there,  wörld! 你好 ok ";
-    let opts = WordTokenizerOptions {
-        ignore_punctuation: false,
-        split_character: true,
-        retain_format: true,
-    };
+    let opts = WordTokenizerOptions { ignore_punctuation: false, retain_format: true };
     let spans = Words(opts).tokenize(text);
     assert_eq!(spans[0].start, 0);
     for pair in spans.windows(2) {
@@ -200,37 +210,4 @@ fn words_spans_tile_the_input_and_reassemble_it() {
     }
     assert_eq!(spans.last().expect("tokens").end, text.chars().count());
     assert_eq!(spans.iter().map(|s| s.text.as_str()).collect::<String>(), text);
-}
-
-// Catches: a boundary tag left on the previous sentence, or emitted alone.
-#[test]
-fn xml_aware_keeps_a_boundary_tag_with_the_following_sentence() {
-    let out = xml::tokenize_aware(&Dots, "Hello. <break/> World. Bye.");
-    let texts: Vec<&str> = out.iter().map(|s| s.text.as_str()).collect();
-    assert_eq!(texts, vec!["Hello.", "<break/> World.", "Bye."]);
-    assert_eq!(out[1].start, 6);
-    assert_eq!(out[1].end, 22, "offsets index the original, tag included");
-}
-
-// --- xml-aware streaming (the rest of `TestStreamingTokenizer` runs in the reference suite).
-
-const XML_STREAM: TokenBufferOptions =
-    TokenBufferOptions { min_token_len: 1, min_ctx_len: 5, max_token_len: None, xml_aware: true };
-
-// A-31. Catches: a `<break time="1s"/>` arriving one character at a time being cut. At the
-// reference's floor of 20 it rides inside its sentence.
-#[test]
-fn a_break_tag_mid_sentence_never_splits() {
-    let text = "Hello <break time=\"1s\"/> there my friend. Second sentence here.";
-    let per_char: Vec<String> = text.chars().map(String::from).collect();
-    let got =
-        drive(&mut sentences(TokenBufferOptions { min_token_len: 20, ..XML_STREAM }), &per_char);
-    assert_eq!(got, vec!["Hello <break time=\"1s\"/> there my friend.", "Second sentence here."]);
-
-    let got = drive(&mut sentences(XML_STREAM), &per_char);
-    assert_eq!(got.iter().filter(|t| t.contains("<break time=\"1s\"/>")).count(), 1, "{got:?}");
-    for token in &got {
-        assert!(!xml::has_unclosed_tags(token), "a token split a tag: {token:?}");
-        assert!(!xml::is_xml_only(token), "a tag was emitted alone: {token:?}");
-    }
 }

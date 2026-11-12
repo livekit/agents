@@ -101,8 +101,8 @@ class TTS(tts.TTS):
             api_key (str, optional): The NeuPhonic API key. If not provided, it will be read from the NEUPHONIC_API_KEY environment variable.
             jwt_token (str, optional): The NeuPhonic JWT token.
             http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
-            word_tokenizer (tokenize.WordTokenizer, optional): The word tokenizer to use. Defaults to tokenize.basic.WordTokenizer().
-            tokenizer (tokenize.SentenceTokenizer, optional): The sentence tokenizer to use. Defaults to tokenize.blingfire.SentenceTokenizer().
+            word_tokenizer (tokenize.WordTokenizer, optional): The word tokenizer to use. Defaults to tokenize.WordTokenizer().
+            tokenizer (tokenize.SentenceTokenizer, optional): The sentence tokenizer to use. Defaults to tokenize.SentenceTokenizer().
             base_url (str, optional): The base URL for the NeuPhonic API. Defaults to "https://api.neuphonic.com".
         """  # noqa: E501
 
@@ -119,7 +119,7 @@ class TTS(tts.TTS):
             )
 
         if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+            word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
             lang_code=LanguageCode(lang_code),
@@ -141,7 +141,7 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+            tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
         )
 
     async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:

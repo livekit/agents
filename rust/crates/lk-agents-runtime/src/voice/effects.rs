@@ -136,6 +136,9 @@ impl VoiceRuntime {
             E::DetachRecorder(_) => {
                 self.recorder_observers.detach(&self.shared, None);
                 self.publications.recorder.set(None);
+                for output in self.driver.active_audio_outputs() {
+                    self.recorder_observers.attach(&self.shared, output);
+                }
             }
             E::FlushRecorder(at) => self.flush_recorder(at),
             E::PushKeyterms { stt, terms, warn_unsupported } => {
@@ -304,8 +307,10 @@ impl VoiceRuntime {
         let Some(recorder) = self.shared.resources.recorder(recorder.0) else { return };
         recorder.observe(&self.peer.session);
         let tap = crate::voice::recorder::RecorderTap::new(recorder, self.shared.time.clock());
+        let outputs: Vec<_> = self.driver.active_audio_outputs().collect();
+        crate::voice::recorder::join(&self.shared, &tap, &outputs);
         self.publications.recorder.set(Some(tap));
-        for output in self.driver.active_audio_outputs() {
+        for output in outputs {
             self.recorder_observers.attach(&self.shared, output);
         }
     }
@@ -535,10 +540,10 @@ impl VoiceRuntime {
         enabled: bool,
     ) {
         let resources = &self.shared.resources;
-        if let Some(old) = previous.and_then(|id| resources.text_output(id)) {
+        if let Some(old) = previous.and_then(|id| resources.transcription_output(id)) {
             old.on_detached();
         }
-        if let Some(new) = next.and_then(|id| resources.text_output(id)) {
+        if let Some(new) = next.and_then(|id| resources.transcription_output(id)) {
             if enabled { new.on_attached() } else { new.on_detached() }
         }
     }
@@ -557,7 +562,7 @@ impl VoiceRuntime {
                 }
             }
             lk_agents_voice::trace::OutputKind::Transcription => {
-                if let Some(sink) = sink.and_then(|id| resources.text_output(id)) {
+                if let Some(sink) = sink.and_then(|id| resources.transcription_output(id)) {
                     if enabled { sink.on_attached() } else { sink.on_detached() }
                 }
             }

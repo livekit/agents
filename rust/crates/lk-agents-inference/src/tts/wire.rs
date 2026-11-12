@@ -310,8 +310,7 @@ impl AlignmentTime {
             start_time: self.start,
             end_time: self.end,
             confidence: None,
-            start_time_offset: None,
-            speaker_id: None,
+            ..TranscriptChunk::default()
         })
     }
 }

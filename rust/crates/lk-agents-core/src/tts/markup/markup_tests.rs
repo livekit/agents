@@ -30,10 +30,10 @@ fn a_bare_less_than_in_prose_does_not_stall_the_transcript() {
     let mut s = TranscriptMarkupStripper::new();
     assert_eq!(s.push("3 < 5 and 4 "), "3 < 5 and 4");
     assert_eq!(s.flush(), " ", "only the trailing separator is held, and only until flush");
-    // but a tag-shaped tail is still held until it closes
+    // but a tail that could still be a tag is held until it closes
     let mut s = TranscriptMarkupStripper::new();
-    assert_eq!(s.push("hi <sou"), "");
-    assert_eq!(s.push("nd value=\"laugh\"/> there"), "hi there");
+    assert_eq!(s.push("hi <sou"), "hi");
+    assert_eq!(s.push("nd value=\"laugh\"/> there"), " there");
 }
 
 #[test]
@@ -42,30 +42,33 @@ fn nested_wrapping_tags_are_fully_removed() {
     let (clean, tags) =
         split_all_markup("<excited><loud><higher-pitch>no way</higher-pitch></loud></excited>");
     assert_eq!(clean, "no way");
-    // the outer tag's value is the *raw* inner markup, because it was recorded on the first pass
-    assert_eq!(tags[0].kind, "excited");
-    assert_eq!(tags[0].value, "<loud><higher-pitch>no way</higher-pitch></loud>");
-    assert_eq!(tags.last().unwrap(), &ExpressiveTag::new("higher-pitch", "no way"));
+    // was: a wrapping tag's value was its raw inner markup; a tag's value is its first attribute
+    let kinds: Vec<&str> = tags.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(kinds, ["excited", "loud", "higher-pitch"]);
+    assert!(tags.iter().all(|t| t.value.is_empty()));
 }
 
 #[test]
 fn normalizing_an_already_closed_marker_is_a_no_op() {
     // `[^/>\s]` keeps the rewrite idempotent (no `...//>`).
     let m = Markup::from_provider(Provider::Inworld);
-    for text in ["<expr type=\"sound\" label=\"laugh\"/>", "<expr type=\"break\" label=\"1s\" />"] {
-        assert_eq!(m.normalize(text), text);
-        assert_eq!(m.normalize(&m.normalize(text)), m.normalize(text));
-    }
+    let canonical = "<expr type=\"sound\" label=\"laugh\"/>";
+    assert_eq!(m.normalize(canonical), canonical);
+    // was: kept as written; a settled tag now takes its canonical spelling
+    let spaced = "<expr type=\"break\" label=\"1s\" />";
+    assert_eq!(m.normalize(spaced), "<expr type=\"break\" label=\"1s\"/>");
+    assert_eq!(m.normalize(&m.normalize(spaced)), m.normalize(spaced));
+    // a tag the delta ends inside stays as written for the next delta to complete
+    assert_eq!(m.normalize("hi <expr type=\"sou"), "hi <expr type=\"sou");
 }
 
 #[test]
-fn the_native_closer_eats_the_first_angle_bracket_when_a_second_follows() {
-    // CPython's `([^>]*[^/])`: `[^/]` admits `>`, so `<break>  >` matches as a whole.
+fn a_native_the_provider_writes_self_closed_is_self_closed() {
+    // was: CPython-regex quirks (`<break>  >` -> `<break>/>`, a bare `<break>` left open)
     let m = Markup::from_provider(Provider::Cartesia);
-    assert_eq!(m.normalize("<break>  >"), "<break>/>");
-    // and with no second `>`, the documented case: a bare `<break>` is left alone
-    assert_eq!(m.normalize("<break> x"), "<break> x");
-    assert_eq!(m.normalize("<break time=\"1s\" >"), "<break time=\"1s\" />");
+    assert_eq!(m.normalize("<break>  >"), "<break/>  >");
+    assert_eq!(m.normalize("<break> x"), "<break/> x");
+    assert_eq!(m.normalize("<break time=\"1s\" >"), "<break time=\"1s\"/>");
 }
 
 #[test]
@@ -222,51 +225,16 @@ fn drop_bracket_cues_plans_by_index() {
 }
 
 #[test]
-fn only_assistant_messages_are_scrubbed_of_markup() {
-    // History markup few-shots the model; a user turn quoting a tag is left alone.
-    let mut ctx = ChatContext::new(vec![
-        ChatMessage::new(
-            "u",
-            Role::User,
-            vec![ChatContent::Text("what does <sound value=\"laugh\"/> mean?".into())],
-            t(1),
-        )
-        .into(),
-        ChatMessage::new(
-            "a",
-            Role::Assistant,
-            vec![ChatContent::Text("ha <sound value=\"laugh\"/> ha".into())],
-            t(2),
-        )
-        .into(),
-    ]);
-    assert_eq!(strip_assistant_markup(&mut ctx), 1);
-    let text = |i: usize| match &ctx.items[i] {
-        lk_agents_abi::ChatItem::Message(m) => match &m.content[0] {
-            ChatContent::Text(t) => t.clone(),
-            _ => unreachable!(),
-        },
-        _ => unreachable!(),
-    };
-    assert_eq!(text(0), "what does <sound value=\"laugh\"/> mean?");
-    assert_eq!(text(1), "ha ha");
-}
-
-#[test]
-fn expressive_chunking_raises_the_minimum_only_when_expressive_is_on() {
-    // Batch up to the send limit, and xml-aware only under expressive (#6116's class of stall).
+fn expressive_chunking_batches_to_the_limit_only_when_expressive_is_on() {
+    // Batch up to the send limit only under expressive.
     let m = Markup::from_provider(Provider::Inworld);
     assert_eq!(
         m.sentence_tokenizer(true),
-        SentenceTokenizerConfig {
-            max_token_len: Some(900),
-            min_token_len: Some(900),
-            xml_aware: true
-        }
+        SentenceTokenizerConfig { max_token_len: Some(900), batch_to_max: true }
     );
     assert_eq!(
         m.sentence_tokenizer(false),
-        SentenceTokenizerConfig { max_token_len: Some(900), min_token_len: None, xml_aware: false }
+        SentenceTokenizerConfig { max_token_len: Some(900), batch_to_max: false }
     );
     // Fish is deliberately uncapped.
     assert_eq!(Markup::from_provider(Provider::FishAudio).max_input_len(), None);
@@ -406,8 +374,8 @@ fn fish_emphasis_is_a_prefix_marker_on_the_stressed_word() {
     assert_eq!(f.convert("the <emphasis>ninth</emphasis>."), "the [emphasis] ninth.");
     assert_eq!(f.convert("<EMPHASIS> ninth </EMPHASIS>"), "[emphasis] ninth");
     assert_eq!(f.convert(r#"<emphasis class="x">ninth</emphasis>"#), "[emphasis] ninth");
-    // `([^<]*)` cannot cross a `<`, so an unclosed one is left for the transcript stripper
-    assert_eq!(f.convert("<emphasis>ninth"), "<emphasis>ninth");
+    // was: an unclosed one reached the TTS raw; now its delimiter goes and the word stays
+    assert_eq!(f.convert("<emphasis>ninth"), "ninth");
 }
 
 #[test]

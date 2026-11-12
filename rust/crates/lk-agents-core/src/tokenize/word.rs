@@ -1,5 +1,8 @@
+use crate::tokenize::token_buffer::{NativeTokenBuffer, TokenBufferOptions, Words};
 use lk_agents_abi::tokenize::TokenSpan;
+use regex::Regex;
 use std::borrow::Cow;
+use std::sync::LazyLock;
 
 // `retain_format` makes the tokens concatenate back to the source for the transcript synchroniser.
 
@@ -12,23 +15,10 @@ pub const PUNCTUATIONS: [char; 39] = [
 
 pub use crate::text::{is_py_space, py_strip};
 
-/// `char_based_codes`, verbatim. Deliberately no Hangul or Arabic/Hebrew/Indic (#2366).
-#[inline]
-pub fn is_char_based(c: char) -> bool {
-    matches!(c,
-        '\u{4e00}'..='\u{9fff}'   // CJK unified ideographs
-        | '\u{3040}'..='\u{30ff}' // hiragana + katakana
-        | '\u{3400}'..='\u{4dbf}' // CJK extension A
-        | '\u{0e00}'..='\u{0e7f}' // Thai
-    )
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WordTokenizerOptions {
     /// Offsets still span the source.
     pub ignore_punctuation: bool,
-    /// One token per [`is_char_based`] character; the interruption guards turn it on for CJK.
-    pub split_character: bool,
     /// Whitespace is glued to the front of the following token.
     pub retain_format: bool,
 }
@@ -36,7 +26,7 @@ pub struct WordTokenizerOptions {
 impl Default for WordTokenizerOptions {
     /// `WordTokenizer()` (`audio_recognition.py:338`). Not derived: `ignore_punctuation` is true.
     fn default() -> Self {
-        Self { ignore_punctuation: true, split_character: false, retain_format: false }
+        Self { ignore_punctuation: true, retain_format: false }
     }
 }
 
@@ -63,28 +53,58 @@ struct Pos {
 
 /// `split_words` for the host: `(word, start_char, end_char)`, with character offsets
 /// (`replace_words` splices with them).
-pub fn split_words_of(
-    text: &str,
-    ignore_punctuation: bool,
-    split_character: bool,
-    retain_format: bool,
-) -> Vec<TokenSpan> {
-    let opts = WordTokenizerOptions { ignore_punctuation, split_character, retain_format };
+pub fn split_words_of(text: &str, ignore_punctuation: bool, retain_format: bool) -> Vec<TokenSpan> {
+    let opts = WordTokenizerOptions { ignore_punctuation, retain_format };
     split_words(text, opts).into_iter().map(Word::into_span).collect()
 }
 
-/// The public `basic.split_words` is this with `retain_format: false`.
+/// Words split at whitespace, with each Han, Hiragana and Katakana character a word of its own.
+/// Punctuation and combining marks join the word in progress.
 pub fn split_words(text: &str, opts: WordTokenizerOptions) -> Vec<Word<'_>> {
     let mut out = Vec::new();
     scan(text, opts, |w| out.push(w));
     out
 }
 
-/// Without building the tokens.
-pub fn count_words(text: &str, opts: WordTokenizerOptions) -> usize {
-    let mut n = 0;
-    scan(text, opts, |_| n += 1);
-    n
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Space,
+    /// Punctuation and combining marks: they join the token in progress.
+    Attached,
+    /// Han, Hiragana and Katakana: one token per character.
+    Ideograph,
+    Other,
+}
+
+fn classify(c: char) -> Class {
+    // Marks, variation selectors, emoji modifiers, ZWJ and the half-width (han)dakuten.
+    static JOINER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^[\p{M}\p{gcb=Extend}\p{gcb=ZWJ}]$").expect("constant pattern")
+    });
+    // Script extensions, so the prolonged sound mark counts; punctuation is classified first.
+    static IDEOGRAPH: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]$").expect("constant pattern")
+    });
+    let matches = |re: &Regex| !c.is_ascii() && re.is_match(c.encode_utf8(&mut [0; 4]));
+    if is_py_space(c) {
+        Class::Space
+    } else if is_punctuation(c) || matches(&JOINER) {
+        Class::Attached
+    } else if matches(&IDEOGRAPH) {
+        Class::Ideograph
+    } else {
+        Class::Other
+    }
+}
+
+/// What the token in progress holds, past any glued whitespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Run {
+    Empty,
+    /// Only punctuation or marks so far: the next character joins them.
+    Lead,
+    Word,
+    Ideograph,
 }
 
 fn scan<'a>(text: &'a str, opts: WordTokenizerOptions, mut sink: impl FnMut(Word<'a>)) {
@@ -101,41 +121,48 @@ fn scan<'a>(text: &'a str, opts: WordTokenizerOptions, mut sink: impl FnMut(Word
         }
     };
 
-    let mut word_start = Pos { ch: 0, by: 0 };
-    let mut ch = 0usize;
-
-    for (by, c) in text.char_indices() {
+    let mut start = Pos { ch: 0, by: 0 };
+    let mut end = start;
+    let mut run = Run::Empty;
+    for (ch, (by, c)) in text.char_indices().enumerate() {
         let pos = Pos { ch, by };
-        ch += 1;
-        let next = Pos { ch: pos.ch + 1, by: by + c.len_utf8() };
-
-        if is_py_space(c) {
-            // `retain_format`: hold a whitespace-only run for the front of the next token.
-            if opts.retain_format && text[word_start.by..pos.by].chars().all(is_py_space) {
+        let next = Pos { ch: ch + 1, by: by + c.len_utf8() };
+        end = next;
+        let (breaks, then) = match (classify(c), run) {
+            (Class::Space, Run::Empty) => {
+                if !opts.retain_format {
+                    start = next;
+                }
                 continue;
             }
-            emit(word_start, pos);
-            word_start = if opts.retain_format { pos } else { next };
-        } else if opts.split_character && is_char_based(c) {
-            // Flush whatever preceded the character (possibly pure whitespace, as the reference
-            // does). `<=` is an equivalent mutant.
-            if word_start.ch < pos.ch {
-                emit(word_start, pos);
+            (Class::Space, _) => {
+                emit(start, pos);
+                start = if opts.retain_format { pos } else { next };
+                run = Run::Empty;
+                continue;
             }
-            emit(pos, next);
-            word_start = next;
+            (Class::Attached, Run::Empty) => (false, Run::Lead),
+            (Class::Attached, run) => (false, run),
+            (Class::Ideograph, run) => (matches!(run, Run::Word | Run::Ideograph), Run::Ideograph),
+            (Class::Other, run) => (run == Run::Ideograph, Run::Word),
+        };
+        if breaks {
+            emit(start, pos);
+            start = pos;
         }
+        run = then;
     }
 
-    emit(word_start, Pos { ch, by: text.len() });
+    // Under `retain_format`, trailing whitespace is a token of its own.
+    emit(start, end);
 }
 
 /// `tokenizer.is_punctuation`: [`PUNCTUATIONS`] or any Unicode punctuation (`P*`), e.g. Arabic
 /// "،" and "؟", Devanagari "।", CJK "，" and "。".
 #[inline]
 pub fn is_punctuation(c: char) -> bool {
-    static UNICODE_PUNCTUATION: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"^\p{P}$").expect("constant pattern"));
+    static UNICODE_PUNCTUATION: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\p{P}$").expect("constant pattern"));
     PUNCTUATIONS.contains(&c)
         || (!c.is_ascii() && UNICODE_PUNCTUATION.is_match(c.encode_utf8(&mut [0; 4])))
 }
@@ -144,37 +171,51 @@ pub fn is_punctuation(c: char) -> bool {
 #[path = "word_tests.rs"]
 mod tests;
 
-/// Really naive implementation of a word tokenizer: words split on whitespace, punctuation
-/// stripped unless asked to keep it.
+/// `tokenize.WordTokenizer`: see [`split_words`].
 #[derive(Debug, Clone)]
-pub struct BasicWordTokenizer {
-    pub opts: WordTokenizerOptions,
-}
+pub struct SpeechWordTokenizer(WordTokenizerOptions);
 
-impl lk_agents_abi::tokenize::bindings::WordTokenizer for BasicWordTokenizer {
-    fn new(ignore_punctuation: bool, split_character: bool, retain_format: bool) -> Self {
-        BasicWordTokenizer {
-            opts: WordTokenizerOptions { ignore_punctuation, split_character, retain_format },
-        }
+impl lk_agents_abi::tokenize::bindings::SpeechWordTokenizer for SpeechWordTokenizer {
+    type Stream = WordStream;
+
+    fn new(ignore_punctuation: bool, retain_format: bool) -> Self {
+        SpeechWordTokenizer(WordTokenizerOptions { ignore_punctuation, retain_format })
     }
 
     /// The words of `text`; `language` is accepted and unused.
     fn tokenize(&self, text: String, _language: Option<String>) -> Vec<String> {
-        split_words(&text, self.opts).into_iter().map(|w| w.text.into_owned()).collect()
+        split_words(&text, self.0).into_iter().map(|w| w.text.into_owned()).collect()
     }
 
-    /// Each word and its offsets: what a stream batches.
-    fn split(&self, text: String) -> Vec<TokenSpan> {
-        split_words(&text, self.opts).into_iter().map(Word::into_span).collect()
+    fn stream(&self) -> WordStream {
+        WordStream::new(self.0)
+    }
+}
+
+/// Words cut as their text streams in: each goes out once the next proves it whole.
+#[derive(Debug, Clone)]
+pub struct WordStream(NativeTokenBuffer<Words>);
+
+impl WordStream {
+    pub fn new(opts: WordTokenizerOptions) -> Self {
+        WordStream(NativeTokenBuffer::new(Words(opts), TokenBufferOptions::WORDS))
     }
 
-    /// The shortest token a stream emits: each word once the next proves it whole.
-    fn min_token_len(&self) -> usize {
-        1
+    pub fn push(&mut self, text: &str) -> Vec<String> {
+        self.0.push(text)
     }
 
-    /// The text a stream buffers before it splits.
-    fn min_ctx_len(&self) -> usize {
-        1
+    pub fn flush(&mut self) -> Vec<String> {
+        self.0.flush()
+    }
+}
+
+impl lk_agents_abi::tokenize::bindings::SpeechWordStream for WordStream {
+    fn push(&mut self, text: String) -> Vec<String> {
+        self.0.push(&text)
+    }
+
+    fn flush(&mut self) -> Vec<String> {
+        self.0.flush()
     }
 }

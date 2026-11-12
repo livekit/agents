@@ -6,12 +6,13 @@ use lk_agents_abi::TranscriptChunk;
 use lk_agents_abi::voice::io::Result as IoResult;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver,
-    PlaybackSegment, TextOutput,
+    PlaybackSegment, TranscriptionOutput,
 };
 use lk_agents_abi::voice::nodes::TextNode;
 use lk_agents_voice::agent_session::machine::output::{OutputBindingEvent, SegmentBinding};
 use lk_agents_voice::agent_session::{Answer, RequestId};
 use lk_agents_voice::generation::GenEvent;
+use lk_agents_voice::transcription::TranscriptSegment;
 use std::sync::{Arc, Weak};
 
 // A generation owns its admitted output binding even when cancelled while awaiting it.
@@ -25,7 +26,7 @@ pub(super) struct OutputBinding {
     nodes: OutputNodes,
     /// The activated segment's transcript chain, the agent's `transcription_node` over the bound
     /// output, until its delivery settles.
-    text: Option<Arc<dyn TextOutput>>,
+    text: Option<Arc<dyn TranscriptionOutput>>,
 }
 
 /// Established before the grant is awaited, so cancellation still releases a late grant.
@@ -94,7 +95,7 @@ impl OutputBinding {
     }
 
     /// The transcript chain; `None` before activation.
-    pub(super) fn text(&self) -> Option<Arc<dyn TextOutput>> {
+    pub(super) fn text(&self) -> Option<Arc<dyn TranscriptionOutput>> {
         self.text.clone()
     }
 
@@ -126,8 +127,8 @@ impl OutputBinding {
         self.binding = binding;
         let sink = (self.binding.outputs.transcription.as_ref())
             .filter(|_| self.binding.outputs.transcription_enabled)
-            .and_then(|r| self.shared.resources.text_output(r.id));
-        self.text = text_output(&self.nodes, sink);
+            .and_then(|r| self.shared.resources.transcription_output(r.id));
+        self.text = transcription_output(&self.nodes, sink);
         self.activated =
             self.audio().is_none_or(|audio| audio.begin_segment(self.binding.segment).is_ok());
         if !self.activated {
@@ -226,15 +227,15 @@ impl PlaybackObserver for OutputSettlement {
     }
 }
 
-/// Bind the agent's transcription node to this segment's admitted text output.
-fn text_output(
+/// Bind the agent's transcription node to this segment's admitted transcription output.
+fn transcription_output(
     nodes: &OutputNodes,
-    below: Option<Arc<dyn TextOutput>>,
-) -> Option<Arc<dyn TextOutput>> {
-    let below = below?;
+    below: Option<Arc<dyn TranscriptionOutput>>,
+) -> Option<Arc<dyn TranscriptionOutput>> {
+    let below: Arc<dyn TranscriptionOutput> = Arc::new(SegmentGate::new(below?));
     let Some(factory) = &nodes.transcription else { return Some(below) };
     match factory.text_node(Arc::clone(&below)) {
-        Ok(node) => Some(Arc::new(NodeTextOutput::new(node, below))),
+        Ok(node) => Some(Arc::new(NodeTranscriptionOutput::new(node, below))),
         Err(e) => {
             log::error!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str();
                     "failed to open the transcription_node");
@@ -243,24 +244,76 @@ fn text_output(
     }
 }
 
-/// A [`TextNode`] as a link in the chain, with the core leg it emits into below it.
-struct NodeTextOutput {
-    node: Arc<dyn TextNode>,
-    next: Arc<dyn TextOutput>,
+/// The session's transcription output as the generation (or its node) writes into it: a flush
+/// reaches it only when text did since the last one, so it never closes an empty segment.
+struct SegmentGate {
+    next: Arc<dyn TranscriptionOutput>,
+    segment: parking_lot::Mutex<TranscriptSegment>,
 }
 
-impl NodeTextOutput {
-    fn new(node: Arc<dyn TextNode>, next: Arc<dyn TextOutput>) -> Self {
-        NodeTextOutput { node, next }
+impl SegmentGate {
+    fn new(next: Arc<dyn TranscriptionOutput>) -> Self {
+        SegmentGate { next, segment: Default::default() }
     }
 }
 
-impl TextOutput for NodeTextOutput {
+impl TranscriptionOutput for SegmentGate {
+    fn label(&self) -> &str {
+        self.next.label()
+    }
+
+    fn next_in_chain(&self) -> Option<Arc<dyn TranscriptionOutput>> {
+        Some(Arc::clone(&self.next))
+    }
+
+    fn capture_timed<'a>(
+        &'a self,
+        cx: &telemetry::Cx,
+        text: &'a TranscriptChunk,
+    ) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
+        self.segment.lock().wrote(&text.text);
+        self.next.capture_timed(cx, text)
+    }
+
+    fn capture_text<'a>(
+        &'a self,
+        cx: &telemetry::Cx,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
+        self.segment.lock().wrote(text);
+        self.next.capture_text(cx, text)
+    }
+
+    fn wait_for_flush(&self) -> lk_agents_abi::BoxFuture<'_, IoResult<()>> {
+        self.next.wait_for_flush()
+    }
+
+    fn flush(&self) {
+        let closes = self.segment.lock().flush();
+        if closes {
+            self.next.flush();
+        }
+    }
+}
+
+/// A [`TextNode`] as a link in the chain, with the core leg it emits into below it.
+struct NodeTranscriptionOutput {
+    node: Arc<dyn TextNode>,
+    next: Arc<dyn TranscriptionOutput>,
+}
+
+impl NodeTranscriptionOutput {
+    fn new(node: Arc<dyn TextNode>, next: Arc<dyn TranscriptionOutput>) -> Self {
+        NodeTranscriptionOutput { node, next }
+    }
+}
+
+impl TranscriptionOutput for NodeTranscriptionOutput {
     fn label(&self) -> &str {
         "Agent.transcription_node"
     }
 
-    fn next_in_chain(&self) -> Option<Arc<dyn TextOutput>> {
+    fn next_in_chain(&self) -> Option<Arc<dyn TranscriptionOutput>> {
         Some(Arc::clone(&self.next))
     }
 
@@ -287,7 +340,7 @@ impl TextOutput for NodeTextOutput {
     }
 
     fn retain_until_flushed(&self, owner: Box<dyn Send>) {
-        self.node.retain_until_drained(Box::new(TextOutputOwner {
+        self.node.retain_until_drained(Box::new(TranscriptionOutputOwner {
             next: self.next.clone(),
             owner: Some(owner),
         }));
@@ -311,12 +364,12 @@ impl TextOutput for NodeTextOutput {
 }
 
 /// Pass a binding through every processing receipt in its text chain.
-struct TextOutputOwner {
-    next: Arc<dyn TextOutput>,
+struct TranscriptionOutputOwner {
+    next: Arc<dyn TranscriptionOutput>,
     owner: Option<Box<dyn Send>>,
 }
 
-impl Drop for TextOutputOwner {
+impl Drop for TranscriptionOutputOwner {
     fn drop(&mut self) {
         if let Some(owner) = self.owner.take() {
             self.next.retain_until_flushed(owner);
@@ -356,7 +409,7 @@ mod text_node_tests {
     }
 
     struct Destination;
-    impl TextOutput for Destination {
+    impl TranscriptionOutput for Destination {
         fn label(&self) -> &str {
             "destination"
         }
@@ -373,7 +426,7 @@ mod text_node_tests {
     #[test]
     fn a_buffered_text_node_keeps_the_segment_pending_until_its_drain_finishes() {
         let delivered = Arc::new(BufferedTextNode::default());
-        let output = NodeTextOutput::new(delivered.clone(), Arc::new(Destination));
+        let output = NodeTranscriptionOutput::new(delivered.clone(), Arc::new(Destination));
         output.flush();
         let mut completion = output.wait_for_flush();
         let mut cx = Context::from_waker(Waker::noop());
@@ -384,12 +437,47 @@ mod text_node_tests {
     #[test]
     fn cancelling_a_buffered_text_node_settles_its_own_segment() {
         let delivered = Arc::new(BufferedTextNode::default());
-        let output = NodeTextOutput::new(delivered, Arc::new(Destination));
+        let output = NodeTranscriptionOutput::new(delivered, Arc::new(Destination));
         output.flush();
         let mut completion = output.wait_for_flush();
         let mut cx = Context::from_waker(Waker::noop());
         assert!(matches!(completion.as_mut().poll(&mut cx), Poll::Pending));
         output.cancel_flush();
         assert!(matches!(completion.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
+    }
+
+    /// What reached the session's transcription output.
+    #[derive(Default)]
+    struct Recorded(parking_lot::Mutex<Vec<String>>);
+    impl TranscriptionOutput for Recorded {
+        fn label(&self) -> &str {
+            "recorded"
+        }
+        fn capture_text<'a>(
+            &'a self,
+            _cx: &telemetry::Cx,
+            text: &'a str,
+        ) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
+            self.0.lock().push(text.to_owned());
+            Box::pin(async { Ok(()) })
+        }
+        fn flush(&self) {
+            self.0.lock().push("<flush>".into());
+        }
+    }
+
+    // Catches: a generation that wrote no text (a realtime message cancelled before its first
+    // delta) closing an empty segment on the session's transcription output.
+    #[tokio::test]
+    async fn a_flush_closes_only_a_segment_that_had_text() {
+        let recorded = Arc::new(Recorded::default());
+        let output = SegmentGate::new(recorded.clone());
+        output.flush();
+        output.capture_text(&telemetry::Cx::NONE, "").await.unwrap();
+        output.flush();
+        output.capture_text(&telemetry::Cx::NONE, "Hello.").await.unwrap();
+        output.flush();
+        output.flush();
+        assert_eq!(*recorded.0.lock(), ["", "Hello.", "<flush>"]);
     }
 }

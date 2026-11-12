@@ -72,7 +72,7 @@ class WebSocketV1Adapter:
         self._sentence_tokenizer = (
             sentence_tokenizer
             if sentence_tokenizer is not None
-            else tokenize.blingfire.SentenceTokenizer(min_sentence_len=1)
+            else tokenize.SentenceTokenizer(min_words=1)
         )
         self._pools = PoolManager(self._new_pool())
 

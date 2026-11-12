@@ -15,6 +15,16 @@ mod playout {
     /// The fixture holds a segment until it is flushed, then plays its accepted duration at normal
     /// speed. Adversarial report-loss tests continue to drive these controls themselves.
     pub async fn apply_with_playout(run: &mut Run, input: &Input) {
+        play(run, input, true).await;
+    }
+
+    /// The same speaker reporting only its start and its finish, never its progress, as
+    /// `tests/fake_io.FakeAudioOutput` and many custom outputs do.
+    pub async fn apply_with_bare_playout(run: &mut Run, input: &Input) {
+        play(run, input, false).await;
+    }
+
+    async fn play(run: &mut Run, input: &Input, progress: bool) {
         let Input::Advance { ms } = input else {
             run.apply(input).await;
             return;
@@ -33,11 +43,13 @@ mod playout {
                 });
                 let Some((at, duration)) = flushed else { continue };
                 run.apply(&Input::PlayoutStarted { segment: Ref::new(segment) }).await;
-                run.apply(&Input::PlayoutProgressed {
-                    segment: Ref::new(segment),
-                    ms: Millis(elapsed),
-                })
-                .await;
+                if progress {
+                    run.apply(&Input::PlayoutProgressed {
+                        segment: Ref::new(segment),
+                        ms: Millis(elapsed),
+                    })
+                    .await;
+                }
                 if now >= at.saturating_add(duration) {
                     run.apply(&Input::PlayoutFinished { segment: Ref::new(segment) }).await;
                 }
@@ -64,6 +76,8 @@ mod realtime_lifecycle;
 mod realtime_tools;
 #[path = "realtime_turns_tests.rs"]
 mod realtime_turns;
+#[path = "recording_tests.rs"]
+mod recording;
 #[path = "room_io_tests.rs"]
 mod room_io;
 #[path = "session_resources_tests.rs"]
@@ -78,7 +92,11 @@ mod speech_playback;
 mod storage_fault;
 #[path = "telephony_tests.rs"]
 mod telephony;
+#[path = "tool_call_segments_tests.rs"]
+mod tool_call_segments;
 #[path = "tools_tests.rs"]
 mod tools;
+#[path = "transcript_text_tests.rs"]
+mod transcript_text;
 #[path = "user_turn_tests.rs"]
 mod user_turn;

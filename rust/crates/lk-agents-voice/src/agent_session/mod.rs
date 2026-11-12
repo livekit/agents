@@ -1,7 +1,7 @@
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::machine::activity::DriverConfig;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
-use lk_agents_abi::resources::{AudioOutputRef, ResourceId, TextOutputRef};
+use lk_agents_abi::resources::{AudioOutputRef, ResourceId, TranscriptionOutputRef};
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::io::AudioOutputCapabilities;
 use lk_agents_abi::{Maybe, Ts};
@@ -210,12 +210,8 @@ impl VoiceSessionState {
         self.next_request
     }
 
-    pub(crate) fn expressive_guide(&mut self, reply: bool) -> Option<String> {
-        let guide = self.expressive.guide(self.tts.as_ref(), lk_agents_abi::Modality::Audio);
-        if guide.is_none() && reply {
-            self.chat_ctx.strip_assistant_markup();
-        }
-        guide
+    pub(crate) fn expressive_guide(&mut self) -> Option<String> {
+        self.expressive.guide(self.tts.as_ref(), lk_agents_abi::Modality::Audio)
     }
 
     /// The previous state when it changed. A speaking edge means the pipeline produced audio, so
@@ -451,7 +447,7 @@ pub struct Outputs {
     pub audio: Option<AudioOutputRef>,
     /// `output.audio_enabled`: the switch, which a speech freezes at its voice leg.
     pub audio_enabled: bool,
-    pub transcription: Option<TextOutputRef>,
+    pub transcription: Option<TranscriptionOutputRef>,
     /// `output.transcription_enabled`.
     pub transcription_enabled: bool,
 }
@@ -464,7 +460,10 @@ impl Default for Outputs {
 }
 
 impl Outputs {
-    pub fn new(audio: Option<AudioOutputRef>, transcription: Option<TextOutputRef>) -> Self {
+    pub fn new(
+        audio: Option<AudioOutputRef>,
+        transcription: Option<TranscriptionOutputRef>,
+    ) -> Self {
         Outputs { audio, audio_enabled: true, transcription, transcription_enabled: true }
     }
 

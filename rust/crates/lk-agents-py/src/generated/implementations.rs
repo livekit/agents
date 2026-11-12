@@ -90,11 +90,11 @@ impl super::Implementations for Selected {
     type TextSessionRunner = ::lk_agents_runtime::text_session::Runner;
     type LocalInteraction = ::lk_agents_runtime::agent_tool::LocalInteraction;
     type TokenizeFunctions = ::lk_agents_runtime::cores::SpeechTokenizer;
-    type HostTokenization = ::lk_agents_runtime::cores::HostTokenizer;
-    type WordTokenizer = ::lk_agents_runtime::cores::BasicWordTokenizer;
-    type SentenceTokenizer = ::lk_agents_runtime::cores::BasicSentenceTokenizer;
-    type BlingfireSentenceTokenizer =
-        ::lk_agents_runtime::inference::tts::sentences::BlingfireSentenceTokenizer;
+    type SpeechSentenceTokenizer =
+        ::lk_agents_runtime::inference::tts::sentences::SpeechSentenceTokenizer;
+    type SpeechSentenceStream = ::lk_agents_runtime::inference::tts::sentences::SentenceBuffer;
+    type SpeechWordTokenizer = ::lk_agents_runtime::cores::SpeechWordTokenizer;
+    type SpeechWordStream = ::lk_agents_runtime::cores::WordStream;
     type BufferedTokens = ::lk_agents_runtime::cores::BufferedTokenStream;
     type LanguageFunctions = ::lk_agents_runtime::cores::Languages;
     type SearchDocument = ::lk_agents_runtime::cores::SearchDocument;

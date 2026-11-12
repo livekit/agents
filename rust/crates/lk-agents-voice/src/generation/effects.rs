@@ -16,7 +16,7 @@ pub enum StreamingTtsEffect {
 
 pub enum AlignedTranscriptEffect {
     CaptureTimed(TranscriptChunk),
-    Capture(String),
+    Capture(Vec<lk_agents_abi::TranscriptChunk>),
     WarnUnaligned,
     Flush,
 }
@@ -25,7 +25,7 @@ pub enum SynthesisLossEffect {
     Fail(crate::agent_session::DriverError),
     ReleaseVoice,
     CutShort,
-    Capture(String),
+    Capture(Vec<lk_agents_abi::TranscriptChunk>),
     Drain { opening: Visible, text: DrainedText },
     Heard(Heard),
 }

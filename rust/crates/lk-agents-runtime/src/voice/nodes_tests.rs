@@ -94,7 +94,7 @@ struct GaveUp;
 impl NodeFactory for GaveUp {
     fn text_node(
         &self,
-        _below: Arc<dyn TextOutput>,
+        _below: Arc<dyn TranscriptionOutput>,
     ) -> Result<Arc<dyn lk_agents_abi::voice::nodes::TextNode>, HostError> {
         unreachable!()
     }
@@ -255,10 +255,13 @@ async fn a_tts_connection_reaches_the_sink_through_the_node() {
     use lk_agents_inference::testkit::{FakeWs, text};
     let (mut runtime, records) = traced("connection").await;
     let pcm = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [1u8; 4]);
-    let ws = Arc::new(FakeWs::new(vec![
-        text(serde_json::json!({"type": "output_audio", "audio": pcm})),
-        text(serde_json::json!({"type": "done"})),
-    ]));
+    let ws = Arc::new(
+        FakeWs::new(vec![
+            text(serde_json::json!({"type": "output_audio", "audio": pcm})),
+            text(serde_json::json!({"type": "done"})),
+        ])
+        .after_flush(),
+    );
     let opts = lk_agents_inference::tts::TtsOptions {
         model: "cartesia/sonic-3".into(),
         base_url: "https://gw/v1".into(),

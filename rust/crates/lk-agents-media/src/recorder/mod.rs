@@ -157,6 +157,19 @@ impl Track {
             None => true,
             Some(expected) => (started_at - expected).abs() > RESYNC_TOLERANCE,
         };
+        self.append(started_at, frame, resync);
+    }
+
+    /// `started_at` is where the last frame received ended, to within one of its samples at
+    /// `rate`: a report's positions are rounded to them.
+    fn follows(&self, started_at: f64, rate: u32) -> bool {
+        let slack = (1.0 + 1e-6) / f64::from(rate);
+        self.received_until.is_some_and(|until| (started_at - until).abs() <= slack)
+    }
+
+    /// `resync` starts a new run at `started_at`; otherwise `frame` follows the run's last sample.
+    fn append(&mut self, started_at: f64, frame: &PcmFrame, resync: bool) {
+        let resync = resync || self.run_start.is_none();
         if resync {
             // The resampler's tail belongs to the run that just ended: place it before re-anchoring.
             if let Ok(Some(tail)) = self.resampler.flush() {
@@ -319,6 +332,8 @@ fn to_i16(v: f32) -> i16 {
 pub struct Placed {
     pub started_at: f64,
     pub frame: PcmFrame,
+    /// Follows the segment's previous placement sample for sample.
+    pub continues: bool,
 }
 
 /// `RecorderAudioOutput`'s state: the segment's frames and what the sink said about where they went.
@@ -454,7 +469,14 @@ impl SegmentPlacer {
         let ch = i64::from(channels.max(1));
         let requested_lo =
             (round_ties_even_like_python(offset * f64::from(rate)) as i64).saturating_mul(ch);
-        let lo = requested_lo.max(self.offset as i64).max(0) as usize;
+        // Report positions are rounded to samples: one starting within a sample of what was
+        // placed continues it. Anything later is audio the sink discarded.
+        let continues = self.offset > 0 && requested_lo <= self.offset as i64 + ch;
+        let lo = if continues {
+            self.offset
+        } else {
+            requested_lo.max(self.offset as i64).max(0) as usize
+        };
         let hi = ((round_ties_even_like_python((offset + duration) * f64::from(rate)) as i64)
             .saturating_mul(ch))
         .max(0) as usize;
@@ -473,7 +495,7 @@ impl SegmentPlacer {
         self.offset = hi;
         let started_at =
             started_at + (lo as i64 - requested_lo) as f64 / (f64::from(rate) * ch as f64);
-        Some(Placed { started_at, frame: PcmFrame::new(chunk, rate, channels) })
+        Some(Placed { started_at, frame: PcmFrame::new(chunk, rate, channels), continues })
     }
 }
 
@@ -504,8 +526,14 @@ impl<E: OggOpusEncoder> Recorder<E> {
         self.input_settled = track.emitted_until().unwrap_or(self.input_settled);
     }
 
+    /// The sink's timestamps are where the audio played: a placement that does not continue its
+    /// segment (the segment's start, or audio after a discarded stretch), or that resumes after
+    /// the speaker paused, starts a new run there.
     pub fn on_output_placed(&mut self, placed: &Placed) {
-        self.mixer.push(OUTPUT_CHANNEL, placed.started_at, &placed.frame);
+        let track = &mut self.mixer.tracks[OUTPUT_CHANNEL];
+        let resync =
+            !placed.continues || !track.follows(placed.started_at, placed.frame.sample_rate);
+        track.append(placed.started_at, &placed.frame, resync);
     }
 
     /// A stalled source is waited on only for [`INPUT_STALL_TIMEOUT`]; nothing past an in-flight
@@ -529,12 +557,14 @@ impl<E: OggOpusEncoder> Recorder<E> {
         self.mixer.flush_resamplers().map_err(|error| RecordingFailure::Encode(error.to_string()))
     }
 
-    /// Empty output is normal: opus buffers.
+    /// Empty output is normal: opus buffers. A block reaching past what a track's resampler has
+    /// emitted means its run ended ([`Recorder::settle_until`] holds the writer otherwise), so the
+    /// resampler's tail is placed before the block is written over it.
     pub fn flush_until(&mut self, until: f64) -> Result<Vec<u8>, RecordingFailure> {
         for track in &mut self.mixer.tracks {
             if let (Some(received), Some(emitted)) = (track.received_until, track.emitted_until())
-                && until >= received
                 && until > emitted
+                && emitted < received
             {
                 track
                     .flush_resampler()

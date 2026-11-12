@@ -201,7 +201,7 @@ mod nodes {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
-    use lk_agents_abi::voice::io::{IoError, TextOutput};
+    use lk_agents_abi::voice::io::{IoError, TranscriptionOutput};
     use lk_agents_abi::voice::nodes::{AgentNodes as _, NodeFactory};
     use lk_agents_abi::{AudioFrame, HostRef};
     use lk_agents_runtime::net::env::ProcessEnv;
@@ -212,7 +212,7 @@ mod nodes {
 
     struct Destination;
 
-    impl TextOutput for Destination {
+    impl TranscriptionOutput for Destination {
         fn label(&self) -> &str {
             "destination"
         }

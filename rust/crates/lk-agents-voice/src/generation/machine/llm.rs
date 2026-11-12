@@ -1,5 +1,5 @@
 use crate::generation::SpeechSegmentEvent;
-use crate::transcription::VisibleStream;
+use crate::transcription::{SegmentText, SpeechViews};
 use lk_agents_abi::metrics::base::LlmMetrics;
 use lk_agents_abi::metrics::base::Metadata;
 use lk_agents_abi::{Extra, LlmChunk};
@@ -33,12 +33,18 @@ pub struct LlmGenerationData {
     open: bool,
     output_tokens: Option<u64>,
     window: Option<(f64, f64)>,
-    visible: VisibleStream,
+    views: SpeechViews,
+    segment: SegmentText,
 }
 
 impl LlmGenerationData {
-    /// `label` and `metadata`: the LLM's, stamped on the record.
-    pub fn new(started_at: f64, label: String, metadata: Option<Metadata>) -> Self {
+    /// `label` and `metadata`: the LLM's, stamped on the record. `views`: how the voice reads it.
+    pub fn new(
+        started_at: f64,
+        label: String,
+        metadata: Option<Metadata>,
+        views: SpeechViews,
+    ) -> Self {
         Self {
             tps: None,
             started_at,
@@ -49,11 +55,13 @@ impl LlmGenerationData {
             open: false,
             output_tokens: None,
             window: None,
-            visible: VisibleStream::new(),
+            segment: SegmentText::new(views.clone()),
+            views,
         }
     }
 
-    /// Calls have already been dispatched; the same chunk's words precede its flush sentinel.
+    /// Calls have already been dispatched; the same chunk's words precede its flush sentinel or
+    /// its calls, either of which ends the segment.
     /// `at` (seconds on the session's clock) times the streaming window; `wall` is read only for
     /// the first response.
     pub fn chunk(
@@ -71,7 +79,7 @@ impl LlmGenerationData {
             if let Some(text) = delta.content.as_ref().filter(|text| !text.is_empty()) {
                 self.window = Some((self.window.map_or(at, |(first, _)| first), at));
                 self.open = true;
-                effects.push(SpeechSegmentEvent::Chunk(self.visible.push(text)));
+                effects.push(SpeechSegmentEvent::Chunk(self.segment.push(text)));
             }
         }
         if let Some(usage) = &chunk.usage {
@@ -79,7 +87,9 @@ impl LlmGenerationData {
         }
         self.called |= !chunk.node_text;
         self.metrics.observe(chunk, wall);
-        if chunk.flush {
+        // A tool call ends the sentence before it: the words after it are a segment of their own.
+        let tool_call = chunk.delta.as_ref().is_some_and(|delta| !delta.tool_calls.is_empty());
+        if chunk.flush || tool_call {
             self.end_segment(&mut effects);
         }
         effects
@@ -102,8 +112,9 @@ impl LlmGenerationData {
         if !std::mem::replace(&mut self.open, false) {
             return;
         }
-        let tail = std::mem::replace(&mut self.visible, VisibleStream::new()).flush();
-        if !tail.text.is_empty() {
+        let fresh = SegmentText::new(self.views.clone());
+        let tail = std::mem::replace(&mut self.segment, fresh).finish();
+        if !tail.is_blank() {
             effects.push(SpeechSegmentEvent::Chunk(tail));
         }
         effects.push(SpeechSegmentEvent::End);

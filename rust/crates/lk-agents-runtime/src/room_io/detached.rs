@@ -1,5 +1,5 @@
 use crate::telemetry;
-use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
+use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TranscriptionOutput};
 use lk_agents_abi::voice::room_owner;
 use lk_agents_abi::voice::rtc::ParticipantIdentity;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ impl room_owner::RoomIo for DetachedRoomIo {
     fn audio_output(&self) -> Option<Arc<dyn AudioOutput>> {
         None
     }
-    fn transcription_output(&self) -> Option<Arc<dyn TextOutput>> {
+    fn transcription_output(&self) -> Option<Arc<dyn TranscriptionOutput>> {
         None
     }
     fn wants_transcript_sync(&self, _: bool) -> bool {

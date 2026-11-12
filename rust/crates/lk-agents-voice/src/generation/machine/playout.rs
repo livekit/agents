@@ -22,6 +22,11 @@ pub enum SinkReport {
     },
     /// A word a synchroniser released, and the playback that released it.
     Shown(Option<PlaybackSegment>, lk_agents_abi::TranscriptChunk),
+    /// A synchroniser took the clear of `segment`'s audio: the words it showed were heard by then.
+    Cleared {
+        segment: PlaybackSegment,
+        heard: String,
+    },
     Reset,
 }
 
@@ -50,6 +55,9 @@ pub(in crate::generation) struct Playout {
     /// The sink reported one of this forwarding's segments cut under it (a reset): not all of
     /// it played, whatever the last segment reports.
     pub cut_below: bool,
+    /// What a synchroniser showed was heard when the sink's audio was cleared: the cut's text when
+    /// the sink never reports it.
+    cleared: Option<String>,
 }
 
 impl Playout {
@@ -69,6 +77,7 @@ impl Playout {
             first_segment: None,
             segments: segment_key.into_iter().collect(),
             cut_below: false,
+            cleared: None,
         }
     }
 
@@ -126,6 +135,11 @@ impl Playout {
                     end: word.end_time.unwrap_or_default(),
                     played: self.played,
                 }))
+            }
+            SinkReport::Cleared { segment, heard } => {
+                if self.segments.contains(&segment) {
+                    self.cleared = Some(heard);
+                }
             }
             // What played so far is heard; the rest plays from the segment's start again.
             SinkReport::Reset => {
@@ -280,10 +294,10 @@ pub(in crate::generation) enum Completion {
 impl Playout {
     /// Project only confirmed audio, preserving a synchronizer's transcript when it supplied one.
     pub fn heard(&self, text: String, completion: Completion) -> crate::transcription::Heard {
-        use crate::transcription::{Heard, Visible};
+        use crate::transcription::{Heard, plain};
         match completion {
             Completion::Played(ev) => Heard {
-                text: ev.synchronized_transcript.map(|t| Visible::of(&t).text).unwrap_or(text),
+                text: ev.synchronized_transcript.map(|t| plain(&t)).unwrap_or(text),
                 position: ev.playback_position,
                 complete: !ev.interrupted && !self.cut_below,
                 frames: self.pushed,
@@ -292,15 +306,16 @@ impl Playout {
             Completion::Cut(ev) => {
                 let cut = if ev.interrupted { ev.playback_position } else { Duration::ZERO };
                 Heard {
-                    text: ev.synchronized_transcript.map(|t| Visible::of(&t).text).unwrap_or(text),
+                    text: ev.synchronized_transcript.map(|t| plain(&t)).unwrap_or(text),
                     position: ev.playback_position,
                     complete: false,
                     frames: self.pushed,
                     played: self.completed + cut,
                 }
             }
+            // The synchroniser's words up to the clear, as its finish would have carried them.
             Completion::CutUnreported { position } => Heard {
-                text,
+                text: self.cleared.as_deref().map_or(text, plain),
                 position,
                 complete: false,
                 frames: self.pushed,
@@ -424,9 +439,7 @@ impl SegmentFinish {
             ) => match source_error {
                 Some(error) => self.confirm(
                     error,
-                    receipt
-                        .synchronized_transcript
-                        .map(|text| crate::transcription::Visible::of(&text).text),
+                    receipt.synchronized_transcript.map(|text| crate::transcription::plain(&text)),
                 ),
                 None => AudioPlaybackFinishEffect::Complete(Ok(
                     playout.heard(text, Completion::Played(receipt))
@@ -627,5 +640,62 @@ mod tests {
         let word = lk_agents_abi::TranscriptChunk::new("late".to_owned());
         let effects = playout.handle(SinkReport::Shown(Some(segment(7)), word), now());
         assert!(effects.is_empty(), "a word another playback released was taken");
+    }
+
+    const SAID: &str = "One, two, three, four.";
+
+    fn cleared(segment: PlaybackSegment, heard: &str) -> SinkReport {
+        SinkReport::Cleared { segment, heard: heard.to_owned() }
+    }
+
+    fn playing() -> Playout {
+        let mut playout = Playout::new(SpeechId(1), None);
+        playout.captured(Some(segment(1)), Duration::from_millis(20));
+        playout
+    }
+
+    // Catches: a cut the sink never reported committed the whole forwarded text, though the
+    // synchroniser had shown only the first words when the audio was cleared.
+    #[test]
+    fn an_unreported_cut_is_the_words_the_synchroniser_showed_by_the_clear() {
+        let mut playout = playing();
+        playout.handle(cleared(segment(1), "One, two,"), now());
+        let position = Duration::from_millis(900);
+        let heard = playout.heard(SAID.to_owned(), Completion::CutUnreported { position });
+        assert_eq!(heard.text, "One, two,");
+        assert!(!heard.complete);
+        assert_eq!((heard.position, heard.played), (position, position));
+    }
+
+    // Pins: with no synchroniser there are no shown words to go by: the forwarded text stands.
+    #[test]
+    fn an_unreported_cut_with_no_synchroniser_is_the_forwarded_text() {
+        let position = Duration::from_millis(900);
+        let heard = playing().heard(SAID.to_owned(), Completion::CutUnreported { position });
+        assert_eq!(heard.text, SAID);
+        assert!(!heard.complete);
+    }
+
+    // Catches: a synchroniser's account of another forwarding's cleared playback taken as this
+    // one's.
+    #[test]
+    fn another_playbacks_clear_is_not_this_cuts_text() {
+        let mut playout = playing();
+        playout.handle(cleared(segment(7), ""), now());
+        let completion = Completion::CutUnreported { position: Duration::ZERO };
+        assert_eq!(playout.heard(SAID.to_owned(), completion).text, SAID);
+    }
+
+    // Pins: a reported cut keeps the transcript its report carried, not the clear's account.
+    #[test]
+    fn a_reported_cut_keeps_its_synchronised_transcript() {
+        let mut playout = playing();
+        playout.handle(cleared(segment(1), "One,"), now());
+        let report = PlaybackFinished {
+            playback_position: Duration::from_millis(900),
+            interrupted: true,
+            synchronized_transcript: Some("One, two,".to_owned()),
+        };
+        assert_eq!(playout.heard(SAID.to_owned(), Completion::Cut(report)).text, "One, two,");
     }
 }

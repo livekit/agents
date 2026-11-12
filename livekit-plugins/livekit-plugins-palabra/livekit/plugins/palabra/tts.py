@@ -121,7 +121,7 @@ class TTS(tts.TTS):
             region: Palabra region (``"eu"`` / ``"us"``). Falls back to the
                 ``PALABRA_REGION`` environment variable, then ``"eu"``.
             tokenizer: Sentence tokenizer used to chunk streamed text into utterances.
-                Defaults to ``livekit.agents.tokenize.blingfire.SentenceTokenizer``.
+                Defaults to ``livekit.agents.tokenize.SentenceTokenizer``.
 
         Raises:
             ValueError: no ``api_key`` argument and no ``PALABRA_API_KEY`` in the environment.
@@ -151,7 +151,7 @@ class TTS(tts.TTS):
         self._closed = False
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+            tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
         )
 
     @property

@@ -1,10 +1,8 @@
 //! Media formats for the agent: container decode to PCM, ogg/opus encode, image encode, filters
-//! and libsoxr resampling. `blingfire`, `images` and `ffmpeg` are optional features.
+//! and libsoxr resampling. `images` and `ffmpeg` are optional features.
 
 pub mod audio_byte_stream;
 pub mod audio_decoder;
-#[cfg(feature = "blingfire")]
-pub mod blingfire;
 pub mod emitter;
 pub mod error;
 #[cfg(feature = "ffmpeg")]

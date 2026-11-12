@@ -3,7 +3,11 @@ use super::*;
 fn paced(text: &str, audio_secs: f64) -> TranscriptPacer {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
     for ev in [
-        TranscriptPacerEvent::Text { raw: text.into(), start_time: None, end_time: None },
+        TranscriptPacerEvent::Text {
+            chunk: lk_agents_abi::TranscriptChunk::new(text),
+            start_time: None,
+            end_time: None,
+        },
         TranscriptPacerEvent::TextEnd,
         TranscriptPacerEvent::Audio { secs: audio_secs },
         TranscriptPacerEvent::AudioEnd,
@@ -28,8 +32,11 @@ fn warned(effects: &[TranscriptPacerEffect]) -> Vec<TranscriptPacerWarning> {
 // what was heard.
 #[test]
 fn events_out_of_order_are_warned_and_change_nothing() {
-    let text =
-        || TranscriptPacerEvent::Text { raw: "late".into(), start_time: None, end_time: None };
+    let text = || TranscriptPacerEvent::Text {
+        chunk: lk_agents_abi::TranscriptChunk::new("late"),
+        start_time: None,
+        end_time: None,
+    };
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
     for ev in [text(), TranscriptPacerEvent::TextEnd] {
         p = p.step(ev).0;
@@ -79,8 +86,16 @@ fn events_out_of_order_are_warned_and_change_nothing() {
 fn an_aligned_delta_starts_where_the_voice_says() {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
     for ev in [
-        TranscriptPacerEvent::Text { raw: "one ".into(), start_time: Some(0.0), end_time: None },
-        TranscriptPacerEvent::Text { raw: "two".into(), start_time: Some(1.0), end_time: None },
+        TranscriptPacerEvent::Text {
+            chunk: lk_agents_abi::TranscriptChunk::new("one "),
+            start_time: Some(0.0),
+            end_time: None,
+        },
+        TranscriptPacerEvent::Text {
+            chunk: lk_agents_abi::TranscriptChunk::new("two"),
+            start_time: Some(1.0),
+            end_time: None,
+        },
         TranscriptPacerEvent::TextEnd,
         TranscriptPacerEvent::Audio { secs: 2.0 },
         TranscriptPacerEvent::AudioEnd,
@@ -97,7 +112,7 @@ fn shown(effects: &[TranscriptPacerEffect]) -> String {
     effects
         .iter()
         .filter_map(|e| match e {
-            TranscriptPacerEffect::Forward { word, .. } => Some(word.as_str()),
+            TranscriptPacerEffect::Forward { chunk, .. } => Some(chunk.text.as_str()),
             _ => None,
         })
         .collect()
@@ -168,7 +183,7 @@ fn a_pause_shows_no_aligned_word_ahead_of_its_stamp() {
     for (raw, at) in [("one ", 0.0), ("two ", 0.2)] {
         p = p
             .step(TranscriptPacerEvent::Text {
-                raw: raw.into(),
+                chunk: lk_agents_abi::TranscriptChunk::new(raw),
                 start_time: Some(at),
                 end_time: None,
             })
@@ -188,7 +203,7 @@ fn an_aligned_word_ends_at_its_stamp() {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
     for (raw, at) in [("Okay. ", 0.0), ("I've ", 0.01)] {
         let ev = TranscriptPacerEvent::Text {
-            raw: raw.into(),
+            chunk: lk_agents_abi::TranscriptChunk::new(raw),
             start_time: Some(at),
             end_time: Some(at + 0.01),
         };
@@ -215,8 +230,11 @@ fn a_paced_space_holds_back_no_stamped_word() {
     for (raw, at, end) in
         [("That's ", 0.0, None), ("outside ", 0.008, None), ("what", 0.016, Some(0.03))]
     {
-        let ev =
-            TranscriptPacerEvent::Text { raw: raw.into(), start_time: Some(at), end_time: end };
+        let ev = TranscriptPacerEvent::Text {
+            chunk: lk_agents_abi::TranscriptChunk::new(raw),
+            start_time: Some(at),
+            end_time: end,
+        };
         p = p.step(ev).0;
     }
     p = p.step(TranscriptPacerEvent::TextEnd).0;
@@ -230,7 +248,7 @@ fn a_paced_space_holds_back_no_stamped_word() {
 fn a_word_ends_where_the_next_starts() {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
     let ev = TranscriptPacerEvent::Text {
-        raw: "one two three ".into(),
+        chunk: lk_agents_abi::TranscriptChunk::new("one two three "),
         start_time: Some(0.0),
         end_time: None,
     };
@@ -259,7 +277,7 @@ fn a_word_keeps_the_speed_it_started_at() {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
     p = p
         .step(TranscriptPacerEvent::Text {
-            raw: "one two three".into(),
+            chunk: lk_agents_abi::TranscriptChunk::new("one two three"),
             start_time: None,
             end_time: None,
         })

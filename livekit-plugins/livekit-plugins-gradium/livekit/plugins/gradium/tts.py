@@ -73,7 +73,7 @@ class TTS(tts.TTS):
             voice (str): Speaker voice.
             voice_id (str): Speaker voice ID.
             pronunciation_id (str): Optional pronunciation ID for controlling TTS pronunciation.
-            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
+            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to `livekit.agents.tokenize.WordTokenizer`.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -101,7 +101,7 @@ class TTS(tts.TTS):
         self._model_name = model_name
 
         if not word_tokenizer:
-            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+            word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
         self._opts = _TTSOptions(
             voice=voice,
             voice_id=voice_id,

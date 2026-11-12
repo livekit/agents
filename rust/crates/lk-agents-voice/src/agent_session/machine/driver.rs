@@ -607,8 +607,8 @@ pub enum DriverError {
     #[error("playback report timed out for attachment {} segment {}", .0.attachment, .0.segment)]
     PlaybackReportTimeout(lk_agents_abi::voice::io::PlaybackSegment),
 
-    #[error("text output: {0}")]
-    TextOutput(lk_agents_abi::voice::io::IoError),
+    #[error("transcription output: {0}")]
+    TranscriptionOutput(lk_agents_abi::voice::io::IoError),
 
     #[error("the session has no {0}")]
     Missing(&'static str),

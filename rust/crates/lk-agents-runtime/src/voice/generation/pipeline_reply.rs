@@ -38,7 +38,7 @@ pub(crate) async fn pipeline_reply_task(
             return;
         }
         Err(DriverError::Provider(error)) => error,
-        Err(DriverError::TextOutput(lk_agents_abi::voice::io::IoError::Host(error))) => {
+        Err(DriverError::TranscriptionOutput(lk_agents_abi::voice::io::IoError::Host(error))) => {
             error.into()
         }
         // Reachable from the host: `generate_reply()` on an agent with no LLM.
