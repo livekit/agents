@@ -280,7 +280,8 @@ the job reports, and ends the job when it closes. A later session of the job
 records nothing, serves no remote session and does not end the job; the
 console's call serves the remote session either way, and `--record` records
 its audio. The audio recording is `audio.ogg` in the job's session directory,
-the report's `audio_recording_path`. Every session of the job closes as the
+the report's `audio_recording_path`. With `console --record`, the report and the
+audio are kept in `.livekit/sessions/<date-time>/` in the working directory. Every session of the job closes as the
 job shuts down, with `CloseReason.JOB_SHUTDOWN`, in the shutdown's span.
 
 A session's report belongs to the job the session first started in; another

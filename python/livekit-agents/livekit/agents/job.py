@@ -22,6 +22,7 @@ import inspect
 import logging
 import multiprocessing as mp
 import os
+import shutil
 import tempfile
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
@@ -203,15 +204,19 @@ class JobContext:
         from .voice._session_bindings import ConsoleCall
 
         if ConsoleCall.record:
-            path = Path(
-                "console-recordings",
-                f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
-                "session_report.json",
+            directory = Path(
+                ".livekit", "sessions", datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
             )
             try:
-                await asyncio.to_thread(_write_console_report, self.make_session_report(), path)
+                await asyncio.to_thread(
+                    _keep_console_recording,
+                    self.make_session_report(),
+                    self.session_directory,
+                    directory,
+                )
+                logger.info(f"session recording saved to {directory.resolve()}")
             except Exception:
-                logger.exception("failed to save session report")
+                logger.exception("failed to save the session recording")
 
     async def _on_cleanup(self) -> None:
         await asyncio.to_thread(self._tempdir.cleanup)
@@ -702,6 +707,10 @@ class JobProcess:
         return self._http_proxy
 
 
-def _write_console_report(report: SessionReport, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_core.session_report_json(report))
+def _keep_console_recording(report: SessionReport, session: Path, directory: Path) -> None:
+    """`console --record`: the report and the call's audio outlive the job's temporary directory."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "session_report.json").write_text(_core.session_report_json(report))
+    audio = session / "audio.ogg"
+    if audio.is_file():
+        shutil.copyfile(audio, directory / "audio.ogg")

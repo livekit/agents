@@ -82,6 +82,7 @@ async def test_a_recorded_console_call_writes_its_audio_without_a_room(
         "--connect-addr",
         console.addr,
         env={**agent_env, "RECORDING": str(recording)},
+        cwd=tmp_path,
     )
     assert await console_call.wait() == 0
 
