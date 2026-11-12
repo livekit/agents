@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Hugging Face plugin for LiveKit Agents: run open LLM and STT models locally with transformers."""
+"""Hugging Face plugin for LiveKit Agents: run open LLM, STT and TTS models locally with transformers."""
 
 import os
 
@@ -22,14 +22,18 @@ from .download import download_model, models_to_download
 from .llm import DEFAULT_MODEL, LLM, LLMStream
 from .log import logger
 from .stt import DEFAULT_STT_MODEL, STT
+from .tts import DEFAULT_TTS_MODEL, TTS, ChunkedStream
 from .version import __version__
 
 __all__ = [
     "LLM",
     "LLMStream",
     "STT",
+    "TTS",
+    "ChunkedStream",
     "DEFAULT_MODEL",
     "DEFAULT_STT_MODEL",
+    "DEFAULT_TTS_MODEL",
     "download_model",
     "__version__",
 ]
