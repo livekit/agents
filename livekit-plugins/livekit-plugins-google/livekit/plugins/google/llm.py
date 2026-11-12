@@ -71,6 +71,25 @@ def _supports_xhigh_thinking(model: str) -> bool:
     return "gemini-4-hydrogen" in model.lower()
 
 
+def _check_thinking_level(
+    model: str, thinking_config: types.ThinkingConfigOrDict
+) -> types.ThinkingConfig:
+    """Check the request's thinking level against the model, and put it in the API's upper case.
+
+    google-genai has no XHIGH member and would send an unknown level as typed.
+    """
+    if isinstance(thinking_config, dict):
+        thinking_config = types.ThinkingConfig.model_validate(thinking_config)
+    level = thinking_config.thinking_level
+    if level is None:
+        return thinking_config
+    if level.value.upper() == "XHIGH" and not _supports_xhigh_thinking(model):
+        raise ValueError(f"Model {model} does not support thinking_level 'xhigh'.")
+    return thinking_config.model_copy(
+        update={"thinking_level": types.ThinkingLevel(level.value.upper())}
+    )
+
+
 def _ignores_sampling_params(model: str) -> bool:
     """Check if model ignores temperature/top_p/top_k, which later ones will reject outright"""
     return _is_gemini_4_model(model)
@@ -510,11 +529,7 @@ class LLM(llm.LLM):
                 if _level is None and _is_gemini_3_model(self._opts.model):
                     # only default the level where the accepted levels are known
                     _level = "minimal" if _is_gemini_3_flash_model(self._opts.model) else "low"
-                # the level passes through as given, checked against the model in __init__.
-                # google-genai has no XHIGH member and would send an unknown level unchanged,
-                # so it goes out in the API's upper case
-                if isinstance(_level, str):
-                    _level = _level.upper()
+                # the level passes through as given, checked against the model in __init__
                 extra["thinking_config"] = types.ThinkingConfig(
                     thinking_level=_level, include_thoughts=_include_thoughts
                 )
@@ -532,6 +547,12 @@ class LLM(llm.LLM):
                 else:
                     # Pass through original config if no specific handling needed
                     extra["thinking_config"] = self._opts.thinking_config
+
+        # a thinking_config can also arrive through extra_kwargs, so check what will be sent
+        if extra.get("thinking_config") is not None:
+            extra["thinking_config"] = _check_thinking_level(
+                self._opts.model, extra["thinking_config"]
+            )
 
         if is_given(self._opts.automatic_function_calling_config):
             extra["automatic_function_calling"] = self._opts.automatic_function_calling_config

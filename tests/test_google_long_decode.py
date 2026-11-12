@@ -258,6 +258,29 @@ class TestRequestShaping:
         cfg = extra["thinking_config"]
         assert cfg.model_dump(mode="json", exclude_none=True) == {"thinking_level": "XHIGH"}
 
+    @pytest.mark.parametrize(
+        "thinking_config",
+        [{"thinking_level": "xhigh"}, types.ThinkingConfig(thinking_level="xhigh")],
+    )
+    async def test_a_per_call_xhigh_goes_out_upper_case_on_hydrogen(
+        self, thinking_config: types.ThinkingConfigOrDict
+    ) -> None:
+        extra = await _request_config(
+            _llm("gemini-4-hydrogen"), extra_kwargs={"thinking_config": thinking_config}
+        )
+        cfg = extra["thinking_config"]
+        assert cfg.model_dump(mode="json", exclude_none=True) == {"thinking_level": "XHIGH"}
+
+    @pytest.mark.parametrize(
+        "thinking_config",
+        [{"thinking_level": "xhigh"}, types.ThinkingConfig(thinking_level="xhigh")],
+    )
+    async def test_a_per_call_xhigh_is_rejected_where_unsupported(
+        self, thinking_config: types.ThinkingConfigOrDict
+    ) -> None:
+        with pytest.raises(ValueError, match="xhigh"):
+            await _request_config(_llm(), extra_kwargs={"thinking_config": thinking_config})
+
     @pytest.mark.parametrize("model", [ARGON, "gemini-4-carbon", "gemini-3-pro-preview"])
     def test_xhigh_is_rejected_where_unsupported(self, model: str) -> None:
         with pytest.raises(ValueError, match="xhigh"):
