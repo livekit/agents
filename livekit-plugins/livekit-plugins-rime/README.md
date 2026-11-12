@@ -237,7 +237,7 @@ Python Rime SDK. Use Python 3.11 or later. TTS still supports Python 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra requires `rimelabs-sdk>=0.1.0a29`. For source development:
+The realtime extra requires `rimelabs-sdk>=0.1.0a30`. For source development:
 
 ```sh
 uv sync --package livekit-plugins-rime --extra realtime --inexact
@@ -251,7 +251,7 @@ from rimelabs_sdk.realtime import TurnDetection
 model = rime.realtime.RealtimeModel(
     turn_detection=TurnDetection(eagerness="low", end_of_turn_timeout_ms=5000),
 )
-session = AgentSession(llm=model)
+session = AgentSession(llm=model, aec_warmup_duration=None)
 await session.start(agent=Agent(instructions="Give short, clear answers."), room=ctx.room)
 session.generate_reply(user_input="Hello!")
 ```
@@ -273,7 +273,7 @@ model = RealtimeModelFallbackAdapter([
     rime.realtime.RealtimeModel(),
     rime.realtime.RealtimeModel(),
 ])
-session = AgentSession(llm=model)
+session = AgentSession(llm=model, aec_warmup_duration=None)
 ```
 
 ### LiveKit compatibility
@@ -309,6 +309,14 @@ Microphone input uses Prism's server turn detection. The adapter forwards
 speech events and uses LiveKit's standard cancellation and message truncation.
 It requests interruption on caller speech. Early speech hints do not change
 playback volume. There is no custom per-response interruption policy.
+
+Set `aec_warmup_duration=None` on `AgentSession` so Prism receives caller audio
+from the beginning of the opening greeting. LiveKit's default echo-cancellation
+warmup replaces caller audio with silence during the first three seconds of
+agent speech, which prevents Prism from hearing an early stop phrase. The same
+setting applies when using `RealtimeModelFallbackAdapter`. Applications that
+need the echo warmup can set a positive duration explicitly; caller speech
+during that window is suppressed before reaching Prism.
 
 Choose playback behavior when you create the model:
 
@@ -394,7 +402,8 @@ filler. Replace the map with `model.update_options(tool_fillers=...)`, or pass
 ### History and recovery
 
 `agent.update_chat_ctx()` supports user, assistant, and system text messages and
-completed tool calls/results. Each imported message has at most 4000 characters.
+completed tool calls/results. Prism enforces its context limit; the plugin does
+not impose a 4,000-character cap on imported messages or typed input.
 An imported result must immediately follow its call. Images, video, developer
 messages are unsupported. LiveKit configuration and handoff
 records stay local. Importing history does not execute tools or start a reply.
@@ -596,3 +605,23 @@ The tests include response settings revisions, completed tool history rebuilds,
 history snapshot isolation, and cancellation during acknowledged updates.
 Validate typed replies and audio playback against the target Prism deployment
 separately. Caller-interruption checks require a speech fixture with nonzero audio.
+
+### Prism speech and interruption settings
+
+Set `speed` through `RealtimeModel` or `update_options`. Values range from
+0.85 through 1.3. The model also accepts SDK
+`TurnDetection` settings at connect time and `TurnDetectionUpdate` for live
+changes to interruption word counts and phrase lists. The silence floor is
+connect-only. An empty phrase list clears it; omitted settings stay unchanged.
+Live updates change stored options after the server confirms them.
+
+Pass an SDK `Review` to the model's `review` option to check proposed speech.
+The SDK runs and cancels callbacks. They can run before a LiveKit generation
+exists and must support async cancellation. The adapter forwards SDK faults
+and server timestamps through `rime_server_event_received`. Partial captions
+use the cumulative transcript when present, including an empty correction;
+older events still append their delta.
+
+These options require `rimelabs-sdk>=0.1.0a30` and a Prism deployment that supports
+them, such as build `20261111`. Default requests omit the new settings and retain
+support for older images. Full end-to-end validation remains pending.
