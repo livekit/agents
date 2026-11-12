@@ -868,6 +868,36 @@ async def test_reconnect_keeps_the_onset_when_the_transcript_comes_before_end_sp
 
 
 @pytest.mark.virtual_time
+async def test_a_later_speech_end_cancels_the_wait_for_end_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    first = _pcm_frame(100, 1)
+    stream.push_frame(first)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(first.data.tobytes()))
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": 0.0}}
+    )
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "जी", "language_code": "hi-IN", "speech_end": 0.1}}
+    )
+    onset = _pcm_frame(50, 2)  # the next turn starts before END_SPEECH arrives
+    stream.push_frame(onset)
+    sent = len(first.data.tobytes()) + len(onset.data.tobytes())
+    await _wait_until(lambda: len(session.sockets[0].audio()) == sent)
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+    assert bytes(stream._recent_audio) == onset.data.tobytes()
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
 async def test_reconnect_keeps_transcript_times_on_the_stream_timeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
