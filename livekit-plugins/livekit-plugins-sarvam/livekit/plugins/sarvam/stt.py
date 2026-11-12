@@ -994,6 +994,8 @@ class SpeechStream(stt.SpeechStream):
         self._audio_buffer: list[Any] = []
         # samples sent on the current connection, which is Sarvam's clock for it
         self._sent_samples = 0
+        # _sent_samples when the last END_SPEECH arrived on this connection
+        self._end_speech_sample: int | None = None
         # PCM sent that no finished utterance covers, up to RECONNECT_REPLAY_S
         self._recent_audio = bytearray()
         # stream-timeline position of the current connection's first sample when it opened
@@ -1548,6 +1550,7 @@ class SpeechStream(stt.SpeechStream):
         else:
             self._connection_offset = None
         self._sent_samples = 0
+        self._end_speech_sample = None
 
     def _remember_sent_audio(self, pcm: bytes) -> None:
         """Count sent PCM and keep the latest of it for replay after a reconnect."""
@@ -1838,12 +1841,15 @@ class SpeechStream(stt.SpeechStream):
 
     def _release_claimed_audio(self, speech_end: object) -> None:
         """Drop replay audio up to where a finished utterance ended; what follows stays."""
-        if isinstance(speech_end, bool) or not isinstance(speech_end, (int, float)):
-            # no boundary to go by, so treat everything sent so far as covered
-            self._recent_audio.clear()
-            return
+        if not isinstance(speech_end, bool) and isinstance(speech_end, (int, float)):
+            boundary = int(speech_end * self._opts.sample_rate)
+        elif self._end_speech_sample is not None:
+            # no speech_end, so go by what had been sent when END_SPEECH arrived
+            boundary = self._end_speech_sample
+        else:
+            boundary = self._sent_samples
         start = self._sent_samples - len(self._recent_audio) // 2
-        covered = int(speech_end * self._opts.sample_rate) - start
+        covered = boundary - start
         if covered > 0:
             del self._recent_audio[: covered * 2]
 
@@ -1940,6 +1946,7 @@ class SpeechStream(stt.SpeechStream):
                     self._logger.debug("Speech started", extra=self._build_log_context())
 
             elif signal_type == "END_SPEECH":
+                self._end_speech_sample = self._sent_samples
                 if self._speaking:
                     self._speaking = False
                     self._pending_eos = True
