@@ -1075,7 +1075,6 @@ class TestAMDDetector:
         detector, classifier, room, publisher, _ = await _start_detector(monkeypatch)
         execute_task = asyncio.create_task(detector.execute())
 
-        # the callee starts their greeting, then hangs up before a verdict
         classifier.on_user_speech_started()
         await asyncio.sleep(0)
         room.emit("participant_disconnected", publisher)
@@ -1116,7 +1115,6 @@ class TestAMDDetector:
         detector, classifier, room, publisher, _ = await _start_detector(monkeypatch)
         execute_task = asyncio.create_task(detector.execute())
 
-        # the carrier says the mailbox is not set up, then hangs up
         classifier.on_user_speech_started()
         classifier._set_verdict(_llm_verdict(AMDCategory.MACHINE_UNAVAILABLE))
         await asyncio.sleep(0)

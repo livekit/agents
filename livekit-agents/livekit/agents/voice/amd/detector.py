@@ -210,8 +210,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._result: AMDPredictionEvent | None = None
         self._closed = False
         self._span: trace.Span | None = None
-        self._disconnect_room: rtc.Room | None = None
-        self._listened_identity: str | None = None
+        self._room: rtc.Room | None = None
+        self._publisher_identity: str | None = None
 
         self._provided_detection_options: DetectionOptions = (
             detection_options if is_given(detection_options) else {}
@@ -347,10 +347,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         if self._audio_ch and not self._audio_ch.closed:
             self._audio_ch.close()
 
-        if self._disconnect_room is not None:
-            self._disconnect_room.off("participant_disconnected", self._on_participant_disconnected)
-            self._disconnect_room = None
-        self._listened_identity = None
+        if self._room is not None:
+            self._room.off("participant_disconnected", self._on_participant_disconnected)
+            self._room = None
+        self._publisher_identity = None
 
         if self._classifier:
             self._classifier.off("amd_prediction", self._on_amd_prediction)
@@ -449,10 +449,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 self._settle_participant_missing("participant disappeared after track subscription")
                 return
 
-            # a hangup must still settle a verdict once listening has started,
-            # otherwise the session teardown closes AMD with no result
-            self._listened_identity = publisher.identity
-            self._disconnect_room = room
+            self._publisher_identity = publisher.identity
+            self._room = room
             room.on("participant_disconnected", self._on_participant_disconnected)
 
             if publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
@@ -475,18 +473,12 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         logger.debug("AMD starts listening")
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
-        """Settle a pending verdict when the listened-to participant leaves.
+        """Settle a pending verdict when the publisher leaves.
 
-        Disconnects from other participants are ignored. Before listening starts the
-        result is ``uncertain`` / ``participant_missing``. After that it is
-        ``uncertain`` / ``participant_disconnected``, except that a held
-        ``machine-unavailable`` verdict is released unchanged. Either way ``execute()``
-        does not wait for a greeting that will never finish.
-
-        Args:
-            participant: The remote participant that disconnected.
+        Session teardown would otherwise close AMD with no result, and ``execute()``
+        would raise.
         """
-        if participant.identity != self._listened_identity:
+        if participant.identity != self._publisher_identity:
             return
         if self._closed or not self._classifier or self._result is not None:
             return
