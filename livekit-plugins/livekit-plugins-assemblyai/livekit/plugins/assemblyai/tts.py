@@ -102,7 +102,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: str = DEFAULT_VOICE,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         model: str = DEFAULT_MODEL,
         sample_rate: int = 24000,
         word_timestamps: bool = True,
@@ -168,7 +168,9 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(
             voice=_require(voice, "voice"),
-            language=_language_name(language) if is_given(language) else None,
+            language=_language_name(language)
+            if is_given(language) and language is not None
+            else None,
             model=_require(model, "model"),
             sample_rate=sample_rate,
             word_timestamps=word_timestamps,

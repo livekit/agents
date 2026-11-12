@@ -95,14 +95,16 @@ _MAX_LANGUAGE_CODES = 10
 _UNCAPPED_LANGUAGE_CODES_MODELS = ("universal-3-6-pro",)
 
 
-def _normalize_language_codes(language_codes: str | list[str], model: str) -> list[str]:
+def _normalize_language_codes(language_codes: str | list[str] | None, model: str) -> list[str]:
     """Normalize code(s) to bare ISO 639-1 and dedup preserving order.
 
     Accepts a single code or a list, mirroring the server, which takes either.
     Mirrors the AssemblyAI streaming API's validation rules: at most 10 codes
     (except on Universal-3.6 Pro), and 'multi' (the unsteered multilingual
-    default) must be sent alone.
+    default) must be sent alone. None or "" means "no codes", like [].
     """
+    if language_codes is None:
+        return []
     if isinstance(language_codes, str):
         # A bare code is shorthand for a one-element list; wrapping here (the
         # single choke point for every input path) keeps a stray string from
@@ -154,8 +156,8 @@ class STT(stt.STT):
             "universal-3-6-pro",
         ] = "universal-3-6-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
-        language_code: NotGivenOr[str] = NOT_GIVEN,
-        language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
+        language_code: NotGivenOr[str | None] = NOT_GIVEN,
+        language_codes: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -260,6 +262,13 @@ class STT(stt.STT):
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
         """
+        # An explicit empty value ([], "", or None) is equivalent to unset at
+        # construction — the param is omitted from the connect query either
+        # way — so it is not subject to the U3-Pro-family gate below.
+        if is_given(language_code) and not language_code:
+            language_code = NOT_GIVEN
+        if is_given(language_codes) and not language_codes:
+            language_codes = NOT_GIVEN
         if is_given(language_code) and is_given(language_codes):
             raise ValueError(
                 "language_code and language_codes are mutually exclusive; "
@@ -267,11 +276,6 @@ class STT(stt.STT):
             )
         if is_given(language_code):
             logger.warning("'language_code' is deprecated, use 'language_codes' instead.")
-        # An explicit empty value ([] or "") is equivalent to unset at
-        # construction — the param is omitted from the connect query either
-        # way — so it is not subject to the U3-Pro-family gate below.
-        if is_given(language_codes) and not language_codes:
-            language_codes = NOT_GIVEN
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
@@ -359,9 +363,9 @@ class STT(stt.STT):
         # the form AssemblyAI's language steering expects. The singular
         # language_code is shorthand for a one-element list.
         normalized_language_codes: NotGivenOr[list[str]] = NOT_GIVEN
-        if is_given(language_code):
+        if is_given(language_code) and language_code is not None:
             normalized_language_codes = _normalize_language_codes(language_code, model)
-        elif is_given(language_codes):
+        elif is_given(language_codes) and language_codes is not None:
             normalized_language_codes = _normalize_language_codes(language_codes, model)
 
         self._opts = STTOptions(
@@ -446,7 +450,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
-        language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
+        language_codes: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
@@ -592,7 +596,7 @@ class SpeechStream(stt.SpeechStream):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
-        language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
+        language_codes: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,

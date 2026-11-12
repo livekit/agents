@@ -1338,6 +1338,47 @@ async def test_language_codes_empty_string_at_construction_is_unset():
     assert stt._opts.language_codes is NOT_GIVEN
 
 
+async def test_language_codes_none_at_construction_is_unset():
+    """An explicit None at construction equals unset, like [] and ""."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-streaming-english", language_codes=None)
+    assert stt._opts.language_codes is NOT_GIVEN
+
+    stt_code = STT(api_key="test-key", model="universal-streaming-english", language_code=None)
+    assert stt_code._opts.language_codes is NOT_GIVEN
+
+    stt_pro = STT(api_key="test-key", model="u3-rt-pro", language_codes=None)
+    assert stt_pro._opts.language_codes is NOT_GIVEN
+
+
+async def test_language_code_and_language_codes_none_combinations():
+    """Passing None for one language option does not trigger mutual-exclusion against the other."""
+    from livekit.plugins.assemblyai import STT
+
+    # language_code=None with valid language_codes
+    stt_codes = STT(
+        api_key="test-key", model="u3-rt-pro", language_code=None, language_codes=["es"]
+    )
+    assert stt_codes._opts.language_codes == ["es"]
+
+    # valid language_code with language_codes=None
+    stt_code = STT(api_key="test-key", model="u3-rt-pro", language_code="es", language_codes=None)
+    assert stt_code._opts.language_codes == ["es"]
+
+    # both None
+    stt_both_none = STT(
+        api_key="test-key", model="u3-rt-pro", language_code=None, language_codes=None
+    )
+    assert stt_both_none._opts.language_codes is NOT_GIVEN
+
+    # both set with actual codes still raises ValueError
+    import pytest
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        STT(api_key="test-key", model="u3-rt-pro", language_code="es", language_codes=["fr"])
+
+
 async def test_language_code_singular_logs_deprecation_warning(caplog):
     """The singular language_code still works but logs a deprecation warning."""
     import logging
@@ -1380,6 +1421,17 @@ async def test_language_codes_update_empty_string_clears_steering():
     stream = _make_stream_for_unit_test()
 
     stream.update_options(language_codes="")
+
+    assert stream._opts.language_codes == []
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["language_codes"] == []
+
+
+async def test_language_codes_update_none_clears_steering():
+    """An explicit None mid-session clears steering, same as [] and ""."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes=None)
 
     assert stream._opts.language_codes == []
     msg = stream._config_update_queue.get_nowait()
