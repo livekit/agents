@@ -1189,19 +1189,14 @@ class SpeechStream(stt.SpeechStream):
         self._client_request_id = request_id
         self._server_request_id = None
         try:
+            # a retry after an error starts here too, with the base class's clock restarted
+            self._carry_audio_into_next_connection()
             # update_options() ends a connection to reopen it with the new options;
             # the input channel carries on into the next connection
             while await self._run_connection():
-                # Sarvam times each connection from zero, so re-anchor on its first audio.
-                # The anchor is the first frame read, but carried-over samples go out ahead
-                # of it, so the new clock starts that much earlier.
+                # Sarvam times each connection from zero, so re-anchor on its first audio
                 self._input_ch.restart_provider_clock()
-                if self._recent_audio:
-                    # speech may have started in audio the old connection never reported on
-                    replay = memoryview(bytes(self._recent_audio)).cast("h").tolist()
-                    self._audio_buffer[:0] = replay
-                    self._recent_audio.clear()
-                self._carried_audio_s = len(self._audio_buffer) / self._opts.sample_rate
+                self._carry_audio_into_next_connection()
                 self.start_time = time.time()
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             async with self._connection_lock:
@@ -1404,6 +1399,20 @@ class SpeechStream(stt.SpeechStream):
         self._recent_audio.clear()
         self._try_commit_utterance()
         self._emit_end_of_speech()
+
+    def _carry_audio_into_next_connection(self) -> None:
+        """Queue audio the previous connection may not have transcribed for the next one.
+
+        That is the recently sent audio no utterance has claimed (speech may have started
+        in it before Sarvam's VAD reported it) plus samples never sent. The new clock is
+        anchored on the first frame read, but this audio goes out ahead of it, so the
+        connection's timestamps are shifted back by its duration.
+        """
+        if self._recent_audio:
+            replay = memoryview(bytes(self._recent_audio)).cast("h").tolist()
+            self._audio_buffer[:0] = replay
+            self._recent_audio.clear()
+        self._carried_audio_s = len(self._audio_buffer) / self._opts.sample_rate
 
     def _remember_sent_audio(self, pcm: bytes) -> None:
         self._recent_audio += pcm

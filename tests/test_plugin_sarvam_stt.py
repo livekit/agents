@@ -32,6 +32,10 @@ def _bare_stream(**conn: Any) -> sarvam_stt.SpeechStream:
     stream._server_request_id = None
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
+    stream._opts = SimpleNamespace(sample_rate=16000)  # type: ignore[assignment]
+    stream._recent_audio = bytearray()
+    stream._audio_buffer = []
+    stream._carried_audio_s = 0.0
     return stream
 
 
@@ -643,6 +647,20 @@ async def test_reconnect_replays_at_most_half_a_second(
 
     await stream.aclose()
     await stt.aclose()
+
+
+def test_each_connection_recomputes_its_carried_audio() -> None:
+    """A connection that carries nothing over drops the previous connection's correction."""
+    stream = _bare_stream()
+    stream._carried_audio_s = 0.5
+    stream._carry_audio_into_next_connection()
+    assert stream._carried_audio_s == 0.0
+
+    stream._recent_audio += np.full(800, 1, dtype=np.int16).tobytes()
+    stream._audio_buffer.extend([2] * 160)
+    stream._carry_audio_into_next_connection()
+    assert stream._audio_buffer == [1] * 800 + [2] * 160  # replay goes out first
+    assert stream._carried_audio_s == pytest.approx(0.06)
 
 
 @pytest.mark.virtual_time
