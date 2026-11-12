@@ -992,10 +992,13 @@ class SpeechStream(stt.SpeechStream):
         self._utterance_resolved = asyncio.Event()
         # samples short of a full chunk; kept on the stream so a reconnect doesn't drop them
         self._audio_buffer: list[Any] = []
-        # seconds of that audio the current connection was opened with
-        self._carried_audio_s = 0.0
-        # PCM sent since the last utterance ended, up to RECONNECT_REPLAY_S
+        # samples sent on the current connection, which is Sarvam's clock for it
+        self._sent_samples = 0
+        # PCM sent that no finished utterance covers, up to RECONNECT_REPLAY_S
         self._recent_audio = bytearray()
+        # stream-timeline position of the current connection's first sample when it opened
+        # with carried audio; None leaves it to the base class's anchor
+        self._connection_offset: float | None = None
 
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
@@ -1050,7 +1053,12 @@ class SpeechStream(stt.SpeechStream):
         if value <= 0:
             return None
         # Map connection-relative timestamps onto the caller's audio timeline.
-        return max(float(value) + self.start_time_offset - self._carried_audio_s, 0.0)
+        return float(value) + self._timeline_offset()
+
+    def _timeline_offset(self) -> float:
+        if self._connection_offset is not None:
+            return self._connection_offset
+        return self.start_time_offset
 
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
@@ -1526,18 +1534,24 @@ class SpeechStream(stt.SpeechStream):
     def _carry_audio_into_next_connection(self) -> None:
         """Queue audio the previous connection may not have transcribed for the next one.
 
-        That is the recently sent audio no utterance has claimed (speech may have started
-        in it before Sarvam's VAD reported it) plus samples never sent. The new clock is
-        anchored on the first frame read, but this audio goes out ahead of it, so the
-        connection's timestamps are shifted back by its duration.
+        That is the sent audio no finished utterance covers (speech may have started in it
+        before Sarvam's VAD reported it) plus samples never sent. It continues the previous
+        connection's timeline, so the new connection is anchored where it starts there
+        rather than on the next frame read, which may come later or not at all.
         """
-        if self._recent_audio:
-            replay = memoryview(bytes(self._recent_audio)).cast("h").tolist()
-            self._audio_buffer[:0] = replay
+        replay_samples = len(self._recent_audio) // 2
+        if replay_samples or self._audio_buffer:
+            start = self._sent_samples - replay_samples
+            self._connection_offset = self._timeline_offset() + start / self._opts.sample_rate
+            self._audio_buffer[:0] = memoryview(bytes(self._recent_audio)).cast("h").tolist()
             self._recent_audio.clear()
-        self._carried_audio_s = len(self._audio_buffer) / self._opts.sample_rate
+        else:
+            self._connection_offset = None
+        self._sent_samples = 0
 
     def _remember_sent_audio(self, pcm: bytes) -> None:
+        """Count sent PCM and keep the latest of it for replay after a reconnect."""
+        self._sent_samples += len(pcm) // 2
         self._recent_audio += pcm
         excess = len(self._recent_audio) - int(RECONNECT_REPLAY_S * self._opts.sample_rate) * 2
         if excess > 0:
@@ -1822,9 +1836,21 @@ class SpeechStream(stt.SpeechStream):
             )
             raise APIStatusError(f"Message processing error: {e}") from e
 
+    def _release_claimed_audio(self, speech_end: object) -> None:
+        """Drop replay audio up to where a finished utterance ended; what follows stays."""
+        if isinstance(speech_end, bool) or not isinstance(speech_end, (int, float)):
+            # no boundary to go by, so treat everything sent so far as covered
+            self._recent_audio.clear()
+            return
+        start = self._sent_samples - len(self._recent_audio) // 2
+        covered = int(speech_end * self._opts.sample_rate) - start
+        if covered > 0:
+            del self._recent_audio[: covered * 2]
+
     async def _handle_transcript_data(self, data: dict) -> None:
         """Handle transcription result messages."""
         transcript_data = data.get("data", {})
+        self._release_claimed_audio(transcript_data.get("speech_end"))
         transcript_text = transcript_data.get("transcript", "")
         self._maybe_set_server_request_id(transcript_data)
         # Prefer the per-message request_id from the server; fall back to the
@@ -1914,8 +1940,6 @@ class SpeechStream(stt.SpeechStream):
                     self._logger.debug("Speech started", extra=self._build_log_context())
 
             elif signal_type == "END_SPEECH":
-                # audio up to here belongs to the utterance that just ended
-                self._recent_audio.clear()
                 if self._speaking:
                     self._speaking = False
                     self._pending_eos = True
