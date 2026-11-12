@@ -1770,6 +1770,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
+ "chrono",
  "futures-util",
  "libc",
  "livekit-protocol",

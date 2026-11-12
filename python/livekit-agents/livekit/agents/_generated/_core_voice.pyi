@@ -1013,6 +1013,11 @@ class _core_SessionOwner:
         """`aclose` without waiting for it."""
     async def finish_recording(self) -> None:
         """The recording's final result remains available to the job reporter."""
+    async def keep_console_recording(self, report: SessionReport) -> str | None:
+        """`console --record`: `report` and the call's audio are kept in
+        `.livekit/sessions/<local date-time>/` under the working directory, which is returned;
+        `None` for any other session. Call after `finish_recording`.
+        """
     @property
     def started_at(self) -> float | None:
         """When the session started (wall clock seconds), once its startup prepared it."""

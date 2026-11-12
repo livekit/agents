@@ -215,6 +215,14 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// The recording's final result remains available to the job reporter.
     #[host(await)]
     async fn finish_recording(&self) -> Result<(), crate::recorder::RecordingFailure>;
+    /// `console --record`: `report` and the call's audio are kept in
+    /// `.livekit/sessions/<local date-time>/` under the working directory, which is returned;
+    /// `None` for any other session. Call after `finish_recording`.
+    #[host(await)]
+    async fn keep_console_recording(
+        &self,
+        report: crate::telemetry::report::SessionReport,
+    ) -> Result<Option<String>, crate::recorder::RecordingFailure>;
     /// When the session started (wall clock seconds), once its startup prepared it.
     #[host(getter)]
     fn started_at(&self) -> Option<f64>;

@@ -118,6 +118,8 @@ struct Inner {
     started_at: OnceLock<f64>,
     recording_options: OnceLock<RecordingOptions>,
     audio: OnceLock<(String, Arc<SessionRecorder>)>,
+    /// The console's call recorded with `--record`: its recording is kept past the job.
+    console_recording: OnceLock<bool>,
     /// The report's events: which are kept, and the job allowed to read them.
     retention: Mutex<Retention>,
     tasks: Arc<TaskSet>,
@@ -384,6 +386,7 @@ impl Inner {
             args.job = None;
         }
         let _ = self.started_at.set(lk_agents_abi::unix_secs(self.env.clock.wall()));
+        let _ = self.console_recording.set(args.console.is_some() && record_audio);
         let Some(job) = job else { return Ok(()) };
         if recording.audio || record_audio {
             let dir = std::path::PathBuf::from(job.recording_dir()?);
@@ -507,6 +510,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             started_at: OnceLock::new(),
             recording_options: OnceLock::new(),
             audio: OnceLock::new(),
+            console_recording: OnceLock::new(),
             retention: Mutex::new(Retention::process()),
             tasks: Arc::new(TaskSet::default()),
             opened,
@@ -734,6 +738,36 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
 
     async fn finish_recording(&self) -> Result<(), RecordingFailure> {
         self.0.finish_recording().await
+    }
+
+    async fn keep_console_recording(
+        &self,
+        report: telemetry::SessionReport,
+    ) -> Result<Option<String>, RecordingFailure> {
+        if self.0.console_recording.get() != Some(&true) {
+            return Ok(None);
+        }
+        use lk_agents_abi::telemetry::report::SessionReportFunctions as _;
+        let json = lk_agents_net::export::session_report::ReportFiles::session_report_json(report)
+            .map_err(|error| RecordingFailure::Encode(error.to_string()))?;
+        let stamp = chrono::DateTime::<chrono::Local>::from(self.0.env.clock.wall());
+        let directory = std::path::Path::new(".livekit/sessions")
+            .join(stamp.format("%Y-%m-%d-%H%M%S").to_string());
+        let audio = self.0.audio.get().map(|(path, _)| std::path::PathBuf::from(path));
+        let kept = directory.clone();
+        lk_agents_net::blocking_io::blocking_io()
+            .run((), move || -> std::io::Result<()> {
+                std::fs::create_dir_all(&kept)?;
+                std::fs::write(kept.join("session_report.json"), json)?;
+                if let Some(audio) = audio.filter(|audio| audio.is_file()) {
+                    std::fs::copy(audio, kept.join("audio.ogg"))?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|lost| RecordingFailure::Worker(lost.to_string()))?
+            .map_err(|error| RecordingFailure::Io(error.to_string()))?;
+        Ok(Some(directory.to_string_lossy().into_owned()))
     }
 
     fn started_at(&self) -> Option<f64> {

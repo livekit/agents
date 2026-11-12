@@ -4600,6 +4600,25 @@ impl CoreSessionOwner {
         })
     }
 
+    /// `console --record`: `report` and the call's audio are kept in
+    /// `.livekit/sessions/<local date-time>/` under the working directory, which is returned;
+    /// `None` for any other session. Call after `finish_recording`.
+    #[pyo3(signature = (report))]
+    fn keep_console_recording<'py>(
+        &self,
+        py: Python<'py>,
+        report: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let report = crate::generated::records::telemetry::session_report_from_py(report.as_any())?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out = <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::keep_console_recording(&this, report)
+                .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
     /// When the session started (wall clock seconds), once its startup prepared it.
     #[getter]
     fn started_at(&self, py: Python<'_>) -> PyResult<SessionOwnerStartedAtOutput> {

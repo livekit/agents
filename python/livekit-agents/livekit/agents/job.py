@@ -16,13 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import datetime
 import functools
 import inspect
 import logging
 import multiprocessing as mp
 import os
-import shutil
 import tempfile
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
@@ -201,22 +199,13 @@ class JobContext:
             logger.exception("failed to snapshot the session report")
             return
 
-        from .voice._session_bindings import ConsoleCall
-
-        if ConsoleCall.record:
-            directory = Path(
-                ".livekit", "sessions", datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
-            )
-            try:
-                await asyncio.to_thread(
-                    _keep_console_recording,
-                    self.make_session_report(),
-                    self.session_directory,
-                    directory,
-                )
-                logger.info(f"session recording saved to {directory.resolve()}")
-            except Exception:
-                logger.exception("failed to save the session recording")
+        try:
+            kept = await session._native.keep_console_recording(self.make_session_report())
+        except Exception:
+            logger.exception("failed to keep the session recording")
+        else:
+            if kept is not None:
+                logger.info(f"session recording saved to {Path(kept).resolve()}")
 
     async def _on_cleanup(self) -> None:
         await asyncio.to_thread(self._tempdir.cleanup)
@@ -705,12 +694,3 @@ class JobProcess:
     @property
     def http_proxy(self) -> str | None:
         return self._http_proxy
-
-
-def _keep_console_recording(report: SessionReport, session: Path, directory: Path) -> None:
-    """`console --record`: the report and the call's audio outlive the job's temporary directory."""
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / "session_report.json").write_text(_core.session_report_json(report))
-    audio = session / "audio.ogg"
-    if audio.is_file():
-        shutil.copyfile(audio, directory / "audio.ogg")

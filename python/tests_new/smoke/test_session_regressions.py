@@ -15,7 +15,7 @@ from tests_new.fakes import FakeAudioInput, FakeSTT, FakeVAD, until
 from .conftest import ConsolePeer
 
 RECORDING_AGENT_MODULE = """
-import asyncio, os, shutil
+import asyncio
 
 from livekit.agents import Agent, AgentServer, VoiceSession, cli
 from tests_new.fakes import FakeTTS
@@ -29,7 +29,6 @@ async def entrypoint(ctx):
     await session.say("hello there")
     await asyncio.sleep(0.5)  # the call lasts half a second
     await session.aclose()
-    shutil.copy(ctx.session_directory / "audio.ogg", os.environ["RECORDING"])
     ctx.shutdown()
 
 if __name__ == "__main__":
@@ -70,9 +69,9 @@ async def test_a_recorded_console_call_writes_its_audio_without_a_room(
     agent_env: dict[str, str],
     tmp_path: Path,
 ) -> None:
-    """``console --record`` records the call's audio although the console has no room.
-    https://github.com/livekit/agents/pull/4575"""
-    agent, recording = agent_module(RECORDING_AGENT_MODULE), tmp_path / "audio.ogg"
+    """``console --record`` records the call's audio although the console has no room, and keeps
+    it with the report under ``.livekit/sessions/``. https://github.com/livekit/agents/pull/4575"""
+    agent = agent_module(RECORDING_AGENT_MODULE)
 
     console_call = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -81,11 +80,14 @@ async def test_a_recorded_console_call_writes_its_audio_without_a_room(
         "--record",
         "--connect-addr",
         console.addr,
-        env={**agent_env, "RECORDING": str(recording)},
+        env=agent_env,
         cwd=tmp_path,
     )
     assert await console_call.wait() == 0
 
+    [kept] = list((tmp_path / ".livekit" / "sessions").iterdir())
+    assert (kept / "session_report.json").is_file()
+    recording = kept / "audio.ogg"
     decoder = media.AudioStreamDecoder(format="audio/ogg")
     decoder.push(recording.read_bytes())
     decoder.end_input()

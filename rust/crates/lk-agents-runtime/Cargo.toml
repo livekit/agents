@@ -26,6 +26,7 @@ lk-agents-voice = { path = "../lk-agents-voice", default-features = false }
 lk-agents-worker = { path = "../lk-agents-worker" }
 lk-agents-media = { path = "../lk-agents-media" }
 serde_json = { workspace = true, features = ["preserve_order"] }
+chrono = { version = "0.4", default-features = false, features = ["alloc", "clock"] }
 log.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
