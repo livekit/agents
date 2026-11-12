@@ -24,7 +24,7 @@ import time
 import weakref
 from dataclasses import dataclass, replace
 from functools import cached_property
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import aiohttp
 
@@ -338,16 +338,31 @@ class TTS(tts.TTS):
                 self.__current_connection.mark_non_current()
                 self.__current_connection = None
 
-    async def _current_connection(self) -> tuple[_Connection | _DialogueConnection, float, bool]:
+    @overload
+    async def _current_connection(
+        self, *, allow_dialogue: Literal[True] = True
+    ) -> tuple[_Connection | _DialogueConnection, float, bool]: ...
+
+    @overload
+    async def _current_connection(
+        self, *, allow_dialogue: Literal[False]
+    ) -> tuple[_Connection | _DialogueConnection, float, bool] | None: ...
+
+    async def _current_connection(
+        self, *, allow_dialogue: bool = True
+    ) -> tuple[_Connection | _DialogueConnection, float, bool] | None:
         """Get the current connection, creating one if needed.
 
         Returns:
-            Tuple of (connection, acquire_time, connection_reused)
+            Tuple of (connection, acquire_time, connection_reused), or None when
+            dialogue acquisition is disabled and the current model is dialogue.
         """
         async with self._connection_lock:
             session = self._ensure_session()
             t0 = time.perf_counter()
             while True:
+                if not allow_dialogue and is_dialogue_model(self._opts.model):
+                    return None
                 if (
                     self.__current_connection
                     and self.__current_connection.is_current
@@ -385,7 +400,13 @@ class TTS(tts.TTS):
         return stream
 
     def prewarm(self) -> None:
-        """Open the websocket connection before the first synthesis request."""
+        """Preconnect regular TTS models; dialogue models connect on first synthesis.
+
+        A dialogue socket without a synthesis context times out after 20 seconds.
+        Context keep-alives cannot keep an unused prewarmed socket open.
+        """
+        if is_dialogue_model(self._opts.model):
+            return
         if self._prewarm_task is None or self._prewarm_task.done():
             self._prewarm_task = asyncio.create_task(self._run_prewarm())
 
@@ -394,18 +415,10 @@ class TTS(tts.TTS):
         max_retry_delay = 30.0
 
         try:
-            while True:
+            while not is_dialogue_model(self._opts.model):
                 try:
-                    conn, _, _ = await self._current_connection()
-                    retry_delay = 1.0
-
-                    if not is_dialogue_model(self._opts.model) or conn._recv_task is None:
-                        return
-
-                    # Text-to-dialogue sockets are closed by the server after an idle period.
-                    # Wait for that closure and reconnect immediately so the next turn remains warm.
-                    # asyncio.wait() does not propagate cancellation from the receive task.
-                    await asyncio.wait({conn._recv_task})
+                    await self._current_connection(allow_dialogue=False)
+                    return
                 except asyncio.CancelledError:
                     raise
                 except APIStatusError as exc:

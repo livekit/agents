@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
@@ -110,7 +111,7 @@ async def test_prewarm_opens_connection(monkeypatch: pytest.MonkeyPatch) -> None
     opened = asyncio.Event()
 
     async def _current_connection(
-        self: object,
+        self: object, *, allow_dialogue: bool = True
     ) -> tuple[SimpleNamespace, float, bool]:
         opened.set()
         return SimpleNamespace(_recv_task=None), 0.0, False
@@ -124,8 +125,11 @@ async def test_prewarm_opens_connection(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(("dialogue", "prewarm"), [(False, False), (True, False), (True, True)])
 async def test_option_update_during_connect_discards_stale_socket(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, dialogue: bool, prewarm: bool
 ) -> None:
     connect_started = asyncio.Event()
     resume_connect = asyncio.Event()
@@ -151,46 +155,60 @@ async def test_option_update_during_connect_discards_stale_socket(
             self.is_current = False
 
     monkeypatch.setattr(elevenlabs_tts, "_Connection", _StubConnection)
+    monkeypatch.setattr(elevenlabs_tts, "_DialogueConnection", _StubConnection)
 
     async with aiohttp.ClientSession() as session:
         tts = elevenlabs_tts.TTS(api_key="test-key", voice_id="old", http_session=session)
-        connection_task = asyncio.create_task(tts._current_connection())
+        if prewarm:
+            tts.prewarm()
+            connection_task = tts._prewarm_task
+            assert connection_task is not None
+        else:
+            connection_task = asyncio.create_task(tts._current_connection())
         await asyncio.wait_for(connect_started.wait(), timeout=1)
 
-        tts.update_options(voice_id="new")
+        if dialogue:
+            tts.update_options(model="eleven_v4")
+        else:
+            tts.update_options(voice_id="new")
         resume_connect.set()
-        connection, _, _ = await asyncio.wait_for(connection_task, timeout=1)
+        await asyncio.wait_for(connection_task, timeout=1)
 
+        # Prewarm must close the stale handshake without opening a dialogue socket.
+        assert len(connections) == (1 if prewarm else 2)
+        connection, _, _ = await tts._current_connection()
         assert len(connections) == 2
         assert connections[0]._closed  # pyright: ignore[reportAttributeAccessIssue]
         assert connection is connections[1]
-        assert connection._opts.voice_id == "new"
+        assert connection._opts.voice_id == ("old" if dialogue else "new")
+        assert connection._opts.model == ("eleven_v4" if dialogue else "eleven_turbo_v2_5")
 
         await tts.aclose()
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_prewarm_stops_on_non_retryable_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
     attempts = 0
     finished = asyncio.Event()
+    sleep = asyncio.sleep
 
-    async def _current_connection(self: object) -> tuple[SimpleNamespace, float, bool]:
+    async def _sleep(_delay: float) -> None:
+        finished.set()
+
+    async def _current_connection(
+        self: object, *, allow_dialogue: bool = True
+    ) -> tuple[SimpleNamespace, float, bool]:
         nonlocal attempts
         attempts += 1
         raise elevenlabs_tts.APIStatusError("Unauthorized", status_code=401)
 
     monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
-    monkeypatch.setattr(
-        elevenlabs_tts.asyncio,
-        "sleep",
-        lambda _delay: finished.set(),
-    )
+    monkeypatch.setattr(elevenlabs_tts.asyncio, "sleep", _sleep)
 
     tts = elevenlabs_tts.TTS(api_key="test-key")
     tts.prewarm()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await sleep(0)
+    await sleep(0)
     assert attempts == 1
     assert not finished.is_set()
     await tts.aclose()
@@ -204,7 +222,7 @@ async def test_prewarm_retries_with_exponential_backoff(
     ready = asyncio.Event()
 
     async def _current_connection(
-        self: object,
+        self: object, *, allow_dialogue: bool = True
     ) -> tuple[SimpleNamespace, float, bool]:
         nonlocal attempts
         attempts += 1
@@ -228,34 +246,23 @@ async def test_prewarm_retries_with_exponential_backoff(
     assert delays == [1.0, 2.0, 4.0]
 
 
-async def test_dialogue_prewarm_reconnects_when_idle_socket_closes(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.unit
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    "model", ["eleven_v3", "eleven_v3_conversational", "eleven_v4", "eleven_v4_turbo"]
+)
+async def test_dialogue_prewarm_does_not_open_unused_connection(
+    monkeypatch: pytest.MonkeyPatch, model: str
 ) -> None:
-    connections: list[asyncio.Future[None]] = []
-    reconnected = asyncio.Event()
-
-    async def _current_connection(
-        self: object,
-    ) -> tuple[SimpleNamespace, float, bool]:
-        recv_task = asyncio.get_running_loop().create_future()
-        connections.append(recv_task)
-        if len(connections) == 2:
-            reconnected.set()
-        return SimpleNamespace(_recv_task=recv_task), 0.0, False
-
-    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
-
-    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4")
-    tts.prewarm()
-    while not connections:
+    connect = AsyncMock()
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", connect)
+    tts = elevenlabs_tts.TTS(api_key="test-key", model=model)
+    try:
+        tts.prewarm()
         await asyncio.sleep(0)
-
-    connections[0].cancel()
-    await asyncio.wait_for(reconnected.wait(), timeout=1)
-    await tts.aclose()
-
-    assert len(connections) == 2
-    assert not connections[1].cancelled()
+        connect.assert_not_awaited()
+    finally:
+        await tts.aclose()
 
 
 def test_build_context_init_packet_includes_generation_config() -> None:
@@ -525,6 +532,7 @@ def test_unregister_stream_keeps_the_context_closable() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.virtual_time
 async def test_interrupted_stream_unregisters_before_ending_the_segment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1085,6 +1093,7 @@ async def test_dialogue_send_loop_sends_close_context_without_waiting() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.virtual_time
 async def test_dialogue_send_loop_sends_keep_alive_for_idle_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1111,6 +1120,7 @@ async def test_dialogue_send_loop_sends_keep_alive_for_idle_context(
 
 
 @pytest.mark.asyncio
+@pytest.mark.virtual_time
 async def test_dialogue_send_loop_keeps_idle_context_alive_during_other_traffic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1142,6 +1152,7 @@ async def test_dialogue_send_loop_keeps_idle_context_alive_during_other_traffic(
 
 
 @pytest.mark.asyncio
+@pytest.mark.virtual_time
 async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
