@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-sherpa"
+dynamic = ["version"]
+description = "Local speech-to-text and text-to-speech for LiveKit Agents, powered by sherpa-onnx"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = [
+    "webrtc",
+    "realtime",
+    "audio",
+    "livekit",
+    "livekit-agents",
+    "stt",
+    "speech-to-text",
+    "tts",
+    "text-to-speech",
+    "kokoro",
+    "streaming",
+    "offline",
+    "local",
+    "onnx",
+    "sherpa-onnx",
+]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "livekit-agents>=1.8.6",
+    "sherpa-onnx>=1.13.8",
+    # The sherpa-onnx wheels do not declare it; it ships libonnxruntime.
+    "sherpa-onnx-core>=1.13.8",
+    "huggingface-hub>=0.34",
+    "numpy>=1.26",
+]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://k2-fsa.github.io/sherpa/onnx/"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/sherpa/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
