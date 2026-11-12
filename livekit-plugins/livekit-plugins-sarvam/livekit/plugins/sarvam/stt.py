@@ -926,6 +926,8 @@ class SpeechStream(stt.SpeechStream):
         self._utterance_resolved = asyncio.Event()
         # samples short of a full chunk; kept on the stream so a reconnect doesn't drop them
         self._audio_buffer: list[Any] = []
+        # seconds of that audio the current connection was opened with
+        self._carried_audio_s = 0.0
 
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
@@ -986,7 +988,7 @@ class SpeechStream(stt.SpeechStream):
         if value <= 0:
             return None
         # Map connection-relative timestamps onto the caller's audio timeline.
-        return float(value) + self.start_time_offset
+        return max(float(value) + self.start_time_offset - self._carried_audio_s, 0.0)
 
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
@@ -1185,8 +1187,11 @@ class SpeechStream(stt.SpeechStream):
             # update_options() ends a connection to reopen it with the new options;
             # the input channel carries on into the next connection
             while await self._run_connection():
-                # Sarvam times each connection from zero, so re-anchor on its first audio
+                # Sarvam times each connection from zero, so re-anchor on its first audio.
+                # The anchor is the first frame read, but carried-over samples go out ahead
+                # of it, so the new clock starts that much earlier.
                 self._input_ch.restart_provider_clock()
+                self._carried_audio_s = len(self._audio_buffer) / self._opts.sample_rate
                 self.start_time = time.time()
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             async with self._connection_lock:
@@ -1344,13 +1349,15 @@ class SpeechStream(stt.SpeechStream):
         return False
 
     async def _settle_utterance_for_reconnect(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """Hand the old connection everything it was sent for before it is replaced.
+        """Close an open utterance on the old connection before it is replaced.
 
-        Audio read but not yet sent goes to the old connection, so the new one starts clean
-        and its clock lines up with the first frame it reads. Only the old connection can
-        transcribe speech it has started on, so an open utterance is flushed there too, and
-        the turn ends with END_OF_SPEECH either way.
+        Only the old connection can transcribe speech it has started on, so its buffered
+        audio and a flush go there, and the turn ends with END_OF_SPEECH either way. With no
+        utterance open, unsent audio carries into the new connection instead.
         """
+        if not self._speaking:
+            return
+
         import base64
 
         import numpy as np
@@ -1372,19 +1379,15 @@ class SpeechStream(stt.SpeechStream):
                         }
                     )
                 )
-            if not self._speaking:
-                return
             # a transcript from earlier in the utterance doesn't cover the flushed audio
             self._utterance_resolved.clear()
             await ws.send_str(json.dumps({"type": "flush"}))
             await asyncio.wait_for(self._utterance_resolved.wait(), RECONNECT_SETTLE_TIMEOUT)
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
             self._logger.warning(
-                f"Audio not transcribed before reconnect: {e!r}",
+                f"Open utterance not transcribed before reconnect: {e!r}",
                 extra=self._build_log_context(),
             )
-            if not self._speaking:
-                return
 
         self._speaking = False
         self._try_commit_utterance()
