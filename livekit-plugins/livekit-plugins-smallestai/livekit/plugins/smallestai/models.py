@@ -13,7 +13,7 @@ TTSEncoding = Literal[
     "alaw",
 ]
 
-STTModels = Literal["pulse"]
+STTModels = Literal["pulse", "pulse-2"]
 
 STTEncoding = Literal[
     "linear16",
