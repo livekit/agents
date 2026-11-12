@@ -99,6 +99,14 @@ class STT(stt.STT):
             max_speaker_count=max_speaker_count,
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "nvidia"
+
     def _recognize_impl(
         self,
         buffer: AudioBuffer,

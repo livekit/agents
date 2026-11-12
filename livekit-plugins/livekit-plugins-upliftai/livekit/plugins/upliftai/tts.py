@@ -170,6 +170,10 @@ class TTS(tts.TTS):
         self._client: WebSocketClient | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
+    @property
+    def provider(self) -> str:
+        return "UpliftAI"
+
     def update_options(
         self,
         *,
