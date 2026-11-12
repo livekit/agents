@@ -1,14 +1,4 @@
-"""Tests for ``_CloudTransport`` (cloud WS body, driven by the unified
-``_BaseStreamingTurnDetectorStream`` stream).
-
-Uses the in-process ``FakeTurnDetectorWS`` to drive the transport
-deterministically. Covers:
-
-- Retry counter resets after a successful connect (so transient drops across
-  the session lifetime don't accumulate toward ``max_retry``).
-- All outbound messages are FIFO-ordered on the wire, even when control
-  hooks fire synchronously between two awaited audio frames.
-"""
+"""The cloud turn-detector transport, driven over an in-process fake websocket."""
 
 from __future__ import annotations
 
@@ -42,9 +32,7 @@ class TestCloudStreamRetry:
     """``_num_retries`` lifecycle across reconnects."""
 
     async def test_num_retries_resets_after_successful_connect(self) -> None:
-        """Regression: after a successful WS connect, transient-failure
-        counters must reset so transient drops across the session lifetime
-        don't accumulate toward ``max_retry``."""
+        """A successful connect resets the transient-failure counter."""
         stream, _fake_ws, transport = make_stream(
             connect_script=[APIConnectionError("transient", retryable=True), None],
             max_retry=3,
@@ -64,11 +52,7 @@ class TestCloudStreamSendOrdering:
     """FIFO delivery for the unified outbound channel."""
 
     async def test_inference_start_precedes_input_audio(self) -> None:
-        """Regression: ``run_inference`` (sync hook) used to schedule its
-        send via ``asyncio.create_task``, which could land on the wire after
-        an awaited ``input_audio`` send. With the unified channel, the
-        sender drains FIFO so ``inference_start`` always reaches the wire
-        first."""
+        """run_inference reaches the wire after an earlier input_audio send."""
         stream, fake_ws, transport = make_stream(connect_script=[None])
         try:
             await wait_until_connected(transport)
@@ -84,10 +68,7 @@ class TestCloudStreamSendOrdering:
             await stream.aclose()
 
     async def test_consecutive_inference_starts_serialized(self) -> None:
-        """Regression: two sync ``run_inference`` hooks back-to-back (a
-        predict superseding another) used to race at the ``ws.send_bytes``
-        await because each ran in its own task. The unified channel serializes
-        them in call order."""
+        """Two back-to-back run_inference calls keep their order on the wire."""
         stream, fake_ws, transport = make_stream(connect_script=[None])
         try:
             await wait_until_connected(transport)
