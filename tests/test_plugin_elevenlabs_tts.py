@@ -628,7 +628,7 @@ def test_build_dialogue_synthesize_body_single_turn() -> None:
         ],
     )
     body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
-        tts._opts, "hello there", voice_settings=None
+        tts._opts, "hello there"
     )
 
     assert body["inputs"] == [{"text": "hello there", "voice_id": "voice-1"}]
@@ -641,13 +641,18 @@ def test_build_dialogue_synthesize_body_single_turn() -> None:
 
 def test_build_dialogue_synthesize_body_keeps_only_supported_settings() -> None:
     tts = elevenlabs_tts.TTS(
-        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+        api_key="test-key",
+        model="eleven_v3_conversational",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=0.5, similarity_boost=0.75, style=0.3
+        ),
     )
     body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
-        tts._opts, "hello there", voice_settings={"stability": 0.5, "similarity_boost": 0.75}
+        tts._opts, "hello there"
     )
 
-    assert body["settings"] == {"stability": 0.5}
+    assert body["settings"] == {"stability": 0.5, "similarity": 0.75}
 
 
 def test_build_dialogue_context_init_packet_registers_single_voice() -> None:
@@ -666,13 +671,15 @@ def test_build_dialogue_context_init_packet_keeps_only_supported_voice_settings(
         api_key="test-key",
         model="eleven_v3_conversational",
         voice_id="voice-1",
-        voice_settings=elevenlabs_tts.VoiceSettings(stability=0.5, similarity_boost=0.75),
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=0.5, similarity_boost=0.75, style=0.3
+        ),
     )
     packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
         tts._opts, context_id="ctx-1"
     )
 
-    assert packet["voice_settings"] == {"stability": 0.5}
+    assert packet["voice_settings"] == {"stability": 0.5, "similarity": 0.75}
 
 
 def test_dialogue_model_warns_on_unsupported_voice_settings(
@@ -682,10 +689,111 @@ def test_dialogue_model_warns_on_unsupported_voice_settings(
         elevenlabs_tts.TTS(
             api_key="test-key",
             model="eleven_v3_conversational",
-            voice_settings=elevenlabs_tts.VoiceSettings(stability=0.5, similarity_boost=0.75),
+            voice_settings=elevenlabs_tts.VoiceSettings(
+                stability=0.5, similarity_boost=0.75, style=0.3
+            ),
         )
 
-    assert any("voice_settings.similarity_boost" in r.getMessage() for r in caplog.records)
+    assert any("voice_settings.style" in r.getMessage() for r in caplog.records)
+
+
+def test_build_dialogue_synthesize_body_sends_clone_strength_for_v4() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v4",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=0.5, similarity_boost=0.75, clone_strength=0.3
+        ),
+    )
+    body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, "hello there"
+    )
+
+    assert body["settings"] == {"stability": 0.5, "similarity": 0.75, "clone_strength": 0.3}
+
+
+def test_build_dialogue_context_init_packet_sends_clone_strength_for_v4() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v4_turbo",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=0.5, similarity_boost=0.75, clone_strength=0.3
+        ),
+    )
+    packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, context_id="ctx-1"
+    )
+
+    assert packet["voice_settings"] == {"stability": 0.5, "similarity": 0.75, "clone_strength": 0.3}
+
+
+@pytest.mark.parametrize("model", ["eleven_v3_conversational", "eleven_flash_v2_5"])
+def test_clone_strength_ignored_for_non_v4_model(
+    model: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        tts = elevenlabs_tts.TTS(
+            api_key="test-key",
+            model=model,
+            voice_id="voice-1",
+            voice_settings=elevenlabs_tts.VoiceSettings(
+                stability=0.5, similarity_boost=0.75, clone_strength=0.3
+            ),
+        )
+
+    if elevenlabs_tts.is_dialogue_model(model):
+        packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, context_id="ctx-1"
+        )
+    else:
+        packet = elevenlabs_tts._build_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, context_id="ctx-1"
+        )
+
+    assert any("voice_settings.clone_strength" in r.getMessage() for r in caplog.records)
+    assert "clone_strength" not in packet["voice_settings"]
+
+
+def test_update_options_warns_when_clone_strength_ignored(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_flash_v2_5", voice_id="voice-1")
+
+    with caplog.at_level(logging.WARNING):
+        tts.update_options(
+            voice_settings=elevenlabs_tts.VoiceSettings(
+                stability=0.5, similarity_boost=0.75, clone_strength=0.3
+            )
+        )
+
+    assert any("voice_settings.clone_strength" in r.getMessage() for r in caplog.records)
+
+
+def test_clone_strength_sent_again_after_switching_back_to_v4() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v4",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=0.5, similarity_boost=0.75, clone_strength=0.3
+        ),
+    )
+
+    tts.update_options(model="eleven_flash_v2_5")
+    assert (
+        "clone_strength"
+        not in elevenlabs_tts._build_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, context_id="ctx-1"
+        )["voice_settings"]
+    )
+
+    tts.update_options(model="eleven_v4")
+    packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, context_id="ctx-2"
+    )
+    assert packet["voice_settings"] == {"stability": 0.5, "similarity": 0.75, "clone_strength": 0.3}
 
 
 def test_build_dialogue_context_init_packet_includes_pronunciation_dictionaries() -> None:
@@ -1059,3 +1167,47 @@ async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
 
         connection._input_queue.close()
         await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_retires_unused_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unused dialogue socket closes itself before the server's 20s idle timeout."""
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_IDLE_RETIRE", 0.05)
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4", voice_id="voice-1")
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection._send_task = asyncio.create_task(connection._send_loop())
+
+        await asyncio.wait({connection._send_task}, timeout=1.0)
+
+        assert connection._closed
+        assert ws.sent == []
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_retires_socket_after_last_context_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A context ending between keep-alive checks does not delay retirement past the deadline."""
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_IDLE_RETIRE", 0.1)
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4", voice_id="voice-1")
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        connection._ws = _RecordingWs()  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-1", "hello ", flush=True)  # pyright: ignore[reportPrivateUsage]
+        )
+        connection.close_context("ctx-1")
+        connection._send_task = asyncio.create_task(connection._send_loop())
+        await asyncio.sleep(0.05)
+        connection._cleanup_context("ctx-1")
+
+        await asyncio.wait({connection._send_task}, timeout=1.0)
+
+        assert connection._closed
