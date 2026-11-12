@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 from weakref import WeakSet
 
 import aiohttp
+from yarl import URL
 
 from livekit import rtc
 from livekit.agents import (
@@ -151,8 +152,12 @@ class STT(stt.STT):
             raise ValueError("Unsupported Giggy STT language.")
         return name
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        """Return a credential-free borrowed or context-managed HTTP session."""
+    def _ensure_session(self, url: str = GIGGY_ORIGIN) -> aiohttp.ClientSession:
+        """Return a borrowed or context-managed HTTP session with no credentials for ``url``.
+
+        Only cookies that would accompany a request to ``url`` count; a shared session may
+        hold cookies for unrelated hosts.
+        """
         session = (
             self._http_session
             if self._http_session is not None
@@ -160,7 +165,7 @@ class STT(stt.STT):
         )
         if (
             session.auth is not None
-            or session.cookie_jar
+            or session.cookie_jar.filter_cookies(URL(url))
             or any(
                 name.lower()
                 in {
@@ -490,7 +495,7 @@ class STT(stt.STT):
             ):
                 raise ValueError("Invalid artifact origin")
             # Recheck mutable session defaults before crossing to a signed artifact origin.
-            self._ensure_session()
+            self._ensure_session(result_url)
             async with session.get(result_url, timeout=timeout, allow_redirects=False) as response:
                 result = await self._read_json(response, status=200)
             if (
@@ -568,7 +573,9 @@ class SpeechStream(stt.RecognizeStream):
             if self._failure in done:
                 await self._failure
             await producer
-            await asyncio.gather(*tuple(self._turns))
+            # Turn failures reach self._failure through _turn_done; a dropped short turn is
+            # cancelled on purpose and must not end the stream.
+            await asyncio.gather(*tuple(self._turns), return_exceptions=True)
             if self._failure.done():
                 await self._failure
         finally:
@@ -704,22 +711,35 @@ class SpeechStream(stt.RecognizeStream):
             "speech_end": None,
             "id": None,
             "attempt": None,
+            "unsent": 0,
+            "discarded": False,
+            "task": None,
         }
         self._active = turn
         self._queue_audio(turn, bytes(self._pre_roll), False)
         self._pre_roll.clear()
         self._previous = turn["published"]
-        task = asyncio.create_task(
-            asyncio.wait_for(self._transcribe_turn(turn), timeout=self._owner._recognition_timeout)
-        )
+        task = asyncio.create_task(self._run_turn(turn))
+        turn["task"] = task
         self._turns.add(task)
         task.add_done_callback(self._turn_done)
+
+    async def _run_turn(self, turn: dict[str, Any]) -> None:
+        """Transcribe one turn within the recognition deadline.
+
+        The transcription coroutine is created here, so a turn dropped before this task
+        starts leaves no un-awaited coroutine behind.
+        """
+        await asyncio.wait_for(
+            self._transcribe_turn(turn), timeout=self._owner._recognition_timeout
+        )
 
     def _queue_audio(self, turn: dict[str, Any], pcm: bytes, quiet: bool) -> None:
         """Queue real PCM and track tentative silence boundaries within the capture limits."""
         if not pcm:
             return
         turn["samples"] += len(pcm) // 2
+        turn["unsent"] += len(pcm)
         self._pending_bytes += len(pcm)
         if turn["samples"] > 30 * SAMPLE_RATE or self._pending_bytes > 960000:
             raise ValueError("Giggy live STT capture exceeds its bounded queue or 30-second turn.")
@@ -731,15 +751,27 @@ class SpeechStream(stt.RecognizeStream):
             turn["queue"].put_nowait((pcm[start : start + 16000], turn["boundary"], False))
 
     def _finish_turn(self) -> None:
-        """Validate the active turn's minimum duration and queue its final input marker."""
+        """Queue the active turn's final input marker, or drop a turn below Giggy's minimum."""
         turn = self._active
         if turn is None:
             return
+        self._active = None
         if turn["samples"] < 8000:
-            raise ValueError("Giggy live STT needs at least 0.5 seconds of real PCM.")
+            # Giggy needs at least 0.5 seconds of audio. Drop a shorter turn (a click or a
+            # one-syllable blip) instead of failing the stream, so later speech is still heard.
+            self._discard_turn(turn)
+            return
         turn["ended"] = True
         turn["queue"].put_nowait((b"", turn["boundary"], True))
-        self._active = None
+
+    def _discard_turn(self, turn: dict[str, Any]) -> None:
+        """Cancel a sub-minimum turn, release its queued capture and unblock later turns."""
+        turn["discarded"] = True
+        self._pending_bytes -= turn["unsent"]
+        turn["unsent"] = 0
+        turn["published"].set()
+        if turn["task"] is not None:
+            turn["task"].cancel()
 
     def _turn_done(self, task: asyncio.Task[None]) -> None:
         """Retire a completed turn task and propagate its first failure to the stream."""
@@ -772,7 +804,9 @@ class SpeechStream(stt.RecognizeStream):
                 await socket.send_bytes(pcm)
                 sent_samples += len(pcm) // 2
                 turn["frames"] += 1
-                self._pending_bytes -= len(pcm)
+                if not turn["discarded"]:
+                    turn["unsent"] -= len(pcm)
+                    self._pending_bytes -= len(pcm)
             if candidate != prepared and candidate is not None and candidate <= sent_samples:
                 if candidate < sent_samples - 3200:
                     raise ValueError("Canonical preparation boundary expired.")
@@ -971,7 +1005,7 @@ class SpeechStream(stt.RecognizeStream):
             or origin.password is not None
         ):
             raise ValueError("Invalid signed artifact origin.")
-        self._owner._ensure_session()
+        self._owner._ensure_session(result_url)
         async with session.get(result_url, timeout=timeout, allow_redirects=False) as response:
             result = await self._owner._read_json(response, status=200)
         if (

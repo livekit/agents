@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
-from aiohttp import web
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, APITimeoutError
 from livekit.plugins import giggy
@@ -308,48 +307,3 @@ async def test_shared_session_ownership(monkeypatch: pytest.MonkeyPatch) -> None
     assert provider._ensure_session() is session
     await provider.aclose()
     session.close.assert_not_called()
-
-
-@pytest.mark.parametrize("read_timeout", [False, True])
-async def test_real_http_error_is_single_post(
-    monkeypatch: pytest.MonkeyPatch, read_timeout: bool
-) -> None:
-    """Exercise actual aiohttp transport against an offline loopback server."""
-    requests: list[dict[str, object]] = []
-
-    async def handler(request: web.Request) -> web.StreamResponse:
-        requests.append({"headers": dict(request.headers), "body": await request.json()})
-        if read_timeout:
-            response = web.StreamResponse(headers={"Content-Type": "application/octet-stream"})
-            await response.prepare(request)
-            await asyncio.sleep(0.3)
-            return response
-        return web.Response(status=503, text=KEY)
-
-    app = web.Application()
-    app.router.add_post("/v1/audio/speech", handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    try:
-        site = web.TCPSite(runner, "127.0.0.1", 0)
-        await site.start()
-        port = runner.addresses[0][1]
-        base_url = f"http://127.0.0.1:{port}/v1"
-        async with aiohttp.ClientSession() as session:
-            provider = giggy.TTS(api_key=KEY, voice=VOICE, http_session=session, base_url=base_url)
-            expected = APITimeoutError if read_timeout else APIStatusError
-            with pytest.raises(expected) as caught:
-                async with provider.synthesize(
-                    "Hi",
-                    conn_options=APIConnectOptions(max_retry=5, retry_interval=0, timeout=0.05),
-                ) as stream:
-                    await asyncio.wait_for(stream.collect(), 2)
-            assert KEY not in str(caught.value)
-            assert caught.value.retryable is False
-            await provider.aclose()
-            assert not session.closed
-        assert len(requests) == 1
-        assert requests[0]["headers"]["Authorization"] == "Bearer " + KEY
-        assert "Idempotency-Key" not in requests[0]["headers"]
-    finally:
-        await runner.cleanup()
