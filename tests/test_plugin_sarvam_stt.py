@@ -801,9 +801,10 @@ async def test_reconnect_keeps_the_next_utterance_onset(
     await stt.aclose()
 
 
+@pytest.mark.parametrize("speech_end", [None, 0.0])
 @pytest.mark.virtual_time
 async def test_reconnect_keeps_the_onset_when_the_transcript_has_no_speech_end(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, speech_end: float | None
 ) -> None:
     """Without a speech_end, only audio sent by the time of END_SPEECH counts as covered."""
     session, stt = _reconnect_stt(monkeypatch)
@@ -821,13 +822,14 @@ async def test_reconnect_keeps_the_onset_when_the_transcript_has_no_speech_end(
     sent = len(first.data.tobytes()) + len(onset.data.tobytes())
     await _wait_until(lambda: len(session.sockets[0].audio()) == sent)
     await stream._handle_transcript_data(
-        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": None}}
+        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": speech_end}}
     )
 
     stream.update_options(language="hi-IN", model="saaras:v4")
     await _wait_until(lambda: len(session.sockets) == 2)
     new = session.sockets[1]
     await _wait_until(lambda: len(new.audio()) > 0)
+    # the finished utterance isn't replayed, only the next turn's onset
     assert new.audio() == onset.data.tobytes()
 
     await stream.aclose()
