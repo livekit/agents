@@ -19,10 +19,9 @@ from typing import Any
 import httpx2 as httpx
 import openai
 
-from livekit.agents.llm import ChatContext, Tool, ToolChoice
+from livekit.agents.llm import ChatContext, ChatMessage, Tool, ToolChoice
 from livekit.agents.llm._provider_format.utils import convert_mid_conversation_instructions
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
@@ -31,14 +30,14 @@ from livekit.agents.utils import is_given
 from livekit.plugins.openai import LLM as OpenAILLM
 from livekit.plugins.openai.llm import LLMStream
 
-from ._common import client_headers, openai_base_url, resolve_api_key
+from ._common import (
+    DEFAULT_CONN_OPTIONS,
+    client_headers,
+    conn_options_or_default,
+    openai_base_url,
+    resolve_api_key,
+)
 from .models import SUPPORTED_SAMPLING, ChatModels
-
-# The gateway can hold a streamed reply until the first token, and allows qwen/qwen3.8-27b up to
-# 60 s for it (https://docs.vlm.run/gateway/error-codes). The framework's 10 s default cut those
-# turns off and retried them, so wait past the gateway's own deadline and let its 504 arrive
-# first. The request timeout comes from conn_options; a timeout on the client is never used.
-_DEFAULT_CONN_OPTIONS = APIConnectOptions(timeout=70.0)
 
 
 class LLM(OpenAILLM):
@@ -136,20 +135,16 @@ class LLM(OpenAILLM):
         *,
         chat_ctx: ChatContext,
         tools: list[Tool] | None = None,
-        conn_options: APIConnectOptions = _DEFAULT_CONN_OPTIONS,
+        conn_options: APIConnectOptions = DEFAULT_CONN_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         response_format: NotGivenOr[Any] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
-        # AgentSession always passes its llm_conn_options, which is this same object unless the
-        # user set their own. Identity, not equality, so an explicit APIConnectOptions() is kept.
-        if conn_options is DEFAULT_API_CONNECT_OPTIONS:
-            conn_options = _DEFAULT_CONN_OPTIONS
         return super().chat(
             chat_ctx=_gateway_chat_ctx(chat_ctx),
             tools=tools,
-            conn_options=conn_options,
+            conn_options=conn_options_or_default(conn_options),
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             response_format=response_format,
@@ -175,10 +170,13 @@ def _gateway_chat_ctx(chat_ctx: ChatContext) -> ChatContext:
     the beginning") and a request with no user message ("No user query found in
     messages"). generate_reply(instructions=...) produces both: a later system message,
     and on an opening greeting no user turn at all. Later instructions become inline user
-    turns where they fall, as the anthropic, aws, google and mistralai formats do, and
-    "(empty)" is added as the user turn when there is still none.
+    turns where they fall, as the anthropic, aws, google and mistralai formats do. When there
+    is still no user turn, "(empty)" is added as the first one, after the system message, as
+    the anthropic and aws formats do.
     """
     shaped = convert_mid_conversation_instructions(chat_ctx)
     if not any(item.type == "message" and item.role == "user" for item in shaped.items):
-        shaped.add_message(role="user", content="(empty)")
+        first = shaped.items[0] if shaped.items else None
+        after_system = first is not None and first.type == "message" and first.role == "system"
+        shaped.items.insert(1 if after_system else 0, ChatMessage(role="user", content=["(empty)"]))
     return shaped

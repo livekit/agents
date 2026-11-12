@@ -25,7 +25,13 @@ from livekit.agents.llm import _systemone as systemone
 from livekit.agents.llm.decisions import Decision, DecisionCapabilities, DecisionResponse
 from livekit.agents.types import APIConnectOptions
 
-from ._common import client_headers, gateway_url, resolve_api_key
+from ._common import (
+    DEFAULT_CONN_OPTIONS,
+    client_headers,
+    conn_options_or_default,
+    gateway_url,
+    resolve_api_key,
+)
 from .models import DecisionModels
 
 
@@ -48,9 +54,8 @@ class DecisionModel(llm.DecisionModel):
         http_session: Optional caller-owned aiohttp session. Defaults to the job's HTTP
             session; outside a job, use ``async with utils.http_context.open()``.
 
-    Each attempt times out after ``conn_options.timeout`` (10 s by default). The gateway allows
-    ``qwen/qwen3.8-27b`` up to 60 s, so pass ``conn_options=APIConnectOptions(timeout=70)`` to
-    ``evaluate()`` to wait for it.
+    Each attempt times out after 70 s by default, above the gateway's own deadline. Pass
+    ``conn_options`` to ``evaluate()`` to change it.
     """
 
     def __init__(
@@ -88,6 +93,19 @@ class DecisionModel(llm.DecisionModel):
     @property
     def provider(self) -> str:
         return self._provider
+
+    async def evaluate(
+        self,
+        *,
+        input: str | llm.ChatContext,
+        decisions: Mapping[str, Decision],
+        conn_options: APIConnectOptions = DEFAULT_CONN_OPTIONS,
+    ) -> DecisionResponse:
+        return await super().evaluate(
+            input=input,
+            decisions=decisions,
+            conn_options=conn_options_or_default(conn_options),
+        )
 
     async def _evaluate_impl(
         self,

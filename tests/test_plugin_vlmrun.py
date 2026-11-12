@@ -173,6 +173,22 @@ async def test_instructions_only_request_gets_placeholder_user_message(
     assert len(chat_ctx.items) == 1, "the caller's context is not modified"
 
 
+async def test_placeholder_user_message_goes_first_not_after_the_greeting(
+    transport: _Transport,
+) -> None:
+    chat_ctx = llm.ChatContext()
+    chat_ctx.add_message(role="system", content="Be terse.")
+    chat_ctx.add_message(role="assistant", content="Hello! How can I help?")
+    messages = await _messages_sent(transport, chat_ctx)
+    assert [m["role"] for m in messages] == ["system", "user", "assistant"]
+    assert messages[1]["content"] == "(empty)"
+
+    chat_ctx = llm.ChatContext()
+    chat_ctx.add_message(role="assistant", content="Hello! How can I help?")
+    messages = await _messages_sent(transport, chat_ctx)
+    assert [m["role"] for m in messages] == ["user", "assistant"], "no system message to follow"
+
+
 async def test_existing_user_message_is_left_alone(transport: _Transport) -> None:
     chat_ctx = llm.ChatContext()
     chat_ctx.add_message(role="system", content="Be terse.")
@@ -323,6 +339,18 @@ async def test_batch_is_sent_to_system_one_with_a_bearer_key() -> None:
 def test_missing_api_key_fails_at_construction() -> None:
     with pytest.raises(ValueError, match="VLMRUN_API_KEY is required"):
         vlmrun.DecisionModel()
+
+
+async def _decision_timeout(**evaluate_kwargs: Any) -> float:
+    model, http_session = model_for(response_body())
+    await model.evaluate(input="hi", decisions=QUESTIONS, **evaluate_kwargs)
+    return http_session.post.call_args.kwargs["timeout"].total
+
+
+async def test_decision_timeout_outlasts_the_gateway_deadline() -> None:
+    assert await _decision_timeout() > 60
+    assert await _decision_timeout(conn_options=DEFAULT_API_CONNECT_OPTIONS) > 60
+    assert await _decision_timeout(conn_options=APIConnectOptions(timeout=10.0)) == 10.0
 
 
 def test_ipv6_provider_keeps_its_brackets() -> None:

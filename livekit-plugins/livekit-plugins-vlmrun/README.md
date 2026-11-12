@@ -33,7 +33,8 @@ account. Sampling settings are sent only when set, because the gateway rejects s
 doesn't support.
 
 Requests time out after 70 s by default, because the gateway allows `qwen/qwen3.8-27b` up to 60 s
-to its first token. Set `AgentSession(conn_options=...)` to change it.
+to its first token. Set `AgentSession(conn_options=...)` to change it, or pass `conn_options` to
+`DecisionModel.evaluate()`.
 
 See the [LiveKit docs](https://docs.livekit.io/agents/models/llm/vlmrun/) for more.
 

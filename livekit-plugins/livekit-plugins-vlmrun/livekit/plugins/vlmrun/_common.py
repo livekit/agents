@@ -16,7 +16,21 @@ from __future__ import annotations
 
 import os
 
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+
 from .version import __version__
+
+# The gateway can hold a reply until the first token, and allows qwen/qwen3.8-27b up to 60 s for
+# it (https://docs.vlm.run/gateway/error-codes). The framework's 10 s default cut those requests
+# off and retried them, so wait past the gateway's own deadline and let its 504 arrive first.
+DEFAULT_CONN_OPTIONS = APIConnectOptions(timeout=70.0)
+
+
+def conn_options_or_default(conn_options: APIConnectOptions) -> APIConnectOptions:
+    # A caller that leaves the timeout alone, AgentSession included, passes the framework's
+    # default object. Identity, not equality, so an explicit APIConnectOptions() is kept.
+    return DEFAULT_CONN_OPTIONS if conn_options is DEFAULT_API_CONNECT_OPTIONS else conn_options
+
 
 DEFAULT_GATEWAY_URL = "https://gateway.vlm.run"
 
