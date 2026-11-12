@@ -175,7 +175,7 @@ fn recorded(driver: &VoiceDriver) -> Vec<(Role, String)> {
 }
 
 // Catches: a voice run's `new_messages()` leaving out the input it was run on, which a text
-// run's (and pydantic-ai's) starts with.
+// run's starts with.
 #[test]
 fn a_run_records_its_input_first() {
     for mut driver in

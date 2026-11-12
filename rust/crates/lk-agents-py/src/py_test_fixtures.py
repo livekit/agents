@@ -63,7 +63,10 @@ def generated_module(name):
     with _generated_fixture_lock:
         module = sys.modules.get(module_name)
         if module is None:
-            path = Path(__file__).parents[4] / f"livekit-agents/livekit/agents/_generated/{name}.py"
+            path = (
+                Path(__file__).parents[4]
+                / f"python/livekit-agents/livekit/agents/_generated/{name}.py"
+            )
             spec = importlib.util.spec_from_file_location(module_name, path)
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module

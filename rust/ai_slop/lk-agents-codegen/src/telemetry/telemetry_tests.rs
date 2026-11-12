@@ -272,7 +272,7 @@ fn outputs_describe_the_declarations() {
     let files: std::collections::BTreeMap<String, String> =
         telemetry::otel(&r).into_iter().collect();
     let schema: serde_json::Value =
-        serde_json::from_str(&files["rust/otel/schema.json"]).expect("schema is JSON");
+        serde_json::from_str(&files["otel/schema.json"]).expect("schema is JSON");
     let turn = &schema["spans"][1];
     assert_eq!((turn["name"].as_str(), turn["kind"].as_str()), (Some("turn"), Some("client")));
     assert_eq!(
@@ -293,7 +293,7 @@ fn outputs_describe_the_declarations() {
         let body: String = text.lines().filter(|l| !l.starts_with('#')).collect();
         serde_json::from_str(&body).expect("JSON")
     };
-    let attributes = yaml("rust/otel/registry/attributes.yaml");
+    let attributes = yaml("otel/registry/attributes.yaml");
     let owned: Vec<&serde_json::Value> = attributes["groups"]
         .as_array()
         .unwrap()
@@ -306,19 +306,19 @@ fn outputs_describe_the_declarations() {
         !owned.iter().any(|a| a["id"] == "gen_ai.request.model" || a["id"] == "lk.room_id"),
         "dependency keys are referenced, never redefined: {attributes}"
     );
-    let spans = yaml("rust/otel/registry/spans.yaml");
+    let spans = yaml("otel/registry/spans.yaml");
     let turn = spans["groups"].as_array().unwrap().iter().find(|g| g["id"] == "span.turn");
     let turn = turn.expect("span.turn");
     assert_eq!((turn["type"].as_str(), turn["span_kind"].as_str()), (Some("span"), Some("client")));
     assert!(turn["attributes"].as_array().unwrap().contains(
         &serde_json::json!({"ref": "gen_ai.request.model", "requirement_level": "recommended"})
     ));
-    let metrics = yaml("rust/otel/registry/metrics.yaml");
+    let metrics = yaml("otel/registry/metrics.yaml");
     assert_eq!(metrics["groups"][0]["metric_name"], "lk.turn.delay");
     assert_eq!(metrics["groups"].as_array().unwrap().len(), 1, "imports are not redeclared");
-    let imports = yaml("rust/otel/registry/imports.yaml");
+    let imports = yaml("otel/registry/imports.yaml");
     assert_eq!(imports["imports"]["metrics"], serde_json::json!(["gen_ai.invoke_agent.duration"]));
-    let manifest = &files["rust/otel/manifest.yaml"];
+    let manifest = &files["otel/manifest.yaml"];
     assert!(
         manifest.contains("livekit/protocol.git@") && manifest.contains("[otel/model/shared]"),
         "{manifest}"
@@ -394,8 +394,9 @@ fn declarations_cover_the_1_8_10_wire() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let abi = Crate::read(&root, "rust/crates/lk-agents-abi", "lk_agents_abi").expect("abi");
     let r = telemetry::read(&abi).expect("the declarations read");
-    let text = std::fs::read_to_string(root.join("tests/telemetry/baseline/schema_1_8_10.json"))
-        .expect("baseline");
+    let text =
+        std::fs::read_to_string(root.join("python/tests/telemetry/baseline/schema_1_8_10.json"))
+            .expect("baseline");
     let baseline: serde_json::Value = serde_json::from_str(&text).expect("baseline JSON");
     let stamped: Vec<&str> = r
         .groups

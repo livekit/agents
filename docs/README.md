@@ -74,11 +74,11 @@ Start with the [execution paths](internals/architecture.md#execution-paths) to f
 
 ## Running the examples
 
-- [`examples/`](../examples/README.md): three fast brain and slow brain
+- [`python/examples/`](../python/examples/README.md): three fast brain and slow brain
   pairs, each one worker: a dental practice's front desk, a hotel
   receptionist, an airline's customer care, with simulation scenarios.
-- [`tests/e2e/`](../tests/e2e/README.md) contains pytest journeys selected with
-  `uv run pytest tests/e2e --e2e`: a thread across two workers, interrupt, an
+- [`python/tests/e2e/`](../python/tests/e2e/README.md) contains pytest journeys selected with
+  `uv run pytest python/tests/e2e --e2e`: a thread across two workers, interrupt, an
   inbox burst, a worker killed mid-turn, input-required and approvals
   answered on the other worker, a stateless agent serving two threads,
   and the threads service's create and delete.

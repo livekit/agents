@@ -49,7 +49,7 @@ takes `raw_arguments: dict`, optionally after `ctx`, and validates them itself.
 ### Retries
 
 Arguments that fail validation and `ModelRetry` from the body send the model
-back to correct the call, as in pydantic-ai. Each tool counts its own
+back to correct the call. Each tool counts its own
 consecutive retries against the agent's `retries["tools"]` budget (default
 `1`); `retries=` on the tool replaces that budget for it. A run whose tool
 goes over its budget fails with `UnexpectedModelBehavior`.

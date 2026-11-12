@@ -29,10 +29,10 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
-const PYTHON_PACKAGES: &[&str] = &["livekit-agents"];
+const PYTHON_PACKAGES: &[&str] = &["python/livekit-agents"];
 const PYTHON_GENERATED: &str = "livekit/agents/_generated";
 const PYTHON_CORE: &str = "livekit/agents";
-const OTEL_REGISTRY: &str = "rust/otel/registry";
+const OTEL_REGISTRY: &str = "otel/registry";
 // Read by the registration test of `lk-agents-py`.
 const CORE_NAMES: &str = "rust/crates/lk-agents-py/src/generated/core_names.json";
 
@@ -275,13 +275,13 @@ mod drift {
         let families = [
             "rust/crates/lk-agents-py/src/generated/mod.rs",
             CORE_NAMES,
-            "livekit-agents/livekit/agents/_generated/stt.py",
-            "livekit-agents/livekit/agents/_generated/__init__.py",
-            "livekit-agents/livekit/agents/_core.pyi",
-            "livekit-agents/livekit/agents/_generated/_core_voice.pyi",
-            "livekit-agents/livekit/agents/_generated/semconv.py",
-            "rust/otel/schema.json",
-            "rust/otel/registry/spans.yaml",
+            "python/livekit-agents/livekit/agents/_generated/stt.py",
+            "python/livekit-agents/livekit/agents/_generated/__init__.py",
+            "python/livekit-agents/livekit/agents/_core.pyi",
+            "python/livekit-agents/livekit/agents/_generated/_core_voice.pyi",
+            "python/livekit-agents/livekit/agents/_generated/semconv.py",
+            "otel/schema.json",
+            "otel/registry/spans.yaml",
         ];
         for family in families {
             let path = tmp.join(family);

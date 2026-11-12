@@ -16,7 +16,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-PACKAGE = Path(__file__).resolve().parents[1] / "livekit-agents"
+PACKAGE = Path(__file__).resolve().parents[1] / "python" / "livekit-agents"
 EXTENSION_SUFFIXES = (".abi3.so", ".pyd")
 
 

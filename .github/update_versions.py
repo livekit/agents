@@ -7,7 +7,7 @@ from packaging.version import Version
 
 colorama.init()
 
-AGENTS_PROJECT = pathlib.Path("livekit-agents")
+AGENTS_PROJECT = pathlib.Path("python/livekit-agents")
 
 
 def _iter_plugin_dirs(plugins_root: pathlib.Path) -> list[pathlib.Path]:
@@ -98,7 +98,7 @@ def bump_prerelease(cur: str, bump_type: str) -> str:
 
 
 def update_plugins_pyproject_agents_version(new_agents_version: str) -> None:
-    plugins_root = pathlib.Path("livekit-plugins")
+    plugins_root = pathlib.Path("python/livekit-plugins")
     for pdir in _iter_plugin_dirs(plugins_root):
         pyproject = pdir / "pyproject.toml"
         if pyproject.exists():
@@ -145,7 +145,7 @@ def update_agents_pyproject_optional_dependencies(plugin_versions: dict[str, str
 
 def update_versions(bump_type: str) -> None:
     agents_ver = AGENTS_PROJECT / "livekit" / "agents" / "version.py"
-    plugins_root = pathlib.Path("livekit-plugins")
+    plugins_root = pathlib.Path("python/livekit-plugins")
 
     new_agents_version = None
     plugin_versions = {}
@@ -186,7 +186,7 @@ def update_versions(bump_type: str) -> None:
 
 def update_prerelease(prerelease_type: str, agents_only: bool = False) -> None:
     agents_ver = AGENTS_PROJECT / "livekit" / "agents" / "version.py"
-    plugins_root = pathlib.Path("livekit-plugins")
+    plugins_root = pathlib.Path("python/livekit-plugins")
 
     new_agents_version = None
     plugin_versions = {}

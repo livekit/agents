@@ -27,7 +27,7 @@ def _read_pypi_name(plugin_dir: pathlib.Path) -> str:
 
 
 def _iter_plugin_names() -> list[str]:
-    plugins_root = pathlib.Path(__file__).parent.parent / "livekit-plugins"
+    plugins_root = pathlib.Path(__file__).parent.parent / "python" / "livekit-plugins"
     names = []
     for d in sorted(plugins_root.glob("livekit-plugins-*")):
         if d.is_dir():

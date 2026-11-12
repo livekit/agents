@@ -34,13 +34,13 @@ jobs:
           python-version: "3.12"
 
       - name: Build and install blockguard
-        run: pip install livekit-plugins/livekit-blockguard/
+        run: pip install python/livekit-plugins/livekit-blockguard/
 
       - name: Install pytest
         run: pip install pytest
 
       - name: Run blockguard tests
-        working-directory: livekit-plugins/livekit-blockguard
+        working-directory: python/livekit-plugins/livekit-blockguard
         run: python -m pytest test_blockguard.py -v
 
   # The job channel's transport differs per OS (a socketpair on Linux and macOS, a named pipe on
@@ -145,7 +145,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Hermetic journeys
-        run: uv run --no-sync pytest --ignore=tests/e2e/test_text.py --e2e
+        run: uv run --no-sync pytest --ignore=python/tests/e2e/test_text.py --e2e
 
       - name: Text journeys
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
@@ -154,7 +154,7 @@ jobs:
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
           PYTHONPATH: ${{ github.workspace }}/livekit-agents:${{ github.workspace }}
-        run: uv run --no-sync pytest tests/e2e --e2e
+        run: uv run --no-sync pytest python/tests/e2e --e2e
 
   evaluation:
     # don't run tests for PRs on forks

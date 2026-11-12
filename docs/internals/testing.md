@@ -59,11 +59,11 @@ next to its actions; share fixtures rather than copying orchestration. Avoid
 both monolithic runners and many single-use forwarding modules. Each module
 must have a responsibility that a reader can name.
 
-`tests/test_native_smoke.py` checks the assembled Python/native API with scripted
+`python/tests/test_native_smoke.py` checks the assembled Python/native API with scripted
 providers, local protocol peers and real job processes. Run it with
-`make test TEST_ARGS="tests/test_native_smoke.py --unit"`; it also runs in the
-default hermetic suite. Scripted providers live in `tests/native_smoke_fixtures.py`,
-and the logging subprocess is `tests/native_job_logs.py`.
+`make test TEST_ARGS="python/tests/test_native_smoke.py --unit"`; it also runs in the
+default hermetic suite. Scripted providers live in `python/tests/native_smoke_fixtures.py`,
+and the logging subprocess is `python/tests/native_job_logs.py`.
 
 Python tests reach an offline room through the documented session, as
 [programmatic tests](../testing.md#programmatic-tests) do: `session.start(agent)`

@@ -10,11 +10,11 @@ on:
         default: "main"
   pull_request:
     paths:
-      - "livekit-agents/livekit/agents/inference/realtime/**"
-      - "livekit-agents/livekit/agents/llm/realtime.py"
-      - "livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/**"
-      - "livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/realtime/**"
-      - "tests/test_realtime/**"
+      - "python/livekit-agents/livekit/agents/inference/realtime/**"
+      - "python/livekit-agents/livekit/agents/llm/realtime.py"
+      - "python/livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/**"
+      - "python/livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/realtime/**"
+      - "python/tests/test_realtime/**"
       - ".github/workflows/test-realtime.yml"
 
 jobs:

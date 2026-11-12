@@ -474,7 +474,7 @@ A route of kind `text` goes to its A2A door
 ([`lk-agents-runtime/src/a2a/door/serve.rs`](../rust/crates/lk-agents-runtime/src/a2a/door/serve.rs))
 instead of the binding.
 Python route authoring and the ASGI adapter are in
-[`livekit/agents/http/server.py`](../livekit-agents/livekit/agents/http/server.py):
+[`livekit/agents/http/server.py`](../python/livekit-agents/livekit/agents/http/server.py):
 `AgentRoutes` defines the routes and runs the application once per exchange.
 
 ## Voice entrypoints

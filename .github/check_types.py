@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run strict mypy and pyright on the public API, every plugin and examples.
 
-Auto-discovers all plugin packages in livekit-plugins/ and runs mypy on them.
+Auto-discovers all plugin packages in python/livekit-plugins/ and runs mypy on them.
 Uses mypy's incremental mode (.mypy_cache) for fast re-checks after the first run.
 Use --checker=mypy or --checker=pyright for one checker. `--no-sync` and arguments after `--` go
 to `uv run`; other arguments go to mypy.
@@ -44,7 +44,7 @@ def get_packages(repo_root: Path) -> list[str]:
     # tests.type_checks pins the public generics: each expected error carries a type: ignore
     packages = ["livekit.agents", "tests.type_checks"]
 
-    plugins_dir = repo_root / "livekit-plugins"
+    plugins_dir = repo_root / "python/livekit-plugins"
     for plugin_dir in sorted(plugins_dir.glob("livekit-plugins-*")):
         if (plugin_dir / "pyproject.toml").is_file() and (plugin_dir / "livekit").is_dir():
             # livekit-plugins-openai -> openai
@@ -120,7 +120,7 @@ def main() -> None:
         # Examples are separate applications and can use the same module names.
         targets.extend(
             [str(path.relative_to(repo_root))]
-            for path in sorted((repo_root / "examples").iterdir())
+            for path in sorted((repo_root / "python/examples").iterdir())
             if path.is_dir() or path.suffix == ".py"
         )
         for target in targets:
@@ -134,13 +134,13 @@ def main() -> None:
 
     if options.checker in ("pyright", "all"):
         source_paths = [
-            "livekit-agents/livekit/agents",
-            "tests/type_checks",
-            "examples",
+            "python/livekit-agents/livekit/agents",
+            "python/tests/type_checks",
+            "python/examples",
         ]
         source_paths.extend(
             str(path.relative_to(repo_root))
-            for path in sorted((repo_root / "livekit-plugins").glob("livekit-plugins-*/livekit"))
+            for path in sorted((repo_root / "python/livekit-plugins").glob("livekit-plugins-*/livekit"))
             if (path.parent / "pyproject.toml").is_file()
         )
         pyright = [

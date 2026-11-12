@@ -36,7 +36,7 @@ A constructed agent reads back `agent.name`, `agent.instructions`, `agent.tools`
 (its tools and toolsets), `agent.llm` (its model, `NOT_GIVEN` when it uses the
 session's) and `agent.output_type` (`str` unless declared).
 
-As in pydantic-ai, the constructor infers the agent's type parameters from
+The constructor infers the agent's type parameters from
 its arguments: `scheduler` above is an `Agent[SchedulingContext, Appointment]`,
 and an agent without `output_type` has `str` output. `Agent[Context, Output]`
 is the explicit spelling, for annotations such as a function taking any agent
@@ -280,7 +280,7 @@ For multi-turn conversations with typed final results, see
 
 ## Retries
 
-Retries follow pydantic-ai. The model gets a budget of consecutive retries
+The model gets a budget of consecutive retries
 before the run fails with `UnexpectedModelBehavior`:
 
 | Budget | Consumed by | Reset by |

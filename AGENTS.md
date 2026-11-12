@@ -44,7 +44,7 @@ make -C rust test-checks   # rust/check and codegen tests
 ### Testing
 ```bash
 uv run pytest --unit                    # Run all unit tests
-uv run pytest tests/test_tools.py --unit # Run a single unit test file
+uv run pytest python/tests/test_tools.py --unit # Run a single unit test file
 make unit-tests                         # Run unit tests that don't require cloud accounts
 make test                               # Run the default hermetic suite
 make bench                              # Run the standalone IPC benchmark
@@ -58,7 +58,7 @@ Every test module declares exactly one category via a module-level marker, and
 each category has a matching `--<category>` selection flag. Selection happens
 *before* test-module import, so unselected test modules are not imported.
 Shared `conftest.py` fixtures and their dependencies still load. Categories are
-registered in `pyproject.toml`; `tests/conftest.py` reads their literal markers.
+registered in `pyproject.toml`; `python/tests/conftest.py` reads their literal markers.
 Put test paths before category flags, whose optional argument is a provider name.
 
 | Marker | Flag | Meaning |
@@ -189,8 +189,24 @@ specification; implementation cleanup must follow the agreed contracts.
   session.override_options(...)` layers temporary settings released when the block ends.
 
 ### Key Directories
+The repository is one Rust core with a binding per host language. The workspace manifests
+(`pyproject.toml`, `uv.lock`) stay at the root; each language's packages live under its own
+directory. Node gets `node/` beside `python/`, with `lk-agents-node` beside `lk-agents-py`.
 ```
-livekit-agents/livekit/agents/   # the public Python API and host adapters
+rust/                   # The shared core and its bindings; see docs/internals/architecture.md
+python/                 # The Python SDK
+├── livekit-agents/     # livekit-agents, built with the core as livekit.agents._core
+├── livekit-plugins/    # Provider plugins (openai, anthropic, google, deepgram, etc.)
+├── examples/           # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
+├── tests/              # Test suite with fakes (fake_stt.py, fake_vad.py)
+└── tests_new/          # Smoke, host, plugin and e2e suites
+otel/                   # Generated OTel registry and consumer schema (never edited)
+docs/                   # The 2.0 design, one feature per page
+bench/                  # Startup, IPC, host-boundary and sentence benchmarks
+```
+
+```
+python/livekit-agents/livekit/agents/   # the public Python API and host adapters
 ├── voice/              # Agent, VoiceSession, VoiceTask, the livekit.rtc room adapter
 ├── a2a.py              # The text door: A2A endpoint API, AgentClient, RemoteAgent, tokens
 ├── storage/            # AgentDBStorage, SQLiteStorage, thread handles, the context store
@@ -207,7 +223,7 @@ livekit-agents/livekit/agents/   # the public Python API and host adapters
 ├── _generated/         # Generated implementations and forwarding modules (never edited)
 └── _core.pyi           # Generated stubs of the Rust core extension
 
-rust/crates/            # The Rust core, built into livekit.agents._core; see docs/internals/architecture.md
+rust/crates/            # The Rust core, built into livekit.agents._core
 ├── lk-agents-abi       # Export declarations and typed boundary records
 ├── lk-agents-core      # AgentRun, tools/approval/output acceptance, TextSession, A2A and MCP logic
 ├── lk-agents-voice     # Voice session lifecycle, turns, speech scheduling, interruption
@@ -224,15 +240,10 @@ rust/crates/            # The Rust core, built into livekit.agents._core; see do
 └── lk-agents-fuzz      # DST: sans-I/O crates and the runtime's real executors over port fakes
 rust/ai_slop/           # Build tools: lk-agents-bindgen, lk-agents-host-derive, lk-agents-codegen
                         # (declarations IR, markers, generation); only their generated output is reviewed
-livekit-plugins/        # Provider plugins (openai, anthropic, google, deepgram, etc.)
-examples/               # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
-docs/                   # The 2.0 design, one feature per page
-skills/                 # Agent skills shipped with the repo (migrate-to-v2)
-tests/                  # Test suite with fakes (fake_stt.py, fake_vad.py)
 ```
 
 ### Plugin System
-Plugins in `livekit-plugins/` provide STT, TTS, LLM, and specialized services. Each plugin is a separate package following the pattern `livekit-plugins-<provider>`. Plugins register via the `Plugin` base class in `plugin.py`. Plugins stay Python; Rust reaches them through generated proxies and HostInvoker.
+Plugins in `python/livekit-plugins/` provide STT, TTS, LLM, and specialized services. Each plugin is a separate package following the pattern `livekit-plugins-<provider>`. Plugins register via the `Plugin` base class in `plugin.py`. Plugins stay Python; Rust reaches them through generated proxies and HostInvoker.
 
 ### Model Interface Pattern
 STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:

@@ -3,9 +3,9 @@ name: Telemetry registry
 on:
   push:
     branches: [v2.0]
-    paths: ['rust/otel/**', '.github/workflows/telemetry-registry.yml']
+    paths: ['otel/**', '.github/workflows/telemetry-registry.yml']
   pull_request:
-    paths: ['rust/otel/**', '.github/workflows/telemetry-registry.yml']
+    paths: ['otel/**', '.github/workflows/telemetry-registry.yml']
   workflow_dispatch:
 
 permissions:
@@ -30,6 +30,6 @@ jobs:
           tar xf "$archive"
           echo "$PWD/weaver-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
       # Resolves every reference, each `semconv` constant included, against the registries
-      # pinned in rust/otel/manifest.yaml.
+      # pinned in otel/manifest.yaml.
       - name: Check the registry
-        run: weaver registry check -r rust/otel
+        run: weaver registry check -r otel

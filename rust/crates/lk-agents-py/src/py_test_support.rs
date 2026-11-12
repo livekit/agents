@@ -56,17 +56,15 @@ mod support {
                         crate::py_calls::call(&site.getattr("addsitedir")?, (path,), None)?;
                     }
                 }
+                let package_root = root.join("python/livekit-agents");
                 let paths = sys.getattr("path")?;
-                crate::py_calls::call(
-                    &paths.getattr("insert")?,
-                    (0, root.join("livekit-agents").to_string_lossy().into_owned()),
-                    None,
-                )?;
-                crate::py_calls::call(
-                    &paths.getattr("insert")?,
-                    (0, root.to_string_lossy().into_owned()),
-                    None,
-                )?;
+                for path in [&package_root, &root.join("python"), &root] {
+                    crate::py_calls::call(
+                        &paths.getattr("insert")?,
+                        (0, path.to_string_lossy().into_owned()),
+                        None,
+                    )?;
+                }
                 let core = PyModule::new(py, "livekit.agents._core")?;
                 register(&core)?;
                 let modules = sys.getattr("modules")?.cast_into::<pyo3::types::PyDict>()?;
@@ -78,7 +76,7 @@ mod support {
                 let package = py.import("livekit.agents")?;
                 let package_path: String = package.getattr("__file__")?.extract()?;
                 assert!(
-                    std::path::Path::new(&package_path).starts_with(root.join("livekit-agents")),
+                    std::path::Path::new(&package_path).starts_with(&package_root),
                     "binding contracts must load this checkout's Python package: {package_path}"
                 );
                 package.setattr("_core", &core)?;

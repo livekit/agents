@@ -42,7 +42,7 @@ export OPENAI_API_KEY=<key>                  # for calls
 export LIVEKIT_WORKER_INSECURE=1             # temporary, staging only
 export LIVEKIT_AGENT_DEPLOYMENT=default      # temporary, staging only
 
-cd examples/frontdesk && lk agent dev
+cd python/examples/frontdesk && lk agent dev
 ```
 
 Pin the beta's exact version rather than allowing pre-releases, which would also take
@@ -56,9 +56,9 @@ lk agent console
 
 ## Examples
 
-- [`frontdesk`](examples/frontdesk/README.md): dental appointment booking
-- [`hotel-receptionist`](examples/hotel-receptionist/README.md): hotel bookings, lookups and cancellations
-- [`airline-support`](examples/airline-support/README.md): airline customer care as a graph
+- [`frontdesk`](python/examples/frontdesk/README.md): dental appointment booking
+- [`hotel-receptionist`](python/examples/hotel-receptionist/README.md): hotel bookings, lookups and cancellations
+- [`airline-support`](python/examples/airline-support/README.md): airline customer care as a graph
 
 ## More
 

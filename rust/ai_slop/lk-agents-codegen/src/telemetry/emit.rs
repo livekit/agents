@@ -222,7 +222,7 @@ fn manifest() -> String {
     let dep = |schema: &str, path: String| json!({ "schema_url": schema, "registry_path": path });
     yaml_file(json!({
         "file_format": "definition_manifest/2.0",
-        "schema_url": "https://github.com/livekit/agents/tree/main/rust/otel",
+        "schema_url": "https://github.com/livekit/agents/tree/main/otel",
         "stability": "development",
         "description": "LiveKit Agents telemetry: the framework's spans, events, metrics and report records.",
         "dependencies": [
@@ -415,16 +415,16 @@ fn imports_yaml(r: &Registry) -> String {
     yaml_file(json!({ "file_format": "definition/2", "imports": { "metrics": names } }))
 }
 
-/// Every file under `rust/otel/`, by repo-relative path.
+/// Every file under `otel/`, by repo-relative path.
 pub fn otel(r: &Registry) -> Vec<(String, String)> {
     vec![
-        ("rust/otel/manifest.yaml".into(), manifest()),
-        ("rust/otel/registry/attributes.yaml".into(), attributes_yaml(r)),
-        ("rust/otel/registry/spans.yaml".into(), spans_yaml(r)),
-        ("rust/otel/registry/events.yaml".into(), events_yaml(r)),
-        ("rust/otel/registry/metrics.yaml".into(), metrics_yaml(r)),
-        ("rust/otel/registry/imports.yaml".into(), imports_yaml(r)),
-        ("rust/otel/schema.json".into(), schema(r)),
+        ("otel/manifest.yaml".into(), manifest()),
+        ("otel/registry/attributes.yaml".into(), attributes_yaml(r)),
+        ("otel/registry/spans.yaml".into(), spans_yaml(r)),
+        ("otel/registry/events.yaml".into(), events_yaml(r)),
+        ("otel/registry/metrics.yaml".into(), metrics_yaml(r)),
+        ("otel/registry/imports.yaml".into(), imports_yaml(r)),
+        ("otel/schema.json".into(), schema(r)),
     ]
 }
 

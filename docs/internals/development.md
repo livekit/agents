@@ -7,7 +7,7 @@ Local builds, automatic checks, code conventions and implementation review.
 ## Local builds
 
 From the repository root, `make test` runs the hermetic tests. Set `TEST_ARGS` to select
-paths and categories, for example `make test TEST_ARGS="tests/test_it_ipc.py --e2e"`.
+paths and categories, for example `make test TEST_ARGS="python/tests/test_it_ipc.py --e2e"`.
 `make type-check` runs both type checkers; `TYPE_CHECK_ARGS` selects a checker or its options.
 `make bench` runs standalone measurements described in the [benchmark guide](../../bench/README.md).
 

@@ -3,7 +3,7 @@
         test bench bench-startup bench-host bench-sentences bench-sync
 
 ROOT := $(CURDIR)
-AGENTS_PROJECT := $(ROOT)/livekit-agents
+AGENTS_PROJECT := $(ROOT)/python/livekit-agents
 PYTHON_SDKS := $(abspath $(ROOT)/../python-sdks)
 RUST_SDKS := $(abspath $(ROOT)/../rust-sdks)
 PYTHON_RTC := $(PYTHON_SDKS)/livekit-rtc
@@ -61,7 +61,7 @@ check: format-check lint type-check ## Run all checks (format-check, lint, type-
 unit-tests: test ## Run the default hermetic test suite
 
 test: ## Run tests; select paths and categories with TEST_ARGS
-	PYTHONPATH="$(ROOT)" uv run pytest $(PYTEST_ARGS) $(TEST_ARGS)
+	PYTHONPATH="$(ROOT):$(ROOT)/python" uv run pytest $(PYTEST_ARGS) $(TEST_ARGS)
 
 bench: ## Run the IPC benchmark; pass BENCH_ARGS (--help lists them)
 	uv run python -m bench.ipc $(BENCH_ARGS)

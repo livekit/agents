@@ -105,7 +105,7 @@ jobs:
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
-          working-directory: livekit-agents
+          working-directory: python/livekit-agents
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           container: ${{ matrix.container || '' }}
@@ -128,9 +128,9 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           python -m pip install delocate
-          delocate-wheel --require-archs "$(uname -m)" -v -w repaired livekit-agents/dist/*.whl
-          rm livekit-agents/dist/*.whl
-          mv repaired/*.whl livekit-agents/dist/
+          delocate-wheel --require-archs "$(uname -m)" -v -w repaired python/livekit-agents/dist/*.whl
+          rm python/livekit-agents/dist/*.whl
+          mv repaired/*.whl python/livekit-agents/dist/
 
       - name: Install uv
         if: matrix.test
@@ -139,7 +139,7 @@ jobs:
       - name: Accept the wheel
         shell: bash
         run: |
-          wheel=$(ls livekit-agents/dist/*.whl)
+          wheel=$(ls python/livekit-agents/dist/*.whl)
           if [ "${{ matrix.test }}" != true ]; then
             python -I .github/check_wheel.py --no-import "$wheel"
             exit
@@ -155,7 +155,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ inputs.artifact_name }}-${{ matrix.name }}
-          path: livekit-agents/dist/
+          path: python/livekit-agents/dist/
 
   build_blockguard:
     if: inputs.package == 'livekit-blockguard'
@@ -174,7 +174,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: livekit-plugins/livekit-blockguard
+        working-directory: python/livekit-plugins/livekit-blockguard
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -200,7 +200,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ inputs.artifact_name }}-${{ matrix.os }}
-          path: livekit-plugins/livekit-blockguard/dist/
+          path: python/livekit-plugins/livekit-blockguard/dist/
 
   merge_artifacts:
     if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && (inputs.package == 'livekit-blockguard' || inputs.package == 'livekit-agents') }}

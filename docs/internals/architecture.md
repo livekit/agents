@@ -24,8 +24,8 @@ by reading generated conversions unless investigating a boundary/conversion prob
 
 ### Direct agent invocation
 
-1. [`Agent.run` / `run_stream`](../../livekit-agents/livekit/agents/voice/__init__.py) calls
-   [`start_run`](../../livekit-agents/livekit/agents/voice/agent_run.py), which constructs
+1. [`Agent.run` / `run_stream`](../../python/livekit-agents/livekit/agents/voice/__init__.py) calls
+   [`start_run`](../../python/livekit-agents/livekit/agents/voice/agent_run.py), which constructs
    `_core.AgentRunner` with the agent definition, model and host callbacks.
 2. [`AgentRunner`](../../rust/crates/lk-agents-abi/src/agent/run.rs) is implemented by
    [`runtime::agent_run::Runner`](../../rust/crates/lk-agents-runtime/src/agent_run/runner.rs).
@@ -42,7 +42,7 @@ output and cancellation state are subordinate to that invocation, not independen
 
 ### Request-scoped text conversation
 
-1. [`TextSession.run_stream`](../../livekit-agents/livekit/agents/text_session.py) constructs
+1. [`TextSession.run_stream`](../../python/livekit-agents/livekit/agents/text_session.py) constructs
    `_core.TextSessionRunner` from the configured agents and explicitly supplied state.
 2. [`runtime::text_session`](../../rust/crates/lk-agents-runtime/src/text_session/mod.rs) drives
    [`core::text_session::TextSession`](../../rust/crates/lk-agents-core/src/text_session/machine/mod.rs).

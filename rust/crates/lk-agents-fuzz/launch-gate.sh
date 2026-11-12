@@ -22,7 +22,7 @@ for pair in "VOICE_GATE_SEEDS=$gate_seeds" "VOICE_SURVEY_SEEDS=$survey_seeds" \
 done
 
 py=${PYO3_PYTHON:-$PWD/../.venv/bin/python}
-agent_python_path=${PYTHONPATH:-$PWD/../livekit-agents}
+agent_python_path=${PYTHONPATH:-$PWD/../python/livekit-agents}
 python_home=$("$py" -c 'import sys; print(sys.base_prefix)')
 site_packages=$("$py" -c 'import site; print(site.getsitepackages()[0])')
 
@@ -38,16 +38,16 @@ PYO3_PYTHON=$py PYTHONHOME=$python_home PYTHONPATH=$site_packages \
     -p lk-agents-abi --features python
 
 step "worker generated API, CLI and endpoint contracts"
-PYTHONPATH="$agent_python_path:$PWD/.." "$py" -m pytest \
-    ../tests/conformance/test_worker_records.py ../tests/conformance/test_python_bootstrap.py \
-    ../tests/test_endpoint_routes.py --unit -q
+PYTHONPATH="$agent_python_path:$PWD/..:$PWD/../python" "$py" -m pytest \
+    ../python/tests/conformance/test_worker_records.py ../python/tests/conformance/test_python_bootstrap.py \
+    ../python/tests/test_endpoint_routes.py --unit -q
 
 step "bounded real IPC, preload and shutdown journeys"
 LIVEKIT_IPC_SOAK_BATCHES=3 LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE=0 \
-    PYTHONPATH="$agent_python_path:$PWD/.." "$py" -m pytest \
-    ../tests/conformance/test_worker_ipc_resources.py \
-    ../tests/conformance/test_worker_preload.py ../tests/conformance/test_cli_shutdown.py \
-    ../tests/test_it_ipc.py --e2e -q
+    PYTHONPATH="$agent_python_path:$PWD/..:$PWD/../python" "$py" -m pytest \
+    ../python/tests/conformance/test_worker_ipc_resources.py \
+    ../python/tests/conformance/test_worker_preload.py ../python/tests/conformance/test_cli_shutdown.py \
+    ../python/tests/test_it_ipc.py --e2e -q
 
 step "fuzz suites: scheduler, contract registry, probes, determinism, regressions"
 cargo test -q --release -p lk-agents-fuzz

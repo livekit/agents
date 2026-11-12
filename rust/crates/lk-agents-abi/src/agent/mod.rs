@@ -454,7 +454,7 @@ pub enum OutputSpec {
     Structured { schema: Value },
 }
 
-/// A run's retry budgets (`Agent(retries=)`, `run(retries=)`, pydantic-ai's): how many
+/// A run's retry budgets (`Agent(retries=)`, `run(retries=)`): how many
 /// consecutive retries the model gets before the run fails, per tool for argument errors and
 /// `ModelRetry`, and for the final output.
 #[crate::host(record(module = "agent_run", extract, emit, default))]
