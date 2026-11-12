@@ -33,7 +33,7 @@ from .models import DecisionModels
 
 
 class DecisionModel(llm.DecisionModel):
-    """Gemini's Decisions API (``POST /v1/decisions``).
+    """Gemini's Decisions API (``POST /v1beta/decisions``).
 
     One request answers a batch of probability, choice, and score questions about the
     same input.
@@ -56,7 +56,7 @@ class DecisionModel(llm.DecisionModel):
     def __init__(
         self,
         *,
-        model: DecisionModels | str = "gemini-decision",
+        model: DecisionModels | str = "gemini-decision-1",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: genai.Client | None = None,
     ) -> None:
@@ -99,6 +99,8 @@ class DecisionModel(llm.DecisionModel):
                 model=self._model,
                 input=input,
                 questions={name: _encode_question(d) for name, d in decisions.items()},
+                # The SDK defaults to v1, which has no decisions endpoint (a bare 404).
+                api_version="v1beta",
                 timeout=conn_options.timeout,
             )
             decision = await raw.parse()
