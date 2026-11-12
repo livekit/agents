@@ -1,0 +1,23 @@
+livekit-agents/livekit/agents/voice/amd/classifier.py
+  s_d7c15d18b291f0::t_303264d944fe7d 395
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_d7c15d18b291f0::t_ef99269f3b1419 477-478,491
+tests/test_amd.py
+  s_d7c15d18b291f0::t_fb57e97e6cdff9 6,794-796,818-824,826-832,853,855,880,1087-1088,1090,1092,1094,1099,1102-1108,1113-1114,1117-1118,1120-1122,1128,1133-1134,1136-1137,1139-1141,1147,1150-1153,1155-1173,1175,1177-1182,1187,1192-1193,1195,1197-1199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ad042bcc5306592c3cbeb1ab31f022770912faf",
+  "prompts": {},
+  "sessions": {
+    "s_d7c15d18b291f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_d7c15d18b291f0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
