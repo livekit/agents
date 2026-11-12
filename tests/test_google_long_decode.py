@@ -116,6 +116,7 @@ class TestModelDetection:
         [
             ("gemini-4-argon", True),
             ("gemini-4-carbon", True),
+            ("gemini-4-hydrogen", True),
             ("gemini-3-pro-preview", False),
             ("gemini-2.5-flash", False),
             ("gemma-4-27b-it", False),
