@@ -106,6 +106,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     detection timeout begins only after listening starts; SIP settings bound
     the pre-answer phase. If the call ends before audio arrives, AMD settles
     immediately with an ``uncertain`` verdict (``reason="participant_missing"``).
+    If the callee hangs up while AMD is listening, AMD settles ``uncertain``
+    (``reason="participant_disconnected"``), unless ``machine-unavailable`` was
+    already detected, which is returned.
 
     For SIP participants, the no-speech timer and
     audio/transcript processing are deferred until ``sip.callStatus ==
@@ -347,6 +350,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         if self._disconnect_room is not None:
             self._disconnect_room.off("participant_disconnected", self._on_participant_disconnected)
             self._disconnect_room = None
+        self._listened_identity = None
 
         if self._classifier:
             self._classifier.off("amd_prediction", self._on_amd_prediction)
@@ -473,9 +477,11 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         """Settle a pending verdict when the listened-to participant leaves.
 
-        Disconnects from other participants are ignored. If no verdict exists yet,
-        the result is settled as uncertain and the classifier is told the turn has
-        ended, so ``execute()`` does not wait for a greeting that will never finish.
+        Disconnects from other participants are ignored. Before listening starts the
+        result is ``uncertain`` / ``participant_missing``. After that it is
+        ``uncertain`` / ``participant_disconnected``, except that a held
+        ``machine-unavailable`` verdict is released unchanged. Either way ``execute()``
+        does not wait for a greeting that will never finish.
 
         Args:
             participant: The remote participant that disconnected.
@@ -484,10 +490,11 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             return
         if self._closed or not self._classifier or self._result is not None:
             return
-        self._settle_participant_missing("participant disconnected before a verdict")
-        if self._classifier and self._result is None:
-            # the callee is gone, so the greeting is over: release the verdict now
-            self._classifier.on_end_of_turn()
+        if not self._classifier.listening:
+            self._settle_participant_missing("participant disconnected before listening started")
+            return
+        logger.debug("AMD: participant disconnected before a verdict, settling")
+        self._classifier.on_participant_disconnected()
 
     def _settle_participant_missing(self, error: str) -> None:
         if self._closed or not self._classifier:

@@ -7,8 +7,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from livekit import rtc
 from livekit.agents.voice.amd import detector as amd_detector
-from livekit.agents.voice.amd.classifier import AMDCategory
+from livekit.agents.voice.amd.classifier import (
+    AMDCategory,
+    AMDPredictionEvent,
+    _AMDClassifier,
+)
 from livekit.agents.voice.amd.detector import AMD
 
 from .fake_llm import FakeLLM
@@ -53,6 +58,73 @@ class _FakeRoom:
     def emit(self, event: str, *args: object) -> None:
         for callback in list(self._handlers.get(event, [])):
             callback(*args)  # type: ignore[operator]
+
+
+def _llm_verdict(category: AMDCategory) -> AMDPredictionEvent:
+    return AMDPredictionEvent(
+        speech_duration=3.0,
+        category=category,
+        reason="llm",
+        transcript="greeting",
+        delay=0.0,
+    )
+
+
+async def _start_detector(
+    monkeypatch: pytest.MonkeyPatch, *, kind: object | None = None
+) -> tuple[AMD, _AMDClassifier, _FakeRoom, SimpleNamespace, list[str]]:
+    """Run AMD setup against a fake room, up to the point where a hangup can arrive.
+
+    The returned list records the session actions ``execute()`` takes on a verdict.
+    """
+
+    async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+        return SimpleNamespace(sid="track_sid")
+
+    monkeypatch.setattr(
+        amd_detector,
+        "wait_for_track_publication",
+        fake_wait_for_track_publication,
+    )
+
+    calls: list[str] = []
+
+    async def interrupt(*, force: bool = False) -> None:
+        calls.append("interrupt")
+
+    async def start_ivr_detection(*, transcript: str | None = None) -> None:
+        calls.append("start_ivr_detection")
+
+    llm = FakeLLM()
+    publisher = SimpleNamespace(
+        kind=kind if kind is not None else object(),
+        identity="callee",
+        track_publications={"track_sid": object()},
+    )
+    room = _FakeRoom({"callee": publisher})
+    session = SimpleNamespace(
+        llm=llm,
+        _activity=None,
+        _session_host=None,
+        _amd=None,
+        _room_io=SimpleNamespace(room=room),
+        interrupt=interrupt,
+        _start_ivr_detection=start_ivr_detection,
+    )
+    detector = AMD(
+        session,  # type: ignore[arg-type]
+        llm=llm,
+        suppress_compatibility_warning=True,
+    )
+    detector._stt = None
+    classifier = detector._resolve_classifier(session)  # type: ignore[arg-type]
+    assert classifier is not None
+    classifier.on("amd_prediction", detector._on_amd_prediction)
+    detector._classifier = classifier
+    detector._session = session  # type: ignore[assignment]
+
+    await detector._setup(session)  # type: ignore[arg-type]
+    return detector, classifier, room, publisher, calls
 
 
 class TestAMDDetector:
@@ -291,42 +363,7 @@ class TestAMDDetector:
     async def test_execute_settles_when_participant_hangs_up_while_listening(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
-            return SimpleNamespace(sid="track_sid")
-
-        monkeypatch.setattr(
-            amd_detector,
-            "wait_for_track_publication",
-            fake_wait_for_track_publication,
-        )
-
-        llm = FakeLLM()
-        publisher = SimpleNamespace(
-            kind=object(),
-            identity="callee",
-            track_publications={"track_sid": object()},
-        )
-        room = _FakeRoom({"callee": publisher})
-        session = SimpleNamespace(
-            llm=llm,
-            _activity=None,
-            _session_host=None,
-            _amd=None,
-            _room_io=SimpleNamespace(room=room),
-        )
-        detector = AMD(
-            session,  # type: ignore[arg-type]
-            llm=llm,
-            suppress_compatibility_warning=True,
-        )
-        detector._stt = None
-        classifier = detector._resolve_classifier(session)  # type: ignore[arg-type]
-        assert classifier is not None
-        classifier.on("amd_prediction", detector._on_amd_prediction)
-        detector._classifier = classifier
-        detector._session = session  # type: ignore[assignment]
-
-        await detector._setup(session)  # type: ignore[arg-type]
+        detector, classifier, room, publisher, _ = await _start_detector(monkeypatch)
         execute_task = asyncio.create_task(detector.execute())
 
         # the callee starts their greeting, then hangs up before a verdict
@@ -338,8 +375,82 @@ class TestAMDDetector:
 
         result = await execute_task
         assert result.category == AMDCategory.UNCERTAIN
-        assert result.reason == "participant_missing"
+        assert result.reason == "participant_disconnected"
         assert room._handlers["participant_disconnected"] == []
+
+    @pytest.mark.parametrize(
+        "held", [AMDCategory.HUMAN, AMDCategory.MACHINE_VM, AMDCategory.MACHINE_IVR]
+    )
+    async def test_hangup_overrides_held_verdict(
+        self, monkeypatch: pytest.MonkeyPatch, held: AMDCategory
+    ) -> None:
+        detector, classifier, room, publisher, calls = await _start_detector(monkeypatch)
+        execute_task = asyncio.create_task(detector.execute())
+
+        # the verdict is stored mid-greeting, so the silence gate still holds it
+        classifier.on_user_speech_started()
+        classifier._set_verdict(_llm_verdict(held))
+        await asyncio.sleep(0)
+        assert detector.pending
+        room.emit("participant_disconnected", publisher)
+        await detector.aclose()
+
+        result = await execute_task
+        assert result.category == AMDCategory.UNCERTAIN
+        assert result.reason == "participant_disconnected"
+        # nobody is left to interrupt for, or to navigate an IVR with
+        assert calls == []
+
+    async def test_hangup_keeps_held_machine_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        detector, classifier, room, publisher, _ = await _start_detector(monkeypatch)
+        execute_task = asyncio.create_task(detector.execute())
+
+        # the carrier says the mailbox is not set up, then hangs up
+        classifier.on_user_speech_started()
+        classifier._set_verdict(_llm_verdict(AMDCategory.MACHINE_UNAVAILABLE))
+        await asyncio.sleep(0)
+        assert detector.pending
+        room.emit("participant_disconnected", publisher)
+        await detector.aclose()
+
+        result = await execute_task
+        assert result.category == AMDCategory.MACHINE_UNAVAILABLE
+        assert result.reason == "llm"
+
+    async def test_hangup_before_sip_answer_settles_participant_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def never_answered(*_: object, **__: object) -> None:
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(amd_detector, "wait_for_participant_attribute", never_answered)
+        detector, classifier, room, publisher, _ = await _start_detector(
+            monkeypatch, kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+        )
+        execute_task = asyncio.create_task(detector.execute())
+        await asyncio.sleep(0)
+        assert not classifier.listening
+
+        room.emit("participant_disconnected", publisher)
+        await detector.aclose()
+
+        result = await execute_task
+        assert result.category == AMDCategory.UNCERTAIN
+        assert result.reason == "participant_missing"
+
+    async def test_other_participant_disconnect_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        detector, classifier, room, _, _ = await _start_detector(monkeypatch)
+        classifier.on_user_speech_started()
+
+        room.emit("participant_disconnected", SimpleNamespace(identity="someone-else"))
+
+        assert detector.pending
+        assert classifier.listening
+        await detector.aclose()
 
     async def test_setup_settles_when_participant_disconnects_before_track(
         self, monkeypatch: pytest.MonkeyPatch
