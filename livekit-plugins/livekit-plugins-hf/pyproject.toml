@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-hf"
 dynamic = ["version"]
-description = "LiveKit Agents plugin for running Hugging Face chat models locally"
+description = "LiveKit Agents plugin for running Hugging Face LLM and STT models locally"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
