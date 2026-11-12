@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 import pytest
+from jsonschema import Draft202012Validator, ValidationError
 from pydantic import BaseModel
 
 from livekit.agents.llm.utils import (
@@ -85,3 +86,40 @@ def test_response_format_payload_validates_with_plain_model_validate() -> None:
 
     payload = {"child": {"x": 2}, "label": "b"}
     assert Response.model_validate(payload) == Response(child=Child(x=2), label="b")
+
+
+class _StringResponse(BaseModel):
+    value: Literal["known"] | None
+
+
+class _IntegerResponse(BaseModel):
+    value: Literal[1] | None
+
+
+class _BooleanResponse(BaseModel):
+    value: Literal[True] | None
+
+
+class _EnumResponse(BaseModel):
+    value: Literal["first", "second"] | None
+
+
+@pytest.mark.parametrize(
+    ("response_type", "values"),
+    [
+        (_StringResponse, ["known"]),
+        (_IntegerResponse, [1]),
+        (_BooleanResponse, [True]),
+        (_EnumResponse, ["first", "second"]),
+    ],
+)
+def test_nullable_literal_response_schema_accepts_null_and_the_literals(
+    response_type: type[BaseModel], values: list[object]
+) -> None:
+    wire_schema = to_openai_response_format(response_type)["json_schema"]["schema"]
+    validator = Draft202012Validator(wire_schema)
+    for payload in ({"value": v} for v in [None, *values]):
+        response_type.model_validate(payload)
+        validator.validate(payload)
+    with pytest.raises(ValidationError):
+        validator.validate({"value": "invalid"})
