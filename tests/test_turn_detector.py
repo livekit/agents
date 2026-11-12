@@ -510,15 +510,18 @@ class TestLocalTransportInput:
         assert len(pcm) == EOT_MAX_SAMPLES
         assert turn_samples == 4000 + 2 * EOT_MAX_SAMPLES // 1600 * 1600
 
-    async def test_turn_covers_at_least_the_audio_the_model_reads(
-        self, transport: _LocalTransport
-    ) -> None:
-        transport.push_frame(_frame(EOT_MAX_SAMPLES))
-        transport.on_start_of_turn(0.05)  # a start later than the window's first sample
+    async def test_turn_start_drops_the_audio_before_it(self, transport: _LocalTransport) -> None:
+        """A turn shorter than the window: the model reads the turn only, not the audio that
+        filled the buffer before the user spoke."""
+        transport.push_frame(_frame(EOT_MAX_SAMPLES, value=1))  # the agent speaks
+        transport.push_frame(_frame(4000, value=2))
+        transport.on_start_of_turn(0.25)
+        transport.push_frame(_frame(1600, value=2))
 
-        _, turn_samples = await self._predict(transport)
+        pcm, turn_samples = await self._predict(transport)
 
-        assert turn_samples == EOT_MAX_SAMPLES
+        assert len(pcm) == turn_samples == 5600
+        assert (pcm == 2).all()
 
     async def test_flush_forgets_the_turn_start(self, transport: _LocalTransport) -> None:
         transport.push_frame(_frame(16000))

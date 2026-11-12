@@ -426,8 +426,8 @@ class _LocalTransport:
         self._buf = utils.AudioArrayBuffer(
             buffer_size=EOT_MAX_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
         )
-        # the user turn length so far, counted since the last flush: the model takes it as a
-        # feature, beyond the window it reads
+        # the user turn length so far: the model takes it as a feature, beyond the window it
+        # reads. The buffer holds the last EOT_MAX_SAMPLES of the same turn, never more
         self._turn_samples = 0
         self._eot = _EOT()
         self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
@@ -441,10 +441,7 @@ class _LocalTransport:
         self._stream_ref = weakref.ref(stream)
 
     def run_inference(self, request_id: str, *, chat_ctx: ChatContext | None = None) -> None:
-        pcm = self._buf.read()
-        # the turn covers at least the audio the model reads
-        turn_samples = max(self._turn_samples, len(pcm))
-        task = asyncio.create_task(self._predict(request_id, pcm, turn_samples))
+        task = asyncio.create_task(self._predict(request_id, self._buf.read(), self._turn_samples))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -469,12 +466,14 @@ class _LocalTransport:
         self._turn_samples += self._buf.push_frame(frame)
 
     def on_start_of_turn(self, elapsed: float) -> None:
-        """Count the turn from its start, ``elapsed`` seconds before the frames pushed so far end.
+        """Start the turn ``elapsed`` seconds before the frames pushed so far end.
 
-        Samples pushed since the last flush but before the turn start stop counting toward the
-        turn length passed to the model; the audio window keeps them.
+        Samples pushed since the last flush but before the turn start leave both the audio
+        window the model reads and the turn length passed to it.
         """
         self._turn_samples = min(self._turn_samples, int(elapsed * DEFAULT_SAMPLE_RATE))
+        if (stale := len(self._buf) - self._turn_samples) > 0:
+            self._buf.shift(stale)
 
     def flush(self) -> None:
         if len(self._buf) > 0:
