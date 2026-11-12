@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import wave
+from http.cookies import SimpleCookie
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -682,19 +683,92 @@ async def test_stt_overall_deadline_closes_stream(session):
     session.post.assert_called_once()
 
 
-@pytest.mark.parametrize("cookie_host", ["https://api.giggy.ai/", "https://other.example/"])
-async def test_stt_cookie_session_rejected(session, cookie_host):
-    """Only cookies that would be sent to Giggy block a shared session."""
-    session.cookie_jar = aiohttp.CookieJar()
-    session.cookie_jar.update_cookies({"sid": "caller-private"}, URL(cookie_host))
+def cookie_jar(host: str, path: str) -> aiohttp.CookieJar:
+    """A jar holding one caller cookie scoped to ``host`` and ``path``."""
+    cookie: SimpleCookie = SimpleCookie()
+    cookie["sid"] = "caller-private"
+    cookie["sid"]["path"] = path
+    jar = aiohttp.CookieJar()
+    jar.update_cookies(cookie, URL(host))
+    return jar
+
+
+@pytest.mark.parametrize(
+    ("host", "path", "outcome"),
+    [
+        ("https://api.giggy.ai/", "/", "upload_blocked"),
+        ("https://api.giggy.ai/", "/v1", "upload_blocked"),
+        ("https://api.giggy.ai/", "/v1/generations", "status_blocked"),
+        ("https://api.giggy.ai/", "/dashboard", "allowed"),
+        ("https://other.example/", "/", "allowed"),
+    ],
+)
+async def test_stt_cookie_session_rejected(session, host, path, outcome):
+    """A cookie that would be sent with any Giggy request blocks it, whatever its path scope."""
+    session.cookie_jar = cookie_jar(host, path)
     provider = giggy.STT(api_key=KEY, http_session=session)
-    if "giggy" in cookie_host:
+    if outcome == "upload_blocked":
         with pytest.raises(ValueError, match="credential"):
             await provider.recognize(audio())
         session.post.assert_not_called()
+    elif outcome == "status_blocked":
+        with pytest.raises(APIConnectionError):
+            await provider.recognize(audio())
+        session.post.assert_called_once()
+        session.get.assert_not_called()
     else:
         event = await provider.recognize(audio())
         assert event.alternatives[0].text == "Hello LiveKit."
+
+
+async def test_stream_path_scoped_cookie_blocks_socket(session):
+    """A cookie scoped to ``/v1`` must not reach the live WebSocket handshake."""
+    from livekit.agents import vad
+
+    class Detection:
+        def __init__(self):
+            self.events = asyncio.Queue()
+
+        def push_frame(self, frame):
+            self.events.put_nowait(
+                SimpleNamespace(
+                    type=vad.VADEventType.INFERENCE_DONE, frames=[frame], raw_accumulated_silence=0
+                )
+            )
+            self.events.put_nowait(SimpleNamespace(type=vad.VADEventType.START_OF_SPEECH))
+
+        def end_input(self):
+            self.events.put_nowait(None)
+
+        async def aclose(self):
+            pass
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            event = await self.events.get()
+            if event is None:
+                raise StopAsyncIteration
+            return event
+
+    class Detector:
+        def stream(self):
+            return Detection()
+
+    session.cookie_jar = cookie_jar("https://api.giggy.ai/", "/v1")
+    session.ws_connect = MagicMock()
+    provider = giggy.STT(api_key=KEY, vad=Detector(), http_session=session)
+    stream = provider.stream()
+    stream.push_frame(audio(duration=0.5))
+    stream.end_input()
+    with pytest.raises(APIConnectionError):
+        async with asyncio.timeout(3):
+            async for _ in stream:
+                pass
+    session.ws_connect.assert_not_called()
+    await stream.aclose()
+    await provider.aclose()
 
 
 async def test_stt_artifact_cookie_rejected_before_download(session):

@@ -152,11 +152,12 @@ class STT(stt.STT):
             raise ValueError("Unsupported Giggy STT language.")
         return name
 
-    def _ensure_session(self, url: str = GIGGY_ORIGIN) -> aiohttp.ClientSession:
+    def _ensure_session(self, url: str) -> aiohttp.ClientSession:
         """Return a borrowed or context-managed HTTP session with no credentials for ``url``.
 
-        Only cookies that would accompany a request to ``url`` count; a shared session may
-        hold cookies for unrelated hosts.
+        ``url`` must be the exact request URL: cookies are matched by host and path, so
+        checking only the origin would miss a cookie scoped to a deeper path such as
+        ``/v1``. Cookies for unrelated hosts or paths are allowed.
         """
         session = (
             self._http_session
@@ -299,7 +300,7 @@ class STT(stt.STT):
         duration = sum(frame.samples_per_channel for frame in frames) / rate
         if not 0.5 <= duration <= 43200:
             raise ValueError("Giggy STT accepts recordings from 0.5 seconds to 12 hours.")
-        session = self._ensure_session()
+        session = self._ensure_session(GIGGY_ORIGIN + "/v1/audio/transcriptions")
         cancelled = threading.Event()
         # Stage native WAV on disk without copying or merging the full recording.
         # Await the encoder on cancellation so it cannot write to a closed file.
@@ -467,8 +468,10 @@ class STT(stt.STT):
             if generation is None or generation_id is None or final_text is None:
                 raise ValueError("STT stream ended without canonical completion")
             # Resolve the retained result through the authenticated public projection.
+            status_url = f"{GIGGY_ORIGIN}/v1/generations/{generation_id}"
+            self._ensure_session(status_url)
             async with session.get(
-                f"{GIGGY_ORIGIN}/v1/generations/{generation_id}",
+                status_url,
                 headers=headers,
                 timeout=timeout,
                 allow_redirects=False,
@@ -823,11 +826,12 @@ class SpeechStream(stt.RecognizeStream):
         """Deliver one WebSocket turn in order, then verify its durable transcript result."""
         sender = None
         try:
-            session = self._owner._ensure_session()
+            socket_url = f"{GIGGY_ORIGIN}/v1/audio/transcriptions"
+            session = self._owner._ensure_session(socket_url)
             connected = time.perf_counter()
             async with await asyncio.wait_for(
                 session.ws_connect(
-                    f"{GIGGY_ORIGIN}/v1/audio/transcriptions",
+                    socket_url,
                     headers={"Authorization": "Bearer " + self._owner._api_key},
                     max_msg_size=16 * 1024 * 1024,
                     compress=0,
@@ -979,10 +983,11 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _verify_result(self, turn: dict[str, Any], final_text: str) -> None:
         """Verify canonical completion and match the signed artifact's text and PCM duration."""
-        session = self._owner._ensure_session()
+        status_url = f"{GIGGY_ORIGIN}/v1/generations/{turn['id']}"
+        session = self._owner._ensure_session(status_url)
         timeout = aiohttp.ClientTimeout(total=10)
         async with session.get(
-            f"{GIGGY_ORIGIN}/v1/generations/{turn['id']}",
+            status_url,
             headers={"xi-api-key": self._owner._api_key},
             timeout=timeout,
             allow_redirects=False,
