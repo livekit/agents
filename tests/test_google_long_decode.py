@@ -69,9 +69,11 @@ class _FakeStreams:
     def __init__(self, hops: list[list[types.GenerateContentResponse]]) -> None:
         self._hops = hops
         self.configs: list[types.GenerateContentConfig] = []
+        self.contents: list[list[types.Content]] = []
 
     async def __call__(self, **kwargs: Any) -> AsyncIterator[types.GenerateContentResponse]:
         self.configs.append(kwargs["config"])
+        self.contents.append(kwargs["contents"])
         responses = self._hops[min(len(self.configs) - 1, len(self._hops) - 1)]
 
         async def _iter() -> AsyncIterator[types.GenerateContentResponse]:
@@ -113,8 +115,7 @@ class TestModelDetection:
         "model,expected",
         [
             ("gemini-4-argon", True),
-            # the EAP name is not a listed id, but routes the same if passed as a raw string
-            ("gemini-4-argon-eap", True),
+            ("gemini-4-carbon", True),
             ("gemini-3-pro-preview", False),
             ("gemini-2.5-flash", False),
             ("gemma-4-27b-it", False),
@@ -247,6 +248,53 @@ class TestRequestShaping:
         cfg = extra["thinking_config"]
         assert cfg.thinking_budget is None
         assert cfg.thinking_level == types.ThinkingLevel.HIGH
+
+
+def _tool_call_first_ctx() -> agents_llm.ChatContext:
+    """An interrupted generate_reply() greeting: only its tool call survived."""
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.insert(
+        [
+            agents_llm.FunctionCall(
+                call_id="c1", name="lookup_weather", arguments='{"location": "Tokyo"}'
+            ),
+            agents_llm.FunctionCallOutput(
+                call_id="c1", name="lookup_weather", output="sunny", is_error=False
+            ),
+        ]
+    )
+    chat_ctx.add_message(role="user", content="hahahaa")
+    return chat_ctx
+
+
+async def _sent_contents(model: LLM, chat_ctx: agents_llm.ChatContext) -> list[types.Content]:
+    """The contents the first request carried."""
+    streams = _FakeStreams([[_response(text="hi", finish_reason=types.FinishReason.STOP)]])
+    model._client.aio.models.generate_content_stream = streams  # type: ignore[method-assign]
+    async with model.chat(chat_ctx=chat_ctx) as stream:
+        async for _ in stream:
+            pass
+    return streams.contents[0]
+
+
+class TestHistoryShaping:
+    async def test_a_user_turn_goes_before_an_opening_tool_call(self) -> None:
+        # Gemini 4 answers a history that opens with a function call with a 400
+        contents = await _sent_contents(_llm(), _tool_call_first_ctx())
+        assert [c.role for c in contents] == ["user", "model", "user", "user"]
+        assert contents[0].parts is not None and contents[0].parts[0].text == "."
+        assert contents[1].parts is not None and contents[1].parts[0].function_call is not None
+
+    async def test_an_opening_reply_with_text_is_left_alone(self) -> None:
+        chat_ctx = agents_llm.ChatContext.empty()
+        chat_ctx.add_message(role="assistant", content="Hi!")
+        chat_ctx.add_message(role="user", content="hahahaa")
+        contents = await _sent_contents(_llm(), chat_ctx)
+        assert [c.role for c in contents] == ["model", "user"]
+
+    async def test_older_models_send_the_history_as_is(self) -> None:
+        contents = await _sent_contents(_llm("gemini-2.5-flash"), _tool_call_first_ctx())
+        assert [c.role for c in contents] == ["model", "user", "user"]
 
 
 class TestLongDecode:
