@@ -583,6 +583,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._active_session: AsyncSession | None = None
         self._avatar_decoder: AvatarStreamDecoder | None = None
         self._avatar_speaking_gen: _ResponseGeneration | None = None
+        self._avatar_interrupted_gen: _ResponseGeneration | None = None
         # indicates if the underlying session should end
         self._session_should_close = asyncio.Event()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
@@ -1652,7 +1653,11 @@ class RealtimeSession(llm.RealtimeSession):
         if gen and not gen.audio_ch.closed:
             # the idle stream keeps running until the reply's speech starts; that lead-in
             # is not part of the reply's playout
-            if self._avatar_speaking_gen is not gen and not gen._done and is_speech(frame):
+            if (
+                self._avatar_speaking_gen is not gen
+                and self._avatar_interrupted_gen is not gen
+                and is_speech(frame)
+            ):
                 self._avatar_speaking_gen = gen
                 if avatar:
                     avatar._set_audio_muted(False)
@@ -1755,6 +1760,8 @@ class RealtimeSession(llm.RealtimeSession):
             else:
                 self._close_output_streams(current_gen)
 
+        if server_content.interrupted:
+            self._avatar_interrupted_gen = current_gen
         if server_content.interrupted and not self._pending_generation_fut:
             # interrupt agent if there is no pending user initiated generation
             self._handle_input_speech_started()

@@ -1770,7 +1770,6 @@ async def test_reply_audio_survives_turn_complete_while_decoding(
         assert gen is not None
         for chunk in _fragmented_mp4_chunks():
             assert not session._route_avatar_media(_video_message(chunk))
-        await _wait_for(lambda: not gen.audio_ch.empty())
         session._handle_server_content(types.LiveServerContent(turn_complete=True))
 
         await _wait_for(lambda: gen.audio_ch.closed)
@@ -1827,3 +1826,27 @@ async def test_closing_the_avatar_restores_the_previous_audio_output(
     await avatar.aclose()
 
     assert session_output.audio is room_audio
+
+
+async def test_interrupted_reply_speech_stays_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    async with _avatar_session(monkeypatch) as session:
+        avatar = AvatarSession(session._gemini_model)
+        session._gemini_model._avatar_session = avatar
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+        avatar._set_audio_muted(True)
+        session._handle_server_content(types.LiveServerContent(interrupted=True))
+        speech = rtc.AudioFrame(
+            data=b"\x10\x20" * 240,
+            sample_rate=_SAMPLE_RATE,
+            num_channels=1,
+            samples_per_channel=240,
+        )
+
+        session._on_avatar_audio(speech)
+
+        pushed, _ = avatar._frame_ch.recv_nowait()
+        assert isinstance(pushed, rtc.AudioFrame) and not any(bytes(pushed.data))
+        assert gen.audio_ch.empty()
+        session._gemini_model._avatar_session = None
