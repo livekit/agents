@@ -6,8 +6,9 @@ Local builds, automatic checks, code conventions and implementation review.
 
 ## Local builds
 
-From the repository root, `make test` runs the hermetic tests. Set `TEST_ARGS` to select
-paths and categories, for example `make test TEST_ARGS="python/tests/test_it_ipc.py --e2e"`.
+From the repository root, `make test` runs the hermetic Python suites and `make test-e2e` the
+journeys against a LiveKit project; `PYTEST_ARGS` passes pytest options, for example
+`make test PYTEST_ARGS="-k recording"`. [CI](#enforcement) lists every category.
 `make type-check` runs both type checkers; `TYPE_CHECK_ARGS` selects a checker or its options.
 `make bench` runs standalone measurements described in the [benchmark guide](../../bench/README.md).
 
@@ -21,7 +22,7 @@ Published wheels retain Maturin's release default.
 `make rust-check` (or `make -C rust check`) compiles and lints every
 workspace crate and test target with FFmpeg enabled, and enforces boundaries and
 generated output ([enforcement](#enforcement)). `make -C rust test-checks` runs the
-`rust/check` and codegen tests; CI and the launch gate run both.
+`rust/check` and codegen tests; CI runs both.
 `MATURIN` and `VIRTUAL_ENV` can select an existing tool and virtual environment.
 Cargo and Maturin use that environment's Python; `PYO3_PYTHON` can override Cargo's
 interpreter explicitly. Unix environments use `bin/python`; Windows uses
@@ -166,11 +167,14 @@ order, generated markers and file length in `sources.rs`) and the generated drif
 fixed, or one site carries `#[allow(lint, reason = "...")]`. Each rule's tag in AGENTS.md says
 which of these enforces it, or that review does.
 
-CI runs these rules and the native package smoke test in
-[`ci.yml`](../../.github/workflows/ci.yml). Rust test suites and the DST run separately through
-[`launch-gate.yml`](../../.github/workflows/launch-gate.yml); Python tests use
-[`tests.yml`](../../.github/workflows/tests.yml). The launch gate uses bounded seed campaigns
-for PRs and larger campaigns for scheduled or manually triggered runs.
+CI has one workflow per area, each job one category:
+
+| Workflow | Jobs |
+| --- | --- |
+| [`rust.yml`](../../.github/workflows/rust.yml) | `rules` (`make -C rust check test-checks`), `tests` (`make -C rust test`), `bindings` (`make -C rust test-bindings`), `dst` (`make -C rust dst`: 4,096 seeds on a change, 32,768 nightly), `otel-registry` (`weaver registry check -r otel`) |
+| [`python.yml`](../../.github/workflows/python.yml) | `lint` (ruff), `types` (`make type-check`), `tests` (one job each for `tests/host`, `plugins` and `smoke`), `blockguard` |
+| [`e2e.yml`](../../.github/workflows/e2e.yml) | `tests/e2e --e2e`, with the repository's LiveKit secrets |
+| [`storage-backends.yml`](../../.github/workflows/storage-backends.yml) | the storage contracts against a real AgentDB |
 ## Codebase rules
 
 ### Rust-first implementation

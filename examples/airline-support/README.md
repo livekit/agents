@@ -85,6 +85,6 @@ its PIR, someone else's booking; `spam` a message with nothing to act on.
 
 ## Tests
 
-`python/tests/test_airline_support_example.py` runs the back office on scripted models: the EU261
+`tests/smoke/test_examples.py` runs the back office on scripted models: the EU261
 payment, an earlier payment taken off, the over-limit hand-off, a reply failing review twice,
 spam, and a missing booking reference asked, saved and continued on the answer.

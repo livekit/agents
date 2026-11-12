@@ -42,46 +42,32 @@ make -C rust test-checks   # rust/check and codegen tests
 ```
 
 ### Testing
+Each category is a folder of `tests/` or a `rust/Makefile` target, and CI runs each as
+its own job (`.github/workflows/rust.yml`, `python.yml`, `e2e.yml`).
+
+| Category | Command | What it covers |
+|--------|------|---------|
+| Rust rules | `make -C rust check test-checks` | fmt, Clippy policies, `rust/check`, codegen drift |
+| Rust tests | `make -C rust test` | every crate's tests but the bindings and the DST |
+| Bindings | `make -C rust test-bindings` | the Python binding contracts (`lk-agents-py/src/*_tests.py`) |
+| DST | `make -C rust dst` | the fuzz suites and the seed campaigns over the real executors |
+| Python host | `uv run pytest tests/host` | the bindings and host adapters, hermetic |
+| Python plugins | `uv run pytest tests/plugins` | each provider against a local peer |
+| Python smoke | `uv run pytest tests/smoke` | the installed package end to end, examples, CLI |
+| E2E | `uv run pytest tests/e2e --e2e` | real processes, rooms and text threads; needs a LiveKit project |
+
 ```bash
-uv run pytest --unit                    # Run all unit tests
-uv run pytest python/tests/test_tools.py --unit # Run a single unit test file
-make unit-tests                         # Run unit tests that don't require cloud accounts
-make test                               # Run the default hermetic suite
+make test                               # every hermetic Python suite (host, plugins, smoke)
+make test-e2e                           # tests/e2e, with LIVEKIT_URL/API_KEY/API_SECRET
+uv run pytest tests/host/test_callbacks.py   # one file
 make bench                              # Run the standalone IPC benchmark
 make bench-startup                      # Time start, dev and console launches to ready
 make bench-host                         # Time the Rust-to-Python host boundary
 ```
 
-#### Test categories
-
-Every test module declares exactly one category via a module-level marker, and
-each category has a matching `--<category>` selection flag. Selection happens
-*before* test-module import, so unselected test modules are not imported.
-Shared `conftest.py` fixtures and their dependencies still load. Categories are
-registered in `pyproject.toml`; `python/tests/conftest.py` reads their literal markers.
-Put test paths before category flags, whose optional argument is a provider name.
-
-| Marker | Flag | Meaning |
-|--------|------|---------|
-| `pytest.mark.unit` | `--unit` | fast, hermetic, no external providers/credentials/network |
-| `pytest.mark.audio_eot` | `--audio_eot` | hermetic audio end-of-turn / turn-detection suite |
-| `pytest.mark.plugin("name")` | `--plugin [name]` | provider integration test (needs that provider's deps/keys) |
-| `pytest.mark.stt("name")` | `--stt [name]` | speech-to-text suite, optionally for one provider; requires provider dependencies and credentials |
-| `pytest.mark.realtime("name")` | `--realtime [name]` | realtime-model test |
-| `pytest.mark.evals` | `--evals` | behavioral evals against the LiveKit inference gateway |
-| `pytest.mark.docs` | `--docs` | tests for the docs-build tooling under `.github/` |
-| `pytest.mark.e2e` | `--e2e` | real process and transport journeys; selected runs require live services |
-
-```bash
-uv run pytest --unit --audio_eot        # the CI unit gate (no cloud accounts)
-uv run pytest --plugin openai           # only the openai provider tests
-uv run pytest --list-categories         # list every module grouped by category, then exit
-```
-
-**Adding a test:** give the new module a category marker (`pytestmark =
-pytest.mark.unit`, etc.) — collection fails with a hint if it lacks one. Run
-pytest with the `--allow-uncategorized` option to temporarily disable this rule
-(CI keeps it on by default).
+A test asserts public behaviour (tool outcomes, replies, run steps, wire payloads) through the
+shared fakes in `tests/fakes.py`, and names the regression it catches. Keep only tests
+that would catch a real regression. A new test goes in the folder of its category.
 
 ### Running Agents
 ```bash
@@ -196,9 +182,8 @@ directory. Node gets `node/` beside `python/`, with `lk-agents-node` beside `lk-
 rust/                   # The shared core and its bindings; see docs/internals/architecture.md
 python/                 # The Python SDK
 ├── livekit-agents/     # livekit-agents, built with the core as livekit.agents._core
-├── livekit-plugins/    # Provider plugins (openai, anthropic, google, deepgram, etc.)
-├── tests/              # Test suite with fakes (fake_stt.py, fake_vad.py)
-└── tests_new/          # Smoke, host, plugin and e2e suites
+└── livekit-plugins/    # Provider plugins (openai, anthropic, google, deepgram, etc.)
+tests/                  # host, plugins, smoke and e2e suites over the shared fakes.py
 examples/               # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
 otel/                   # Generated OTel registry and consumer schema (never edited)
 docs/                   # The 2.0 design, one feature per page

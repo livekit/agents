@@ -152,7 +152,7 @@ matched seed/policy comparisons, cancellation/due-wake tests and known-bug searc
 | `--test survey -- --ignored --nocapture` | Seeded reach/findings; VOICE_SEED/VOICE_SEEDS/VOICE_FIRST_SEED/VOICE_BUDGET/VOICE_POLICY configure the window |
 | `--test soak -- --ignored --nocapture` | Longer conversations; inspect its own environment controls |
 | `--test pos -- --ignored --nocapture` | Scheduling-policy comparison, rather than a replacement generator |
-| `launch-gate.sh` | Workspace verification: every Rust test suite as well as simulations |
+| `dst.sh` | Workspace verification: every Rust test suite as well as simulations |
 
 Replay requires the same code, configuration and random-stream partitioning. Seeds do not
 survive arbitrary refactors. Historical COVERAGE/benchmark tables must keep revision, seed

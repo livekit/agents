@@ -1,0 +1,94 @@
+name: Rust
+
+# The Rust core: its rules, every crate's tests, the Python binding contracts and the DST
+# (bounded seeds on every change, the full campaign nightly).
+
+on:
+  push:
+    branches: [main, v2.0]
+    paths-ignore: ['**/*.md']
+  pull_request:
+    paths-ignore: ['**/*.md']
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_RUNNER: cargo
+
+jobs:
+  # fmt, Clippy, rust/check and generated-code drift (AGENTS.md "Rust architecture rules").
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: ./.github/actions/setup
+        with:
+          cache-key: rust-rules
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+      - run: rustup component add rustfmt clippy
+      - run: make -C rust check test-checks
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: ./.github/actions/setup
+        with:
+          python-sdk: 'false'
+          cache-key: rust-tests
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+      - run: make -C rust test
+
+  # Against the repository's venv: the generated Python facades over the Rust bindings.
+  bindings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: ./.github/actions/setup
+        with:
+          python-version: '3.11'
+          cache-key: rust-bindings
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+      - run: make install
+      - run: make -C rust test-bindings
+
+  dst:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: ./.github/actions/setup
+        with:
+          python-sdk: 'false'
+          cache-key: rust-dst
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+      - name: DST
+        env:
+          DST_SEEDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '32768' || '4096' }}
+        run: make -C rust dst
+
+  # The generated OTel registry, each reference resolved against the registries pinned in
+  # otel/manifest.yaml.
+  otel-registry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WEAVER_VERSION: v0.28.0
+      WEAVER_SHA256: 9878e2d56ad82ae441b0b527377a4f6001ae19f4af362fb0a4d951884f59ab61
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Install Weaver
+        run: |
+          archive=weaver-x86_64-unknown-linux-gnu.tar.xz
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/open-telemetry/weaver/releases/download/$WEAVER_VERSION/$archive"
+          echo "$WEAVER_SHA256  $archive" | sha256sum -c -
+          tar xf "$archive"
+          echo "$PWD/weaver-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
+      - run: weaver registry check -r otel

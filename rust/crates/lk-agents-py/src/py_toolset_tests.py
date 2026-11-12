@@ -1,8 +1,7 @@
 """Resource ownership behind search/proxy tool lists, through the Cargo-linked runtime."""
 
 import asyncio
-from collections import deque
-from typing import Annotated, Any
+from typing import Annotated
 
 import pytest
 from pydantic import Field
@@ -15,17 +14,12 @@ from livekit.agents.beta import (
     ToolSearchToolset,
 )
 from livekit.agents.llm import (
-    ChatContext,
-    ChatMessage,
-    FunctionCallOutput,
     FunctionToolCall,
-    LLMStream,
-    Tool,
+    ToolContext,
     Toolset,
     function_tool,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from tests.fake_llm import FakeLLM, FakeLLMResponse
+from tests.fakes import FakeLLM
 
 pytestmark = pytest.mark.unit
 
@@ -152,39 +146,6 @@ async def test_close_during_index_build_settles_hidden_children(
             await asyncio.gather(opening, return_exceptions=True)
 
 
-class ScriptedLLM(FakeLLM):
-    def __init__(self, *steps: FunctionToolCall | str) -> None:
-        super().__init__()
-        self.steps = deque(steps)
-        self.offered: list[list[str]] = []
-
-    def chat(
-        self,
-        *,
-        chat_ctx: ChatContext,
-        tools: list[Tool] | None = None,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        **kwargs: Any,
-    ) -> LLMStream:
-        from livekit.agents.llm import ToolContext
-
-        self.offered.append(list(ToolContext(tools or []).function_tools))
-        incoming = chat_ctx.items[-1]
-        assert isinstance(incoming, (ChatMessage, FunctionCallOutput))
-        text = (
-            (incoming.text_content or "") if isinstance(incoming, ChatMessage) else incoming.output
-        )
-        step = self.steps.popleft()
-        self.fake_response_map[text] = FakeLLMResponse(
-            input=text,
-            content=step if isinstance(step, str) else "",
-            tool_calls=[step] if isinstance(step, FunctionToolCall) else [],
-            ttft=0,
-            duration=0,
-        )
-        return super().chat(chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
-
-
 async def test_discovered_tool_executes_on_the_next_model_step() -> None:
     booked: list[int] = []
 
@@ -197,18 +158,21 @@ async def test_discovered_tool_executes_on_the_next_model_step() -> None:
     agent = Agent(
         instructions="Find and use the reservations tool.",
         tools=[ToolSearchToolset(id="reservations", tools=[reserve_seats])],
-        llm=ScriptedLLM(
-            FunctionToolCall(
-                name="tool_search", arguments='{"query":"reserve seats"}', call_id="s"
-            ),
-            FunctionToolCall(name="reserve_seats", arguments='{"count":2}', call_id="r"),
-            "Your two seats are reserved.",
+        llm=FakeLLM(
+            [
+                FunctionToolCall(
+                    name="tool_search", arguments='{"query":"reserve seats"}', call_id="s"
+                ),
+                FunctionToolCall(name="reserve_seats", arguments='{"count":2}', call_id="r"),
+                "Your two seats are reserved.",
+            ]
         ),
     )
     result = await agent.run("Reserve two seats.")
-    assert isinstance(agent.llm, ScriptedLLM)
-    assert "reserve_seats" not in agent.llm.offered[0]
-    assert "reserve_seats" in agent.llm.offered[1]
+    assert isinstance(agent.llm, FakeLLM)
+    offered = [list(ToolContext(tools).function_tools) for tools in agent.llm.tools]
+    assert "reserve_seats" not in offered[0]
+    assert "reserve_seats" in offered[1]
     assert booked == [2], [
         i.output for i in result.new_messages() if i.type == "function_call_output"
     ]
@@ -246,16 +210,18 @@ async def test_proxy_invokes_a_discovered_tool_only_with_valid_arguments(
     agent = Agent(
         instructions="Search for reservations, then use call_tool.",
         tools=[ToolProxyToolset(id="reservations", tools=[reserve_seats])],
-        llm=ScriptedLLM(
-            FunctionToolCall(
-                name="tool_search", arguments='{"query":"reserve seats"}', call_id="s"
-            ),
-            FunctionToolCall(
-                name="call_tool",
-                arguments='{"name":"reserve_seats","parameters":{"count":' + str(count) + "}}",
-                call_id="r",
-            ),
-            "Reservation processed.",
+        llm=FakeLLM(
+            [
+                FunctionToolCall(
+                    name="tool_search", arguments='{"query":"reserve seats"}', call_id="s"
+                ),
+                FunctionToolCall(
+                    name="call_tool",
+                    arguments='{"name":"reserve_seats","parameters":{"count":' + str(count) + "}}",
+                    call_id="r",
+                ),
+                "Reservation processed.",
+            ]
         ),
     )
     result = await agent.run("Reserve seats.")

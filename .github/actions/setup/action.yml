@@ -1,0 +1,63 @@
+name: Set up the repository
+description: >-
+  The SDK sources beside the checkout, the Rust toolchain with the core's system libraries,
+  cargo-nextest, uv, Python and the cargo cache. Each part is optional.
+inputs:
+  python-sdk:
+    description: Checkout the Python SDK sources and set up uv and Python.
+    default: 'true'
+  rust:
+    description: Install the Rust toolchain, the core's system libraries and cargo-nextest.
+    default: 'true'
+  python-version:
+    description: The Python version.
+    default: '3.12'
+  cache-key:
+    description: The cargo cache's key prefix; empty for no cargo cache.
+    default: ''
+  python-ref:
+    description: Compatible livekit/python-sdks source revision.
+  rust-ref:
+    description: Compatible livekit/rust-sdks source revision.
+runs:
+  using: composite
+  steps:
+    - name: Checkout compatible SDK sources
+      uses: ./.github/actions/checkout-sdks
+      with:
+        python-sdk: ${{ inputs.python-sdk }}
+        rust-sdk: ${{ inputs.rust }}
+        python-ref: ${{ inputs.python-ref }}
+        rust-ref: ${{ inputs.rust-ref }}
+
+    - name: Install native build prerequisites
+      if: inputs.rust == 'true'
+      uses: ./.github/actions/native-build
+
+    - name: Install cargo-nextest
+      if: inputs.rust == 'true'
+      shell: bash
+      run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+
+    - name: Cache cargo
+      if: inputs.cache-key != ''
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          rust/target
+        key: ${{ inputs.cache-key }}-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+        restore-keys: ${{ inputs.cache-key }}-${{ runner.os }}-
+
+    - name: Install uv
+      if: inputs.python-sdk == 'true'
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      if: inputs.python-sdk == 'true'
+      with:
+        python-version: ${{ inputs.python-version }}

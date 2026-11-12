@@ -129,23 +129,23 @@ The search's yardstick is reach (journal variants, distinct edges between consec
 input x phase cells) and distinct findings; `COVERAGE.md` sections 7 to 10 hold the numbers and
 the biases the search still has.
 
-## 6. The launch gate
+## 6. The DST run
 
 One command, from the repository root:
 
 ```bash
-rust/crates/lk-agents-fuzz/launch-gate.sh
+make -C rust dst
 ```
 
 It runs, in order, failing at the first problem:
 
-1. `cargo check -q --workspace --all-targets`
-2. `cargo test -q -p lk-agents-voice`: the driver's unit tests.
-3. `cargo test -q --release -p lk-agents-fuzz`: the registry and probe tests, the search's own
+1. `cargo test -q --release -p lk-agents-fuzz`: the registry and probe tests, the search's own
    invariants, the determinism contracts in the regression suite, and every regression test.
-4. The survey on seeds 0 to 1023 (`src/survey_tests.rs`).
-5. A campaign on the next `VOICE_GATE_SEEDS` seeds (4096 by default).
-6. The soak.
+2. The survey on seeds 0 to 1023 (`src/survey_tests.rs`).
+3. A campaign on the next `DST_SEEDS` seeds (32768 by default; CI runs 4096 on a change).
+4. The soak.
+
+Every other crate's tests run in `make -C rust test`.
 
 Each campaign step must run its one ignored test and pass it; the survey and the soak fail on
 any finding of a contract outside `KNOWN_FINDINGS`. `VOICE_HANG_S` bounds a blocked run.

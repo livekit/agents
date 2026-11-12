@@ -476,7 +476,7 @@ A struct record is a keyword-only, slotted dataclass, frozen (and so hashable) o
 type derives `Hash`: an identity used as a key, such as `FrameId`. Freezing is not the default
 because `@dataclass` generates `__setattr__`, `__delattr__`, `__hash__` and pickling hooks for
 each frozen class when the module is imported, which made up a third of the records' import
-time; `python/tests/test_import_time.py` bounds how many dataclasses are frozen.
+time; `tests/smoke/test_import_time.py` bounds the modules the import loads.
 Python validation and serialization operations remain named hooks with behavioral contracts.
 
 Callback-bearing dataclasses use `deferred` to keep ordinary postponed Python annotations while

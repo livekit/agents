@@ -111,7 +111,7 @@ dev = [
     "tiktoken>=0.9.0",
     "pytest-xdist>=3.8.0",
     "jsonschema>=4.25.0",
-    # the MCP test servers (python/tests_new/host/mcp_peer.py): the SDK's own and standalone FastMCP
+    # the MCP test servers (tests/host/mcp_peer.py): the SDK's own and standalone FastMCP
     "mcp>=2.3,<3",
     "fastmcp>=4.1,<5",
     "a2a-sdk[http-server]>=1.1.2,<2",
@@ -119,10 +119,10 @@ dev = [
     "pytest-timeout>=2.3",
     # the tests bridge an application's SDK provider
     "opentelemetry-sdk>=1.45,<1.46",
-    # .github/update_versions.py, which python/tests/test_package_releases.py runs
+    # .github/update_versions.py, the release version bump
     "colorama",
     # published noise cancellation models, tested unchanged against 2.0
-    # (python/tests_new/e2e/test_noise_cancellation_compat.py)
+    # (tests/e2e/test_noise_cancellation_compat.py)
     "livekit-plugins-noise-cancellation>=0.3.3",
     "livekit-plugins-ai-coustics>=0.3.5",
 ]
@@ -163,8 +163,6 @@ typing = [
 
 [tool.ruff]
 line-length = 100
-# `tests` and `tests_new` sit under python/ and import as first-party packages.
-src = [".", "python"]
 target-version = "py311"
 # `_generated` is written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`): generator
 # output is not hand-formatted, and a lint finding there is fixed in the generator, not the file.
@@ -205,24 +203,14 @@ addopts = [
     "--import-mode=importlib",
     "--ignore=examples",
 ]
-pythonpath = [".", "python"]
-testpaths = ["python/tests"]
+pythonpath = ["."]
+testpaths = ["tests"]
 # a hung test fails instead of stalling the run (pytest-timeout); slow suites override per test
 timeout = 120
-markers = [
-    "unit: fast tests with no external providers (select with --unit)",
-    "audio_eot: hermetic audio end-of-turn / turn-detection tests (select with --audio_eot)",
-    "plugin(name): provider integration test for `name` (select with --plugin [name])",
-    "realtime(name): realtime-model test, optionally for provider `name` (--realtime [name])",
-    "stt(name): speech-to-text test, optionally for provider `name` (--stt [name])",
-    "evals: behavioral evals run against the LiveKit inference gateway (--evals)",
-    "docs: tests for the docs-build tooling under .github/ (select with --docs)",
-    "e2e: real process and transport journeys, requires live services (select with --e2e)",
-]
 
 
 [tool.mypy]
-mypy_path = "$MYPY_CONFIG_FILE_DIR/.type_stubs:$MYPY_CONFIG_FILE_DIR/python"
+mypy_path = "$MYPY_CONFIG_FILE_DIR/.type_stubs"
 strict = true
 plugins = ["pydantic.mypy"]
 
@@ -287,7 +275,7 @@ stubPath = ".type_stubs"
 # (docs/README.md). The library itself is held to mypy strict; pyright's strict-only rules
 # (cross-module private names, unknown types from untyped SDKs) add no check of its API there.
 typeCheckingMode = "standard"
-strict = ["examples", "python/tests/type_checks"]
+strict = ["examples", "tests/type_checks"]
 pythonVersion = "3.11"
 executionEnvironments = [
     { root = "examples/airline-support", extraPaths = ["examples/airline-support"] },

@@ -446,7 +446,7 @@ async fn an_unlimited_call_ends_with_its_session() {
 }
 
 mod lifecycle {
-    // Runs python/tests_new/host/mcp_peer.py with MCP_TEST_PYTHON (default python3), which needs
+    // Runs tests/host/mcp_peer.py with MCP_TEST_PYTHON (default python3), which needs
     // the MCP SDK, FastMCP and uvicorn: the repository's dev environment.
     use std::error::Error;
     use std::path::{Path, PathBuf};
@@ -474,7 +474,7 @@ mod lifecycle {
                 directory,
                 python: std::env::var("MCP_TEST_PYTHON").unwrap_or_else(|_| "python3".into()),
                 script: Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../../python/tests_new/host/mcp_peer.py")
+                    .join("../../../tests/host/mcp_peer.py")
                     .display()
                     .to_string(),
             }

@@ -2,7 +2,6 @@
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any
 
 import pytest
 
@@ -257,31 +256,11 @@ async def test_provider_failure_while_phrasing_keeps_the_tools_input_requirement
     text_session: bool,
 ) -> None:
     from livekit.agents import Agent, APIStatusError, InputRequired, TextSession
-    from livekit.agents.llm import ChatContext, FunctionToolCall, LLMStream
-    from tests.fake_llm import FakeLLM, FakeLLMResponse
+    from livekit.agents.llm import FunctionToolCall
+    from tests.fakes import FakeLLM
 
     failure = APIStatusError("phrasing failed", status_code=401, retryable=False)
-
-    class FailingPhrasing(FakeLLM):
-        requests = 0
-
-        def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> LLMStream:
-            self.requests += 1
-            if self.requests > 1:
-                raise failure
-            return super().chat(chat_ctx=chat_ctx, **kwargs)
-
-    model = FailingPhrasing(
-        fake_responses=[
-            FakeLLMResponse(
-                input="Help",
-                content="",
-                tool_calls=[FunctionToolCall(name="ask", arguments="{}", call_id="city-call")],
-                ttft=0,
-                duration=0,
-            )
-        ]
-    )
+    model = FakeLLM([FunctionToolCall(name="ask", arguments="{}", call_id="city-call"), failure])
     agent = Agent(name="desk", instructions="Ask for the missing city.", llm=model)
 
     @agent.tool
@@ -296,7 +275,7 @@ async def test_provider_failure_while_phrasing_keeps_the_tools_input_requirement
             await agent.run("Help")
 
     assert raised.value is failure
-    assert model.requests == 2
+    assert len(model.requests) == 2
     requirements = raised.value.__dict__["input_requirements"]
     assert len(requirements) == 1
     requirement = requirements[0]

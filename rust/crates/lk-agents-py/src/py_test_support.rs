@@ -58,7 +58,7 @@ mod support {
                 }
                 let package_root = root.join("python/livekit-agents");
                 let paths = sys.getattr("path")?;
-                for path in [&package_root, &root.join("python"), &root] {
+                for path in [&package_root, &root] {
                     crate::py_calls::call(
                         &paths.getattr("insert")?,
                         (0, path.to_string_lossy().into_owned()),

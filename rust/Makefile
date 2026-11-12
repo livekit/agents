@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help require-cargo-runner build check python python-debug format format-check clippy test-checks
+.PHONY: help require-cargo-runner build check python python-debug format format-check clippy test-checks \
+	test test-bindings dst
 
 ROOT := $(CURDIR)/..
 # An executable, e.g. cargo, mbx, or an absolute path to either. No global shim required.
@@ -26,6 +27,9 @@ help:
 		'make format-check  Check Rust formatting' \
 		'make clippy        Run Clippy with the purity, I/O and base policies, denying warnings' \
 		'make test-checks   Test rust/check and the code generator' \
+		'make test          Run every crate'"'"'s tests but the bindings and the DST' \
+		'make test-bindings Run the Python binding contracts against the repository venv' \
+		'make dst           Run the DST suites and campaigns (DST_SEEDS, DST_SOAK_SEEDS)' \
 		'' \
 		'Rust commands use mbx by default; pass CARGO_RUNNER=cargo to bypass it.'
 
@@ -39,7 +43,7 @@ require-cargo-runner:
 		exit 1; \
 	}
 
-build check clippy test-checks: | require-cargo-runner
+build check clippy test-checks test test-bindings dst: | require-cargo-runner
 
 build:
 	"$(CARGO_RUNNER)" build --locked --workspace --features lk-agents-py/ffmpeg $(BUILD_ARGS)
@@ -82,3 +86,19 @@ clippy:
 
 test-checks:
 	"$(CARGO_RUNNER)" test --locked -q -p lk-agents-check -p lk-agents-codegen --bins
+
+test:
+	"$(CARGO_RUNNER)" test --locked -q --workspace --exclude lk-agents-py --exclude lk-agents-fuzz
+
+PYTHON_HOME = $(shell "$(PYO3_PYTHON)" -c 'import sys; print(sys.base_prefix)')
+SITE_PACKAGES = $(shell "$(PYO3_PYTHON)" -c 'import site; print(site.getsitepackages()[0])')
+
+# The abi tests behind `python` set process globals (fork guard, cached host classes): nextest
+# gives each its own process.
+test-bindings:
+	PYTHONHOME="$(PYTHON_HOME)" "$(CARGO_RUNNER)" test --locked -q -p lk-agents-py --features ffmpeg
+	PYTHONHOME="$(PYTHON_HOME)" PYTHONPATH="$(SITE_PACKAGES)" "$(CARGO_RUNNER)" nextest run --locked \
+		--cargo-quiet --status-level fail --final-status-level fail -p lk-agents-abi --features python
+
+dst:
+	crates/lk-agents-fuzz/dst.sh

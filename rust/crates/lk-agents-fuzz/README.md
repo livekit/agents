@@ -97,8 +97,8 @@ input/phase observations. Reaching a journal variant does not prove a contract w
 subject kind. A campaign passing its gate can still contain known violations. Keep that
 baseline shrinking; turn fixes into production regressions.
 
-The [launch gate](launch-gate.sh) runs a much broader suite than a local seed or small campaign.
-It needs the repository environment and cargo-nextest.
+[`dst.sh`](dst.sh) (`make -C rust dst`) runs the fuzz suites and the full campaigns, a much
+broader run than a local seed or small campaign. It needs cargo-nextest.
 
 For design detail, read [TEST_STRATEGY.md](../lk-agents-voice/TEST_STRATEGY.md).
 [COVERAGE.md](COVERAGE.md) contains dated measurements, not a live capability inventory.

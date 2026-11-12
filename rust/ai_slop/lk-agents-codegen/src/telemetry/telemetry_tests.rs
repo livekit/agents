@@ -395,8 +395,7 @@ fn declarations_cover_the_1_8_10_wire() {
     let abi = Crate::read(&root, "rust/crates/lk-agents-abi", "lk_agents_abi").expect("abi");
     let r = telemetry::read(&abi).expect("the declarations read");
     let text =
-        std::fs::read_to_string(root.join("python/tests/telemetry/baseline/schema_1_8_10.json"))
-            .expect("baseline");
+        std::fs::read_to_string(root.join("otel/baseline/schema_1_8_10.json")).expect("baseline");
     let baseline: serde_json::Value = serde_json::from_str(&text).expect("baseline JSON");
     let stamped: Vec<&str> = r
         .groups

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The storage and runtime contracts against a real AgentDB; the SQLite ones run in the launch gate.
+# The storage and runtime contracts against a real AgentDB; the SQLite ones run in `make -C rust test`.
 set -euo pipefail
 for name in LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET; do
     [[ -n ${!name:-} ]] || { echo "AgentDB backend contracts require $name" >&2; exit 2; }

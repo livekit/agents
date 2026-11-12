@@ -135,7 +135,7 @@ def main() -> None:
     if options.checker in ("pyright", "all"):
         source_paths = [
             "python/livekit-agents/livekit/agents",
-            "python/tests/type_checks",
+            "tests/type_checks",
             "examples",
         ]
         source_paths.extend(

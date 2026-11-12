@@ -79,7 +79,7 @@ Start with the deterministic checks from the repository root. They use scripted 
 no provider calls are needed:
 
 ```sh
-make test TEST_ARGS="python/tests/test_example_simulation.py python/tests/test_airline_support_example.py python/tests/test_session_binding.py python/tests/test_text_session.py python/tests/test_voice_storage.py python/tests/test_a2a_delegation.py --unit"
+uv run pytest tests/smoke/test_examples.py
 ```
 
 For a manual conversation, use the same staging credentials as above and run from

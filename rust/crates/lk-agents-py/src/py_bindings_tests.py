@@ -727,7 +727,7 @@ async def test_realtime_generation_preserves_plain_text_and_transcript_chunk_sta
 async def test_refused_amd_handle_cannot_replace_or_close_the_attached_detector() -> None:
     from livekit.agents import Agent, VoiceSession
     from livekit.agents.voice.amd import AMD
-    from tests.fake_llm import FakeLLM
+    from tests.fakes import FakeLLM
 
     async with VoiceSession(llm=FakeLLM(), vad=None, turn_detection="manual") as session:
         await session.start(Agent(instructions="Welcome the caller.", name="desk"))
@@ -859,7 +859,7 @@ async def test_the_end_of_the_core_events_settles_what_only_they_would() -> None
 
     from livekit.agents import Agent, VoiceSession
     from livekit.agents.voice.amd import AMD
-    from tests.fake_llm import FakeLLM
+    from tests.fakes import FakeLLM
 
     async with VoiceSession(llm=FakeLLM(), vad=None, turn_detection="manual") as session:
         await session.start(Agent(instructions="Welcome the caller.", name="desk"))

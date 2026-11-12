@@ -249,8 +249,8 @@ generator is visible in the generator's body.
   `with tracer.start_as_current_span(..)` held across a `yield` resets its
   token, and a context variable set before a `yield` is visible after it.
 
-The parentage regression table (`python/tests/test_telemetry_invocations.py`) has one
-row per application entry point and the stream cases above.
+The parentage regressions (`tests/host/test_callback_contexts.py`) cover the application entry
+points and the stream cases above.
 
 Parentage always comes from explicit data. No span is found through a
 process-global current span.

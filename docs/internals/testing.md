@@ -59,11 +59,9 @@ next to its actions; share fixtures rather than copying orchestration. Avoid
 both monolithic runners and many single-use forwarding modules. Each module
 must have a responsibility that a reader can name.
 
-`python/tests/test_native_smoke.py` checks the assembled Python/native API with scripted
-providers, local protocol peers and real job processes. Run it with
-`make test TEST_ARGS="python/tests/test_native_smoke.py --unit"`; it also runs in the
-default hermetic suite. Scripted providers live in `python/tests/native_smoke_fixtures.py`,
-and the logging subprocess is `python/tests/native_job_logs.py`.
+`tests/smoke/` checks the assembled Python/native API with scripted providers, local
+protocol peers and real job processes; `uv run pytest tests/smoke` runs it. Scripted
+providers live in `tests/fakes.py`.
 
 Python tests reach an offline room through the documented session, as
 [programmatic tests](../testing.md#programmatic-tests) do: `session.start(agent)`
@@ -183,8 +181,8 @@ handwritten regressions. Key distinct findings by rule and subject kind, never
 generated IDs. Compare both findings and reach on the same seeds when changing
 scheduling or fakes.
 
-The [launch gate](../../rust/crates/lk-agents-fuzz/launch-gate.sh) must run before
-every merge. It covers affected subject cores and runtime/binding contracts,
+Every merge runs [`rust.yml`](../../.github/workflows/rust.yml): the rules, every crate's tests
+(`make -C rust test`), the binding contracts and the [DST](../../rust/crates/lk-agents-fuzz/dst.sh). It covers affected subject cores and runtime/binding contracts,
 reports omitted coverage and rejects empty runs. Workspace compilation is not
 behavioral coverage of any component; the worker and the other async I/O crates
 run their real-transport, real-process and controlled-peer suites in the gate.
@@ -218,7 +216,7 @@ From the repository root:
 # Shared invocation/routing decisions and voice coordination.
 cargo test --manifest-path rust/Cargo.toml --locked -p lk-agents-core -p lk-agents-voice
 
-# Real runtime drivers and local-peer integration; the MCP peer (tests_new/host/mcp_peer.py)
+# Real runtime drivers and local-peer integration; the MCP peer (tests/host/mcp_peer.py)
 # needs the repo Python.
 MCP_TEST_PYTHON="$PWD/.venv/bin/python" cargo test --manifest-path rust/Cargo.toml \
   --locked -p lk-agents-runtime --features media-ffmpeg,media-images

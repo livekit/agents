@@ -1,4 +1,4 @@
-.PHONY: help install format format-check lint lint-fix fix type-check check unit-tests \
+.PHONY: help install format format-check lint lint-fix fix type-check check test-e2e \
         link-rtc link-rtc-local unlink-rtc status doctor build build-debug rust-check \
         test bench bench-startup bench-host bench-sentences bench-sync
 
@@ -9,8 +9,6 @@ RUST_SDKS := $(abspath $(ROOT)/../rust-sdks)
 PYTHON_RTC := $(PYTHON_SDKS)/livekit-rtc
 # The FFI crate livekit-rtc is built against: its own rust-sdks submodule.
 RTC_RUST_SDK := $(PYTHON_RTC)/rust-sdks
-TEST_ARGS ?= --unit --audio_eot
-
 ifeq ($(OS),Windows_NT)
 HOST_OS := windows
 ARCH := $(if $(filter ARM64,$(PROCESSOR_ARCHITECTURE)),aarch64,x86_64)
@@ -58,10 +56,11 @@ type-check: ## Run strict mypy and pyright
 
 check: format-check lint type-check ## Run all checks (format-check, lint, type-check)
 
-unit-tests: test ## Run the default hermetic test suite
+test: ## Run the hermetic Python suites (host, plugins, smoke); pass PYTEST_ARGS
+	uv run pytest tests $(PYTEST_ARGS)
 
-test: ## Run tests; select paths and categories with TEST_ARGS
-	PYTHONPATH="$(ROOT):$(ROOT)/python" uv run pytest $(PYTEST_ARGS) $(TEST_ARGS)
+test-e2e: ## Run tests/e2e against a LiveKit project (LIVEKIT_URL, _API_KEY, _API_SECRET)
+	uv run pytest tests/e2e --e2e $(PYTEST_ARGS)
 
 bench: ## Run the IPC benchmark; pass BENCH_ARGS (--help lists them)
 	uv run python -m bench.ipc $(BENCH_ARGS)

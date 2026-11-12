@@ -1,0 +1,75 @@
+name: Python
+
+# The Python SDK: lint, types, and the hermetic suites, one job per folder of tests:
+# host (the bindings and the host adapters), plugins (each provider against a local peer) and
+# smoke (the installed package end to end). e2e.yml runs tests/e2e.
+
+on:
+  push:
+    branches: [main, v2.0]
+    paths-ignore: ['**/*.md']
+  pull_request:
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: ./.github/actions/setup
+        with:
+          rust: 'false'
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+      - run: uv sync --locked --only-group lint
+      - run: uv run --no-sync ruff check --output-format=github .
+      - run: uv run --no-sync ruff format --check .
+
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: ./.github/actions/setup
+        with:
+          python-version: '3.11'
+          cache-key: python
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+      - run: uv sync --all-extras --dev
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .mypy_cache
+          key: mypy-${{ hashFiles('uv.lock') }}-${{ github.run_id }}
+          restore-keys: mypy-${{ hashFiles('uv.lock') }}-
+      - run: make type-check
+
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [host, plugins, smoke]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: ./.github/actions/setup
+        with:
+          cache-key: python
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+      - run: uv sync --all-extras --dev
+      - run: uv run --no-sync pytest tests/${{ matrix.suite }}
+
+  # A plugin with its own native extension and its own test file.
+  blockguard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - run: pip install python/livekit-plugins/livekit-blockguard/ pytest
+      - working-directory: python/livekit-plugins/livekit-blockguard
+        run: python -m pytest test_blockguard.py -v

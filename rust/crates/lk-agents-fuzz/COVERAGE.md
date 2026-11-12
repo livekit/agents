@@ -787,14 +787,14 @@ Measured nowhere here, and each a separate source of production risk:
 
 ## 12. Keeping it true
 
-**The launch gate** is one command, `rust/crates/lk-agents-fuzz/launch-gate.sh`, and the merge gate
-in CI (`.github/workflows/launch-gate.yml`: 4,096 campaign seeds on every pull request and push to
+**The DST** is one command, `make -C rust dst` (`rust/crates/lk-agents-fuzz/dst.sh`), and a job
+of the merge gate in CI (`.github/workflows/rust.yml`: 4,096 campaign seeds on every pull request and push to
 v2.0, 32,768 nightly). It prints a coverage table placing every workspace crate as executed,
 compiled only or outside (with the job that covers it), and fails on a crate in no list; then the
 workspace build, the voice core's unit tests, the provider clients' unit tests
 (`lk-agents-inference`, `lk-agents-abi`, and abi's `python` feature under nextest), the fuzz suites
 (the scheduler's small programs, every contract's examples, counterexamples and probe, determinism,
-the regression tests), the 1,024-seed survey, a campaign on the next window (`VOICE_GATE_SEEDS`,
+the regression tests), the 1,024-seed survey, a campaign on the next window (`DST_SEEDS`,
 32,768 by default) and the soak (`VOICE_SOAK_SEEDS`, 8). Every verdict is a runner's exit status:
 the campaigns run under nextest, which fails a selection that runs no test, and zero seeds are
 refused. It fails on any finding outside `src/known_findings.tsv` (open findings keyed by
