@@ -54,6 +54,7 @@ _SOFT_CAPABILITIES = (
     "mutable_tools",
     "per_response_tool_choice",
     "supports_say",
+    "supports_uninterruptible_say",
     "can_disable_turn_detection",
 )
 
@@ -465,7 +466,11 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     def start_user_activity(self) -> None:
         self._active.start_user_activity()
 
-    def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
+    def say(
+        self, text: str | AsyncIterable[str], *, allow_interruptions: bool = True
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        if self.capabilities.supports_uninterruptible_say:
+            return self._active.say(text, allow_interruptions=allow_interruptions)
         return self._active.say(text)
 
     def delegate(self, instructions: str | None = None) -> None:

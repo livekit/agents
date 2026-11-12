@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterable
 from types import SimpleNamespace
 
 import pytest
@@ -151,6 +152,7 @@ def test_default_model_is_grok_voice_latest() -> None:
     model = RealtimeModel(api_key="fake")
     assert model.model == "grok-voice-latest"
     assert model.capabilities.supports_say is True
+    assert model.capabilities.supports_uninterruptible_say is True
     assert model._opts.input_audio_transcription is not None
     assert model._opts.input_audio_transcription.model == "grok-transcribe"
 
@@ -550,6 +552,39 @@ async def test_a_silent_response_survives_the_user_speaking_over_it() -> None:
     _speech_started(session, "item_1")
 
     assert not generation._done_fut.done()
+
+
+@pytest.mark.parametrize("allow_interruptions", [None, True, False])
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_say_sends_force_message_interruptibility(
+    allow_interruptions: bool | None, streamed: bool
+) -> None:
+    session, _ = _make_session()
+    session._response_created_futures = {}
+    sent: list[dict] = []
+    session.send_event = sent.append  # type: ignore[method-assign]
+
+    async def chunks() -> AsyncIterable[str]:
+        yield "This call "
+        yield "is being recorded."
+
+    text = "This call is being recorded."
+    kwargs = {} if allow_interruptions is None else {"allow_interruptions": allow_interruptions}
+    fut = session.say(chunks() if streamed else text, **kwargs)
+    try:
+        await asyncio.sleep(0)
+        assert len(sent) == 1
+        assert sent[0]["type"] == "conversation.item.create"
+        assert sent[0]["item"] == {
+            "type": "force_message",
+            "role": "assistant",
+            "interruptible": allow_interruptions is not False,
+            "content": [{"type": "output_text", "text": text}],
+        }
+    finally:
+        # Finish the send task without waiting for a real server response.
+        fut.set_result(None)  # type: ignore[arg-type]
+        await asyncio.gather(*session._say_tasks)
 
 
 async def test_cancelling_say_keeps_pending_tag_for_discard() -> None:
