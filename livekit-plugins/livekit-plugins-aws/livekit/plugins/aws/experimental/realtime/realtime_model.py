@@ -1134,42 +1134,48 @@ class RealtimeSession(  # noqa: F811
 
     @utils.log_exceptions(logger=logger)
     def emit_generation_event(self) -> None:
-        """Publish a llm.GenerationCreatedEvent to external subscribers.
+        """Publish a llm.GenerationCreatedEvent for the current generation, at most once.
 
-        This can be called multiple times for the same generation:
-        - Once from _create_response_generation() when a NEW generation is created
-        - Once from TurnTracker when TOOL_OUTPUT_CONTENT_START or ASSISTANT_SPEC_START arrives
+        Called from _create_response_generation() when a NEW generation is created, and
+        again from TurnTracker when TOOL_OUTPUT_CONTENT_START or ASSISTANT_SPEC_START arrives.
+        Every generation_created event makes the framework start a speech that reads the
+        generation's single-reader message/function channels, so a generation that was
+        already emitted is never emitted again.
 
-        The TurnTracker emission is critical for tool calls - it happens at the right moment
-        for the framework to start listening before the tool call is emitted.
+        If a generate_reply() future is pending, the generation answers it: the event is
+        marked user_initiated so the framework plays it through the speech generate_reply()
+        created instead of scheduling another one.
         """
-        if self._current_generation is None:
+        generation = self._current_generation
+        if generation is None:
             logger.debug("[GEN] emit_generation_event called but no generation exists - ignoring")
             return
 
-        # Log whether this is first or re-emission for tool call
-        if self._current_generation._emitted:
+        if generation._emitted:
             logger.debug(
-                f"[GEN] EMITTING generation_created (re-emit for tool call) for response_id={self._current_generation.response_id}"
+                f"[GEN] generation_created already emitted for response_id={generation.response_id} - skipping"
             )
-        else:
-            logger.debug(
-                f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}"
-            )
+            return
 
-        self._current_generation._emitted = True
+        generation._emitted = True
+        pending_fut = self._pending_generation_fut
+        user_initiated = pending_fut is not None and not pending_fut.done()
+        logger.debug(
+            f"[GEN] EMITTING generation_created for response_id={generation.response_id}, "
+            f"user_initiated={user_initiated}"
+        )
         generation_ev = llm.GenerationCreatedEvent(
-            message_stream=self._current_generation.message_ch,
-            function_stream=self._current_generation.function_ch,
-            user_initiated=False,
-            response_id=self._current_generation.response_id,
+            message_stream=generation.message_ch,
+            function_stream=generation.function_ch,
+            user_initiated=user_initiated,
+            response_id=generation.response_id,
         )
         self.emit("generation_created", generation_ev)
 
-        # Resolve pending generate_reply future if exists
-        if self._pending_generation_fut and not self._pending_generation_fut.done():
-            self._pending_generation_fut.set_result(generation_ev)
+        # Resolve the pending generate_reply future with this generation
+        if pending_fut is not None and user_initiated:
             self._pending_generation_fut = None
+            pending_fut.set_result(generation_ev)
 
     @utils.log_exceptions(logger=logger)
     async def _handle_event(self, event_data: dict) -> None:
