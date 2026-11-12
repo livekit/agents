@@ -37,6 +37,7 @@ def _bare_stream(**conn: Any) -> sarvam_stt.SpeechStream:
     stream._audio_buffer = []
     stream._sent_samples = 0
     stream._end_speech_sample = None
+    stream._release_at_end_speech = False
     stream._connection_offset = None
     return stream
 
@@ -761,6 +762,36 @@ async def test_reconnect_keeps_the_onset_when_the_transcript_has_no_speech_end(
     await _wait_until(lambda: len(new.audio()) > 0)
     # the finished utterance isn't replayed, only the next turn's onset
     assert new.audio() == onset.data.tobytes()
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_keeps_the_onset_when_the_transcript_comes_before_end_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transcript with no speech_end and no END_SPEECH yet doesn't claim later audio."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    first = _pcm_frame(100, 1)
+    stream.push_frame(first)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(first.data.tobytes()))
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    onset = _pcm_frame(50, 2)
+    stream.push_frame(onset)
+    sent = len(first.data.tobytes()) + len(onset.data.tobytes())
+    await _wait_until(lambda: len(session.sockets[0].audio()) == sent)
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": 0.0}}
+    )
+    assert len(stream._recent_audio) == sent  # nothing proves any of it was covered
+
+    # once END_SPEECH arrives, what was sent by then counts as covered
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+    assert len(stream._recent_audio) == 0
 
     await stream.aclose()
     await stt.aclose()

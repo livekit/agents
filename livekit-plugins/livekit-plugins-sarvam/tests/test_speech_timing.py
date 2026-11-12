@@ -39,6 +39,7 @@ def _make_stream_under_test(
     instance._utterance_resolved = asyncio.Event()  # type: ignore[attr-defined]
     instance._sent_samples = 0  # type: ignore[attr-defined]
     instance._end_speech_sample = None  # type: ignore[attr-defined]
+    instance._release_at_end_speech = False  # type: ignore[attr-defined]
     instance._connection_offset = None  # type: ignore[attr-defined]
     instance._recent_audio = bytearray()  # type: ignore[attr-defined]
     return instance, captured
