@@ -1705,10 +1705,15 @@ class SpeechStream(stt.SpeechStream):
 
     def _release_claimed_audio(self, speech_end: object) -> None:
         """Drop replay audio up to where a finished utterance ended; what follows stays."""
-        if not isinstance(speech_end, bool) and isinstance(speech_end, (int, float)):
+        if (
+            not isinstance(speech_end, bool)
+            and isinstance(speech_end, (int, float))
+            and speech_end > 0
+        ):
             boundary = int(speech_end * self._opts.sample_rate)
         elif self._end_speech_sample is not None:
-            # no speech_end, so go by what had been sent when END_SPEECH arrived
+            # no usable speech_end (Sarvam sends 0 when it has none), so go by what had
+            # been sent when END_SPEECH arrived
             boundary = self._end_speech_sample
         else:
             boundary = self._sent_samples
