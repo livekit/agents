@@ -30,7 +30,6 @@ import aiohttp
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     LanguageCode,
     stt,
@@ -42,6 +41,7 @@ from livekit.rtc import AudioFrame
 
 from .api import ws_headers
 from .log import logger
+from .tts import _close_error
 
 STTEncoding = Literal["pcm_s16le"]
 
@@ -56,14 +56,17 @@ SUPPORTED_SAMPLE_RATE = 24000
 DEFAULT_DELAY_IN_FRAMES = 10
 
 
-def _api_error(msg_data: dict[str, Any]) -> APIError:
+def _api_error(msg_data: dict[str, Any]) -> APIStatusError:
     """Build the error for a `{"type": "error"}` frame.
 
     The server sends it right before closing the socket, so the message is the only
     place the actual failure reason (unsupported language, no credits, ...) shows up.
+    Its `code` is the websocket close code that follows; client errors are not retried.
     """
     message = msg_data.get("message") or "unknown error"
-    return APIError(f"Gradium returned error: {message}", body=msg_data)
+    return _close_error(
+        f"Gradium returned error: {message}", code=msg_data.get("code"), body=msg_data
+    )
 
 
 @dataclass

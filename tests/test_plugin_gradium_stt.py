@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APIStatusError
+from livekit.agents import APIConnectOptions, APIStatusError
 from livekit.agents.stt import SpeechEventType
 from livekit.plugins.gradium.stt import DEFAULT_DELAY_IN_FRAMES
 
@@ -680,15 +680,19 @@ async def test_end_input_sends_eos_and_finalizes_pending_text():
     assert events[-1].type == SpeechEventType.END_OF_SPEECH
 
 
-async def test_error_frame_raises_api_error():
-    error = {"type": "error", "message": "Unsupported language 'xx'.", "code": 1011}
+@pytest.mark.parametrize(("code", "retryable"), [(1011, True), (1003, False)])
+async def test_error_frame_raises_api_error(code: int, retryable: bool):
+    """The server's message is surfaced; a client error (1003) is not retried."""
+    error = {"type": "error", "message": "Unsupported language 'xx'.", "code": code}
     stt, _, _ = _make_stt([READY, error, "close"])
 
     stream = stt.stream(conn_options=CONN_OPTS)
     stream.push_frame(_audio_frame())
     try:
-        with pytest.raises(APIError, match="Unsupported language"):
+        with pytest.raises(APIStatusError, match="Unsupported language") as excinfo:
             await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.status_code == code
+        assert excinfo.value.retryable is retryable
     finally:
         await stream.aclose()
 
