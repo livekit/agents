@@ -49,6 +49,9 @@ STTModel = Literal["resonant-1", "rumble-2"]
 https://docs.reson8.dev/speech-to-text/models/.
 """
 
+DEFAULT_MODEL: STTModel = "resonant-1"
+"""The model Reson8 uses when no ``model`` is sent."""
+
 # fmt: off
 SupportedLanguage = Literal[
     "af", "ar", "az", "be", "bg", "bn", "bs", "ca", "ceb", "cs", "da", "de", "el", "en",
@@ -108,8 +111,8 @@ def normalize_languages(value: str | Sequence[str] | None, model: str | None = N
     ``"nl"`` -> ``"nl"``; ``"nl,de"`` -> ``"nl,de"``; ``["nl", "de"]`` ->
     ``"nl,de"``; ``None``/``""``/``[]`` -> ``None`` (auto-detect).
 
-    Raises ``ValueError`` if any code is not supported by ``model``, or not a
-    :data:`SupportedLanguage` when no model is set, so invalid selections fail
+    Raises ``ValueError`` if any code is not supported by ``model``, or by
+    :data:`DEFAULT_MODEL` when no model is set, so invalid selections fail
     locally rather than after a request to the API. A model this plugin does
     not list is left for Reson8 to check.
     """
@@ -122,14 +125,14 @@ def normalize_languages(value: str | Sequence[str] | None, model: str | None = N
     if not codes:
         return None
 
-    allowed = MODEL_LANGUAGES.get(model) if model else SUPPORTED_LANGUAGES
+    model = model or DEFAULT_MODEL
+    allowed = MODEL_LANGUAGES.get(model)
     if allowed is not None:
         unsupported = [c for c in codes if c not in allowed]
         if unsupported:
             supported = ", ".join(sorted(allowed))
             raise ValueError(
-                f"unsupported language(s): {', '.join(unsupported)}. "
-                f"{model or 'Reson8'} supports: {supported}."
+                f"unsupported language(s): {', '.join(unsupported)}. {model} supports: {supported}."
             )
 
     return ",".join(codes)

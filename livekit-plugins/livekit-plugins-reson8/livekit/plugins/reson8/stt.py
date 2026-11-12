@@ -40,6 +40,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from ._utils import (
+    DEFAULT_MODEL,
     ENCODINGS,
     ERROR_MESSAGE_HEADER,
     FILLER_MODES,
@@ -410,7 +411,7 @@ class STT(stt.STT):
             base_url: Reson8 API base URL. Falls back to ``RESON8_BASE_URL``,
                 then ``https://api.reson8.dev``.
             model: Reson8 model, e.g. ``"rumble-2"``. Fixed for the lifetime of
-                the instance. Leave as ``None`` for Reson8's default model.
+                the instance. Leave as ``None`` for Reson8's default, ``resonant-1``.
                 For an :data:`STTModel`, a language or biasing
                 option the model does not support raises ``ValueError``, here
                 and in :meth:`update_options`; any other name is sent as is.
@@ -466,7 +467,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return self._opts.model or "default"
+        return self._opts.model or DEFAULT_MODEL
 
     @property
     def provider(self) -> str:
