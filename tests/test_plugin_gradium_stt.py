@@ -692,6 +692,22 @@ async def test_error_frame_raises_api_error(code: int, retryable: bool):
         await stream.aclose()
 
 
+async def test_non_object_frame_is_skipped():
+    """Valid JSON that is not an object is logged and skipped, not fatal."""
+    stt, _, _ = _make_stt([READY, ["unexpected"], _text("hello", 0.1)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello"]
+
+
 async def test_pending_text_is_finalized_when_the_server_closes_instead_of_replying():
     """A close in place of the server's end_of_stream must not lose the buffered words."""
     stt, _, _ = _make_stt([READY, _text("hello", 0.1), _text("world", 0.4)], after_eos=["close"])

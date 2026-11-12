@@ -449,6 +449,9 @@ class SpeechStream(stt.SpeechStream):
                 except json.JSONDecodeError:
                     logger.exception("Failed to decode message from Gradium")
                     continue
+                if not isinstance(data, dict):
+                    logger.error("Unexpected Gradium message: %s", msg.data)
+                    continue
 
                 type_ = data.get("type", "")
                 if type_ == "error":
