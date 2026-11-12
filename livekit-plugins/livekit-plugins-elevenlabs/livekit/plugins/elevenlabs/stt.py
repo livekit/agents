@@ -147,12 +147,12 @@ class STT(stt.STT):
                 the audio, on top of `language_code`. Keeps the primary language hinted while still
                 recognizing the others, which is what a code-switching speaker needs. Names and
                 ISO-639-3 codes are accepted and normalized to what the API takes. Only supported
-                for Scribe v2 realtime.
+                for realtime models.
             include_language_detection (NotGivenOr[bool]): Whether the committed transcript reports
                 the language the model actually heard. Defaults to True when no `language_code` is
                 set and False otherwise. Turning it off while no `language_code` is set leaves the
                 plugin with no language to report and every transcript falls back to "en". Only
-                supported for Scribe v2 realtime.
+                supported for realtime models.
             tag_audio_events (bool): Whether to tag audio events like (laughter), (footsteps), etc. in the transcription.
                 Only supported for Scribe v1 model. Default is True.
             use_realtime (bool): Whether to use "scribe_v2_realtime" model for streaming mode. Default is NOT_GIVEN.
@@ -161,8 +161,8 @@ class STT(stt.STT):
             audio_chunk_duration_ms (int): Duration of each outgoing realtime audio chunk in
                 milliseconds. Must be a positive integer. Defaults to 50. Larger chunks reduce
                 message frequency but increase buffering latency. Flushes send any shorter
-                remaining chunk before committing. Only used for Scribe v2 realtime.
-            server_vad (NotGivenOr[VADOptions | None]): Server-side VAD options, only supported for Scribe v2 realtime model.
+                remaining chunk before committing. Only used for realtime models.
+            server_vad (NotGivenOr[VADOptions | None]): Server-side VAD options, only supported for realtime models.
                 At construction, omit or set to None to use manual commits. Pass {} to enable server VAD defaults.
                 In update_options(), omission keeps the current setting; None disables server VAD and restores manual commits.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
@@ -179,7 +179,7 @@ class STT(stt.STT):
             enable_logging (bool): Enable logging of the request. When set to false, zero retention
                 mode will be used. Defaults to True.
             previous_text (NotGivenOr[str]): Preceding text context sent once on the first realtime
-                audio chunk to improve transcription accuracy. Only supported for Scribe v2 realtime.
+                audio chunk to improve transcription accuracy. Only supported for realtime models.
         """
 
         if (
@@ -214,18 +214,18 @@ class STT(stt.STT):
         use_realtime = model in _REALTIME_MODELS
 
         if not use_realtime and is_given(server_vad):
-            logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
+            logger.warning("Server-side VAD is only supported for realtime models")
 
         if not use_realtime and is_given(secondary_languages):
             logger.warning(
-                "`secondary_languages` is only supported for Scribe v2 realtime model "
+                "`secondary_languages` is only supported for realtime models "
                 "and will be ignored"
             )
             secondary_languages = NOT_GIVEN
 
         if not use_realtime and is_given(include_language_detection):
             logger.warning(
-                "`include_language_detection` is only supported for Scribe v2 realtime model "
+                "`include_language_detection` is only supported for realtime models "
                 "and will be ignored"
             )
             include_language_detection = NOT_GIVEN
@@ -233,7 +233,7 @@ class STT(stt.STT):
         resolved_previous_text = previous_text if is_given(previous_text) else None
         if not use_realtime and resolved_previous_text is not None:
             logger.warning(
-                "`previous_text` is only supported for Scribe v2 realtime model and will be ignored"
+                "`previous_text` is only supported for realtime models and will be ignored"
             )
             resolved_previous_text = None
 
@@ -436,7 +436,7 @@ class STT(stt.STT):
                 ]
             else:
                 logger.warning(
-                    "`secondary_languages` is only supported for Scribe v2 realtime model "
+                    "`secondary_languages` is only supported for realtime models "
                     "and will be ignored"
                 )
                 secondary_languages = NOT_GIVEN
@@ -470,7 +470,7 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
-    """Streaming speech recognition using ElevenLabs Scribe v2 realtime API"""
+    """Streaming speech recognition using the ElevenLabs Scribe realtime API"""
 
     def __init__(
         self,
