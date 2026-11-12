@@ -66,6 +66,11 @@ def _supports_thinking_level(model: str) -> bool:
     return _is_gemini_3_or_newer(model) or _is_gemma_4_model(model)
 
 
+def _supports_xhigh_thinking(model: str) -> bool:
+    """Check if model accepts thinking_level "xhigh", its maximum reasoning depth"""
+    return "gemini-4-hydrogen" in model.lower()
+
+
 def _ignores_sampling_params(model: str) -> bool:
     """Check if model ignores temperature/top_p/top_k, which later ones will reject outright"""
     return _is_gemini_4_model(model)
@@ -297,6 +302,13 @@ class LLM(llm.LLM):
                     f"or 'high' (thinking on), got {_thinking_level!r}."
                 )
 
+            if (
+                _thinking_level is not None
+                and _thinking_level.upper() == "XHIGH"
+                and not _supports_xhigh_thinking(model)
+            ):
+                raise ValueError(f"Model {model} does not support thinking_level 'xhigh'.")
+
         self._opts = _LLMOptions(
             model=model,
             temperature=temperature,
@@ -498,7 +510,11 @@ class LLM(llm.LLM):
                 if _level is None and _is_gemini_3_model(self._opts.model):
                     # only default the level where the accepted levels are known
                     _level = "minimal" if _is_gemini_3_flash_model(self._opts.model) else "low"
-                # the level passes through as given, checked against the model in __init__
+                # the level passes through as given, checked against the model in __init__.
+                # google-genai has no XHIGH member and would send an unknown level unchanged,
+                # so it goes out in the API's upper case
+                if isinstance(_level, str):
+                    _level = _level.upper()
                 extra["thinking_config"] = types.ThinkingConfig(
                     thinking_level=_level, include_thoughts=_include_thoughts
                 )

@@ -250,6 +250,19 @@ class TestRequestShaping:
         assert cfg.thinking_budget is None
         assert cfg.thinking_level == types.ThinkingLevel.HIGH
 
+    @pytest.mark.parametrize("level", ["xhigh", "XHIGH"])
+    async def test_xhigh_goes_out_upper_case_on_hydrogen(self, level: str) -> None:
+        extra = await _request_config(
+            _llm("gemini-4-hydrogen", thinking_config=types.ThinkingConfig(thinking_level=level))
+        )
+        cfg = extra["thinking_config"]
+        assert cfg.model_dump(mode="json", exclude_none=True) == {"thinking_level": "XHIGH"}
+
+    @pytest.mark.parametrize("model", [ARGON, "gemini-4-carbon", "gemini-3-pro-preview"])
+    def test_xhigh_is_rejected_where_unsupported(self, model: str) -> None:
+        with pytest.raises(ValueError, match="xhigh"):
+            _llm(model, thinking_config={"thinking_level": "xhigh"})
+
 
 def _tool_call_first_ctx() -> agents_llm.ChatContext:
     """An interrupted generate_reply() greeting: only its tool call survived."""
