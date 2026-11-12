@@ -1,5 +1,6 @@
 .PHONY: help install format format-check lint lint-fix fix type-check check unit-tests \
-        link-rtc link-rtc-local unlink-rtc status doctor build build-debug rust-check
+        bench-sentences link-rtc link-rtc-local unlink-rtc status doctor build build-debug \
+        rust-check
 
 ROOT := $(CURDIR)
 AGENTS_PROJECT := $(ROOT)/livekit-agents-next
@@ -58,6 +59,10 @@ check: format-check lint type-check ## Run all checks (format-check, lint, type-
 
 unit-tests: ## Run the unit and audio_eot test categories (no cloud accounts)
 	PYTHONPATH="$(ROOT)" uv run pytest --unit --audio_eot $(PYTEST_ARGS)
+
+bench-sentences: ## Time the sentence splitter's pushes on the experiment corpus and adversarial replies
+	cargo test --release --manifest-path rust/Cargo.toml -p lk-agents-runtime --test sentence_bench \
+		-- --ignored --nocapture --test-threads=1
 
 link-rtc: ## Link ../python-sdks/livekit-rtc with downloaded FFI artifacts
 	cd $(PYTHON_RTC) && python3 rust-sdks/download_ffi.py --platform $(FFI_OS) --arch $(FFI_ARCH) \

@@ -61,9 +61,10 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "m
 name = "tls"
 path = "src/tls_tests.rs"
 
+# The sentence splitter's speed, kept with the other benchmarks: `make bench-sentences`.
 [[test]]
-name = "sentence_speed"
-path = "src/sentence_speed_tests.rs"
+name = "sentence_bench"
+path = "../../../bench/sentences.rs"
 
 [features]
 media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]
