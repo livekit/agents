@@ -1,0 +1,19 @@
+livekit-agents/livekit/agents/inference/eot/detector.py
+  s_60305e40777026::t_52b7241e8a76a7 54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bd1e3e3746262c329e14f1f40254c17e6deef8dc",
+  "prompts": {},
+  "sessions": {
+    "s_60305e40777026": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_60305e40777026",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
