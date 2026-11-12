@@ -641,3 +641,19 @@ async def test_thread_job_writes_its_file_end_to_end(
     records, _ = _job_lines(path)
     hello = next(r for r in records if r["message"] == "hello")
     assert hello["job_id"] == info.job.id
+
+
+def test_a_retried_job_gets_a_new_file(hosted_env: Path) -> None:
+    hand_off()
+    jobs = hosted_env / "jobs"
+    stale = jobs / "job-AJ_1.log"
+    stale.write_text("earlier attempt\n")
+    (jobs / "job-AJ_1.export.done.log").write_text("older attempt\n")
+    old_inode = stale.stat().st_ino
+
+    out = _hosted_logs.thread_job_output("AJ_1", {}, redaction=False)
+    assert out is not None
+    assert sorted(p.name for p in jobs.iterdir()) == ["job-AJ_1.log"]
+    assert stale.read_text() == ""
+    assert stale.stat().st_ino != old_inode
+    out.close()

@@ -99,6 +99,15 @@ class JobOutput(Protocol):
     def close(self) -> None: ...
 
 
+def _new_job_file(jobs_dir: str, job_id: str) -> str:
+    """The path of a job's new file, after removing any file an earlier attempt left."""
+    for decision in ("", f".{_LogsDecision.EXPORT.value}", f".{_LogsDecision.PRIVATE.value}"):
+        for done in ("", ".done"):
+            with contextlib.suppress(OSError):
+                os.remove(os.path.join(jobs_dir, f"job-{job_id}{decision}{done}.log"))
+    return os.path.join(jobs_dir, f"job-{job_id}.log")
+
+
 def _dup_onto_std(path: str) -> bool:
     """Point fd 1 and fd 2 at ``path``; False if it can't be opened."""
     try:
@@ -223,7 +232,7 @@ def redirect_job_output(
     jobs_dir = _jobs_dir()
     if not _handed_off or jobs_dir is None:
         return None
-    path = os.path.join(jobs_dir, f"job-{job_id}.log")
+    path = _new_job_file(jobs_dir, job_id)
     root = logging.getLogger()
     if not _dup_onto_std(path):
         logger.warning(
@@ -349,7 +358,7 @@ def thread_job_output(job_id: str, fields: dict[str, Any], *, redaction: bool) -
     jobs_dir = _jobs_dir()
     if not _handed_off or jobs_dir is None:
         return None
-    path = os.path.join(jobs_dir, f"job-{job_id}.log")
+    path = _new_job_file(jobs_dir, job_id)
     try:
         stream = open(path, "a", encoding="utf-8")
     except OSError:
