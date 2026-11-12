@@ -205,6 +205,7 @@ Gender = Literal["male", "female", "neutral"]
 
 ChatModels = Literal[
     "gemini-4-argon",
+    "gemini-4-carbon",
     "gemini-3.8-flash",
     "gemini-3.5-flash",
     "gemini-3-pro-preview",
@@ -225,3 +226,6 @@ GeminiTTSModels = Literal[
     "gemini-2.5-flash-lite-preview-tts",
     "gemini-2.5-pro-tts",
 ]
+
+# Decisions API (POST /v1beta/decisions)
+DecisionModels = Literal["gemini-decision-1"]
