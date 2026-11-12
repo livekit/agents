@@ -5,6 +5,7 @@ import contextlib
 import time
 from typing import Any
 
+import numpy as np
 import pytest
 
 from livekit import rtc
@@ -423,6 +424,57 @@ async def test_tts_recover() -> None:
     await fallback_adapter.aclose()
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(("num_channels", "output_rate"), [(1, 48000), (2, 16000), (2, 48000)])
+async def test_resampling_preserves_channel_content(
+    streaming: bool, num_channels: int, output_rate: int
+) -> None:
+    input_rate = 16000
+    pcm = np.tile(np.array([1000, -2000][:num_channels], dtype=np.int16), input_rate // 5)
+    primary = FakeTTS(
+        sample_rate=output_rate,
+        num_channels=num_channels,
+        fake_exception=APIConnectionError("primary unavailable"),
+    )
+    secondary = FakeTTS(
+        sample_rate=input_rate,
+        num_channels=num_channels,
+        fake_audio_duration=0.2,
+        fake_audio_data=pcm.tobytes(),
+    )
+    adapter = FallbackAdapter([primary, secondary], sample_rate=output_rate, max_retry_per_tts=0)
+
+    async def collect_frames(tts_impl: TTS) -> list[rtc.AudioFrame]:
+        if streaming:
+            async with tts_impl.stream() as stream:
+                stream.push_text("hello test")
+                stream.end_input()
+                return [event.frame async for event in stream]
+        async with tts_impl.synthesize("hello test") as chunked:
+            return [event.frame async for event in chunked]
+
+    try:
+        expected_frames = await collect_frames(secondary)
+        if output_rate != input_rate:
+            reference = rtc.AudioResampler(
+                input_rate=input_rate, output_rate=output_rate, num_channels=num_channels
+            )
+            expected_frames = [
+                resampled for frame in expected_frames for resampled in reference.push(frame)
+            ] + reference.flush()
+        actual_frames = await collect_frames(adapter)
+        expected = np.frombuffer(
+            b"".join(frame.data.tobytes() for frame in expected_frames), dtype=np.int16
+        )
+        actual = np.frombuffer(
+            b"".join(frame.data.tobytes() for frame in actual_frames), dtype=np.int16
+        )
+        # Independent native resamplers can differ by two int16 quantization steps.
+        np.testing.assert_allclose(actual, expected, rtol=0, atol=2)
+    finally:
+        await adapter.aclose()
+
+
 async def test_audio_resampled() -> None:
     fake1 = FakeTTS(sample_rate=48000, fake_exception=APIConnectionError("fake1 failed"))
     fake2 = FakeTTS(fake_audio_duration=5.0, sample_rate=16000)
@@ -589,10 +641,7 @@ async def test_recovery_is_not_suppressed_across_paths() -> None:
 
 
 async def test_tts_recover_on_streamed_path() -> None:
-    # a provider marked unavailable is skipped on later streamed requests, so
-    # nothing has awaited by the time recovery is considered and the probe used
-    # to be dropped for want of text - leaving the process pinned to its
-    # fallback for good after one transient outage (#6678)
+    # a skipped provider must still get a recovery probe, or one outage pins the fallback for good
     fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
     fake2 = FakeTTS(fake_audio_duration=1.0)
 
