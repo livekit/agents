@@ -5,6 +5,9 @@ from livekit.agents.voice.transcription.text_transforms import _apply_text_trans
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
+# every streamed result must be the same whatever the chunk boundaries
+CHUNK_SIZES = (1, 2, 3, 5, 7, 11, 50, 1000)
+
 
 async def _stream_text(text: str, chunk_size: int):
     for i in range(0, len(text), chunk_size):
@@ -12,18 +15,15 @@ async def _stream_text(text: str, chunk_size: int):
 
 
 async def _collect(stream) -> str:
-    result = ""
-    async for chunk in stream:
-        result += chunk
-    return result
+    return "".join([chunk async for chunk in stream])
 
 
 async def _collect_chunks(stream) -> list[str]:
     return [chunk async for chunk in stream]
 
 
-async def _filtered(text: str, chunk_size: int) -> str:
-    return await _collect(filter_markdown(_stream_text(text, chunk_size)))
+async def _outputs(transform, text: str) -> set[str]:
+    return {await _collect(transform(_stream_text(text, size))) for size in CHUNK_SIZES}
 
 
 MARKDOWN_INPUT = """# Mathematics and Markdown Guide
@@ -130,10 +130,9 @@ Class names: MyClass_Name, some_module_function, API_ENDPOINT_URL
 This is a sentence. 这是一个中文句子。これは日本語の文章です。你好！LiveKit是一个直播音频和视频应用程序和服务的平台，我们正在测试Markdown。"""  # noqa: E501
 
 
-@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 11, 50])
-async def test_markdown_filter(chunk_size: int):
+async def test_markdown_filter():
     """Mixed markdown, math and prose survive the streaming filter intact."""
-    assert await _filtered(MARKDOWN_INPUT, chunk_size) == MARKDOWN_EXPECTED_OUTPUT.strip()
+    assert await _outputs(filter_markdown, MARKDOWN_INPUT) == {MARKDOWN_EXPECTED_OUTPUT.strip()}
 
 
 # --- emphasis that must be stripped ---
@@ -184,9 +183,8 @@ EMPHASIS_CASES = [
 
 
 @pytest.mark.parametrize("text,expected", EMPHASIS_CASES)
-@pytest.mark.parametrize("chunk_size", [1, 2, 3, 7, 50])
-async def test_emphasis_stripped(text: str, expected: str, chunk_size: int):
-    assert await _filtered(text, chunk_size) == expected
+async def test_emphasis_stripped(text: str, expected: str):
+    assert await _outputs(filter_markdown, text) == {expected}
 
 
 # --- text that must survive untouched ---
@@ -225,12 +223,6 @@ PRESERVE_CASES = [
 ]
 
 
-@pytest.mark.parametrize("text", PRESERVE_CASES)
-@pytest.mark.parametrize("chunk_size", [1, 3, 7, 50])
-async def test_non_markdown_preserved(text: str, chunk_size: int):
-    assert await _filtered(text, chunk_size) == text
-
-
 # --- delimiters that can never pair up must not hold the stream ---
 
 STRAY_DELIMITER_CASES = [
@@ -240,6 +232,11 @@ STRAY_DELIMITER_CASES = [
     "rates rose last year [1] and may rise again.",
     "see ]( broken formatting and please continue.",
 ]
+
+
+@pytest.mark.parametrize("text", PRESERVE_CASES + STRAY_DELIMITER_CASES)
+async def test_non_markdown_preserved(text: str):
+    assert await _outputs(filter_markdown, text) == {text}
 
 
 @pytest.mark.parametrize("text", STRAY_DELIMITER_CASES)
@@ -291,9 +288,8 @@ HORIZONTAL_RULE_CASES = [
 
 
 @pytest.mark.parametrize("text,expected", HORIZONTAL_RULE_CASES)
-@pytest.mark.parametrize("chunk_size", [1, 3, 50])
-async def test_horizontal_rule(text: str, expected: str, chunk_size: int):
-    assert await _filtered(text, chunk_size) == expected
+async def test_horizontal_rule(text: str, expected: str):
+    assert await _outputs(filter_markdown, text) == {expected}
 
 
 LINK_CASES = [
@@ -308,26 +304,8 @@ LINK_CASES = [
 
 
 @pytest.mark.parametrize("text,expected", LINK_CASES)
-@pytest.mark.parametrize("chunk_size", [1, 3, 7, 50])
-async def test_link_text_kept(text: str, expected: str, chunk_size: int):
-    assert await _filtered(text, chunk_size) == expected
-
-
-# --- streaming invariant ---
-
-
-@pytest.mark.parametrize(
-    "text",
-    [t for t, _ in EMPHASIS_CASES]
-    + PRESERVE_CASES
-    + STRAY_DELIMITER_CASES
-    + [t for t, _ in HORIZONTAL_RULE_CASES]
-    + [t for t, _ in LINK_CASES],
-)
-async def test_output_independent_of_chunking(text: str):
-    """Buffering must not change the result: every chunk size yields one output."""
-    outputs = {await _filtered(text, size) for size in (1, 2, 3, 5, 7, 11, 50, 1000)}
-    assert len(outputs) == 1, f"chunk-size dependent output: {outputs}"
+async def test_link_text_kept(text: str, expected: str):
+    assert await _outputs(filter_markdown, text) == {expected}
 
 
 # Emoji test data
@@ -380,36 +358,48 @@ The app works great. Let's celebrate!
 End of emoji test. """  # noqa: W291
 
 
-@pytest.mark.parametrize("chunk_size", [1, 5, 10, 30])
-async def test_emoji_filter(chunk_size: int):
-    result = await _collect(filter_emoji(_stream_text(EMOJI_INPUT, chunk_size)))
-    assert result == EMOJI_EXPECTED_OUTPUT
+async def test_emoji_filter():
+    assert await _outputs(filter_emoji, EMOJI_INPUT) == {EMOJI_EXPECTED_OUTPUT}
 
 
-# --- text_transforms.replace tests ---
+# --- text_transforms.replace ---
 
 
-@pytest.mark.parametrize("chunk_size", [1, 2, 5, 11, 50])
-async def test_replace_across_chunk_sizes(chunk_size: int):
-    """Test replacement with multiple keys, case insensitivity, and boundary spanning."""
-    transform = replace({"LiveKit": "Lyve Kit", "SQL": "sequel", "boundary": "EDGE"})
-    text = "LiveKit uses SQL. livekit boundary test."
-    result = await _collect(transform(_stream_text(text, chunk_size)))
-    assert result == "Lyve Kit uses sequel. Lyve Kit EDGE test."
+@pytest.mark.parametrize(
+    "replacements, text, expected",
+    [
+        # case-insensitive by default, several keys
+        (
+            {"LiveKit": "Lyve Kit", "SQL": "sequel", "boundary": "EDGE"},
+            "LiveKit uses SQL. livekit boundary test.",
+            "Lyve Kit uses sequel. Lyve Kit EDGE test.",
+        ),
+        ({"LiveKit": "Lyve Kit"}, "a LiveKit and livekit agent", "a Lyve Kit and Lyve Kit agent"),
+        ({"um": ""}, "um well um", " well "),
+        ({"ab": "cab"}, "xabc ab", "xcabc cab"),
+        # overlapping keys resolve to the longest match, not insertion order
+        ({"a": "X", "ab": "Y"}, "ab", "Y"),
+        # a replacement's output is never re-matched (single pass)
+        ({"a": "b", "b": "c"}, "a", "b"),
+        ({"hello": "hi", "hi there": "GT"}, "hello there, hello there", "hi there, hi there"),
+        # input right after a replacement is not swallowed by the held-back output
+        ({"ab": "a"}, "abb", "ab"),
+        ({"Texas": "Tex"}, "Texasas", "Texas"),
+    ],
+)
+async def test_replace(replacements: dict[str, str], text: str, expected: str):
+    assert await _outputs(replace(replacements), text) == {expected}
 
 
-@pytest.mark.parametrize("chunk_size", [1, 3, 7])
-async def test_replace_case_sensitive(chunk_size: int):
-    """Test case-sensitive mode only replaces exact matches."""
+async def test_replace_case_sensitive():
     transform = replace({"LiveKit": "Lyve Kit"}, case_sensitive=True)
-    result = await _collect(
-        transform(_stream_text("LiveKit is great. livekit should stay.", chunk_size))
-    )
-    assert result == "Lyve Kit is great. livekit should stay."
+    assert await _outputs(transform, "LiveKit is great. livekit should stay.") == {
+        "Lyve Kit is great. livekit should stay."
+    }
 
 
 async def test_replace_edge_cases():
-    """Test empty replacements, empty input, no matches, and regex special chars."""
+    """Empty maps, empty input, no matches and regex metacharacters pass through literally."""
     # empty replacements = passthrough
     text = "Hello world."
     assert await _collect(replace({})(_stream_text(text, 3))) == text
@@ -448,70 +438,8 @@ async def test_replace_holds_only_potential_prefix():
     assert "".join(chunks) == "visit Live"
 
 
-async def test_replace_prefers_longest_overlapping_key():
-    """Overlapping keys resolve to the longest match, not dict/insertion order.
-
-    The trailing run that can still grow into a longer key is held back, so the
-    longest match wins whether the key arrives in one chunk or split across chunks.
-    """
-    transform = replace({"a": "X", "ab": "Y"})
-    assert await _collect(transform(_stream_text("ab", 100))) == "Y"
-    assert await _collect(transform(_stream_text("ab", 1))) == "Y"
-
-
-async def test_replace_does_not_cascade():
-    """A replacement's output is not re-matched against other keys (single pass)."""
-    transform = replace({"a": "b", "b": "c"})
-    assert await _collect(transform(_stream_text("a", 100))) == "b"
-
-
-@pytest.mark.parametrize("chunk_size", [1, 2, 5, 100])
-async def test_replace_does_not_cascade_across_chunks(chunk_size: int):
-    """The single-pass guarantee also holds when the text arrives in chunks.
-
-    ``hello`` becomes ``hi``, the held-back ``hi`` joins the next chunk, and the
-    result is re-matched against the ``hi there`` key.
-    """
-    transform = replace({"hello": "hi", "hi there": "GT"})
-    text = "hello there"
-    assert await _collect(transform(_stream_text(text, chunk_size))) == "hi there"
-
-
-@pytest.mark.parametrize("chunk_size", [1, 2, 5, 100])
-async def test_replace_does_not_consume_input_after_a_held_replacement(chunk_size: int):
-    """Input right after a replacement is not swallowed by the held-back output."""
-    cases = [
-        ({"ab": "a"}, "abb", "ab"),
-        ({"Texas": "Tex"}, "Texasas", "Texas"),
-    ]
-    for replacements, text, expected in cases:
-        result = await _collect(replace(replacements)(_stream_text(text, chunk_size)))
-        assert result == expected
-
-
-@pytest.mark.parametrize("chunk_size", [1, 2, 3, 4, 7, 13, 100])
-@pytest.mark.parametrize(
-    "replacements, text",
-    [
-        ({"ab": "a"}, "abb"),
-        ({"Texas": "Tex"}, "Texasas"),
-        ({"hello": "hi", "hi there": "GT"}, "hello there, hello there"),
-        ({"LiveKit": "Lyve Kit"}, "a LiveKit and livekit agent"),
-        ({"um": ""}, "um well um"),
-        ({"a": "X", "ab": "Y"}, "ab"),
-        ({"SQL": "sequel", "LiveKit": "Lyve Kit"}, "uses SQL, LiveKit"),
-        ({"ab": "cab"}, "xabc ab"),
-    ],
-)
-async def test_replace_is_chunk_invariant(replacements: dict[str, str], text: str, chunk_size: int):
-    """Streamed output must not depend on where the chunk boundaries fall."""
-    expected = await _collect(replace(replacements)(_stream_text(text, len(text))))
-    result = await _collect(replace(replacements)(_stream_text(text, chunk_size)))
-    assert result == expected
-
-
 async def test_apply_text_transforms_with_callable():
-    """Test _apply_text_transforms with callable, mixed transforms, and invalid input."""
+    """Callables and builtin names chain in order; an unknown name raises."""
     # callable only
     result = await _collect(
         _apply_text_transforms(_stream_text("Hello world!", 3), [replace({"world": "planet"})])

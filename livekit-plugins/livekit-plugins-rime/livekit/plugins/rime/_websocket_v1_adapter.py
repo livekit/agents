@@ -27,6 +27,7 @@ from livekit.agents.utils import is_given
 from . import _websocket_v1
 from ._pool_manager import PoolManager
 from ._stream_tts import StreamTTS
+from .models import CustomLexiconEntry
 
 _Pool = utils.ConnectionPool[_websocket_v1.Connection]
 
@@ -47,6 +48,7 @@ class V1SynthesisOptions:
     time_scale_factor: NotGivenOr[float] = NOT_GIVEN
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
+    custom_lexicon: tuple[CustomLexiconEntry, ...] = ()
 
     def _to_protocol(self) -> _websocket_v1.SynthesisOptions:
         if not is_given(self.language):
@@ -69,6 +71,7 @@ class V1SynthesisOptions:
                 if is_given(self.phonemize_between_brackets)
                 else None
             ),
+            custom_lexicon=self.custom_lexicon,
         )
 
 

@@ -64,7 +64,7 @@ async def test_forced_tool_choice_sent_as_auto_only_for_rejecting_models() -> No
         "disable_parallel_tool_use": True,
     }
 
-    # Opus 5, Sonnet 5, Fable 5 and Haiku 5.5 still accept a forced choice.
+    # Opus 5, Sonnet 5, Fable 5 and Haiku 5.5 still accept a forced choice
     for model in ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-haiku-5-5"):
         assert await _tool_choice(model, "required") == {"type": "any"}
         assert await _tool_choice(model, _NAMED) == {"type": "tool", "name": "get_weather"}
@@ -91,14 +91,14 @@ async def _request(**kwargs: Any) -> dict[str, Any]:
 
 
 async def test_parallel_tool_calls_sent_without_tool_choice() -> None:
-    # Passed to chat()
+    # passed to chat()
     request = await _request(tools=[get_weather], parallel_tool_calls=False)
     assert request["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
 
     request = await _request(tools=[get_weather], parallel_tool_calls=True)
     assert request["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": False}
 
-    # Set on the LLM
+    # set on the LLM
     request = await _request(tools=[get_weather], llm_kwargs={"parallel_tool_calls": False})
     assert request["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
 
@@ -113,14 +113,14 @@ async def test_parallel_tool_calls_sent_without_tool_choice() -> None:
 
 async def test_tool_choice_unchanged_without_parallel_tool_calls() -> None:
     assert "tool_choice" not in await _request(tools=[get_weather])
-    # No tools: nothing to send, even with parallel_tool_calls set.
+    # no tools: nothing to send, even with parallel_tool_calls set
     request = await _request(parallel_tool_calls=False)
     assert "tool_choice" not in request and "tools" not in request
-    # An explicit "none" still drops the tools and sends no tool_choice.
+    # an explicit "none" still drops the tools and sends no tool_choice
     request = await _request(tools=[get_weather], tool_choice="none", parallel_tool_calls=False)
     assert "tool_choice" not in request
     assert request.get("tools", []) == []
-    # Explicit choices keep their type and still carry the flag.
+    # explicit choices keep their type and still carry the flag
     request = await _request(tools=[get_weather], tool_choice="required", parallel_tool_calls=False)
     assert request["tool_choice"] == {"type": "any", "disable_parallel_tool_use": True}
     request = await _request(tools=[get_weather], tool_choice=_NAMED, parallel_tool_calls=False)
@@ -129,3 +129,14 @@ async def test_tool_choice_unchanged_without_parallel_tool_calls() -> None:
         "name": "get_weather",
         "disable_parallel_tool_use": True,
     }
+
+
+async def test_user_sent_as_metadata_user_id() -> None:
+    for extra_kwargs in ({}, {"metadata": anthropic.omit}):
+        request = await _request(llm_kwargs={"user": "user-123"}, extra_kwargs=extra_kwargs)
+        assert request["metadata"] == {"user_id": "user-123"}
+
+    metadata = {"user_id": "caller", "trace_id": "abc"}
+    request = await _request(llm_kwargs={"user": "user-123"}, extra_kwargs={"metadata": metadata})
+    assert request["metadata"] == {"user_id": "user-123", "trace_id": "abc"}
+    assert metadata == {"user_id": "caller", "trace_id": "abc"}

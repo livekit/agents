@@ -269,6 +269,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                 self._backend._ensure_session().ws_connect(
                     self._backend._model_endpoint,
                     headers={"Authorization": f"Api-Key {self._backend._api_key}"},
+                    autoping=False,
                 ),
                 timeout=self._conn_options.timeout,
             )
@@ -325,8 +326,11 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
 
         async def _recv() -> None:
             speaking = False
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
@@ -354,6 +358,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                 segments = event.get("segments") or []
                 text = " ".join(s.get("text", "") for s in segments).strip()
                 is_final = bool(event.get("is_final"))
+                self._mark_provider_progress()
 
                 # Only real words open a turn. An empty final (VAD closed on
                 # noise, recognizer returned nothing) would otherwise emit
