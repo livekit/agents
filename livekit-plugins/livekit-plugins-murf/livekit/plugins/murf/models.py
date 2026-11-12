@@ -59,3 +59,30 @@ TTSEncoding = Literal[
 
 TTSDefaultVoiceId = "en-US-matthew"
 TTSDefaultVoiceStyle = "Conversation"
+
+STTModels = Literal["finch_indic_1.0", "finch_global_1.0"]
+
+STTLanguages = Literal[
+    "auto",
+    # finch_indic_1.0
+    "en_IN",
+    "as",
+    "bn",
+    "gu",
+    "hi",
+    "kn",
+    "ml",
+    "mr",
+    "or",
+    "pa",
+    "ta",
+    "te",
+    # finch_global_1.0
+    "en",
+    "de",
+    "es",
+    "fr",
+    "it",
+    "pt",
+    "nl",
+]
