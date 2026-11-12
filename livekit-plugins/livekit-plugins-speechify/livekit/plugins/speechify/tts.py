@@ -225,6 +225,15 @@ class TTS(tts.TTS):
         if not self._owns_client:
             return
 
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning(
+                "prewarm() needs a running event loop and was skipped; "
+                "call it from the job entrypoint"
+            )
+            return
+
         async def _prewarm() -> None:
             try:
                 await self._httpx_client.get(self._base_url.rstrip("/") + PREWARM_PATH)

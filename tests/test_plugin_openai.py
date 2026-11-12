@@ -434,3 +434,14 @@ async def test_tts_a_second_prewarm_does_not_replace_one_still_in_flight() -> No
     finally:
         release.set()
         await asyncio.gather(first, return_exceptions=True)
+
+
+def test_tts_prewarm_without_running_loop_warns_instead_of_raising(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tts = TTS(api_key="test")
+    with caplog.at_level("WARNING"):
+        tts.prewarm()
+
+    assert tts._prewarm_task is None
+    assert "needs a running event loop" in caplog.text

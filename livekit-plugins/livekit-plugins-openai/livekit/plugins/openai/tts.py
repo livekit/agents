@@ -33,6 +33,7 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import aio, is_given
 
+from .log import logger
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
 
@@ -236,6 +237,15 @@ class TTS(tts.TTS):
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def prewarm(self) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning(
+                "prewarm() needs a running event loop and was skipped; "
+                "call it from the job entrypoint"
+            )
+            return
+
         async def _prewarm() -> None:
             try:
                 await self._client.get("/", cast_to=str)
