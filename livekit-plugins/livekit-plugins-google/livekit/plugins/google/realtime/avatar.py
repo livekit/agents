@@ -112,7 +112,7 @@ class AvatarSession(_BaseAvatarSession[Any]):
             await utils.aio.cancel_and_wait(self._forward_atask)
             self._forward_atask = None
         if self._playout:
-            self._playout._cancel_finish()
+            self._playout._end_segment()
         if self._room and self._room.isconnected():
             for publication in self._publications:
                 await self._room.local_participant.unpublish_track(publication.sid)
@@ -277,13 +277,15 @@ class _AvatarPlayoutOutput(AudioOutput):
         super().on_detached()
         self._avatar._set_output_detached(True)
 
-    def _cancel_finish(self) -> None:
+    def _end_segment(self) -> None:
+        if self._started_at is not None:
+            position = min(time.time() - self._started_at, self._pushed_duration)
+            self._finish(position, True)
+
+    def _finish(self, position: float, interrupted: bool) -> None:
         if self._finish_handle:
             self._finish_handle.cancel()
             self._finish_handle = None
-
-    def _finish(self, position: float, interrupted: bool) -> None:
-        self._cancel_finish()
         self._started_at = None
         self._pushed_duration = 0.0
         self.on_playback_finished(playback_position=position, interrupted=interrupted)

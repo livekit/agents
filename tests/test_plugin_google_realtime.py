@@ -1556,6 +1556,31 @@ async def test_interrupted_reply_is_silenced_until_the_next_reply(
     assert isinstance(unmuted, rtc.AudioFrame) and bytes(unmuted.data) == bytes(speech.data)
 
 
+async def test_closing_the_avatar_finishes_the_playing_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    model = RealtimeModel(avatar_config=types.AvatarConfig(avatar_name="Kira"))
+    avatar = AvatarSession(model)
+    output = _AvatarPlayoutOutput(avatar)
+    avatar._playout = output
+    finished: list[PlaybackFinishedEvent] = []
+    output.on("playback_finished", finished.append)
+    speech = rtc.AudioFrame(
+        data=b"\x10\x00" * 24000,
+        sample_rate=_SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=24000,
+    )
+
+    await output.capture_frame(speech)
+    output.flush()
+    await avatar.aclose()
+
+    assert len(finished) == 1 and finished[0].interrupted
+    await output.wait_for_playout()
+
+
 async def test_avatar_is_silent_while_the_session_audio_output_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
