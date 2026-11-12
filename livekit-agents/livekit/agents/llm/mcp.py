@@ -65,6 +65,10 @@ class MCPToolOptions(TypedDict, total=False):
     report_progress: bool
     """Whether to forward the tool's progress notifications to ctx.update()."""
 
+    timeout: float | None
+    """Seconds to wait for the tool's result before the call fails.
+    ``None`` uses the server's ``client_session_timeout_seconds``."""
+
 
 # default for tools not listed in tool_options
 _DEFAULT_TOOL_OPTIONS: MCPToolOptions = {
@@ -72,6 +76,7 @@ _DEFAULT_TOOL_OPTIONS: MCPToolOptions = {
     "on_duplicate": "allow",
     "duplicate_scope": "name",
     "report_progress": False,
+    "timeout": None,
 }
 
 
@@ -272,7 +277,10 @@ class MCPServer(ABC):
                     await ctx.update(message)
 
                 tool_result = await self._call_tool(
-                    name, raw_arguments, progress_callback=_on_progress
+                    name,
+                    raw_arguments,
+                    timeout=options["timeout"],
+                    progress_callback=_on_progress,
                 )
                 return await _resolve(tool_result, raw_arguments)
 
@@ -287,7 +295,7 @@ class MCPServer(ABC):
                         "Please check that the MCPServer is still running."
                     )
 
-                tool_result = await self._call_tool(name, raw_arguments)
+                tool_result = await self._call_tool(name, raw_arguments, timeout=options["timeout"])
                 return await _resolve(tool_result, raw_arguments)
 
             impl = _tool_called
@@ -313,6 +321,7 @@ class MCPServer(ABC):
         name: str,
         arguments: dict[str, Any],
         *,
+        timeout: float | None = None,
         progress_callback: ProgressFnT | None = None,
     ) -> mcp.types.CallToolResult:
         """Call a tool.
@@ -320,11 +329,16 @@ class MCPServer(ABC):
         Cancelling the task awaiting ``call_tool`` is enough: MCP SDK 2 sends
         ``notifications/cancelled`` for that request itself. v1 did not, and the
         private ``ClientSession._request_id`` used to synthesize the notification
-        is gone.
+        is gone. A ``timeout`` that elapses sends the same notification.
         """
         client = self._client
         assert client is not None
-        result = await client.call_tool(name, arguments, progress_callback=progress_callback)
+        result = await client.call_tool(
+            name,
+            arguments,
+            read_timeout_seconds=timeout,
+            progress_callback=progress_callback,
+        )
         if not isinstance(result, mcp.types.CallToolResult):
             raise ToolError(
                 f"Tool '{name}' returned an unexpected MCP result ({type(result).__name__})."
@@ -549,10 +563,13 @@ class MCPToolset(AsyncToolset):
 
         MCPToolset(
             id="mcp",
-            mcp_server=MCPServerHTTP(url="...", client_session_timeout_seconds=120),
+            mcp_server=MCPServerHTTP(url="...", client_session_timeout_seconds=10),
             tool_options={
                 "book_flight": MCPToolOptions(
-                    flags=ToolFlag.CANCELLABLE, on_duplicate="confirm", report_progress=True
+                    flags=ToolFlag.CANCELLABLE,
+                    on_duplicate="confirm",
+                    report_progress=True,
+                    timeout=120,
                 ),
             },
         )
