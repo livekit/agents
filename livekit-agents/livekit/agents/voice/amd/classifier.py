@@ -392,6 +392,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         held = self._verdict_result
         if held is not None and held.category != AMDCategory.MACHINE_UNAVAILABLE:
             self._verdict_result = None
+        # settle() keeps the end-of-turn gate shut after speech under wait_until_finished
         self._eot_reached = True
         self.settle(AMDCategory.UNCERTAIN, reason="participant_disconnected")
 

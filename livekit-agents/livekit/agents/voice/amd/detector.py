@@ -350,7 +350,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         if self._room is not None:
             self._room.off("participant_disconnected", self._on_participant_disconnected)
             self._room = None
-        self._publisher_identity = None
 
         if self._classifier:
             self._classifier.off("amd_prediction", self._on_amd_prediction)
@@ -475,8 +474,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         """Settle a pending verdict when the publisher leaves.
 
-        Session teardown would otherwise close AMD with no result, and ``execute()``
-        would raise.
+        Runs synchronously in the room event, so ``execute()`` has a result before
+        session teardown closes AMD.
         """
         if participant.identity != self._publisher_identity:
             return
@@ -489,7 +488,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._classifier.on_participant_disconnected()
 
     def _settle_participant_missing(self, error: str) -> None:
-        if self._closed or not self._classifier:
+        if self._closed or not self._classifier or self._result is not None:
             return
         logger.debug(
             "AMD: call ended before detection could run, settling",
