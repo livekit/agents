@@ -62,6 +62,7 @@ from ..llm.tool_context import (
     TASK_KEY,
     AskedQuestion,
     Completed,
+    DelegateQuestion,
     Failed,
     InputRequired,
     ModelRetry,
@@ -743,15 +744,19 @@ class AgentRun(Generic[Run_T]):
         async def ask(
             question: InputRequired,
             call: FunctionCall | None,
-            answer_to: Sequence[tuple[str, str]] | None = None,
+            answer_to: Sequence[DelegateQuestion] | None = None,
         ) -> RunResult[Run_T]:
             """The task pauses on ``question`` from ``call``: as written when it is verbatim or
             another agent asked, else in the agent's own words. ``answer_to`` are the delegates'
-            questions it holds, each ``(tool, expert task)``, by default ``call``'s."""
+            questions it holds, by default ``call``'s."""
             result._pending_call = call
             if answer_to is None:
                 ref = question._answer_ref
-                answer_to = [(call.name, ref)] if ref and call is not None else []
+                answer_to = (
+                    [DelegateQuestion(call.name, ref, question.question)]
+                    if ref and call is not None
+                    else []
+                )
             result._answer_to = list(answer_to)
             if (
                 hooks is not None
@@ -1047,7 +1052,11 @@ class AgentRun(Generic[Run_T]):
                     "\n\n".join(dict.fromkeys(q.question for _, q in questions)),
                     verbatim=all(q.verbatim for _, q in questions),
                 )
-                return await ask(question, call, [(c.name, str(q._answer_ref)) for c, q in takers])
+                # each expert's own question, not the joined text, is what its answer is judged by
+                answered = [
+                    DelegateQuestion(c.name, str(q._answer_ref), q.question) for c, q in takers
+                ]
+                return await ask(question, call, answered)
             if held and (stopped or not replies):
                 # the one place the step's exact results become one text
                 return finish("\n\n".join(held), verbatim=True)

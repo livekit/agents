@@ -1,0 +1,6 @@
+name = "Getaway"
+agent = "getaway"
+endpoint = "frontend"
+description = "A travel concierge with a flight desk, a hotel desk and a payments desk behind it."
+voice = true
+start = "GETAWAY_NOW=2026-06-12 uv run python main.py dev"

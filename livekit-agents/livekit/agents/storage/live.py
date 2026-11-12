@@ -35,6 +35,7 @@ from .._generated.storage import (
 )
 from .._generated.storage_run import TaskRecord
 from ..llm import ChatContext, ChatItem, FunctionCallOutput
+from ..llm.tool_context import DelegateQuestion
 from ..log import logger
 from .agentdb import AgentDBStorage
 from .protocol import StorageError, dump_state, history_of, item_to_payload, load_state
@@ -74,8 +75,8 @@ class LaneQuestion(BaseModel):
     verbatim: bool = False
     call_id: str = ""
     tool: str = ""
-    answer_to: list[tuple[str, str]] = []
-    """The delegates' questions it holds, each ``(tool, the expert task the answer continues)``."""
+    answer_to: list[DelegateQuestion] = []
+    """The delegates' questions it holds."""
     passed: bool = False
     """The person wrote after it was shown: it is no longer in front of them."""
 
@@ -611,9 +612,9 @@ def _closed(row: TaskRow, refs: set[str | None]) -> TaskWrite:
     the delegates' questions of it not in ``refs``."""
     ask = row.internal.get("ask") if isinstance(row.internal, dict) else None
     left = [
-        pair
-        for pair in (ask or {}).get("answer_to", [])
-        if pair[1] not in refs and None not in refs
+        held
+        for held in (ask or {}).get("answer_to", [])
+        if DelegateQuestion(*held).task_id not in refs and None not in refs
     ]
     return TaskWrite(
         task_id=row.task_id,
@@ -634,7 +635,8 @@ def _left_open(question: OpenQuestion, task_id: str) -> TaskWrite:
         ask["tool"] = question.output.name
         ask["call_id"] = question.output.call_id
         if question.answer_ref is not None:
-            ask["answer_to"] = [[question.output.name, question.answer_ref]]
+            held = DelegateQuestion(question.output.name, question.answer_ref, question.question)
+            ask["answer_to"] = [list(held)]
     if question.verbatim:
         ask["verbatim"] = True
     return TaskWrite(

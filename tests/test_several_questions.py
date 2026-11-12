@@ -15,11 +15,13 @@ import pytest
 from livekit.agents import Agent, AgentServer, InputRequired, RunContext
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.a2a.extension import MERGED_INTO
-from livekit.agents.delegation import A2ADelegate
+from livekit.agents.delegation import A2ADelegate, InputRequiredCheck
+from livekit.agents.llm.tool_context import AskedQuestion
 from livekit.agents.storage import AgentDBStorage
 
 from .a2a_driver import (
     Door,
+    Judge,
     Reply,
     ScriptedLLM,
     Sent,
@@ -28,7 +30,16 @@ from .a2a_driver import (
     output_of,
 )
 from .test_a2a_delegation import _Dropping
-from .test_live_inbox import BOOK_MONDAY, NO_INTERRUPT, bookings, listed, metadata_of, said, until
+from .test_live_inbox import (
+    BOOK_MONDAY,
+    NO_INTERRUPT,
+    bookings,
+    listed,
+    metadata_of,
+    said,
+    told,
+    until,
+)
 
 pytestmark = [pytest.mark.unit]
 
@@ -214,6 +225,113 @@ async def test_one_answer_goes_to_each_expert_that_asked_in_one_step(
 
     assert answered.answer == "Both are booked."
     assert fares_saw[-1] == "friday" and seats_saw[-1] == "friday"
+
+
+@pytest.mark.rule("R8", "R36")
+async def test_a_task_whose_question_is_answered_waits_for_its_other_work(
+    door: Callable[..., Door], expert: Callable[..., A2ADelegate]
+) -> None:
+    fares = expert(asking_expert("Which date?", "Fare booked.", []), "fares", tool="fares")
+    release = asyncio.Event()
+    front = Agent(
+        instructions="front desk",
+        tools=[fares],
+        llm=ScriptedLLM(
+            Reply(
+                tool_calls=[call("fares", "f1", request="a fare"), call("hotel", "h1")],
+                when=said("plan my trip"),
+            ),
+            Reply(tool_calls=[call("fares", "f2", request="friday")], when=said("friday")),
+            Reply("Your fare is booked.", when=told("f2")),
+            Reply("Your hotel is booked.", when=told("h1_final")),
+        ),
+    )
+
+    @front.tool
+    async def hotel(ctx: RunContext) -> str:
+        """Book the hotel."""
+        await ctx.update("booking the hotel")
+        await release.wait()
+        return "hotel booked"
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        return await front.run(ctx.message, message_history=ctx.message_history)
+
+    desk = door(handler, inbox="live")
+    thread = await desk.thread()
+    asked = await asyncio.wait_for(desk.send("plan my trip", context_id=thread), 20)
+    assert asked.state == "input_required"
+    answered = await asyncio.wait_for(desk.send("friday", context_id=thread), 20)
+    assert answered.answer == "Your fare is booked."
+
+    # its question answered, the first task still waits on the hotel, and the hotel's end
+    # answers it
+    first = await desk.get_task(asked.task["id"], thread)
+    assert first["status"]["state"] == "TASK_STATE_WORKING"
+    release.set()
+
+    async def hotel_told() -> dict[str, Any] | None:
+        task = await desk.get_task(asked.task["id"], thread)
+        return task if task["status"]["state"] == "TASK_STATE_COMPLETED" else None
+
+    done = await until(hotel_told, "the hotel's end answered the first task")
+    assert done["artifacts"][0]["parts"][0]["text"] == "Your hotel is booked."
+
+
+@pytest.mark.rule("R47")
+async def test_questions_asked_in_one_step_are_each_judged_as_their_own(
+    door: Callable[..., Door], expert: Callable[..., A2ADelegate]
+) -> None:
+    judged: dict[str, list[str]] = {}
+
+    def detector(tool: str) -> Any:
+        async def judge(check: InputRequiredCheck) -> AskedQuestion:
+            judged[tool] = [q.question for q in check.questions]
+            return check.questions[0]
+
+        return Judge(judge)
+
+    fares = expert(
+        asking_expert("Which date?", "Fare booked.", []), "fares", tool="fares",
+        answer_detector=detector("fares"),
+    )  # fmt: skip
+    seats = expert(
+        asking_expert("Which seat?", "Seat booked.", []), "seats", tool="seats",
+        answer_detector=detector("seats"),
+    )  # fmt: skip
+    front = Agent(
+        instructions="front desk",
+        tools=[fares, seats],
+        llm=ScriptedLLM(
+            Reply(
+                tool_calls=[
+                    call("fares", "f1", request="a fare"),
+                    call("seats", "s1", request="a seat"),
+                ],
+                when=said("plan my trip"),
+            ),
+            Reply(
+                tool_calls=[
+                    call("fares", "f2", request="friday"),
+                    call("seats", "s2", request="aisle"),
+                ],
+                when=said("friday, aisle"),
+            ),
+            Reply("Both are booked."),
+        ),
+    )
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        return await front.run(ctx.message, message_history=ctx.message_history)
+
+    desk = door(handler, inbox="live")
+    thread = await desk.thread()
+    asked = await asyncio.wait_for(desk.send("plan my trip", context_id=thread), 20)
+    # the person sees both questions as one
+    assert asked.status_text == "Which date?\n\nWhich seat?"
+    await asyncio.wait_for(desk.send("friday, aisle", context_id=thread), 20)
+
+    assert judged == {"fares": ["Which date?"], "seats": ["Which seat?"]}
 
 
 # ---------------------------------------------------------------------------------------------

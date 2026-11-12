@@ -139,6 +139,7 @@ from .turn import (
 
 if TYPE_CHECKING:
     from .._generated.storage import TaskRow
+    from ..delegation import InputRequiredDetector
     from ..llm import mcp
     from .agent_run import AgentRun
     from .agent_session import ExpressiveOptions, LiveSession
@@ -519,6 +520,8 @@ class AgentActivity(RecognitionHooks):
         )
         self._interruption_detection_enabled: bool = self._interruption_detector is not None
         self._interruption_detected: bool = False
+        # the delegates' answer detectors whose usage this activity reports
+        self._answer_detectors: list[InputRequiredDetector] = []
 
         # this allows taking over audio interruption temporarily until interruption is detected
         # by default it is true unless turn_detection is manual or realtime_llm
@@ -573,9 +576,11 @@ class AgentActivity(RecognitionHooks):
                 call_id=asked.call_id, name=asked.tool, output=asked.question, is_error=False
             )
             # one question per delegate that asked it: each one's answer closes its own
-            refs: list[tuple[str, str | None]] = [*asked.answer_to] or [(asked.tool, None)]
-            for tool, ref in refs:
-                question = InputRequired(asked.question, verbatim=asked.verbatim, _answer_ref=ref)
+            refs: list[tuple[str, str | None, str]] = [*asked.answer_to] or [
+                (asked.tool, None, asked.question)
+            ]
+            for tool, ref, own in refs:
+                question = InputRequired(own, verbatim=asked.verbatim, _answer_ref=ref)
                 self._questions.append(
                     _Question(
                         question,
@@ -1413,6 +1418,17 @@ class AgentActivity(RecognitionHooks):
         # keyterm detection runs its own LLM, surface its usage
         self._session._keyterm_detector.on("metrics_collected", self._on_metrics_collected)
 
+        # so does a delegate's answer detector, which its calls run
+        from ..delegation import A2ADelegate
+
+        self._answer_detectors = [
+            detector
+            for tool in self.tools
+            if isinstance(tool, A2ADelegate) and (detector := tool.answer_detector) is not None
+        ]
+        for detector in self._answer_detectors:
+            detector.on("metrics_collected", self._on_metrics_collected)
+
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
             if rt_reused:
@@ -1798,6 +1814,9 @@ class AgentActivity(RecognitionHooks):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
 
         self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
+        for detector in self._answer_detectors:
+            detector.off("metrics_collected", self._on_metrics_collected)
+        self._answer_detectors = []
 
         if self._rt_session is not None:
             await self._rt_session.aclose()

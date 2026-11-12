@@ -114,10 +114,10 @@ pub struct PendingCall {
     pub name: String,
     pub call_id: String,
     /// The delegates' questions the ask holds, each `(tool, the expert task the answer
-    /// continues)`: a later call of the tool may answer one.
+    /// continues, its own question)`: a later call of the tool may answer one.
     #[serde(default)]
     #[python(default_factory = "list")]
-    pub answer_to: Vec<(String, String)>,
+    pub answer_to: Vec<(String, String, String)>,
 }
 
 /// A journal event the handler recorded (docs/journal.md): `tool_execution_updated` for a

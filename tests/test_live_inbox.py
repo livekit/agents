@@ -494,6 +494,33 @@ async def test_a_tool_that_reports_progress_runs_on_beside_the_next_message(
     assert (await desk.send("what did I book?")).answer == "booked: monday"
 
 
+@pytest.mark.rule("R8", "R28")
+async def test_work_a_delivered_result_starts_keeps_its_task_waiting(
+    door: Callable[..., Door],
+) -> None:
+    desk = await bookings(
+        door,
+        *BOOK_MONDAY,
+        Reply(tool_calls=[call("book", "b2", day="tuesday")], when=told("b1_final")),
+        Reply("Both booked.", when=told("b2_final")),
+        days=("monday", "tuesday"),
+    )
+    first = desk.send("book monday")
+    await desk.in_the_background()
+    desk.release["monday"].set()
+
+    async def tuesday_started() -> bool:
+        return any("b2" in str(r.items) for r in desk.model.requests)
+
+    # the reply to monday's end books tuesday in the background: the task waits for it too
+    await until(tuesday_started, "tuesday's booking started")
+    await asyncio.sleep(0.5)
+    assert not first.done()
+    desk.release["tuesday"].set()
+    booked = await asyncio.wait_for(first, 20)
+    assert booked.state == "completed" and booked.answer == "Both booked."
+
+
 @pytest.mark.rule("R8", "R28", "R55")
 async def test_later_progress_is_sent_as_it_is_and_the_model_reads_it_with_the_end(
     door: Callable[..., Door],

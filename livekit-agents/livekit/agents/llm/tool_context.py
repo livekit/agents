@@ -32,6 +32,7 @@ from typing import (
     Any,
     Generic,
     Literal,
+    NamedTuple,
     TypeGuard,
     TypeVar,
     get_type_hints,
@@ -46,7 +47,7 @@ from . import _provider_format
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
-    from .chat_context import ChatContext
+    from .chat_context import ChatContext, FunctionCall
 
 
 class Tool(ABC):
@@ -242,6 +243,16 @@ class InputRequired:
     _answer_ref: str | None = None
 
 
+class DelegateQuestion(NamedTuple):
+    """A delegate's question that a task waiting on the person holds."""
+
+    tool: str
+    task_id: str
+    """The expert task the answer continues."""
+    question: str
+    """The expert's own question, which its answer is judged by."""
+
+
 @dataclass(frozen=True, eq=False)
 class AskedQuestion:
     """A delegate's question the person was asked and may have answered since: the tool's next
@@ -355,9 +366,10 @@ _CONFIRM_DUPLICATE_DESCRIPTION = (
 
 @dataclass
 class _ApprovalScope:
-    """Set by the executor around one call of a tool that requires approval: whether it may
-    run, and whether it asked for approval instead."""
+    """Set by the executor around one call of a tool that requires approval: the read-back the
+    person answered, and whether the call ran on it or asked for approval instead."""
 
+    answered: str | None
     granted: bool
     asked: bool = False
 
@@ -481,21 +493,35 @@ RELAY_ANSWER = "\n\nWhen they answer it, call {name} with their answer."
 only when the model sends it."""
 
 
-def approval_granted(items: Sequence[Any], call: Any) -> bool:
-    """Whether ``call`` repeats, with the same arguments, the latest answered read-back of its
-    tool in its task, and no earlier repeat used that answer. A call that asked something else,
-    such as a missing detail, is not a read-back."""
-    from .chat_context import FunctionCall
+class AnsweredReadBack(NamedTuple):
+    """A read-back the person answered: the call that asked, and what it asked."""
 
-    def key(c: FunctionCall) -> str:
-        try:
-            return json.dumps(json.loads(c.arguments or "{}"), sort_keys=True)
-        except ValueError:
-            return c.arguments or ""
+    call: FunctionCall
+    question: str
+
+
+def _arguments(call: FunctionCall) -> str:
+    """A call's arguments as canonical JSON, for comparing two calls."""
+    try:
+        return json.dumps(json.loads(call.arguments or "{}"), sort_keys=True)
+    except ValueError:
+        return call.arguments or ""
+
+
+def answered_read_back(items: Sequence[Any], call: Any) -> AnsweredReadBack | None:
+    """The latest read-back of ``call``'s tool in its task that the person answered and no
+    repeat ran on yet. A call that asked something else, such as a missing detail, is not a
+    read-back."""
+    from .chat_context import FunctionCall, FunctionCallOutput
 
     answered = _read_back_answers(items)
+    questions = {
+        item.call_id: item.output.removeprefix(WAITING_PREFIX)
+        for item in items
+        if isinstance(item, FunctionCallOutput)
+    }
     task = call.extra.get(TASK_KEY)
-    asked: str | None = None  # the arguments of the latest answered, unused read-back
+    read_back: AnsweredReadBack | None = None
     for item in items:
         if not isinstance(item, FunctionCall) or item.name != call.name:
             continue
@@ -504,18 +530,27 @@ def approval_granted(items: Sequence[Any], call: Any) -> bool:
         if item.call_id == call.call_id:
             break
         mark = item.extra.get(APPROVAL_KEY)
-        if mark == "granted" and key(item) == asked:
-            asked = None  # this repeat ran on the answer
+        if mark == "granted":
+            read_back = None  # this repeat ran on the answer
         elif mark == "asked":
-            asked = key(item) if item.call_id in answered else None
-    return asked is not None and key(call) == asked
+            question = questions.get(item.call_id)
+            read_back = (
+                AnsweredReadBack(item, question)
+                if item.call_id in answered and question is not None
+                else None
+            )
+    return read_back
 
 
 @contextmanager
-def approval_scope(call: Any, granted: bool) -> Iterator[None]:
-    """Around one call of a tool that requires approval: whether it is the approved repeat of
-    a read-back the person answered. Marks the call, for the next one to read."""
-    scope = _ApprovalScope(granted=granted)
+def approval_scope(call: Any, answered: AnsweredReadBack | None) -> Iterator[None]:
+    """Around one call of a tool that requires approval: the read-back the person answered,
+    which the call runs on when it repeats its arguments or reads back the same. Marks the call,
+    for the next one to read."""
+    scope = _ApprovalScope(
+        answered=answered.question if answered is not None else None,
+        granted=answered is not None and _arguments(call) == _arguments(answered.call),
+    )
     token = _approval_scope.set(scope)
     try:
         yield
@@ -784,9 +819,12 @@ def _wrap_with_approval(
                     if shown
                     else f"Please confirm: {plain}. Yes or no?"
                 )
-            if scope is not None:
-                scope.asked = True
-            return InputRequired(str(question), verbatim=True)
+            # the person approved what they read: other arguments that read back the same run
+            if scope is None or scope.answered != str(question):
+                if scope is not None:
+                    scope.asked = True
+                return InputRequired(str(question), verbatim=True)
+            scope.granted = True
         result = func(*args, **kwargs)
         if asyncio.iscoroutine(result):
             return await result

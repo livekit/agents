@@ -15,7 +15,7 @@ import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, NamedTuple, TypeVar
 
 from a2a.server.jsonrpc_models import (
     InvalidRequestError as RpcInvalidRequestError,
@@ -69,7 +69,7 @@ from .extension import (
     pb,
     to_json,
 )
-from .pump import ResponsePump, WireHost, start, tail
+from .pump import Frame, ResponsePump, WireHost, start, tail
 
 if TYPE_CHECKING:
     from .endpoint import A2AEndpoint
@@ -78,6 +78,14 @@ S = TypeVar("S")
 
 JsonRpc = dict[str, JsonValue]
 """One JSON-RPC envelope, as the a2a-sdk's response helpers build it."""
+
+
+class RpcResponse(NamedTuple):
+    """One JSON-RPC response, and for a frame of a task's stream its position, the SSE ``id``."""
+
+    body: JsonRpc
+    position: int | None = None
+
 
 Params = Mapping[str, JsonValue]
 
@@ -115,7 +123,8 @@ class CallContext:
     principal: Principal = field(default_factory=lambda: ANONYMOUS)
     extensions: Extensions = field(default_factory=Extensions)
     resume_offset: str | None = None
-    """``Last-Event-ID`` or ``params.offset``: where ``tasks/resubscribe`` resumes from."""
+    """``Last-Event-ID`` or ``params.offset``: how many frames of the task's stream the client
+    has, which ``tasks/resubscribe`` resumes after."""
 
 
 @dataclass
@@ -171,75 +180,89 @@ class A2AService(Generic[S]):
 
     # -- dispatch --
 
-    async def dispatch(self, request: JsonValue, call: CallContext) -> AsyncIterator[JsonRpc]:
+    async def dispatch(self, request: JsonValue, call: CallContext) -> AsyncIterator[RpcResponse]:
         """One JSON-RPC request to its responses; errors become error responses, auth failures
         raise ``AuthError`` for the binding to answer in its own terms."""
         request_id = request.get("id") if isinstance(request, Mapping) else None
         if not isinstance(request_id, (str, int)):
             request_id = None
         if not isinstance(request, Mapping) or request.get("jsonrpc") != "2.0":
-            yield build_error_response(
-                request_id, RpcInvalidRequestError(message="'jsonrpc' must be exactly '2.0'")
+            yield RpcResponse(
+                build_error_response(
+                    request_id, RpcInvalidRequestError(message="'jsonrpc' must be exactly '2.0'")
+                )
             )
             return
 
         name = METHODS.get(str(request.get("method") or ""))
         if name is None:
-            yield build_error_response(request_id, RpcMethodNotFoundError())
+            yield RpcResponse(build_error_response(request_id, RpcMethodNotFoundError()))
             return
 
         params = request.get("params") or {}
         if not isinstance(params, Mapping):
-            yield build_error_response(
-                request_id, InvalidParamsError(message="params must be an object")
+            yield RpcResponse(
+                build_error_response(
+                    request_id, InvalidParamsError(message="params must be an object")
+                )
             )
             return
 
         try:
-            async for result in self._results(name, params, call):
-                yield {"jsonrpc": "2.0", "id": request_id, "result": result}
+            async for result, position in self._results(name, params, call):
+                yield RpcResponse({"jsonrpc": "2.0", "id": request_id, "result": result}, position)
         except AuthError:
             raise
         except A2AError as e:
-            yield build_error_response(request_id, e)
+            yield RpcResponse(build_error_response(request_id, e))
         except RunRejected as e:
             # plan 5.12: the reject policy refused the message, naming the running task
             running = e.running_task_id
-            yield build_error_response(
-                request_id,
-                UnsupportedOperationError(
-                    message="a turn of this lane is running; cancel it first",
-                    data={"runningTaskId": running} if running else None,
-                ),
+            yield RpcResponse(
+                build_error_response(
+                    request_id,
+                    UnsupportedOperationError(
+                        message="a turn of this lane is running; cancel it first",
+                        data={"runningTaskId": running} if running else None,
+                    ),
+                )
             )
         except StorageError as e:
             logger.warning(
                 "an agent-store error ended an A2A request",
                 extra={"endpoint": self._endpoint.name, "error": str(e)},
             )
-            yield build_error_response(request_id, InternalError(message=REQUEST_FAILED))
+            yield RpcResponse(
+                build_error_response(request_id, InternalError(message=REQUEST_FAILED))
+            )
         except Exception:
             logger.exception("an A2A request failed", extra={"endpoint": self._endpoint.name})
-            yield build_error_response(request_id, InternalError(message=REQUEST_FAILED))
+            yield RpcResponse(
+                build_error_response(request_id, InternalError(message=REQUEST_FAILED))
+            )
 
     async def _results(
         self, name: str, params: Params, call: CallContext
-    ) -> AsyncIterator[JsonValue]:
-        """The method's results as JSON: one for a unary method, every frame of a stream."""
-        if name == "stream":
-            async for event in self.stream(params, call):
-                yield to_json(to_stream_response(event))
-        elif name == "resubscribe":
-            async for frame in self.resubscribe(params, call):
-                yield to_json(to_stream_response(frame))
+    ) -> AsyncIterator[tuple[JsonValue, int | None]]:
+        """The method's results as JSON: one for a unary method, every frame of a stream, each
+        with its position in the task's stream when it has one."""
+        if name in STREAMING:
+            frames = (
+                self.stream(params, call) if name == "stream" else self.resubscribe(params, call)
+            )
+            async for frame in frames:
+                if isinstance(frame, Frame):
+                    yield to_json(to_stream_response(frame.event)), frame.position
+                else:
+                    yield to_json(to_stream_response(frame)), None
         elif name == "send":
-            yield to_json(await self.send(params, call))
+            yield to_json(await self.send(params, call)), None
         elif name == "get":
-            yield to_json(await self.get_task(params, call))
+            yield to_json(await self.get_task(params, call)), None
         elif name == "list":
-            yield to_json(await self.list_tasks(params, call))
+            yield to_json(await self.list_tasks(params, call)), None
         else:
-            yield to_json(await self.cancel_task(params, call))
+            yield to_json(await self.cancel_task(params, call)), None
 
     # -- message/send and message/stream --
 
@@ -281,7 +304,7 @@ class A2AService(Generic[S]):
 
     async def stream(
         self, params: Params, call: CallContext
-    ) -> AsyncIterator[StreamEvent | pb.StreamResponse]:
+    ) -> AsyncIterator[StreamEvent | pb.StreamResponse | Frame]:
         """``message/stream``: the acknowledgment, progress, the artifact, the final status."""
         message = _message_of(params)
         received = time.monotonic()
@@ -373,7 +396,7 @@ class A2AService(Generic[S]):
             opening.add_done_callback(close)
             raise
         own_id: str | None = created.stream_id
-        continued_from: asyncio.Future[str | None] | None = None
+        continued_from: asyncio.Future[tuple[str | None, int]] | None = None
         if continued:
             # the task answers on its own stream, which stayed open while it waited
             self._streams.appendleft(stream)
@@ -575,9 +598,9 @@ class A2AService(Generic[S]):
 
     async def resubscribe(
         self, params: Params, call: CallContext
-    ) -> AsyncIterator[StreamEvent | pb.StreamResponse]:
-        """``tasks/resubscribe``: the current ``Task`` object, then the stream's frames from the
-        offset, following live until the terminal one (plan 6)."""
+    ) -> AsyncIterator[StreamEvent | pb.StreamResponse | Frame]:
+        """``tasks/resubscribe``: the current ``Task`` object, then the stream's frames after the
+        ones the client has, following live until the terminal one (plan 6)."""
         thread_id = await self._context_for_tasks(params, call, flag="read")
         task_id = str(params.get("id") or "")
         record = await self._find_task(thread_id, task_id)
@@ -587,13 +610,18 @@ class A2AService(Generic[S]):
         yield task_to_pb(record, thread_id, exts=call.extensions)
         offset = params.get("offset")
         after = str(offset) if offset is not None else call.resume_offset
+        had = int(after) if after is not None and after.isdigit() else 0
         live = record.status not in TERMINAL_TASK_STATES
         try:
-            reader = self._storage.streams.read(task_id, after=after, live=live)
+            reader = self._storage.streams.read(task_id, live=live)
+            position = 0
             while (frame := await reader.next()) is not None:
-                yield json_format.ParseDict(
-                    json.loads(frame), pb.StreamResponse(), ignore_unknown_fields=True
-                )
+                position += 1
+                if position > had:
+                    event = json_format.ParseDict(
+                        json.loads(frame), pb.StreamResponse(), ignore_unknown_fields=True
+                    )
+                    yield Frame(event, position)
         except StorageError:
             # a task older than its stream's TTL, or one written by another path: the Task
             # object above is everything there is

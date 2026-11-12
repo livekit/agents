@@ -33,7 +33,7 @@ from ..llm.tool_context import (
     ToolResult,
     Toolset,
     Transition,
-    approval_granted,
+    answered_read_back,
     approval_scope,
     delivered,
     function_tool,
@@ -461,20 +461,20 @@ class _ToolExecutor:
                 fnc_args, fnc_kwargs = prepare_function_arguments(
                     fnc=tool, json_arguments=raw_arguments, call_ctx=run_ctx
                 )
-                granted = isinstance(tool, FunctionTool) and tool.info.requires_approval
-                if granted:
+                answered = None
+                if isinstance(tool, FunctionTool) and tool.info.requires_approval:
                     history = (
                         run_ctx._run._chat_ctx.items
                         if run_ctx._run is not None
                         else run_ctx.session.history.items
                     )
-                    granted = approval_granted(history, run_ctx.function_call)
+                    answered = answered_read_back(history, run_ctx.function_call)
                 if mock is not None:
                     from .run_result import _run_mock
 
                     output = await _run_mock(mock, *fnc_args, **fnc_kwargs)
                 else:
-                    with approval_scope(run_ctx.function_call, granted):
+                    with approval_scope(run_ctx.function_call, answered):
                         output = tool(*fnc_args, **fnc_kwargs)
                         if inspect.isawaitable(output):
                             output = await output

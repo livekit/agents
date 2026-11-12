@@ -31,6 +31,7 @@ from ..utils import is_given
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from ..llm.tool_context import DelegateQuestion
     from ..metrics import AgentSessionUsage
     from .agent import Agent
     from .agent_session import LiveSession
@@ -163,7 +164,7 @@ class RunResult(Generic[Run_T]):
         self._interrupted: bool = False
         self._pending_call: llm.FunctionCall | None = None
         # the tools the answer is handed to, each with what it continues the answer with
-        self._answer_to: list[tuple[str, str]] = []
+        self._answer_to: list[DelegateQuestion] = []
         self._verbatim: str | None = None
         self._agent_stack: list[Ref] | None = None
 

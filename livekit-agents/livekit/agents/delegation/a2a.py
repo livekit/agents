@@ -55,7 +55,6 @@ from .delegate import (
 from .input_required import (
     InputRequiredCheck,
     InputRequiredDetector,
-    InputRequiredDetectorFn,
     InputRequiredVerdict,
 )
 
@@ -142,7 +141,7 @@ class A2ADelegate(Delegate, Toolset):
         httpx_client: httpx.AsyncClient | None = None,
         name: str | None = None,
         announce: bool = True,
-        answer_detector: InputRequiredDetectorFn | bool = False,
+        answer_detector: InputRequiredDetector | bool = False,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._url = url.rstrip("/")
@@ -155,9 +154,11 @@ class A2ADelegate(Delegate, Toolset):
         # TODO: default to True if a benchmark of the asked-last default, this detector, the
         # detector started when the person's turn ends, and the model naming the question in the
         # tool's arguments shows it the best; is the tool-argument routing worth an option?
-        self._answer_detector: InputRequiredDetectorFn | None = (
-            InputRequiredDetector() if answer_detector is True else answer_detector or None
-        )
+        # a detector the delegate made is closed with it; one passed in belongs to the caller
+        self._owned_detector = InputRequiredDetector() if answer_detector is True else None
+        self._answer_detector = (
+            answer_detector if isinstance(answer_detector, InputRequiredDetector) else None
+        ) or self._owned_detector
         self._tool: FunctionTool | None = None
         # the tool names the expert only: its card could not be read yet
         self._unread = False
@@ -221,12 +222,15 @@ class A2ADelegate(Delegate, Toolset):
         # the reply to a question the expert asked continues its task
         answered: AskedQuestion | None = None
         if asked := await ctx._asked_questions():
-            check = InputRequiredCheck(request, asked, history)
-            try:
-                verdict = await (self._answer_detector or _asked_last)(check)
-            except Exception as e:
-                logger.warning("the answer detector failed", extra={"error": str(e)})
-                verdict = await _asked_last(check)
+            # without a detector, or when it fails, the question asked last takes the reply
+            last = max(asked, key=lambda q: q.asked_at)
+            verdict: InputRequiredVerdict = last
+            if self._answer_detector is not None:
+                check = InputRequiredCheck(request, asked, history, usage=ctx.usage)
+                try:
+                    verdict = await self._answer_detector.detect(check)
+                except Exception as e:
+                    logger.warning("the answer detector failed", extra={"error": str(e)})
             if verdict == "unclear":
                 return UNCLEAR.format(questions="; ".join(f'"{q.question}"' for q in asked))
             if verdict != "new":
@@ -407,10 +411,16 @@ class A2ADelegate(Delegate, Toolset):
                 extra={"url": self._url, "taskId": task_id, "error": str(e)},
             )
 
+    @property
+    def answer_detector(self) -> InputRequiredDetector | None:
+        return self._answer_detector
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._owned_detector is not None:
+            await self._owned_detector.aclose()
 
     async def _connect(self) -> AgentClient:
         if self._client is None:
@@ -436,11 +446,6 @@ class A2ADelegate(Delegate, Toolset):
         from ..a2a.auth import Credentials
 
         return Credentials(api_key, api_secret).project_token(identity="delegate")
-
-
-async def _asked_last(check: InputRequiredCheck) -> InputRequiredVerdict:
-    """With no detector, the question asked last takes the reply."""
-    return max(check.questions, key=lambda q: q.asked_at)
 
 
 def _conversation(

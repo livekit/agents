@@ -223,7 +223,8 @@ impl Turn {
         run.answer_task = Some(answer_task.clone());
         // the delegates' questions the turn's calls answered close, whatever the turn's end: the
         // answer went to the expert. A task left with none completes into this one, which ends
-        // on its own
+        // on its own, unless work of its own still runs: then it waits, and that work's end
+        // answers it
         for (tid, reference) in out.answered.iter().filter(|(t, _)| *t != answer_task) {
             let Some(row) = run.tasks.get(tid).await?.filter(|r| !r.terminal()) else {
                 continue;
@@ -237,7 +238,10 @@ impl Turn {
                 .filter(|pair| pair.get(1).and_then(Value::as_str) != Some(reference))
                 .cloned()
                 .collect();
-            if left.is_empty() {
+            let runs_on = row.data.metadata.get(BACKGROUND_KEY) == Some(&Value::Bool(true));
+            if left.is_empty() && runs_on {
+                run.tasks.write(tid, TaskState::Working, TaskPatch::default()).await?;
+            } else if left.is_empty() {
                 let patch =
                     TaskPatch { metadata: Some(merged_into(&answer_task)), ..TaskPatch::default() };
                 run.tasks.write(tid, TaskState::Completed, patch).await?;
@@ -314,10 +318,15 @@ impl Turn {
             run.reason = Some("client-cancel".into());
             return Ok(outcome(shown, true));
         }
-        // each task of a delivery stays `working` while work of it runs on
+        // each task of a delivery stays `working` while work of it runs on, the work its reply
+        // started included: that runs under the turn's task
         let working: Vec<bool> = batch
             .iter()
-            .map(|m| m.metadata.get(BACKGROUND_KEY) == Some(&Value::Bool(true)))
+            .zip(task_ids)
+            .map(|(m, tid)| {
+                m.metadata.get(BACKGROUND_KEY) == Some(&Value::Bool(true))
+                    || (out.background && *tid == answer_task)
+            })
             .collect();
         let merged = if delivery { 0 } else { task_ids.len() - 1 };
         for (tid, m) in task_ids[..merged].iter().zip(&batch[..merged]) {

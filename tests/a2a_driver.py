@@ -26,7 +26,8 @@ from a2a.utils.constants import TransportProtocol
 from livekit.agents import AgentServer
 from livekit.agents.a2a import A2AEndpoint, A2ASessionContext, Credentials
 from livekit.agents.a2a.codec import metadata_from_wire
-from livekit.agents.delegation import A2ADelegate
+from livekit.agents.delegation import A2ADelegate, InputRequiredCheck, InputRequiredDetector
+from livekit.agents.delegation.input_required import InputRequiredVerdict
 from livekit.agents.llm import ChatContext, FunctionToolCall, LLMStream, Tool
 from livekit.agents.storage import AgentDBStorage
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
@@ -408,6 +409,19 @@ def output_of(call_id: str) -> Callable[[ChatContext], bool]:
         return last is not None and last.type == "function_call_output" and last.call_id == call_id
 
     return matches
+
+
+class Judge(InputRequiredDetector):
+    """A detector whose verdict ``judge`` gives, with no model call."""
+
+    def __init__(
+        self, judge: Callable[[InputRequiredCheck], Awaitable[InputRequiredVerdict]]
+    ) -> None:
+        super().__init__(FakeLLM())
+        self._judge = judge
+
+    async def detect(self, check: InputRequiredCheck) -> InputRequiredVerdict:
+        return await self._judge(check)
 
 
 class ScriptedLLM(FakeLLM):

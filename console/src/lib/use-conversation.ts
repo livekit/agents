@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import { A2AClient, interpret, uuid } from "./a2a";
+import { A2AClient, interpret, uuid, type Received } from "./a2a";
 import { HttpError, createSession, getConfig, getGrant, getHistory, listSessions, nameSession } from "./api";
 import { listExamples, sameExample, type Example } from "./examples";
 import { text } from "./format";
@@ -11,6 +11,8 @@ export const SESSION_KEY = "console.session";
 const PENDING_KEY = "console.pending";
 
 type Pending = { taskId: string; sessionId: string; text?: string };
+/** A task to follow on: it waits on the person while its work runs, from the frames the console has. */
+type Follow = { taskId: string; offset: string };
 /** An entry before it is given its id: a distributive Omit, so each kind keeps its fields. */
 type Draft = Entry extends infer E ? (E extends Entry ? Omit<E, "id" | "at"> : never) : never;
 
@@ -71,6 +73,8 @@ function delegationExtra(item: HistoryItem): Pick<Delegation, "taskId" | "endpoi
 /** What a tool said while it ran, as the framework words it to the model (voice/tool_executor.py UPDATE_TEMPLATE). */
 const UPDATE_PREFIX = /^The tool `[^`]*` has updated, message: /;
 const UPDATE_TAIL = /\nThe task is still running.*$/s;
+/** A line a tool said as written, as the framework records it (llm/tool_context.py DELIVERED). */
+const DELIVERED_PREFIX = "delivered to the person as written: ";
 /** The dispatch note of the delegate tool (delegation/tool.py): an instruction to the model, never shown. */
 const DISPATCH_NOTE = "Acknowledge in a few natural words";
 
@@ -209,6 +213,9 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
             if (agent) restored.push({ kind: "status", id: nextId(), at, text: `${agent} answers from here` });
           } else if (kind === "message") {
             const role = item.role === "user" ? "user" : "agent";
+            /* a turn that ends on a line said as written records it twice: as the output, then as the reply */
+            const previous = restored[restored.length - 1];
+            if (role === "agent" && previous?.kind === "agent" && previous.text === text(item.content)) continue;
             restored.push(
               role === "user"
                 ? { kind: "user", id: nextId(), at, text: text(item.content) }
@@ -235,6 +242,10 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
             } else restored.push({ kind: "tool", id: nextId(), at, name: String(item.name ?? ""), args });
           } else if (kind === "function_call_output") {
             const output = text(item.output);
+            if (output.startsWith(DELIVERED_PREFIX)) {
+              restored.push({ kind: "agent", id: nextId(), at, text: output.slice(DELIVERED_PREFIX.length) });
+              continue;
+            }
             const update = toolUpdate(output);
             /* The dispatch note is the model's, not the person's. */
             if (update === null) continue;
@@ -342,27 +353,40 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
     });
   }, []);
 
-  /** One turn's frames, from message/stream or tasks/resubscribe. */
+  /**
+   * One turn's frames, from message/stream or tasks/resubscribe; what the task's stream has
+   * after it, when it waits on the person while its work runs. A follow on such a task is quiet:
+   * nothing is busy, nothing is pending, and it stops when the session changes.
+   */
   const consume = useCallback(
-    async (frames: AsyncGenerator<Parameters<typeof interpret>[0]>, userText?: string) => {
+    async (frames: AsyncGenerator<Received>, userText?: string, follow = false): Promise<Follow | null> => {
+      /* the reply streaming now, and every reply's bubble by its artifact: a reply beside work is one of several */
       let reply: string | null = null;
+      const bubbles = new Map<string, string>();
+      let answered = false;
       let artifactText = "";
       let taskId: string | null = null;
+      /* the last frame's position in its task's stream, and the task to follow on from it */
+      let offset: string | undefined;
+      let next: Follow | null = null;
+      const session = sessionRef.current;
       /* a text sent during a call is the call's to say, even when the call ends before its task does */
       const duringCall = inCall?.current === true;
-      setBusy(true);
+      if (!follow) setBusy(true);
       try {
-        for await (const frame of frames) {
+        for await (const { frame, id } of frames) {
+          if (follow && sessionRef.current !== session) break;
+          if (id) offset = id;
           for (const event of interpret(frame)) {
             switch (event.type) {
               case "error":
                 append({ kind: "status", text: `This turn failed: ${event.message}`, taskId: taskId ?? undefined, failed: true });
-                return;
+                return null;
               case "task":
                 taskId = event.taskId;
                 /* The first message made the session. */
                 if (!sessionRef.current) setSession(event.contextId, { fresh: true });
-                write(PENDING_KEY, JSON.stringify({ taskId, sessionId: event.contextId, text: userText } satisfies Pending));
+                if (!follow) write(PENDING_KEY, JSON.stringify({ taskId, sessionId: event.contextId, text: userText } satisfies Pending));
                 if (event.artifactText) artifactText = event.artifactText;
                 break;
               case "progress":
@@ -378,30 +402,46 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
                   return [...list, { kind: "delegation", id: nextId(), at: now, name: "", task: userText ?? "", progress: [{ at: now, text: event.text }] }];
                 });
                 break;
-              case "artifact":
+              case "artifact": {
                 /* During a call the answer waits for the end: the call may have spoken it. */
                 if ((duringCall || inCall?.current) && !reply) {
                   artifactText = event.append ? artifactText + event.text : event.text || artifactText;
                   break;
                 }
-                if (!reply) reply = append({ kind: "agent", text: "", taskId: taskId ?? undefined, streaming: true });
-                patch(reply, (entry) =>
+                /* the answer's last chunk under the row's own artifact is the whole of the reply that just streamed */
+                const bubble: string =
+                  bubbles.get(event.id) ?? (event.last && !event.append ? reply : null) ?? append({ kind: "agent", text: "", taskId: taskId ?? undefined, streaming: true });
+                bubbles.set(event.id, bubble);
+                reply = bubble;
+                answered = true;
+                patch(bubble, (entry) =>
                   entry.kind === "agent"
                     ? { ...entry, text: event.append ? entry.text + event.text : event.text || entry.text }
                     : entry,
                 );
                 break;
+              }
+              case "said":
+                /* said as written: the person's to read, unless the call spoke it */
+                if (!(duringCall || inCall?.current)) append({ kind: "agent", text: event.text, taskId: taskId ?? undefined });
+                break;
+              case "replied":
+                if (reply) patch(reply, (entry) => ({ ...entry, streaming: false }) as Entry);
+                reply = null;
+                break;
               case "question":
                 append({ kind: "question", text: event.text });
                 break;
               case "ended": {
-                write(PENDING_KEY, null);
+                if (!follow) write(PENDING_KEY, null);
                 /* The turn's delegation, if any, is over with it. */
                 setEntries((list) => list.map((entry) => (entry.kind === "delegation" && entry.endedAt === undefined ? { ...entry, endedAt: Date.now() } : entry)));
                 /* The plan's spelling of the A2A states: input-required, not INPUT_REQUIRED. */
                 const state = event.state.replace("TASK_STATE_", "").toLowerCase().replace(/_/g, "-");
+                /* asked while its work runs: what the work brings comes later, on the same task */
+                next = state === "input-required" && event.meta.background === true && offset ? { taskId: event.taskId, offset } : null;
                 const spoken = event.meta.answeredByVoice === true && (duringCall || inCall?.current);
-                if (artifactText && !reply && !spoken) reply = append({ kind: "agent", text: artifactText, taskId: event.taskId });
+                if (artifactText && !answered && !spoken) reply = append({ kind: "agent", text: artifactText, taskId: event.taskId });
                 if (reply) patch(reply, (entry) => ({ ...entry, streaming: false }) as Entry);
                 const meta = Object.entries(event.meta)
                   .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
@@ -427,7 +467,7 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
           failed: true,
         });
       } finally {
-        setBusy(false);
+        if (!follow) setBusy(false);
         if (grant) {
           await refreshSessions(grant.agent, grant.endpointName, grant.sub);
           const id = sessionRef.current;
@@ -435,8 +475,20 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
         }
         void settleDelegations();
       }
+      return next;
     },
     [append, grant, inCall, name, patch, refreshSessions, setSession, settleDelegations],
+  );
+
+  /** Follows a task that waits on the person while its work runs, until it ends. */
+  const followOn = useCallback(
+    async (next: Follow | null) => {
+      while (next && client.current && sessionRef.current) {
+        const params = { id: next.taskId, contextId: sessionRef.current, offset: next.offset };
+        next = await consume(client.current.stream("tasks/resubscribe", params, sessionRef.current), undefined, true);
+      }
+    },
+    [consume],
   );
 
   /** The client, on a new grant when the one it holds expires within a minute. */
@@ -467,9 +519,9 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
       }
       if (sessionRef.current) message.contextId = sessionRef.current;
       append({ kind: "user", text: textToSend });
-      await consume(a2a.stream("message/stream", { message }, sessionRef.current), textToSend);
+      void followOn(await consume(a2a.stream("message/stream", { message }, sessionRef.current), textToSend));
     },
-    [append, consume, current, grant, setSession],
+    [append, consume, current, followOn, grant, setSession],
   );
 
   const resume = useCallback(
@@ -478,12 +530,13 @@ export function useConversation({ onSessionLost, inCall }: { onSessionLost?: () 
       if (!a2a) return;
       if (pending.text) append({ kind: "user", text: pending.text });
       append({ kind: "status", text: "resuming the reply", taskId: pending.taskId });
-      await consume(
+      const next = await consume(
         a2a.stream("tasks/resubscribe", { id: pending.taskId, contextId: pending.sessionId }, pending.sessionId),
         pending.text,
       );
+      void followOn(next);
     },
-    [append, consume, current],
+    [append, consume, current, followOn],
   );
 
   /** Talks to one example from here on: its grant, its card, its sessions. */

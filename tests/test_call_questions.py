@@ -24,7 +24,7 @@ from livekit.agents.voice.audio_recognition import (
     _PreemptiveGenerationInfo,
 )
 
-from .a2a_driver import AGENT, Door, Reply, ScriptedLLM, call, no_project_env  # noqa: F401
+from .a2a_driver import AGENT, Door, Judge, Reply, ScriptedLLM, call, no_project_env  # noqa: F401
 from .fake_io import FakeAudioOutput
 from .fake_realtime import ScriptedRealtimeModel
 from .test_call_lane import held
@@ -172,7 +172,7 @@ async def test_the_answer_detector_picks_the_question_a_call_answers(
     delegate = expert(
         asking("Which date?", "Which seat?", answer="Booked.", heard=heard),
         announce=False,
-        answer_detector=detector,
+        answer_detector=Judge(detector),
     )
     async with LiveSession(llm=model) as session:
         await session.start(Agent(instructions="front desk", tools=[delegate]))

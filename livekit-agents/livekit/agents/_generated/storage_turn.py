@@ -109,9 +109,9 @@ class PendingCall(BaseModel):
     model_config = ConfigDict(frozen=True)
     name: str
     call_id: str
-    answer_to: list[tuple[str, str]] = Field(default_factory=list)
+    answer_to: list[tuple[str, str, str]] = Field(default_factory=list)
     """The delegates' questions the ask holds, each `(tool, the expert task the answer
-    continues)`: a later call of the tool may answer one.
+    continues, its own question)`: a later call of the tool may answer one.
     """
 
 
