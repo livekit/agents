@@ -634,7 +634,7 @@ async def test_reconnect_ends_the_turn_when_no_transcript_arrives(
 
 
 @pytest.mark.virtual_time
-async def test_reconnect_sends_buffered_audio_on_the_old_connection(
+async def test_reconnect_carries_buffered_audio_over(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session, stt = _reconnect_stt(monkeypatch)
@@ -646,15 +646,22 @@ async def test_reconnect_sends_buffered_audio_on_the_old_connection(
     await _wait_until(lambda: len(stream._audio_buffer) > 0)
     stream.update_options(language="hi-IN", model="saaras:v4")
     await _wait_until(lambda: len(session.sockets) == 2)
-    assert session.sockets[0].audio() == first.data.tobytes()
-    assert {"type": "flush"} not in session.sockets[0].sent  # no open utterance to flush
+    assert session.sockets[0].audio() == b""  # speech starting here isn't cut off
 
-    second = _pcm_frame(60, 2)
+    second = _pcm_frame(30, 2)
     stream.push_frame(second)
     new = session.sockets[1]
     await _wait_until(lambda: len(new.audio()) > 0)
-    # the new connection starts with its own audio, so its clock starts there too
-    assert new.audio() == second.data.tobytes()[: 800 * 2]
+    # one 50 ms chunk: all of the first frame, then the start of the second
+    assert new.audio() == (first.data.tobytes() + second.data.tobytes())[: 800 * 2]
+
+    # the new clock starts with the carried 30 ms, ahead of the frame it's anchored on
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "नमस्ते", "language_code": "hi-IN", "speech_end": 1.0}}
+    )
+    _, final = await _next_events(stream, 2)
+    expected = stream.start_time_offset + 1.0 - 0.03
+    assert final.alternatives[0].end_time == pytest.approx(expected)
 
     await stream.aclose()
     await stt.aclose()

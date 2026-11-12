@@ -40,6 +40,7 @@ def _make_stream_under_test(
     instance._utterance_settled.set()
     instance._utterance_resolved = asyncio.Event()  # type: ignore[attr-defined]
     instance._pending_keyterms = NOT_GIVEN  # type: ignore[attr-defined]
+    instance._carried_audio_s = 0.0  # type: ignore[attr-defined]
     return instance, captured
 
 
