@@ -32,8 +32,8 @@ again when left empty.
 | `video_sampler` | a `VoiceActivityVideoSampler(speaking_fps=, silent_fps=)`: how often camera frames reach the model; `None` sends every frame |
 | `stt_context_options` | an `STTContextOptions`: static `keyterms` the STT is biased toward, `keyterm_detection` (`KeytermDetectionOptions`) to add terms heard in the conversation, `forward_chat_context`. `session.keyterms` reads the current terms; `update_options(keyterms=)` replaces the static ones |
 | `aec_warmup_duration` | seconds after the agent first speaks during which the person cannot interrupt, while echo cancellation adapts; 3 by default, none on an outbound SIP call the agent dialed |
-| `expressive` | `True`, or an `ExpressiveOptions` (`speech_steering`: `SpeechSteeringOptions`, whose `nonverbal_sounds` takes `NonverbalOptions`; or a custom instructions template) |
-| `tts_text_transforms` | the `TextTransforms` applied before synthesis: `"filter_markdown"`, `"filter_emoji"` |
+| `expressive` | `True`, or an `ExpressiveOptions` (`speech_steering`: `SpeechSteeringOptions`, whose `nonverbal_sounds` takes `NonverbalOptions`; or a custom instructions template); see [expressive speech](lexer.md#expressive-speech) |
+| `tts_text_transforms` | what the voice skips: `"filter_markdown"`, `"filter_emoji"` (both by default); the transcript keeps them either way, see [markdown and emoji](lexer.md#markdown-and-emoji) |
 | `max_tool_steps` | model requests one reply may chain through tool calls; 3 by default |
 | `min_consecutive_speech_delay` | seconds of silence between two of the agent's speeches; 0 by default |
 | `use_tts_aligned_transcript` | whether the transcript follows the TTS's word timings rather than the text sent to it; the session decides when left out |
@@ -781,7 +781,8 @@ reply's request; the edited `new_message` text is what the history records.
 Registering a step twice, or after `start()`, raises `RuntimeError`.
 
 Transcript chunks carry `text`, optional `start_time`/`end_time`, `confidence`,
-`start_time_offset`, and `speaker_id`. They are generated records, rather than string subclasses;
+`start_time_offset`, `speaker_id`, `spoken` (whether the voice says it) and `expression` (the
+delivery asked for from it on); see [the transcript](lexer.md#the-transcript). They are generated records, rather than string subclasses;
 read `.text` for string operations. A `transcription_node` receives records even when timing is
 absent and may return records or plain strings. Plain strings are normalized into records with
 no metadata at that boundary. Return an existing record unchanged to preserve all its metadata.

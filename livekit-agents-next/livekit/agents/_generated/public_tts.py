@@ -3,11 +3,7 @@
 
 from __future__ import annotations
 
-from .._core import (
-    AudioEmitter as AudioEmitter,
-    split_all_markup as split_all_markup,
-    split_expr_markup as split_expr_markup,
-)
+from .._core import AudioEmitter as AudioEmitter, split_expr_markup as split_expr_markup
 from .facades_tts import (
     FallbackChunkedStream as FallbackChunkedStream,
     FallbackSynthesizeStream as FallbackSynthesizeStream,
@@ -41,6 +37,5 @@ __all__: list[str] = [
     "StreamAdapterWrapper",
     "StreamPacerWrapper",
     "AudioEmitter",
-    "split_all_markup",
     "split_expr_markup",
 ]

@@ -216,10 +216,9 @@ fn code_span(s: &str, prev: Option<char>, ctx: Context, at_end: bool) -> Scan {
                     return Scan::NeedMore;
                 }
                 if m == n {
-                    let code = Context { code: true, ..ctx };
                     let tokens = vec![
                         md(Md::CodeOpen, &s[..n], ctx),
-                        Token { kind: Kind::Prose, raw: s[n..i].to_owned(), ctx: code },
+                        Token { kind: Kind::Prose, raw: s[n..i].to_owned(), ctx },
                         md(Md::CodeClose, &s[i..i + n], ctx),
                     ];
                     return Scan::Match { len: i + n, tokens };

@@ -233,8 +233,7 @@ fn code_is_literal_even_when_it_quotes_markup() {
     let rules = Rules::speech(Vocabulary::LiveKit);
     let tokens = Lexer::all(rules, "use `<expr type=\"sound\"/>` like this");
     assert!(tokens.iter().all(|t| !matches!(t.kind, Kind::Tag(_))));
-    let code: Vec<&str> = tokens.iter().filter(|t| t.ctx.code).map(|t| t.raw.as_str()).collect();
-    assert_eq!(code, ["<expr type=\"sound\"/>"]);
+    assert!(tokens.iter().any(|t| t.kind == Kind::Prose && t.raw == "<expr type=\"sound\"/>"));
     assert_eq!(Projector::new(SPOKEN).text(&tokens), "use <expr type=\"sound\"/> like this");
 }
 

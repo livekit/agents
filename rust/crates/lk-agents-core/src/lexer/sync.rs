@@ -30,14 +30,14 @@ impl Unit {
 
 /// Units over one stream of tokens.
 #[derive(Debug, Clone)]
-pub struct Sync {
+pub struct Units {
     said: Projector,
     shown: Projector,
 }
 
-impl Sync {
-    pub fn new(said: View, shown: View) -> Sync {
-        Sync { said: Projector::new(said), shown: Projector::new(shown) }
+impl Units {
+    pub fn new(said: View, shown: View) -> Units {
+        Units { said: Projector::new(said), shown: Projector::new(shown) }
     }
 
     pub fn push(&mut self, tokens: &[Token]) -> Vec<Unit> {

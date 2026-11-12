@@ -74,28 +74,6 @@ impl ModelSyntax {
         controls: &["<|channel|>", "<|constrain|>", "<|message|>"],
     };
 
-    /// ChatML (Qwen, Hermes and others).
-    pub const CHATML: Turns = Turns {
-        opens: &[
-            Turn { open: "<|im_start|>assistant", said: true },
-            Turn { open: "<|im_start|>", said: false },
-        ],
-        header_end: Some("\n"),
-        ends: &["<|im_end|>", "<|endoftext|>"],
-        channel: None,
-    };
-
-    /// Llama 3.
-    pub const LLAMA3: Turns = Turns {
-        opens: &[
-            Turn { open: "<|start_header_id|>assistant<|end_header_id|>", said: true },
-            Turn { open: "<|start_header_id|>", said: false },
-        ],
-        header_end: None,
-        ends: &["<|eot_id|>", "<|eom_id|>", "<|end_of_text|>"],
-        channel: None,
-    };
-
     /// Every literal this syntax reacts to.
     fn delimiters(&self) -> impl Iterator<Item = &'static str> + '_ {
         let turns = self.turns.iter().flat_map(|t| {

@@ -81,7 +81,7 @@ fn throughput() {
         let start = std::time::Instant::now();
         let mut lexer = Lexer::new(speech());
         let mut said = Projector::new(View::Spoken { keep_markdown: false, keep_emoji: false });
-        let mut sync = Sync::new(
+        let mut sync = Units::new(
             View::Spoken { keep_markdown: false, keep_emoji: false },
             View::Display { keep_emoji: true },
         );

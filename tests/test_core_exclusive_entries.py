@@ -13,13 +13,13 @@ pytestmark = pytest.mark.unit
 # Catches: a `&mut self` entry releasing the GIL for its call, so a second thread's call finds the
 # object mutably borrowed and raises instead of waiting its turn.
 def test_threads_calling_one_mutating_object_take_turns() -> None:
-    stripper = _core.TranscriptMarkupStripper()
+    state = _core.TtsMetricState(True, "tts", "model", "provider")
     errors: list[BaseException] = []
 
     def push() -> None:
         try:
             for _ in range(20_000):
-                stripper.push("say <emphasis>this</emphasis> ")
+                state.queue_text("say this")
         except BaseException as e:
             errors.append(e)
 

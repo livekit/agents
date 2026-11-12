@@ -5,7 +5,7 @@ const DISPLAY: View = View::Display { keep_emoji: true };
 
 fn units(deltas: &[&str]) -> Vec<Unit> {
     let mut lexer = Lexer::new(Rules::speech(Vocabulary::LiveKit));
-    let mut sync = Sync::new(SPOKEN, DISPLAY);
+    let mut sync = Units::new(SPOKEN, DISPLAY);
     let mut out = Vec::new();
     for d in deltas {
         out.extend(sync.push(&lexer.push(d)));
@@ -58,7 +58,7 @@ fn a_link_url_and_unspoken_blocks_are_silent() {
 #[test]
 fn spoken_text_leaves_with_its_delta() {
     let mut lexer = Lexer::new(Rules::speech(Vocabulary::LiveKit));
-    let mut sync = Sync::new(SPOKEN, DISPLAY);
+    let mut sync = Units::new(SPOKEN, DISPLAY);
     assert_eq!(sync.push(&lexer.push("hel")), [s("hel")]);
     assert_eq!(sync.push(&lexer.push("lo wo")), [s("lo wo")]);
 }
@@ -80,13 +80,13 @@ fn emoji_kept_in_the_transcript_cost_the_voice_nothing() {
 #[test]
 fn a_dropped_fragment_between_spoken_words_leaves_one_said_unit() {
     let tokens = Lexer::all(Rules::speech(Vocabulary::LiveKit), "a <expr type x> b");
-    assert_eq!(Sync::new(SPOKEN, DISPLAY).push(&tokens), [s("a b")]);
+    assert_eq!(Units::new(SPOKEN, DISPLAY).push(&tokens), [s("a b")]);
 }
 
 #[test]
 fn a_markers_delivery_is_never_folded_into_the_silent_text_before_it() {
     let tokens = Lexer::all(Rules::speech(Vocabulary::LiveKit), "~~x~~<expr label='y'/> go");
-    let units = Sync::new(SPOKEN, DISPLAY).push(&tokens);
+    let units = Units::new(SPOKEN, DISPLAY).push(&tokens);
     let Unit::Silent { tags, .. } = &units[1] else { panic!("{units:?}") };
     assert_eq!(units[0], q("~~x~~"));
     assert_eq!(tags[0].attr("label"), Some("y"));

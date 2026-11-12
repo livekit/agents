@@ -73,6 +73,9 @@ text to come could change where it ends, and emits exactly the chunks `tokenize`
 whole text. With `clause_words`, a sentence running past that many words breaks at its next
 clause mark (`,` `;` `:` and their fullwidth forms, never inside a number such as `1,000`).
 
+A sentence never ends inside the voice's markup, whatever splits it; see
+[sentences for the voice](lexer.md#sentences-for-the-voice).
+
 `text_pacing=True` (or a `SentenceStreamPacer`) holds sentences back: the first goes at once;
 each later batch waits until the synthesized audio stopped growing and at most
 `min_remaining_audio` seconds of it are left to play (from the first audio), then whole
@@ -142,7 +145,7 @@ plugin's classes, not these bases.
 | Module | Names |
 | --- | --- |
 | `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk` (its `usage` is a `TokenUsage`), `ChoiceDelta`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events (`llm.realtime.EventTypes`: `InputSpeechStartedEvent`, `InputSpeechStoppedEvent`, `InputTranscriptionCompleted`, `GenerationCreatedEvent` with its `MessageGeneration`s, `RemoteItemAddedEvent`, `RealtimeSessionReconnectedEvent`); duplex (`llm.duplex`): `DuplexModel`, `DuplexSession`, `DuplexCapabilities`, `DuplexRealtimeAdapter` (a duplex model as a realtime model), `DuplexAudioFrame`, `DuplexOutputTranscriptDelta`, `DuplexInputGap`/`DuplexInputMute`, `AudioGate`/`FixedGate`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
-| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `TTSError`, `SentenceStreamPacer`, `split_all_markup`/`split_expr_markup`; each module's `FallbackAdapter` and `StreamAdapter` |
+| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `TTSError`, `SentenceStreamPacer`, `split_expr_markup`; each module's `FallbackAdapter` and `StreamAdapter` |
 | `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `VADCapabilities`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`/`NotGiven`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http`, `redacted_cause`, `ProviderAttempts` (a stream's `_core_attempts`, see [provider attempts](#provider-attempts)) |
 | `livekit.agents.tokenize` | `SentenceTokenizer` and `WordTokenizer` (the built-in splitters; subclass one and override `tokenize` for a custom one), `SentenceStream`, `WordStream`, `TokenData`, `TokenSpan`, `BufferedSentenceStream`, `BufferedWordStream`, `split_words`, `replace_words` |
 | `livekit.agents.utils` | `ConnectionPool`, `shortuuid`, `is_given`, `log_exceptions`, `EventEmitter`; `aio`: `Chan`, `ChanClosed`, `ChanEmpty`, `Interval`, `interval`, `cancel_and_wait`; `media`: `AudioByteStream`, `AudioStreamDecoder`, `encode` with `EncodeOptions`/`ResizeOptions` |

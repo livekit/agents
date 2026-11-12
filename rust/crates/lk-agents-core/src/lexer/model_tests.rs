@@ -1,5 +1,27 @@
 use super::*;
 
+/// ChatML (Qwen, Hermes and others).
+const CHATML: Turns = Turns {
+    opens: &[
+        Turn { open: "<|im_start|>assistant", said: true },
+        Turn { open: "<|im_start|>", said: false },
+    ],
+    header_end: Some("\n"),
+    ends: &["<|im_end|>", "<|endoftext|>"],
+    channel: None,
+};
+
+/// Llama 3.
+const LLAMA3: Turns = Turns {
+    opens: &[
+        Turn { open: "<|start_header_id|>assistant<|end_header_id|>", said: true },
+        Turn { open: "<|start_header_id|>", said: false },
+    ],
+    header_end: None,
+    ends: &["<|eot_id|>", "<|eom_id|>", "<|end_of_text|>"],
+    channel: None,
+};
+
 const DEFAULT: ModelSyntax = ModelSyntax::DEFAULT;
 const GEMMA: ModelSyntax = ModelSyntax {
     spans: &[Span { open: "<|channel>thought", close: Some("<channel|>"), why: Hidden::Reasoning }],
@@ -14,7 +36,7 @@ const HERMES: ModelSyntax = ModelSyntax {
         Span { open: "[TOOL_CALLS]", close: None, why: Hidden::ToolCall },
     ],
     starts_open: false,
-    turns: Some(ModelSyntax::CHATML),
+    turns: Some(CHATML),
     controls: &[],
 };
 
@@ -120,7 +142,7 @@ fn template_tokens_drop_only_for_the_model_that_has_them() {
     assert_eq!(run(controls, &["a<|python_t", "ag|>b"]), "ab");
 }
 
-const LLAMA: ModelSyntax = ModelSyntax { turns: Some(ModelSyntax::LLAMA3), ..DEFAULT };
+const LLAMA: ModelSyntax = ModelSyntax { turns: Some(LLAMA3), ..DEFAULT };
 
 /// Every template, replies ending in the model inventing the user's next turn.
 fn templates() -> [(ModelSyntax, &'static str, &'static str); 4] {

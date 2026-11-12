@@ -29,6 +29,7 @@ To expose and call your application, read [server entrypoints](server.md) and
 | [text-session.md](text-session.md) | Session rehydration, backend agent frames, delegation, private histories, and continuation across requests |
 | [voice-session.md](voice-session.md) | Audio and turn configuration, agent replacement, frontend expert events, and reply routing |
 | [voice-tasks.md](voice-tasks.md) | Constructing and running bounded voice interactions, typed completion, suspension, and cleanup |
+| [lexer.md](lexer.md) | A model reply's text on its way to the voice, the transcript and the history: hidden reasoning and template leaks, expressive markup, markdown and emoji, transcript sync, and how long text is held |
 | [threads.md](threads.md) | Conversation identity, lifecycle, public history/task access, and the relationship between lanes and session frames |
 | [server.md](server.md) | AgentServer/AgentHandler, text and voice entrypoints, handler outcomes, and request policies |
 | [clients.md](clients.md) | Thread service and handles, endpoint clients, grants, browser access, and call dispatch |

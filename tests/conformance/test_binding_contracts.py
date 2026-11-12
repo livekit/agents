@@ -57,7 +57,7 @@ def test_presence_defaults_only_on_omission(case: dict[str, Any]) -> None:
 def test_scalar_conversion_preserves_values_and_types(case: dict[str, Any]) -> None:
     value = case["value"]
     if case["kind"] == "string":
-        assert _core.strip_all_markup(value) == case["expected"]
+        assert _core.strip_expr_markup(value) == case["expected"]
     elif case["kind"] == "float":
         assert _core.ExpFilter(0.5, initial=value).value == case["expected"]
     elif case["kind"] == "bool":

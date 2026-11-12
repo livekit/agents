@@ -331,8 +331,8 @@ class ChunkedStream(tts.ChunkedStream):
         The agent's stream adapter hands over one sentence at a time, so a turn usually
         makes one part; a direct ``synthesize()`` call may carry several sentences, and
         each keeps the style that governs it -- including a leading one with no style of
-        its own, which travels as a plain part. Hence ``split_expr_markup``, not
-        ``split_all_markup`` -- the latter would take the inline tags out too.
+        its own, which travels as a plain part. ``split_expr_markup`` keeps the inline
+        tags in the text.
         """
         opts = self._options
         if not _styles_per_part(opts.model):

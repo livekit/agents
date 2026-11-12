@@ -21,7 +21,7 @@ mod sync;
 pub use markup::{EXPR, Tag, Vocabulary};
 pub use model::{ModelSyntax, Span, Turn, Turns};
 pub use project::{Projector, View};
-pub use sync::{Sync, Unit};
+pub use sync::{Unit, Units};
 
 /// How far an inline markdown construct may run, in bytes and on one line, before its opener is
 /// taken literally.
@@ -55,8 +55,6 @@ impl Rules {
 pub struct Context {
     /// Inside `~~...~~`: a correction, never spoken.
     pub struck: bool,
-    /// Inside `` `...` ``: spoken as written.
-    pub code: bool,
     /// Inside a fenced block: shown, never spoken.
     pub fenced: bool,
 }

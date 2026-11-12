@@ -38,6 +38,14 @@ impl TextSessionRunner for Runner {
         agents: Vec<TextSessionAgent>,
         max_depth: usize,
     ) -> Result<Self, Invalid> {
+        // what the model writes that is not for the person never reaches a run
+        let agents: Vec<TextSessionAgent> = agents
+            .into_iter()
+            .map(|mut agent| {
+                agent.llm = lk_agents_inference::llm::model_text::ModelText::wrap(agent.llm);
+                agent
+            })
+            .collect();
         let config = TextSessionConfig::from_agents(
             root_agent,
             agents.iter().map(|agent| SessionAgent {

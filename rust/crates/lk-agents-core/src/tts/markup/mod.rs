@@ -1,7 +1,6 @@
 use lk_agents_abi::tts::markup as abi;
-use lk_agents_abi::tts::markup::{MarkupClass, MarkupFunctions, TranscriptStripper};
+use lk_agents_abi::tts::markup::{MarkupClass, MarkupFunctions};
 pub(crate) use provider::ProviderExt;
-use std::collections::BTreeMap;
 
 mod chat;
 mod instructions;
@@ -133,13 +132,6 @@ impl MarkupFunctions for SpeechMarkup {
     fn supported_nonverbals(provider: String) -> lk_agents_abi::MarkupInfo {
         lk_agents_abi::MarkupInfo { nonverbals: self::nonverbals_of(&provider) }
     }
-    fn split_all_markup(text: String) -> lk_agents_abi::tts::markup::MarkupSplit {
-        let (text, tags) = self::split_all_markup(&text);
-        lk_agents_abi::tts::markup::MarkupSplit { text, tags }
-    }
-    fn strip_all_markup(text: String) -> String {
-        self::strip_all_markup(&text)
-    }
     fn strip_expr_markup(text: String) -> String {
         self::strip_expr_markup(&text)
     }
@@ -177,23 +169,6 @@ impl MarkupClass for ProviderMarkup {
     }
 }
 
-impl TranscriptStripper for self::TranscriptMarkupStripper {
-    fn new() -> Self {
-        Self::default()
-    }
-    fn push(&mut self, text: String) -> String {
-        self::TranscriptMarkupStripper::push(self, &text)
-    }
-    fn flush(&mut self) -> String {
-        self::TranscriptMarkupStripper::flush(self)
-    }
-    fn tags(&self) -> Vec<ExpressiveTag> {
-        self::TranscriptMarkupStripper::tags(self).to_vec()
-    }
-    fn expression_attribute(&self) -> Option<BTreeMap<String, String>> {
-        self.expression_attribute_map()
-    }
-}
 
 /// Render an element with owned attribute pairs, retaining their supplied order.
 fn to_xml_of(

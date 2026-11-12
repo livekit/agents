@@ -149,7 +149,6 @@ pub trait Implementations: 'static {
     type ToolSearch: ::lk_agents_abi::tokenize::search::ToolSearch<Document = Self::SearchDocument>;
     type MarkupFunctions: ::lk_agents_abi::tts::markup::MarkupFunctions;
     type MarkupClass: ::lk_agents_abi::tts::markup::MarkupClass;
-    type TranscriptStripper: ::lk_agents_abi::tts::markup::TranscriptStripper;
     type TtsStreamAdapter: ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter<Stream = Self::TtsStream>;
     type PacedSentences: ::lk_agents_abi::tts::stream_pacer::PacedSentences;
     type TtsStream: ::lk_agents_abi::tts::streams::TtsStream;
@@ -409,13 +408,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tokenize::tool_proxy_arguments, m)?)?;
     m.add_function(wrap_pyfunction!(tts::chat_message_text_content, m)?)?;
     m.add_function(wrap_pyfunction!(tts::supported_nonverbals, m)?)?;
-    m.add_function(wrap_pyfunction!(tts::split_all_markup, m)?)?;
-    m.add_function(wrap_pyfunction!(tts::strip_all_markup, m)?)?;
     m.add_function(wrap_pyfunction!(tts::strip_expr_markup, m)?)?;
     m.add_function(wrap_pyfunction!(tts::split_expr_markup, m)?)?;
     m.add_function(wrap_pyfunction!(tts::to_xml, m)?)?;
     m.add_class::<tts::Markup>()?;
-    m.add_class::<tts::TranscriptMarkupStripper>()?;
     m.add_class::<tts::TtsStreamAdapter>()?;
     m.add_class::<tts::CorePacedSentences>()?;
     m.add_class::<tts::TtsStream>()?;

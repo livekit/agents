@@ -4,7 +4,7 @@ pub mod machine;
 use lk_agents_abi::TranscriptChunk;
 use lk_agents_abi::tts::markup::Markup;
 use lk_agents_abi::voice::session_options::TextTransform;
-use lk_agents_core::lexer::{Lexer, Projector, Rules, Sync, Unit, View, Vocabulary};
+use lk_agents_core::lexer::{Lexer, Projector, Rules, Unit, Units, View, Vocabulary};
 use std::time::Duration;
 
 /// What was heard of one segment: the words, where the playhead stopped, whether it played out.
@@ -165,7 +165,7 @@ pub struct SegmentText {
     lexer: Lexer,
     said: Projector,
     plain: Projector,
-    units: Sync,
+    units: Units,
     /// A delivery met since the last chunk: it goes on the next one.
     expression: Option<String>,
 }
@@ -176,7 +176,7 @@ impl SegmentText {
             lexer: Lexer::new(Rules::speech(views.vocab.clone())),
             said: Projector::new(views.said()),
             plain: Projector::new(View::Plain),
-            units: Sync::new(views.spoken(), View::Display { keep_emoji: true }),
+            units: Units::new(views.spoken(), View::Display { keep_emoji: true }),
             expression: None,
         }
     }

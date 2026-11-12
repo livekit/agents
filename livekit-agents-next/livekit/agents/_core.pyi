@@ -206,14 +206,11 @@ from ._generated._core_tokenize import (
 )
 from ._generated._core_tts import (
     Markup as Markup,
-    TranscriptMarkupStripper as TranscriptMarkupStripper,
     TtsStream as TtsStream,
     TtsStreamAdapter as TtsStreamAdapter,
     _core_PacedSentences as _core_PacedSentences,
     chat_message_text_content as chat_message_text_content,
-    split_all_markup as split_all_markup,
     split_expr_markup as split_expr_markup,
-    strip_all_markup as strip_all_markup,
     strip_expr_markup as strip_expr_markup,
     supported_nonverbals as supported_nonverbals,
     to_xml as to_xml,

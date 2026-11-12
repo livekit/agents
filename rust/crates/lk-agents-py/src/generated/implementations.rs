@@ -101,7 +101,6 @@ impl super::Implementations for Selected {
     type ToolSearch = ::lk_agents_runtime::cores::ToolDiscovery;
     type MarkupFunctions = ::lk_agents_runtime::cores::SpeechMarkup;
     type MarkupClass = ::lk_agents_runtime::cores::ProviderMarkup;
-    type TranscriptStripper = ::lk_agents_runtime::cores::TranscriptMarkupStripper;
     type TtsStreamAdapter = ::lk_agents_runtime::inference::tts::sentence_adapter::StreamAdapter;
     type PacedSentences = ::lk_agents_runtime::inference::tts::pacing::PacedSentences;
     type TtsStream = ::lk_agents_runtime::inference::tts::stream::TtsStream;

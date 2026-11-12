@@ -298,7 +298,7 @@ fn a_reply_cut_anywhere_shows_only_what_it_had_and_no_markup() {
 
 fn units(rules: &Rules, deltas: &[&str]) -> Vec<Unit> {
     let mut lexer = Lexer::new(rules.clone());
-    let mut sync = Sync::new(SPOKEN, DISPLAY);
+    let mut sync = Units::new(SPOKEN, DISPLAY);
     let mut out = Vec::new();
     for d in deltas {
         out.extend(sync.push(&lexer.push(d)));

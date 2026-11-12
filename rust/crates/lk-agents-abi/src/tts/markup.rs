@@ -212,8 +212,6 @@ pub struct SpeechSteering {
     pub pace: Option<Pace>,
 }
 
-use std::collections::BTreeMap;
-
 /// Text with its expressive markup stripped, and the tags taken out of it.
 #[crate::host(record(module = "tts", path = "livekit.agents.tts", dataclass, emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,11 +226,6 @@ pub trait MarkupFunctions {
     fn chat_message_text_content(parts: Vec<String>, assistant: bool) -> Option<String>;
     #[host(function)]
     fn supported_nonverbals(provider: String) -> crate::MarkupInfo;
-    /// Strip every provider's expressive XML markup; brackets are prose and stay.
-    #[host(function, path = "livekit.agents.tts")]
-    fn split_all_markup(text: String) -> MarkupSplit;
-    #[host(function)]
-    fn strip_all_markup(text: String) -> String;
     #[host(function)]
     fn strip_expr_markup(text: String) -> String;
     /// Strip only the `<expr/>` dialect, returning the clean text and its markers; the
@@ -270,19 +263,4 @@ pub trait MarkupClass: Send + Sized + 'static {
     /// Lower the framework's markup to the provider's native syntax.
     #[host(call)]
     fn convert(&self, text: String) -> String;
-}
-
-/// Stateful, provider-agnostic markup stripper for one transcript segment.
-#[crate::host(class(name = "TranscriptMarkupStripper", pid = false))]
-pub trait TranscriptStripper: Send + Sized + 'static {
-    #[host(new)]
-    fn new() -> Self;
-    #[host(call)]
-    fn push(&mut self, text: String) -> String;
-    #[host(call)]
-    fn flush(&mut self) -> String;
-    #[host(getter)]
-    fn tags(&self) -> Vec<ExpressiveTag>;
-    #[host(call)]
-    fn expression_attribute(&self) -> Option<BTreeMap<String, String>>;
 }

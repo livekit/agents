@@ -14,23 +14,11 @@ from livekit.agents.tts import TTS, AudioEmitter
 from .connect import APIConnectOptions
 from .expressive import SpeechSteeringOptions
 from .stream_pacer import SentenceStreamPacer, TextPacing
-from .tts import (
-    ExpressiveTag,
-    MarkupInfo,
-    MarkupSplit,
-    SegmentCount,
-    SynthesizedAudio,
-    TTSCapabilities,
-)
+from .tts import MarkupInfo, MarkupSplit, SegmentCount, SynthesizedAudio, TTSCapabilities
 
 def chat_message_text_content(parts: Sequence[str], assistant: bool) -> str | None: ...
 
 def supported_nonverbals(provider: str) -> MarkupInfo: ...
-
-def split_all_markup(text: str) -> MarkupSplit:
-    """Strip every provider's expressive XML markup; brackets are prose and stay."""
-
-def strip_all_markup(text: str) -> str: ...
 
 def strip_expr_markup(text: str) -> str: ...
 
@@ -64,15 +52,6 @@ class Markup:
         """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
     def convert(self, text: str) -> str:
         """Lower the framework's markup to the provider's native syntax."""
-
-class TranscriptMarkupStripper:
-    """Stateful, provider-agnostic markup stripper for one transcript segment."""
-    def __new__(cls) -> Self: ...
-    def push(self, text: str) -> str: ...
-    def flush(self) -> str: ...
-    @property
-    def tags(self) -> list[ExpressiveTag]: ...
-    def expression_attribute(self) -> dict[str, str] | None: ...
 
 class TtsStreamAdapter:
     """`tts.StreamAdapter`'s engine: a non-streaming TTS as a streaming one, the text split into
