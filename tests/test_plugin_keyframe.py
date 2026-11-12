@@ -1,11 +1,4 @@
-"""Tests for the Keyframe plugin: timed emotion cues for persona-2.0-live.
-
-Covers the framed audio stream (``_framing``, ``KeyframeAudioOutput``), the timed
-``set_emotion`` on top of it, and ``emotion_tts_node``: the marker parser, the cue
-planner that times markers against TTS word timings, and the node that ties them to
-``Agent.default.tts_node``. The room and stream writer are faked; ``emotion_tts_node``
-runs in a real ``AgentSession`` with a fake TTS.
-"""
+"""Keyframe plugin: the framed audio stream, timed emotion cues and emotion_tts_node."""
 
 from __future__ import annotations
 
