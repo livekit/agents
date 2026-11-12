@@ -5,9 +5,37 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from livekit.agents import llm
+from livekit.agents.llm.tool_context import UPDATE_OF_KEY
 from livekit.agents.log import logger
 
 _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE = "<instructions>\n{content}\n</instructions>"
+
+TOOL_UPDATE_NOTE = "Your earlier {name} call: {output}"
+"""How a model reads a tool's later update or result."""
+
+
+def tool_updates_as_notes(chat_ctx: llm.ChatContext) -> llm.ChatContext:
+    """A tool's later updates and result, recorded as calls of their own, as system notes in
+    their place: a model that reads them as calls it made calls again to get a result."""
+    updates = {
+        item.call_id: item.name
+        for item in chat_ctx.items
+        if item.type == "function_call" and item.extra.get(UPDATE_OF_KEY)
+    }
+    if not updates:
+        return chat_ctx
+
+    items: list[llm.ChatItem] = []
+    for item in chat_ctx.items:
+        if item.type == "function_call" and item.call_id in updates:
+            continue
+        if item.type == "function_call_output" and item.call_id in updates:
+            note = TOOL_UPDATE_NOTE.format(name=updates[item.call_id], output=item.output)
+            item = llm.ChatMessage(
+                id=item.id, role="system", content=[note], created_at=item.created_at
+            )
+        items.append(item)
+    return llm.ChatContext(items)
 
 
 def parse_tool_call_arguments(fnc_call: llm.FunctionCall) -> dict[str, Any]:

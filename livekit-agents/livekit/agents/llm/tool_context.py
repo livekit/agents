@@ -382,6 +382,10 @@ APPROVAL_KEY = "lk.approval"
 """``FunctionCall.extra`` key on a call of a tool that requires approval: ``asked`` when it
 returned the read-back, ``granted`` when it ran on the person's answer."""
 
+UPDATE_OF_KEY = "lk.update_of"
+"""``extra`` key on a call that records a tool's later update or result as a call of its own:
+the call id it belongs to. A model reads such a pair as a note, never as a call it made."""
+
 CUT_OFF_KEY = "lk.cut_off"
 """``FunctionCall.extra`` key, ``"true"``, on a call whose output's reply the person cut off by
 speaking: the output stores no ``extra``, and the call is stored beside it."""

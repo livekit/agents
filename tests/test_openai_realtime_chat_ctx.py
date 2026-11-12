@@ -6,6 +6,7 @@ import pytest
 
 from livekit.agents import llm
 from livekit.agents.llm import remote_chat_context
+from livekit.agents.llm.tool_context import UPDATE_OF_KEY
 from livekit.plugins.openai.realtime import realtime_model
 from livekit.plugins.openai.realtime.realtime_model import RealtimeSession
 
@@ -52,6 +53,31 @@ async def test_update_chat_ctx_keeps_existing_remote_empty_messages() -> None:
     await session.update_chat_ctx(chat_ctx)
 
     assert session._sent_events == []
+
+
+async def test_a_later_result_is_created_as_a_note_not_a_call() -> None:
+    session = _create_session()
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.items.append(llm.FunctionCall(call_id="c1", name="flights", arguments="{}"))
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(call_id="c1", name="flights", output="searching", is_error=False)
+    )
+    later = {UPDATE_OF_KEY: "c1"}
+    chat_ctx.items.append(
+        llm.FunctionCall(call_id="c1_final", name="flights", arguments="{}", extra=later)
+    )
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(call_id="c1_final", name="flights", output="booked", is_error=False)
+    )
+
+    await session.update_chat_ctx(chat_ctx)
+
+    created = [event.item for event in session._sent_events]
+    assert [(item.type, getattr(item, "role", None)) for item in created] == [
+        ("function_call", None),
+        ("function_call_output", None),
+        ("message", "system"),
+    ]
 
 
 def test_truncate_deletes_item_when_no_audio_played() -> None:

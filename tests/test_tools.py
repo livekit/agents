@@ -17,6 +17,7 @@ from livekit.agents.llm import (
     function_tool,
 )
 from livekit.agents.llm._strict import to_strict_json_schema
+from livekit.agents.llm.tool_context import UPDATE_OF_KEY
 from livekit.agents.llm.utils import (
     _json_schema_allows_null,
     build_legacy_openai_schema,
@@ -1538,6 +1539,15 @@ class TestRunContextUpdate:
 
         assert ctx._updates[0][0].call_id == "orig"
         assert ctx._updates[1][0].call_id == "orig_update_1"
+
+    @pytest.mark.asyncio
+    async def test_a_later_update_names_the_call_it_belongs_to(self):
+        ctx = _make_run_context(call_id="orig")
+        await ctx.update("msg1")
+        await ctx.update("msg2")
+
+        assert UPDATE_OF_KEY not in ctx._updates[0][0].extra
+        assert ctx._updates[1][0].extra[UPDATE_OF_KEY] == "orig"
 
     @pytest.mark.asyncio
     async def test_synthesized_pair_extra_is_copy(self):

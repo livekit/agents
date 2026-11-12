@@ -80,6 +80,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
+from livekit.agents.llm._provider_format.utils import tool_updates_as_notes
 from livekit.agents.log import logger
 from livekit.agents.metrics import RealtimeModelMetrics, STTMetrics
 from livekit.agents.metrics.base import Metadata
@@ -1527,6 +1528,7 @@ class RealtimeSession(
             )
             # only remove the instructions but keep other system messages
             remove_instructions(chat_ctx)
+            chat_ctx = tool_updates_as_notes(chat_ctx)
 
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []

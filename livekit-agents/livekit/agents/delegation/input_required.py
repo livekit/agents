@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal
 
 from livekit import rtc
 
+from ..llm._provider_format.utils import tool_updates_as_notes
 from ..llm.chat_context import ChatContext, ChatMessage
 from ..llm.llm import LLM
 from ..llm.tool_context import AskedQuestion, function_tool
@@ -99,9 +100,13 @@ class InputRequiredDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         judges another way."""
         ids = {f"Q{i}": q for i, q in enumerate(check.questions, 1)}
         lines = []
-        for item in check.chat_ctx.items[-self._max_items :]:
+        # a tool's later updates read as notes, as the model facing the person reads them
+        outputs = {i.id for i in check.chat_ctx.items if i.type == "function_call_output"}
+        for item in tool_updates_as_notes(check.chat_ctx).items[-self._max_items :]:
             if item.type == "message" and item.role in ("user", "assistant") and item.text_content:
                 lines.append(f"{item.role}: {item.text_content}")
+            elif item.type == "message" and item.id in outputs and item.text_content:
+                lines.append(f"note: {item.text_content}")
             elif item.type == "function_call":
                 lines.append(f"call {item.name}: {item.arguments}")
             elif item.type == "function_call_output":
