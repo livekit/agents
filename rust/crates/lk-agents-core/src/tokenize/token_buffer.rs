@@ -1,188 +1,121 @@
-use std::borrow::Cow;
-
-use crate::tokenize::word::{WordTokenizerOptions, split_words};
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::tokenize::TokenSpan;
-use lk_agents_abi::tokenize::bindings::TokenizerToken;
+use lk_agents_abi::tokenize::bindings::{BufferedTokens, TokenizerCallback, TokenizerToken};
+use std::sync::Arc;
 
 // Lengths and offsets are characters, not bytes, as in Python.
 
-/// Character indices. Spans must tile the input start-to-start, or the text in a gap is dropped.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Span {
-    pub text: String,
-    pub start: usize,
-    pub end: usize,
-}
-
-impl From<Span> for TokenSpan {
-    fn from(span: Span) -> Self {
-        TokenSpan { token: span.text, start: span.start, end: span.end }
-    }
-}
-
-impl Span {
-    /// `push` holds it, `flush` says it whole.
-    pub fn whole(text: &str) -> Span {
-        Span { text: text.to_owned(), start: 0, end: text.chars().count() }
-    }
-}
-
-/// Text-only callback tokens retain the reference's first-match offsets and following whitespace.
-pub fn spans_from_tokens(text: &str, tokens: Vec<TokenizerToken>) -> Vec<Span> {
-    tokens
-        .into_iter()
-        .map(|token| match token {
-            TokenizerToken::Span(TokenSpan { token, start, end }) => {
-                Span { text: token, start, end }
-            }
-            TokenizerToken::Text(token) => {
-                let start = text.find(&token).map_or(0, |byte| text[..byte].chars().count());
-                let mut end = start + token.chars().count();
-                end += text.chars().skip(end).take_while(|c| c.is_whitespace()).count();
-                Span { text: token, start, end }
-            }
-        })
-        .collect()
-}
-
-/// Implemented only by native tokenizers: a host callback cannot run under a native buffer.
-pub mod sealed {
-    pub trait NativeTokenizer {}
-}
-
-/// Infallible: on failure return [`Span::whole`].
-pub trait Tokenize: sealed::NativeTokenizer {
-    fn tokenize(&self, text: &str) -> Vec<Span>;
-}
-
-/// Minus the tokenizer (`retain_format` is a tokenizer setting).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TokenBufferOptions {
+/// An application tokenizer's tokens, batched, each emitted once the next one proves it complete.
+pub struct BufferedTokenStream {
+    tokenizer: Arc<dyn TokenizerCallback>,
     /// Batch complete tokens until the running token reaches this many characters.
-    pub min_token_len: usize,
+    min_token_len: usize,
     /// Consult the tokenizer only once this much text is buffered.
-    pub min_ctx_len: usize,
+    min_ctx_len: usize,
     /// Emit before a token would take the batch past this (an oversized token goes whole).
-    pub max_token_len: Option<usize>,
-}
-
-impl TokenBufferOptions {
-    /// A word stream: emit each word once a following one proves it whole.
-    pub const WORDS: TokenBufferOptions =
-        TokenBufferOptions { min_token_len: 1, min_ctx_len: 1, max_token_len: None };
-}
-
-/// One tokenization requested from the queue owner, or the completed operation's text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TokenBufferStep {
-    Tokenize(String),
-    Done(Vec<String>),
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Operation {
-    Push,
-    Flush,
-}
-
-#[derive(Debug, Clone)]
-enum Phase {
-    Idle,
-    Awaiting { operation: Operation, emitted: Vec<String> },
-}
-
-/// Pure buffering state. Its owner supplies the spans of each requested text.
-#[derive(Debug, Clone)]
-pub struct TokenBuffer {
-    opts: TokenBufferOptions,
+    max_token_len: Option<usize>,
     in_buf: String,
     out_buf: String,
-    phase: Phase,
 }
 
-impl TokenBuffer {
-    pub fn new(opts: TokenBufferOptions) -> Self {
-        Self { opts, in_buf: String::new(), out_buf: String::new(), phase: Phase::Idle }
+impl BufferedTokens for BufferedTokenStream {
+    fn new(
+        tokenize_fnc: Arc<dyn TokenizerCallback>,
+        min_token_len: usize,
+        min_ctx_len: usize,
+        max_token_len: Option<usize>,
+    ) -> Self {
+        BufferedTokenStream {
+            tokenizer: tokenize_fnc,
+            min_token_len,
+            min_ctx_len,
+            max_token_len,
+            in_buf: String::new(),
+            out_buf: String::new(),
+        }
     }
 
-    pub fn push(&mut self, text: &str) -> TokenBufferStep {
-        assert!(matches!(self.phase, Phase::Idle), "tokenization is already pending");
+    /// The callback's error is reported once the push completes, the buffer left consistent.
+    fn push(&mut self, text: String) -> Result<Vec<String>, HostError> {
+        let mut out = Vec::new();
         if text.is_empty() {
-            return TokenBufferStep::Done(Vec::new());
+            return Ok(out);
         }
-        self.in_buf.push_str(text);
-        if self.in_buf.chars().count() < self.opts.min_ctx_len {
-            return TokenBufferStep::Done(Vec::new());
+        self.in_buf.push_str(&text);
+        if self.in_buf.chars().count() < self.min_ctx_len {
+            return Ok(out);
         }
-        self.request(Operation::Push, Vec::new())
+        let mut failed = None;
+        loop {
+            let spans = self.spans(&mut failed);
+            // The last token may still grow; a first token that covers no text proves nothing.
+            let [first, _, ..] = spans.as_slice() else { break };
+            if first.end == 0 {
+                break;
+            }
+            self.absorb(&first.token, &mut out);
+            if self.out_buf.chars().count() >= self.min_token_len {
+                out.push(std::mem::take(&mut self.out_buf));
+            }
+            let cut =
+                self.in_buf.char_indices().nth(first.end).map_or(self.in_buf.len(), |(by, _)| by);
+            self.in_buf.drain(..cut);
+        }
+        failed.map_or(Ok(out), Err)
     }
 
     /// Ignores the minimum token length; the cap still applies.
-    pub fn flush(&mut self) -> TokenBufferStep {
-        assert!(matches!(self.phase, Phase::Idle), "tokenization is already pending");
+    fn flush(&mut self) -> Result<Vec<String>, HostError> {
+        let mut out = Vec::new();
         if self.in_buf.is_empty() && self.out_buf.is_empty() {
-            return TokenBufferStep::Done(Vec::new());
+            return Ok(out);
         }
-        self.request(Operation::Flush, Vec::new())
+        let mut failed = None;
+        let spans = self.spans(&mut failed);
+        self.in_buf.clear();
+        for span in spans {
+            self.absorb(&span.token, &mut out);
+        }
+        if !self.out_buf.is_empty() {
+            out.push(std::mem::take(&mut self.out_buf));
+        }
+        failed.map_or(Ok(out), Err)
     }
+}
 
-    pub fn accept(&mut self, spans: Vec<Span>) -> TokenBufferStep {
-        let Phase::Awaiting { operation, emitted } =
-            std::mem::replace(&mut self.phase, Phase::Idle)
-        else {
-            panic!("no tokenization is pending");
-        };
-        self.apply(operation, emitted, spans)
-    }
-
-    fn request(&mut self, operation: Operation, emitted: Vec<String>) -> TokenBufferStep {
-        self.phase = Phase::Awaiting { operation, emitted };
-        TokenBufferStep::Tokenize(self.in_buf.clone())
-    }
-
-    fn apply(
-        &mut self,
-        operation: Operation,
-        mut emitted: Vec<String>,
-        spans: Vec<Span>,
-    ) -> TokenBufferStep {
-        match operation {
-            Operation::Push => {
-                let mut spans = spans.into_iter();
-                let (Some(first), Some(_second)) = (spans.next(), spans.next()) else {
-                    return TokenBufferStep::Done(emitted);
-                };
-                // A first token that covers no text proves nothing complete.
-                if first.end == 0 {
-                    return TokenBufferStep::Done(emitted);
+impl BufferedTokenStream {
+    /// The buffered text's tokens. Spans must tile the text start-to-start, or the text in a gap
+    /// is dropped; a text token takes its first match and the whitespace after it. If the
+    /// tokenizer fails, its error is kept and the text is one token.
+    fn spans(&self, failed: &mut Option<HostError>) -> Vec<TokenSpan> {
+        let text = &self.in_buf;
+        match self.tokenizer.tokenize(text) {
+            Ok(tokens) => tokens
+                .into_iter()
+                .map(|token| match token {
+                    TokenizerToken::Span(span) => span,
+                    TokenizerToken::Text(token) => {
+                        let start =
+                            text.find(&token).map_or(0, |byte| text[..byte].chars().count());
+                        let mut end = start + token.chars().count();
+                        end += text.chars().skip(end).take_while(|c| c.is_whitespace()).count();
+                        TokenSpan { token, start, end }
+                    }
+                })
+                .collect(),
+            Err(error) => {
+                *failed = Some(error);
+                if text.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    vec![TokenSpan { token: text.clone(), start: 0, end: text.chars().count() }]
                 }
-                self.absorb(&first.text, &mut emitted);
-                if self.out_buf.chars().count() >= self.opts.min_token_len {
-                    emitted.push(std::mem::take(&mut self.out_buf));
-                }
-                let cut = self
-                    .in_buf
-                    .char_indices()
-                    .nth(first.end)
-                    .map_or(self.in_buf.len(), |(byte, _)| byte);
-                self.in_buf.drain(..cut);
-                self.request(operation, emitted)
-            }
-            Operation::Flush => {
-                self.in_buf.clear();
-                for span in spans {
-                    self.absorb(&span.text, &mut emitted);
-                }
-                if !self.out_buf.is_empty() {
-                    emitted.push(std::mem::take(&mut self.out_buf));
-                }
-                TokenBufferStep::Done(emitted)
             }
         }
     }
 
     fn absorb(&mut self, token: &str, out: &mut Vec<String>) {
-        if let Some(max) = self.opts.max_token_len
+        if let Some(max) = self.max_token_len
             && !self.out_buf.is_empty()
             && self.out_buf.chars().count() + 1 + token.chars().count() > max
         {
@@ -192,61 +125,6 @@ impl TokenBuffer {
             self.out_buf.push(' ');
         }
         self.out_buf.push_str(token);
-    }
-}
-
-/// Convenience owner for built-in native tokenizers. The sealed tokenizer cannot call a host.
-#[derive(Debug, Clone)]
-pub struct NativeTokenBuffer<T: Tokenize> {
-    tokenizer: T,
-    state: TokenBuffer,
-}
-
-impl<T: Tokenize> NativeTokenBuffer<T> {
-    pub fn new(tokenizer: T, opts: TokenBufferOptions) -> Self {
-        Self { tokenizer, state: TokenBuffer::new(opts) }
-    }
-
-    pub fn push(&mut self, text: &str) -> Vec<String> {
-        let step = self.state.push(text);
-        self.drive(step)
-    }
-
-    pub fn flush(&mut self) -> Vec<String> {
-        let step = self.state.flush();
-        self.drive(step)
-    }
-
-    fn drive(&mut self, mut step: TokenBufferStep) -> Vec<String> {
-        loop {
-            step = match step {
-                TokenBufferStep::Tokenize(text) => {
-                    self.state.accept(self.tokenizer.tokenize(&text))
-                }
-                TokenBufferStep::Done(out) => return out,
-            };
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Words(pub WordTokenizerOptions);
-
-impl sealed::NativeTokenizer for Words {}
-
-impl Tokenize for Words {
-    fn tokenize(&self, text: &str) -> Vec<Span> {
-        split_words(text, self.0)
-            .into_iter()
-            .map(|w| Span {
-                text: match w.text {
-                    Cow::Borrowed(s) => s.to_owned(),
-                    Cow::Owned(s) => s,
-                },
-                start: w.start,
-                end: w.end,
-            })
-            .collect()
     }
 }
 

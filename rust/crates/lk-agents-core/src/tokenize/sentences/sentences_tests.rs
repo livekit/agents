@@ -206,7 +206,8 @@ fn compare_with_blingfire_on_the_experiment_corpus() {
 
 fn chunks(text: &str, min_words: usize, retain_format: bool) -> Vec<(String, usize, usize)> {
     let opts = SentenceOptions { min_words, retain_format, ..SentenceOptions::default() };
-    SentenceSplitter::default().sentences(text, &opts)
+    let sentences = SentenceSplitter::default().sentences(text, &opts);
+    sentences.into_iter().map(|s| (s.text, s.start, s.end)).collect()
 }
 
 // A short sentence merges forward without advancing its start; whitespace belongs to the next

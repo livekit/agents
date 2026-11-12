@@ -21,7 +21,6 @@ Addnl
 Adj
 Adjs
 Adjt
-Adm
 Adv
 Advs
 Advt
@@ -77,6 +76,7 @@ Ariz
 Ark
 Arm
 Arr
+Art
 Arty
 As
 Asg
@@ -99,7 +99,6 @@ Atmos
 Att
 Attn
 Attrib
-Atty
 Attys
 Aud
 Aug
@@ -109,6 +108,7 @@ Austl
 Auth
 Aux
 Av
+Avda
 Avdp
 Ave
 Avg
@@ -143,6 +143,7 @@ Bancorp
 Bap
 Bapt
 Bbl
+Bd
 Bdle
 Bdrm
 Bds
@@ -150,6 +151,7 @@ Bef
 Belg
 Benj
 Bhd
+Bhf
 Bhn
 Bhu
 Bib
@@ -181,6 +183,7 @@ Bro
 Bros
 Bsh
 Bsk
+Bsp
 Btry
 Bul
 Bulg
@@ -234,13 +237,11 @@ Cmdg
 Cmdr
 Cml
 Co
-Col
 Coll
 Collat
 Colloq
 Colo
 Cols
-Com
 Comd
 Comdg
 Comdt
@@ -332,7 +333,6 @@ Diff
 Dil
 Dimin
 Dipl
-Dir
 Dirs
 Dis
 Disp
@@ -356,7 +356,6 @@ Dupls
 Dups
 Dwt
 E. g
-E.g
 Ec
 Eccl
 Eccles
@@ -394,7 +393,6 @@ Equip
 Equiv
 Esk
 Esp
-Esq
 Est
 Esth
 Etc
@@ -406,7 +404,6 @@ Evang
 Evap
 Evg
 Ex
-Exc
 Exch
 Excl
 Exod
@@ -417,6 +414,7 @@ Exr
 Exrx
 Ext
 Ezek
+Fa
 Fac
 Fam
 Far
@@ -431,6 +429,7 @@ Fgt
 Fict
 Fig
 Figs
+Fil
 Fin
 Fla
 Fld
@@ -451,7 +450,7 @@ Gal
 Galv
 Gaz
 Gds
-Gen
+Gebr
 Genit
 Genl
 Geo
@@ -465,7 +464,6 @@ Gld
 Gn
 Gnd
 Goth
-Gov
 Govt
 Gr
 Gro
@@ -480,6 +478,7 @@ Gynecol
 HH.D
 Hab
 Hag
+Hbf
 Hdbk
 Hdkf
 Hdlg
@@ -494,6 +493,7 @@ Hind
 Hist
 Hitt
 Hld
+Hnos
 Hond
 Hor
 Horol
@@ -567,6 +567,8 @@ Jct
 Jdt
 Jer
 Jg
+Jh
+Jhd
 Jl
 Jm
 Jn
@@ -583,6 +585,7 @@ Juv
 Jwlr
 Kan
 Kans
+Kfz
 Kmh
 Knt
 Kor
@@ -621,6 +624,7 @@ Litho
 Lithog
 Litt.B
 Litt.D
+Lkw
 Loc
 Loq
 Ltd
@@ -632,7 +636,6 @@ M.Agr
 M.Div
 M.Ed
 M.Sc
-MM
 MS
 MSS
 Macc
@@ -652,7 +655,6 @@ Masc
 Mass
 Md
 Mdse
-Me
 Meas
 Mech
 Med
@@ -666,8 +668,6 @@ Mfg
 Mfr
 Mfrs
 Mgmt
-Mgr
-Mgrs
 Mgt
 Mhz
 Mich
@@ -675,6 +675,7 @@ Mid
 Midn
 Min
 Minn
+Mio
 Misc
 Miss
 Mkt
@@ -689,6 +690,7 @@ Morph
 Mos
 Moz
 Mph
+Mrd
 Msec
 Mses
 Msg
@@ -704,6 +706,7 @@ Mus.B
 Mus.D
 Mus.Dr
 Mus.M
+MwSt
 Mxd
 Myc
 Mycol
@@ -740,6 +743,7 @@ Nor
 Norw
 Nos
 Nov
+Nr
 Nt.wt
 Num
 Numis
@@ -821,6 +825,7 @@ Pizz
 Pkg
 Pkgs
 Pkt
+Pkw
 Pl
 Plf
 Pln
@@ -835,6 +840,7 @@ Polit
 Por
 Pos
 Poss
+Pp
 Ppd
 Pph
 Ppt
@@ -846,7 +852,6 @@ Prem
 Prepd
 Prepn
 Preps
-Pres
 Presb
 Presby
 Pret
@@ -857,7 +862,6 @@ Priv
 Prob
 Probs
 Proc
-Prof
 Pron
 Propr
 Pros
@@ -912,7 +916,6 @@ Regd
 Regt
 Rel
 Rem
-Rep
 Repl
 Rept
 Repub
@@ -921,7 +924,6 @@ Reqd
 Res
 Resp
 Ret
-Rev
 Rhbdr
 Rheo
 Rhet
@@ -932,7 +934,9 @@ Rm
 Rms
 Rnd
 Rom
+Rp
 Rpt
+Rs
 Rt
 Rte
 Rtes
@@ -965,7 +969,6 @@ Secy
 Sed
 Sel
 Sem
-Sen
 Sep
 Sepd
 Sept
@@ -1017,6 +1020,8 @@ Stk
 Stmt
 Stmts
 Str
+Sts
+Sté
 Subj
 Subjs
 Subs
@@ -1029,7 +1034,6 @@ Sup.Ct
 Supp
 Suppl
 Supr
-Supt
 Supvr
 Sur
 Surg
@@ -1075,11 +1079,13 @@ Theol
 Therap
 Therm
 Thos
+Thu
 Thur
 Thurs
 Tinct
 Tit
 Tkt
+Tln
 Tlr
 Tng
 Tnpk
@@ -1096,13 +1102,17 @@ Trigon
 Tripl
 Trop
 Trp
+Tsd
 Tsp
 Tu
+Tue
 Tues
 Tun
 Tur
 Twp
 Typ
+Ud
+Uds
 Ult
 Unan
 Unb
@@ -1123,6 +1133,8 @@ Var
 Vars
 Vat
 Vbs
+Vd
+Vds
 Veg
 Vel
 Venez
@@ -1132,7 +1144,6 @@ Veter
 Vic
 Viet
 Vil
-Vis
 Viz
 Voc
 Vocab
@@ -1156,13 +1167,14 @@ Wm
 Wmk
 Wpn
 Wrnt
+Wwe
 Wyo
 Yel
 Yeo
 Yrs
 Yug
 Yugo
-ab
+Ztr
 abb
 abbr
 abbrs
@@ -1195,14 +1207,12 @@ agcy
 agri
 agric
 agt
-al
 alc
 alg
 alky
 alt
 amt
 amts
-an
 anat
 anc
 and
@@ -1220,6 +1230,7 @@ appl
 approx
 appt
 apptd
+apr
 apt
 apts
 aq
@@ -1305,6 +1316,7 @@ bul
 bur
 bvt
 bx
+bzw
 c
 ca
 cal
@@ -1354,7 +1366,6 @@ coll
 collat
 colloq
 cols
-com
 comd
 comdg
 coml
@@ -1474,7 +1485,6 @@ ed
 eds
 educ
 eff
-el
 elec
 elem
 elev
@@ -1489,6 +1499,7 @@ eng
 engr
 enl
 entom
+env
 eq
 eqn
 eqns
@@ -1496,13 +1507,13 @@ equip
 equiv
 esp
 esq
-est
 etc
 etym
 evan
 evang
 evap
 evg
+evtl
 ex
 exc
 exch
@@ -1552,11 +1563,11 @@ geog
 geol
 geom
 ger
+ggf
 gl
 gld
 gm
 gnd
-gov
 govt
 gr
 gro
@@ -1580,7 +1591,6 @@ hgwy
 hist
 hld
 hm
-ho
 hor
 horol
 hort
@@ -1600,7 +1610,6 @@ ign
 illus
 imit
 immun
-in
 inbd
 inc
 incl
@@ -1616,6 +1625,7 @@ infin
 infl
 infs
 inj
+inkl
 inq
 ins
 insol
@@ -1745,7 +1755,6 @@ neg
 neur
 neurol
 neut
-no
 nol
 nom
 nos
@@ -1754,6 +1763,7 @@ nt.wt
 num
 numis
 nw
+núm
 ob
 obj
 obl
@@ -1769,21 +1779,18 @@ opt
 orch
 ord
 ordn
-org
 orig
 ornith
 orth
 otol
 oz
 pam
-par
 paren
 parl
 patd
 payt
 pct
 pd
-per
 perp
 pers
 petr
@@ -1870,6 +1877,7 @@ pwr
 pwt
 pxt
 pyro
+pág
 ql
 qlty
 qn
@@ -1932,6 +1940,7 @@ rtes
 rul
 rwy
 ry
+réf
 s.ap
 sanit
 satd
@@ -1942,7 +1951,6 @@ sci
 scr
 sculp
 sd
-se
 sec
 sect
 sects
@@ -2067,6 +2075,7 @@ trp
 tsp
 twp
 typ
+tél
 ult
 unan
 unb
@@ -2089,6 +2098,7 @@ vel
 ver
 vert
 veter
+vgl
 vic
 vil
 vis
@@ -2124,3 +2134,11 @@ yeo
 yr
 yrs
 zool
+zzgl
+éd
+नं
+पृ
+प्रा
+रु
+लि
+सं

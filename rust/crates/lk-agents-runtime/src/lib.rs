@@ -12,11 +12,13 @@ pub mod cores {
     pub use lk_agents_core::metrics::provider::{LlmMetricState, ProviderMetrics, TtsMetricState};
     pub use lk_agents_core::request::ConnectOptionsRules;
     pub use lk_agents_core::text::Languages;
-    pub use lk_agents_core::tokenize::{BufferedTokenStream, SpeechWordTokenizer, WordStream};
+    pub use lk_agents_core::tokenize::sentences::{SentenceStream, SpeechSentenceTokenizer};
+    pub use lk_agents_core::tokenize::{
+        BufferedTokenStream, SpeechTokenizer, SpeechWordTokenizer, WordStream,
+    };
     pub use lk_agents_core::tool_outcome::ToolReports;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
     pub use lk_agents_core::tts::markup::{ProviderMarkup, SpeechMarkup, TranscriptMarkupStripper};
-    pub use lk_agents_voice::tokenize::SpeechTokenizer;
 }
 
 // The cores' in-place `_core` registrations are linked with the extension only from a crate it

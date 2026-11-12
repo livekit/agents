@@ -5,7 +5,7 @@
 use super::{
     Context, INLINE_WINDOW, Kind, Md, Rules, Scan, Token, floor_char, lex_inline, markup_scan,
 };
-use crate::tokenize::is_py_space;
+use crate::text::is_py_space;
 
 fn md(kind: Md, raw: &str, ctx: Context) -> Token {
     Token { kind: Kind::Markdown(kind), raw: raw.to_owned(), ctx }

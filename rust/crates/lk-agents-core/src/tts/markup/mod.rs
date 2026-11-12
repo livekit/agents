@@ -80,6 +80,14 @@ pub fn nonverbals_of(provider: &str) -> std::collections::BTreeMap<NonverbalFiel
         .collect()
 }
 
+/// The markup a voice speaking `markup_provider`'s dialect keeps whole, while it flows.
+pub fn markup_vocabulary(
+    markup_provider: &str,
+    expressive: bool,
+) -> Option<crate::lexer::Vocabulary> {
+    expressive.then(|| crate::lexer::Vocabulary::of(Provider::from_wire(markup_provider)))
+}
+
 /// `sentence_tokenizer(provider, expressive=)` for a `_provider_key()`.
 pub fn sentence_tokenizer_of(provider: &str, expressive: bool) -> SentenceTokenizerConfig {
     Markup::from_provider_key(provider).sentence_tokenizer(expressive)

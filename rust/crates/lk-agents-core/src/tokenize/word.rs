@@ -1,4 +1,4 @@
-use crate::tokenize::token_buffer::{NativeTokenBuffer, TokenBufferOptions, Words};
+use crate::text::is_py_space;
 use lk_agents_abi::tokenize::TokenSpan;
 use regex::Regex;
 use std::borrow::Cow;
@@ -12,8 +12,6 @@ pub const PUNCTUATIONS: [char; 39] = [
     '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~', '±', '—', '‘', '’', '“', '”',
     '…',
 ];
-
-pub use crate::text::{is_py_space, py_strip};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WordTokenizerOptions {
@@ -192,30 +190,46 @@ impl lk_agents_abi::tokenize::bindings::SpeechWordTokenizer for SpeechWordTokeni
     }
 }
 
-/// Words cut as their text streams in: each goes out once the next proves it whole.
+/// Words cut as their text streams in: each goes out once another word follows it (under
+/// `retain_format`, trailing whitespace counts as one); flush emits the rest.
 #[derive(Debug, Clone)]
-pub struct WordStream(NativeTokenBuffer<Words>);
+pub struct WordStream {
+    opts: WordTokenizerOptions,
+    pending: String,
+}
 
 impl WordStream {
     pub fn new(opts: WordTokenizerOptions) -> Self {
-        WordStream(NativeTokenBuffer::new(Words(opts), TokenBufferOptions::WORDS))
+        WordStream { opts, pending: String::new() }
     }
 
     pub fn push(&mut self, text: &str) -> Vec<String> {
-        self.0.push(text)
+        self.pending.push_str(text);
+        let mut words = split_words(&self.pending, self.opts);
+        words.pop();
+        let Some(end) = words.last().map(|w| w.end) else { return Vec::new() };
+        let out = words.into_iter().map(|w| w.text.into_owned()).collect();
+        let cut = self.pending.char_indices().nth(end).map_or(self.pending.len(), |(by, _)| by);
+        self.pending.drain(..cut);
+        out
     }
 
     pub fn flush(&mut self) -> Vec<String> {
-        self.0.flush()
+        let out = split_words(&self.pending, self.opts)
+            .into_iter()
+            .map(|w| w.text.into_owned())
+            .collect();
+        self.pending.clear();
+        out
     }
 }
 
 impl lk_agents_abi::tokenize::bindings::SpeechWordStream for WordStream {
     fn push(&mut self, text: String) -> Vec<String> {
-        self.0.push(&text)
+        WordStream::push(self, &text)
     }
 
     fn flush(&mut self) -> Vec<String> {
-        self.0.flush()
+        WordStream::flush(self)
     }
 }

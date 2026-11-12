@@ -3,7 +3,9 @@
 The sentence splitter (`src/tokenize/sentences/`) is BlingFire's sentence breaker
 (github.com/microsoft/BlingFire at 18e9a19, MIT, see `LICENSE`) ported rule for rule, with the
 changes speech needs marked `Voice:` in `rules.rs`. The word lists in `src/tokenize/sentences/data/`
-come from the same upstream rules, hence its `LICENSE` here.
+come from the same upstream rules (`ldbsrc/sbd`), hence its `LICENSE` here, with additions of ours
+for voice: European and Hindi abbreviations and titles, and all of `number_abbreviations.txt`
+(common words read as an abbreviation only before a number, `no. 3`). Each list is sorted by byte.
 
 `corpus.jsonl` holds short windows of text (one or two sentences), each with the split the
 splitter gives it (`sentences`) and, where known, the split a voice wants (`expect`). It was

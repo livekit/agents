@@ -286,3 +286,38 @@ fn cjk_word_streams_release_each_character_once_the_next_starts() {
         assert_eq!(stream.flush(), [flushed]);
     }
 }
+
+// Catches: a word emitted before another follows it, so a word still arriving is cut.
+#[test]
+fn a_streamed_word_goes_out_once_another_follows_it() {
+    let mut stream = WordStream::new(DEFAULTS);
+    assert_eq!(stream.push("Hel"), Vec::<String>::new());
+    assert_eq!(stream.push("lo, "), Vec::<String>::new(), "a space alone proves nothing");
+    assert_eq!(stream.push("wo"), ["Hello"]);
+    assert_eq!(stream.flush(), ["wo"]);
+    assert_eq!(stream.flush(), Vec::<String>::new(), "flush is not repeatable");
+
+    // Under `retain_format` the whitespace is a token of its own, so it proves the word whole.
+    let mut stream = WordStream::new(RETAIN);
+    assert_eq!(stream.push("Hello "), ["Hello"]);
+    assert_eq!(stream.push("there"), Vec::<String>::new());
+    assert_eq!(stream.flush(), [" there"]);
+}
+
+// Catches: a stream whose words depend on how the text was chunked.
+#[test]
+fn a_word_stream_says_what_split_words_says() {
+    for text in SAMPLES {
+        for flags in 0..4u8 {
+            let opts = WordTokenizerOptions {
+                ignore_punctuation: flags & 1 != 0,
+                retain_format: flags & 2 != 0,
+            };
+            let mut stream = WordStream::new(opts);
+            let mut out: Vec<String> =
+                text.chars().flat_map(|c| stream.push(&c.to_string())).collect();
+            out.extend(stream.flush());
+            assert_eq!(out, texts(text, opts), "{text:?} with {opts:?}");
+        }
+    }
+}

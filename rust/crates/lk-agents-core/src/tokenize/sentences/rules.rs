@@ -60,10 +60,11 @@ pub(super) fn rule_sets() -> &'static RuleSets {
 /// What the rules are built from: the word lists and the character sets a rule names.
 #[derive(Debug, Clone)]
 pub(super) struct Sources {
+    /// Abbreviations other than titles.
     pub abbreviations: Vec<&'static str>,
     pub titles: Vec<&'static str>,
-    /// Common words left out of the abbreviations, still read as one before a number.
-    pub not_abbreviations: Vec<&'static str>,
+    /// Common words read as an abbreviation only before a number.
+    pub number_abbreviations: Vec<&'static str>,
     pub start_words: Vec<&'static str>,
     pub ordinal_nouns: Vec<&'static str>,
     pub always: &'static str,
@@ -76,14 +77,10 @@ pub(super) struct Sources {
 impl Default for Sources {
     fn default() -> Self {
         Sources {
-            abbreviations: words(include_str!("data/en_abbreviations.txt"))
-                .chain(words(include_str!("data/more_abbreviations.txt")))
-                .collect(),
-            titles: words(include_str!("data/en_titles.txt"))
-                .chain(words(include_str!("data/more_titles.txt")))
-                .collect(),
-            not_abbreviations: words(include_str!("data/not_abbreviations.txt")).collect(),
-            start_words: words(include_str!("data/en_start_words.txt")).collect(),
+            abbreviations: words(include_str!("data/abbreviations.txt")),
+            titles: words(include_str!("data/titles.txt")),
+            number_abbreviations: words(include_str!("data/number_abbreviations.txt")),
+            start_words: words(include_str!("data/start_words.txt")),
             ordinal_nouns: ORDINAL_NOUNS.split_whitespace().collect(),
             always: ALWAYS,
             endp: ENDP,
@@ -108,8 +105,8 @@ pub(super) fn build(rules: Vec<(String, Rule)>) -> RuleSet {
     RuleSet { dfa, rules: rules.into_iter().map(|(_, r)| r).collect() }
 }
 
-fn words(list: &'static str) -> impl Iterator<Item = &'static str> {
-    list.lines().filter(|w| !w.is_empty())
+fn words(list: &'static str) -> Vec<&'static str> {
+    list.lines().filter(|w| !w.is_empty()).collect()
 }
 
 fn alternation<'a>(words: impl Iterator<Item = &'a str>) -> String {
@@ -178,10 +175,7 @@ impl Patterns {
             r"(?:[0-9][0-9]?|[a-z]|i?i?i|iv|vi?i?i?|ix|xi?i?i?|I?I?I|IV|VI?I?I?|IX|XI?I?I?)";
         let sp = r"[\x{20}\x{A0}]";
         let n3 = "[0-9]?[0-9]?[0-9]";
-        let removed = &src.not_abbreviations;
-        let all = || src.abbreviations.iter().chain(&src.titles).copied();
-        let abbreviations = all().filter(|w| !removed.contains(w));
-        let abbreviations_and_removed = all().chain(removed.iter().copied());
+        let abbreviations = || src.abbreviations.iter().chain(&src.titles).copied();
         Patterns {
             always,
             closers,
@@ -201,12 +195,12 @@ impl Patterns {
                 l4 = short(4),
                 l2 = short(2)
             ),
-            abbr: format!("{}[.]", alternation(abbreviations)),
-            // Voice: what reads as an abbreviation before a number: the list, the entries left
-            // out of it (`no. 3`, `al. 2`) and single letters (`p. 87`).
+            abbr: format!("{}[.]", alternation(abbreviations())),
+            // Voice: what reads as an abbreviation before a number: the lists, common words
+            // (`no. 3`, `al. 2`) and single letters (`p. 87`).
             abbr_before_number: format!(
                 "(?:{}|{letter})[.]",
-                alternation(abbreviations_and_removed)
+                alternation(abbreviations().chain(src.number_abbreviations.iter().copied()))
             ),
             title: format!("{}[.]", alternation(src.titles.iter().copied())),
             start_word: alternation(src.start_words.iter().copied()),

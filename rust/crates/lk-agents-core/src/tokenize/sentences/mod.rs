@@ -48,6 +48,61 @@ impl Default for SentenceOptions {
     }
 }
 
+/// The sentence splitting a synthesis applies: without a provider, the sentence adapter's
+/// default; with one, its gateway limits. `markup` is what is never split; under it, sentences
+/// batch up to the provider's limit.
+pub fn sentence_splitter(provider: Option<&str>, markup: Option<Vocabulary>) -> SentenceStream {
+    let Some(provider) = provider else {
+        return SentenceStream::new(SentenceOptions {
+            retain_format: true,
+            markup,
+            ..SentenceOptions::default()
+        });
+    };
+    let cfg = crate::tts::markup::sentence_tokenizer_of(provider, markup.is_some());
+    let base = SentenceOptions::default();
+    SentenceStream::new(SentenceOptions {
+        min_words: if cfg.batch_to_max { usize::MAX } else { base.min_words },
+        max_token_len: cfg.max_token_len,
+        markup,
+        ..base
+    })
+}
+
+/// `tokenize.SentenceTokenizer`.
+pub struct SpeechSentenceTokenizer(SentenceOptions);
+
+impl lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer for SpeechSentenceTokenizer {
+    type Stream = SentenceStream;
+
+    fn new(
+        min_words: usize,
+        clause_words: Option<usize>,
+        retain_format: bool,
+        max_token_len: Option<usize>,
+    ) -> Self {
+        SpeechSentenceTokenizer(SentenceOptions {
+            min_words,
+            clause_words,
+            max_token_len,
+            retain_format,
+            markup: None,
+        })
+    }
+
+    fn tokenize(&self, text: String, _language: Option<String>) -> Vec<String> {
+        SentenceSplitter::default().sentences(&text, &self.0).into_iter().map(|s| s.text).collect()
+    }
+
+    fn stream(&self) -> SentenceStream {
+        SentenceStream::new(self.0.clone())
+    }
+
+    fn max_token_len(&self) -> Option<usize> {
+        self.0.max_token_len
+    }
+}
+
 /// Splits text into sentences. Holds the rule automata's caches, so keep one per stream.
 pub struct SentenceSplitter {
     caches: lexer::Caches<'static>,
@@ -77,7 +132,11 @@ impl SentenceSplitter {
         chunker.advance(&view, opts, &ends, view.clean.len(), &mut cuts);
         chunker.finish(&view, opts, &mut cuts);
         cuts.into_iter()
-            .map(|r| (view.render(r.clone(), opts.retain_format), r.start, r.end))
+            .map(|r| Sentence {
+                text: view.render(r.clone(), opts.retain_format),
+                start: r.start,
+                end: r.end,
+            })
             .collect()
     }
 }
@@ -136,8 +195,13 @@ fn script(c: char) -> Script {
     }
 }
 
-/// `(text, start, end)`, with a character span.
-pub type Sentence = (String, usize, usize);
+/// A chunk a voice speaks, with its character span of the source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sentence {
+    pub text: String,
+    pub start: usize,
+    pub end: usize,
+}
 
 /// Runs of whitespace that contain a newline become one space; the result is trimmed. Python's
 /// `\s` (`re.sub(r"\s*\n+\s*", " ", s).strip()`), so the C0 separators count as whitespace.

@@ -1,4 +1,5 @@
-use super::pacing::{AdapterInput, HostSentences, Sentences, Split, trim_python_whitespace};
+use super::pacing::trim_python_whitespace;
+use super::sentences::{AdapterInput, HostSentences, Sentences, Split};
 use super::stream::TtsStream;
 use crate::telemetry;
 use lk_agents_abi::ApiConnectOptions;
@@ -15,6 +16,8 @@ use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
 use lk_agents_core::metrics::provider::TtsMetricState;
+use lk_agents_core::tokenize::sentences::sentence_splitter;
+use lk_agents_core::tts::markup::markup_vocabulary;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::strings::shortuuid;
 use parking_lot::Mutex;
@@ -199,9 +202,9 @@ impl StreamAdapter {
         let lowering = processor();
         // A host tokenizer knows nothing of the voice's tags: its sentences are glued here until
         // none ends inside one, as the native splitter does.
-        let markup = sentences.as_ref().and_then(|_| {
-            super::sentences::markup_vocabulary(&self.tts.markup_provider(), lowering.is_some())
-        });
+        let markup = sentences
+            .as_ref()
+            .and_then(|_| markup_vocabulary(&self.tts.markup_provider(), lowering.is_some()));
         let split = match sentences {
             Some(stream) => Split::Host(HostSentences::read(stream, cx)),
             None => Split::Native((self.splitter)(lowering.is_some())),
@@ -604,7 +607,6 @@ mod tests;
 pub(crate) fn splitter_for(tts: &dyn Tts) -> SplitterFactory {
     let markup_provider = tts.markup_provider();
     Arc::new(move |expressive| {
-        let markup = super::sentences::markup_vocabulary(&markup_provider, expressive);
-        Box::new(super::sentences::sentence_splitter(None, markup))
+        Box::new(sentence_splitter(None, markup_vocabulary(&markup_provider, expressive)))
     })
 }

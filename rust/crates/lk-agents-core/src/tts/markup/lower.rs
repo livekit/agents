@@ -5,7 +5,7 @@
 use lk_agents_abi::tts::markup::MarkerKind;
 
 use crate::lexer::{EXPR, Kind, Lexer, Rules, Tag, Token, Vocabulary};
-use crate::tokenize::py_strip;
+use crate::text::py_strip;
 use crate::tts::markup::provider::{
     FISHAUDIO_DRAMA_SPANS, FISHAUDIO_TONES, GEMINI_PAUSE, GEMINI_SOUNDS, Provider, ProviderExt,
     XAI_WRAPPING, cartesia_prosody, fishaudio_sound_alias, gemini_sound_alias, xai_sound_alias,

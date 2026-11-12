@@ -90,9 +90,8 @@ impl super::Implementations for Selected {
     type TextSessionRunner = ::lk_agents_runtime::text_session::Runner;
     type LocalInteraction = ::lk_agents_runtime::agent_tool::LocalInteraction;
     type TokenizeFunctions = ::lk_agents_runtime::cores::SpeechTokenizer;
-    type SpeechSentenceTokenizer =
-        ::lk_agents_runtime::inference::tts::sentences::SpeechSentenceTokenizer;
-    type SpeechSentenceStream = ::lk_agents_runtime::inference::tts::sentences::SentenceBuffer;
+    type SpeechSentenceTokenizer = ::lk_agents_runtime::cores::SpeechSentenceTokenizer;
+    type SpeechSentenceStream = ::lk_agents_runtime::cores::SentenceStream;
     type SpeechWordTokenizer = ::lk_agents_runtime::cores::SpeechWordTokenizer;
     type SpeechWordStream = ::lk_agents_runtime::cores::WordStream;
     type BufferedTokens = ::lk_agents_runtime::cores::BufferedTokenStream;

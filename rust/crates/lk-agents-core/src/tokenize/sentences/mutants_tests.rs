@@ -31,8 +31,7 @@ fn leak(s: String) -> &'static str {
 }
 
 fn mutants() -> Vec<Box<dyn FnOnce() -> Mutant>> {
-    let base = Sources::default();
-    let rules = Patterns::new(&base).main().len();
+    let rules = Patterns::new(&Sources::default()).main().len();
     let mut out: Vec<Box<dyn FnOnce() -> Mutant>> = Vec::new();
     for i in 0..rules {
         out.push(Box::new(move || Mutant {
@@ -82,27 +81,17 @@ fn mutants() -> Vec<Box<dyn FnOnce() -> Mutant>> {
 
     // A word list with some entries left out; a window must contain one of them to notice.
     type Field = fn(&mut Sources) -> &mut Vec<&'static str>;
-    let lists: [(&str, Field, usize); 6] = [
+    let lists: [(&str, Field, usize); 5] = [
         ("abbreviation", |s| &mut s.abbreviations, 25),
-        ("title", |s| &mut s.titles, 5),
-        ("not-abbreviation", |s| &mut s.not_abbreviations, 1),
+        ("title", |s| &mut s.titles, 6),
+        ("number abbreviation", |s| &mut s.number_abbreviations, 1),
         ("start word", |s| &mut s.start_words, 8),
         ("ordinal noun", |s| &mut s.ordinal_nouns, 1),
-        ("more abbreviation", |s| &mut s.abbreviations, 1),
     ];
-    let more_from =
-        base.abbreviations.len() - include_str!("data/more_abbreviations.txt").lines().count();
     for (kind, field, chunk) in lists {
-        let mut probe = Sources::default();
-        let all = field(&mut probe).clone();
-        let range = match kind {
-            "abbreviation" => 0..more_from,
-            "more abbreviation" => more_from..all.len(),
-            _ => 0..all.len(),
-        };
-        let indices: Vec<usize> = range.collect();
-        for group in indices.chunks(chunk) {
-            let gone: Vec<&'static str> = group.iter().map(|&i| all[i]).collect();
+        let all = field(&mut Sources::default()).clone();
+        for group in all.chunks(chunk) {
+            let gone = group.to_vec();
             out.push(Box::new(move || {
                 let mut src = Sources::default();
                 let list = field(&mut src);

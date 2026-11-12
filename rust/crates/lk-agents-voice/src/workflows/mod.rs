@@ -2,7 +2,7 @@ use lk_agents_abi::utils::dates::Date;
 use lk_agents_abi::voice::workflows::{
     CaptureRefused, DateOfBirthRefused, UnknownDtmfSymbol, WorkflowChecks,
 };
-use lk_agents_core::tokenize::{is_py_space, py_strip};
+use lk_agents_core::text::{is_py_space, py_strip};
 use lk_agents_voice::generation::{Rendered, safe_render};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;

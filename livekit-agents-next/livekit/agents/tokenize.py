@@ -199,6 +199,11 @@ def replace_words(
     return _replace_words()
 
 
+def _overrides_tokenize(tokenizer: _SentenceTokenizerBase | _WordTokenizerBase) -> bool:
+    """Whether a subclass's own `tokenize` decides the tokens; the generated ones are native."""
+    return not type(tokenizer).tokenize.__module__.startswith(_generated.__name__)
+
+
 class _SpeechSentenceStream(_NativeTokenStream, SentenceStream):
     """`SentenceTokenizer`'s stream: a sentence goes out once no text to come could change it."""
 
@@ -213,16 +218,14 @@ class _SentenceTokenizerBase:
         raise NotImplementedError
 
     def stream(self, *, language: str | None = None) -> SentenceStream:
-        native = self._native
-        # A subclass's own `tokenize` decides its sentences; the generated ones are native.
-        if type(self).tokenize.__module__.startswith(_generated.__name__):
-            return _SpeechSentenceStream(native._core_stream())
+        if not _overrides_tokenize(self):
+            return _SpeechSentenceStream(self._native._core_stream())
         # each of the subclass's sentences goes out once the next one starts
         return BufferedSentenceStream(
             tokenizer=functools.partial(self.tokenize, language=language),
             min_token_len=1,
             min_ctx_len=1,
-            max_token_len=native._core_max_token_len,
+            max_token_len=self._native._core_max_token_len,
         )
 
 
@@ -240,8 +243,7 @@ class _WordTokenizerBase:
         raise NotImplementedError
 
     def stream(self, *, language: str | None = None) -> WordStream:
-        # A subclass's own `tokenize` decides its words; the generated one is native.
-        if type(self).tokenize.__module__.startswith(_generated.__name__):
+        if not _overrides_tokenize(self):
             return _SpeechWordStream(self._native._core_stream())
         # each of the subclass's words goes out once the next one starts
         return BufferedWordStream(

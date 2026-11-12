@@ -21,8 +21,6 @@ lk-agents-telemetry = { path = "../lk-agents-telemetry" }
 lk-agents-media = { path = "../lk-agents-media" }
 log.workspace = true
 serde_json.workspace = true
-# `replace_words`' ordered replacement table, as the host passes it.
-indexmap.workspace = true
 thiserror.workspace = true
 # `remote_session` (`voice/remote_session.py`): the `livekit.agent` package's
 # `AgentSessionEvent`/`SessionRequest`, its prost, and the well-known types as that crate spells

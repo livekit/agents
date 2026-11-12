@@ -44,7 +44,7 @@ mod pump;
 mod request;
 pub mod sentence_adapter;
 pub use request::{stream, synthesize};
-pub mod sentences;
+mod sentences;
 pub mod stream;
 pub mod wire;
 
@@ -369,8 +369,8 @@ impl GatewayTts {
             }),
             sentences: {
                 let key = pump.provider.map_or("", InferenceProvider::as_str);
-                let markup = sentences::markup_vocabulary(key, expressive);
-                Box::new(sentences::sentence_splitter(Some(key), markup))
+                let markup = lk_agents_core::tts::markup::markup_vocabulary(key, expressive);
+                Box::new(lk_agents_core::tokenize::sentences::sentence_splitter(Some(key), markup))
             },
         };
         self.tasks.spawn(self.spawner.as_ref(), "tts stream", pump.run());

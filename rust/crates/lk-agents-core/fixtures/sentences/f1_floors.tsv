@@ -25,6 +25,7 @@ issue	1.000	1.000	1.000
 probe/abbr	1.000	0.000	0.000
 probe/de	1.000	0.000	0.000
 probe/hi	1.000	0.000	0.000
+probe/number	1.000	1.000	1.000
 probe/title	1.000	0.000	0.000
 review/de	1.000	1.000	1.000
 review/en	1.000	1.000	1.000

@@ -31,6 +31,8 @@ base64.workspace = true
 # Report and Langfuse timestamps. No `clock`: time is an input.
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 thiserror.workspace = true
+# `replace_words`' ordered replacement table, as the host passes it.
+indexmap.workspace = true
 
 [dev-dependencies]
 fastrand = "2"

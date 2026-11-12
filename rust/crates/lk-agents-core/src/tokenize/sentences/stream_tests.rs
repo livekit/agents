@@ -1,10 +1,13 @@
 use std::path::Path;
 
-use super::{SentenceOptions, SentenceSplitter, SentenceStream, spoken_words};
+use super::{
+    SentenceOptions, SentenceSplitter, SentenceStream, SpeechSentenceTokenizer, sentence_splitter,
+    spoken_words,
+};
 use crate::lexer::Vocabulary;
 
 fn split(text: &str, opts: &SentenceOptions) -> Vec<String> {
-    SentenceSplitter::default().sentences(text, opts).into_iter().map(|s| s.0).collect()
+    SentenceSplitter::default().sentences(text, opts).into_iter().map(|s| s.text).collect()
 }
 
 fn stream(pieces: &[&str], opts: &SentenceOptions) -> Vec<String> {
@@ -53,7 +56,7 @@ fn options() -> Vec<SentenceOptions> {
 /// chunks the whole text splits into. Returns what differs.
 fn mismatches(pair: &mut Pair, text: &str) -> Option<String> {
     let want: Vec<String> =
-        pair.splitter.sentences(text, &pair.opts).into_iter().map(|s| s.0).collect();
+        pair.splitter.sentences(text, &pair.opts).into_iter().map(|s| s.text).collect();
     let at: Vec<usize> = text.char_indices().map(|(i, _)| i).chain([text.len()]).collect();
     let by_char: Vec<&str> = at.windows(2).map(|w| &text[w[0]..w[1]]).collect();
     let halves = at.iter().map(|&i| vec![&text[..i], &text[i..]]);
@@ -135,6 +138,7 @@ fn a_sentence_goes_out_once_its_end_is_certain() {
     assert_eq!(stream.push("This is the first sentence."), Vec::<String>::new());
     assert_eq!(stream.push(" And"), vec!["This is the first sentence."]);
     assert_eq!(stream.flush(), vec!["And"]);
+    assert_eq!(stream.flush(), Vec::<String>::new(), "flush is not repeatable");
 }
 
 // Catches: short sentences spoken alone; the floor is in words, not characters.
@@ -231,4 +235,65 @@ fn an_unclosed_wrapper_stops_holding_sentences_once_far_behind() {
         early.extend(stream.push(&format!("This is sentence number {n} of the reply. ")));
     }
     assert!(!early.is_empty(), "nothing reached the voice before the reply ended");
+}
+
+/// `tests/test_tokenizer.py`'s `[1, 2, 4]` chunking.
+fn reference_chunks(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    for size in [1usize, 2, 4].iter().cycle() {
+        if i >= chars.len() {
+            break;
+        }
+        let end = (i + size).min(chars.len());
+        out.push(chars[i..end].iter().collect());
+        i = end;
+    }
+    out
+}
+
+// The public tokenizer's stream says what its `tokenize` says, chunk for chunk.
+#[test]
+fn streamed_sentence_tokenizer_matches_its_split() {
+    use lk_agents_abi::tokenize::bindings::{
+        SpeechSentenceStream, SpeechSentenceTokenizer as Tokenizer,
+    };
+    let tokenizer = SpeechSentenceTokenizer::new(4, None, false, None);
+    let mut s = tokenizer.stream();
+    let mut out: Vec<String> = reference_chunks(STREAMED[0])
+        .into_iter()
+        .flat_map(|c| SpeechSentenceStream::push(&mut s, c))
+        .collect();
+    out.extend(SpeechSentenceStream::flush(&mut s));
+    assert_eq!(
+        out,
+        [
+            "Hi! LiveKit is a platform for live audio and video applications and services.",
+            "R.T.C stands for Real-Time Communication... again R.T.C. Mr. Theo is testing the \
+             sentence tokenizer.",
+            "This is a test.",
+            "Another test. A short sentence.",
+            "A longer sentence that is longer than the previous sentence. f(x) = x * 2.54 + 42.",
+            "Hey! Hi! Hello! This is a sentence.",
+            "这是一个中文句子。",
+            "これは日本語の文章です。",
+            "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。",
+            "This is a sentence contains   consecutive spaces.",
+        ]
+    );
+    assert_eq!(out, tokenizer.tokenize(STREAMED[0].to_owned(), None));
+}
+
+// Catches: the provider limits not reaching the stream. Expressive batches up to the cap; plain
+// speaks sentence by sentence and never batches past it.
+#[test]
+fn a_provider_cap_bounds_the_batches() {
+    let text = "This is one more sentence. ".repeat(80);
+    let markup = crate::tts::markup::markup_vocabulary("inworld", true);
+    let expressive = feed(&mut sentence_splitter(Some("inworld"), markup), &[&text]);
+    assert!(expressive.len() > 1 && expressive.iter().all(|c| c.chars().count() <= 900));
+    assert!(expressive[0].chars().count() > 880, "batched up to the cap: {}", expressive[0]);
+    let plain = feed(&mut sentence_splitter(Some("inworld"), None), &[&text]);
+    assert_eq!(plain.len(), 80);
 }

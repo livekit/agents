@@ -1519,6 +1519,9 @@
 {"id":"probe-abbr-Wwe#all","text":"Das gilt für Wwe. Müller und alle anderen.","starts":[0],"expect":[0]}
 {"id":"probe-abbr-Ztr#all","text":"Das gilt für Ztr. Müller und alle anderen.","starts":[0],"expect":[0]}
 {"id":"probe-abbr-bzw#all","text":"Das gilt für bzw. Müller und alle anderen.","starts":[0],"expect":[0]}
+{"id":"probe-abbr-corp#all","text":"Das gilt für corp. Müller und alle anderen.","starts":[0],"expect":[0]}
+{"id":"probe-abbr-dept#all","text":"Das gilt für dept. Müller und alle anderen.","starts":[0],"expect":[0]}
+{"id":"probe-abbr-encl#all","text":"Das gilt für encl. Müller und alle anderen.","starts":[0],"expect":[0]}
 {"id":"probe-abbr-env#all","text":"Das gilt für env. Müller und alle anderen.","starts":[0],"expect":[0]}
 {"id":"probe-abbr-evtl#all","text":"Das gilt für evtl. Müller und alle anderen.","starts":[0],"expect":[0]}
 {"id":"probe-abbr-ggf#all","text":"Das gilt für ggf. Müller und alle anderen.","starts":[0],"expect":[0]}
@@ -1552,6 +1555,18 @@
 {"id":"probe-hi-abbr-पृ#all","text":"यह पृ. शर्मा जी के लिए है।","starts":[0],"expect":[0]}
 {"id":"probe-hi-abbr-रु#all","text":"यह रु. शर्मा जी के लिए है।","starts":[0],"expect":[0]}
 {"id":"probe-hi-abbr-सं#all","text":"यह सं. शर्मा जी के लिए है।","starts":[0],"expect":[0]}
+{"id":"probe-number-ab#all","text":"The rule is in ab. 3. The rest follows.","starts":[0,22],"expect":[0,22]}
+{"id":"probe-number-an#all","text":"The rule is in an. 3. The rest follows.","starts":[0,22],"expect":[0,22]}
+{"id":"probe-number-com#all","text":"The rule is in com. 3. The rest follows.","starts":[0,23],"expect":[0,23]}
+{"id":"probe-number-el#all","text":"The rule is in el. 3. The rest follows.","starts":[0,22],"expect":[0,22]}
+{"id":"probe-number-est#all","text":"The rule is in est. 3. The rest follows.","starts":[0,23],"expect":[0,23]}
+{"id":"probe-number-gov#all","text":"The rule is in gov. 3. The rest follows.","starts":[0,23],"expect":[0,23]}
+{"id":"probe-number-ho#all","text":"The rule is in ho. 3. The rest follows.","starts":[0,22],"expect":[0,22]}
+{"id":"probe-number-in#all","text":"The rule is in in. 3. The rest follows.","starts":[0,22],"expect":[0,22]}
+{"id":"probe-number-org#all","text":"The rule is in org. 3. The rest follows.","starts":[0,23],"expect":[0,23]}
+{"id":"probe-number-par#all","text":"The rule is in par. 3. The rest follows.","starts":[0,23],"expect":[0,23]}
+{"id":"probe-number-per#all","text":"The rule is in per. 3. The rest follows.","starts":[0,23],"expect":[0,23]}
+{"id":"probe-number-se#all","text":"The rule is in se. 3. The rest follows.","starts":[0,22],"expect":[0,22]}
 {"id":"probe-title-Ing#all","text":"Bitte wenden Sie sich an Ing. Müller im Büro.","starts":[0],"expect":[0]}
 {"id":"probe-title-Lic#all","text":"Bitte wenden Sie sich an Lic. Müller im Büro.","starts":[0],"expect":[0]}
 {"id":"probe-title-MM#all","text":"Bitte wenden Sie sich an MM. Müller im Büro.","starts":[0],"expect":[0]}
