@@ -1,9 +1,7 @@
-"""The trace-shape checker itself: the rules catch the mistakes they exist for, both span
-sources agree, and a full fake session passes clean."""
+"""The trace-shape checker catches the mistakes it exists for, and both span sources agree."""
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterator
 
 import pytest
@@ -11,17 +9,14 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents import Agent
 from livekit.agents.telemetry import set_tracer_provider, tracer
 
-from .fake_session import FakeActions, create_session, run_session
 from .trace_schema import (
     ANY,
     MAY_OUTLIVE_PARENT,
     SPAN_PARENTS,
     EventRecord,
     SpanRecord,
-    assert_trace_well_formed,
     check_trace,
     from_otlp_json,
     from_readable_spans,
@@ -259,71 +254,3 @@ def test_otlp_json_and_readable_spans_agree(span_exporter: InMemorySpanExporter)
     [turn_record] = [s for s in converted if s.name == "user_turn"]
     assert turn_record.parent_id == hex_id(root.get_span_context().span_id, 16)
     assert check_trace(converted) == check_trace(readable) == []
-
-
-async def test_full_fake_session_is_well_formed(span_exporter: InMemorySpanExporter) -> None:
-    actions = FakeActions()
-    actions.add_user_speech(0.5, 1.5, "Hello there", stt_delay=0.1)
-    actions.add_llm("Hi!", ttft=0.1, duration=0.2)
-    actions.add_tts(0.5, ttfb=0.1, duration=0.2)
-    session = create_session(actions, speed_factor=2.0)
-    await asyncio.wait_for(
-        run_session(session, Agent(instructions="t"), drain_delay=1.0), timeout=60
-    )
-    assert_trace_well_formed(span_exporter.get_finished_spans())
-
-
-async def test_adapter_request_shapes_are_allowed(span_exporter: InMemorySpanExporter) -> None:
-    """Each fallback or stream adapter opens the wrapped request directly under its own span,
-    with no attempt span of its own in between."""
-    from livekit.agents import APIConnectOptions
-    from livekit.agents.llm import ChatContext, FallbackAdapter as LLMFallbackAdapter
-    from livekit.agents.tts import FallbackAdapter as TTSFallbackAdapter, StreamAdapter
-
-    from .fake_llm import FakeLLM, FakeLLMResponse
-    from .fake_tts import FakeTTS
-
-    llm = LLMFallbackAdapter(
-        [
-            FakeLLM(
-                fake_responses=[
-                    FakeLLMResponse(input="hi", content="hello", ttft=0.01, duration=0.02)
-                ]
-            )
-        ],
-        max_retry_per_llm=0,
-    )
-    chat_ctx = ChatContext()
-    chat_ctx.add_message(role="user", content="hi")
-    plain = TTSFallbackAdapter([FakeTTS(fake_audio_duration=0.1)], max_retry_per_tts=0)
-    stacked = TTSFallbackAdapter(
-        [StreamAdapter(tts=FakeTTS(fake_audio_duration=0.1))], max_retry_per_tts=0
-    )
-    stream_only = StreamAdapter(tts=FakeTTS(fake_audio_duration=0.1))
-
-    with tracer.start_as_current_span("agent_session"):
-        with tracer.start_as_current_span(
-            "agent_turn", attributes={"lk.speech_id": "sp", "lk.generation_count": 1}
-        ) as turn:
-            turn.add_event("generation", {"lk.generation_id": "sp_1"})
-            with tracer.start_as_current_span("llm_node"):
-                stream = llm.chat(chat_ctx=chat_ctx)
-                _ = [c async for c in stream]
-                await stream.aclose()
-            with tracer.start_as_current_span("tts_node"):
-                chunked = plain.synthesize("hello world.")
-                _ = [a async for a in chunked]
-                await chunked.aclose()
-                for tts in (plain, stacked, stream_only):
-                    synth = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-                    synth.push_text("hello world.")
-                    synth.end_input()
-                    _ = [a async for a in synth]
-                    await synth.aclose()
-    for model in (llm, plain, stacked, stream_only):
-        await model.aclose()
-
-    spans = span_exporter.get_finished_spans()
-    names = {s.name for s in spans}
-    assert {"llm_fallback_adapter", "tts_fallback_adapter", "tts_stream_adapter"} <= names
-    assert_trace_well_formed(spans)

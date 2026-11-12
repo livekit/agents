@@ -7,6 +7,7 @@ used in expressive mode (Cartesia, ElevenLabs, Inworld).
 from __future__ import annotations
 
 import asyncio
+import re
 
 import pytest
 
@@ -39,18 +40,6 @@ async def _stream_tokenize(tok: SentenceTokenizer, text: str) -> list[str]:
     stream = tok.stream()
     for char in text:
         stream.push_text(char)
-    stream.end_input()
-    return [ev.token async for ev in stream]
-
-
-async def _stream_tokenize_tiktoken(tok: SentenceTokenizer, text: str) -> list[str]:
-    """Push text token-by-token using GPT-4o's tokenizer (realistic LLM streaming)."""
-    import tiktoken
-
-    enc = tiktoken.encoding_for_model("gpt-4o")
-    stream = tok.stream()
-    for token_id in enc.encode(text):
-        stream.push_text(enc.decode([token_id]))
     stream.end_input()
     return [ev.token async for ev in stream]
 
@@ -714,16 +703,22 @@ class TestStreamingTokenizer:
         assert len(tokens) == 1
 
     @pytest.mark.asyncio
-    async def test_expression_tags_between_sentences_tiktoken(self) -> None:
-        """Regression: expression tags between sentences must split correctly
-        when streamed with GPT-4o's actual tokenizer."""
+    async def test_expression_tags_between_sentences_word_pieces(self) -> None:
+        """Expression tags between sentences split correctly when streamed as LLM word pieces."""
         text = (
             '<expression value="speak cheerfully"/> Hello and welcome to McDonalds! '
             '<expression value="speak with bright energy"/> We have got some great specials. '
             '<expression value="sound excited"/> Our new chicken sandwich is amazing. '
             '<expression value="speak warmly"/> Would you like to try a combo meal?'
         )
-        tokens = await _stream_tokenize_tiktoken(self.tok, text)
+        stream = self.tok.stream()
+        # BPE-style pieces: a word with its leading space, or a punctuation run, so tags
+        # arrive split as ' <', 'expression', ' value', '="', ...
+        for piece in re.findall(r" ?\w+| ?[^\w\s]+|\s+", text):
+            stream.push_text(piece)
+        stream.end_input()
+        tokens = [ev.token async for ev in stream]
+
         assert len(tokens) >= 3, f"Expected at least 3 sentences: {tokens}"
         _assert_no_tag_only_sentences(tokens)
         for t in tokens:
