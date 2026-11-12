@@ -28,11 +28,10 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     http,
-    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -45,7 +44,6 @@ class _TTSOptions:
     voice: str | None
     voice_id: str | None
     pronunciation_id: str | None
-    word_tokenizer: tokenize.WordTokenizer
     json_config: dict[str, JsonValue] | None = None
 
 
@@ -61,7 +59,6 @@ class TTS(tts.TTS):
         pronunciation_id: str | None = None,
         json_config: dict[str, JsonValue] | None = None,
         http_session: http.HttpSession | None = None,
-        word_tokenizer: tokenize.WordTokenizer | None = None,
     ) -> None:
         """
         Initialize the Gradium TTS.
@@ -73,7 +70,6 @@ class TTS(tts.TTS):
             voice (str): Speaker voice.
             voice_id (str): Speaker voice ID.
             pronunciation_id (str): Optional pronunciation ID for controlling TTS pronunciation.
-            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to `livekit.agents.tokenize.WordTokenizer`.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -100,13 +96,10 @@ class TTS(tts.TTS):
         self._model_endpoint = model_endpoint
         self._model_name = model_name
 
-        if not word_tokenizer:
-            word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
         self._opts = _TTSOptions(
             voice=voice,
             voice_id=voice_id,
             pronunciation_id=pronunciation_id,
-            word_tokenizer=word_tokenizer,
             json_config=json_config,
         )
         self._session = http_session
@@ -118,6 +111,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Gradium"
+
+    def _core_text_unit(self) -> str:
+        return "words"
 
     async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         return await self._ensure_session().ws_connect(
@@ -149,9 +145,7 @@ class TTS(tts.TTS):
         if is_given(json_config):
             self._opts.json_config = json_config
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         return SynthesizeStream(
             connect_ws=self._connect_ws,
             model_name=self._model_name,
@@ -160,15 +154,15 @@ class TTS(tts.TTS):
             conn_options=conn_options,
         )
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             connect_ws=self._connect_ws,
             opts=replace(self._opts),
             tts=self,
             api_key=self._api_key,
-            input_text=text,
+            input_text=chunk.text,
             model_endpoint=self._model_endpoint,
             model_name=self._model_name,
             conn_options=conn_options,
@@ -283,7 +277,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._model_name = model_name
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -293,28 +287,27 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        async def _tokenize_input() -> None:
-            # Converts incoming text into WordStreams and sends them into _segments_ch
-            word_stream = None
+        async def _segment_input() -> None:
+            segment: utils.aio.Chan[str] | None = None
             async for input in self.input:
-                if isinstance(input, str):
-                    if word_stream is None:
-                        word_stream = self._opts.word_tokenizer.stream()
-                        segments_ch.send_nowait(word_stream)
-                    word_stream.push_text(input)
-                else:
-                    if word_stream:
-                        word_stream.end_input()
-                    word_stream = None
-
+                if isinstance(input, tts.SpeechChunk):
+                    if segment is None:
+                        segment = utils.aio.Chan[str]()
+                        segments_ch.send_nowait(segment)
+                    segment.send_nowait(input.text)
+                elif segment is not None:
+                    segment.close()
+                    segment = None
+            if segment is not None:
+                segment.close()
             segments_ch.close()
 
         async def _run_segments() -> None:
-            async for word_stream in segments_ch:
-                await self._run_ws(word_stream, output_emitter)
+            async for segment in segments_ch:
+                await self._run_ws(segment, output_emitter)
 
         tasks = [
-            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_segment_input()),
             asyncio.create_task(_run_segments()),
         ]
         try:
@@ -326,9 +319,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             await utils.aio.cancel_and_wait(*tasks)
 
-    async def _run_ws(
-        self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
-    ) -> None:
+    async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
@@ -351,8 +342,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             await ws.send_str(json.dumps(setup_msg))
 
-            async for word in word_stream:
-                text_msg = {"type": "text", "text": f"{word.token} "}
+            async for chunk in segment:
+                text_msg = {"type": "text", "text": f"{chunk} "}
                 self.mark_started()
                 await ws.send_str(json.dumps(text_msg))
                 read_deadline.expect_response()

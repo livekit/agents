@@ -128,8 +128,8 @@ async fn option_updates_while_the_session_opens_stay_on_the_options() {
         owner.start(storage, host.clone(), None, lk_agents_abi::telemetry::Cx::NONE).unwrap();
     host.preparing.notified().await;
     use Maybe::NotGiven as N;
-    owner.update_options(Maybe::Given(None), N, N, N, N, N, N, N).unwrap();
-    let layer = owner.override_options(N, Maybe::Given(None), N, N, N, N).unwrap();
+    owner.update_options(Maybe::Given(None), N, N, N, N, N, N).unwrap();
+    let layer = owner.override_options(N, Maybe::Given(None), N, N, N).unwrap();
     owner.release_override(layer).unwrap();
     host.release.notify_one();
     assert!(opening.await.is_err());
@@ -210,6 +210,112 @@ async fn the_report_is_the_jobs_with_the_sessions_options() {
     assert!(closed.chat_history.is_empty() && closed.job_id == "AJ_1");
 }
 
+/// A recording that failed mid-call leaves a truncated Ogg: the report keeps the session and its
+/// transcript for upload, and offers no audio. A healthy recording offers its file.
+#[tokio::test]
+async fn a_failed_recording_uploads_the_transcript_without_the_audio() {
+    use lk_agents_media::pool::{MediaPool, MediaPoolLimits};
+    use lk_agents_media::recorder::{OggOpusEncoder, RecordingLimits};
+    struct Pcm;
+    impl OggOpusEncoder for Pcm {
+        fn push(&mut self, pcm: &[i16]) -> lk_agents_media::Result<Vec<u8>> {
+            Ok(lk_agents_media::pcm_bytes(pcm))
+        }
+        fn finish(self) -> lk_agents_media::Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+    }
+    struct Disk {
+        full: bool,
+    }
+    impl std::io::Write for Disk {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.full {
+                return Err(std::io::Error::new(std::io::ErrorKind::StorageFull, "file too large"));
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let limits = MediaPoolLimits {
+        total: 3,
+        decoders: 1,
+        recordings: 2,
+        images: 1,
+        formatting: 1,
+        eot_models: 1,
+        vad_models: 1,
+    };
+    let media_pool = MediaPool::new(limits).unwrap();
+    let options = RecordingOptions { audio: true, transcript: true, ..Default::default() };
+    let job = lk_agents_abi::telemetry::report::ReportJob {
+        job_id: "AJ_1".into(),
+        room_id: "RM_1".into(),
+        room: "lobby".into(),
+        agent_name: "desk".into(),
+        sdk_version: "2.0.0".into(),
+    };
+    let said = lk_agents_abi::ChatMessage::text(
+        "item_1",
+        lk_agents_abi::Role::User,
+        "hi",
+        std::time::UNIX_EPOCH,
+    );
+    let history = vec![lk_agents_abi::ChatItem::Message(said)];
+    for full in [false, true] {
+        let owner = owner();
+        let recorder = SessionRecorder::open_with(
+            &media_pool,
+            48_000,
+            Some(1000.0),
+            RecordingLimits::default(),
+            move || Ok((Pcm, Disk { full })),
+        )
+        .await
+        .unwrap();
+        let frame = AudioFrame::new(lk_agents_media::pcm_bytes(&[1000; 480]), 48_000, 1, 480);
+        recorder.on_input_frame(1000.01, &frame);
+        assert_eq!(recorder.flush(1000.01).await.is_err(), full, "the write fails mid-call");
+        assert!(owner.0.audio.set(("/recordings/AJ_1/audio.ogg".into(), recorder)).is_ok());
+        assert!(owner.0.recording_options.set(options).is_ok());
+
+        let report = owner.report(job.clone(), SessionLegs::none(), Vec::new(), history.clone());
+        let upload = lk_agents_core::telemetry::report::upload(
+            &report,
+            &options,
+            false,
+            &lk_agents_abi::telemetry::report::CloudAgent::default(),
+        )
+        .expect("the report is uploaded");
+        assert!(upload.chat_history.is_some_and(|json| json.contains("hi")), "with its transcript");
+        let audio = (!full).then(|| "/recordings/AJ_1/audio.ogg".to_owned());
+        assert_eq!(upload.audio_path, audio, "a failed recording's file is not offered");
+        assert_eq!(report.audio_recording_path, audio);
+    }
+}
+
+/// A started session's report carries its elapsed duration with audio recording off. https://github.com/livekit/agents/pull/8083
+#[tokio::test]
+#[ignore = "https://github.com/livekit/agents/pull/8083 reproduces: report duration is derived from the recording start only"]
+async fn report_duration_without_recording_tracks_session_time() {
+    let owner = owner();
+    let started_at = lk_agents_abi::unix_secs(owner.0.env.clock.wall()) - 30.0;
+    assert!(owner.0.started_at.set(started_at).is_ok());
+    let job = lk_agents_abi::telemetry::report::ReportJob {
+        job_id: "AJ_1".into(),
+        room_id: "RM_1".into(),
+        room: "lobby".into(),
+        agent_name: "desk".into(),
+        sdk_version: "2.0.0".into(),
+    };
+    let report = owner.report(job, SessionLegs::none(), Vec::new(), Vec::new());
+    assert!(report.audio_recording_started_at.is_none(), "recording is off");
+    let duration = report.duration.expect("a started session's report has a duration");
+    assert!((duration - (report.timestamp - started_at)).abs() < 1e-6, "{duration}");
+}
+
 /// Holds no host payloads.
 struct Registry;
 
@@ -244,8 +350,15 @@ async fn local_thread(env: &ProcessEnv) -> (Arc<lk_agents_storage::storage::Name
 async fn storage() -> Arc<SessionStorage> {
     let env = ProcessEnv::current_runtime();
     let (namespace, thread_id) = local_thread(&env).await;
-    let lane = || "frontdesk".to_owned();
-    Arc::new(SessionStorage::new(&env, Some(namespace), Some(thread_id), lane(), lane(), None))
+    let partition_key = || "frontdesk".to_owned();
+    Arc::new(SessionStorage::new(
+        &env,
+        Some(namespace),
+        Some(thread_id),
+        partition_key(),
+        partition_key(),
+        None,
+    ))
 }
 
 #[derive(Default)]
@@ -257,11 +370,11 @@ impl lk_agents_abi::telemetry::record::RecordSink for Records {
     }
 }
 
-// Catches: a call given a thread whose lane does not load continuing on a new local thread (a
+// Catches: a call given a thread whose partition does not load continuing on a new local thread (a
 // silent fork) instead of failing its start with the storage's own error, which the session's
 // reserved spans end with.
 #[tokio::test]
-async fn a_thread_whose_lane_does_not_load_fails_the_start() {
+async fn a_thread_whose_partition_does_not_load_fails_the_start() {
     use lk_agents_abi::storage::{Storage as _, StorageError};
     use lk_agents_abi::telemetry::record::{Record, Status};
     let records = Arc::new(Records::default());
@@ -270,8 +383,15 @@ async fn a_thread_whose_lane_does_not_load_fails_the_start() {
     let env = ProcessEnv { tracer, ..base };
     let (namespace, thread_id) = local_thread(&env).await;
     namespace.delete_thread(thread_id.clone()).await.unwrap();
-    let lane = || "frontdesk".to_owned();
-    let storage = SessionStorage::new(&env, Some(namespace), Some(thread_id), lane(), lane(), None);
+    let partition_key = || "frontdesk".to_owned();
+    let storage = SessionStorage::new(
+        &env,
+        Some(namespace),
+        Some(thread_id),
+        partition_key(),
+        partition_key(),
+        None,
+    );
     let owner = SessionOwner::new(
         &env,
         SessionOptions::new(crate::voice::session::tests::option_kwargs(), Default::default()),

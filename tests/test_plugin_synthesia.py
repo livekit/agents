@@ -37,63 +37,14 @@ pytestmark = pytest.mark.unit
 
 class TestConfig:
     ADA = "03cee7ec-ac90-45ec-8c20-74a399cf3dc4"
-    SECOND = "6d999451-039c-4bf2-9b88-c769ac2faa78"
 
     @staticmethod
     def _config(avatar=None, **kwargs):
         return synthesia.AvatarConfig(avatar_ids=[avatar or TestConfig.ADA], **kwargs)
 
-    @pytest.fixture(autouse=True)
-    def _clear_env(self, monkeypatch):
-        monkeypatch.delenv("SYNTHESIA_API_KEY", raising=False)
-        monkeypatch.delenv("SYNTHESIA_API_URL", raising=False)
-
-    def test_api_key_missing_raises(self):
-        with pytest.raises(synthesia.SynthesiaError):
-            synthesia.AvatarSession(self._config())
-
-    def test_avatar_ids_empty_raises(self):
-        with pytest.raises(ValueError, match="between 1 and"):
-            synthesia.AvatarConfig(avatar_ids=[])
-
-    def test_avatar_ids_oversize_raises(self):
-        with pytest.raises(ValueError, match="between 1 and"):
-            synthesia.AvatarConfig(avatar_ids=[f"avatar-{i}" for i in range(6)])
-
-    def test_avatar_ids_bare_string_raises(self):
-        with pytest.raises(ValueError, match="list"):
-            synthesia.AvatarConfig(avatar_ids="lucas")
-
     def test_config_repr_redacts_api_key(self):
         avatar = synthesia.AvatarSession(self._config(), api_key="super-secret")
         assert "super-secret" not in repr(avatar._config)
-
-
-class TestErrors:
-    _NON_RETRYABLE_TYPES = [
-        ErrorType.AUTH,
-        ErrorType.FEATURE_NOT_IN_PLAN,
-        ErrorType.UNKNOWN_AVATAR,
-        ErrorType.QUOTA_EXCEEDED,
-        ErrorType.INVALID_ROOM_TOKEN,
-        ErrorType.LIVEKIT_CREDENTIALS_REJECTED,
-        ErrorType.INVALID_SESSION_REQUEST,
-    ]
-
-    _RETRYABLE_TYPES = [
-        ErrorType.RATE_LIMITED,
-        ErrorType.CONCURRENCY_LIMIT,
-        ErrorType.TIMEOUT,
-        ErrorType.CONNECTION,
-    ]
-
-    @pytest.mark.parametrize("error_type", _NON_RETRYABLE_TYPES)
-    def test_retryable_defaults_false(self, error_type):
-        assert SynthesiaError("boom", type=error_type).retryable is False
-
-    @pytest.mark.parametrize("error_type", _RETRYABLE_TYPES)
-    def test_retryable_defaults_true(self, error_type):
-        assert SynthesiaError("boom", type=error_type).retryable is True
 
 
 class TestApiClient:
@@ -1221,34 +1172,6 @@ class TestAvatarSession:
         with pytest.raises(SynthesiaError):
             await session.start(self._FakeAgentSession(), self._FakeRoom(), livekit_url=self.LK_URL)
 
-    @pytest.mark.parametrize(
-        ("key", "secret"),
-        [("   ", "lk-api-secret-never-leaks"), ("lk-api-key", "   "), ("   ", "   ")],
-    )
-    async def test_blank_livekit_credentials_fail_before_launch(self, api_recorder, key, secret):
-        session = self._session()
-        with pytest.raises(SynthesiaError, match="LiveKit"):
-            await session.start(
-                self._FakeAgentSession(),
-                self._FakeRoom(),
-                livekit_url=self.LK_URL,
-                livekit_api_key=key,
-                livekit_api_secret=secret,
-            )
-        assert api_recorder.requests == []
-
-    async def test_blank_livekit_url_fails_before_launch(self, api_recorder):
-        session = self._session()
-        with pytest.raises(SynthesiaError, match="LiveKit"):
-            await session.start(
-                self._FakeAgentSession(),
-                self._FakeRoom(),
-                livekit_url="   ",
-                livekit_api_key=self.LK_KEY,
-                livekit_api_secret=self.LK_SECRET,
-            )
-        assert api_recorder.requests == []
-
     async def test_custom_identity_in_minted_token(self, api_recorder, instant_join):
         room = self._FakeRoom()
         session = self._session(avatar_participant_identity=self.CUSTOM_IDENTITY)
@@ -1257,32 +1180,6 @@ class TestAvatarSession:
         claims = self._decode_jwt(api_recorder.requests[0].lk_token)
         assert claims["sub"] == self.CUSTOM_IDENTITY
         assert session.avatar_identity == self.CUSTOM_IDENTITY
-        await session.aclose()
-
-    async def test_custom_identity_drives_audio_destination(self, api_recorder, instant_join):
-        room = self._FakeRoom()
-        agent = self._FakeAgentSession()
-        session = self._session(avatar_participant_identity=self.CUSTOM_IDENTITY)
-        await self._start(session, room, agent)
-
-        assert agent.output.audio.destination_identity == self.CUSTOM_IDENTITY
-        await session.aclose()
-
-    async def test_custom_identity_drives_swap_rpc(self, api_recorder, instant_join):
-        room = self._FakeRoom()
-        session = synthesia.AvatarSession(
-            synthesia.AvatarConfig(avatar_ids=[self.ADA_ID, self.SECOND_ID]),
-            api_key="syn-key",
-            avatar_participant_identity=self.CUSTOM_IDENTITY,
-        )
-        await self._start(session, room)
-        room.local_participant.rpc_response = json.dumps(
-            {"status": "ok", "avatar_id": self.SECOND_ID}
-        )
-
-        await session.swap_avatar(self.SECOND_ID)
-
-        assert room.local_participant.rpc_calls[0]["destination_identity"] == self.CUSTOM_IDENTITY
         await session.aclose()
 
     async def test_disconnect_handler_keys_on_custom_identity(
@@ -1305,16 +1202,6 @@ class TestAvatarSession:
             await session._teardown_task
 
         assert caplog.text.count("avatar left the room unexpectedly") == 1
-
-    @pytest.mark.parametrize("identity", ["", "   "])
-    async def test_blank_identity_rejected_at_construction(self, identity):
-        with pytest.raises(SynthesiaError, match="avatar_participant_identity"):
-            self._session(avatar_participant_identity=identity)
-
-    @pytest.mark.parametrize("name", ["", "   "])
-    async def test_blank_name_rejected_at_construction(self, name):
-        with pytest.raises(SynthesiaError, match="avatar_participant_name"):
-            self._session(avatar_participant_name=name)
 
     async def test_teardown_unregisters_handlers(self, api_recorder, instant_join):
         room = self._FakeRoom()

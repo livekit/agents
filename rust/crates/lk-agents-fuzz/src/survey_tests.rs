@@ -339,7 +339,7 @@ fn campaign(window: &Window) {
     let [sqlite, clock, crash, held, stolen] = lk_agents_fuzz::fakes::storage_faults();
     println!(
         "storage faults: {sqlite} sqlite refusals, {clock} clock jumps, {crash} crashes, \
-         {held} lanes held and {stolen} stolen by another worker"
+         {held} partitions held and {stolen} stolen by another worker"
     );
     println!("busiest instant: {} steps of the run's loop (seed {})", busiest.0, busiest.1);
     let endings: Vec<String> =

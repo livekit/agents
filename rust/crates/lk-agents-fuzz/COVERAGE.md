@@ -386,7 +386,7 @@ speech. Scheduling can be paused (a drain), refusing new speech except tool repl
   applies to the next request and not to the one in flight; retries follow the configured
   count and backoff; a late result from a replaced stream never reaches the new one (only
   outputs are checked); filler stops when the reply starts.
-- **Never varied**: `tts_text_transforms` (0% reached), `use_tts_aligned_transcript`, the realtime
+- **Never varied**: the realtime
   audio node.
 
 ### 5.3 Turn taking (`audio_recognition/`, `endpointing.rs`, `turn.rs`)
@@ -725,7 +725,7 @@ switch to the public API).
 deployed Python agent can run. Left out, each for its reason below: `workflows/` (owned by the
 text-mode rework), the remote-session client and `room_io/rooms.rs`. Before the wiring this read
 85.1% of 21,164 lines, a total that also left out `amd/` and the keyterm LLM pass because
-`livekit-agents-next` never ran them; counted the new way it was 82.9% (18,644 of 22,493).
+`livekit-agents` never ran them; counted the new way it was 82.9% (18,644 of 22,493).
 
 | Area | Lines | Reached | Note |
 |---|--:|--:|---|
@@ -773,7 +773,7 @@ avatar sink's interrupted path after a give-up timer.
 
 Measured nowhere here, and each a separate source of production risk:
 
-- The Python voice host adapters (`livekit-agents-next/livekit/agents/voice/`), including the
+- The Python voice host adapters (`livekit-agents/livekit/agents/voice/`), including the
   `livekit.rtc` room adapter.
 - The binding from Python to the driver (`lk-agents-py`), plugins reached through host proxies.
 - Threads, lanes and leases in agent-db and the SQLite file backend, and the A2A text door.
@@ -916,7 +916,7 @@ Found by them and fixed, each with a regression test that fails with its fix rev
 | A pause decided after the person stopped (a detector's late verdict) never armed its resume | `late_verdict_pause_resumes` |
 | The native realtime session stamped its metrics with seconds since the model was created and its items in 1970 | inference's `server_sync::realtime_metrics_are_stamped_on_the_wall_clock` (500 of 1,024 survey seeds with the fix reverted, when the DST ran the native session) |
 
-`livekit-agents-next/scripts/parity.py` (deleted since, owner decision 22) compared payloads whole against the reference: each
+`livekit-agents/scripts/parity.py` (deleted since, owner decision 22) compared payloads whole against the reference: each
 message's metrics (the models it names, which timings it carries), each metrics record's kind,
 label, model and attribution, and the history's order by `created_at`. It found, and the core now
 matches the reference on: a `say` message naming the LLM and TTS and an `llm_node_ttfs`; a realtime
@@ -1127,8 +1127,9 @@ the explicit context copy is belt and braces). Their regression tests, and for 7
   tests named above.
 - **`fuzz.py`** (deleted with the Python virtual-time loop, decision 117): seeded random calls
   through the Python `VoiceSession` over `_core.FakeRoom`; its classes are the DST's.
-- **`smoke.py`**: `decoder` (a 16 kHz WAV decodes at 16 kHz with `sample_rate=None`) and
-  `llm_prewarm` (the gateway LLM sends `GET /models` as the session starts).
+- **`tests/test_native_smoke.py`** (formerly `smoke.py`): `test_decoder` (a 16 kHz WAV
+  decodes at 16 kHz with `sample_rate=None`) and `test_llm_prewarm` (the gateway LLM
+  sends `GET /models` as the session starts).
 - **The launch gate runs the provider clients' unit tests** (`lk-agents-inference`,
   `lk-agents-abi`, about 20 s): they ran nowhere before (CI tests only the storage and A2A
   crates), so 54c213e74's own unit test could not fail anything.

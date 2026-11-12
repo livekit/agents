@@ -546,7 +546,7 @@ const HEX_ESCAPE_DIGITS: usize = 2;
 const HIGH_SURROGATES: std::ops::RangeInclusive<u32> = 0xD800..=0xDBFF;
 const LOW_SURROGATES: std::ops::RangeInclusive<u32> = 0xDC00..=0xDFFF;
 /// The first code point past the Basic Multilingual Plane, where surrogate pairs start.
-const SUPPLEMENTARY_PLANES: u32 = 0x10000;
+const SUPPLEMENTARY_PPARTITIONS: u32 = 0x10000;
 /// The bits each surrogate half carries.
 const SURROGATE_BITS: u32 = 10;
 
@@ -557,7 +557,7 @@ fn surrogate_pair(high: u32, low: u32) -> Option<char> {
     }
     let offset =
         ((high - HIGH_SURROGATES.start()) << SURROGATE_BITS) + (low - LOW_SURROGATES.start());
-    char::from_u32(SUPPLEMENTARY_PLANES + offset)
+    char::from_u32(SUPPLEMENTARY_PPARTITIONS + offset)
 }
 
 /// Whether the last `{` of `out` is unclosed, so a `}` closes it as text.

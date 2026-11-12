@@ -142,7 +142,7 @@ pub const AGENT_TURNS: &[&str] = &[
     "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
     "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60).",
     "Yes... no, wait -- actually, let me check that again.",
-    // Markdown and emoji, which the voice must never be given (`tts_text_transforms`).
+    // Markdown and emoji, which the voice must never be given.
     "# Your options\n\n1. **Upgrade** to _Premium_ \u{1F680}\n2. Keep `basic` -- see [the plan](https://example.com/plans).\n",
     "Done \u{2705} Your refund of ~~$40~~ **$45** is on its way! \u{1F389}\u{1F44D}\u{1F3FD}",
     "> Note: *the office is closed* on Monday.\n- Tuesday 9-5\n- Wednesday 9-1 \u{2615}",
@@ -654,6 +654,8 @@ inputs! {
     /// The host answers a hook the driver has stopped waiting for.
     HookDoneLate { hook: Gone<Hook>, answer: HookAnswer, text: AgentText };
     HostMetrics { } leaf command::HostMetrics;
+    /// The avatar lifecycle's report that the avatar did not join in time.
+    AvatarError { } leaf command::AvatarError;
     Ivr { input: IvrInput, silence: Millis, text: UserText } leaf command::Ivr;
     SetStaticKeyterms { terms: Vec<String> } leaf command::SetStaticKeyterms;
     /// `GetDtmfTask`'s event half: `Start` a collection of `digits + 1` keys (`#` stops,

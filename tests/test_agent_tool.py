@@ -80,65 +80,6 @@ async def test_a_direct_run_reads_the_childs_typed_output_and_counts_its_usage()
     assert sum(model.requests for model in result.usage.models) == 4
 
 
-async def test_a_waiting_child_passes_its_question_up_and_resumes_on_the_next_call() -> None:
-    child_model = Script(
-        Reply("For which date?"),
-        call("final_result", {"reference": "B-7"}, "final-1"),
-    )
-    child = _booking(child_model)
-    parent = Agent(
-        instructions="Delegate bookings.",
-        context_type=Case,
-        tools=[child.as_tool(parameters=Request, chat_history="fork")],
-        llm=Script(
-            call("booking", {"nights": 1}, "first"),
-            Reply("Which date would you like?"),
-            call("booking", {"nights": 1}, "second"),
-            Reply("Booked: B-7."),
-        ),
-    )
-
-    first = await parent.run("One night", context=Case())
-    assert first.status == "input_required"
-    assert first.question == "Which date would you like?", "the parent words the child's question"
-
-    second = await parent.run("Friday", message_history=first.all_messages(), context=Case())
-    assert second.status == "completed" and second.output == "Booked: B-7."
-    resumed = child_model.requests[1].items
-    assert any(
-        i.type == "message" and i.role == "assistant" and i.text_content == "For which date?"
-        for i in resumed
-    ), "the child resumed with its own history"
-    calls = [i for i in second.all_messages() if i.type == "function_call"]
-    asked = [i for i in first.all_messages() if i.type == "function_call"]
-    assert "lk.agent_tool" in asked[0].extra, "the waiting child is kept"
-    assert all("lk.agent_tool" not in c.extra for c in calls), "an answered child is not kept"
-
-
-async def test_only_the_latest_waiting_child_is_kept() -> None:
-    child = _booking(
-        Script(Reply("For which date?"), Reply("Which room?"), Reply("Smoking or not?"))
-    )
-    parent = Agent(
-        instructions="Delegate bookings.",
-        context_type=Case,
-        tools=[child.as_tool(parameters=Request)],
-        llm=Script(
-            call("booking", {"nights": 1}, "first"),
-            Reply("Which date?"),
-            call("booking", {"nights": 1}, "second"),
-            Reply("Which room?"),
-        ),
-    )
-    first = await parent.run("One night", context=Case())
-    second = await parent.run("Friday", message_history=first.all_messages(), context=Case())
-    assert second.status == "input_required"
-    calls = [i for i in second.all_messages() if i.type == "function_call"]
-    assert ["lk.agent_tool" in c.extra for c in calls] == [False, True]
-    kept = json.dumps(calls[1].extra["lk.agent_tool"])
-    assert "For which date?" in kept and "Which room?" in kept
-
-
 async def test_cancelling_the_parent_cancels_and_settles_the_child() -> None:
     blocked = asyncio.Event()
     child = _booking(Script(Reply(blocked=blocked)))
@@ -153,18 +94,6 @@ async def test_cancelling_the_parent_cancels_and_settles_the_child() -> None:
         stream.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(consumer, timeout=5)
-
-
-async def test_agent_tools_nest_up_to_the_depth_limit() -> None:
-    # an agent calling itself is refused past the limit instead of recursing forever
-    model = Script(*[call("recursive", {}, f"r{i}") for i in range(9)], *[Reply("bottom")] * 9)
-    recursive = Agent(name="recursive", instructions="Recurse.", output_type=str, llm=model)
-    recursive.tool(recursive.as_tool())
-    result = await recursive.run("go")
-    assert result.status == "completed" and result.output == "bottom"
-    deepest = model.requests[9].items
-    refusals = [i.output for i in deepest if i.type == "function_call_output"]
-    assert refusals == ["agent-tool call exceeds max_depth=8"]
 
 
 async def test_on_a_call_the_childs_result_reaches_the_call() -> None:

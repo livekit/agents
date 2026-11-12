@@ -2,8 +2,7 @@
 dispatches made through the server API, and people played by ``livekit.rtc`` clients that publish
 a microphone from a WAV file, type on the chat topic and watch what the agent publishes. The DST
 runs the same room I/O over a fake room; the real SFU, real WebRTC tracks, data streams and
-participant attributes are what it cannot reach. Hang-ups and rejoins are
-``scripts/e2e.py``'s, which compares them with the reference.
+participant attributes are what it cannot reach.
 
 The agent is this file run as a worker (``python tests/test_it_room_cloud.py start``), with
 scripted providers: an STT that hears any loud stretch of audio as "heard speech", an LLM that
@@ -39,6 +38,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     Agent,
     AgentServer,
+    APIConnectOptions,
     JobContext,
     VoiceSession,
     cli,
@@ -496,8 +496,10 @@ class Tone(tts.TTS):
             num_channels=1,
         )
 
-    def synthesize(self, text: str, **_: Any) -> tts.ChunkedStream:
-        return _Toning(tts=self, input_text=text, conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
+    ) -> tts.ChunkedStream:
+        return _Toning(tts=self, input_text=chunk.text, conn_options=conn_options)
 
 
 class _Toning(tts.ChunkedStream):

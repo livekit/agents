@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.e2e, pytest.mark.no_concurrent]
+pytestmark = pytest.mark.e2e
 
 
 async def _run_cleanup(code: str) -> subprocess.CompletedProcess[str]:

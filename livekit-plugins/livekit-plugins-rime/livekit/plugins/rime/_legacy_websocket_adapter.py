@@ -30,7 +30,6 @@ from livekit.agents import (
     APITimeoutError,
     http,
     redacted_cause,
-    tokenize,
     tts,
     utils,
 )
@@ -77,12 +76,10 @@ class LegacyWebSocketAdapter:
         websocket_url: str,
         api_key: str,
         ensure_session: Callable[[], http.HttpSession],
-        sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         self._websocket_url = websocket_url
         self._api_key = api_key
         self._ensure_session = ensure_session
-        self._sentence_tokenizer = sentence_tokenizer
         self._pools = PoolManager(self._new_pool())
 
     def _new_pool(self) -> _Pool:
@@ -139,7 +136,6 @@ class LegacyWebSocketAdapter:
             pool_manager=self._pools,
             options=options,
             conn_options=conn_options,
-            sentence_tokenizer=self._sentence_tokenizer,
         )
         return stream
 
@@ -168,14 +164,12 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         pool_manager: PoolManager[http.WebSocket],
         options: LegacySynthesisOptions,
         conn_options: APIConnectOptions,
-        sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(
             tts=StreamTTS(tts_instance, model=options.model), conn_options=conn_options
         )
         self._pool = pool
         self._options = options
-        self._sentence_tokenizer = sentence_tokenizer
         pool_manager.track_stream(pool, self._task)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -190,23 +184,16 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=context_id)
 
-        sent_stream = self._sentence_tokenizer.stream()
         input_sent_event = asyncio.Event()
         empty_input = False
-
-        async def _input_task() -> None:
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    sent_stream.flush()
-                    continue
-                sent_stream.push_text(data)
-            sent_stream.end_input()
 
         async def _send_task(websocket: http.WebSocket) -> None:
             nonlocal empty_input
             sent_count = 0
-            async for event in sent_stream:
-                packet = {"text": event.token + " ", "contextId": context_id}
+            async for chunk in self.input:
+                if not isinstance(chunk, tts.SpeechChunk):
+                    continue
+                packet = {"text": chunk.text + " ", "contextId": context_id}
                 self.mark_started()
                 await websocket.send_str(json.dumps(packet))
                 input_sent_event.set()
@@ -258,7 +245,6 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         try:
             async with self._pool.connection(conn_options=self._conn_options) as websocket:
                 tasks = [
-                    asyncio.create_task(_input_task()),
                     asyncio.create_task(_send_task(websocket)),
                     asyncio.create_task(_recv_task(websocket)),
                 ]
@@ -266,7 +252,6 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                     await asyncio.gather(*tasks)
                 finally:
                     input_sent_event.set()
-                    await sent_stream.aclose()
                     await utils.aio.cancel_and_wait(*tasks)
         except APIError:
             raise

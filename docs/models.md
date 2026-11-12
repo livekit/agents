@@ -56,33 +56,42 @@ adapter) when a model goes down or comes back. `tts.StreamAdapter` and
 
 ### Sentences and pacing
 
-`tts.StreamAdapter(tts=, sentence_tokenizer=, text_pacing=)` splits the text pushed into
-sentences and synthesizes each with the wrapped TTS's `synthesize()`, one after the other, as
-one segment whose last frame is final. The split is `tokenize.SentenceTokenizer`'s
-(`retain_format`, keeping the voice's markup whole on an expressive stream) unless `sentence_tokenizer` is given: the framework then feeds the text
-to its `stream()` and synthesizes what that stream yields, and closes it with the synthesis.
-On an expressive stream the wrapped TTS's markup is normalized before the split and lowered in
-each sentence. Each sentence is retried on its own within `conn_options` while it has
-delivered no audio. Time to first audio is measured from the stream's first text.
+`tts.synthesize(text)` and `tts.stream()` are the framework's for every TTS: the text goes through
+the TTS's stage (see [sentences for the voice](lexer.md#sentences-for-the-voice)) and each attempt
+is retried within `conn_options`. `tts.options` is a `TTSOptions` that sets how:
+
+- `sentence_tokenizer`: what splits the text, `tokenize.SentenceTokenizer()` by default. The
+  built-in runs natively with its settings; a subclass that overrides `tokenize` or `stream` runs
+  through Python, its sentences joined until none ends inside a tag and cut at the provider's
+  limit. A provider that takes words is sent words whatever this is.
+- `pacing`: a `SentenceStreamPacer`, or `None` to send each chunk as soon as it is split. A
+  TTS without streaming (sent through `StreamAdapter`, one request per batch) is paced by default,
+  for more context per request; a streaming one is not. With a pacer the first chunk goes at once; each later batch waits until
+  the synthesized audio stopped growing and at most `min_remaining_audio` seconds of it are left
+  to play, then whole chunks are joined with a space up to `max_text_length` characters, never
+  past the provider's request limit. It synthesizes less that an interruption throws away; on a
+  streaming TTS the provider sits idle between batches, and one that ends an idle stream
+  (Cartesia through LiveKit Inference) fails a long reply.
 
 `tokenize.SentenceTokenizer(min_words=4, clause_words=None, retain_format=False,
 max_token_len=None)` batches sentences until a chunk holds `min_words` spoken
 words (a Chinese or Japanese character is a word, Thai about every three characters), never past
-`max_token_len` characters; a longer sentence goes whole. Its stream emits a chunk as soon as no
-text to come could change where it ends, and emits exactly the chunks `tokenize` returns for the
-whole text. With `clause_words`, a sentence running past that many words breaks at its next
-clause mark (`,` `;` `:` and their fullwidth forms, never inside a number such as `1,000`).
+`max_token_len` characters; a longer sentence is cut at its last clause mark or word boundary
+before it, and with no cap set at 1000 characters, so no text waits on a sentence that never ends.
+Its stream emits a chunk as soon as no text to come could change where it ends, and emits exactly
+the chunks `tokenize` returns for the whole text. With `clause_words`, a sentence running past that
+many words breaks at its next clause mark (`,` `;` `:` and their fullwidth forms, never inside a
+number such as `1,000`).
 
-A sentence never ends inside the voice's markup, whatever splits it; see
-[sentences for the voice](lexer.md#sentences-for-the-voice).
+`tts.StreamAdapter(tts=)` gives a non-streaming TTS a streaming interface: each chunk is
+synthesized on its own with the wrapped TTS, retried within `conn_options` while it has delivered
+no audio, as one segment whose last frame is final. Its `options` are the wrapped TTS's.
 
-`text_pacing=True` (or a `SentenceStreamPacer`) holds sentences back: the first goes at once;
-each later batch waits until the synthesized audio stopped growing and at most
-`min_remaining_audio` seconds of it are left to play (from the first audio), then whole
-sentences are joined with a space up to `max_text_length` characters. A streaming plugin paces
-its own tokenizer stream with `pacer.wrap(sentence_stream, output_emitter)`: a
-`SentenceStream` whose text goes to `sentence_stream` and whose sentences are paced by the
-audio `output_emitter` pushed; closing it closes `sentence_stream` and ends a pending read.
+A plugin implements one provider attempt: `_synthesize(chunk, conn_options=)` for a whole text,
+and `_stream(conn_options=)` when the service synthesizes text as it arrives. Its stream's `input`
+yields a `tts.SpeechChunk` per chunk, `text` in the provider's syntax and `said` the words it
+says, and a `Flush` at each segment's end. A provider that buffers text itself declares
+`_core_text_unit()` as `"words"`; one with a request size limit declares `_core_max_text_len()`.
 
 ## Connection options
 
@@ -150,7 +159,7 @@ plugin's classes, not these bases.
 | `livekit.agents.tokenize` | `SentenceTokenizer` and `WordTokenizer` (the built-in splitters; subclass one and override `tokenize` for a custom one), `SentenceStream`, `WordStream`, `TokenData`, `TokenSpan`, `BufferedSentenceStream`, `BufferedWordStream`, `split_words`, `replace_words` |
 | `livekit.agents.utils` | `ConnectionPool`, `shortuuid`, `is_given`, `log_exceptions`, `EventEmitter`; `aio`: `Chan`, `ChanClosed`, `ChanEmpty`, `Interval`, `interval`, `cancel_and_wait`; `media`: `AudioByteStream`, `AudioStreamDecoder`, `encode` with `EncodeOptions`/`ResizeOptions` |
 | `livekit.agents.http` | the client: `HttpSession`, `HttpResponse`, `FormData`, `WebSocket`, `WebSocketMessage`, `WebSocketMessageType`, `http_session`, `open`; see [HTTP and WebSockets](#http-and-websockets) |
-| `livekit.agents.voice.avatar` | `AvatarSession` (its join wait, metrics and close: [Avatars](voice-session.md#avatars)), `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)`. The avatar worker's side: `AvatarRunner`, `AvatarOptions`, `VideoGenerator`, `AudioReceiver`/`DataStreamAudioReceiver`, `AudioSegmentEnd`, `QueueAudioOutput`; it publishes on the agent's behalf (`livekit.agents.types.ATTRIBUTE_PUBLISH_ON_BEHALF`) |
+| `livekit.agents.voice.avatar` | `AvatarSession` (its join wait, metrics and close: [Avatars](voice-session.md#avatars)), `AvatarError` (the recoverable `"error"` of an avatar that did not join in time), `DataStreamAudioOutput` (native, with the whole `io.AudioOutput` surface, so a Python stage can wrap it); an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)`. The avatar worker's side: `AvatarRunner`, `AvatarOptions`, `VideoGenerator`, `AudioReceiver`/`DataStreamAudioReceiver`, `AudioSegmentEnd`, `QueueAudioOutput`; it publishes on the agent's behalf (`livekit.agents.types.ATTRIBUTE_PUBLISH_ON_BEHALF`) |
 | `livekit.agents.types` | the TTS audio frame `userdata` keys: `USERDATA_TIMED_TRANSCRIPT` (the frame's `TranscriptChunk` words) and `USERDATA_TTS_STARTED_TIME` |
 
 An OpenAI-compatible chat-completions provider (Groq, Cerebras, Baseten and the like)

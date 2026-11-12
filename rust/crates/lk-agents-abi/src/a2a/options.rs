@@ -15,7 +15,7 @@ pub struct TurnOptions {
     /// or a map by channel; `None` is the defaults.
     #[host(default = None)]
     pub debounce: DebounceSpec,
-    /// How long a waiter polls for the lane before its task fails `lease-timeout`; `None` is a
+    /// How long a waiter polls for the partition before its task fails `lease-timeout`; `None` is a
     /// minute.
     #[host(default = None)]
     pub wait_timeout: Option<Duration>,
@@ -28,7 +28,7 @@ impl TurnOptions {
     }
 }
 
-/// A message during a run: one of the five policies.
+/// A message during a run: one of the four policies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[crate::host(record(module = "storage_options", emit, extract))]
 #[crate::host(wire_strs)]
@@ -37,8 +37,6 @@ impl TurnOptions {
 pub enum Policy {
     #[host(rename = "batch")]
     Batch,
-    #[host(rename = "interrupt")]
-    Interrupt,
     #[host(rename = "queue")]
     Queue,
     #[host(rename = "concurrent")]

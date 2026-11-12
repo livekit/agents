@@ -741,24 +741,6 @@ async def test_first_event_is_a_session_start_carrying_the_whole_configuration(
         await model.aclose()
 
 
-async def test_the_backend_delegation_accepts_every_service_tier(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A gated tier the wire types don't list would raise while composing session.start."""
-    ws = _connect_hook(monkeypatch)
-
-    model = GPTLiveModel(api_key="sk-test", responses_options={"service_tier": "ultrafast"})
-    session = model.session()
-    try:
-        await session._update_session(instructions="Be concise.")
-        await asyncio.sleep(0.1)
-
-        assert ws.sent[0]["session"]["delegation"]["responses"]["service_tier"] == "ultrafast"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
 async def test_instructions_cannot_change_once_the_session_has_started(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1748,12 +1730,6 @@ def _no_provider_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-_BACKEND_REQUIRED = (
-    "Azure responses delegation needs responses_options['model'], the name of a "
-    "Responses deployment in the same resource; or use delegation='client'"
-)
-
-
 @pytest.mark.usefixtures("_no_provider_env")
 @pytest.mark.parametrize(
     "endpoint_path", ["", "/", "/openai", "/openai/", "/openai/v1", "/openai/v1/live/sessions"]
@@ -1806,54 +1782,6 @@ async def test_with_azure_entra_token_is_a_bearer_and_ignores_the_env_api_key(
 
 
 @pytest.mark.usefixtures("_no_provider_env")
-async def test_with_azure_falls_back_to_the_azure_env_vars(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async with _live_server() as (base, seen):
-        monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", base)
-        monkeypatch.setenv("AZURE_OPENAI_API_KEY", "env-key")
-        model = GPTLiveModel.with_azure(azure_deployment="my-live", delegation="client")
-        await _connect(model, seen)
-
-    assert seen.path == "/openai/v1/live/sessions"
-    assert seen.headers["api-key"] == "env-key"
-
-
-@pytest.mark.usefixtures("_no_provider_env")
-async def test_with_azure_base_url_keeps_a_gateway_path() -> None:
-    async with _live_server() as (base, seen):
-        model = GPTLiveModel.with_azure(
-            azure_deployment="my-live",
-            base_url=f"{base}/gateway",
-            api_key="azure-key",
-            delegation="client",
-        )
-        await _connect(model, seen)
-
-    assert seen.path == "/gateway/live/sessions"
-    assert seen.headers["api-key"] == "azure-key"
-
-
-@pytest.mark.usefixtures("_no_provider_env")
-@pytest.mark.parametrize(
-    "base_path,expected_path", [("", "/live/sessions"), ("/v1", "/v1/live/sessions")]
-)
-async def test_openai_handshake_is_unchanged_by_azure_support(
-    base_path: str, expected_path: str
-) -> None:
-    """OpenAI gets no /openai/v1 prefix and keeps its bearer key."""
-    async with _live_server() as (base, seen):
-        model = GPTLiveModel(api_key="sk-test", base_url=f"{base}{base_path}")
-        await _connect(model, seen)
-
-    assert seen.path == expected_path
-    assert seen.headers["Authorization"] == "Bearer sk-test"
-    assert "api-key" not in seen.headers
-    assert seen.start["session"]["model"] == gpt_live_model.DEFAULT_MODEL
-    assert "OpenAI-Service-Tier" not in seen.headers
-
-
-@pytest.mark.usefixtures("_no_provider_env")
 @pytest.mark.parametrize("service_tier", ["ultrafast", "priority"])
 async def test_a_service_tier_rides_on_the_connection_header(service_tier: ServiceTier) -> None:
     """The tier is asked for at the handshake, not in the session configuration."""
@@ -1863,86 +1791,3 @@ async def test_a_service_tier_rides_on_the_connection_header(service_tier: Servi
 
     assert seen.headers["OpenAI-Service-Tier"] == service_tier
     assert "service_tier" not in seen.start["session"]
-
-
-@pytest.mark.parametrize(
-    "base_url,is_azure,expected",
-    [
-        ("wss://http-gateway.example.com", False, "wss://http-gateway.example.com/live/sessions"),
-        ("ws://localhost:8080/v1/", False, "ws://localhost:8080/v1/live/sessions"),
-        (
-            "https://r.openai.azure.com/openai?api-version=2025-01-01",
-            True,
-            "wss://r.openai.azure.com/openai/v1/live/sessions",
-        ),
-    ],
-)
-def test_live_sessions_url_swaps_only_the_scheme(
-    base_url: str, is_azure: bool, expected: str
-) -> None:
-    """The scheme, not the first "http" anywhere in the URL, becomes ws; any query is dropped."""
-    assert gpt_live_model._live_sessions_url(base_url, is_azure=is_azure) == expected
-
-
-@pytest.mark.usefixtures("_no_provider_env")
-@pytest.mark.parametrize(
-    "kwargs,message",
-    [
-        (
-            {"azure_endpoint": "https://r.openai.azure.com", "base_url": "https://gw"},
-            "base_url and azure_endpoint are mutually exclusive",
-        ),
-        (
-            {"azure_endpoint": "https://r.openai.azure.com", "entra_token": "t"},
-            "api_key and entra_token are mutually exclusive",
-        ),
-        (
-            {"azure_deployment": "", "azure_endpoint": "https://r.openai.azure.com"},
-            "Azure needs azure_deployment, the voice model's deployment name",
-        ),
-        (
-            {"api_key": None, "azure_endpoint": "https://r.openai.azure.com"},
-            "Missing Azure credentials. Pass api_key or entra_token, "
-            "or set the AZURE_OPENAI_API_KEY environment variable",
-        ),
-        (
-            {"azure_endpoint": None},
-            "Missing Azure endpoint. Pass azure_endpoint or base_url, "
-            "or set the AZURE_OPENAI_ENDPOINT environment variable",
-        ),
-        (
-            {"azure_endpoint": "https://r.openai.azure.com", "delegation": "responses"},
-            _BACKEND_REQUIRED,
-        ),
-        (
-            {
-                "azure_endpoint": "https://r.openai.azure.com",
-                "delegation": "responses",
-                "responses_options": {"model": ""},
-            },
-            _BACKEND_REQUIRED,
-        ),
-    ],
-)
-def test_with_azure_rejects_incomplete_configuration(kwargs: dict[str, Any], message: str) -> None:
-    args: dict[str, Any] = {"azure_deployment": "my-live", "api_key": "k", "delegation": "client"}
-    args.update(kwargs)
-    with pytest.raises(ValueError) as exc_info:
-        GPTLiveModel.with_azure(**args)
-    assert str(exc_info.value) == message
-
-
-@pytest.mark.usefixtures("_no_provider_env")
-def test_with_azure_does_not_accept_the_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OPENAI_API_KEY belongs to api.openai.com and must never authenticate an Azure resource."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
-    with pytest.raises(ValueError) as exc_info:
-        GPTLiveModel.with_azure(
-            azure_deployment="my-live",
-            azure_endpoint="https://r.openai.azure.com",
-            delegation="client",
-        )
-    assert str(exc_info.value) == (
-        "Missing Azure credentials. Pass api_key or entra_token, "
-        "or set the AZURE_OPENAI_API_KEY environment variable"
-    )

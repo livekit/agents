@@ -569,6 +569,7 @@ mod recording {
             )
             .unwrap_err();
             assert!(error.is_instance_of::<pyo3::exceptions::PyOSError>(py), "{error}");
+            assert!(error.to_string().contains("could not be created"), "{error}");
         });
     }
 }

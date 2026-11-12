@@ -18,7 +18,7 @@ pub mod cores {
     };
     pub use lk_agents_core::tool_outcome::ToolReports;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
-    pub use lk_agents_core::tts::markup::{ProviderMarkup, SpeechMarkup};
+    pub use lk_agents_core::markup::{ProviderMarkup, SpeechMarkup};
 }
 
 // The cores' in-place `_core` registrations are linked with the extension only from a crate it

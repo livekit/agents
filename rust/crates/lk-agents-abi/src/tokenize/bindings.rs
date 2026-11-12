@@ -42,8 +42,50 @@ pub trait TokenizeFunctions {
     ) -> Option<ReplacedWords>;
 }
 
+/// A built-in `tokenize.SentenceTokenizer`'s settings, which a TTS's stage splits by natively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SentenceSettings {
+    pub min_words: usize,
+    pub clause_words: Option<usize>,
+    pub retain_format: bool,
+    pub max_token_len: Option<usize>,
+}
+
+impl Default for SentenceSettings {
+    /// `SentenceTokenizer()`'s.
+    fn default() -> Self {
+        SentenceSettings {
+            min_words: 4,
+            clause_words: None,
+            retain_format: false,
+            max_token_len: None,
+        }
+    }
+}
+
+/// A built-in `tokenize.SentenceTokenizer`, as a TTS's stage reads it.
+#[crate::host(native(refused = "expected a tokenize.SentenceTokenizer"))]
+pub trait NativeSentences: Send + Sync {
+    fn settings(&self) -> SentenceSettings;
+}
+
+impl NativeSentences for SentenceSettings {
+    fn settings(&self) -> SentenceSettings {
+        *self
+    }
+}
+
+/// What splits a TTS's text: a built-in `tokenize.SentenceTokenizer`, which the stage runs
+/// natively with its settings, or a custom one, whose sentences it reads from the host.
+#[crate::host(record(module = "tts", extract, transparent))]
+#[derive(Clone)]
+pub enum SentenceTokenizerLeg {
+    Native(Arc<dyn NativeSentences>),
+    Host(Arc<dyn crate::tts::stream_adapter::HostSentenceTokenizer>),
+}
+
 /// `tokenize.SentenceTokenizer`'s engine.
-#[crate::host(class(name = "SpeechSentenceTokenizer", pid = false))]
+#[crate::host(class(name = "SpeechSentenceTokenizer", pid = false, native = NativeSentences))]
 pub trait SpeechSentenceTokenizer: Send + Sized + 'static {
     #[host(class(name = "SpeechSentenceStream"))]
     type Stream;
@@ -152,7 +194,8 @@ pub trait SpeechWords {
 ///         ``1,000``). ``None`` breaks only at sentence ends.
 ///     retain_format: keep original whitespace/formatting in emitted tokens.
 ///     max_token_len: cap on a chunk's length in characters: batching stops before a sentence
-///         that would pass it. A single longer sentence goes whole.
+///         that would pass it. A longer sentence is cut at its last clause mark or word
+///         boundary before the cap (1000 characters when unset).
 #[crate::host(facade(
     path = "livekit.agents.tokenize",
     name = "SentenceTokenizer",

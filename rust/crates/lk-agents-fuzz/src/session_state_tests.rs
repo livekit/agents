@@ -687,19 +687,15 @@ mod idle_while_closing {
     }
 }
 
-mod lane_lost_call_goes_on {
-    //! A lost voice-lane lease never ends the call: what the agent says after it is heard.
+mod bound_partition_loss_stops_execution {
+    //! A bound call loses durable ownership when its lease is lost and must stop execution.
     use lk_agents_fuzz::drive::{Outcome, Run, Setup, StorageSetup, finish, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, UserText};
     use lk_agents_voice::trace::{SpeechStep, Step};
 
-    // Catches: a lost lease cancelled the speech under it and every later one at its creation, each
-    // announced `Completed` with nothing said, and a speech whose commit was answered after the loss
-    // never finished (`speech_is_heard`, `no_premature_completion`, survey seeds 12, 341, 615).
-    // Storage failures are logged and never end the call.
     #[test]
-    fn the_agent_is_heard_after_its_lane_is_lost() {
-        // The database goes down just after the first turn took the lane, for longer than the
+    fn the_bound_call_closes_instead_of_speaking_after_ownership_is_lost() {
+        // The database goes down just after the first turn took the partition, for longer than the
         // lease, while the turn's tool runs: its renewals fail until the lease is lost.
         let storage = StorageSetup { outage: Some((30, 12_000)), ..StorageSetup::default() };
         let setup = Setup { storage: Some(storage), ..Setup::default() };
@@ -750,13 +746,18 @@ mod lane_lost_call_goes_on {
             let journal: Vec<&Step> = run.record.journal().iter().map(|(_, s)| s).collect();
             let lost = journal
                 .iter()
-                .position(|s| matches!(s, Step::Speech(SpeechStep::LaneLost { .. })))
-                .expect("the scenario: the lane's lease is lost mid-call");
+                .position(|s| matches!(s, Step::Speech(SpeechStep::PartitionLost { .. })))
+                .expect("the scenario: the partition_key's lease is lost mid-call");
             assert!(
-                journal[lost..]
+                !journal[lost..]
                     .iter()
                     .any(|s| matches!(s, Step::Speech(SpeechStep::AgentStartedSpeaking { .. }))),
-                "the agent speaks after the loss"
+                "a bound agent must not keep speaking after losing durable ownership"
+            );
+            assert!(
+                run.record
+                    .internal_view()
+                    .error_close_requested_after(run.record.journal()[lost].0)
             );
             let outcome = finish(run, Outcome::default()).await;
             assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);

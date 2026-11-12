@@ -39,12 +39,12 @@ pub trait Storage: Send + Sync {
     async fn get_thread_items(
         &self,
         id: &str,
-        lane: Option<&str>,
+        partition_key: Option<&str>,
         after: Option<&str>,
         limit: i64,
     ) -> Result<lk_agents_abi::storage::ThreadItemPage, StorageError> {
         with_thread(self, id, async |thread| {
-            crate::storage::thread_item_page(thread.list_items(lane, after, limit).await?)
+            crate::storage::thread_item_page(thread.list_items(partition_key, after, limit).await?)
         })
         .await
     }

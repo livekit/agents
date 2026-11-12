@@ -628,7 +628,8 @@ pub enum TaskEnd {
 pub struct TranscriptSetup {
     /// A synchroniser paces the transcript against the audio (`sync_transcription`).
     pub synchronized: bool,
-    /// The effective `use_tts_aligned_transcript`, the agent's else the session's, is on.
+    /// The voice aligns its words (it says so, or the stream adapter stamps for it): the
+    /// transcript follows its stamps.
     pub aligned: bool,
     /// Every word spoken comes back stamped: by the voice, or by the stream adapter.
     pub stamps: bool,
@@ -685,6 +686,8 @@ pub struct Recording {
     output_attachments: Vec<(Observed, u32, bool)>,
     host: Vec<(Observed, Host)>,
     avatar: Vec<(Observed, AvatarStep)>,
+    /// What each audio source published in the room played, by source, as last looked at.
+    room_speakers: Vec<crate::fakes::room::Speaker>,
     journal: Vec<(Observed, Step)>,
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
@@ -804,6 +807,17 @@ impl Recording {
         &self.journal
     }
 
+    /// Each speech's place in the order the driver first named it: its turn. Speech ids are
+    /// random, so comparing them says nothing about which came first.
+    pub fn speech_order(&self) -> std::collections::BTreeMap<u64, usize> {
+        let mut order = std::collections::BTreeMap::new();
+        for speech in self.journal.iter().filter_map(|(_, step)| step.speech()) {
+            let next = order.len();
+            order.entry(speech.0).or_insert(next);
+        }
+        order
+    }
+
     /// What the host received, as the production types themselves.
     pub fn host(&self) -> &[(Observed, Host)] {
         &self.host
@@ -812,6 +826,15 @@ impl Recording {
     /// What the avatar worker's runner did, in order.
     pub fn avatar(&self) -> &[(Observed, AvatarStep)] {
         &self.avatar
+    }
+
+    /// What each audio source published in the room played, against its clears.
+    pub fn room_speakers(&self) -> &[crate::fakes::room::Speaker] {
+        &self.room_speakers
+    }
+
+    pub fn set_room_speakers(&mut self, speakers: Vec<crate::fakes::room::Speaker>) {
+        self.room_speakers = speakers;
     }
 
     /// What left the session.

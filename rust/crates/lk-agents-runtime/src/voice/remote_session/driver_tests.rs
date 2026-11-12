@@ -452,3 +452,38 @@ async fn the_client_times_out_mints_distinct_ids_and_cancels_at_close() {
     assert_ne!(ids[0], ids[1]);
     assert!(ids.iter().all(|i| lk_agents_net::strings::is_valid_id("req_", i)), "{ids:?}");
 }
+
+/// The job's simulation verdict is still answered after the session closed. https://github.com/livekit/agents/pull/7986 https://github.com/livekit/agents/pull/6037
+#[tokio::test]
+#[ignore = "https://github.com/livekit/agents/pull/7986 reproduces: finalize_simulation after the session closed gets no reply"]
+async fn finalize_simulation_is_answered_after_the_session_closed() {
+    use proto::session_request::{FinalizeSimulation, Request};
+    use proto::session_response::Response;
+    let (ht, ct) = pair();
+    let (clock, spawner) = rt();
+    let link = RemoteSessionLink::new(
+        Arc::new(Port { release: Arc::new(Notify::new()) }),
+        ht,
+        None,
+        Timebase::of_clock(Arc::clone(&clock)),
+        Arc::clone(&spawner),
+    );
+    link.start().await.unwrap();
+    let client = RemoteSession::new(clock, spawner);
+    client.start(ct, Arc::new(Events(Mutex::new(vec![])))).await.unwrap();
+    // The session closes; the job, and its simulation, outlive it.
+    link.aclose().await;
+    let finalize = Request::FinalizeSimulation(FinalizeSimulation {
+        provisional_success: true,
+        provisional_reason: "goal reached".into(),
+    });
+    let reply = client.request(finalize, secs(1.0)).await;
+    let Ok(proto::SessionResponse {
+        response: Some(Response::FinalizeSimulation(verdict)), ..
+    }) = reply
+    else {
+        panic!("no verdict after the session closed: {reply:?}");
+    };
+    assert!(verdict.user_verdict.is_some(), "{verdict:?}");
+    client.aclose().await;
+}

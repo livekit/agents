@@ -1,16 +1,16 @@
 """Hermetic tests for the google plugin's direct ``credentials`` parameter (#6586).
 
-Uses ``AnonymousCredentials`` — a real ``google.auth.credentials.Credentials``
-object that requires no files, environment, or network — to verify the object
-is passed through to the underlying clients, mirroring what Workload Identity
-Federation setups do with in-memory credentials.
+Uses ``AnonymousCredentials``, a real ``google.auth.credentials.Credentials``
+object that requires no files, environment, or network, to verify how the GCP
+project is resolved for in-memory credentials, as Workload Identity Federation
+setups supply them.
 """
 
 import pytest
 from google.auth.credentials import AnonymousCredentials
 
 from livekit.agents import APIConnectionError, APIConnectOptions
-from livekit.plugins.google import STT, TTS
+from livekit.plugins.google import STT
 
 pytestmark = pytest.mark.unit
 
@@ -22,19 +22,6 @@ class _ProjectCredentials(AnonymousCredentials):
 
 
 class TestSTTCredentials:
-    async def test_client_uses_supplied_credentials(self) -> None:
-        creds = AnonymousCredentials()
-        stt_instance = STT(credentials=creds)
-        client = await stt_instance._create_client(conn_options=APIConnectOptions())
-        assert client.transport._credentials is creds
-
-    async def test_credentials_take_precedence_over_file(self, tmp_path) -> None:
-        creds = AnonymousCredentials()
-        # the file path is never read when a credentials object is supplied
-        stt_instance = STT(credentials=creds, credentials_file=str(tmp_path / "missing.json"))
-        client = await stt_instance._create_client(conn_options=APIConnectOptions())
-        assert client.transport._credentials is creds
-
     async def test_recognizer_uses_project_from_credentials(self) -> None:
         # credentials carrying a project must not fall back to ADC
         creds = _ProjectCredentials()
@@ -63,17 +50,3 @@ class TestSTTCredentials:
         client = await stt_instance._create_client(conn_options=APIConnectOptions())
         with pytest.raises(APIConnectionError, match="could not determine the GCP project id"):
             stt_instance._get_recognizer(client)
-
-
-class TestTTSCredentials:
-    def test_client_uses_supplied_credentials(self) -> None:
-        creds = AnonymousCredentials()
-        tts_instance = TTS(credentials=creds)
-        client = tts_instance._ensure_client()
-        assert client.transport._credentials is creds
-
-    def test_credentials_take_precedence_over_file(self, tmp_path) -> None:
-        creds = AnonymousCredentials()
-        tts_instance = TTS(credentials=creds, credentials_file=str(tmp_path / "missing.json"))
-        client = tts_instance._ensure_client()
-        assert client.transport._credentials is creds

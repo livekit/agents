@@ -61,7 +61,7 @@ fn each_reply_pays_only_the_voice() {
             tokio::time::sleep(Duration::from_millis(500)).await;
             for reply in 0..5 {
                 let asked = tokio::time::Instant::now();
-                let mut audio = voice.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Sure, let me check that for you.").await.unwrap();
+                let mut audio = voice.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("Sure, let me check that for you.")).await.unwrap();
                 audio.next().await.unwrap().expect("the reply's first audio");
                 let took = asked.elapsed();
                 let owed = *shared.first_audio.lock();
@@ -111,7 +111,10 @@ fn each_synthesis_reports_the_connection_it_acquired() {
         let mut reported = Vec::new();
         for _ in 0..2 {
             let mut audio = voice
-                .synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Sure, let me check that for you.")
+                .synthesize(
+                    &lk_agents_abi::telemetry::Cx::NONE,
+                    &chunk("Sure, let me check that for you."),
+                )
                 .await
                 .unwrap();
             let first = audio.next().await.unwrap().expect("the reply's first audio");
@@ -156,7 +159,7 @@ async fn gateway_error_codes_and_retry_policy_reach_the_public_audio_source_with
             Arc::new(SimClock::new()),
         );
         let mut audio =
-            voice.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello.").await.unwrap();
+            voice.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("Hello.")).await.unwrap();
         let error = audio.next().await.expect_err("a gateway refusal must reach the caller");
         assert_eq!(error.status_code(), Some(status));
         assert_eq!(error.retryable(), retryable);
@@ -197,7 +200,8 @@ async fn gateway_fallback_notification_keeps_the_replys_audio_playable() {
         Arc::new(TokioSpawner::current()),
         Arc::new(SimClock::new()),
     );
-    let mut audio = voice.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello.").await.unwrap();
+    let mut audio =
+        voice.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("Hello.")).await.unwrap();
     let frame = audio.next().await.unwrap().expect("the fallback voice remains audible");
     let mut samples = frame.frame.samples_per_channel;
     while let Some(frame) = audio.next().await.unwrap() {
@@ -379,7 +383,7 @@ async fn malformed_audio_is_a_failure_even_when_followed_by_done() {
     ] {
         let ws = Arc::new(FakeWs::new(vec![text(frame), text(json!({"type": "done"}))]));
         let mut source =
-            tts(ws).synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
+            tts(ws).synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("hi")).await.unwrap();
         assert!(source.next().await.is_err(), "malformed audio cannot become successful output");
     }
 }
@@ -388,8 +392,8 @@ async fn malformed_audio_is_a_failure_even_when_followed_by_done() {
 async fn done_before_the_final_flush_cannot_finish_a_synthesis() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let (sink, mut source) =
-        tts(ws.clone()).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("Hello there, this is the first sentence.".to_owned()).unwrap();
+        tts(ws.clone()).stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
+    sink.push(chunk("Hello there, this is the first sentence.")).unwrap();
     sink.flush().unwrap();
     until_sent(&ws, 2).await;
     ws.feed(text(json!({"type": "done"})));
@@ -402,7 +406,8 @@ async fn a_handshake_that_never_completes_is_a_retryable_timeout_on_the_session_
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::hanging());
     let tts = tts_on(ws.clone(), clock.clone());
-    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
+    let mut source =
+        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("hi")).await.unwrap();
 
     crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
     let err = source.next().await.expect_err("the handshake never completed");
@@ -418,7 +423,8 @@ async fn a_gateway_that_takes_the_text_and_never_answers_is_a_retryable_timeout(
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts_on(ws.clone(), clock.clone());
-    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
+    let mut source =
+        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("hi")).await.unwrap();
 
     crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
     let err = source.next().await.expect_err("the gateway never answered");
@@ -427,6 +433,11 @@ async fn a_gateway_that_takes_the_text_and_never_answers_is_a_retryable_timeout(
     let sent = ws.sent_json();
     assert_eq!(sent[0]["type"], json!("session.create"), "the socket did open");
     assert_eq!(sent[1]["type"], json!("input_transcript"), "and the text went out");
+}
+
+/// A chunk as the stage prepared it: what the gateway is sent.
+fn chunk(text: &str) -> lk_agents_abi::SpeechChunk {
+    lk_agents_abi::SpeechChunk { text: text.to_owned(), said: text.to_owned() }
 }
 
 fn pcm(n: usize) -> String {
@@ -443,7 +454,7 @@ async fn synthesize_is_the_duplex_path_with_one_push_and_an_end() {
     ]));
     let tts = tts(ws.clone());
     let mut source =
-        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello there.").await.unwrap();
+        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("Hello there.")).await.unwrap();
     let first = source.next().await.unwrap().unwrap();
     assert_eq!(&*first.frame.data, &[1u8; 4]);
     assert_eq!(first.segment_id, "sess_1");
@@ -468,8 +479,10 @@ async fn a_second_synthesis_reuses_the_socket_the_first_finished_on() {
     for _ in 0..2 {
         ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
         ws.feed(text(json!({"type": "done"})));
-        let mut source =
-            tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello there.").await.unwrap();
+        let mut source = tts
+            .synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("Hello there."))
+            .await
+            .unwrap();
         while source.next().await.unwrap().is_some() {}
         for _ in 0..16 {
             tokio::task::yield_now().await;
@@ -480,19 +493,19 @@ async fn a_second_synthesis_reuses_the_socket_the_first_finished_on() {
     assert_eq!(creates, 1, "configured once: {:?}", ws.sent_json());
 }
 
-// Catches: frames without `USERDATA_TTS_STARTED_TIME`, so the session measured TTFB from the
-// first token it pushed, sentence buffering included, and had no time to first sentence.
+// Catches: frames without `USERDATA_TTS_STARTED_TIME`, or stamped when the stream opened, so the
+// session measured TTFB from the first token it pushed, sentence buffering included, and had no
+// time to first sentence.
 #[tokio::test]
 async fn frames_carry_the_instant_the_first_sentence_went_out() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts_on(ws.clone(), clock.clone());
-    let (sink, mut source) =
-        tts.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("Hello there, this is".to_owned()).unwrap();
+    let (sink, mut source) = tts.stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
+    // the stage took this long to complete the first sentence
     clock.advance(Duration::from_millis(300));
     let sent_at = clock.wall().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-    sink.push(" the first sentence. And".to_owned()).unwrap();
+    sink.push(chunk("Hello there, this is the first sentence.")).unwrap();
     until_sent(&ws, 2).await;
     ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
     let frame = source.next().await.unwrap().unwrap();
@@ -511,27 +524,24 @@ async fn until_sent(ws: &FakeWs, n: usize) -> Vec<serde_json::Value> {
     ws.sent_json()
 }
 
-// Catches: holding sentences until `end_input` (or a flush), which makes time-to-first-audio
-// carry the whole LLM generation.
+// Catches: holding chunks until `end_input` (or a flush), which makes time-to-first-audio carry
+// the whole LLM generation; or a segment's end sent as the wire's flush, which ends the session.
 #[tokio::test]
-async fn the_first_sentence_goes_out_before_end_input() {
+async fn each_chunk_goes_out_as_it_is_pushed() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts(ws.clone());
-    let (sink, _source) =
-        tts.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    for token in ["Hello there, this is", " the first sentence.", " And here comes", " the second"]
-    {
-        sink.push(token.to_owned()).unwrap();
-    }
+    let (sink, _source) = tts.stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
+    sink.push(chunk("Hello there, this is the first sentence.")).unwrap();
 
     let sent = until_sent(&ws, 2).await;
-    assert_eq!(sent.len(), 2, "session.create, then the sentence, with the input open: {sent:?}");
+    assert_eq!(sent.len(), 2, "session.create, then the chunk, with the input open: {sent:?}");
     assert_eq!(sent[0]["type"], json!("session.create"));
     assert_eq!(sent[1]["type"], json!("input_transcript"));
     assert_eq!(sent[1]["transcript"], json!("Hello there, this is the first sentence. "));
 
-    // A flush sends what the tokenizer holds; the wire's own flush waits for the end.
+    // A segment's end sends nothing; the wire's own flush waits for the end.
     sink.flush().unwrap();
+    sink.push(chunk("And here comes the second")).unwrap();
     let sent = until_sent(&ws, 3).await;
     assert_eq!(sent.len(), 3, "{sent:?}");
     assert_eq!(sent[2]["transcript"], json!("And here comes the second "));
@@ -542,17 +552,13 @@ async fn the_first_sentence_goes_out_before_end_input() {
     assert_eq!(sent[3], json!({"type": "session.flush"}), "one flush, at the end of input");
 }
 
-// Catches: the trailing space added twice, or short sentences sent alone instead of batched
-// up to the tokenizer's floor.
+// Catches: the trailing space the gateway concatenates on added twice, or not at all.
 #[tokio::test]
-async fn sentences_are_batched_and_carry_exactly_one_trailing_space() {
+async fn a_chunk_carries_exactly_one_trailing_space() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts(ws.clone());
-    let (sink, _source) =
-        tts.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    for sentence in ["One. ", "Two! ", "Three? "] {
-        sink.push(sentence.to_owned()).unwrap();
-    }
+    let (sink, _source) = tts.stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
+    sink.push(chunk("One. Two! Three?")).unwrap();
     sink.end_input();
 
     let sent = until_sent(&ws, 3).await;
@@ -564,39 +570,33 @@ async fn sentences_are_batched_and_carry_exactly_one_trailing_space() {
     assert_eq!(transcripts, ["One. Two! Three? "]);
 }
 
-// Catches: an expressive synthesis sending standard markup instead of the provider's, or its
-// bracket cues left in the alignment the transcript is synchronised against.
+// Catches: a gateway synthesis sending standard markup instead of the provider's: the request's
+// stage lowers for the gateway's model.
 #[tokio::test]
-async fn an_expressive_synthesis_converts_markup_and_drops_cues_from_the_alignment() {
+async fn a_synthesis_sends_the_models_markup() {
     let ws = Arc::new(FakeWs::new(vec![
         text(json!({"type": "session.created", "session_id": "sess_1"})),
-        text(json!({"type": "output_alignment", "words": [
-            {"word": "[laughs]", "start": 0.0, "end": 0.2},
-            {"word": "hi", "start": 0.2, "end": 0.4},
-        ]})),
         text(json!({"type": "output_audio", "audio": pcm(4)})),
         text(json!({"type": "done"})),
     ]));
     let mut opts = opts();
     opts.model = "inworld/inworld-tts-2".into();
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let tts = GatewayTts::new(
-        opts,
-        ws.clone(),
-        spawner,
-        Arc::new(lk_agents_net::clock::RealClock::new()),
+    let clock = Arc::new(lk_agents_net::clock::RealClock::new());
+    let tts = Arc::new(GatewayTts::new(opts, ws.clone(), spawner, clock.clone()));
+    let request = crate::tts::stream(
+        tts,
+        &lk_agents_abi::telemetry::Cx::NONE,
+        ApiConnectOptions::default(),
+        clock,
+        None,
     );
-    let (sink, mut source) =
-        Tts::stream(&tts, &lk_agents_abi::telemetry::Cx::NONE, true).await.unwrap().split();
+    let (sink, mut source) = request.await.unwrap().split();
     sink.push("say <expr type=\"prosody\" label=\"whisper\">this</expr> now".into()).unwrap();
     sink.end_input();
-    let mut words = Vec::new();
-    while let Some(audio) = source.next().await.unwrap() {
-        words.extend(audio.timed_transcript.into_iter().map(|t| t.text));
-    }
-    assert!(words.iter().all(|w| !w.contains('[')), "{words:?}");
+    while source.next().await.unwrap().is_some() {}
     let transcript = ws.sent_json()[1]["transcript"].as_str().unwrap().to_owned();
-    assert_eq!(transcript, "say [whisper]this now ", "converted to the provider's markup");
+    assert_eq!(transcript, "say [whisper] this now ", "converted to the provider's markup");
 }
 
 // Catches: the host's identification headers (the job's `X-LiveKit-*` identity) not reaching
@@ -614,7 +614,7 @@ async fn a_stream_opened_with_identification_connects_with_those_headers() {
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v.to_owned()))
     .collect();
-    let (_sink, _source) = client.stream_identified(Some(ident), false).unwrap();
+    let (_sink, _source) = client.stream_identified(Some(ident)).unwrap();
     until_sent(&ws, 1).await;
     let (_, headers) = ws.last_connect().expect("connected");
     let get = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
@@ -627,7 +627,7 @@ async fn a_stream_opened_with_identification_connects_with_those_headers() {
     // Without identification (no job): no `X-LiveKit-*` header at all.
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let (_sink, _source) =
-        tts(ws.clone()).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
+        tts(ws.clone()).stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
     until_sent(&ws, 1).await;
     let (_, headers) = ws.last_connect().expect("connected");
     let livekit: Vec<_> = headers.iter().filter(|(k, _)| k.starts_with("X-LiveKit-")).collect();
@@ -639,7 +639,7 @@ async fn a_stream_opened_with_identification_connects_with_those_headers() {
 async fn an_empty_synthesis_still_flushes_and_terminates() {
     let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "done"}))]));
     let tts = tts(ws.clone());
-    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "").await.unwrap();
+    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("")).await.unwrap();
     let last = source.next().await.unwrap().unwrap();
     assert!(last.is_final);
     let sent = ws.sent_json();
@@ -657,7 +657,8 @@ async fn alignment_rides_out_on_the_next_audio_frame() {
         text(json!({"type": "done"})),
     ]));
     let tts = tts(ws);
-    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
+    let mut source =
+        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("hi")).await.unwrap();
     let frame = source.next().await.unwrap().unwrap();
     assert_eq!(frame.timed_transcript.len(), 1);
     assert_eq!(frame.timed_transcript[0].text, "hi ", "cartesia re-adds the space");
@@ -685,8 +686,8 @@ async fn cartesia_words_keep_their_separators_through_a_stream() {
     let ident: Headers = [("X-LiveKit-Session-ID".to_owned(), "inference_connection".to_owned())]
         .into_iter()
         .collect();
-    let (sink, mut source) = client.stream_identified(Some(ident), false).unwrap();
-    sink.push("hello world.".to_owned()).unwrap();
+    let (sink, mut source) = client.stream_identified(Some(ident)).unwrap();
+    sink.push(chunk("hello world.")).unwrap();
     sink.end_input();
     let mut words = Vec::new();
     while let Some(audio) = source.next().await.unwrap() {
@@ -712,7 +713,8 @@ async fn a_gateway_error_frame_fails_the_stream() {
         json!({"type": "error", "code": "NOT_FOUND", "data": "voice not found"}),
     )]));
     let tts = tts(ws);
-    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
+    let mut source =
+        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("hi")).await.unwrap();
     let err = source.next().await.expect_err("the gateway said error");
     assert!(err.message().contains("NOT_FOUND"), "{}", err.message());
     assert!(!err.message().contains("voice not found"), "{}", err.message());
@@ -734,7 +736,8 @@ async fn partial_audio_then_provider_failure_preserves_audio_and_fails() {
         text(json!({"type": "output_audio", "session_id": "segment", "audio": pcm(4)})),
         text(json!({"type": "error", "code": "SERVER_ERROR", "data": "synthesis failed"})),
     ]));
-    let mut source = tts(ws).synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
+    let mut source =
+        tts(ws).synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("hi")).await.unwrap();
     assert_eq!(&*source.next().await.unwrap().unwrap().frame.data, &[1; 4]);
     let error = source.next().await.expect_err("partial audio is not successful completion");
     assert!(error.message().contains("SERVER_ERROR"), "{}", error.message());
@@ -746,8 +749,7 @@ async fn close_settles_a_pump_while_its_audio_queue_is_full() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let client = tts_on(ws.clone(), clock.clone());
-    let (_sink, source) =
-        client.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
+    let (_sink, source) = client.stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
     for _ in 0..AUDIO_QUEUE_CAPACITY + 2 {
         ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
     }
@@ -761,47 +763,14 @@ async fn close_settles_a_pump_while_its_audio_queue_is_full() {
     );
 }
 
-// Catches: expressive leaking from one synthesis to another on the same client (a shared flag).
-#[tokio::test]
-async fn each_synthesis_carries_its_own_expressive_option() {
-    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let mut options = opts();
-    options.model = "inworld/inworld-tts-2".into();
-    let client = GatewayTts::new(
-        options,
-        ws.clone(),
-        Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
-        Arc::new(lk_agents_net::clock::RealClock::new()),
-    );
-    for expressive in [true, false] {
-        ws.feed(text(
-            json!({"type": "output_alignment", "words": [{"word": "[laughs]"}, {"word": "hello"}]}),
-        ));
-        ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
-        ws.feed(text(json!({"type": "done"})));
-        let (sink, mut source) =
-            Tts::stream(&client, &lk_agents_abi::telemetry::Cx::NONE, expressive)
-                .await
-                .unwrap()
-                .split();
-        sink.push("hello".into()).unwrap();
-        sink.end_input();
-        let frame = source.next().await.unwrap().unwrap();
-        assert_eq!(
-            frame.timed_transcript.iter().all(|token| !token.text.contains('[')),
-            expressive
-        );
-        while source.next().await.unwrap().is_some() {}
-    }
-}
-
 #[tokio::test]
 async fn a_call_policy_replaces_gateway_tts_defaults_before_connecting() {
     let ws = Arc::new(FakeWs::hanging());
     let client: Arc<dyn Tts> = Arc::new(tts(ws.clone()));
     let conn = ApiConnectOptions { connect_timeout: Some(0.0), max_retry: 0, ..Default::default() };
     let call = client.with_conn_options(&conn).unwrap_or_else(|| client.clone());
-    let mut source = call.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hello").await.unwrap();
+    let mut source =
+        call.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("hello")).await.unwrap();
     let failure = lk_agents_abi::timeout(
         &lk_agents_net::clock::RealClock::new(),
         Duration::from_millis(250),
@@ -814,31 +783,27 @@ async fn a_call_policy_replaces_gateway_tts_defaults_before_connecting() {
     source.close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
 }
 
+// Catches: a full input queue refusing text (a long reply failing, or a chunk lost) instead of
+// holding the feed until the gateway took what was queued.
 #[tokio::test]
-async fn input_capacity_failure_at_eof_is_not_retryable() {
+async fn a_full_input_queue_holds_the_feed_instead_of_refusing() {
     let ws = Arc::new(FakeWs::new(Vec::new()).keep_open());
-    let client = tts(ws);
-    let (sink, mut source) =
-        client.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    for _ in 0..TEXT_QUEUE_CAPACITY - 1 {
-        sink.push("hello".to_owned()).unwrap();
-        sink.flush().unwrap();
+    let client = tts(ws.clone());
+    let (sink, _source) = client.stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
+    let texts: Vec<String> = (0..2 * TEXT_QUEUE_CAPACITY).map(|n| format!("chunk {n}")).collect();
+    for text in &texts {
+        let sent = lk_agents_abi::utils::stream::Entry::Item(chunk(text));
+        let taken = tokio::time::timeout(Duration::from_secs(5), sink.send(sent)).await;
+        taken.expect("the queue drains").expect("the input took the chunk");
     }
-    sink.push("tail".to_owned()).unwrap();
     sink.end_input();
-    let error = lk_agents_abi::timeout(
-        &lk_agents_net::clock::RealClock::new(),
-        Duration::from_secs(1),
-        source.next(),
-    )
-    .await
-    .expect("EOF capacity refusal must settle the synthesis")
-    .expect_err("the final buffered text could not be enqueued");
-    assert!(error.message().contains("input queue overflowed at EOF"));
-    assert!(
-        !error.retryable(),
-        "deterministic local capacity failure must not reopen the provider"
-    );
+    let sent = until_sent(&ws, 2 * TEXT_QUEUE_CAPACITY + 2).await;
+    let transcripts: Vec<String> = sent
+        .iter()
+        .filter(|v| v["type"] == json!("input_transcript"))
+        .map(|v| v["transcript"].as_str().unwrap().trim_end().to_owned())
+        .collect();
+    assert_eq!(transcripts, texts, "every chunk, in order");
 }
 
 fn credentials() -> Option<(String, String, String)> {
@@ -889,7 +854,7 @@ async fn a_tts_synthesis_round_trips_over_the_websocket() {
     );
 
     let mut source = tts
-        .synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello from Rust.")
+        .synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("Hello from Rust."))
         .await
         .expect("the socket opened");
     let mut bytes = 0usize;
@@ -915,14 +880,14 @@ async fn a_synthesis_stopped_while_opening_closes_its_pooled_connection() {
     ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
     ws.feed(text(json!({"type": "done"})));
     let mut source =
-        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello there.").await.unwrap();
+        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("Hello there.")).await.unwrap();
     while source.next().await.unwrap().is_some() {}
     for _ in 0..16 {
         tokio::task::yield_now().await;
     }
     assert_eq!(tts.connections.lock().idle.len(), 1, "the first synthesis gave it back");
     let pooled = tts.connections.lock().idle.values().next().unwrap().sender.clone();
-    let stream = tts.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap();
+    let stream = tts.stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap();
     // Stopped before its pump first runs: the stop wins over the reused connection.
     drop(stream);
     for _ in 0..64 {
@@ -977,10 +942,40 @@ async fn a_prewarm_after_a_failed_one_pools_the_socket_the_first_synthesis_reuse
     gateway.inner.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
     gateway.inner.feed(text(json!({"type": "done"})));
     let mut source =
-        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello there.").await.unwrap();
+        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("Hello there.")).await.unwrap();
     let first = source.next().await.unwrap().expect("the reply's first audio");
     let connection = first.connection.expect("the first frame reports the connection");
     assert!(connection.reused, "the synthesis opened its own socket: the prewarm was suppressed");
     while source.next().await.unwrap().is_some() {}
     assert_eq!(gateway.inner.connect_count(), 1, "one socket after the refused one");
+}
+
+// Catches: `inference.TTS.aclose()` leaving its pooled gateway socket open until the process
+// exits, so a worker that made a TTS per session hit the project's gateway connection limit
+// (`MaxConcurrentGatewayTTS`) after about fifty sessions.
+#[tokio::test]
+async fn closing_the_client_closes_its_pooled_socket_and_pools_nothing_more() {
+    use lk_agents_abi::inference::tts_client::InferenceTts as _;
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let tts = tts(ws.clone());
+    let synthesize = |tts: GatewayTts, ws: Arc<FakeWs>| async move {
+        ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
+        ws.feed(text(json!({"type": "done"})));
+        let mut source = tts
+            .synthesize(&lk_agents_abi::telemetry::Cx::NONE, &chunk("Hello there."))
+            .await
+            .unwrap();
+        while source.next().await.unwrap().is_some() {}
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+    };
+    synthesize(tts.clone(), ws.clone()).await;
+    let pooled = tts.connections.lock().idle.values().next().expect("pooled").sender.clone();
+    tts.aclose().await;
+    assert!(pooled.is_closed(), "the idle socket was closed");
+    assert!(tts.connections.lock().idle.is_empty());
+    // a synthesis after the close still runs, and its socket is closed rather than pooled
+    synthesize(tts.clone(), ws.clone()).await;
+    assert!(tts.connections.lock().idle.is_empty(), "nothing pooled after the close");
 }

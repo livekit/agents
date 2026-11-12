@@ -61,23 +61,6 @@ impl CoreCredentials {
         crate::generated::records::a2a_auth::principal_to_py(py, out)
     }
 
-    /// The caller of a request with these headers: its `Authorization` bearer token, else its
-    /// thread grant header (names compared case-insensitively); with neither, the project when
-    /// the LiveKit node authorized the call.
-    #[pyo3(signature = (headers, *, agent_name, deployment = "".to_owned(), node_authorized = false))]
-    fn principal<'py>(
-        &self,
-        py: Python<'py>,
-        headers: ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
-        agent_name: ::std::string::String,
-        deployment: ::std::string::String,
-        node_authorized: bool,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::principal(&self.0, headers, agent_name, deployment, node_authorized)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as crate::py_errors::HostException>::to_py_err(&e))?;
-        crate::generated::records::a2a_auth::principal_to_py(py, out)
-    }
-
     #[pyo3(signature = (*, identity = "worker".to_owned(), ttl_seconds = 3600))]
     fn project_token(
         &self,
@@ -499,12 +482,13 @@ impl CoreA2ADoor {
     /// The door over `storage`'s namespace, which opens its backend on first use; accepted work
     /// is settled by the storage's `aclose`.
     #[new]
-    #[pyo3(signature = (storage, config, host))]
+    #[pyo3(signature = (storage, config, host, server = None))]
     fn new(
         py: Python<'_>,
         storage: Bound<'_, PyAny>,
         config: Bound<'_, PyAny>,
         host: Bound<'_, PyAny>,
+        server: Option<Bound<'_, PyAny>>,
     ) -> PyResult<CoreA2ADoor> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
@@ -519,7 +503,20 @@ impl CoreA2ADoor {
         })?;
         let config = crate::generated::records::a2a_door::door_config_from_py(config.as_any())?;
         let host = crate::generated::a2a::TurnHostProxy::from_host(host.as_any())?;
-        let out = py.detach(|| <CoreA2ADoorImpl as ::lk_agents_abi::a2a::door::A2ADoor>::new(&env, storage, config, host)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let server = server
+            .map(|v| {
+                crate::py_objects::native::<
+                    dyn ::lk_agents_abi::worker::server_host::ServerConfiguration,
+                >(v.as_any())
+                .ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "server",
+                        ": expected a native ServerConfig"
+                    ))
+                })
+            })
+            .transpose()?;
+        let out = py.detach(|| <CoreA2ADoorImpl as ::lk_agents_abi::a2a::door::A2ADoor>::new(&env, storage, config, host, server)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(CoreA2ADoor(::std::sync::Arc::new(out)))
     }
 
@@ -591,6 +588,24 @@ impl CoreRemoteInteraction {
         })?;
         let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, tool_id, function_call, history, project_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(CoreRemoteInteraction(::std::sync::Arc::new(out)))
+    }
+
+    /// Caller identities carried to the receiving endpoint for partition re-entry checks.
+    #[pyo3(signature = (chain))]
+    fn set_partition_chain(&self, py: Python<'_>, chain: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let chain = chain.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::generated::records::a2a_remote::delegation_partition_from_py(
+                        item.as_any(),
+                    )
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::set_partition_chain(&self.0, chain)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
     }
 
     /// The call's message; `thread_id` shares the caller's thread under `token`'s grant for it.
@@ -700,6 +715,31 @@ type RemoteConfigurationImpl =
     <crate::generated::implementations::Selected as super::Implementations>::RemoteConfiguration;
 type RemoteConfigurationCoreRemoteTokenOutput = ::std::option::Option<::std::string::String>;
 
+#[pyfunction]
+#[pyo3(signature = (metadata))]
+pub fn _core_delegation_chain<'py>(
+    py: Python<'py>,
+    metadata: Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    crate::py_calls::check_pid()?;
+    let metadata = match crate::py_values::value_from_py(metadata.as_any(), "metadata")? {
+        ::serde_json::Value::Object(map) => Ok(map),
+        _ => {
+            Err(::pyo3::exceptions::PyTypeError::new_err(concat!("metadata", ": expected a dict")))
+        }
+    }?;
+    let out = py.detach(|| <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_delegation_chain(metadata)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+    ::pyo3::PyResult::Ok(
+        ::pyo3::types::PyList::new(
+            py,
+            out.into_iter()
+                .map(|x| crate::generated::records::a2a_remote::delegation_partition_to_py(py, x))
+                .collect::<PyResult<Vec<_>>>()?,
+        )?
+        .into_any(),
+    )
+}
+
 /// The delegation tool declared in code: `name` and `description` are required, and the tool
 /// takes the request, stated in full. Nothing is fetched from the endpoint.
 #[pyfunction]
@@ -741,8 +781,8 @@ type CoreHandlerTurnImpl =
 /// that order, publishing progress and tokens and answering checkpoints.
 ///
 /// A report waits while the turn holds 64 unread ones, so a handler never runs ahead of the
-/// turn. `checkpoint()` returns `True` when the run should yield (a newer message waits under
-/// `interrupt`, or the client cancelled the task). Once the turn ended, or was closed, reports
+/// turn. `checkpoint()` returns `True` when the run should yield because the client
+/// cancelled the task. Once the turn ended, or was closed, reports
 /// are dropped and `checkpoint()` returns `True`.
 #[pyclass(frozen, name = "_core_HandlerTurn", module = "livekit.agents._core")]
 pub struct CoreHandlerTurn(pub(crate) ::std::sync::Arc<CoreHandlerTurnImpl>);
@@ -757,6 +797,31 @@ impl CoreHandlerTurn {
                 <CoreHandlerTurnImpl as ::lk_agents_abi::a2a::turn::HandlerTurn>::checkpoint(&this)
                     .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[pyo3(signature = (state, history))]
+    fn save_session<'py>(
+        &self,
+        py: Python<'py>,
+        state: Bound<'_, PyAny>,
+        history: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let state = crate::py_values::value_from_py(state.as_any(), "state")?;
+        let history = history.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreHandlerTurnImpl as ::lk_agents_abi::a2a::turn::HandlerTurn>::save_session(&this, state, history)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 
@@ -816,11 +881,11 @@ pub struct Turn(pub(crate) ::std::sync::Arc<TurnImpl>);
 #[pymethods]
 impl Turn {
     #[new]
-    #[pyo3(signature = (thread, lane, host, options = None))]
+    #[pyo3(signature = (thread, partition_key, host, options = None))]
     fn new(
         py: Python<'_>,
         thread: Bound<'_, PyAny>,
-        lane: ::std::string::String,
+        partition_key: ::std::string::String,
         host: Bound<'_, PyAny>,
         options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Turn> {
@@ -835,15 +900,22 @@ impl Turn {
             .map(|v| crate::generated::records::storage_options::turn_options_from_py(v.as_any()))
             .transpose()?;
         let out = py.detach(|| {
-            <TurnImpl as ::lk_agents_abi::a2a::turn::Turn>::new(&env, thread, lane, host, options)
+            <TurnImpl as ::lk_agents_abi::a2a::turn::Turn>::new(
+                &env,
+                thread,
+                partition_key,
+                host,
+                options,
+            )
         });
         ::pyo3::PyResult::Ok(Turn(::std::sync::Arc::new(out)))
     }
 
     #[getter]
-    fn lane(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+    fn partition_key(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <TurnImpl as ::lk_agents_abi::a2a::turn::Turn>::lane(&self.0));
+        let out =
+            py.detach(|| <TurnImpl as ::lk_agents_abi::a2a::turn::Turn>::partition_key(&self.0));
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -1182,6 +1254,7 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(ctx).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1192,7 +1265,7 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::generated::records::storage_turn::handler_output_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::storage_turn::handler_output_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

@@ -4,14 +4,15 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::avatar::{AudioReceiverObservation, AvatarAudio};
 use lk_agents_abi::voice::avatar_queue::{QueueClosed, QueueEffects};
 use lk_agents_abi::voice::io::{
-    AudioOutput, AvatarPlaybackSegment, IoError, PlaybackFinished, PlaybackSegment,
-    PlaybackTracker, Result,
+    AudioOutput, AudioOutputExt, AvatarPlaybackSegment, IoError, OutputAlreadyChained,
+    PlaybackEvent, PlaybackFinished, PlaybackFinishedEvent, PlaybackListener, PlaybackObserver,
+    PlaybackSegment, PlaybackTracker, Result,
 };
 use lk_agents_abi::voice::rtc::{
     self, AudioOutputCapabilities, ByteStreamWriter, ParticipantIdentity, RoomEvent, RtcError,
     RtcRoom, StreamBytesOptions,
 };
-use lk_agents_abi::{AudioFrame, BoxFuture, Clock, Closed, Spawner, Ts};
+use lk_agents_abi::{AudioFrame, BoxFuture, Clock, Closed, Spawner, Ts, WallAnchor};
 use lk_agents_net::signal;
 use lk_agents_net::task::{ScopedTask, TaskSet};
 use lk_agents_voice::avatar::machine::output::{
@@ -64,6 +65,12 @@ struct Inner {
     /// `None` while starting, then whether the avatar became ready. The start task's: its end
     /// (a close cancels it) ends every wait.
     started: signal::Cell<Option<rtc::Result<()>>>,
+    /// The avatar lifecycle's verdict while the avatar is overdue: why audio fails instead of
+    /// waiting for it. Its producer is the lifecycle's join wait.
+    absence: Mutex<Option<signal::Cell<Option<String>>>>,
+    /// The host stage built over this output, which its playback reports reach; released at the
+    /// close.
+    parent: Mutex<Option<Arc<Parent>>>,
     /// The open segment. Its stream is opened, written and closed by tasks of their own, so a
     /// capture the playout drops mid-write leaves the stream to the segment's close.
     segment: Mutex<Segments>,
@@ -72,6 +79,8 @@ struct Inner {
     close_outcome: Arc<Mutex<Closed>>,
     /// The give-up timer after a clear, and when it fires.
     clear_timer: Mutex<Option<(ScopedTask, Ts, PlaybackSegment)>>,
+    /// The plain v1 report methods' routes for the avatar, by method.
+    plain_routes: Mutex<Vec<(&'static str, u64)>>,
 }
 
 #[derive(Default)]
@@ -94,7 +103,54 @@ enum SegmentWriter {
     Closed,
 }
 
+/// The host stage built over the output (`next_in_chain=`): each playback report reaches its
+/// `on_playback_*`, stamped in wall seconds.
+struct Parent {
+    stage: Arc<dyn PlaybackListener>,
+    anchor: WallAnchor,
+}
+
+impl PlaybackObserver for Parent {
+    fn on_playback_event(&self, ev: &PlaybackEvent) {
+        match ev {
+            PlaybackEvent::Started(e) => {
+                self.stage.on_playback_started(e.segment, self.anchor.seconds(e.created_at));
+            }
+            PlaybackEvent::Progressed(e) => self.stage.on_playback_progressed(
+                e.segment,
+                self.anchor.seconds(e.started_at),
+                e.offset.as_secs_f64(),
+                e.duration.as_secs_f64(),
+            ),
+            PlaybackEvent::Finished { segment, event } => self.stage.on_playback_finished(
+                *segment,
+                event.playback_position.as_secs_f64(),
+                event.interrupted,
+                event.synchronized_transcript.clone(),
+            ),
+        }
+    }
+}
+
 impl Inner {
+    /// Until the avatar is ready, or at once while the lifecycle reports it overdue.
+    async fn ready(&self) -> Result<()> {
+        let absence = self.absence.lock().clone();
+        let absent = async move {
+            match &absence {
+                Some(absence) => absence.wait_map(Option::clone).await.ok(),
+                None => None,
+            }
+        };
+        tokio::select! {
+            biased;
+            ready = self.started.wait() => {
+                Ok(ready.unwrap_or(Err(RtcError::Closed("the avatar output")))?)
+            }
+            Some(reason) = absent => Err(IoError::Rtc(reason)),
+        }
+    }
+
     fn is_started(&self) -> bool {
         let started = self.started.with(|started| matches!(started, Some(Ok(()))));
         started && !self.segment.lock().core.is_closed()
@@ -112,6 +168,7 @@ impl Inner {
         while !self.room.connection_state()?.is_connected() {
             next_room_event(&mut events, "room before connection").await?;
         }
+        self.register_plain_routes()?;
         if self.segment.lock().core.is_closed() {
             self.retire_routes();
             return Err(RtcError::Closed("avatar output"));
@@ -188,23 +245,12 @@ impl Inner {
             state.core.continued(segment.key)
         };
         for &base in report_routes(self.wait_playback_start) {
-            let method =
-                playback_method(base, &token).map_err(|error| IoError::Rtc(error.to_string()))?;
+            let method = playback_method(base, &token);
             let target = Arc::downgrade(self);
             let key = segment.key;
             let handler = RpcHandler::new(move |caller, payload| {
                 let Some(inner) = target.upgrade() else { return Reject::Retired.wire() };
-                if let Err(reply) = check_caller(caller, &inner.destination) {
-                    return reply.wire();
-                }
-                let reply = if base == RPC_PLAYBACK_FINISHED {
-                    inner.on_playback_finished(key, payload)
-                } else if continued || inner.tracker.playback_started(key, inner.clock.now()) {
-                    Ok(())
-                } else {
-                    Err(Reject::Stale)
-                };
-                reply.map_or_else(Reject::wire, |()| "ok".into())
+                inner.on_report(base, key, continued, caller, payload)
             });
             self.room.local().register_rpc_method(method.clone(), handler)?;
             let retained = self.segment.lock().core.contains(segment.key);
@@ -215,6 +261,53 @@ impl Inner {
             }
         }
         Ok(continued)
+    }
+
+    /// v1 avatar workers report on the plain methods, about the oldest segment streaming to them
+    /// (v1 `_datastream_io.py` registers them per caller at the room's connection).
+    fn register_plain_routes(self: &Arc<Self>) -> rtc::Result<()> {
+        let routes = self.room.rpc_router().clone();
+        for &base in report_routes(self.wait_playback_start) {
+            let target = Arc::downgrade(self);
+            let callback = RpcHandler::new(move |caller, payload| {
+                let Some(inner) = target.upgrade() else { return Reject::Retired.wire() };
+                let oldest = {
+                    let state = inner.segment.lock();
+                    state.core.oldest_streamed().map(|key| (key, state.core.continued(key)))
+                };
+                let Some((key, continued)) = oldest else { return Reject::Stale.wire() };
+                inner.on_report(base, key, continued, caller, payload)
+            });
+            let registration = routes.insert(base, self.destination.clone(), callback);
+            self.plain_routes.lock().push((base, registration));
+            let shared = routes.clone();
+            let handler =
+                RpcHandler::new(move |caller, payload| shared.call(base, caller, payload));
+            self.room.local().register_rpc_method(base.to_owned(), handler)?;
+        }
+        Ok(())
+    }
+
+    /// One avatar report about `key`: `continued` when an earlier stream already started it.
+    fn on_report(
+        &self,
+        base: &str,
+        key: PlaybackSegment,
+        continued: bool,
+        caller: &str,
+        payload: &str,
+    ) -> String {
+        if let Err(reply) = check_caller(caller, &self.destination) {
+            return reply.wire();
+        }
+        let reply = if base == RPC_PLAYBACK_FINISHED {
+            self.on_playback_finished(key, payload)
+        } else if continued || self.tracker.playback_started(key, self.clock.now()) {
+            Ok(())
+        } else {
+            Err(Reject::Stale)
+        };
+        reply.map_or_else(Reject::wire, |()| "ok".into())
     }
 
     fn on_playback_finished(
@@ -285,7 +378,7 @@ impl Inner {
     fn retire_route(&self, token: Option<AvatarPlaybackSegment>) {
         let Some(token) = token else { return };
         for &base in report_routes(self.wait_playback_start) {
-            let Ok(method) = playback_method(base, &token) else { continue };
+            let method = playback_method(base, &token);
             if let Err(error) = self.room.local().unregister_rpc_method(method) {
                 log::error!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str(); "failed to retire avatar playback route");
             }
@@ -354,6 +447,10 @@ impl Inner {
     }
 
     fn retire_routes(self: &Arc<Self>) {
+        let plain = std::mem::take(&mut *self.plain_routes.lock());
+        for (base, registration) in plain {
+            self.room.rpc_router().remove(base, &self.destination, registration);
+        }
         let keys = self.segment.lock().core.keys();
         for key in keys {
             self.retire_segment(key);
@@ -371,6 +468,11 @@ impl Inner {
             self.close_segment(segment);
         }
         self.tracker.reset();
+        let parent = self.parent.lock().take();
+        if let Some(parent) = parent {
+            let parent: Arc<dyn PlaybackObserver> = parent;
+            self.tracker.unobserve(&parent);
+        }
         let replaced = self.clear_timer.lock().take();
         drop(replaced);
         self.retire_routes();
@@ -454,6 +556,68 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
     fn sample_rate(&self) -> Option<u32> {
         AudioOutput::sample_rate(self)
     }
+    fn begin_segment(&self, segment: PlaybackSegment) -> Result<()> {
+        AudioOutput::begin_segment(self, segment)
+    }
+    fn withdraw_capture(&self) -> Result<()> {
+        AudioOutput::withdraw_capture(self)
+    }
+    fn playback_segment(&self) -> Option<PlaybackSegment> {
+        self.inner.tracker.current_segment()
+    }
+    async fn capture_frame(&self, frame: AudioFrame) -> Result<()> {
+        AudioOutputExt::capture_frame(self, &frame).await
+    }
+    fn flush(&self) {
+        AudioOutputExt::flush(self);
+    }
+    fn clear_buffer(&self) {
+        AudioOutput::clear_buffer(self);
+    }
+    fn can_pause(&self) -> bool {
+        AudioOutputExt::can_pause(self)
+    }
+    fn pause(&self) {
+        AudioOutput::pause(self);
+    }
+    fn resume(&self) {
+        AudioOutput::resume(self);
+    }
+    fn on_attached(&self) {
+        AudioOutput::on_attached(self);
+    }
+    fn on_detached(&self) {
+        AudioOutput::on_detached(self);
+    }
+    async fn wait_for_playout(&self) -> PlaybackFinishedEvent {
+        let ev = AudioOutputExt::wait_for_playout(self).await;
+        PlaybackFinishedEvent {
+            playback_position: ev.playback_position.as_secs_f64(),
+            interrupted: ev.interrupted,
+            synchronized_transcript: ev.synchronized_transcript,
+            segment: None,
+        }
+    }
+    fn set_parent(
+        &self,
+        stage: Arc<dyn PlaybackListener>,
+    ) -> std::result::Result<(), OutputAlreadyChained> {
+        let mut parent = self.inner.parent.lock();
+        if let Some(parent) = &*parent {
+            // a stage's tracker is its own: the same tracker is the same stage
+            let registered = Arc::as_ptr(parent.stage.tracker());
+            if std::ptr::addr_eq(registered, Arc::as_ptr(stage.tracker())) {
+                return Ok(());
+            }
+            return Err(OutputAlreadyChained { label: AudioOutput::label(self).to_owned() });
+        }
+        let anchor = self.inner.tracker.anchor();
+        let registered = Arc::new(Parent { stage, anchor });
+        *parent = Some(Arc::clone(&registered));
+        drop(parent);
+        self.inner.tracker.observe(registered);
+        Ok(())
+    }
     async fn aclose(&self) {
         self.aclose().await;
     }
@@ -475,6 +639,9 @@ impl DataStreamAudioOutput {
         spawner: Arc<dyn Spawner>,
     ) -> Self {
         let (start, started) = signal::once();
+        let tracker: Arc<dyn PlaybackTracker> = Arc::new(crate::voice::playback::Tracker::new());
+        // Its reports are stamped on `clock`; a host stage over it reads them as wall seconds.
+        tracker.anchor_to(WallAnchor::of(&*clock));
         let inner = Arc::new(Inner {
             room,
             destination: destination_identity,
@@ -482,18 +649,27 @@ impl DataStreamAudioOutput {
             wait_playback_start,
             clear_buffer_timeout,
             sample_rate,
-            tracker: Arc::new(crate::voice::playback::Tracker::new()),
+            tracker,
             clock,
             spawner: Arc::clone(&spawner),
             started,
+            absence: Mutex::new(None),
+            parent: Mutex::new(None),
             segment: Mutex::new(Segments::default()),
             tasks: Arc::new(TaskSet::default()),
             closing: Arc::new(TaskSet::default()),
             close_outcome: Arc::new(Mutex::new(Closed::Clean)),
             clear_timer: Mutex::new(None),
+            plain_routes: Mutex::new(Vec::new()),
         });
         inner.tasks.spawn(&*spawner, "avatar_output_start", Arc::clone(&inner).start(start));
         DataStreamAudioOutput { inner }
+    }
+
+    /// Follow the avatar lifecycle's `absence`: while it holds a reason, audio fails with it
+    /// instead of waiting for the avatar.
+    pub fn follow_absence(&self, absence: signal::Cell<Option<String>>) {
+        *self.inner.absence.lock() = Some(absence);
     }
 
     /// When the give-up timer after a clear fires, while one is armed.
@@ -530,8 +706,7 @@ impl AudioOutput for DataStreamAudioOutput {
         frame: &'a AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            let ready = self.inner.started.wait().await;
-            ready.unwrap_or(Err(RtcError::Closed("the avatar output")))?;
+            self.inner.ready().await?;
             if self.inner.segment.lock().core.is_closed() {
                 Err(RtcError::Closed("the avatar output"))?;
             }

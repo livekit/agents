@@ -1,20 +1,20 @@
+//! The adapter itself: each chunk its stage prepared, pushed here directly, synthesized on its
+//! own. How text becomes those chunks is the stage's, tested in `stage_tests.rs`.
+
 use super::StreamAdapter;
 use lk_agents_abi::Tts;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::tts::stream_adapter::SentenceSplitter;
-use lk_agents_abi::tts::stream_adapter::SplitterFactory;
-use lk_agents_abi::tts::types::{SynthesizedAudio, TtsCapabilities, TtsSink, TtsSource};
+use lk_agents_abi::tts::types::{
+    SpeechChunk, SynthesizedAudio, TtsCapabilities, TtsSink, TtsSource,
+};
 use lk_agents_abi::utils::audio::AudioFrame;
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, StreamOutput};
-use lk_agents_core::tts::markup::{Markup, MarkupExt};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 // Every await is bounded: this file's bugs are hangs, and a bounded hang fails cleanly.
@@ -23,62 +23,13 @@ const GUARD: Duration = Duration::from_secs(5);
 async fn bounded<F: std::future::Future>(what: &str, f: F) -> F::Output {
     match tokio::time::timeout(GUARD, f).await {
         Ok(v) => v,
-        Err(_) => panic!("{what}: blocked forever -- a token never reached the source"),
+        Err(_) => panic!("{what}: blocked forever -- a chunk never reached the source"),
     }
 }
 
-/// Splits on '.', keeping the delimiter, and buffers the tail. Records every call so a test
-/// can assert what the sink forwarded.
-#[derive(Default)]
-struct DotSplitter {
-    buf: String,
-
-    seen: Arc<Mutex<Vec<String>>>,
-
-    flushes: Arc<AtomicUsize>,
-}
-
-impl SentenceSplitter for DotSplitter {
-    fn push(&mut self, text: &str) -> Vec<String> {
-        self.seen.lock().push(text.to_owned());
-        self.buf.push_str(text);
-        let mut out = Vec::new();
-        while let Some(i) = self.buf.find('.') {
-            out.push(self.buf.drain(..=i).collect());
-        }
-        out
-    }
-    fn flush(&mut self) -> Vec<String> {
-        self.flushes.fetch_add(1, Ordering::Relaxed);
-        if self.buf.is_empty() { Vec::new() } else { vec![std::mem::take(&mut self.buf)] }
-    }
-}
-
-/// A `StreamAdapter` plus the two observation points its splitter exposes.
-struct Observed {
-    adapter: StreamAdapter,
-
-    seen: Arc<Mutex<Vec<String>>>,
-
-    flushes: Arc<AtomicUsize>,
-}
-
-fn observed(tts: Arc<FakeTts>) -> Observed {
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let flushes = Arc::new(AtomicUsize::new(0));
-    let (s, f) = (seen.clone(), flushes.clone());
-    Observed {
-        adapter: StreamAdapter::new(
-            tts,
-            Arc::new(move |_| {
-                Box::new(DotSplitter { buf: String::new(), seen: s.clone(), flushes: f.clone() })
-            }),
-            lk_agents_core::tts::markup::text_processor_factory(),
-            Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()),
-        ),
-        seen,
-        flushes,
-    }
+/// A chunk as a stage hands it over: `text` for the provider, `said` its words.
+fn chunk(text: &str) -> SpeechChunk {
+    SpeechChunk { text: text.to_owned(), said: text.to_owned() }
 }
 
 fn frame(samples: u32) -> AudioFrame {
@@ -90,7 +41,6 @@ struct VecSource {
     frames: VecDeque<SynthesizedAudio>,
     fail_after: Option<usize>,
     emitted: usize,
-
     closed: Arc<AtomicUsize>,
 }
 
@@ -121,15 +71,12 @@ impl StreamOutput<SynthesizedAudio> for VecSource {
 
 impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for VecSource {}
 
+/// A provider with no duplex path: records the text of every `synthesize()` call.
 struct FakeTts {
-    /// Frames per `synthesize()` call, and the text it was called with.
     frames_per_call: usize,
-
     calls: Mutex<Vec<String>>,
-
     inner_closed: Arc<AtomicUsize>,
     fail_after: Option<usize>,
-    markup: &'static str,
 }
 
 impl FakeTts {
@@ -139,8 +86,12 @@ impl FakeTts {
             calls: Mutex::new(Vec::new()),
             inner_closed: Arc::new(AtomicUsize::new(0)),
             fail_after: None,
-            markup: "",
         })
+    }
+    fn failing_after(frames_per_call: usize, fail_after: usize) -> Arc<Self> {
+        let mut tts = FakeTts::new(frames_per_call);
+        Arc::get_mut(&mut tts).expect("fresh").fail_after = Some(fail_after);
+        tts
     }
     fn texts(&self) -> Vec<String> {
         self.calls.lock().clone()
@@ -161,16 +112,13 @@ impl Tts for FakeTts {
     fn num_channels(&self) -> u16 {
         2
     }
-    fn markup_provider(&self) -> String {
-        self.markup.to_owned()
-    }
     fn synthesize<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        text: &'a str,
+        chunk: &'a SpeechChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            self.calls.lock().push(text.to_owned());
+            self.calls.lock().push(chunk.text.clone());
             let n = self.calls.lock().len();
             let frames = (0..self.frames_per_call)
                 .map(|i| {
@@ -192,7 +140,6 @@ impl Tts for FakeTts {
     fn stream(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        _: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -202,12 +149,11 @@ impl Tts for FakeTts {
 }
 
 fn adapter(tts: Arc<FakeTts>) -> StreamAdapter {
-    StreamAdapter::new(
-        tts,
-        Arc::new(|_| Box::new(DotSplitter::default())),
-        lk_agents_core::tts::markup::text_processor_factory(),
-        Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()),
-    )
+    StreamAdapter::new(tts, Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()))
+}
+
+async fn open(adapter: &StreamAdapter) -> (TtsSink, TtsSource) {
+    adapter.stream(&lk_agents_abi::telemetry::Cx::NONE).await.expect("opens").split()
 }
 
 /// `VecSource` closes at once, so the deadline is a formality.
@@ -237,47 +183,19 @@ async fn drain(mut source: TtsSource) -> Result<Vec<SynthesizedAudio>, ProviderE
     .await
 }
 
-// Catches: a paced adapter sending every sentence at once, sending before the audio already
-// synthesized played out, or losing a held sentence.
-#[tokio::test(start_paused = true)]
-async fn a_paced_adapter_sends_the_first_sentence_then_batches_the_rest_as_audio_plays_out() {
-    let tts = FakeTts::new(2);
-    let adapter = StreamAdapter::new(
-        tts.clone(),
-        Arc::new(|_| Box::new(DotSplitter::default())),
-        lk_agents_core::tts::markup::text_processor_factory(),
-        Arc::new(lk_agents_net::clock::RealClock::new()),
-    )
-    // 0.02 s of audio per sentence; the next batch goes once at most 0.01 s of it remains.
-    .with_pacing(Some(lk_agents_abi::tts::stream_pacer::SentenceStreamPacer {
-        min_remaining_audio: 0.01,
-        max_text_length: 300,
-    }));
-    let (sink, source) =
-        adapter.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("one. two. three.".into()).unwrap();
-    sink.end_input();
-    let started = tokio::time::Instant::now();
-    let out = drain(source).await.unwrap();
-    assert_eq!(tts.texts(), vec!["one.", "two.  three."]);
-    assert_eq!(out.len(), 4);
-    assert!(out.last().unwrap().is_final);
-    // The audio stopped growing (two checks 0.1 s apart) before the batch went.
-    assert!(started.elapsed() >= Duration::from_millis(200), "{:?}", started.elapsed());
-}
-
-// Catches: forwarding the inner `is_final` (or setting it per sentence): one TTS metric per
-// sentence and wrong TTFBs.
+// Catches: forwarding the inner `is_final` (or setting it per chunk): one TTS metric per chunk
+// and wrong TTFBs.
 #[tokio::test]
 async fn only_the_last_frame_of_the_whole_stream_is_final() {
     let tts = FakeTts::new(2);
-    let (sink, source) =
-        adapter(tts).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("one. two. three.".into()).unwrap();
+    let (sink, source) = open(&adapter(tts)).await;
+    for text in ["one.", "two.", "three."] {
+        sink.push(chunk(text)).unwrap();
+    }
     sink.end_input();
 
     let out = drain(source).await.unwrap();
-    assert_eq!(out.len(), 6, "three sentences, two frames each");
+    assert_eq!(out.len(), 6, "three chunks, two frames each");
     let finals: Vec<bool> = out.iter().map(|a| a.is_final).collect();
     assert_eq!(finals, vec![false, false, false, false, false, true]);
 }
@@ -290,27 +208,23 @@ fn tts_records(records: Vec<AgentMetrics>) -> Vec<(u32, bool, bool)> {
     records.into_iter().map(view).collect()
 }
 
-// Catches: one record for the whole stream instead of one per sentence (the one cut by the close
-// as cancelled), and a failed sentence leaving one.
+// Catches: one record for the whole stream instead of one per chunk (the one cut by the close
+// as cancelled), and a failed chunk leaving one.
 #[tokio::test]
-async fn each_sentence_is_metered_as_its_own_call() {
-    let tts = FakeTts::new(2);
-    let (sink, mut source) =
-        adapter(tts).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("one. three.".into()).unwrap();
+async fn each_chunk_is_metered_as_its_own_call() {
+    let (sink, mut source) = open(&adapter(FakeTts::new(2))).await;
+    sink.push(chunk("one.")).unwrap();
+    sink.push(chunk("three.")).unwrap();
     for _ in 0..3 {
         bounded("frame", source.next()).await.unwrap().expect("a frame");
     }
-    // The first sentence ended when the second's first frame came.
+    // The first chunk ended when the second's first frame came.
     assert_eq!(tts_records(source.take_call_metrics(false).unwrap()), vec![(4, false, false)]);
     assert_eq!(tts_records(source.take_call_metrics(true).unwrap()), vec![(6, true, false)]);
     assert_eq!(source.take_call_metrics(true).unwrap(), vec![], "each record is read once");
 
-    let mut failing = FakeTts::new(2);
-    Arc::get_mut(&mut failing).unwrap().fail_after = Some(1);
-    let (sink, mut source) =
-        adapter(failing).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("one.".into()).unwrap();
+    let (sink, mut source) = open(&adapter(FakeTts::failing_after(2, 1))).await;
+    sink.push(chunk("one.")).unwrap();
     sink.end_input();
     assert!(drain_until_error(&mut source).await);
     assert_eq!(source.take_call_metrics(true).unwrap(), vec![]);
@@ -329,13 +243,11 @@ async fn drain_until_error(source: &mut TtsSource) -> bool {
 
 // Catches: holding every frame for the `is_final` lookahead.
 #[tokio::test]
-async fn a_frame_is_not_held_back_while_more_text_may_still_arrive() {
-    let tts = FakeTts::new(4);
-    let (sink, mut source) =
-        adapter(tts).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("hello world.".into()).unwrap();
+async fn a_frame_is_not_held_back_while_more_chunks_may_still_arrive() {
+    let (sink, mut source) = open(&adapter(FakeTts::new(4))).await;
+    sink.push(chunk("hello world.")).unwrap();
 
-    // No `end_input`: the adapter cannot know this is the last sentence, so it must not hold.
+    // No `end_input`: the adapter cannot know this is the last chunk, so it must not hold.
     let first = bounded("first frame", source.next())
         .await
         .unwrap()
@@ -345,58 +257,6 @@ async fn a_frame_is_not_held_back_while_more_text_may_still_arrive() {
     let rest = drain(source).await.unwrap();
     assert_eq!(rest.len(), 3);
     assert!(rest.last().unwrap().is_final);
-}
-
-// Catches: closing the input channel before flushing the splitter (last partial sentence lost).
-#[tokio::test]
-async fn end_input_flushes_the_partial_sentence_before_closing() {
-    let tts = FakeTts::new(1);
-    let (sink, source) = adapter(tts.clone())
-        .stream(&lk_agents_abi::telemetry::Cx::NONE, false)
-        .await
-        .unwrap()
-        .split();
-    sink.push("complete. trailing without a dot".into()).unwrap();
-    sink.end_input();
-
-    drain(source).await.unwrap();
-    assert_eq!(tts.texts(), vec!["complete.", "trailing without a dot"]);
-}
-
-// Catches: treating an empty push as data.
-#[tokio::test]
-async fn an_empty_push_never_reaches_the_splitter() {
-    let tts = FakeTts::new(1);
-    let obs = observed(tts.clone());
-    let (sink, source) =
-        obs.adapter.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("half".into()).unwrap();
-    sink.push(String::new()).unwrap();
-    sink.push(" a sentence.".into()).unwrap();
-    sink.end_input();
-
-    drain(source).await.unwrap();
-    assert_eq!(tts.texts(), vec!["half a sentence."]);
-    // What the output alone cannot show: an empty push reaching the splitter.
-    assert_eq!(*obs.seen.lock(), vec!["half", " a sentence."]);
-}
-
-// Catches: a no-op `flush()`, and a `push` guard of `&&` instead of `||`.
-#[tokio::test]
-async fn flush_forces_the_buffered_partial_out_mid_stream() {
-    let tts = FakeTts::new(1);
-    let obs = observed(tts.clone());
-    let (sink, source) =
-        obs.adapter.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("no delimiter here".into()).unwrap();
-    sink.flush().unwrap();
-    sink.push("second".into()).unwrap();
-    sink.end_input();
-
-    drain(source).await.unwrap();
-    assert_eq!(tts.texts(), vec!["no delimiter here", "second"]);
-    // The explicit `flush()`, `end_input()`'s, and the source's safety-net flush on disconnect.
-    assert_eq!(obs.flushes.load(Ordering::Relaxed), 3);
 }
 
 // Catches: reporting the adapter's own audio format instead of the wrapped provider's, or
@@ -416,34 +276,27 @@ async fn the_adapter_claims_streaming_but_keeps_the_wrapped_providers_audio_form
     assert_ne!(ad.label(), tts.label(), "and must not impersonate it -- the chain keys on labels");
 }
 
-// Catches: synthesizing a whitespace-only sentence, and dropping its alignment.
+// Catches: synthesizing a whitespace-only chunk, or a skipped chunk stealing the final marker.
 #[tokio::test]
-async fn a_whitespace_only_sentence_is_aligned_but_not_synthesized() {
+async fn a_whitespace_only_chunk_is_not_synthesized() {
     let tts = FakeTts::new(1);
-    let (sink, source) = adapter(tts.clone())
-        .stream(&lk_agents_abi::telemetry::Cx::NONE, false)
-        .await
-        .unwrap()
-        .split();
-    sink.push("real text.".into()).unwrap();
-    sink.push("   ".into()).unwrap(); // no delimiter: `end_input`'s flush emits it as-is
+    let (sink, source) = open(&adapter(tts.clone())).await;
+    sink.push(chunk("real text.")).unwrap();
+    sink.push(chunk("   ")).unwrap();
     sink.end_input();
 
     let out = drain(source).await.unwrap();
-    assert_eq!(tts.texts(), vec!["real text."], "the blank sentence must not be synthesized");
-    let words: Vec<&str> =
-        out.iter().flat_map(|a| a.timed_transcript.iter().map(|t| t.text.as_str())).collect();
-    assert_eq!(words, vec!["real text.", "   "], "both tokens must reach the alignment");
+    assert_eq!(tts.texts(), vec!["real text."], "the blank chunk must not be synthesized");
     assert!(out.last().unwrap().is_final, "a queued blank must not steal the final marker");
 }
 
-// Catches: a wrong `start_time` clock, or attaching the transcript to the previous frame.
+// Catches: a wrong `start_time` clock, attaching a chunk's words to the previous frame, or
+// aligning the provider's text (its markup) instead of the words it says.
 #[tokio::test]
-async fn the_timed_transcript_rides_the_next_frame_and_carries_the_preceding_duration() {
-    let tts = FakeTts::new(2); // 2 x 240 samples @ 24 kHz = 20 ms per sentence
-    let (sink, source) =
-        adapter(tts).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("one. two.".into()).unwrap();
+async fn a_chunks_words_ride_its_first_frame_at_the_audio_before_it() {
+    let (sink, source) = open(&adapter(FakeTts::new(2))).await; // 2 x 240 samples = 20 ms
+    sink.push(SpeechChunk { text: "[laugh] one.".into(), said: "one.".into() }).unwrap();
+    sink.push(chunk("two.")).unwrap();
     sink.end_input();
 
     let out = drain(source).await.unwrap();
@@ -454,16 +307,15 @@ async fn the_timed_transcript_rides_the_next_frame_and_carries_the_preceding_dur
             a.timed_transcript.iter().map(move |t| (i, t.text.as_str(), t.start_time))
         })
         .collect();
-    assert_eq!(stamped, vec![(0, "one.", Some(0.0)), (2, " two.", Some(0.02))]);
+    assert_eq!(stamped, vec![(0, "one.", Some(0.0)), (2, "two.", Some(0.02))]);
 }
 
 // Catches: letting the inner provider's `request_id`/`segment_id` through.
 #[tokio::test]
 async fn every_frame_carries_the_adapters_ids_not_the_inner_providers() {
-    let tts = FakeTts::new(2);
-    let (sink, source) =
-        adapter(tts).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("one. two.".into()).unwrap();
+    let (sink, source) = open(&adapter(FakeTts::new(2))).await;
+    sink.push(chunk("one.")).unwrap();
+    sink.push(chunk("two.")).unwrap();
     sink.end_input();
 
     let out = drain(source).await.unwrap();
@@ -477,39 +329,14 @@ async fn every_frame_carries_the_adapters_ids_not_the_inner_providers() {
     }
 }
 
-// Catches: two streams from one adapter sharing a splitter.
-#[tokio::test]
-async fn each_stream_gets_its_own_splitter_state() {
-    let tts = FakeTts::new(1);
-    let ad = adapter(tts.clone());
-
-    let (sink_a, source_a) =
-        ad.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink_a.push("leftover with no delimiter".into()).unwrap();
-    drop(sink_a); // dropped, not ended: the source flushes what it can and stops
-    drain(source_a).await.unwrap();
-
-    let (sink_b, source_b) =
-        ad.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink_b.push("fresh.".into()).unwrap();
-    sink_b.end_input();
-    drain(source_b).await.unwrap();
-
-    assert_eq!(tts.texts(), vec!["leftover with no delimiter", "fresh."]);
-}
-
 // Catches: a push after `end_input` raising, or being synthesized.
 #[tokio::test]
 async fn a_push_after_end_input_is_a_silent_no_op() {
     let tts = FakeTts::new(1);
-    let (sink, source) = adapter(tts.clone())
-        .stream(&lk_agents_abi::telemetry::Cx::NONE, false)
-        .await
-        .unwrap()
-        .split();
-    sink.push("first.".into()).unwrap();
+    let (sink, source) = open(&adapter(tts.clone())).await;
+    sink.push(chunk("first.")).unwrap();
     sink.end_input();
-    assert!(sink.push("too late.".into()).is_ok());
+    assert!(sink.push(chunk("too late.")).is_ok());
     assert!(sink.flush().is_ok());
 
     drain(source).await.unwrap();
@@ -517,14 +344,11 @@ async fn a_push_after_end_input_is_a_silent_no_op() {
 }
 
 // Catches: swallowing an inner failure, emitting the held frame after it, or leaving a spent
-// sentence retryable (the engine would retry the whole reply on top of its budget).
+// chunk retryable (the engine would retry the whole reply on top of its budget).
 #[tokio::test]
 async fn an_inner_failure_surfaces_as_a_final_error() {
-    let mut tts = FakeTts::new(3);
-    Arc::get_mut(&mut tts).unwrap().fail_after = Some(1);
-    let (sink, mut source) =
-        adapter(tts).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("boom.".into()).unwrap();
+    let (sink, mut source) = open(&adapter(FakeTts::failing_after(3, 1))).await;
+    sink.push(chunk("boom.")).unwrap();
     sink.end_input();
 
     // The first frame is held, so the error is the first thing the caller sees.
@@ -541,59 +365,48 @@ fn retrying_adapter(tts: Arc<FakeTts>) -> StreamAdapter {
         retry_interval: 0.0,
         ..lk_agents_abi::ApiConnectOptions::default()
     };
-    let clock = Arc::new(lk_agents_net::clock::SimClock::new());
-    let splitter: SplitterFactory = Arc::new(|_| Box::new(DotSplitter::default()));
-    StreamAdapter::new(tts, splitter, lk_agents_core::tts::markup::text_processor_factory(), clock)
-        .with_budget(budget)
+    StreamAdapter::new(tts, Arc::new(lk_agents_net::clock::SimClock::new())).with_budget(budget)
 }
 
-// Catches: a sentence whose synthesis failed before any audio not synthesized again within
-// the budget, or retried past it.
+// Catches: a chunk whose synthesis failed before any audio not synthesized again within the
+// budget, or retried past it.
 #[tokio::test(start_paused = true)]
-async fn a_sentence_failing_before_audio_is_synthesized_again_within_its_budget() {
-    let mut tts = FakeTts::new(3);
-    Arc::get_mut(&mut tts).unwrap().fail_after = Some(0);
-    let (sink, source) = retrying_adapter(tts.clone())
-        .stream(&lk_agents_abi::telemetry::Cx::NONE, false)
-        .await
-        .unwrap()
-        .split();
-    sink.push("first. second.".into()).unwrap();
+async fn a_chunk_failing_before_audio_is_synthesized_again_within_its_budget() {
+    let tts = FakeTts::failing_after(3, 0);
+    let (sink, source) = open(&retrying_adapter(tts.clone())).await;
+    sink.push(chunk("first.")).unwrap();
+    sink.push(chunk("second.")).unwrap();
     sink.end_input();
     let err = drain(source).await.expect_err("every attempt fails");
     assert!(!err.retryable());
     assert_eq!(tts.texts(), vec!["first.", "first.", "first."]);
 }
 
-// Catches: resynthesizing a sentence whose audio was already delivered: the listener
-// would hear its beginning twice. The delivered frame stays delivered and the stream fails.
+// Catches: resynthesizing a chunk whose audio was already delivered: the listener would hear its
+// beginning twice. The delivered frame stays delivered and the stream fails.
 #[tokio::test(start_paused = true)]
-async fn sentence_adapter_partial_failure_never_resynthesizes_delivered_audio() {
-    let mut tts = FakeTts::new(3);
-    Arc::get_mut(&mut tts).unwrap().fail_after = Some(1);
-    let (sink, mut source) = retrying_adapter(tts.clone())
-        .stream(&lk_agents_abi::telemetry::Cx::NONE, false)
-        .await
-        .unwrap()
-        .split();
-    sink.push("first. second.".into()).unwrap();
+async fn a_partial_failure_never_resynthesizes_delivered_audio() {
+    let tts = FakeTts::failing_after(3, 1);
+    let (sink, mut source) = open(&retrying_adapter(tts.clone())).await;
+    sink.push(chunk("first.")).unwrap();
+    sink.push(chunk("second.")).unwrap();
     sink.end_input();
     let delivered = bounded("first frame", source.next()).await.unwrap();
-    assert!(delivered.is_some(), "the first frame of the sentence reaches the listener");
+    assert!(delivered.is_some(), "the first frame of the chunk reaches the listener");
     let err = bounded("failure", source.next()).await.expect_err("partial output fails");
     assert!(!err.retryable());
     assert_eq!(err.status_code(), Some(429));
     assert_eq!(tts.texts(), vec!["first."], "delivered audio is never synthesized again");
 }
 
-// Catches: dropping the inner `TtsSource` instead of closing it (leaks a host task per sentence).
+// Catches: dropping the inner `TtsSource` instead of closing it (leaks a host task per chunk).
 #[tokio::test]
 async fn every_inner_stream_is_aclosed_including_on_teardown() {
     let tts = FakeTts::new(1);
     let closed = tts.inner_closed.clone();
-    let (sink, mut source) =
-        adapter(tts).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("one. two.".into()).unwrap();
+    let (sink, mut source) = open(&adapter(tts)).await;
+    sink.push(chunk("one.")).unwrap();
+    sink.push(chunk("two.")).unwrap();
     bounded("frame 1", source.next()).await.unwrap(); // the only frame of "one."
     bounded("frame 2", source.next()).await.unwrap(); // exhausts "one.", closes it, starts "two."
     assert_eq!(closed.load(Ordering::Relaxed), 1, "an exhausted inner stream is closed");
@@ -605,22 +418,17 @@ async fn every_inner_stream_is_aclosed_including_on_teardown() {
 }
 
 // Catches: a sink that cannot be shared between the pump and drain tasks.
-
 #[tokio::test]
 async fn the_two_halves_drive_from_two_tasks_at_once() {
     let tts = FakeTts::new(1);
-    let (sink, source) = adapter(tts.clone())
-        .stream(&lk_agents_abi::telemetry::Cx::NONE, false)
-        .await
-        .unwrap()
-        .split();
+    let (sink, source) = open(&adapter(tts.clone())).await;
     let sink: Arc<TtsSink> = Arc::new(sink);
     let feeder = {
         let sink = sink.clone();
         tokio::spawn(async move {
             for i in 0..8 {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                sink.push(format!("s{i}.")).unwrap();
+                sink.push(chunk(&format!("s{i}."))).unwrap();
             }
             sink.end_input();
         })
@@ -631,19 +439,17 @@ async fn the_two_halves_drive_from_two_tasks_at_once() {
     assert_eq!(tts.texts().len(), 8);
 }
 
-// Catches: a `next_sentence` that always returns a sentence, which spins `raw_next` with no
-// await. A wedged executor can only be reported from outside it: hence the second runtime,
-// `shutdown_timeout`, and the explicit exit.
-
+// Catches: a source that loops on its input without an await (a chunk that is never audio),
+// wedging the worker it runs on. A wedged executor can only be reported from outside it: hence
+// the second runtime, `shutdown_timeout`, and the explicit exit.
 #[test]
-fn a_source_that_never_reaches_a_real_sentence_cannot_wedge_the_worker_it_runs_on() {
+fn a_source_cannot_wedge_the_worker_it_runs_on() {
     let rt =
         tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     let outcome = rt.block_on(async {
-        let tts = FakeTts::new(1);
-        let (sink, source) =
-            adapter(tts).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-        sink.push("one sentence.".into()).unwrap();
+        let (sink, source) = open(&adapter(FakeTts::new(1))).await;
+        sink.push(chunk("   ")).unwrap();
+        sink.push(chunk("one sentence.")).unwrap();
         sink.end_input();
         let drained = tokio::spawn(drain(source));
         // Its own generous bound: failure takes the process down.
@@ -653,77 +459,27 @@ fn a_source_that_never_reaches_a_real_sentence_cannot_wedge_the_worker_it_runs_o
 
     let Ok(drained) = outcome else {
         eprintln!(
-            "a_source_that_never_reaches_a_real_sentence_cannot_wedge_the_worker_it_runs_on: \
-             the drain never yielded -- `raw_next` is spinning on a sentence that is never \
-             audio, and every other test in this binary is stuck behind it"
+            "a_source_cannot_wedge_the_worker_it_runs_on: the drain never yielded -- \
+             `raw_next` is spinning on a chunk that is never audio, and every other test in this \
+             binary is stuck behind it"
         );
         // 101 is libtest's own failure code. Panicking would be correct and invisible.
         std::process::exit(101);
     };
     let out = drained.expect("the drain task panicked").expect("the drain failed");
-    assert_eq!(out.len(), 1, "one sentence, one frame, and then end of stream");
+    assert_eq!(out.len(), 1, "one chunk, one frame, and then end of stream");
 }
 
-// Catches: markup spoken aloud by a non-streaming TTS under expressive (the adapter is its
-// only lowering path), a sentence split inside a marker (the splitter not asked to keep markup
-// whole), and a synthesis with expressive off lowered.
-
+// Catches: a chunk's TTFB measured from the stream's open (or its first push) instead of from
+// its submission to the provider. https://github.com/livekit/agents/pull/6300
 #[tokio::test]
-async fn under_expressive_each_sentence_is_lowered_to_the_providers_markup() {
-    let said = "<expr type=\"emotion\" label=\"happy\"/>Hi there.";
-    let markup = Markup::from_provider_key("cartesia");
-    for on in [true, false] {
-        let tts =
-            Arc::new(FakeTts { markup: "cartesia", ..Arc::into_inner(FakeTts::new(1)).unwrap() });
-        let expressive = Arc::new(AtomicBool::new(!on));
-        let seen = expressive.clone();
-        let adapter = StreamAdapter::new(
-            tts.clone(),
-            Arc::new(move |on| {
-                seen.store(on, Ordering::Relaxed);
-                Box::new(DotSplitter::default())
-            }),
-            lk_agents_core::tts::markup::text_processor_factory(),
-            Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()),
-        );
-        assert!(adapter.lowers_markup());
-        assert_eq!(adapter.markup_provider(), "cartesia");
-        let (sink, source) =
-            adapter.stream(&lk_agents_abi::telemetry::Cx::NONE, on).await.unwrap().split();
-        sink.push(said.into()).unwrap();
-        sink.end_input();
-        let out = drain(source).await.unwrap();
-        assert_eq!(expressive.load(Ordering::Relaxed), on, "markup kept only while it flows");
-        let want = if on {
-            markup.convert(&markup.normalize(said)).trim().to_owned()
-        } else {
-            said.to_owned()
-        };
-        assert_eq!(tts.texts(), vec![want], "expressive={on}");
-        // The transcript keeps the framework's markup; the sinks strip it downstream.
-        assert_eq!(out[0].timed_transcript[0].text, said);
-        if on {
-            assert_ne!(tts.texts()[0], said, "cartesia lowers `expr` to its own tags");
-        }
-    }
-}
-
-/// A sentence's TTFB runs from its submission to the provider, not from its first token.
-/// https://github.com/livekit/agents/pull/6300
-#[tokio::test]
-async fn ttfb_excludes_sentence_accumulation() {
+async fn ttfb_runs_from_the_chunks_submission() {
     let clock = Arc::new(lk_agents_abi::utils::clock::VirtualClock::new());
-    let adapter = StreamAdapter::new(
-        FakeTts::new(2),
-        Arc::new(|_| Box::new(DotSplitter::default())),
-        lk_agents_core::tts::markup::text_processor_factory(),
-        clock.clone(),
-    );
-    let (sink, mut source) =
-        adapter.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
-    sink.push("one".into()).unwrap();
+    let adapter = StreamAdapter::new(FakeTts::new(2), clock.clone());
+    let (sink, mut source) = open(&adapter).await;
+    // the stage took 2 s to prepare the chunk
     clock.advance(Duration::from_secs(2));
-    sink.push(" two.".into()).unwrap();
+    sink.push(chunk("one two.")).unwrap();
     sink.end_input();
     while bounded("frame", source.next()).await.unwrap().is_some() {}
 
@@ -738,94 +494,5 @@ async fn ttfb_excludes_sentence_accumulation() {
         .collect();
     assert_eq!(ttfbs.len(), 1, "{ttfbs:?}");
     let ttfb = ttfbs[0].expect("a first frame");
-    assert!(ttfb < 0.5, "TTFB {ttfb} includes the 2 s the sentence took to accumulate");
-}
-
-/// A user's sentence tokenizer: the sentences it was told to yield, whatever the text pushed.
-struct UserSentences(Mutex<VecDeque<String>>);
-
-impl lk_agents_abi::tts::stream_pacer::HostSentenceStream for UserSentences {
-    fn push_text(&self, _text: String) {}
-    fn flush(&self) {}
-    fn end_input(&self) {}
-    fn next(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<
-        '_,
-        Result<Option<lk_agents_abi::tokenize::TokenData>, ProviderError>,
-    > {
-        let token = self.0.lock().pop_front();
-        Box::pin(async move {
-            Ok(token.map(|token| lk_agents_abi::tokenize::TokenData {
-                segment_id: String::new(),
-                token,
-            }))
-        })
-    }
-    fn aclose(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
-// Catches: a user's sentence tokenizer cutting inside a voice tag under expressive. Each half
-// is lowered alone, so the voice reads the second half of the tag aloud; a sentence of markup
-// alone is a synthesis with nothing to say.
-#[tokio::test]
-async fn a_user_tokenizer_never_splits_the_voices_tags() {
-    let markup = Markup::from_provider_key("cartesia");
-    let tts = Arc::new(FakeTts { markup: "cartesia", ..Arc::into_inner(FakeTts::new(1)).unwrap() });
-    let adapter = StreamAdapter::new(
-        tts.clone(),
-        Arc::new(|_| Box::new(DotSplitter::default())),
-        lk_agents_core::tts::markup::text_processor_factory(),
-        Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()),
-    );
-    let user = [
-        "Ha <expr type=\"sound\" ",
-        "label=\"laugh\"/> that was funny.",
-        "<expr type=\"emotion\" label=\"happy\"/>",
-        "See you soon.",
-    ];
-    let host = UserSentences(Mutex::new(user.iter().map(|s| (*s).to_owned()).collect()));
-    let (sink, source) = adapter
-        .open(&lk_agents_abi::telemetry::Cx::NONE, true, Some(Arc::new(host)))
-        .unwrap()
-        .split();
-    sink.end_input();
-    drain(source).await.unwrap();
-    let lowered = |s: &str| markup.convert(&markup.normalize(s)).trim().to_owned();
-    assert_eq!(
-        tts.texts(),
-        vec![
-            lowered("Ha <expr type=\"sound\" label=\"laugh\"/> that was funny."),
-            lowered("<expr type=\"emotion\" label=\"happy\"/>See you soon."),
-        ]
-    );
-}
-
-// Catches: a user tokenizer's sentences held to the end of the reply behind a wrapper the
-// model never closed.
-#[tokio::test]
-async fn an_unclosed_wrapper_does_not_hold_a_user_tokenizers_reply() {
-    let tts = Arc::new(FakeTts { markup: "cartesia", ..Arc::into_inner(FakeTts::new(1)).unwrap() });
-    let adapter = StreamAdapter::new(
-        tts.clone(),
-        Arc::new(|_| Box::new(DotSplitter::default())),
-        lk_agents_core::tts::markup::text_processor_factory(),
-        Arc::new(lk_agents_abi::utils::clock::VirtualClock::new()),
-    );
-    let mut user = vec!["<expr type=\"prosody\" label=\"slow\">Slowly now.".to_owned()];
-    user.extend((0..40).map(|n| format!(" This is sentence number {n} of the reply.")));
-    let host = UserSentences(Mutex::new(user.into()));
-    let (sink, source) = adapter
-        .open(&lk_agents_abi::telemetry::Cx::NONE, true, Some(Arc::new(host)))
-        .unwrap()
-        .split();
-    sink.end_input();
-    drain(source).await.unwrap();
-    assert!(tts.texts().len() > 1, "the whole reply waited for its end: {:?}", tts.texts());
+    assert!(ttfb < 0.5, "TTFB {ttfb} includes the 2 s before the chunk was submitted");
 }

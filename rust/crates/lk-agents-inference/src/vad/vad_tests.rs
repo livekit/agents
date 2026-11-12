@@ -416,3 +416,89 @@ async fn a_ten_second_head_is_scored_in_full_far_faster_than_real_time() {
     let measured = measurements.of("lk.agents.audio.catch_up_time");
     assert!(matches!(measured[..], [seconds] if seconds < 1.0), "{measured:?}");
 }
+
+/// Scores each window with the next scripted probability (0 once the script runs out).
+struct Script(std::collections::VecDeque<f32>);
+
+impl VadModel for Script {
+    fn predict(&mut self, _: &[i16]) -> (f32, f64) {
+        (self.0.pop_front().unwrap_or(0.0), 0.0)
+    }
+    fn reset(&mut self) {}
+}
+
+struct ScriptFactory(Vec<f32>);
+
+impl VadModelFactory for ScriptFactory {
+    fn create(&self) -> Box<dyn VadModel> {
+        Box::new(Script(self.0.iter().copied().collect()))
+    }
+}
+
+/// Raising `activation_threshold` with `update_options` re-derives the implicit deactivation
+/// threshold, so speech ends where a freshly built VAD ends it.
+/// https://github.com/livekit/agents/issues/7597
+#[tokio::test]
+#[ignore = "https://github.com/livekit/agents/issues/7597 reproduces: update_options(activation_threshold) keeps the old implicit deactivation_threshold"]
+async fn an_updated_activation_threshold_ends_speech_like_a_fresh_vad() {
+    use lk_agents_abi::Maybe::{Given, NotGiven};
+    use lk_agents_abi::vad::inference::InferenceVad;
+    // Loud, then a level between the stale (0.35) and the re-derived (0.65) deactivation.
+    let mut script = vec![0.9; 10];
+    script.extend([0.5; 30]);
+    let base = VadOptions { min_silence_duration: 0.1, ..VadOptions::default() };
+    let env = lk_agents_inference::testkit::env();
+    let fresh = LocalVad::new(
+        VadOptions { activation_threshold: 0.8, deactivation_threshold: 0.65, ..base },
+        Arc::new(ScriptFactory(script.clone())),
+        &env,
+    );
+    let updated = LocalVad::new(base, Arc::new(ScriptFactory(script)), &env);
+    InferenceVad::update_options(
+        &updated,
+        NotGiven,
+        NotGiven,
+        NotGiven,
+        NotGiven,
+        Given(0.8),
+        NotGiven,
+    );
+
+    let mut runs = Vec::new();
+    for vad in [&fresh, &updated] {
+        let vad: &dyn lk_agents_abi::Vad = vad;
+        let (sink, mut source) =
+            vad.stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
+        // One window per push, each pushed once the last was scored.
+        let mut events = Vec::new();
+        for _ in 0..40 {
+            sink.push(AudioFrame {
+                data: vec![0u8; 1024].into(),
+                sample_rate: 16000,
+                num_channels: 1,
+                samples_per_channel: 512,
+            })
+            .unwrap();
+            loop {
+                let ev = source.next().await.unwrap().unwrap();
+                if ev.kind == VadEventType::InferenceDone {
+                    break;
+                }
+                let speech: u32 = ev.frames.iter().map(|f| f.samples_per_channel).sum();
+                events.push((ev.kind, speech));
+            }
+        }
+        sink.end_input();
+        while let Ok(Some(ev)) = source.next().await {
+            if ev.kind != VadEventType::InferenceDone {
+                let speech: u32 = ev.frames.iter().map(|f| f.samples_per_channel).sum();
+                events.push((ev.kind, speech));
+            }
+        }
+        runs.push(events);
+    }
+
+    let kinds: Vec<_> = runs[0].iter().map(|(kind, _)| *kind).collect();
+    assert_eq!(kinds, [VadEventType::StartOfSpeech, VadEventType::EndOfSpeech]);
+    assert_eq!(runs[1], runs[0]);
+}

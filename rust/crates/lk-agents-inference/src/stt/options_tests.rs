@@ -174,3 +174,22 @@ fn keyterms_reach_openai_and_cartesia_turns_with_the_server_key() {
         assert!(capabilities(Some(model), &[], None).keyterms);
     }
 }
+
+/// Speechmatics `linden-1` takes session keyterms as `additional_vocab` after the caller's own.
+/// https://github.com/livekit/agents/pull/7853
+#[test]
+#[ignore = "https://github.com/livekit/agents/pull/7853 reproduces: linden-1 gets no keyterms (a_provider_without_keyterm_prompting_returns_none pins the old behaviour)"]
+fn linden_takes_session_keyterms_as_additional_vocab() {
+    let extra =
+        map(&[("additional_vocab", json!([{"content": "gnocchi", "sounds_like": ["nyohki"]}]))]);
+    let got = keyterms_extra_for_model(
+        Some("speechmatics/linden-1"),
+        Some(&extra),
+        &["gnocchi".into(), "livekit".into()],
+    )
+    .expect("linden-1 accepts additional_vocab");
+    assert_eq!(
+        got["additional_vocab"],
+        json!([{"content": "gnocchi", "sounds_like": ["nyohki"]}, {"content": "livekit"}])
+    );
+}

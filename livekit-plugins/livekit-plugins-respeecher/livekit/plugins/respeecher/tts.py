@@ -30,11 +30,10 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
-    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -108,7 +107,6 @@ class TTS(tts.TTS):
         encoding: TTSEncoding = "pcm_s16le",
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         sample_rate: int = 24000,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: http.HttpSession | None = None,
         base_url: str = API_BASE_URL,
     ) -> None:
@@ -157,9 +155,6 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
-        )
         self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -213,12 +208,12 @@ class TTS(tts.TTS):
         if is_given(voice_settings):
             self._opts.voice_settings = voice_settings
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             opts=replace(self._opts),
             ensure_session=self._ensure_session,
@@ -227,15 +222,12 @@ class TTS(tts.TTS):
     def prewarm(self) -> None:
         self._pool.prewarm()
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
             opts=replace(self._opts),
             pool=self._pool,
-            sentence_tokenizer=self._sentence_tokenizer,
         )
         self._streams.add(stream)
         return stream
@@ -324,12 +316,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
         pool: utils.ConnectionPool[http.WebSocket],
-        sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
         self._pool = pool
-        self._sentence_tokenizer = sentence_tokenizer
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -345,7 +335,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=context_id)
 
-        sent_tokenizer_stream = self._sentence_tokenizer.stream()
         input_ended = False
 
         def _voice_payload() -> dict[str, object]:
@@ -354,27 +343,21 @@ class SynthesizeStream(tts.SynthesizeStream):
                 voice["sampling_params"] = self._opts.voice_settings.sampling_params
             return voice
 
-        async def _input_task() -> None:
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    sent_tokenizer_stream.flush()
-                    continue
-                sent_tokenizer_stream.push_text(data)
-            sent_tokenizer_stream.end_input()
-
-        async def _sentence_stream_task(ws: http.WebSocket) -> None:
+        async def _send_task(ws: http.WebSocket) -> None:
             nonlocal input_ended
             output_format = {
                 "encoding": self._opts.encoding,
                 "sample_rate": self._opts.sample_rate,
             }
-            async for sent in sent_tokenizer_stream:
+            async for chunk in self.input:
+                if not isinstance(chunk, tts.SpeechChunk):
+                    continue
                 self.mark_started()
                 await ws.send_str(
                     json.dumps(
                         {
                             "context_id": context_id,
-                            "transcript": sent.token if sent.token else " ",
+                            "transcript": chunk.text + " ",
                             "voice": _voice_payload(),
                             "continue": True,
                             "output_format": output_format,
@@ -431,15 +414,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             async with self._pool.connection(conn_options=self._conn_options) as ws:
                 tasks = [
-                    asyncio.create_task(_input_task()),
-                    asyncio.create_task(_sentence_stream_task(ws)),
+                    asyncio.create_task(_send_task(ws)),
                     asyncio.create_task(_recv_task(ws)),
                 ]
 
                 try:
                     await asyncio.gather(*tasks)
                 finally:
-                    await sent_tokenizer_stream.aclose()
                     await utils.aio.cancel_and_wait(*tasks)
         except TimeoutError:
             raise APITimeoutError() from None

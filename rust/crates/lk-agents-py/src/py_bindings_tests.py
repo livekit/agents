@@ -2,12 +2,15 @@
 
 import os
 from array import array
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Literal, Never, NoReturn
 
 import pytest
 
 from livekit import rtc
-from livekit.agents import _core
+from livekit.agents import _core, telemetry
+from livekit.agents.beta.workflows import format_dtmf
 from livekit.agents.llm import RealtimeCapabilities, RealtimeModel
 from livekit.agents.storage import SQLiteStorage
 from livekit.agents.utils.media import AudioByteStream
@@ -64,7 +67,7 @@ def test_provider_bridge_preserves_authored_overrides_and_inherited_native_paths
     from livekit.agents.llm import LLM, FallbackAdapter
 
     class PythonLLM(LLM):
-        def chat(self, **kwargs):
+        def chat(self, **kwargs: object) -> NoReturn:
             raise AssertionError("resolving a provider must not start a request")
 
     python_provider = PythonLLM()
@@ -72,7 +75,7 @@ def test_provider_bridge_preserves_authored_overrides_and_inherited_native_paths
     assert _bindings.core_leg(None) is None
 
     class PythonRealtime(RealtimeModel):
-        def session(self, **kwargs):
+        def session(self, **kwargs: object) -> NoReturn:
             raise AssertionError("resolving a realtime provider must not start a session")
 
     realtime_provider = PythonRealtime(
@@ -91,15 +94,15 @@ def test_provider_bridge_preserves_authored_overrides_and_inherited_native_paths
         chat = PythonLLM.chat
 
     class SttStream(stt.FallbackAdapter):
-        def stream(self, **kwargs):
+        def stream(self, **kwargs: object) -> NoReturn:
             raise AssertionError("stream override must remain behind the host proxy")
 
     class SttRecognize(stt.FallbackAdapter):
-        async def recognize(self, *args, **kwargs):
+        async def recognize(self, *args: object, **kwargs: object) -> NoReturn:
             raise AssertionError("recognize override must remain behind the host proxy")
 
     class SttRecognizeImpl(stt.FallbackAdapter):
-        async def _recognize_impl(self, *args, **kwargs):
+        async def _recognize_impl(self, *args: object, **kwargs: object) -> NoReturn:
             raise AssertionError("recognize override must remain behind the host proxy")
 
     class AdaptedSttStream(stt.StreamAdapter):
@@ -108,12 +111,13 @@ def test_provider_bridge_preserves_authored_overrides_and_inherited_native_paths
     class AdaptedSttRecognize(stt.StreamAdapter):
         recognize = SttRecognize.recognize
 
+    # a TTS's provider attempt is `_synthesize` / `_stream`; the framework owns the public ones
     class TtsSynthesize(tts.FallbackAdapter):
-        def synthesize(self, *args, **kwargs):
+        def _synthesize(self, *args: object, **kwargs: object) -> NoReturn:
             raise AssertionError("synthesis override must remain behind the host proxy")
 
     class TtsStream(tts.FallbackAdapter):
-        def stream(self, **kwargs):
+        def _stream(self, **kwargs: object) -> NoReturn:
             raise AssertionError("stream override must remain behind the host proxy")
 
     class InferenceLlmChat(inference.LLM):
@@ -123,13 +127,13 @@ def test_provider_bridge_preserves_authored_overrides_and_inherited_native_paths
         stream = SttStream.stream
 
     class InferenceTtsSynthesize(inference.TTS):
-        synthesize = TtsSynthesize.synthesize
+        _synthesize = TtsSynthesize._synthesize
 
     class InferenceTtsStream(inference.TTS):
-        stream = TtsStream.stream
+        _stream = TtsStream._stream
 
     class InferenceVadStream(inference.VAD):
-        def stream(self, **kwargs):
+        def stream(self, **kwargs: object) -> NoReturn:
             raise AssertionError("detector override must remain behind the host proxy")
 
     cases = [
@@ -275,6 +279,57 @@ def test_initialization_preserves_the_public_role_contract_and_is_repeatable() -
     assert frames[0].data.tobytes() == b"\x01\x02\x03\x04"
 
 
+def test_native_scalars_refuse_a_value_of_another_kind() -> None:
+    """A bool is not taken as a native integer nor an int as a native bool, and a negative count
+    is refused instead of wrapping."""
+    with pytest.raises(TypeError, match="window_size"):
+        _core.MovingAverage(True)
+    with pytest.raises(OverflowError):
+        _core.MovingAverage(-1)
+    with pytest.raises(TypeError, match="bool"):
+        telemetry.set_capture_content(1)  # type: ignore[arg-type]  # the refused input
+
+
+def test_a_native_list_argument_is_checked_element_by_element() -> None:
+    """Every element of a list argument is converted, and one of the wrong type is refused."""
+    assert format_dtmf(["1", "2", "#"]) == "1 2 #"
+    with pytest.raises(TypeError, match="str"):
+        format_dtmf(["1", 2])  # type: ignore[list-item]  # the refused input
+
+
+@pytest.mark.parametrize(
+    ("update", "options", "error", "message"),
+    [
+        (False, {"extra_kwargs": []}, ValueError, "expected a dict of extra kwargs, got []"),
+        (True, {"extra_kwargs": []}, ValueError, "expected a dict of extra kwargs, got []"),
+        (False, {"fallback": 7}, TypeError, "expected FallbackModels, got int"),
+    ],
+)
+def test_inference_tts_refuses_misshapen_options_with_a_python_error(
+    update: bool, options: dict[str, object], error: type[Exception], message: str
+) -> None:
+    """Options of the wrong shape, at construction or in an update, raise the Python error
+    naming what was expected."""
+    from livekit.agents import inference
+
+    def tts(**kwargs: object) -> inference.TTS:
+        return inference.TTS(
+            "cartesia/sonic-2",
+            base_url="http://unused.invalid",
+            api_key="key",
+            api_secret="secret",
+            **kwargs,  # type: ignore[arg-type]  # the refused inputs
+        )
+
+    with pytest.raises(error) as raised:
+        if update:
+            tts().update_options(**options)  # type: ignore[arg-type]  # the refused inputs
+        else:
+            tts(**options)
+
+    assert str(raised.value) == message
+
+
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX fork")
 def test_forked_child_requires_reinitialization_and_parent_remains_usable() -> None:
     import traceback
@@ -283,6 +338,8 @@ def test_forked_child_requires_reinitialization_and_parent_remains_usable() -> N
     pid = os.fork()
     if pid == 0:
         try:
+            # pure helpers hold no runtime state and work before reinitialization
+            assert _core.ExpFilter(0.5, initial=8.0).apply(1, 0.0) == 4.0
             with pytest.raises(RuntimeError, match="inherited across a fork"):
                 _core.ipc_pair()
             _core.init(_core.Role.Job)
@@ -320,7 +377,7 @@ async def test_run_handle_keeps_loaded_snapshot_and_commits_state(tmp_path: Path
                 await last_run.abandon("invalid", "reason")
             await last_run.abandon("failed", "finished testing")
             assert await thread.task("missing") is None
-            assert await thread.lane_info("missing") is None
+            assert await thread.partition_info("missing") is None
             with pytest.raises(ValueError, match='TaskOrder: "invalid" is not one of'):
                 await thread.list_tasks(order="invalid")
         finally:
@@ -343,7 +400,7 @@ async def test_avatar_output_keeps_sdk_room_and_validation_contract() -> None:
 
 async def test_realtime_chain_accepts_host_and_native_members() -> None:
     class Provider(RealtimeModel):
-        def session(self, *, turn_detection_disabled=False):
+        def session(self, *, turn_detection_disabled: bool = False) -> NoReturn:
             raise AssertionError("construction must not open a provider session")
 
     capabilities = RealtimeCapabilities(
@@ -642,18 +699,18 @@ async def test_realtime_generation_preserves_plain_text_and_transcript_chunk_sta
     from livekit.agents.llm import GenerationCreatedEvent, MessageGeneration, RealtimeSession
     from livekit.agents.types import TranscriptChunk
 
-    async def text():
+    async def text() -> AsyncIterator[str | TranscriptChunk]:
         yield "plain "
         yield TranscriptChunk("timed", start_time=0.25, end_time=0.5)
 
-    async def empty():
+    async def empty() -> AsyncIterator[Never]:
         if False:
             yield
 
-    async def modalities():
+    async def modalities() -> list[Literal["text", "audio"]]:
         return ["text"]
 
-    async def messages():
+    async def messages() -> AsyncIterator[MessageGeneration]:
         yield MessageGeneration("message", text(), empty(), modalities())
 
     session = SimpleNamespace(_core_events=asyncio.Queue())

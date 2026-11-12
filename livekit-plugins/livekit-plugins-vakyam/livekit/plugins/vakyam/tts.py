@@ -14,8 +14,8 @@
 
 """Text-to-Speech implementation for Vakyam AI (Raaga 1).
 
-Streaming uses the realtime WebSocket API with sentence tokenization because
-Vakyam expects one complete utterance per ``text`` message. One-shot
+Streaming uses the realtime WebSocket API, one ``text`` message per prepared
+chunk because Vakyam expects one complete utterance per message. One-shot
 ``synthesize()`` uses HTTP ``POST /v1/tts/stream`` for PCM bytes.
 """
 
@@ -34,19 +34,15 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
-    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
 
 from ._utils import (
     http_stream_url,
     normalize_base_url,
     raise_http_error,
     speech_payload,
-    split_text,
     validate_tts_options,
 )
 from ._websocket import AsyncStreamingTTSSession, TTSSessionConfig
@@ -59,6 +55,7 @@ from .models import (
     DEFAULT_SPEED,
     DEFAULT_VOICE,
     KEEPALIVE_INTERVAL_SECONDS,
+    MAX_TEXT_CHARACTERS,
     TTSLanguages,
     TTSModels,
     TTSSampleRates,
@@ -84,8 +81,8 @@ class TTS(tts.TTS):
     """Vakyam AI text-to-speech for LiveKit Agents.
 
     Uses the realtime WebSocket API (``WS /v1/tts/websocket``) for low-latency
-    streaming. Text is sentence-tokenized because Vakyam expects one complete
-    utterance per synthesis request.
+    streaming. Each prepared text chunk is one synthesis request because Vakyam
+    expects one complete utterance per request.
     """
 
     def __init__(
@@ -99,7 +96,6 @@ class TTS(tts.TTS):
         speed: float = DEFAULT_SPEED,
         base_url: str | None = None,
         allow_insecure_base_url: bool = False,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: http.HttpSession | None = None,
     ) -> None:
         """Create a Vakyam TTS instance.
@@ -114,7 +110,6 @@ class TTS(tts.TTS):
             speed: Speech rate multiplier (``0.5``–``2.0``).
             base_url: API base URL. Defaults to ``https://api.vakyam.ai``.
             allow_insecure_base_url: Allow non-localhost ``http://`` base URLs.
-            tokenizer: Sentence tokenizer used for streaming synthesis.
             http_session: Optional HttpSession for HTTP ``synthesize()``.
         """
         resolved_key = api_key or os.environ.get("VAKYAM_API_KEY")
@@ -146,9 +141,6 @@ class TTS(tts.TTS):
                 base_url or DEFAULT_BASE_URL, allow_insecure_base_url=allow_insecure_base_url
             ),
             allow_insecure_base_url=allow_insecure_base_url,
-        )
-        self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -202,25 +194,25 @@ class TTS(tts.TTS):
         self._opts = next_opts
         self._sample_rate = next_sample_rate
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _core_max_text_len(self) -> int | None:
+        return MAX_TEXT_CHARACTERS
+
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             opts=replace(self._opts),
             http_session=self._ensure_session,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         opts = replace(self._opts)
         stream = SynthesizeStream(
             tts=self,
             opts=opts,
-            tokenizer=self._sentence_tokenizer,
             pool=self._pool_for(opts),
             start_keepalive=self._start_keepalive,
             stop_keepalive=self._stop_keepalive,
@@ -398,14 +390,13 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    """Streaming synthesis with sentence tokenization over a persistent WebSocket."""
+    """Streaming synthesis over a persistent WebSocket, one request per chunk."""
 
     def __init__(
         self,
         *,
         tts: TTS,
         opts: _TTSOptions,
-        tokenizer: tokenize.SentenceTokenizer,
         pool: utils.ConnectionPool[AsyncStreamingTTSSession],
         start_keepalive: Callable[
             [AsyncStreamingTTSSession, utils.ConnectionPool[AsyncStreamingTTSSession]], None
@@ -415,13 +406,12 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
-        self._tokenizer = tokenizer
         self._pool = pool
         self._start_keepalive = start_keepalive
         self._stop_keepalive = stop_keepalive
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -432,28 +422,27 @@ class SynthesizeStream(tts.SynthesizeStream):
             frame_size_ms=50,
         )
 
-        async def _tokenize_input() -> None:
-            sentence_stream: tokenize.SentenceStream | None = None
+        async def _split_segments() -> None:
+            segment: utils.aio.Chan[str] | None = None
             async for data in self.input:
-                if isinstance(data, str):
-                    if sentence_stream is None:
-                        sentence_stream = self._tokenizer.stream()
-                        segments_ch.send_nowait(sentence_stream)
-                    sentence_stream.push_text(data)
-                else:
-                    if sentence_stream is not None:
-                        sentence_stream.end_input()
-                        sentence_stream = None
-            if sentence_stream is not None:
-                sentence_stream.end_input()
+                if isinstance(data, tts.SpeechChunk):
+                    if segment is None:
+                        segment = utils.aio.Chan[str]()
+                        segments_ch.send_nowait(segment)
+                    segment.send_nowait(data.text)
+                elif segment is not None:
+                    segment.close()
+                    segment = None
+            if segment is not None:
+                segment.close()
             segments_ch.close()
 
         async def _process_segments() -> None:
-            async for sentence_stream in segments_ch:
-                await self._run_segment(sentence_stream, output_emitter)
+            async for segment in segments_ch:
+                await self._run_segment(segment, output_emitter)
 
         tasks = [
-            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_split_segments()),
             asyncio.create_task(_process_segments()),
         ]
         try:
@@ -469,7 +458,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_input()
 
     async def _run_segment(
-        self, sentence_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter
+        self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
@@ -482,36 +471,31 @@ class SynthesizeStream(tts.SynthesizeStream):
             reusable = False
             try:
                 started = False
-                async for sentence in sentence_stream:
-                    for text in split_text(sentence.token):
-                        if not started:
-                            self.mark_started()
-                            started = True
+                async for text in segment:
+                    if not started:
+                        self.mark_started()
+                        started = True
 
-                        async for chunk in session.synthesize_stream(
-                            text,
-                            timeout=self._conn_options.read_timeout,
-                            write_timeout=self._conn_options.write_timeout,
-                        ):
-                            output_emitter.push(chunk)
-
-                        if session.last_result:
-                            output_emitter.report_usage(
-                                characters_count=session.last_result.characters_used
-                            )
-                        if session.last_result and session.last_result.cancelled:
-                            logger.debug("Vakyam TTS utterance cancelled")
-                            break
-                        if session.last_result and session.last_result.truncated:
-                            deferred_error = APIStatusError(
-                                "Vakyam TTS utterance was truncated",
-                                status_code=500,
-                                retryable=False,
-                            )
-                            break
-                    if deferred_error is not None or (
-                        session.last_result and session.last_result.cancelled
+                    async for chunk in session.synthesize_stream(
+                        text,
+                        timeout=self._conn_options.read_timeout,
+                        write_timeout=self._conn_options.write_timeout,
                     ):
+                        output_emitter.push(chunk)
+
+                    if session.last_result:
+                        output_emitter.report_usage(
+                            characters_count=session.last_result.characters_used
+                        )
+                    if session.last_result and session.last_result.cancelled:
+                        logger.debug("Vakyam TTS utterance cancelled")
+                        break
+                    if session.last_result and session.last_result.truncated:
+                        deferred_error = APIStatusError(
+                            "Vakyam TTS utterance was truncated",
+                            status_code=500,
+                            retryable=False,
+                        )
                         break
                 reusable = True
             except asyncio.CancelledError:

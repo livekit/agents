@@ -12,6 +12,11 @@ pub enum AvatarError {
     )]
     #[host(kind = "ValueError")]
     CatalogIdAndImage(String),
+    /// A known avatar option (`image_url`, `prompt`, `idle_prompt`, `idle_timeout`) of the
+    /// wrong type.
+    #[error("invalid avatar option {0}")]
+    #[host(kind = "ValueError")]
+    InvalidOption(String),
     #[error("livekit_url must be set by argument or the LIVEKIT_URL environment variable")]
     #[host(kind = "ValueError")]
     MissingUrl,

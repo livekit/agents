@@ -50,7 +50,7 @@ async def workers(
     token = Credentials(key, secret).project_token()
     env = dict(os.environ)
     root = Path(__file__).resolve().parents[2]
-    env["PYTHONPATH"] = os.pathsep.join((str(root / "livekit-agents-next"), str(root)))
+    env["PYTHONPATH"] = os.pathsep.join((str(root / "livekit-agents"), str(root)))
     stack = AsyncExitStack()
     try:
         children: list[Child] = []

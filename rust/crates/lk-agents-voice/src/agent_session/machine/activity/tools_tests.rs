@@ -109,6 +109,44 @@ pub(in crate::agent_session::machine::activity) fn running(
     }
 }
 
+/// A detached tool's progress and final updates each get a distinct, provider-safe call id.
+/// https://github.com/livekit/agents/issues/5652
+#[test]
+fn detached_tool_updates_get_distinct_provider_safe_call_ids() {
+    let mut driver = crate::agent_session::tests::driver();
+    let mut tool = running("run", 1);
+    tool.updates = 1;
+    driver.activity.tools.running.push(tool);
+    let done = ToolOutcome::Value {
+        text: "done".into(),
+        reply_required: false,
+        verbatim: false,
+        more: None,
+    };
+
+    for update in [
+        ToolUpdate::Progress { message: "first".into(), raw: "first".into() },
+        ToolUpdate::Progress { message: "second".into(), raw: "second".into() },
+        ToolUpdate::Final { report: done.into() },
+    ] {
+        driver.on_tool_update(Ts::ZERO, "run".into(), 1, "reused".into(), update);
+    }
+
+    let calls: std::collections::BTreeSet<_> = driver
+        .session
+        .chat_ctx
+        .items()
+        .filter_map(|item| match item {
+            lk_agents_abi::ChatItem::FunctionCall(call) => Some(call.call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 3, "{calls:?}");
+    let provider_safe =
+        |id: &str| id.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b));
+    assert!(calls.iter().all(|id| provider_safe(id)), "{calls:?}");
+}
+
 #[test]
 fn queued_progress_and_final_reports_cannot_target_a_reused_call_id() {
     let mut driver = crate::agent_session::tests::driver();

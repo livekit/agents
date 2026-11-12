@@ -327,7 +327,8 @@ async fn a_full_assignment_history_rolls_over_after_pending_assignments_settle()
     close(rig, task).await;
 }
 
-// Catches: not reporting held jobs after a reconnect, so the server re-dispatches them.
+// Catches: not reporting held jobs after a reconnect, so the server re-dispatches them, or
+// reporting bare ids where the server needs each job as assigned, under its accepted identity.
 #[tokio::test(start_paused = true)]
 async fn active_jobs_are_migrated_after_re_registration() {
     let (mut rig, task) = running(runtime_rig_with_retry(1), 0);
@@ -339,6 +340,10 @@ async fn active_jobs_are_migrated_after_re_registration() {
         until_sent(&mut rig.sent, |m| matches!(m.message, Some(Sent::MigrateJob(_)))).await;
     let Some(Sent::MigrateJob(migrated)) = migrated.message else { unreachable!() };
     assert_eq!(migrated.job_ids, ["a"]);
+    let [job] = migrated.jobs.as_slice() else { panic!("{:?}", migrated.jobs) };
+    assert_eq!(job.id, "a");
+    let identity = job.state.as_ref().map(|state| state.participant_identity.as_str());
+    assert_eq!(identity, Some("agent-identity"), "the identity the rig accepted it under");
     close(rig, task).await;
 }
 
@@ -400,9 +405,10 @@ async fn availability_waits_for_a_fresh_load_sample() {
     close(rig, task).await;
 }
 
-// Catches: the 0.5 s load sampling and 2.5 s status intervals swapped or collapsed.
+// Catches: the 0.5 s load sampling and 1.5 s status intervals (the 1.x cadence) swapped,
+// collapsed or slowed: the server then learns of capacity changes late.
 #[tokio::test(start_paused = true)]
-async fn load_samples_every_half_second_and_status_reports_every_two_and_a_half() {
+async fn load_samples_every_half_second_and_status_reports_every_one_and_a_half() {
     let (mut rig, task) = running(runtime_rig(), 0);
     until_sent(&mut rig.sent, |m| status(m).is_some()).await;
     tokio::time::sleep(Duration::from_millis(250)).await;
@@ -410,8 +416,9 @@ async fn load_samples_every_half_second_and_status_reports_every_two_and_a_half(
     tokio::time::sleep(UPDATE_STATUS_INTERVAL).await;
     let sampled = rig.load.samples.load(std::sync::atomic::Ordering::SeqCst) - samples;
     let reported = std::iter::from_fn(|| rig.sent.try_recv().ok()).filter(|m| status(m).is_some());
-    assert_eq!((sampled, reported.count()), (5, 1));
+    assert_eq!((sampled, reported.count()), (3, 1));
     assert_eq!(UPDATE_LOAD_INTERVAL, Duration::from_millis(500));
+    assert_eq!(UPDATE_STATUS_INTERVAL, Duration::from_millis(1_500));
     close(rig, task).await;
 }
 

@@ -242,7 +242,7 @@ mod cut_node_words_open_no_segment {
 mod cut_reply_keeps_heard_words {
     //! A reply cut mid-playout is committed as the words heard when the output reports the cut late.
     use lk_agents_abi::{ChatItem, Role};
-    use lk_agents_core::tts::markup::ChatMessageExt;
+    use lk_agents_core::markup::ChatMessageExt;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
     use lk_agents_voice::events::SessionEvent;
@@ -358,7 +358,9 @@ mod lost_voice_ends_its_audio_once {
             for input in [
                 Input::GenerateReply { user_input: None, instructions: None, allow: None },
                 Input::Advance { ms: Millis(20) },
-                Input::LlmText { chat: Ref::new(0), text: text("Let me check that.") },
+                // the next text decides the first sentence, which goes to the voice on its own
+                Input::LlmText { chat: Ref::new(0), text: text("Let me check that for you.") },
+                Input::LlmText { chat: Ref::new(0), text: text(" One") },
                 Input::Advance { ms: Millis(20) },
                 Input::PlayoutStarted { segment: Ref::new(0) },
                 // The voice fails after its audio reached the speaker, which then plays it all.
@@ -412,7 +414,6 @@ mod lost_voice_words_shown_whole {
         let setup = Setup {
             sync_transcription: true,
             tts_alignment: TtsAlignment::Words,
-            aligned_transcript: Some(true),
             ..Setup::default()
         };
         simulate(async {
@@ -946,17 +947,16 @@ mod shown_words_follow_their_playback {
             for input in [
                 Input::GenerateReply { user_input: None, instructions: None, allow: None },
                 Input::Advance { ms: Millis(20) },
-                Input::LlmText { chat: Ref::new(0), text: text("Your order ships on Tuesday") },
+                // the next text decides the first sentence, which goes to the voice on its own
+                Input::LlmText { chat: Ref::new(0), text: text("Your order ships on Tuesday.") },
+                Input::LlmText { chat: Ref::new(0), text: text(" It will") },
                 Input::Advance { ms: Millis(20) },
                 Input::PlayoutStarted { segment: Ref::new(0) },
                 Input::Advance { ms: Millis(500) },
                 Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(500) },
                 // The sink resets mid-speech: the rest of its audio plays as a segment of its own.
                 Input::SinkReset { output: Ref::new(0) },
-                Input::LlmText {
-                    chat: Ref::new(0),
-                    text: text(" and arrives by Friday afternoon."),
-                },
+                Input::LlmText { chat: Ref::new(0), text: text(" arrive by Friday afternoon.") },
                 Input::LlmEnd { chat: Ref::new(0) },
                 Input::Advance { ms: Millis(20) },
                 Input::PlayoutStarted { segment: Ref::new(1) },

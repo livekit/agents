@@ -301,6 +301,8 @@ pub struct SessionHandle {
     pub ivr_detection: bool,
     /// The session's id counter: a host speech call takes its speech's id from it.
     pub speech_ids: Arc<std::sync::atomic::AtomicU64>,
+    /// With the counter, a host speech's id (`SpeechId::nth`).
+    pub id_seed: u64,
 }
 
 pub type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
@@ -327,8 +329,6 @@ pub struct SessionShared {
     /// What the outputs still have to play, for a recorder attached while it plays.
     pub(in crate::voice) unplayed:
         Arc<parking_lot::Mutex<lk_agents_voice::unplayed_audio::UnplayedAudio>>,
-    /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
-    pub(in crate::voice) tts_transforms: Vec<lk_agents_abi::voice::session_options::TextTransform>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
     /// receives. Unbounded: a task must never block on the loop draining it.
     pub(in crate::voice) queue: Tx,
@@ -342,9 +342,8 @@ pub struct SessionShared {
     /// The executor's tasks: readers, drains, pumps, provider calls and closes, drained by the
     /// runtime's close.
     pub(in crate::voice) tasks: Arc<lk_agents_net::task::TaskSet>,
-    /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
+    /// The requests a task opens (`open_call`).
     pub(in crate::voice) gen_ids: std::sync::atomic::AtomicU64,
-    pub(in crate::voice) session_id: String,
     pub(in crate::voice) chat_ctx: lk_agents_net::signal::Cell<Arc<lk_agents_abi::ChatContext>>,
     pub(in crate::voice) resources: crate::voice::resources::Resources,
     /// `session.keyterms`: the last list pushed to the recogniser.
@@ -370,11 +369,6 @@ impl SessionShared {
             Some(turn) => self.trace.clone().under::<telemetry::AgentTurn>(turn),
             None => self.trace.clone(),
         }
-    }
-
-    pub fn mint_item_id(&self) -> String {
-        let n = self.gen_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        format!("{}_item_g{n:04}", self.session_id)
     }
 
     /// A closed channel means the session is ending; not an error.

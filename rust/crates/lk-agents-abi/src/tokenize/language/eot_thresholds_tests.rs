@@ -191,3 +191,22 @@ fn the_local_fallback_drops_the_backchannel_layer() {
     opts.to_local_fallback();
     assert_eq!(opts.lookup_backchannel(Some(&lang("en"))), None);
 }
+
+/// ISO 639-1, ISO 639-3 and regional tags of one language resolve to the same threshold.
+/// https://github.com/livekit/agents/pull/4601 https://github.com/livekit/agents/pull/1195
+#[test]
+fn compatibility_normalizes_iso_tags_before_lookup() {
+    let mini = ThresholdOptions::new(TurnDetectorModel::V1Mini, None, None);
+    for (want, tags) in [(0.3600, ["en", "eng", "en-US"]), (0.2450, ["de", "deu", "de-DE"])] {
+        for tag in tags {
+            assert_eq!(mini.lookup(Some(&lang(tag))), Some(want), "{tag}");
+            assert!(mini.supports(Some(&lang(tag))), "{tag}");
+        }
+    }
+
+    let mut cloud = ThresholdOptions::new(TurnDetectorModel::V1, None, None);
+    cloud.update_defaults(&map(&[("eng", 0.5), ("ja", 0.3)]), 0.7, None, 0.0).unwrap();
+    assert_eq!(cloud.lookup(Some(&lang("en"))), Some(0.5), "a server key in ISO 639-3 matches");
+    assert_eq!(cloud.lookup(Some(&lang("jpn"))), Some(0.3), "a lookup in ISO 639-3 matches");
+    assert_eq!(cloud.lookup(Some(&lang("xx"))), Some(0.7), "an unknown language takes the default");
+}

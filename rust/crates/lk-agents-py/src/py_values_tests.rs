@@ -431,7 +431,7 @@ mod records {
                     "detector_prediction",
                     (concat!(
                         env!("CARGO_MANIFEST_DIR"),
-                        "/../../../livekit-agents-next/livekit/agents/_generated/turn_events.py"
+                        "/../../../livekit-agents/livekit/agents/_generated/turn_events.py"
                     ),),
                 )
                 .unwrap();

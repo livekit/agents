@@ -31,6 +31,8 @@ pub fn raw_schema(
     input_schema: &Map<String, Value>,
     meta: Option<&Map<String, Value>>,
 ) -> Value {
+    // MCP makes a tool's description optional; a tool spec's is a string.
+    let description = description.unwrap_or_default();
     let mut schema = json!({"name": name, "description": description, "parameters": input_schema});
     if let Some(meta) = meta.filter(|m| !m.is_empty()) {
         schema["meta"] = json!(meta);
@@ -255,5 +257,51 @@ impl McpToolsPort for McpTools {
     }
     fn render_result(tool_name: String, result: Value) -> Result<String, McpError> {
         render_result(&tool_name, &result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MCP text and resource results reach the model as literal Unicode.
+    /// https://github.com/livekit/agents/pull/7565
+    #[test]
+    fn results_keep_unicode_literal() {
+        let many = json!({"content": [
+            {"type": "text", "text": "réservé à Zürich"},
+            {"type": "text", "text": "予約済み"},
+        ]});
+        let rendered = render_result("book", &many).unwrap();
+        assert!(
+            rendered.contains("réservé à Zürich") && rendered.contains("予約済み"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("\\u"), "no ASCII escaping: {rendered}");
+
+        let resource = json!({"content": [
+            {"type": "resource", "resource": {"uri": "file:///menu", "text": "crème brûlée"}},
+        ]});
+        let rendered = render_result("menu", &resource).unwrap();
+        assert!(rendered.contains("crème brûlée") && !rendered.contains("\\u"), "{rendered}");
+    }
+
+    /// An MCP error result fails the tool with the result's content as its message.
+    /// https://github.com/livekit/agents/pull/4582
+    #[test]
+    fn an_error_result_fails_with_its_content() {
+        let failed = json!({"isError": true, "content": [
+            {"type": "text", "text": "date indisponible"},
+            {"type": "image", "data": "AA==", "mimeType": "image/png"},
+        ]});
+        match render_result("book", &failed) {
+            Err(McpError::ToolFailed(text)) => {
+                let mut lines = text.lines();
+                assert_eq!(lines.next(), Some("date indisponible"));
+                let image: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+                assert_eq!(image["mimeType"], "image/png");
+            }
+            other => panic!("expected ToolFailed, got {other:?}"),
+        }
     }
 }

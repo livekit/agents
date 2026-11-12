@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// How long a reply may go without its model request, besides the slow answers the fake
-/// database held its lane acquire on.
+/// database held its partition acquire on.
 pub const BOUND_MS: u64 = 15_000;
 
 /// What the case owes the driver before a reply can be planned: an answer to the turn hook, or
@@ -94,7 +94,7 @@ impl Rule for ReplyReachesItsModel {
 }
 
 /// `BOUND_MS` after `at`, extended by the time the fake database held slow answers while the
-/// reply's lane acquire waited on them.
+/// reply's partition acquire waited on them.
 fn deadline(r: &Recording, speech: u64, at: u64) -> u64 {
     let acquire = |step: &StorageStep, answered: bool| match step {
         StorageStep::Requested { speech: s, operation: StorageOperation::Acquire } => {

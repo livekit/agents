@@ -631,13 +631,10 @@ mod never_block {
     #[tokio::test(flavor = "current_thread")]
     #[ignore = "real native workload; records host-dependent measurements"]
     async fn media_never_block_measurements() {
-        let manifest: Value =
-            serde_json::from_str(include_str!("../../../bench-budgets.json")).unwrap();
         println!(
             "MEDIA_PROFILE {}",
             json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH,
-                   "runtime": "current_thread", "features": ["media-images", "media-ffmpeg"],
-                   "budget": manifest["interfaces"]["media"]})
+                   "runtime": "current_thread", "features": ["media-images", "media-ffmpeg"]})
         );
         let media_pool = lk_agents_media::pool::media_pool();
         let mut admission = Vec::new();
@@ -809,4 +806,184 @@ async fn a_finish_waiter_resolves_when_the_supervisor_is_dropped() {
     recorder.tasks.cancel_all();
     let finished = tokio::time::timeout(Duration::from_secs(5), recorder.finish(0.1)).await;
     assert!(matches!(finished, Ok(Err(_))), "the finish outlived the supervisor: {finished:?}");
+}
+
+/// An encoder that fails to open fails the recording's open promptly with its error.
+/// https://github.com/livekit/agents/pull/7741 https://github.com/livekit/agents/issues/3568
+#[tokio::test]
+async fn an_encoder_open_failure_fails_the_recording_open() {
+    let media_pool = media_pool(1);
+
+    let opened = tokio::time::timeout(
+        Duration::from_secs(1),
+        SessionRecorder::open_with::<Encoder, Writer>(&media_pool, 10, Some(0.0), limits(), || {
+            Err(RecordingFailure::Encode("no opus encoder".into()))
+        }),
+    )
+    .await
+    .expect("a failed encoder open must not hang");
+
+    assert!(matches!(opened, Err(RecordingFailure::Encode(detail)) if detail == "no opus encoder"));
+}
+
+/// An encoder failing mid-recording settles the recording with one error and keeps no audio.
+/// https://github.com/livekit/agents/pull/5926 https://github.com/livekit/agents/issues/3568
+#[tokio::test]
+async fn an_encode_failure_settles_the_recording_with_its_error() {
+    struct Failing;
+    impl OggOpusEncoder for Failing {
+        fn push(&mut self, _: &[i16]) -> lk_agents_media::Result<Vec<u8>> {
+            Err(lk_agents_media::CodecError::Read("encoder broke".into()))
+        }
+        fn finish(self) -> lk_agents_media::Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+    }
+    let bound = Duration::from_secs(1);
+    let media_pool = media_pool(1);
+    let (sink, _, _) = Sink::new(false, false);
+    let bytes = sink.bytes;
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.0), limits(), move || {
+        Ok((Failing, sink.writer))
+    })
+    .await
+    .unwrap();
+
+    recorder.input(0.1, &frame(&[1]), false).unwrap();
+    let error = tokio::time::timeout(bound, recorder.flush(0.1))
+        .await
+        .expect("a failed encode must settle the flush")
+        .unwrap_err();
+
+    assert!(matches!(&error, RecordingFailure::Encode(detail) if detail == "encoder broke"));
+    assert_eq!(recorder.input(0.2, &frame(&[2]), false), Err(error.clone()), "later audio refused");
+    let finished = tokio::time::timeout(bound, recorder.finish(0.2))
+        .await
+        .expect("finish after an encode failure must not hang");
+    assert_eq!(finished, Err(error));
+    assert_eq!(recorder.retained_bytes(), 0, "no PCM is held after the failure");
+    assert!(bytes.lock().is_empty(), "nothing reached the file");
+}
+
+/// What the recording writes against what was heard: a jittery 16 kHz microphone and 24 kHz agent
+/// speech, one reply interrupted, over minutes of call. Each channel equals its audio converted as
+/// one stream and placed where it was captured or played, so a hole, a shift or drift fails.
+#[tokio::test]
+async fn the_recording_is_what_was_heard_where_it_was_heard() {
+    const RATE: u32 = 48_000;
+    let resampled = |pcm: &[i16], rate: u32| {
+        let mut resampler =
+            lk_agents_media::Resampler::new(rate, RATE, 1, lk_agents_media::Quality::Medium)
+                .unwrap();
+        let mut out = resampler.push(pcm).unwrap().to_vec();
+        out.extend_from_slice(resampler.flush().unwrap());
+        out
+    };
+    let tone = |rate: u32, seconds: f64, freq: f64| -> Vec<i16> {
+        (0..(seconds * f64::from(rate)) as usize)
+            .map(|i| {
+                let t = i as f64 / f64::from(rate);
+                (8000.0 * (2.0 * std::f64::consts::PI * (freq + 30.0 * t) * t).sin()) as i16
+            })
+            .collect()
+    };
+    let pcm_frame = |pcm: &[i16], rate: u32| {
+        AudioFrame::new(lk_agents_media::pcm_bytes(pcm), rate, 1, pcm.len() as u32)
+    };
+    let media_pool = media_pool(1);
+    let (sink, _, _) = Sink::new(false, false);
+    let bytes = sink.bytes;
+    let encoder = Encoder(sink.trace.clone());
+    let t0 = 1000.0;
+    let recorder =
+        SessionRecorder::open_with(&media_pool, RATE, Some(t0), RecordingLimits::default(), {
+            move || Ok((encoder, sink.writer))
+        })
+        .await
+        .unwrap();
+
+    let (mic_rate, agent_rate, call) = (16_000, 24_000, 150.0);
+    let mic = tone(mic_rate, call, 200.0);
+    // (playback start, audio, seconds played): the third reply is interrupted.
+    let replies: Vec<(f64, Vec<i16>, f64)> = (0..12)
+        .map(|n| {
+            let audio = tone(agent_rate, 1.3, 400.0 + 50.0 * f64::from(n));
+            let played = if n == 2 { 0.6131 } else { 1.3 };
+            (t0 + 3.0 + 12.0 * f64::from(n), audio, played)
+        })
+        .collect();
+    let mic_start = t0 + 0.25;
+    let frame_seconds = 0.01;
+    let mut seed = 0x2545_f491_u64;
+    let mut jitter = move || {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        ((seed >> 33) as f64 / f64::from(1_u32 << 31) - 0.5) * 0.04
+    };
+    let mut reply = replies.iter().peekable();
+    // The reply playing: its playback start, how much of it plays, how much was reported.
+    let mut playing: Option<(f64, f64, f64)> = None;
+    for (i, chunk) in mic.chunks(mic_rate as usize / 100).enumerate() {
+        let now = mic_start + (i + 1) as f64 * frame_seconds;
+        // Delivered up to 20 ms early or late; the first frame anchors the run.
+        let arrived = if i == 0 { now } else { now + jitter() };
+        recorder.input(arrived, &pcm_frame(chunk, mic_rate), false).unwrap();
+        if let Some((start, audio, played)) = reply.next_if(|(start, ..)| *start <= now) {
+            for frame in audio.chunks(agent_rate as usize / 100) {
+                recorder
+                    .record(RecordingCommand::Capture(*start, pcm_frame(frame, agent_rate)))
+                    .unwrap();
+            }
+            recorder.record(RecordingCommand::PlaybackStarted(*start)).unwrap();
+            playing = Some((*start, *played, 0.0));
+        }
+        if let Some((start, played, offset)) = &mut playing {
+            // The sink reports every 50 ms of playout, then its end.
+            let until = (now - *start).min(*played);
+            if until - *offset >= 0.05 || until >= *played {
+                recorder
+                    .record(RecordingCommand::Progress(*start + *offset, *offset, until - *offset))
+                    .unwrap();
+                *offset = until;
+            }
+            if until >= *played {
+                recorder
+                    .record(RecordingCommand::PlaybackFinished(*start + *played, *played))
+                    .unwrap();
+                playing = None;
+            }
+        }
+        if i % 10 == 9 {
+            recorder.flush(now).await.unwrap();
+        }
+    }
+    let summary = recorder.finish(mic_start + call + 0.5).await.unwrap();
+    assert_eq!((summary.dropped_input_samples, summary.dropped_output_samples), (0, 0));
+
+    let written = bytes.lock();
+    let pcm = lk_agents_media::pcm_samples(&written[..written.len() - PCM_ENCODER_TRAILER.len()]);
+    let (user, agent): (Vec<i16>, Vec<i16>) =
+        pcm.as_chunks::<2>().0.iter().map(|pair| (pair[0], pair[1])).unzip();
+    let index = |at: f64| ((at - t0) * f64::from(RATE)).round() as usize;
+    let place = |heard: &[(f64, Vec<i16>)]| {
+        let mut channel = vec![0_i16; user.len()];
+        for (start, pcm) in heard {
+            for (i, sample) in pcm.iter().enumerate() {
+                channel[index(*start) + i] += sample;
+            }
+        }
+        channel
+    };
+    let first_difference = |got: &[i16], want: &[i16]| {
+        got.iter().zip(want).position(|(g, w)| g != w).map(|i| t0 + i as f64 / f64::from(RATE))
+    };
+    let want_user = place(&[(mic_start, resampled(&mic, mic_rate))]);
+    assert_eq!(first_difference(&user, &want_user), None, "the user channel is the microphone");
+    let heard: Vec<_> = replies
+        .iter()
+        .map(|(start, audio, played)| {
+            let played = (played * f64::from(agent_rate)).round() as usize;
+            (*start, resampled(&audio[..played], agent_rate))
+        })
+        .collect();
+    assert_eq!(first_difference(&agent, &place(&heard)), None, "the agent channel is what played");
 }

@@ -79,7 +79,18 @@ impl Driver {
             // Before the effects: the last ones may end the stream the host reads usage beside.
             self.publish_usage();
             while let Some(effect) = effects.pop_front() {
-                self.execute(effect).await;
+                if let TextSessionEffect::Checkpoint(state) = effect {
+                    if let Some(sink) = &self.request.session_sink
+                        && let Err(error) = sink.publish(&self.cx, *state).await
+                    {
+                        effects = self
+                            .session
+                            .handle(TextSessionEvent::PersistenceFailed(error), self.clock.now())
+                            .into();
+                    }
+                } else {
+                    self.execute(effect).await;
+                }
             }
             if let Some(released) = self.take_release() {
                 effects.extend(released);
@@ -159,6 +170,9 @@ impl Driver {
 
     async fn execute(&mut self, effect: TextSessionEffect) {
         match effect {
+            TextSessionEffect::Checkpoint(_) => {
+                unreachable!("checkpoints execute before dependent effects")
+            }
             TextSessionEffect::InvocationStarted {
                 frame_id,
                 agent_name,

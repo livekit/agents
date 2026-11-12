@@ -265,7 +265,7 @@ impl Storage {
         })
     }
 
-    /// The thread's chat items, oldest first, of one agent's lane when `agent` is given.
+    /// The thread's chat items, oldest first, of one agent's partition when `agent` is given.
     #[pyo3(signature = (thread_id, *, agent = None, after = None, limit = None))]
     fn get_thread_items<'py>(
         &self,
@@ -371,17 +371,17 @@ impl Storage {
     }
 
     /// A runtime-supplied field store whose explicit saves commit outside a managed turn.
-    #[pyo3(signature = (thread_id, lane))]
+    #[pyo3(signature = (thread_id, partition_key))]
     fn _core_context_store<'py>(
         &self,
         py: Python<'py>,
         thread_id: ::std::string::String,
-        lane: ::std::string::String,
+        partition_key: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_context_store(&this, thread_id, lane)
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_context_store(&this, thread_id, partition_key)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -394,12 +394,12 @@ impl Storage {
 
     /// A managed turn's field store over the scopes and routing state its run loaded: saves
     /// and `transaction()` writes stage for the turn's commit.
-    #[pyo3(signature = (thread_id, lane, scopes, *, routing_state = None, read_only = false))]
+    #[pyo3(signature = (thread_id, partition_key, scopes, *, routing_state = None, read_only = false))]
     fn _core_turn_store<'py>(
         &self,
         py: Python<'py>,
         thread_id: ::std::string::String,
-        lane: ::std::string::String,
+        partition_key: ::std::string::String,
         scopes: Bound<'_, PyAny>,
         routing_state: Option<Bound<'_, PyAny>>,
         read_only: bool,
@@ -418,7 +418,7 @@ impl Storage {
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_turn_store(&this, thread_id, lane, scopes, routing_state, read_only)
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_turn_store(&this, thread_id, partition_key, scopes, routing_state, read_only)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -555,6 +555,132 @@ impl CoreContextActivation {
                 )
             })
         })
+    }
+
+    /// A detached read of committed routing state; never starts an execution.
+    fn load_session<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out = <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::load_session(&this, )
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    out.map(|value| crate::py_values::value_to_py(py, &value)).transpose()?,
+                    py,
+                )
+            })
+        })
+    }
+
+    fn load_session_snapshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out = <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::load_session_snapshot(&this, )
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[pyo3(signature = (context, store))]
+    fn declare_binding<'py>(
+        &self,
+        py: Python<'py>,
+        context: Bound<'_, PyAny>,
+        store: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let context = crate::py_objects::object_ref_from_py(context.as_any())?;
+        let store = crate::py_objects::object_ref_from_py(store.as_any())?;
+        let out = py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::declare_binding(&self.0, context, store));
+        crate::generated::records::storage_session::bound_context_to_py(py, out)
+    }
+
+    #[pyo3(signature = (history))]
+    fn flush_bound_session<'py>(
+        &self,
+        py: Python<'py>,
+        history: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let history = history
+            .map(|v| {
+                v.try_iter().and_then(|items| {
+                    items
+                        .map(|item| {
+                            let item = item?;
+                            crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                })
+            })
+            .transpose()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::flush_bound_session(&this, history)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// The managed turn's checkpoint channel, owned by the run holding the lease.
+    #[pyo3(signature = (sink))]
+    fn set_session_sink(&self, py: Python<'_>, sink: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let sink =
+            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::turn::HandlerPort>(sink.as_any())
+                .ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "sink",
+                        ": expected a native handler turn"
+                    ))
+                })?;
+        py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::set_session_sink(&self.0, sink)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// Persist the previously accepted session state, without saving application fields.
+    #[pyo3(signature = (history))]
+    fn flush_session<'py>(
+        &self,
+        py: Python<'py>,
+        history: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let history = history.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::flush_session(&this, history)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// Stage framework-owned session state without saving ordinary application fields.
+    #[pyo3(signature = (state))]
+    fn stage_session(&self, py: Python<'_>, state: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let state = crate::py_values::value_from_py(state.as_any(), "state")?;
+        py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::stage_session(&self.0, state)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    #[getter]
+    fn session_state<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::session_state(&self.0));
+        out.map(|value| crate::py_values::value_to_py(py, &value)).transpose()
     }
 
     #[getter]
@@ -833,11 +959,11 @@ impl Thread {
         ::pyo3::PyResult::Ok(out)
     }
 
-    fn lanes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn partitions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::lanes(&this, )
+            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::partitions(&this, )
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -845,7 +971,7 @@ impl Thread {
                         py,
                         out.into_iter()
                             .map(|x| {
-                                crate::generated::records::storage_class::lane_row_to_py(py, x)
+                                crate::generated::records::storage_class::partition_row_to_py(py, x)
                             })
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
@@ -886,16 +1012,16 @@ impl Thread {
         })
     }
 
-    #[pyo3(signature = (lane))]
+    #[pyo3(signature = (partition_key))]
     fn history<'py>(
         &self,
         py: Python<'py>,
-        lane: ::std::string::String,
+        partition_key: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::history(&this, lane)
+            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::history(&this, partition_key)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -914,17 +1040,17 @@ impl Thread {
         })
     }
 
-    #[pyo3(signature = (lane, limit = 50))]
+    #[pyo3(signature = (partition_key, limit = 50))]
     fn tasks<'py>(
         &self,
         py: Python<'py>,
-        lane: ::std::string::String,
+        partition_key: ::std::string::String,
         #[pyo3(from_py_with = _extract_thread_tasks_limit)] limit: ThreadTasksLimitInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::tasks(&this, lane, limit)
+            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::tasks(&this, partition_key, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -966,11 +1092,11 @@ impl Thread {
         })
     }
 
-    #[pyo3(signature = (lane = None, status = None, order = None, page_size = 50, page_token = None))]
+    #[pyo3(signature = (partition_key = None, status = None, order = None, page_size = 50, page_token = None))]
     fn list_tasks<'py>(
         &self,
         py: Python<'py>,
-        lane: ::std::option::Option<::std::string::String>,
+        partition_key: ::std::option::Option<::std::string::String>,
         status: Option<Bound<'_, PyAny>>,
         order: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_thread_list_tasks_page_size)]
@@ -993,7 +1119,7 @@ impl Thread {
         };
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::list_tasks(&this, lane, status, order, page_size, page_token)
+            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::list_tasks(&this, partition_key, status, order, page_size, page_token)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -1004,18 +1130,18 @@ impl Thread {
         })
     }
 
-    #[pyo3(signature = (lane = None, after = None, limit = 100))]
+    #[pyo3(signature = (partition_key = None, after = None, limit = 100))]
     fn list_items<'py>(
         &self,
         py: Python<'py>,
-        lane: ::std::option::Option<::std::string::String>,
+        partition_key: ::std::option::Option<::std::string::String>,
         after: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_thread_list_items_limit)] limit: ThreadListItemsLimitInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::list_items(&this, lane, after, limit)
+            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::list_items(&this, partition_key, after, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -1026,21 +1152,21 @@ impl Thread {
         })
     }
 
-    #[pyo3(signature = (lane))]
-    fn lane_info<'py>(
+    #[pyo3(signature = (partition_key))]
+    fn partition_info<'py>(
         &self,
         py: Python<'py>,
-        lane: ::std::string::String,
+        partition_key: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::lane_info(&this, lane)
+            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::partition_info(&this, partition_key)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     out.map(|value| {
-                        crate::generated::records::storage_class::lane_row_to_py(py, value)
+                        crate::generated::records::storage_class::partition_row_to_py(py, value)
                     })
                     .transpose()?,
                     py,
@@ -1049,17 +1175,17 @@ impl Thread {
         })
     }
 
-    #[pyo3(signature = (lane, pending = false))]
+    #[pyo3(signature = (partition_key, pending = false))]
     fn inbox<'py>(
         &self,
         py: Python<'py>,
-        lane: ::std::string::String,
+        partition_key: ::std::string::String,
         pending: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::inbox(&this, lane, pending)
+            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::inbox(&this, partition_key, pending)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -1078,11 +1204,11 @@ impl Thread {
         })
     }
 
-    #[pyo3(signature = (lane, task_id, metadata))]
+    #[pyo3(signature = (partition_key, task_id, metadata))]
     fn cancel_task<'py>(
         &self,
         py: Python<'py>,
-        lane: ::std::string::String,
+        partition_key: ::std::string::String,
         task_id: ::std::string::String,
         metadata: Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -1096,7 +1222,7 @@ impl Thread {
         }?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::cancel_task(&this, lane, task_id, metadata)
+            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::cancel_task(&this, partition_key, task_id, metadata)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -1110,11 +1236,11 @@ impl Thread {
         })
     }
 
-    #[pyo3(signature = (lane, run_id, *, channel = None, wait_timeout = None))]
+    #[pyo3(signature = (partition_key, run_id, *, channel = None, wait_timeout = None))]
     fn open_run<'py>(
         &self,
         py: Python<'py>,
-        lane: ::std::string::String,
+        partition_key: ::std::string::String,
         run_id: ::std::string::String,
         channel: ::std::option::Option<::std::string::String>,
         wait_timeout: Option<Bound<'_, PyAny>>,
@@ -1127,7 +1253,7 @@ impl Thread {
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::open_run(&this, lane, run_id, channel, wait_timeout)
+            let out = <ThreadImpl as ::lk_agents_abi::storage::handles::Thread>::open_run(&this, partition_key, run_id, channel, wait_timeout)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -1322,7 +1448,7 @@ fn _extract_thread_handle_tasks_limit(
 }
 type ThreadHandleTasksLimitInput = i64;
 
-/// `ctx.thread` (docs/threads.md): one thread of a storage namespace, as the agent `agent` reads
+/// `ctx.thread` (docs/threads.md): one thread of a storage namespace, as the partition_key `partition_key` reads
 /// it. Each read opens the thread's database for the call and releases it after; there is
 /// nothing to open or close.
 #[pyclass(frozen, name = "_core_ThreadHandle", module = "livekit.agents._core")]
@@ -1332,12 +1458,12 @@ pub struct CoreThreadHandle(pub(crate) ::std::sync::Arc<CoreThreadHandleImpl>);
 impl CoreThreadHandle {
     /// Reads take no lease.
     #[new]
-    #[pyo3(signature = (namespace, thread_id, agent))]
+    #[pyo3(signature = (namespace, thread_id, partition_key))]
     fn new(
         py: Python<'_>,
         namespace: Bound<'_, PyAny>,
         thread_id: ::std::string::String,
-        agent: ::std::string::String,
+        partition_key: ::std::string::String,
     ) -> PyResult<CoreThreadHandle> {
         crate::py_calls::check_pid()?;
         let namespace = namespace
@@ -1346,7 +1472,9 @@ impl CoreThreadHandle {
             .map_err(::pyo3::PyErr::from)?;
         let out = py.detach(|| {
             <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::new(
-                namespace, thread_id, agent,
+                namespace,
+                thread_id,
+                partition_key,
             )
         });
         ::pyo3::PyResult::Ok(CoreThreadHandle(::std::sync::Arc::new(out)))
@@ -1362,15 +1490,11 @@ impl CoreThreadHandle {
         ::pyo3::PyResult::Ok(out)
     }
 
-    /// The agent whose history `chat_history()` reads by default.
+    /// The partition_key whose history `chat_history()` reads by default.
     #[getter]
-    fn agent(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+    fn partition_key(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::agent(
-                &self.0,
-            )
-        });
+        let out = py.detach(|| <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::partition_key(&self.0));
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -1427,14 +1551,14 @@ impl CoreThreadHandle {
         })
     }
 
-    /// One page of the thread's committed chat items in insertion order, every lane's or
-    /// `agent`'s; pass the page's `after` to read the next (empty on the last page). The same
+    /// One page of the thread's committed chat items in insertion order, every partition's or
+    /// `partition_key`'s; pass the page's `after` to read the next (empty on the last page). The same
     /// records Cloud's threads API answers, for an application's own read routes.
-    #[pyo3(signature = (*, agent = None, after = None, limit = 100))]
+    #[pyo3(signature = (*, partition_key = None, after = None, limit = 100))]
     fn list_items<'py>(
         &self,
         py: Python<'py>,
-        agent: ::std::option::Option<::std::string::String>,
+        partition_key: ::std::option::Option<::std::string::String>,
         after: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_thread_handle_list_items_limit)]
         limit: ThreadHandleListItemsLimitInput,
@@ -1442,7 +1566,7 @@ impl CoreThreadHandle {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::list_items(&this, agent, after, limit)
+            let out = <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::list_items(&this, partition_key, after, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -1454,14 +1578,14 @@ impl CoreThreadHandle {
     }
 
     /// One page of the thread's A2A task records: in insertion order (`order="inserted"`), or
-    /// last updated first (`"updated"`) as A2A `tasks/list` lists them; of `agent`'s lane and
+    /// last updated first (`"updated"`) as A2A `tasks/list` lists them; of `partition_key`'s partition and
     /// `status` when given. Pass the page's `next_page_token` to read the next; a token is bound
     /// to its listing.
-    #[pyo3(signature = (*, agent = None, status = None, order = None, page_token = None, limit = 50))]
+    #[pyo3(signature = (*, partition_key = None, status = None, order = None, page_token = None, limit = 50))]
     fn list_tasks<'py>(
         &self,
         py: Python<'py>,
-        agent: ::std::option::Option<::std::string::String>,
+        partition_key: ::std::option::Option<::std::string::String>,
         status: Option<Bound<'_, PyAny>>,
         order: Option<Bound<'_, PyAny>>,
         page_token: ::std::option::Option<::std::string::String>,
@@ -1484,7 +1608,7 @@ impl CoreThreadHandle {
         };
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::list_tasks(&this, agent, status, order, page_token, limit)
+            let out = <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::list_tasks(&this, partition_key, status, order, page_token, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -1519,7 +1643,7 @@ impl CoreThreadHandle {
         })
     }
 
-    /// One page of the journal (docs/internals/storage.md#journal), every lane, in order; pass
+    /// One page of the journal (docs/internals/storage.md#journal), every partition, in order; pass
     /// the last `id` to read the next.
     #[pyo3(signature = (after_id = 0, limit = 100))]
     fn journal<'py>(
@@ -1552,17 +1676,17 @@ impl CoreThreadHandle {
         })
     }
 
-    /// `agent`'s lane history, in order.
-    #[pyo3(signature = (agent))]
+    /// `partition_key`'s partition history, in order.
+    #[pyo3(signature = (partition_key))]
     fn history<'py>(
         &self,
         py: Python<'py>,
-        agent: ::std::string::String,
+        partition_key: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::history(&this, agent)
+            let out = <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::history(&this, partition_key)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -1581,12 +1705,12 @@ impl CoreThreadHandle {
         })
     }
 
-    /// `agent`'s lane task records, most recent first; only those in `status` when given.
-    #[pyo3(signature = (agent, *, status = None, limit = 50))]
+    /// `partition_key`'s partition task records, most recent first; only those in `status` when given.
+    #[pyo3(signature = (partition_key, *, status = None, limit = 50))]
     fn tasks<'py>(
         &self,
         py: Python<'py>,
-        agent: ::std::string::String,
+        partition_key: ::std::string::String,
         status: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_thread_handle_tasks_limit)]
         limit: ThreadHandleTasksLimitInput,
@@ -1597,7 +1721,7 @@ impl CoreThreadHandle {
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::tasks(&this, agent, status, limit)
+            let out = <CoreThreadHandleImpl as ::lk_agents_abi::storage::handles::ThreadHandle>::tasks(&this, partition_key, status, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -1649,11 +1773,281 @@ impl CoreThreadServer {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/storage/session.rs.
+type CorePersistedSessionStateImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::PersistedSessionState;
+type PersistedSessionStateActiveAgentOutput = ::std::option::Option<::std::string::String>;
+type PersistedSessionStateSessionIdOutput = ::std::option::Option<::std::string::String>;
+type PersistedSessionStateExecutionIdOutput = ::std::option::Option<::std::string::String>;
+
+/// Read-only conversation state. Reads and results are detached; an explicitly bound
+/// application field retains its identity while the native store updates its contents.
+#[pyclass(frozen, name = "_core_PersistedSessionState", module = "livekit.agents._core")]
+pub struct CorePersistedSessionState(pub(crate) ::std::sync::Arc<CorePersistedSessionStateImpl>);
+
+#[pymethods]
+impl CorePersistedSessionState {
+    #[new]
+    #[pyo3(signature = (data = None))]
+    fn new(
+        py: Python<'_>,
+        data: ::std::option::Option<::std::string::String>,
+    ) -> PyResult<CorePersistedSessionState> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::new(data)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(CorePersistedSessionState(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn kind<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::kind(&self.0));
+        crate::generated::records::storage_session::session_kind_to_py(py, out)
+    }
+
+    #[getter]
+    fn active_agent(&self, py: Python<'_>) -> PyResult<PersistedSessionStateActiveAgentOutput> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::active_agent(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    fn session_id(&self, py: Python<'_>) -> PyResult<PersistedSessionStateSessionIdOutput> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::session_id(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    fn execution_id(&self, py: Python<'_>) -> PyResult<PersistedSessionStateExecutionIdOutput> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::execution_id(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    fn root_frame_id<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::root_frame_id(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        crate::generated::records::text_session::frame_id_to_py(py, out)
+    }
+
+    #[getter]
+    fn active_frame_id<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::active_frame_id(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        crate::generated::records::text_session::frame_id_to_py(py, out)
+    }
+
+    #[getter]
+    fn ancestors<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::ancestors(&self.0));
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::generated::records::text_session::frame_id_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
+    }
+
+    #[getter]
+    fn frames<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::frames(&self.0));
+        ::pyo3::PyResult::Ok({
+            let d = ::pyo3::types::PyDict::new(py);
+            for (k, x) in out {
+                d.set_item(
+                    crate::generated::records::text_session::frame_id_to_py(py, k)?,
+                    crate::generated::records::text_session::session_frame_to_py(py, x)?,
+                )?;
+            }
+            d.into_any()
+        })
+    }
+
+    fn snapshot(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::snapshot(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    fn _to_json(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_to_json(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    fn _text_state<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_text_state(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        out.map(|value| {
+            crate::generated::records::text_session::text_session_state_to_py(py, value)
+        })
+        .transpose()
+    }
+
+    #[pyo3(signature = (data))]
+    fn _update(&self, py: Python<'_>, data: ::std::string::String) -> PyResult<()> {
+        py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_update(&self.0, data)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (data))]
+    fn _from_json(py: Python<'_>, data: ::std::string::String) -> PyResult<::std::string::String> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_from_json(data)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (state))]
+    fn _from_text(py: Python<'_>, state: Bound<'_, PyAny>) -> PyResult<::std::string::String> {
+        let state =
+            crate::generated::records::text_session::text_session_state_from_py(state.as_any())?;
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_from_text(state)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (agent, history_ids))]
+    fn _from_voice(
+        py: Python<'_>,
+        agent: ::std::string::String,
+        history_ids: ::std::vec::Vec<::std::string::String>,
+    ) -> PyResult<::std::string::String> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_from_voice(agent, history_ids)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/storage/session.rs.
+type CoreSessionBindingImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SessionBinding;
+
+/// Native invocation-local binding and checkpoint publisher.
+#[pyclass(frozen, name = "_core_SessionBinding", module = "livekit.agents._core")]
+pub struct CoreSessionBinding(pub(crate) ::std::sync::Arc<CoreSessionBindingImpl>);
+
+#[pymethods]
+impl CoreSessionBinding {
+    #[new]
+    #[pyo3(signature = (activation, view))]
+    fn new(
+        py: Python<'_>,
+        activation: Bound<'_, PyAny>,
+        view: Bound<'_, PyAny>,
+    ) -> PyResult<CoreSessionBinding> {
+        crate::py_calls::check_pid()?;
+        let activation = activation
+            .cast::<super::storage::CoreContextActivation>()
+            .map(|value| value.get().0.as_ref().clone())
+            .map_err(::pyo3::PyErr::from)?;
+        let view = view
+            .cast::<super::storage::CorePersistedSessionState>()
+            .map(|value| value.get().0.as_ref().clone())
+            .map_err(::pyo3::PyErr::from)?;
+        let out = py.detach(|| <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::new(activation, view)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(CoreSessionBinding(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (state))]
+    fn update(&self, py: Python<'_>, state: ::std::string::String) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::update(
+                &self.0, state,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::storage::StorageError| {
+            <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(
+                &e,
+            )
+        })?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (agent, history_ids))]
+    fn update_voice(
+        &self,
+        py: Python<'_>,
+        agent: ::std::string::String,
+        history_ids: ::std::vec::Vec<::std::string::String>,
+    ) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::update_voice(&self.0, agent, history_ids)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (agent))]
+    fn validate_voice(&self, py: Python<'_>, agent: ::std::string::String) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::validate_voice(&self.0, agent)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (history = None))]
+    fn flush<'py>(
+        &self,
+        py: Python<'py>,
+        history: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let history = history
+            .map(|v| {
+                v.try_iter().and_then(|items| {
+                    items
+                        .map(|item| {
+                            let item = item?;
+                            crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                })
+            })
+            .transpose()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::flush(&this, history)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    #[getter]
+    fn closed(&self, py: Python<'_>) -> PyResult<bool> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::closed(
+                &self.0,
+            )
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::close(
+                &self.0,
+            )
+        });
+        Ok(())
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::text_session::SessionStateSink`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::text_session::SessionStateSink>(),
+        read: |obj| {
+            let this = obj.cast::<CoreSessionBinding>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::text_session::SessionStateSink> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/storage/voice.rs.
 type CoreVoiceStoreImpl =
     <crate::generated::implementations::Selected as super::Implementations>::VoiceStore;
 
-/// The stable context store and initial snapshot belonging to one live call's lane.
+/// The stable context store and initial snapshot belonging to one live call's partition.
 #[pyclass(frozen, name = "_core_VoiceStore", module = "livekit.agents._core")]
 pub struct CoreVoiceStore(pub(crate) ::std::sync::Arc<CoreVoiceStoreImpl>);
 

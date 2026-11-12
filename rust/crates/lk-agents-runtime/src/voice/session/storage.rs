@@ -14,27 +14,28 @@ use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
-/// The call's lane on the supplied thread or, without one, in memory.
+/// The call's partition on the supplied thread or, without one, in memory.
 pub struct SessionStorage {
     namespace: Option<Arc<Namespace>>,
     thread_id: Option<String>,
-    lane: String,
+    partition_key: String,
     agent: String,
     initial_history: Option<Vec<ChatItem>>,
-    /// Where the lane's health metrics go before a session names its own span.
+    /// Where the partition's health metrics go before a session names its own span.
     process: telemetry::Cx,
     opened: OnceCell<Opened>,
+    supplied_activation: parking_lot::Mutex<Option<ContextStore>>,
 }
 
 pub(super) struct Opened {
-    lane: Option<Lane>,
+    partition_key: Option<Partition>,
     scope_id: String,
     activation: ContextStore,
     history: Option<Vec<ChatItem>>,
 }
 
-/// The supplied thread's lane, as it loaded.
-struct Lane {
+/// The supplied thread's partition, as it loaded.
+struct Partition {
     namespace: Arc<Namespace>,
     thread_id: String,
     voice_store: Arc<VoiceStore>,
@@ -58,35 +59,49 @@ impl SessionStorage {
     }
 
     /// Native startup receives the initialized payload, so it cannot read a pre-open handle.
-    /// The lane's health metrics record under `cx`, the session's span.
+    /// The partition's health metrics record under `cx`, the session's span.
     pub(super) async fn open_ready(&self, cx: &telemetry::Cx) -> Result<&Opened, StorageError> {
         self.opened.get_or_try_init(|| self.load(cx)).await
     }
 
-    /// The supplied thread's lane, whose failure is the call's; without one, the call runs in
+    /// The supplied thread's partition, whose failure is the call's; without one, the call runs in
     /// memory on the history it was given.
     async fn load(&self, cx: &telemetry::Cx) -> Result<Opened, StorageError> {
-        let scope_id = format!("root:{}", self.lane);
+        let scope_id = format!("root:{}", self.partition_key);
         let (Some(namespace), Some(thread_id)) = (&self.namespace, &self.thread_id) else {
             return Ok(Opened {
-                lane: None,
+                partition_key: None,
                 scope_id,
-                activation: ContextStore::new(Vec::new(), None, false)?,
+                activation: self
+                    .supplied_activation
+                    .lock()
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(|| ContextStore::new(Vec::new(), None, false))?,
                 history: self.initial_history.clone(),
             });
         };
         let history = self.initial_history.clone();
+        let activation = self.supplied_activation.lock().clone();
         let store = namespace
-            .voice_store(thread_id.clone(), self.lane.clone(), history, cx.clone())
+            .voice_store(
+                thread_id.clone(),
+                self.partition_key.clone(),
+                history,
+                cx.clone(),
+                activation,
+            )
             .await?;
+        let store = Arc::new(store);
+        store.activation().set_session_sink(store.session_sink())?;
         Ok(Opened {
             scope_id,
             activation: store.activation(),
             history: store.initial_history(),
-            lane: Some(Lane {
+            partition_key: Some(Partition {
                 namespace: Arc::clone(namespace),
                 thread_id: thread_id.clone(),
-                voice_store: Arc::new(store),
+                voice_store: store,
             }),
         })
     }
@@ -94,12 +109,12 @@ impl SessionStorage {
 
 impl Opened {
     pub(super) fn voice_store(&self) -> Option<Arc<VoiceStore>> {
-        self.lane.as_ref().map(|lane| Arc::clone(&lane.voice_store))
+        self.partition_key.as_ref().map(|partition_key| Arc::clone(&partition_key.voice_store))
     }
 
     /// The call's thread: the conversation its spans record.
     pub(super) fn thread(&self) -> Option<&str> {
-        self.lane.as_ref().map(|lane| lane.thread_id.as_str())
+        self.partition_key.as_ref().map(|partition_key| partition_key.thread_id.as_str())
     }
 
     pub(super) fn history(&self) -> Option<Vec<ChatItem>> {
@@ -117,7 +132,7 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
         env: &ProcessEnv,
         namespace: Option<Arc<Namespace>>,
         thread_id: Option<String>,
-        lane: String,
+        partition_key: String,
         agent: String,
         initial_history: Option<Vec<ChatItem>>,
     ) -> Self {
@@ -125,18 +140,29 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
         Self {
             namespace,
             thread_id,
-            lane,
+            partition_key,
             agent,
             initial_history,
             process,
             opened: OnceCell::new(),
+            supplied_activation: parking_lot::Mutex::new(None),
         }
+    }
+    fn use_activation(&self, activation: Arc<ContextStore>) -> Result<(), StorageError> {
+        if self.opened.get().is_some() {
+            return Err(StorageError::Invalid("voice storage is already open".into()));
+        }
+        *self.supplied_activation.lock() = Some((*activation).clone());
+        Ok(())
     }
     async fn open(&self) -> Result<(), StorageError> {
         self.open_ready(&self.process).await.map(|_| ())
     }
     fn namespace(&self) -> Option<Arc<Namespace>> {
-        self.opened().lane.as_ref().map(|lane| Arc::clone(&lane.namespace))
+        self.opened()
+            .partition_key
+            .as_ref()
+            .map(|partition_key| Arc::clone(&partition_key.namespace))
     }
     fn thread_id(&self) -> Option<String> {
         self.opened().thread().map(str::to_owned)
@@ -155,8 +181,8 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
     }
     async fn aclose(&self) {
         let Some(opened) = self.opened.get() else { return };
-        if let Some(lane) = &opened.lane
-            && let Err(error) = lane.voice_store.aclose().await
+        if let Some(partition_key) = &opened.partition_key
+            && let Err(error) = partition_key.voice_store.aclose().await
         {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice store could not close: {error}");
         }
@@ -172,7 +198,14 @@ impl StreamInput<VoiceStorageEvent> for StorageReporter {
         let input = match event {
             VoiceStorageEvent::Settled { speech, result, lease_lost } => {
                 if let Err(error) = result {
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice turn could not commit: {error}");
+                    return self
+                        .0
+                        .send(VoiceEvent::StorageFailed { speech: SpeechId(speech), error })
+                        .map_err(|_| {
+                            ProviderError::Local(ApiError::connection(Some(
+                                "the voice session has closed".into(),
+                            )))
+                        });
                 }
                 if lease_lost {
                     let _ = self.0.send(VoiceEvent::StorageLost(SpeechId(speech)));
@@ -181,7 +214,14 @@ impl StreamInput<VoiceStorageEvent> for StorageReporter {
             }
             VoiceStorageEvent::Abandoned { speech, result } => {
                 if let Err(error) = result {
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice turn could not abandon: {error}");
+                    return self
+                        .0
+                        .send(VoiceEvent::StorageFailed { speech: SpeechId(speech), error })
+                        .map_err(|_| {
+                            ProviderError::Local(ApiError::connection(Some(
+                                "the voice session has closed".into(),
+                            )))
+                        });
                 }
                 VoiceEvent::StorageAbandoned(SpeechId(speech))
             }

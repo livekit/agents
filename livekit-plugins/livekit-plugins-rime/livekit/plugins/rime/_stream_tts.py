@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, tts
+from livekit.agents import tts
 from livekit.agents.metrics import TTSMetrics
 
 
@@ -48,8 +48,3 @@ class StreamTTS(tts.TTS):
     @property
     def provider(self) -> str:
         return self._provider
-
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> tts.ChunkedStream:
-        raise NotImplementedError("Synthesis is owned by the Rime transport adapter")

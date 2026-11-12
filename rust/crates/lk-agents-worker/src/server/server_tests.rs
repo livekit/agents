@@ -253,6 +253,28 @@ async fn server_startup_lifecycle_reports_warmup_failure_and_joins_cleanup() {
     assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
 }
 
+// Catches: a listener bound only after the job processes started, so a port in use spawned the
+// pool and then failed the run.
+#[tokio::test]
+async fn an_occupied_port_fails_the_run_before_the_job_processes_start() {
+    let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = occupied.local_addr().unwrap().port();
+    let mut host = Host::new();
+    host.fail_start = true; // a pool start fails the run with its own error instead
+    host.release_close.add_permits(1);
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
+    let mut start = options();
+    start.settings.listeners.prometheus = Some(lk_agents_abi::worker::types::ListenerAddress {
+        host: Some("127.0.0.1".into()),
+        port: Some(port),
+    });
+
+    let failure = runtime.run(start).await.unwrap_err();
+
+    assert!(!failure.to_string().contains("pool warmup"), "the pool started first: {failure}");
+    assert_eq!(runtime.close().await, Ok(()));
+}
+
 #[tokio::test]
 async fn server_cleanup_deadline_returns_while_the_actor_retains_the_pool() {
     let host = Host::new();

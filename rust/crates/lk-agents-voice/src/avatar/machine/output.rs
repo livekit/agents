@@ -221,6 +221,13 @@ impl OutputState {
         Ok(())
     }
 
+    /// The segment a v1 avatar's plain report is about: the oldest one streaming to it, as a v1
+    /// worker plays and reports its segments in order.
+    pub fn oldest_streamed(&self) -> Option<PlaybackSegment> {
+        let streamed = self.outstanding.iter().filter(|(_, route)| route.is_some());
+        streamed.map(|(key, _)| *key).min_by_key(|key| key.segment)
+    }
+
     pub fn contains(&self, key: PlaybackSegment) -> bool {
         self.outstanding.contains_key(&key)
     }
@@ -312,6 +319,25 @@ mod tests {
         state.register(key(1), token("second")).unwrap();
         assert_eq!(state.flush(key(1)), None, "the continuation stream reports its own finish");
         assert_eq!(state.finished(key(1), played(20)), Some(Finish::Done(played(30))));
+    }
+
+    #[test]
+    fn a_plain_report_is_about_the_oldest_streamed_segment() {
+        let mut state = OutputState::default();
+        let token = |key: PlaybackSegment| AvatarPlaybackSegment {
+            playback: key,
+            stream_id: Some("s".into()),
+        };
+        assert_eq!(state.oldest_streamed(), None);
+        state.admit(key(1)).unwrap();
+        assert_eq!(state.oldest_streamed(), None, "nothing was streamed yet");
+        state.register(key(1), token(key(1))).unwrap();
+        state.flush(key(1));
+        state.admit(key(2)).unwrap();
+        state.register(key(2), token(key(2))).unwrap();
+        assert_eq!(state.oldest_streamed(), Some(key(1)));
+        state.retire(key(1));
+        assert_eq!(state.oldest_streamed(), Some(key(2)));
     }
 
     #[test]

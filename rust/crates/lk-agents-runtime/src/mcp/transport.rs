@@ -191,9 +191,9 @@ pub(super) fn connect_http(
     url: String,
     headers: Vec<(String, String)>,
     auth: Option<String>,
-    timeout: Duration,
-    read_timeout: Option<Duration>,
+    options: lk_agents_abi::ApiConnectOptions,
     receipt: Arc<TransportReceipt>,
+    cancel: tokio_util::sync::CancellationToken,
 ) -> Result<StreamableHttpClientTransport<CleanupClient>, McpError> {
     let headers = headers
         .into_iter()
@@ -207,15 +207,10 @@ pub(super) fn connect_http(
     let client = CleanupClient {
         http: (env.http)().map_err(|error| conn(std::io::Error::other(error)))?,
         headers,
-        options: lk_agents_abi::ApiConnectOptions {
-            max_retry: 0,
-            connect_timeout: Some(timeout.as_secs_f64()),
-            write_timeout: Some(timeout.as_secs_f64()),
-            read_timeout: read_timeout.map(|limit| limit.as_secs_f64()),
-            ..Default::default()
-        },
+        options,
         clock: env.clock.clone(),
         receipt: receipt.clone(),
+        cancel,
     };
     let mut config = StreamableHttpClientTransportConfig::with_uri(url);
     if let Some(token) = auth {

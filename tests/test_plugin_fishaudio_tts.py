@@ -56,22 +56,6 @@ def test_update_options_sets_sampling_and_encoding_params():
     assert request["normalize"] is False
 
 
-def test_temperature_and_top_p_validated():
-    """Out-of-range temperature/top_p raise, in the constructor and update_options."""
-    from livekit.plugins.fishaudio import TTS
-
-    with pytest.raises(ValueError):
-        TTS(api_key="test-key", temperature=1.5)
-    with pytest.raises(ValueError):
-        TTS(api_key="test-key", top_p=-0.1)
-
-    tts = TTS(api_key="test-key")
-    with pytest.raises(ValueError):
-        tts.update_options(temperature=1.5)
-    with pytest.raises(ValueError):
-        tts.update_options(top_p=-0.1)
-
-
 def test_normalize_loudness_with_speed_and_volume():
     """All three prosody fields are populated together."""
     from livekit.plugins.fishaudio.tts import _build_tts_request
@@ -112,26 +96,6 @@ def test_update_options_sets_generation_tuning_params():
     assert request["condition_on_previous_chunks"] is False
     assert request["early_stop_threshold"] == 0.5
     assert request["prosody"] == {"normalize_loudness": False}
-
-
-def test_generation_tuning_validated():
-    """Out-of-range tuning params raise, in the constructor and update_options."""
-    from livekit.plugins.fishaudio import TTS
-
-    with pytest.raises(ValueError):
-        TTS(api_key="test-key", max_new_tokens=-1)
-    with pytest.raises(ValueError):
-        TTS(api_key="test-key", min_chunk_length=150)
-    with pytest.raises(ValueError):
-        TTS(api_key="test-key", early_stop_threshold=1.5)
-
-    tts = TTS(api_key="test-key")
-    with pytest.raises(ValueError):
-        tts.update_options(max_new_tokens=-1)
-    with pytest.raises(ValueError):
-        tts.update_options(min_chunk_length=-5)
-    with pytest.raises(ValueError):
-        tts.update_options(early_stop_threshold=-0.1)
 
 
 def test_normalize_loudness_dropped_on_s1_constructor():

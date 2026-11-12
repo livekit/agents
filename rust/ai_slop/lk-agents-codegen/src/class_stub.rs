@@ -143,6 +143,22 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
         text.push_str(&body);
         out.push(Stub { out: Out { path: format!("_core_{family}.pyi"), text }, names });
     }
+    let constants: Vec<_> = decls
+        .constants
+        .iter()
+        .filter(|constant| matches!(constant.value, crate::decl::ConstValue::NativeString { .. }))
+        .collect();
+    if !constants.is_empty() {
+        let mut text =
+            String::from("# GENERATED FILE -- DO NOT EDIT.\nfrom typing import Final\n\n");
+        for constant in &constants {
+            text.push_str(&format!("{}: Final[str]\n", constant.name));
+        }
+        out.push(Stub {
+            out: Out { path: "_core_constants.pyi".into(), text },
+            names: constants.iter().map(|constant| constant.name.clone()).collect(),
+        });
+    }
     Ok(out)
 }
 

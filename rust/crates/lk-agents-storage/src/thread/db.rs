@@ -17,8 +17,8 @@ pub const STATE_LIMIT: usize = 64 * 1024;
 /// A task listing's filters, order and position: A2A `tasks/list`, or browsing a thread.
 #[derive(Debug, Clone, Default)]
 pub struct TaskQuery {
-    /// Only this lane's tasks when given.
-    pub lane: Option<String>,
+    /// Only this partition's tasks when given.
+    pub partition_key: Option<String>,
     pub status: Option<TaskState>,
     pub order: TaskOrder,
     /// Unix milliseconds: only tasks updated after it.
@@ -42,23 +42,23 @@ pub struct TaskPage {
 /// One journal entry a commit appends, stamped by the caller.
 #[derive(Debug, Clone, Default)]
 pub struct EventWrite {
-    pub ts_ms: i64,
+    pub occurred_at_ms: i64,
     pub r#type: String,
     pub payload: Value,
 }
 
 impl EventWrite {
-    pub fn new(ts_ms: i64, event: JournalEvent) -> Self {
+    pub fn new(occurred_at_ms: i64, event: JournalEvent) -> Self {
         let (r#type, payload) = event.into_row();
-        Self { ts_ms, r#type, payload }
+        Self { occurred_at_ms, r#type, payload }
     }
 }
 
-/// The lane ownership a lease grants: who holds it, under which token, at which version. Every
+/// The partition ownership a lease grants: who holds it, under which token, at which version. Every
 /// managed write is fenced on `(version, token)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fence {
-    pub lane: String,
+    pub partition_key: String,
     pub holder: crate::Holder,
     pub token: String,
     pub version: i64,
@@ -67,6 +67,7 @@ pub struct Fence {
 /// Every write of a run, as one batch.
 #[derive(Debug, Default)]
 pub struct Commit {
+    pub(crate) session_items: Vec<crate::session_snapshot::SessionItemWrite>,
     pub run_id: String,
     pub items: Vec<ItemRow>,
     pub delete_items: Vec<String>,
@@ -76,7 +77,7 @@ pub struct Commit {
     pub state: Option<Value>,
     /// The unchanged routing snapshot still counts toward the aggregate state budget.
     pub loaded_state: Option<Value>,
-    /// The lane's loaded scopes; staged replacements are substituted before size accounting.
+    /// The partition's loaded scopes; staged replacements are substituted before size accounting.
     pub context_scopes: Vec<ContextScope>,
     pub scope_writes: Vec<ContextScopeWrite>,
     /// Application statements a managed turn staged: applied first, and only while the fence
@@ -149,11 +150,11 @@ pub(crate) async fn schema_version(
 
 /// What an acquire writes and loads besides the lease.
 pub struct Acquire<'a> {
-    pub lane: &'a str,
+    pub partition_key: &'a str,
     pub holder: &'a str,
     /// The fresh lease token this attempt writes.
     pub token: &'a str,
-    pub lease_secs: i64,
+    pub lease_ms: i64,
     /// How long a waiting `submitted` row keeps its place in the arrival order.
     pub wait_ms: i64,
     pub run_id: &'a str,
@@ -163,18 +164,18 @@ pub struct Acquire<'a> {
     pub run_started: EventWrite,
     /// What the batch does with `task_id`'s row under the lease.
     pub pickup: TaskPickup,
-    /// Load the lane's newest task rows, this many.
+    /// Load the partition's newest task rows, this many.
     pub tasks_limit: i64,
 }
 
 /// What an acquire loaded, under the lease it took.
 #[derive(Debug)]
 pub struct Acquired {
-    /// The lane's version under the lease taken.
+    /// The partition's version under the lease taken.
     pub version: i64,
     /// This `run_id` already committed; the caller releases without running.
     pub already_committed: bool,
-    pub lane: LaneRow,
+    pub partition_key: PartitionRow,
     /// The whole history, in the same snapshot as the lease, the state and the tasks.
     pub items: Vec<ItemRow>,
     /// The newest task rows, newest first.
@@ -184,7 +185,7 @@ pub struct Acquired {
     pub picked_up: bool,
 }
 
-/// The lease a lane had when an acquire tried it, on the database's clock (unix seconds).
+/// The lease a partition had when an acquire tried it, on the database's clock (Unix milliseconds).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LeaseBefore {
     pub holder: Option<String>,
@@ -205,47 +206,46 @@ impl LeaseBefore {
         self.token.is_some()
             && self.holder.as_deref() != Some(holder)
             && self.until >= self.now
-            && renewed_ago > stale.as_secs_f64()
+            && renewed_ago > stale.as_secs_f64() * 1000.0
     }
 }
 
-/// Takes the lease and loads the lane, one atomic batch, `schema` prepended for a fresh
-/// database; `None` while another holder has the lane. A retried `run_id` loads as
+/// Takes the lease and loads the partition, one atomic batch, `schema` prepended for a fresh
+/// database; `None` while another holder has the partition. A retried `run_id` loads as
 /// `already_committed` and writes nothing.
 pub(crate) async fn acquire(
     conn: &dyn ThreadDbConnection,
     req: &Acquire<'_>,
     schema: Vec<Statement>,
 ) -> Result<(Option<Acquired>, LeaseBefore), StorageError> {
-    let (lane, token) = (req.lane, req.token);
+    let (partition_key, token) = (req.partition_key, req.token);
     let mut b = Batch(schema);
     b.0.extend(framework_schema());
     b.add(PruneAppliedWrites {});
-    b.add(InsertLane { lane });
-    let before = b.add(SelectLeaseBefore { lane });
+    b.add(InsertPartition { partition_key });
+    let before = b.add(SelectLeaseBefore { partition_key });
     let take = b.add(TakeLease {
-        lane,
+        partition_key,
         holder: req.holder,
         token,
-        lease_secs: req.lease_secs,
+        lease_ms: req.lease_ms,
         task_id: req.task_id,
         wait_ms: req.wait_ms,
     });
-    b.add(ClearWaiter { lane, holder: req.holder, token });
     b.add(InsertRunStarted {
-        lane,
+        partition_key,
         token,
-        ts_ms: req.run_started.ts_ms,
+        occurred_at_ms: req.run_started.occurred_at_ms,
         run_id: req.run_id,
         payload: SqlValue::json(&req.run_started.payload),
     });
-    let committed = b.add(SelectCommittedRun { lane, run_id: req.run_id });
+    let committed = b.add(SelectCommittedRun { partition_key, run_id: req.run_id });
     let pickup = (req.pickup == TaskPickup::Claim)
-        .then(|| b.add(PickupTaskHeld { lane, token, task_id: req.task_id }));
-    let items = b.add(SelectItems { lane });
-    let lane_row = b.add(SelectLane { lane });
-    let tasks = b.add(SelectTasks { lane, limit: req.tasks_limit });
-    b.0.push(crate::thread::schema::SelectScopes { lane }.bind());
+        .then(|| b.add(PickupTaskHeld { partition_key, token, task_id: req.task_id }));
+    let items = b.add(SelectItems { partition_key });
+    let partition_row = b.add(SelectPartition { partition_key });
+    let tasks = b.add(SelectTasks { partition_key, limit: req.tasks_limit });
+    b.0.push(crate::thread::schema::SelectScopes { partition_key }.bind());
     let context_scopes = b.0.len() - 1;
     let out = conn.batch(b.0).await?;
     let before = match out.at(before)?.rows().first() {
@@ -261,11 +261,11 @@ pub(crate) async fn acquire(
     let Some(version) = out.at(take)?.first_int() else {
         return Ok((None, before)); // the reads are discarded
     };
-    let lane_row = out
-        .at(lane_row)?
+    let partition_row = out
+        .at(partition_row)?
         .rows()
         .first()
-        .ok_or_else(|| StorageError::Invalid("acquire: no lane row".into()))?;
+        .ok_or_else(|| StorageError::Invalid("acquire: no partition_key row".into()))?;
     let picked_up = match pickup {
         Some(i) => out.at(i)?.rows_affected() > 0,
         None => false,
@@ -273,7 +273,7 @@ pub(crate) async fn acquire(
     let acquired = Acquired {
         version,
         already_committed: !out.at(committed)?.rows().is_empty(),
-        lane: LaneRow::from_row(lane_row)?,
+        partition_key: PartitionRow::from_row(partition_row)?,
         items: rows(&out, items, ItemRow::from_row)?,
         tasks: rows(&out, tasks, TaskRow::from_row)?,
         context_scopes: crate::context::scopes_from_rows(out.at(context_scopes)?.rows())?,
@@ -312,26 +312,30 @@ pub struct ReceiveInput<'a> {
 /// attempt under `token`.
 pub(crate) async fn receive(
     conn: &dyn ThreadDbConnection,
-    lane: &str,
+    partition_key: &str,
     holder: &str,
     token: &str,
-    lease_secs: i64,
+    lease_ms: i64,
+    endpoint: Option<&str>,
     input: ReceiveInput<'_>,
 ) -> Result<Receive, StorageError> {
     let ReceiveInput { task_id, message, data, internal } = input;
     let message_id = message.message_id.as_str();
     let mut b = Batch::default();
-    b.add(InsertLane { lane });
-    let inbox = b.add(InsertInbox { lane, task_id, message_id, message: SqlValue::json(message) });
+    b.add(InsertPartition { partition_key });
+    let inbox =
+        b.add(InsertInbox { partition_key, task_id, message_id, message: SqlValue::json(message) });
     b.add(InsertSubmittedTaskForMessage {
-        lane,
+        endpoint,
+        partition_key,
         task_id,
         message_id,
         data: SqlValue::json(data),
         internal: internal.map(SqlValue::json).unwrap_or(SqlValue::Null),
     });
-    let take = b.add(TakeLeaseForMessage { lane, holder, token, lease_secs, message_id, task_id });
-    let existing = b.add(SelectInboxTask { lane, message_id });
+    let take =
+        b.add(TakeLeaseForMessage { partition_key, holder, token, lease_ms, message_id, task_id });
+    let existing = b.add(SelectInboxTask { partition_key, message_id });
     let out = conn.batch(b.0).await?;
 
     let crate::sql::StatementResult::Exec { rows_affected, .. } = out.at(inbox)? else {
@@ -345,31 +349,26 @@ pub(crate) async fn receive(
     Ok(Receive::Received(out.at(take)?.first_int()))
 }
 
-/// A turn's checkpoint, one batch: the lane's waiter and the task's status.
+/// A cancellation checkpoint: the task's current status.
 pub(crate) async fn checkpoint(
     conn: &dyn ThreadDbConnection,
-    lane: &str,
+    partition_key: &str,
     task_id: &str,
-) -> Result<(Option<String>, Option<TaskState>), StorageError> {
-    let mut b = Batch::default();
-    let waiter = b.add(SelectWaiter { lane });
-    let status = b.add(SelectTaskStatus { lane, task_id });
-    let out = super::read_batch(conn, b.0).await?;
-    let waiter = first_cell(out.at(waiter)?.rows()).and_then(SqlValue::as_str).map(str::to_owned);
-    let status = first_cell(out.at(status)?.rows()).map(TaskState::from_cell).transpose()?;
-    Ok((waiter, status))
+) -> Result<Option<TaskState>, StorageError> {
+    let rows = conn.query(SelectTaskStatus { partition_key, task_id }.bind()).await?;
+    first_cell(&rows).map(TaskState::from_cell).transpose()
 }
 
 /// Takes a `submitted` or `working` row to `working`, one atomic batch. The status the row had
 /// (`working` means a dead holder had it); `None` when it is terminal or missing.
 pub(crate) async fn pickup(
     conn: &dyn ThreadDbConnection,
-    lane: &str,
+    partition_key: &str,
     task_id: &str,
 ) -> Result<Option<TaskState>, StorageError> {
     let mut b = Batch::default();
-    let before = b.add(SelectPickupStatus { lane, task_id });
-    let moved = b.add(PickupTask { lane, task_id });
+    let before = b.add(SelectPickupStatus { partition_key, task_id });
+    let moved = b.add(PickupTask { partition_key, task_id });
     let out = conn.batch(b.0).await?;
     if out.at(moved)?.rows_affected() == 0 {
         return Ok(None);
@@ -378,16 +377,16 @@ pub(crate) async fn pickup(
 }
 
 /// `tasks/cancel`, one batch: the conditional transition, then the row as it is after:
-/// `canceled`, or unchanged when it was already terminal; `None` when the lane has no such task.
+/// `canceled`, or unchanged when it was already terminal; `None` when the partition has no such task.
 pub(crate) async fn cancel(
     conn: &dyn ThreadDbConnection,
-    lane: &str,
+    partition_key: &str,
     task_id: &str,
     metadata: &Map<String, Value>,
 ) -> Result<Option<TaskRow>, StorageError> {
     let mut b = Batch::default();
-    b.add(CancelTask { lane, task_id, metadata: SqlValue::json(metadata) });
-    let row = b.add(SelectTask { lane, task_id });
+    b.add(CancelTask { partition_key, task_id, metadata: SqlValue::json(metadata) });
+    let row = b.add(SelectTask { partition_key, task_id });
     let out = conn.batch(b.0).await?;
     out.at(row)?.rows().first().map(|row| TaskRow::from_row(row)).transpose()
 }
@@ -395,7 +394,7 @@ pub(crate) async fn cancel(
 /// A lease and how long it lasts, for a fenced commit.
 pub struct Fenced<'a> {
     pub fence: &'a Fence,
-    /// Extend the lease by `lease_secs` instead of releasing it.
+    /// Extend the lease by `lease_ms` instead of releasing it.
     pub keep: Option<i64>,
 }
 
@@ -404,7 +403,7 @@ pub struct Fenced<'a> {
 /// `VersionConflict` when the fenced run outlived its lease: nothing was written.
 pub(crate) async fn commit(
     conn: &dyn ThreadDbConnection,
-    lane: &str,
+    partition_key: &str,
     c: &Commit,
     fenced: Option<Fenced<'_>>,
 ) -> Result<Committed, StorageError> {
@@ -424,20 +423,59 @@ pub(crate) async fn commit(
     }
     let fence = fenced.as_ref().map(|fenced| fenced.fence);
     let mut b = Batch::default();
-    add_app_writes(&mut b, lane, c, fence)?;
+    add_app_writes(&mut b, partition_key, c, fence)?;
     match fence {
-        Some(fence) => add_fenced_rows(&mut b, lane, fence, c)?,
-        None => add_unfenced_rows(&mut b, lane, c),
+        Some(fence) => add_fenced_rows(&mut b, partition_key, fence, c, true)?,
+        None => add_unfenced_rows(&mut b, partition_key, c),
     }
-    let reads = add_lane_commit(&mut b, lane, c, fenced.as_ref());
+    let reads = add_partition_commit(&mut b, partition_key, c, fenced.as_ref());
     let out = conn.batch(b.0).await?;
-    reads.committed(&out, lane, fence)
+    reads.committed(&out, partition_key, fence)
+}
+
+/// A fenced intermediate write. It excludes application saves and does not end the run.
+pub(crate) async fn session_checkpoint(
+    conn: &dyn ThreadDbConnection,
+    partition_key: &str,
+    fence: &Fence,
+    id: &str,
+    commit: &Commit,
+) -> Result<(), StorageError> {
+    crate::context::check_state_size(commit.state.as_ref(), commit.context_scopes.iter())?;
+    let mut batch = Batch::default();
+    batch.add(AssertFence { partition_key, version: fence.version, token: &fence.token });
+    batch.add(RecordAppliedWrite { id });
+    add_fenced_rows(&mut batch, partition_key, fence, commit, false)?;
+    batch.add(CheckpointState {
+        partition_key,
+        version: fence.version,
+        token: &fence.token,
+        state: SqlValue::opt_json(commit.state.as_ref()),
+    });
+    match conn.batch(batch.0).await {
+        Err(StorageError::Invalid(error)) => {
+            let rows = conn.query(SelectFence { partition_key }.bind()).await?;
+            let current = rows.first().is_some_and(|row| {
+                row[0].as_i64() == Some(fence.version)
+                    && row[1].as_str() == Some(fence.token.as_str())
+            });
+            if current {
+                Err(StorageError::Invalid(error))
+            } else {
+                Err(StorageError::VersionConflict {
+                    partition_key: partition_key.to_owned(),
+                    expected: fence.version,
+                })
+            }
+        }
+        result => result.map(drop),
+    }
 }
 
 /// The application's own statements, first, behind a fence check when the run holds one.
 fn add_app_writes(
     b: &mut Batch,
-    lane: &str,
+    partition_key: &str,
     c: &Commit,
     fence: Option<&Fence>,
 ) -> Result<(), StorageError> {
@@ -446,7 +484,7 @@ fn add_app_writes(
     }
     if let Some(fence) = fence {
         // arbitrary SQL cannot be made conditional on the fence: abort the batch instead
-        b.add(AssertFence { lane, version: fence.version, token: fence.token.as_str() });
+        b.add(AssertFence { partition_key, version: fence.version, token: fence.token.as_str() });
     }
     for write in &c.app_writes {
         b.0.push(crate::context::transaction::statement(write)?);
@@ -457,17 +495,29 @@ fn add_app_writes(
 /// Context writes, items, deletions, events (`run_ended` last) and tasks, each on the fence.
 fn add_fenced_rows(
     b: &mut Batch,
-    lane: &str,
+    partition_key: &str,
     fence: &Fence,
     c: &Commit,
+    terminal: bool,
 ) -> Result<(), StorageError> {
     let (version, token) = (fence.version, fence.token.as_str());
+    for item in &c.session_items {
+        b.add(InsertSessionItem {
+            partition_key,
+            version,
+            token,
+            key: &item.key,
+            run_id: &c.run_id,
+            occurred_at_ms: c.run_ended.occurred_at_ms,
+            value: SqlValue::json(&item.value),
+        });
+    }
     for write in &c.scope_writes {
-        b.0.push(crate::context::scope_write(lane, write, Some(fence))?);
+        b.0.push(crate::context::scope_write(partition_key, write, Some(fence))?);
     }
     for item in &c.items {
         b.add(InsertItem {
-            lane,
+            partition_key,
             version,
             token,
             id: &item.id,
@@ -476,14 +526,14 @@ fn add_fenced_rows(
         });
     }
     for id in &c.delete_items {
-        b.add(DeleteItem { lane, version, token, id });
+        b.add(DeleteItem { partition_key, version, token, id });
     }
-    for e in c.events.iter().chain([&c.run_ended]) {
+    for e in c.events.iter().chain(terminal.then_some(&c.run_ended)) {
         b.add(InsertEvent {
-            lane,
+            partition_key,
             version,
             token,
-            ts_ms: e.ts_ms,
+            occurred_at_ms: e.occurred_at_ms,
             run_id: &c.run_id,
             event_type: &e.r#type,
             payload: SqlValue::json(&e.payload),
@@ -491,7 +541,7 @@ fn add_fenced_rows(
     }
     for t in &c.tasks {
         b.add(UpsertTask {
-            lane,
+            partition_key,
             version,
             token,
             task_id: &t.task_id,
@@ -502,19 +552,22 @@ fn add_fenced_rows(
             internal: SqlValue::opt_json(t.internal.as_ref()),
         });
     }
+    if terminal {
+        b.add(PruneInbox { partition_key, version, token, drained_id: c.drained_id });
+    }
     Ok(())
 }
 
-/// The append-only rows of a run without a lease, after creating the lane row. Each is guarded on
+/// The append-only rows of a run without a lease, after creating the partition row. Each is guarded on
 /// the run's `run_ended`, written last: a commit re-sent after a lost acknowledgment, or applied
 /// twice, writes nothing the second time.
-fn add_unfenced_rows(b: &mut Batch, lane: &str, c: &Commit) {
-    // no lease was taken, so nothing created the lane row yet
-    b.add(InsertLane { lane });
+fn add_unfenced_rows(b: &mut Batch, partition_key: &str, c: &Commit) {
+    // no lease was taken, so nothing created the partition row yet
+    b.add(InsertPartition { partition_key });
     let run_id = c.run_id.as_str();
     for item in &c.items {
         b.add(InsertItemUnfenced {
-            lane,
+            partition_key,
             run_id,
             id: &item.id,
             message_id: item.message_id.as_deref(),
@@ -522,11 +575,11 @@ fn add_unfenced_rows(b: &mut Batch, lane: &str, c: &Commit) {
         });
     }
     for id in &c.delete_items {
-        b.add(DeleteItemUnfenced { lane, run_id, id });
+        b.add(DeleteItemUnfenced { partition_key, run_id, id });
     }
     for t in &c.tasks {
         b.add(UpsertTaskUnfenced {
-            lane,
+            partition_key,
             run_id,
             task_id: &t.task_id,
             name: t.name.as_deref(),
@@ -538,8 +591,8 @@ fn add_unfenced_rows(b: &mut Batch, lane: &str, c: &Commit) {
     }
     for e in c.events.iter().chain([&c.run_ended]) {
         b.add(InsertEventUnfenced {
-            lane,
-            ts_ms: e.ts_ms,
+            partition_key,
+            occurred_at_ms: e.occurred_at_ms,
             run_id,
             event_type: &e.r#type,
             payload: SqlValue::json(&e.payload),
@@ -547,40 +600,40 @@ fn add_unfenced_rows(b: &mut Batch, lane: &str, c: &Commit) {
     }
 }
 
-/// The lane row's update (fenced: commit, then extend or release the lease) or read, then
+/// The partition row's update (fenced: commit, then extend or release the lease) or read, then
 /// the answer task's read.
-fn add_lane_commit(
+fn add_partition_commit(
     b: &mut Batch,
-    lane: &str,
+    partition_key: &str,
     c: &Commit,
     fenced: Option<&Fenced<'_>>,
 ) -> CommitReads {
     let state = || SqlValue::opt_json(c.state.as_ref());
-    let lane_row = match fenced {
-        Some(Fenced { fence, keep: Some(lease_secs) }) => b.add(CommitAndExtend {
-            lane,
+    let partition_row = match fenced {
+        Some(Fenced { fence, keep: Some(lease_ms) }) => b.add(CommitAndExtend {
+            partition_key,
             version: fence.version,
             token: fence.token.as_str(),
             state: state(),
             drained_id: c.drained_id,
-            lease_secs: *lease_secs,
+            lease_ms: *lease_ms,
         }),
         Some(Fenced { fence, keep: None }) => b.add(CommitAndRelease {
-            lane,
+            partition_key,
             version: fence.version,
             token: fence.token.as_str(),
             state: state(),
             drained_id: c.drained_id,
         }),
-        None => b.add(SelectLane { lane }),
+        None => b.add(SelectPartition { partition_key }),
     };
-    let task = c.read_task.as_ref().map(|id| b.add(SelectTask { lane, task_id: id }));
-    CommitReads { lane_row, task }
+    let task = c.read_task.as_ref().map(|id| b.add(SelectTask { partition_key, task_id: id }));
+    CommitReads { partition_row, task }
 }
 
-/// Where a commit's batch answers with the lane's new version and the answer task.
+/// Where a commit's batch answers with the partition's new version and the answer task.
 struct CommitReads {
-    lane_row: usize,
+    partition_row: usize,
     task: Option<usize>,
 }
 
@@ -588,14 +641,14 @@ impl CommitReads {
     fn committed(
         self,
         out: &BatchResult,
-        lane: &str,
+        partition_key: &str,
         fence: Option<&Fence>,
     ) -> Result<Committed, StorageError> {
         let version = match fence {
-            Some(_) => out.at(self.lane_row)?.first_int(),
+            Some(_) => out.at(self.partition_row)?.first_int(),
             None => {
-                let row = out.at(self.lane_row)?.rows().first();
-                row.map(|row| LaneRow::from_row(row)).transpose()?.map(|l| l.version)
+                let row = out.at(self.partition_row)?.rows().first();
+                row.map(|row| PartitionRow::from_row(row)).transpose()?.map(|l| l.version)
             }
         };
         let task = match self.task {
@@ -605,10 +658,10 @@ impl CommitReads {
         match (fence, version) {
             (_, Some(version)) => Ok(Committed { version, task }),
             (Some(fence), None) => Err(StorageError::VersionConflict {
-                lane: lane.to_owned(),
+                partition_key: partition_key.to_owned(),
                 expected: fence.version,
             }),
-            (None, None) => Err(StorageError::Invalid("commit: no lane row".into())),
+            (None, None) => Err(StorageError::Invalid("commit: no partition_key row".into())),
         }
     }
 }
@@ -620,23 +673,23 @@ pub enum Resolution {
     Committed(Box<Committed>),
     /// Not committed, and the fence still holds: sending the same commit again is safe.
     NotApplied,
-    /// Not committed, and the lane moved on without it: its staged writes are absent.
+    /// Not committed, and the partition moved on without it: its staged writes are absent.
     Rejected,
 }
 
 /// Looks up the authoritative record of `run_id` after a lost acknowledgment, one batch: its
-/// `run_ended`, the lane's fence, and the answer task.
+/// `run_ended`, the partition's fence, and the answer task.
 pub(crate) async fn resolve_commit(
     conn: &dyn ThreadDbConnection,
-    lane: &str,
+    partition_key: &str,
     run_id: &str,
     fence: Option<&Fence>,
     read_task: Option<&str>,
 ) -> Result<Resolution, StorageError> {
     let mut b = Batch::default();
-    let committed = b.add(SelectCommittedRun { lane, run_id });
-    let lane_fence = b.add(SelectFence { lane });
-    let task = read_task.map(|task_id| b.add(SelectTask { lane, task_id }));
+    let committed = b.add(SelectCommittedRun { partition_key, run_id });
+    let partition_fence = b.add(SelectFence { partition_key });
+    let task = read_task.map(|task_id| b.add(SelectTask { partition_key, task_id }));
     let out = super::read_batch(conn, b.0).await?;
     let committed = !out.at(committed)?.rows().is_empty();
     let task = match task {
@@ -645,26 +698,26 @@ pub(crate) async fn resolve_commit(
         }
         _ => None,
     };
-    resolution(fence, committed, out.at(lane_fence)?.rows().first(), task)
+    resolution(fence, committed, out.at(partition_fence)?.rows().first(), task)
 }
 
-/// The resolution of a run whose `run_ended` is there (`committed`) or not, given the lane's
+/// The resolution of a run whose `run_ended` is there (`committed`) or not, given the partition's
 /// fence row as it stands now.
 fn resolution(
     fence: Option<&Fence>,
     committed: bool,
-    lane: Option<&Row>,
+    partition_key: Option<&Row>,
     task: Option<TaskRow>,
 ) -> Result<Resolution, StorageError> {
-    let (version, token) = match lane {
+    let (version, token) = match partition_key {
         Some(row) => {
-            let cells = Cells::new(row, &["version", "lease_token", "lease_until"])?;
+            let cells = Cells::new(row, &["version", "lease_token", "lease_expires_at_ms"])?;
             (cells.get::<i64>(0)?, cells.get::<Option<String>>(1)?)
         }
         None => (0, None),
     };
     if committed {
-        // the version this run's commit made, not the lane's now: others may have committed
+        // the version this run's commit made, not the partition's now: others may have committed
         // since
         let version = fence.map_or(version, |f| f.version + 1);
         return Ok(Resolution::Committed(Box::new(Committed { version, task })));
@@ -690,9 +743,9 @@ pub(crate) async fn list_tasks(
         TaskOrder::Inserted => "i",
     };
     let status = q.status.map_or("*", TaskState::as_str);
-    let filters = ("tasks", order, status, q.updated_after, q.lane.as_deref());
-    let (lane, status, updated_after) =
-        (q.lane.as_deref(), q.status.map(TaskState::as_str), q.updated_after);
+    let filters = ("tasks", order, status, q.updated_after, q.partition_key.as_deref());
+    let (partition_key, status, updated_after) =
+        (q.partition_key.as_deref(), q.status.map(TaskState::as_str), q.updated_after);
     let page_size = q.page_size.clamp(1, MAX_TASK_PAGE);
     let mut b = Batch::default();
     let page = match q.order {
@@ -700,7 +753,7 @@ pub(crate) async fn list_tasks(
             let (before_at, before_id) =
                 Cursor::position(q.page_token.as_deref(), filters, (i64::MAX, String::new()))?;
             b.add(SelectThreadTasksPage {
-                lane,
+                partition_key,
                 status,
                 updated_after,
                 before_at,
@@ -711,7 +764,7 @@ pub(crate) async fn list_tasks(
         TaskOrder::Inserted => {
             let after = Cursor::position(q.page_token.as_deref(), filters, 0_i64)?;
             b.add(SelectThreadTasksInserted {
-                lane,
+                partition_key,
                 status,
                 updated_after,
                 after,
@@ -719,7 +772,7 @@ pub(crate) async fn list_tasks(
             })
         }
     };
-    let count = b.add(CountThreadTasks { lane, status, updated_after });
+    let count = b.add(CountThreadTasks { partition_key, status, updated_after });
     let out = super::read_batch(conn, b.0).await?;
 
     let (mut tasks, mut positions) = (Vec::new(), Vec::new());
@@ -737,7 +790,7 @@ pub(crate) async fn list_tasks(
     tasks.truncate(page_size as usize);
     let next_page_token = match (tasks.last(), q.order) {
         (Some(last), TaskOrder::Updated) if more => {
-            Cursor::encode(filters, (last.updated_at, &last.task_id))
+            Cursor::encode(filters, (last.updated_at_ms, &last.task_id))
         }
         (Some(_), TaskOrder::Inserted) if more => {
             Cursor::encode(filters, positions[tasks.len() - 1])
@@ -756,38 +809,39 @@ pub struct ItemPage {
     pub next: Option<String>,
 }
 
-/// An item of a page: its position in the thread's history and its lane.
+/// An item of a page: its position in the thread's history and its partition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PagedItem {
     pub seq: i64,
-    pub lane: String,
+    pub partition_key: String,
     pub item: ItemRow,
 }
 
 /// The largest item page.
 const MAX_ITEM_PAGE: i64 = 500;
 
-/// One page of the thread's items after `cursor`, of `lane` when given. A cursor, opaque to
-/// callers, is bound to the lane filter it was made under: another filter's is refused.
+/// One page of the thread's items after `cursor`, of `partition_key` when given. A cursor, opaque to
+/// callers, is bound to the partition filter it was made under: another filter's is refused.
 pub(crate) async fn list_items(
     conn: &dyn ThreadDbConnection,
-    lane: Option<&str>,
+    partition_key: Option<&str>,
     cursor: Option<&str>,
     limit: i64,
 ) -> Result<ItemPage, StorageError> {
-    let scope = ("items", lane);
+    let scope = ("items", partition_key);
     let after = Cursor::position(cursor, scope, 0_i64)?;
     let limit = limit.clamp(1, MAX_ITEM_PAGE);
-    let rows = conn.query(SelectItemsAfter { lane, after, limit: limit + 1 }.bind()).await?;
+    let rows =
+        conn.query(SelectItemsAfter { partition_key, after, limit: limit + 1 }.bind()).await?;
     let mut items = Vec::new();
     let mut last = 0;
     for row in &rows {
-        let (cells, item) = Cells::followed_by::<ItemRow>(row, &["rowid", "lane", "seq"])?;
+        let (cells, item) = Cells::followed_by::<ItemRow>(row, &["rowid", "partition_key", "seq"])?;
         let pos: i64 = cells.get(0)?;
         if items.len() as i64 == limit {
             return Ok(ItemPage { items, next: Some(Cursor::encode(scope, last)) });
         }
-        items.push(PagedItem { seq: cells.get(2)?, lane: cells.get(1)?, item });
+        items.push(PagedItem { seq: cells.get(2)?, partition_key: cells.get(1)?, item });
         last = pos;
     }
     Ok(ItemPage { items, next: None })
@@ -795,9 +849,14 @@ pub(crate) async fn list_items(
 
 /// A turn's `submitted` row, before the lease is tried; changes nothing when its task or message
 /// id already had one.
-pub(crate) fn submitted_task<'a>(lane: &'a str, task: &'a TaskWrite) -> InsertSubmittedTask<'a> {
+pub(crate) fn submitted_task<'a>(
+    partition_key: &'a str,
+    task: &'a TaskWrite,
+    endpoint: Option<&'a str>,
+) -> InsertSubmittedTask<'a> {
     InsertSubmittedTask {
-        lane,
+        endpoint,
+        partition_key,
         task_id: &task.task_id,
         name: task.name.as_deref(),
         message_id: task.message_id.as_deref(),
@@ -812,19 +871,19 @@ mod tests {
 
     fn fence() -> Fence {
         Fence {
-            lane: "front-desk".into(),
+            partition_key: "front-desk".into(),
             holder: crate::Holder::new("w1"),
             token: "lease_a".into(),
             version: 3,
         }
     }
 
-    fn lane(version: i64, token: Option<&str>) -> Row {
+    fn partition(version: i64, token: Option<&str>) -> Row {
         vec![SqlValue::Int(version), token.map_or(SqlValue::Null, Into::into), SqlValue::Int(0)]
     }
 
-    fn resolve(fence: Option<&Fence>, committed: bool, lane: Row) -> Resolution {
-        resolution(fence, committed, Some(&lane), None).unwrap()
+    fn resolve(fence: Option<&Fence>, committed: bool, partition_key: Row) -> Resolution {
+        resolution(fence, committed, Some(&partition_key), None).unwrap()
     }
 
     // A lost acknowledgment is decided by the run's own record, never guessed.
@@ -832,13 +891,13 @@ mod tests {
     fn a_lost_commit_resolves_by_its_run_ended_and_the_fence() {
         let f = fence();
         let committed = Resolution::Committed(Box::new(Committed { version: 4, task: None }));
-        assert_eq!(resolve(Some(&f), true, lane(4, None)), committed);
-        // The lane moved on after the lost commit; the run still reports its own commit's version.
-        assert_eq!(resolve(Some(&f), true, lane(9, Some("lease_c"))), committed);
-        assert_eq!(resolve(Some(&f), false, lane(3, Some("lease_a"))), Resolution::NotApplied);
-        assert_eq!(resolve(Some(&f), false, lane(3, Some("lease_b"))), Resolution::Rejected);
-        assert_eq!(resolve(Some(&f), false, lane(4, None)), Resolution::Rejected);
-        assert_eq!(resolve(None, false, lane(0, None)), Resolution::NotApplied);
+        assert_eq!(resolve(Some(&f), true, partition(4, None)), committed);
+        // The partition moved on after the lost commit; the run still reports its own commit's version.
+        assert_eq!(resolve(Some(&f), true, partition(9, Some("lease_c"))), committed);
+        assert_eq!(resolve(Some(&f), false, partition(3, Some("lease_a"))), Resolution::NotApplied);
+        assert_eq!(resolve(Some(&f), false, partition(3, Some("lease_b"))), Resolution::Rejected);
+        assert_eq!(resolve(Some(&f), false, partition(4, None)), Resolution::Rejected);
+        assert_eq!(resolve(None, false, partition(0, None)), Resolution::NotApplied);
     }
 
     /// Answers every batch with no results.

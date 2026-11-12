@@ -39,8 +39,8 @@ await storage.aclose()
 | `GetThreadTasks` | `thread_id`, optional `status` | A2A task records: `task_id`, optional task label, `status`, `updated_at` |
 
 A thread is a `ThreadInfo`: `thread_id`, `scope`, `attributes`,
-`created_at`, `last_active`, `expires_at` (0: never), `idle_ttl_seconds`,
-`database_id`. Times are timestamps and TTLs durations on the wire; the
+`created_at`, `last_active`, `expires_at` (0: never) and `idle_ttl_seconds`; its
+database has its id. Times are timestamps and TTLs durations on the wire; the
 Python client reads and writes them as seconds. `list_threads` returns a
 `ThreadPage`, `threads` and the `before` cursor, empty on the last page. A
 thread lives in the project's data region and belongs to the project, not
@@ -73,17 +73,17 @@ await thread.update(attributes={"title": "Renewal"})
 await thread.delete()
 
 items = await thread.chat_history()                       # list[ChatItem]: the thread's history
-items = await thread.chat_history(agent="eligibility")    # one agent's lane of the thread
+items = await thread.chat_history(agent="eligibility")    # one agent's partition of the thread
 ```
 
 `create`, `get`, `list`, `info`, `update`, `delete`, and `chat_history`
-use the threads service. Thread history selects configured transport lanes;
+use the threads service. Thread history selects configured transport partitions;
 it does not flatten private `TextSessionState` frame histories. See
 [thread reads](#reading-a-thread).
 
 An endpoint client owns message delivery, task progress, replies, and
 cancellation. A thread ID alone does not choose an endpoint or an agent.
-Inside a managed run, `ctx.thread` also exposes scoped lane access.
+Inside a managed run, `ctx.thread` also exposes scoped partition access.
 `TextSession` coordinates execution separately; a thread handle is not a
 rehydrated session.
 
@@ -101,10 +101,10 @@ stable and yours to store. A tagging feature is one table of your own.
 A thread's history and its tasks come from the threads service's
 `GetThreadItems` and `GetThreadTasks`, under the project credential or a
 grant with `read`; the agent serves no content routes of its own. The
-state, lanes and journal are not readable through these public APIs; only
+state, partitions and journal are not readable through these public APIs; only
 the [admin API](#admin-reads) reads them. Inside a run,
 `ctx.thread` is the durable thread: `info()`, `chat_history(agent=)`,
-`update(attributes=)` and `lane(...).tasks(...)`
+`update(attributes=)` and `partition(...).tasks(...)`
 ([threads.md](threads.md)).
 
 ## Tokens
@@ -133,7 +133,7 @@ token = credentials.thread_grant_token(
 `AuthError`s an endpoint answers with, outside JSON-RPC.
 
 `AgentThreadGrant` takes `scope` or `thread_ids` and the flags `create`,
-`write` and `read` ([a2a.md](protocol/a2a.md), Tokens); `can_create()`,
+`write`, `read` and `sql` ([auth](auth.md#the-thread-grant)); never give a browser `sql`; `can_create()`,
 `can_list(scope)`, `can_read(thread)`, `can_write(thread)` and
 `can_delete(thread)` are its checks. Its `list` and `delete` flags are the
 threads service's browser operations
@@ -183,7 +183,7 @@ endpoint on the project's own origin (`LIVEKIT_URL`, with `LIVEKIT_API_KEY`
 and `LIVEKIT_API_SECRET` set), each call mints a one-hour thread grant,
 identity `delegate`, with `read` and `write` on the caller's thread, and shares
 that thread with the endpoint: the message carries it as `contextId`, and the
-endpoint answers in it on its own lane
+endpoint answers in it on its own partition
 ([two brains, one thread](internals/storage.md#two-brains-one-thread)). The
 endpoint finds that thread in the project's threads service, so the caller
 needs the same storage: a caller without storage, whose thread lives only in
@@ -233,15 +233,16 @@ unsupported.
 
 ## Admin reads
 
-The developer console reads a thread's state, lanes and journal through the
+Administrative tools read a thread's state, partitions and journal through the
 AgentDB admin service, `AgentDBService` in livekit/protocol
 `livekit_agentdb.proto`, served by LiveKit's public API under
 `/v0/projects/p_/databases`: `GetDatabase`, `ListDatabases`, `DumpDatabase` (a
-consistent SQLite export of a thread's database, `ThreadInfo.database_id`, as a
+consistent SQLite export of a database, a thread's by its thread id, as a
 time-limited download URL), `CreateDatabase` and `DeleteDatabase`; queries go
 over the data plane ([connection](internals/storage.md#connection-and-authentication)).
-It is admin-only: it requires an `agent.databaseAdmin` token minted from the
-project's key and secret, runs on a developer's backend, and is never exposed to
+Each call takes a token minted from the project's key and secret for what it touches:
+`agentDatabase` `create` or `list`, `read` or `delete` on the database it names, or
+`agentThread` `sql` on a thread's ([auth](auth.md#grants)). It runs on a developer's backend and is never exposed to
 a customer frontend. Customer frontends use only the threads API and A2A above,
 under an authorized grant.
 

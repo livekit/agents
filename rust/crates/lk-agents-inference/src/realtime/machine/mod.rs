@@ -6,7 +6,7 @@ use lk_agents_abi::ToolSpec;
 use lk_agents_abi::{ChatContext, ChatItem};
 use lk_agents_abi::{Maybe, Ts};
 
-use crate::realtime::dialect::{Dialect, TurnDetection};
+use crate::realtime::dialect::{Dialect, server_turn_taking};
 use crate::realtime::protocol::{self as wire, TranscriptionCompleted};
 use crate::realtime::remote::RemoteChatContext;
 use lk_agents_abi::llm::realtime::{
@@ -28,7 +28,7 @@ mod incoming;
 pub use context::ContextRetirement;
 pub use effects::Outgoing;
 mod options;
-pub use options::{OptionsPatch, SessionOptions};
+pub use options::{OptionsPatch, SessionOptions, transcription};
 #[cfg(test)]
 #[path = "machine_tests.rs"]
 mod tests;
@@ -233,12 +233,7 @@ impl RealtimeMachine {
     fn transcription_metrics(&self, now: Ts, t: &TranscriptionCompleted) -> Option<Event> {
         use lk_agents_abi::metrics::base::SttMetrics;
         let usage = t.usage.as_ref()?;
-        let model = self
-            .opts
-            .transcription
-            .as_ref()
-            .and_then(|v| v.get("model"))
-            .and_then(serde_json::Value::as_str);
+        let model = self.opts.transcription.as_ref().and_then(|t| t.model.as_deref());
         let (audio_duration, tokens) = match usage {
             wire::TranscriptionUsage::Tokens(tokens) => (None, tokens.clone()),
             wire::TranscriptionUsage::Duration { seconds } => {
@@ -847,7 +842,7 @@ impl RealtimeMachine {
             return Step::default();
         }
         self.opts.apply(&patch);
-        let server = TurnDetection::server_turn_taking(self.opts.turn_detection.as_ref());
+        let server = server_turn_taking(self.opts.turn_detection.as_ref());
         self.caps.turn_detection = server;
         self.caps.auto_turn_reply_generation = server;
         self.caps.user_transcription = self.opts.transcription.is_some();

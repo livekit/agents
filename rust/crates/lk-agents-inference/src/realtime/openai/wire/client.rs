@@ -1,6 +1,8 @@
 use super::*;
-use crate::realtime::dialect::TurnDetection;
-use serde::Serialize;
+use lk_agents_abi::llm::realtime_options::{
+    AudioTranscription, NoiseReduction, Reasoning, Tracing, Truncation, TurnDetection, Voice,
+};
+use serde::{Serialize, Serializer};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
@@ -103,7 +105,22 @@ pub fn tool_spec(tool: &lk_agents_abi::ToolSpec) -> Tool {
     })
 }
 
-/// An absent field leaves the remote option alone; Some(Value::Null) clears it.
+/// The reply's token cap: a count, or `"inf"` for the model's limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaxOutputTokens(pub Option<u32>);
+
+impl Serialize for MaxOutputTokens {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            Some(n) => s.serialize_u32(n),
+            None => s.serialize_str("inf"),
+        }
+    }
+}
+
+/// A session field: an absent field leaves the remote option alone, `Some(None)` clears it.
+pub type Patch<T> = Option<Option<T>>;
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(tag = "type", rename = "realtime")]
 pub struct SessionConfig {
@@ -112,19 +129,19 @@ pub struct SessionConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_modalities: Option<Vec<Modality>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<Value>,
+    pub max_output_tokens: Option<MaxOutputTokens>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<Choice>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tracing: Option<Value>,
+    pub tracing: Patch<Tracing>,
     #[serde(skip_serializing_if = "AudioConfig::is_empty")]
     pub audio: AudioConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub truncation: Option<Value>,
+    pub truncation: Patch<Truncation>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<Value>,
+    pub reasoning: Patch<Reasoning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
 }
@@ -155,11 +172,11 @@ pub struct AudioInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<AudioFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub noise_reduction: Option<Value>,
+    pub noise_reduction: Patch<NoiseReduction>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub transcription: Option<Value>,
+    pub transcription: Patch<AudioTranscription>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_detection: Option<Option<TurnDetection>>,
+    pub turn_detection: Patch<TurnDetection>,
 }
 impl AudioInput {
     fn is_empty(&self) -> bool {
@@ -177,7 +194,7 @@ pub struct AudioOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speed: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub voice: Option<Value>,
+    pub voice: Option<Voice>,
 }
 impl AudioOutput {
     fn is_empty(&self) -> bool {
@@ -226,11 +243,11 @@ pub struct BetaSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     modalities: Option<Vec<Modality>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    max_response_output_tokens: Option<Value>,
+    max_response_output_tokens: Option<MaxOutputTokens>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<Choice>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tracing: Option<Value>,
+    tracing: Option<Tracing>,
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -240,13 +257,13 @@ pub struct BetaSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     output_audio_format: Option<BetaAudioFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    input_audio_transcription: Option<Value>,
+    input_audio_transcription: Patch<AudioTranscription>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    input_audio_noise_reduction: Option<Value>,
+    input_audio_noise_reduction: Patch<NoiseReduction>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    turn_detection: Option<Option<TurnDetection>>,
+    turn_detection: Patch<TurnDetection>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    voice: Option<Value>,
+    voice: Option<Voice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     speed: Option<f64>,
 }
@@ -270,7 +287,7 @@ impl From<SessionConfig> for BetaSession {
             }),
             max_response_output_tokens: s.max_output_tokens,
             tool_choice: s.tool_choice,
-            tracing: s.tracing.filter(|v| !v.is_null()),
+            tracing: s.tracing.flatten(),
             instructions: s.instructions,
             tools: s.tools,
             input_audio_format: s.audio.input.format.map(|_| BetaAudioFormat::Pcm16),
@@ -292,13 +309,13 @@ pub struct XaiSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    voice: Option<Value>,
+    voice: Option<Voice>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    turn_detection: Option<Option<TurnDetection>>,
+    turn_detection: Patch<TurnDetection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<Tool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning: Option<Value>,
+    reasoning: Patch<Reasoning>,
     #[serde(skip_serializing_if = "AudioConfig::is_empty")]
     audio: AudioConfig,
 }

@@ -22,7 +22,7 @@ for pair in "VOICE_GATE_SEEDS=$gate_seeds" "VOICE_SURVEY_SEEDS=$survey_seeds" \
 done
 
 py=${PYO3_PYTHON:-$PWD/../.venv/bin/python}
-agent_python_path=${PYTHONPATH:-$PWD/../livekit-agents-next}
+agent_python_path=${PYTHONPATH:-$PWD/../livekit-agents}
 python_home=$("$py" -c 'import sys; print(sys.base_prefix)')
 site_packages=$("$py" -c 'import site; print(site.getsitepackages()[0])')
 

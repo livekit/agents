@@ -1,12 +1,13 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lk_agents_abi::{
-    AudioFrame, SynthesizedAudio, TranscriptChunk, Ts, Tts, TtsCapabilities, TtsSink, TtsSource,
+    AudioFrame, SpeechChunk, SynthesizedAudio, TranscriptChunk, Ts, Tts, TtsCapabilities, TtsSink,
+    TtsSource,
     errors::{ApiError, ProviderError},
-    utils::stream::{Closed, StreamInput, StreamOutput},
+    utils::stream::{Closed, Entry, StreamInput, StreamOutput},
 };
-use lk_agents_core::tts::markup::TranscriptMarkupStripper;
-use tokio::sync::mpsc;
+use lk_agents_core::markup::TranscriptMarkupStripper;
+use tokio::sync::{Notify, mpsc};
 
 use super::{
     Control, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot, Timing, delay,
@@ -29,6 +30,11 @@ const FRAME_SAMPLES: usize = FRAME_MS * SAMPLE_RATE as usize / 1000;
 /// Characters a word of the agent's lines takes, its space included (`input::AGENT_TURNS`).
 const CHARS_PER_WORD: f64 = 5.3;
 
+/// Text a held voice's input takes before refusing a push, as a host TTS's input refuses once
+/// its loop stops taking it (`py_streams::SINK_QUEUE`, smaller so a case reaches it). A `send`
+/// waits for the voice instead.
+pub const HELD_INPUT: usize = 4;
+
 pub struct FakeTts {
     registry: Arc<Registry>,
     /// Draws each stream's time to first audio; `None` answers at once.
@@ -39,6 +45,8 @@ pub struct FakeTts {
     alignment: TtsAlignment,
     /// The markup dialect the voice speaks (`""` for none).
     markup: &'static str,
+    /// Whether its stage paces the chunks it is sent.
+    pacing: bool,
 }
 
 pub struct TtsOptions {
@@ -47,13 +55,14 @@ pub struct TtsOptions {
     pub streaming: bool,
     pub alignment: TtsAlignment,
     pub markup: &'static str,
+    pub pacing: bool,
 }
 
 impl FakeTts {
     pub fn new(registry: Arc<Registry>, options: TtsOptions) -> Arc<Self> {
-        let TtsOptions { latency, timing, streaming, alignment, markup } = options;
+        let TtsOptions { latency, timing, streaming, alignment, markup, pacing } = options;
         let latency = latency.map(|seed| Mutex::new(fastrand::Rng::with_seed(seed)));
-        Arc::new(FakeTts { registry, latency, timing, streaming, alignment, markup })
+        Arc::new(FakeTts { registry, latency, timing, streaming, alignment, markup, pacing })
     }
 }
 
@@ -63,6 +72,8 @@ pub struct Synthesis {
     registry: Arc<Registry>,
     state: Mutex<SynthesisState>,
     stamps: bool,
+    /// The voice stopped holding its input: released, or failed.
+    unheld: Notify,
 }
 
 struct SynthesisState {
@@ -131,6 +142,11 @@ impl Synthesis {
         }
     }
 
+    fn full(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        state.held && state.sender.is_some() && state.queued.len() >= HELD_INPUT
+    }
+
     fn end_if_done(state: &mut SynthesisState) {
         if state.ended && !state.held && state.queued.is_empty() {
             state.sender.take();
@@ -149,8 +165,10 @@ impl Synthesis {
                     self.emit(&mut state, text);
                 }
                 Self::end_if_done(&mut state);
+                self.unheld.notify_waiters();
             }
             Input::TtsFail { .. } => {
+                self.unheld.notify_waiters();
                 if let Some(sender) = state.sender.take() {
                     return sender
                         .send(Err(ProviderError::Local(ApiError::new(
@@ -203,15 +221,23 @@ impl Tts for FakeTts {
         self.markup.to_owned()
     }
 
+    fn options(&self) -> lk_agents_abi::tts::types::TtsOptions {
+        lk_agents_abi::tts::types::TtsOptions {
+            pacing: self
+                .pacing
+                .then(lk_agents_abi::tts::stream_pacer::SentenceStreamPacer::default),
+            ..lk_agents_abi::tts::types::TtsOptions::default()
+        }
+    }
+
     fn synthesize<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        text: &'a str,
+        chunk: &'a SpeechChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            let (sink, source) =
-                self.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await?.split();
-            sink.push(text.into())?;
+            let (sink, source) = self.stream(&lk_agents_abi::telemetry::Cx::NONE).await?.split();
+            sink.push(chunk.clone())?;
             sink.end_input();
             Ok(source)
         })
@@ -220,7 +246,6 @@ impl Tts for FakeTts {
     fn stream(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        _: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -247,6 +272,7 @@ impl Tts for FakeTts {
                     said: TranscriptMarkupStripper::new(),
                 }),
                 stamps: self.alignment == TtsAlignment::Words,
+                unheld: Notify::new(),
             });
             let slot =
                 self.registry.register(Kind::Tts, Detail::None, Control::Tts(synthesis.clone()));
@@ -300,13 +326,21 @@ fn stamps(text: &str, at: f64, span: f64) -> Vec<TranscriptChunk> {
 
 struct InputSide(Arc<Synthesis>);
 
-impl StreamInput<String> for InputSide {
-    fn push(&self, text: String) -> Result<(), ProviderError> {
+/// The provider's input: it speaks each chunk's text, and stamps what it hears itself say of it
+/// (markup taken as instructions, a cue it echoes stamped as a word, as a real voice does).
+impl StreamInput<SpeechChunk> for InputSide {
+    fn push(&self, chunk: SpeechChunk) -> Result<(), ProviderError> {
+        let text = chunk.text;
         if text.trim().is_empty() {
             return Ok(());
         }
         let mut state = self.0.state.lock().unwrap();
         if state.held {
+            if state.queued.len() >= HELD_INPUT {
+                return Err(ProviderError::Local(ApiError::new(
+                    "the voice is not taking its input",
+                )));
+            }
             state.queued.push(text);
         } else {
             self.0.emit(&mut state, text);
@@ -322,6 +356,33 @@ impl StreamInput<String> for InputSide {
         let mut state = self.0.state.lock().unwrap();
         state.ended = true;
         Synthesis::end_if_done(&mut state);
+    }
+
+    /// Waits while the held voice's input is full, then hands `entry` over.
+    fn send(
+        &self,
+        entry: Entry<SpeechChunk>,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
+        let input = InputSide(self.0.clone());
+        Box::pin(async move {
+            loop {
+                let unheld = input.0.unheld.notified();
+                tokio::pin!(unheld);
+                unheld.as_mut().enable();
+                if !input.0.full() {
+                    break;
+                }
+                unheld.await;
+            }
+            match entry {
+                Entry::Item(text) => input.push(text),
+                Entry::Flush => input.flush(),
+                Entry::EndInput => {
+                    input.end_input();
+                    Ok(())
+                }
+            }
+        })
     }
 }
 

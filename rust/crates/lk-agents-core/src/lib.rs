@@ -10,6 +10,7 @@ pub mod assertions;
 pub mod effects;
 pub mod lexer;
 pub mod llm;
+pub mod markup;
 pub mod mcp;
 pub mod metrics;
 pub mod request;
@@ -19,7 +20,6 @@ pub mod tokenize;
 pub mod tool_calls;
 pub mod tool_outcome;
 pub mod tool_search;
-pub mod tts;
 pub mod usage;
 
 pub use agent::AgentError;

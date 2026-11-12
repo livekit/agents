@@ -8,7 +8,7 @@ use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, PlayoutStep, ToolStep};
 use lk_agents_abi::llm::toolsets::SESSION_TOOLSET_SCOPE;
 use lk_agents_abi::{ChatItem, Modality, Ts};
-use lk_agents_core::tts::markup::ChatMessageExt;
+use lk_agents_core::markup::ChatMessageExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -109,6 +109,12 @@ pub(crate) struct AgentActivity {
         std::collections::VecDeque<(crate::agent_session::RequestId, crate::generation::ReplyPlan)>,
     /// Keeps the agent `thinking` across a filler `say` from inside a tool.
     pub(in crate::agent_session) tools_in_flight: BTreeSet<SpeechId>,
+    /// Replies the person cut (their interruption or the host's `interrupt()`), released once
+    /// in their tools; never a cut the framework makes, such as a VoiceTask taking the floor.
+    pub(in crate::agent_session) cut_by_person: BTreeSet<SpeechId>,
+    /// Interrupted replies released while their tools run: each keeps its reply run until its
+    /// own end or its interruption watchdog.
+    pub(in crate::agent_session) outliving_tools: BTreeSet<SpeechId>,
     /// The step's first frame transitions, once. Cleared when the step is spoken.
     spoke: BTreeSet<SpeechId>,
     /// Compared at the end of every cycle to announce floor changes.
@@ -696,6 +702,8 @@ impl AgentActivity {
             speech_history: Default::default(),
             reply_plans: Default::default(),
             tools_in_flight: Default::default(),
+            cut_by_person: Default::default(),
+            outliving_tools: Default::default(),
             spoke: Default::default(),
             announced_current_speech: None,
             interrupt_waiters: Vec::new(),
@@ -780,6 +788,13 @@ impl AgentActivity {
     }
     pub(crate) fn finish_step(&mut self) {
         self.live_speech_at_final = false;
+    }
+    /// When the earliest call still running of a reply released at its interruption was made.
+    pub(crate) fn outliving_since(&self) -> Option<std::time::SystemTime> {
+        (self.outliving_tools.iter())
+            .flat_map(|speech| self.tools.live(*speech))
+            .map(|running| running.call.created_at)
+            .min()
     }
     pub(crate) fn retire_speech_later(&mut self, speech: SpeechId) {
         self.speech_scheduler.retire_later(speech);

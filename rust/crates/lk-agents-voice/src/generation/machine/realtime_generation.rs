@@ -20,6 +20,7 @@ pub struct RealtimeGeneration {
     received: bool,
     finished: bool,
     heard: Heard,
+    recorded_prefix: usize,
     segment_start: usize,
     has_audio_output: bool,
 }
@@ -64,6 +65,7 @@ impl Default for RealtimeGeneration {
             received: false,
             finished: false,
             heard: Heard::complete(String::new(), Duration::ZERO, 0),
+            recorded_prefix: 0,
             segment_start: 0,
             has_audio_output: false,
         }
@@ -83,6 +85,20 @@ impl RealtimeGeneration {
         self.heard.played += part.played;
         self.heard.frames += part.frames;
         self.heard.complete &= part.complete;
+    }
+
+    /// Recovery observes confirmed playout only, including when generated transcript runs ahead.
+    pub fn take_progress(
+        &mut self,
+        accumulator: &crate::generation::TurnAccumulator,
+        default_id: &str,
+    ) -> Option<lk_agents_abi::ChatMessage> {
+        if self.heard.text.len() == self.recorded_prefix {
+            return None;
+        }
+        self.recorded_prefix = self.heard.text.len();
+        accumulator
+            .progress_text(self.message_id.as_deref().unwrap_or(default_id), &self.heard.text)
     }
 
     pub fn finished(&self) -> bool {
@@ -113,10 +129,15 @@ impl RealtimeGeneration {
     /// words ends nothing: its text leg never opened a segment, and an audio end alone would open
     /// one the next speech's words pair with; nor does one whose chain was cancelled with the
     /// words still in it (a cut `transcription_node`).
-    pub fn end_unvoiced(&self, heard: &Heard, has_text_output: bool, delivered: bool) -> bool {
+    pub fn end_unvoiced(
+        &self,
+        heard: &Heard,
+        has_transcription_output: bool,
+        delivered: bool,
+    ) -> bool {
         heard.frames == 0
             && heard.complete
-            && has_text_output
+            && has_transcription_output
             && delivered
             && !self.text().is_empty()
             && self.has_audio_output
@@ -356,6 +377,35 @@ pub fn unheard_messages(events: impl IntoIterator<Item = Event>) -> Vec<rt::Trun
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recovery_progress_excludes_generated_but_unheard_words() {
+        let mut state = super::RealtimeGeneration {
+            message_id: Some("stable-message".into()),
+            segments: vec!["generated but not heard".into()],
+            ..Default::default()
+        };
+        let accumulator = crate::generation::TurnAccumulator::new(std::time::UNIX_EPOCH, None);
+        assert!(state.take_progress(&accumulator, "fallback").is_none());
+        state.played(crate::transcription::Heard::complete(
+            "heard",
+            std::time::Duration::from_secs(1),
+            1,
+        ));
+        let first = state.take_progress(&accumulator, "fallback").unwrap();
+        assert_eq!(first.id, "stable-message");
+        assert!(first.interrupted);
+        assert_eq!(first.raw_text_content().as_deref(), Some("heard"));
+        assert!(state.take_progress(&accumulator, "fallback").is_none());
+        state.played(crate::transcription::Heard::complete(
+            " more",
+            std::time::Duration::from_secs(1),
+            1,
+        ));
+        let second = state.take_progress(&accumulator, "fallback").unwrap();
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.raw_text_content().as_deref(), Some("heard more"));
+        assert_eq!(first.raw_text_content().as_deref(), Some("heard"));
+    }
     use super::*;
 
     fn observed() -> RealtimeGenerationObservation {
@@ -393,5 +443,85 @@ mod tests {
             !playout.end_unvoiced(&silent, true, false),
             "words a cancelled transcription chain never delivered end nothing"
         );
+    }
+
+    /// A text-only realtime message is voiced by the session's TTS once, and stays text with no TTS.
+    /// https://github.com/livekit/agents/issues/2471 https://github.com/livekit/agents/issues/2694
+    /// https://github.com/livekit/agents/pull/1121 https://github.com/livekit/agents/issues/1143
+    #[test]
+    fn a_text_only_realtime_message_is_voiced_by_the_tts_once() {
+        let started = |id: &str| {
+            Event::MessageStarted(rt::MessageStarted { message_id: id.into(), response_id: None })
+        };
+        let delta = |id: &str, text: &str| {
+            Event::TextDelta(rt::TextDelta {
+                message_id: id.into(),
+                response_id: None,
+                delta: text.into(),
+                start_time: None,
+            })
+        };
+        let text_only = |id: &str| {
+            Event::MessageModalities(rt::MessageModalities {
+                message_id: id.into(),
+                response_id: None,
+                modalities: Modalities::TextOnly,
+            })
+        };
+        let done = |id: &str| {
+            Event::MessageDone(rt::MessageDone { message_id: id.into(), response_id: None })
+        };
+        let with_tts = || RealtimeGenerationObservation {
+            interrupted: false,
+            synthesizing: false,
+            tts_available: true,
+        };
+        let mut playout = RealtimeGeneration::default();
+        playout.bind(true);
+        let mut voiced = Vec::new();
+        for (id, words) in [("m1", "Your table is booked."), ("m2", "Anything else?")] {
+            for event in [started(id), delta(id, words), text_only(id), done(id)] {
+                match playout.handle(event, with_tts()) {
+                    Some(RealtimeGenerationEffect::VoiceText { segment, text }) => {
+                        voiced.push((segment, text))
+                    }
+                    Some(RealtimeGenerationEffect::Failed(error)) => panic!("{error}"),
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(
+            voiced,
+            [(0, "Your table is booked.".to_owned()), (1, "Anything else?".to_owned())]
+        );
+        assert!(!playout.finished(), "a text-only message does not end the reply");
+
+        // Cut after a few words: each text-only message is truncated as text.
+        playout.played(Heard::complete("Your", Duration::ZERO, 0));
+        let cuts = playout.heard_until();
+        assert!(cuts.iter().all(|cut| !cut.has_audio && cut.audio_end_ms == 0), "{cuts:?}");
+        assert_eq!(cuts[0].audio_transcript.as_deref(), Some("Your"));
+
+        for (tts_available, interrupted) in [(false, false), (true, true)] {
+            let observed = || RealtimeGenerationObservation {
+                interrupted,
+                synthesizing: false,
+                tts_available,
+            };
+            let mut playout = RealtimeGeneration::default();
+            playout.bind(true);
+            let mut effects = Vec::new();
+            for event in [started("m"), delta("m", "Hi."), text_only("m")] {
+                effects.extend(playout.handle(event, observed()));
+            }
+            assert!(
+                !effects.iter().any(|e| matches!(
+                    e,
+                    RealtimeGenerationEffect::VoiceText { .. }
+                        | RealtimeGenerationEffect::Failed(_)
+                )),
+                "no voicing and no failure"
+            );
+        }
     }
 }

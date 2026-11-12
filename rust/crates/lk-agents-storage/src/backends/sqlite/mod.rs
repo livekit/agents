@@ -48,6 +48,8 @@ const REGISTRY_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS threads (
   expires_at INTEGER NOT NULL
 )";
 
+const REGISTRY_SCOPE_INDEX: &str = "CREATE INDEX IF NOT EXISTS threads_scope_activity ON threads (scope, last_active DESC, thread_id DESC)";
+
 // Version 0 used milliseconds for creation/activity, seconds for TTL/expiry. The version
 // update and conversion are one transaction, including when several processes open at once.
 const REGISTRY_MIGRATION: &str = "CREATE TABLE IF NOT EXISTS registry_schema (
@@ -177,6 +179,7 @@ impl SqliteStorage {
         registry
             .batch(vec![
                 Statement::ddl(REGISTRY_SCHEMA),
+                Statement::ddl(REGISTRY_SCOPE_INDEX),
                 Statement::ddl(REGISTRY_MIGRATION),
                 MigrateRegistryToMillis {}.bind(),
                 SetRegistryVersion {}.bind(),
@@ -386,6 +389,37 @@ impl Storage for SqliteStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_pages_seek_by_scope_without_sorting() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(REGISTRY_SCHEMA, []).unwrap();
+        conn.execute(REGISTRY_SCOPE_INDEX, []).unwrap();
+        conn.execute_batch(
+            "WITH RECURSIVE numbers(n) AS (
+               SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 10000
+             ) INSERT INTO threads
+             SELECT 'AT_' || n, 'other', '{}', n, n, 0, 0 FROM numbers",
+        )
+        .unwrap();
+        conn.execute("INSERT INTO threads VALUES ('AT_wanted', 'wanted', '{}', 1, 1, 0, 0)", [])
+            .unwrap();
+        let mut statement = conn.prepare(SelectRegistryPage::SQL).unwrap();
+        let ids = statement
+            .query_map(
+                rusqlite::named_params! {
+                    ":scope": "wanted", ":now": 0, ":before_at": i64::MAX,
+                    ":before_id": "", ":limit": 10,
+                },
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(ids, ["AT_wanted"]);
+        assert_eq!(statement.get_status(rusqlite::StatementStatus::Sort), 0);
+        assert!(statement.get_status(rusqlite::StatementStatus::VmStep) < 500);
+    }
 
     #[tokio::test]
     async fn registry_migration_is_versioned_and_preserves_millisecond_timestamps() {

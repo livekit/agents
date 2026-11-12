@@ -10,7 +10,6 @@ use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TranscriptionOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
-use lk_agents_abi::voice::session_options::TextTransformSet;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamInput, Stt, Tts, Vad};
 use lk_agents_voice::agent_session::machine::activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
 use lk_agents_voice::agent_session::{DriverError, InitialSession, Now, SessionParts, VoiceDriver};
@@ -190,6 +189,8 @@ pub struct DriverBuilder {
     /// Prefixes every chat item id the session mints, so items from two calls never collide.
     /// `None` mints one at start.
     pub session_id: Option<String>,
+    /// What the session's ids (speeches, chat items) are drawn from. `None` draws one at start.
+    pub id_seed: Option<u64>,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     /// Where the driver's steps go: nowhere in production.
     pub journal: Journal,
@@ -264,6 +265,7 @@ impl DriverBuilder {
             realtime_tools: None,
             toolset: Default::default(),
             session_id: None,
+            id_seed: None,
             storage: None,
             journal: Default::default(),
             trace: tracer.root(),
@@ -320,6 +322,7 @@ impl DriverBuilder {
     ) -> Result<(SessionCores, SessionHandle), DriverError> {
         let session_id =
             self.session_id.take().unwrap_or_else(|| lk_agents_net::strings::shortuuid("AS_"));
+        let id_seed = self.id_seed.unwrap_or_else(telemetry::random_seed);
         let keyterms = self.keyterms.take().map(|mut setup| {
             let llm = setup.llm.take().map(|llm| self.resources.register_llm(llm).id);
             (setup, llm)
@@ -397,6 +400,7 @@ impl DriverBuilder {
                 agent: self.agent.clone(),
                 chat_ctx: self.chat_ctx.clone(),
                 session_id,
+                id_seed,
                 storage_enabled: self.storage.is_some(),
                 telemetry: telemetry::SessionTelemetry {
                     parent: self.trace.span(),
@@ -488,6 +492,7 @@ impl DriverBuilder {
                 peer,
                 ivr_detection,
                 speech_ids,
+                id_seed,
             },
         ))
     }
@@ -521,13 +526,6 @@ impl DriverBuilder {
             output: publications.output.cell(),
             recorder: publications.recorder.cell(),
             unplayed: Default::default(),
-            tts_transforms: self
-                .config
-                .effective()
-                .speech
-                .tts_text_transforms()
-                .map(TextTransformSet::transforms)
-                .unwrap_or_default(),
             conn: self.conn,
             queue: queue.clone(),
             speeches: Arc::clone(&self.speeches),
@@ -535,7 +533,6 @@ impl DriverBuilder {
             spawner: Arc::clone(&self.spawner),
             tasks,
             gen_ids: std::sync::atomic::AtomicU64::new(0),
-            session_id,
             resources: self.resources.clone(),
             chat_ctx: publications.chat_ctx.cell(),
             keyterms: publications.keyterms.cell(),

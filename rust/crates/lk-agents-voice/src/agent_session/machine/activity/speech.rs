@@ -17,7 +17,7 @@ use crate::trace::{GenerationStep, InterruptStep, PlayoutStep, SpeechStep, ToolS
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatContext, ChatMessage, Modality, Role, Ts};
-use lk_agents_core::tts::markup::ChatMessageExt;
+use lk_agents_core::markup::ChatMessageExt;
 use std::sync::Arc;
 
 struct EndOfSpeech {
@@ -587,7 +587,7 @@ impl VoiceDriver {
                 turn.scheduled(now);
             }
             let history = if self.session.storage.enabled {
-                SpeechHistory::VoiceLane
+                SpeechHistory::VoicePartition
             } else {
                 SpeechHistory::InMemory
             };
@@ -633,14 +633,15 @@ impl VoiceDriver {
 
     pub(crate) fn on_generation(&mut self, now: Ts, ev: GenEvent) {
         match ev {
-            GenEvent::OutputBinding(event) => self.on_output_binding(event),
+            GenEvent::OutputBinding(event) => self.on_output_binding(now, event),
             GenEvent::Plan { call, plan } => self.activity.reply_plans.push_back((call, *plan)),
             // A text-only turn's first frame; with audio output the edge is `PlaybackStarted`'s.
             GenEvent::FirstFrame { speech } => self.agent_started_speaking(now, speech),
+            GenEvent::DeliveredProgress { speech, item } => self.storage_progress(speech, *item),
 
             GenEvent::Done { speech, outcome, interrupted } => {
                 if self.session.storage.enabled {
-                    self.storage_settle(speech, *outcome, interrupted);
+                    self.storage_settle(now, speech, *outcome, interrupted);
                 } else {
                     self.activity.tools_in_flight.remove(&speech);
                     self.finish_reply(now, speech, *outcome, interrupted);
@@ -658,6 +659,7 @@ impl VoiceDriver {
                 item,
                 cut_at,
             } => {
+                self.storage_step_spoken(speech);
                 if let Some(position) = cut_at
                     && let Some(turn) = self.agent_turn(speech)
                 {
@@ -679,8 +681,14 @@ impl VoiceDriver {
                     item,
                 );
                 self.reply_spoken(speech, text);
+                // Cut by the person before its words were done: it is done on reaching its tools,
+                // which a cut step reports as not running though its calls still are.
+                if !self.session.closing_past_edge() {
+                    self.release_to_running_tools(now, speech);
+                }
             }
             GenEvent::Trace(step) => self.record_trace(step),
+            GenEvent::OutputFailed { speech, error } => self.output_failed(now, speech, *error),
             GenEvent::ProviderFailed { speech, leg, recoverable, error } => {
                 let source = match leg {
                     crate::trace::ProviderKind::Llm => crate::events::ErrorSource::Llm,
@@ -829,6 +837,21 @@ impl VoiceDriver {
         self.record_trace(SpeechStep::AgentStartedSpeaking { speech });
     }
 
+    /// The output is the session's, not the speech's: the call goes on, and so does the output.
+    fn output_failed(
+        &mut self,
+        now: Ts,
+        speech: SpeechId,
+        error: lk_agents_abi::errors::ProviderError,
+    ) {
+        let source = crate::events::ErrorSource::AudioOutput;
+        self.report_error(now, source, true, error.clone(), Some(speech));
+        if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
+            state.output_failed(error);
+        }
+        self.force_interrupt_speech(now, speech, crate::trace::InterruptCause::OutputFailed);
+    }
+
     pub(crate) fn generation_failed(
         &mut self,
         now: Ts,
@@ -836,8 +859,9 @@ impl VoiceDriver {
         error: Box<lk_agents_abi::errors::ProviderError>,
     ) {
         self.activity.tools_in_flight.remove(&speech);
-        // Released by the close's edge already: the edge was its end.
+        // Released by the close's edge, or at its interruption: that was its end.
         if self.activity.speech_was_released(speech) {
+            self.outliving_reply_ended(speech);
             return;
         }
         self.record_trace(SpeechStep::ReplyFailed {
@@ -959,8 +983,10 @@ impl VoiceDriver {
         outcome: GenTurnOutcome,
         interrupted: bool,
     ) {
-        // Already released by the close's hard edge: a second terminal would be a second end.
+        // Already released by the close's hard edge, or at its interruption while its tools ran:
+        // a second terminal would be a second end.
         if self.activity.speech_was_released(speech) {
+            self.outliving_reply_ended(speech);
             return;
         }
         self.record_trace(SpeechStep::ReplyFinished {
@@ -1011,10 +1037,11 @@ impl VoiceDriver {
         // A finished paused speech drops the pause and resumes the sink, current or not: the
         // release at authorization can miss a pause taken in the same instant.
         self.release_paused_speech(speech);
-        for (request, answer) in self.activity.reply_released(speech) {
-            self.answer(Some(request), answer);
+        self.activity.cut_by_person.remove(&speech);
+        // A reply outliving its speech keeps its run: its tools' results still land.
+        if !self.activity.outliving_tools.contains(&speech) {
+            self.release_reply_run(speech);
         }
-        self.activity.tools.dropped.retain(|(s, _), _| *s != speech);
         // A close answers still-running blocking tools with the closing error before the
         // speech's own `SpeechDone`, and cancels their bodies: nothing would hear their end.
         if self.session.closing.is_some()
@@ -1046,6 +1073,53 @@ impl VoiceDriver {
         self.voice_task_speech_released(now, speech);
         // A realtime session swapped meanwhile gets its frame once what it cut is released.
         self.realtime_replay(now, Some(speech));
+    }
+
+    fn release_reply_run(&mut self, speech: SpeechId) {
+        for (request, answer) in self.activity.reply_released(speech) {
+            self.answer(Some(request), answer);
+        }
+        self.activity.tools.dropped.retain(|(s, _), _| *s != speech);
+    }
+
+    /// A reply the person cut whose words are out and whose tools still run is done now, and the
+    /// floor is free: the person is not held for a tool. Its reply run stays, so a result that
+    /// lands later commits (with no follow-up), and its watchdog still cancels what hangs. Not
+    /// while a VoiceTask awaits the speech. With storage, only persistence waits: the turn keeps
+    /// its hold on the partition and commits in turn order.
+    pub(crate) fn release_to_running_tools(&mut self, now: Ts, speech: SpeechId) {
+        let running = self.activity.tools_in_flight.contains(&speech)
+            || self.activity.tools.live(speech).next().is_some();
+        let in_tools = self.activity.cut_by_person.contains(&speech)
+            && running
+            && !self.activity.is_realtime_speech(speech)
+            && self.activity.speech_scheduler.contains(speech)
+            && !self.activity.voice_tasks.awaits(speech);
+        if !in_tools {
+            return;
+        }
+        let watchdog = Timer::InterruptionTimeout(speech);
+        let at = self.deadline(watchdog);
+        self.activity.outliving_tools.insert(speech);
+        self.record_trace(SpeechStep::ReleasedToTools { speech });
+        self.storage_outlive(speech);
+        self.release_speech(now, speech);
+        if let Some(at) = at {
+            self.set_deadline(watchdog, at);
+            self.record_trace(SpeechStep::WatchdogArmed { speech, at });
+        }
+    }
+
+    /// The end of a reply released at its interruption: its run and watchdog go too.
+    pub(crate) fn outliving_reply_ended(&mut self, speech: SpeechId) {
+        if !self.activity.outliving_tools.remove(&speech) {
+            return;
+        }
+        if self.clear_deadline_if_set(Timer::InterruptionTimeout(speech)) {
+            self.record_trace(SpeechStep::WatchdogCleared { speech });
+        }
+        self.activity.tools_in_flight.remove(&speech);
+        self.release_reply_run(speech);
     }
 
     /// The one door for agent-state writes.

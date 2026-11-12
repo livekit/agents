@@ -7,7 +7,7 @@ email, by text and on the phone.
 | File                | Agent              | What                                                                                                  |
 | ------------------- | ------------------ | ----------------------------------------------------------------------------------------------------- |
 | `frontend_agent.py` | `dentist`         | Talks to the patient, on the phone and by text (the `frontend` endpoint). Its one tool is the back office. |
-| `backend_agent.py`  | lane `backend` | The back office, reached over A2A: one agent with two tools on the calendar.                        |
+| `backend_agent.py`  | partition `backend` | The back office, reached over A2A: one agent with two tools on the calendar.                        |
 | `calendar_api.py`   |                    | The calendar: a fake one seeded with a known week, or cal.com when `CAL_API_KEY` is set.              |
 | `main.py`           |                   | The one entrypoint: the server, the two handlers added to it.                         |
 | `scenarios/*.yaml`  |                    | Simulation scenarios: `booking`, `availability`.                                                      |
@@ -23,22 +23,26 @@ email, by text and on the phone.
   turn, so the model calls the tool again with the email. With everything, and before writing,
   `needs_approval=read_back` reads the appointment back as written; the booking runs only
   when the model repeats the same call after the patient answered, so it cannot skip the ask.
-- **The calendar as the backend's `deps`**, the same object for every turn of every
+- **The calendar in the backend's application context**, the same object for every turn of every
   conversation, and the system of record for what is booked. Its clock is read into the
   instructions on every turn, after the static part, so the model knows the date.
-- **The lane's state** keeps the patient's email, so a second booking does not ask again.
+- **Persisted application state** keeps the patient's email, so a second booking does not ask again.
 
-The same pattern with guided flows as tasks awaited in text is [`../hotel-receptionist/`](../hotel-receptionist/README.md).
+The same pattern with a persisted room-booking draft is [`../hotel-receptionist/`](../hotel-receptionist/README.md).
+
+See [storage and conversation state](../README.md#storage-and-conversation-state) for
+the shared persistence, partition and binding setup.
 
 ## Run
 
 With the stack and the environment of [`../README.md`](../README.md), from this directory:
 
 ```sh
-FRONTDESK_NOW=2026-06-12T09:00 uv run python main.py dev
+FRONTDESK_NOW=2026-06-12T09:00 lk agent dev
 ```
 
-The console (`../../console`) lists this example and picks it once it is up.
+For a terminal conversation, run `lk agent console` from this directory with the same environment.
+Use an [A2A client](../../docs/clients.md) for text requests.
 
 `FRONTDESK_NOW` pins the practice's clock, so the seeded openings and the scenarios' absolute
 dates stay where they are; without it the practice runs on the wall clock, with the same

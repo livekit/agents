@@ -316,3 +316,32 @@ fn slow_inference_is_reported_with_its_accumulated_lag() {
     let out = m.push(window()).unwrap();
     assert!(out[0].extra_inference_time > 0.5);
 }
+
+/// However audio is partitioned and at any input rate, the model only scores whole windows.
+/// https://github.com/livekit/agents/issues/402 https://github.com/livekit/agents/issues/405
+#[test]
+fn arbitrary_partitions_only_reach_supported_inference_windows() {
+    for rate in [8_000u32, 16_000, 24_000, 44_100, 48_000] {
+        let mut m = VadMachine::new(VadOptions::default());
+        let mut scored = Vec::new();
+        let mut pushed = 0usize;
+        for (i, size) in
+            [1usize, 37, 160, 480, 511, 1, 2048, 999, 13].iter().cycle().take(60).enumerate()
+        {
+            let frame = mono(vec![(i % 7) as u8; size * 2], rate);
+            pushed += size;
+            let mut next = m.push(frame).expect("same rate");
+            while let Some(predict) = next {
+                scored.push(predict.samples.len());
+                let result =
+                    VadResult { window: predict.window, probability: 0.0, inference_duration: 0.0 };
+                next = m.predicted(result).1;
+            }
+        }
+        assert!(!scored.is_empty(), "{rate} Hz: {pushed} samples produced no window");
+        assert!(
+            scored.iter().all(|n| *n == VAD_WINDOW_SAMPLES),
+            "{rate} Hz: windows of {scored:?}"
+        );
+    }
+}

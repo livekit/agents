@@ -52,7 +52,7 @@ mod realtime_cut_after_text_failure {
     use lk_agents_fuzz::record::Kind;
     use lk_agents_voice::trace::{RealtimeStep, Step};
 
-    // Catches: the realtime step returning its text output's failure before telling the server what
+    // Catches: the realtime step returning its transcription output's failure before telling the server what
     // was heard, so after a cut no `conversation.item.truncate` went out and the server kept audio
     // the person never heard (`realtime_server_holds_what_was_heard`, campaign seed 32802).
     #[test]
@@ -98,7 +98,7 @@ mod realtime_items_filled {
     //! A realtime server's empty records of its items stay out of history; the words that fill
     //! them reach it, once, under the server's ids.
     use lk_agents_abi::{ChatItem, Role};
-    use lk_agents_core::tts::markup::ChatMessageExt;
+    use lk_agents_core::markup::ChatMessageExt;
     use lk_agents_fuzz::drive::{RealtimeSetup, Run, Setup, simulate};
     use lk_agents_fuzz::input::{Count, Input, Millis, Ref, RtEvent};
     use lk_agents_voice::events::SessionEvent;

@@ -11,7 +11,7 @@ use crate::worker::http::{EndpointExchange, EndpointRequest};
 #[crate::host(record(module = "a2a_door", emit, extract))]
 #[derive(Debug, Clone)]
 pub struct DoorConfig {
-    pub lane: String,
+    pub partition_key: String,
     pub holder: String,
     pub endpoint: EndpointDescriptor,
     pub options: TurnOptions,
@@ -43,8 +43,6 @@ pub struct TextServing {
     pub endpoint_url: Option<String>,
     pub agent_name: String,
     pub deployment: String,
-    /// The project key pair that verifies a bearer; `None` when the worker holds none.
-    pub credentials: Option<(String, String)>,
     /// The host context the endpoint's handler runs in.
     pub host_context: Option<crate::HostRef>,
 }
@@ -55,6 +53,14 @@ pub struct TextServing {
 pub trait TextEndpoint: Send + Sync {
     /// The endpoint's path segment.
     fn name(&self) -> &str;
+    fn recovery_handler(
+        &self,
+        _location: &str,
+        _project: &str,
+        _partition_key: &str,
+    ) -> Option<Arc<dyn TurnHost>> {
+        None
+    }
 
     /// Answer one exchange: authenticate the caller, then serve the card or one JSON-RPC call.
     /// `cx` is the exchange's `http_request` span.
@@ -80,6 +86,9 @@ pub trait A2ADoor: Send + Sync + Sized + 'static {
         storage: Arc<dyn StorageNamespace>,
         config: DoorConfig,
         host: Arc<dyn TurnHost>,
+        #[host(default = None)] server: Option<
+            Arc<dyn crate::worker::server_host::ServerConfiguration>,
+        >,
     ) -> Result<Self, StorageError>;
 
     #[host(getter)]

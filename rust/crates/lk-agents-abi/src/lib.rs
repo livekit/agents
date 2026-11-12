@@ -59,9 +59,6 @@ pub use llm::realtime::{
 };
 pub use llm::realtime::{Realtime, RealtimeCommand, RealtimeCommandKind, RealtimeSession};
 pub use llm::types::{ChatRequest, Llm, LlmStream, ToolChoice, ToolFlags, ToolSpec};
-pub use tts::stream_adapter::{
-    SentenceSplitter, SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
-};
 pub use turn::detector::{EotDetector, LegEvent, ReqId};
 pub use types::headers::Headers;
 pub use types::identity::ProviderId;
@@ -75,8 +72,8 @@ pub use llm::realtime::{
 };
 pub use stt::types::{AlignedTranscript, Stt, SttCapabilities, SttSink, SttSource};
 pub use tts::types::{
-    AudioEncoding, MarkupInfo, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
-    no_duplex_path,
+    AudioEncoding, MarkupInfo, SpeechChunk, SynthesizedAudio, TextSink, Tts, TtsCapabilities,
+    TtsSink, TtsSource, no_duplex_path,
 };
 pub use utils::stream::{
     Closed, DuplexStream, HOST_TEARDOWN_TIMEOUT, OneOrStream, ProviderStream, RetryReport,

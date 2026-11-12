@@ -32,6 +32,7 @@ use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TokioSpawner;
 
 pub struct Configuration {
+    doors: Arc<OnceLock<Vec<std::sync::Weak<dyn TextEndpoint>>>>,
     settings: Arc<Mutex<ServerSettings>>,
     /// Where the endpoints are reached, written by the runtime once it knows.
     serving: Arc<Mutex<server::Serving>>,
@@ -45,7 +46,15 @@ impl Configuration {
     }
 }
 
-impl ServerConfiguration for Configuration {}
+impl ServerConfiguration for Configuration {
+    fn text_endpoint(&self, name: &str) -> Option<Arc<dyn TextEndpoint>> {
+        self.doors
+            .get()?
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .find(|door| door.name() == name)
+    }
+}
 
 impl ServerConfig for Configuration {
     fn new(
@@ -61,6 +70,7 @@ impl ServerConfig for Configuration {
         };
         settings.apply(options, process)?;
         Ok(Self {
+            doors: Arc::default(),
             settings: Arc::new(Mutex::new(settings.with_env(env))),
             serving: Arc::default(),
             running: Arc::default(),
@@ -413,6 +423,7 @@ fn manifest_entry(route: EndpointRoute) -> livekit_protocol::agent_http::AgentEn
 }
 
 pub struct AgentServerRuntime {
+    configuration: Arc<Configuration>,
     settings: Arc<Mutex<ServerSettings>>,
     serving: Arc<Mutex<server::Serving>>,
     running: Arc<AtomicBool>,
@@ -448,6 +459,7 @@ impl ServerRuntime for AgentServerRuntime {
         let host = ServerCallbacks::new(host, native_pools(env.clone()));
         let mounted = host.mounted.clone();
         Ok(Self {
+            configuration: config.clone(),
             settings: config.settings.clone(),
             serving: config.serving.clone(),
             running: config.running.clone(),
@@ -488,6 +500,7 @@ impl ServerRuntime for AgentServerRuntime {
         asyncio_debug: bool,
         context: CallContext,
     ) -> Result<(), WorkerError> {
+        let _ = self.configuration.doors.set(text_doors.iter().map(Arc::downgrade).collect());
         let door_routes = text_doors.iter().map(|door| door_route(door.name()));
         let routes = door_routes.chain(routes).map(manifest_entry).collect::<Vec<_>>();
         let text = TextDoors {

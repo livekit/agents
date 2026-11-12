@@ -5,7 +5,6 @@ use crate::realtime::dialect::{Dialect, SAMPLE_RATE};
 use crate::realtime::machine::{OptionsPatch, Outgoing, SessionOptions};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{Maybe, ToolSpec};
-use serde_json::Value;
 
 pub fn encode(
     effect: Outgoing,
@@ -95,14 +94,14 @@ pub fn session_options(event_id: &str, opts: &SessionOptions, dialect: &Dialect)
             } else {
                 wire::Modality::Text
             }]),
-            max_output_tokens: Some(opts.max_output_tokens.clone()),
+            max_output_tokens: Some(wire::MaxOutputTokens(opts.max_output_tokens)),
             tool_choice: Some(wire::tool_choice(opts.tool_choice.as_ref())),
-            tracing: Some(opts.tracing.clone().unwrap_or(Value::Null)),
+            tracing: Some(opts.tracing.clone()),
             audio: AudioConfig {
                 input: AudioInput {
                     format: Some(AudioFormat { rate: SAMPLE_RATE }),
-                    noise_reduction: Some(opts.noise_reduction.clone().unwrap_or(Value::Null)),
-                    transcription: Some(opts.transcription.clone().unwrap_or(Value::Null)),
+                    noise_reduction: Some(opts.noise_reduction.clone()),
+                    transcription: Some(opts.transcription.clone()),
                     turn_detection: Some(opts.turn_detection.clone()),
                 },
                 output: AudioOutput {
@@ -112,8 +111,8 @@ pub fn session_options(event_id: &str, opts: &SessionOptions, dialect: &Dialect)
                 },
             },
             instructions: opts.instructions.clone(),
-            truncation: opts.truncation.clone(),
-            reasoning: opts.reasoning.clone(),
+            truncation: opts.truncation.clone().map(Some),
+            reasoning: opts.reasoning.clone().map(Some),
             tools: None,
         },
         dialect,
@@ -123,14 +122,14 @@ pub fn session_options(event_id: &str, opts: &SessionOptions, dialect: &Dialect)
 pub fn options_update(event_id: &str, patch: OptionsPatch, dialect: &Dialect) -> ClientEvent {
     let config = SessionConfig {
         tool_choice: given(patch.tool_choice).map(|choice| wire::tool_choice(choice.as_ref())),
-        max_output_tokens: given(patch.max_output_tokens),
-        tracing: nullable(patch.tracing),
-        truncation: nullable(patch.truncation),
-        reasoning: nullable(patch.reasoning),
+        max_output_tokens: given(patch.max_output_tokens).map(wire::MaxOutputTokens),
+        tracing: given(patch.tracing),
+        truncation: given(patch.truncation),
+        reasoning: given(patch.reasoning),
         audio: AudioConfig {
             input: AudioInput {
-                transcription: nullable(patch.transcription),
-                noise_reduction: nullable(patch.noise_reduction),
+                transcription: given(patch.transcription),
+                noise_reduction: given(patch.noise_reduction),
                 turn_detection: given(patch.turn_detection),
                 ..Default::default()
             },
@@ -150,7 +149,4 @@ fn given<T>(value: Maybe<T>) -> Option<T> {
         Maybe::NotGiven => None,
         Maybe::Given(value) => Some(value),
     }
-}
-fn nullable(value: Maybe<Option<Value>>) -> Option<Value> {
-    given(value).map(|value| value.unwrap_or(Value::Null))
 }

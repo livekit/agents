@@ -228,7 +228,7 @@ the cancellation propagates.
 When the caller holds
 [explicit authority](protocol/a2a.md#delegation-and-conversation-data) to share
 its thread with the endpoint, the adapter sends the thread so the remote agent
-keeps its own lane in the caller's thread. Each call reads the endpoint's card for its
+keeps its own partition in the caller's thread. Each call reads the endpoint's card for its
 `capabilities.extensions`, which is only a capability hint and grants no access. Other A2A endpoints
 retain their own remote context.
 
@@ -422,7 +422,8 @@ No MCP wait is unbounded, so a slow or dead server never holds a call or a run:
 `init_timeout` bounds connecting, the handshake and listing the tools; `request_timeout`
 bounds one request that receives neither a reply nor progress, each progress message restarting
 it (`None` removes the limit); `read_timeout` bounds an idle HTTP reply stream. A tool call
-that the caller stops awaiting, an interruption among them, is cancelled on the server. A lone
+that the caller stops awaiting is cancelled on the server; one an interruption leaves running
+is cancelled there when the interruption's 5 second bound passes. A lone
 text result reaches the model as its text; other content as its JSON blocks.
 
 A lost connection, or a stdio server that exited, reconnects on the next listing or call.
@@ -435,7 +436,13 @@ a time. Once listed, the tools stay available through a later outage. The connec
 open for a minute (`MCP_IDLE_CLOSE_SECONDS`) after the toolset's last run, so the next run
 reuses it; the last run's end stops a background retry, cancelling its listing. Once the
 minute passes the toolset drops its tools and closes the connection, and the next `setup()`
-connects and lists again.
+connects and lists again. A server that announces its tools changed
+(`notifications/tools/list_changed`) is listed again by the next `setup()`, so the next run, or
+on a call the next agent activation, sees the new tools; the tools never change during a reply.
+
+Elicitation, a server asking the person a question during a tool call, is not supported yet:
+the client does not advertise it, and a server that asks anyway is answered `decline` at once,
+so the call goes on without the answer. Sampling and roots are not supported either.
 
 Credentials can come from the run, as a backend serving many users needs:
 

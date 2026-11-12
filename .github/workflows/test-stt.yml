@@ -219,7 +219,7 @@ jobs:
         if: always()
         id: test-summary
         run: |
-          python3 scripts/generate_test_summary.py test-results.xml -o test-summary.md
+          python3 .github/generate_test_summary.py test-results.xml -o test-summary.md
 
       - name: Post results to PR
         if: always() && (github.event_name == 'pull_request' || github.event.inputs.pr_number != '')

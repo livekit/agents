@@ -32,6 +32,7 @@ pub fn unauthenticated() -> AuthPrincipal {
             write: true,
             read: true,
             delete: true,
+            sql: false,
         }),
         identity: "console".into(),
         claims: Default::default(),

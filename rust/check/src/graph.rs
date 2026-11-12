@@ -30,7 +30,7 @@ const FUZZ: &str = "lk-agents-fuzz";
 const PY: &str = "lk-agents-py";
 const HOST_DERIVE: &str = "lk-agents-host-derive";
 
-/// Each crate's allowed workspace dependencies (rust-core.md "Crates and dependencies").
+/// Each crate's allowed workspace dependencies (architecture.md "Crates and dependencies").
 const GRAPH: &[(&str, &[&str])] = &[
     (ABI, &[HOST_DERIVE]),
     (CORE, &[ABI]),

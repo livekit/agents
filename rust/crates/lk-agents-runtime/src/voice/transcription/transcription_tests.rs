@@ -5,7 +5,6 @@
 )]
 use super::*;
 use lk_agents_abi::Ts;
-use lk_agents_voice::transcription::machine::synchronizer::Liang;
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -73,7 +72,6 @@ impl Chain {
             audio_next: output.clone() as Arc<dyn AudioOutput>,
             text_next: None,
             speed: 1.0,
-            hyphenator: Arc::new(Liang),
             clock: Arc::new(lk_agents_net::clock::RealClock::new()),
             spawner: Arc::new(lk_agents_net::task::TokioSpawner::current()),
         });
@@ -187,10 +185,12 @@ async fn a_segment_with_no_audio_shows_its_text_and_pairs_with_nothing() {
     c.text("after words").await;
     c.audio(1).await;
     c.leaf.playback_started(c.key(), Ts::ZERO);
-    assert!(c.take_shown().iter().all(|(_, start)| *start <= 1e-9));
+    let mut shown = c.take_shown();
+    assert!(shown.iter().all(|(_, start)| *start <= 1e-9), "{shown:?}");
     c.played(0, 1_100);
     c.finished(1_100);
-    let shown: String = c.take_shown().into_iter().map(|(w, _)| w).collect();
+    shown.extend(c.take_shown());
+    let shown: String = shown.into_iter().map(|(w, _)| w).collect();
     assert_eq!(shown.split_whitespace().collect::<Vec<_>>(), ["after", "words"]);
 }
 
@@ -331,11 +331,13 @@ async fn a_pause_names_the_playback_whose_word_it_shows() {
     let c = Chain::new();
     let attributed = Arc::new(Attributed(Default::default()));
     c.sync.audio_output().tracker().observe(attributed.clone());
-    c.text("one two three four five six").await;
+    c.aligned(&[("one ", 0.0, 0.5), ("two ", 0.5, 0.75), ("three", 0.75, 2.0)]).await;
     c.audio(2).await;
     c.leaf.playback_started(c.key(), Ts::ZERO);
     c.played(0, 700);
     attributed.0.lock().clear();
+    // the playhead moves on to "three" before the pause reads it
+    tokio::time::sleep(Duration::from_millis(100)).await;
     c.sync.audio_output().pause();
     let shown = attributed.0.lock().clone();
     assert!(!shown.is_empty(), "the pause shows the word whose audio started");

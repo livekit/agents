@@ -77,6 +77,90 @@ mod tests {
             !driver.timers.deadline(crate::agent_session::effects::Timer::DtmfDebounce).is_some()
         );
     }
+
+    /// A task's end restores the parent's calls and results, those landed meanwhile included,
+    /// in causal order.
+    /// https://github.com/livekit/agents/issues/8307 https://github.com/livekit/agents/issues/5284
+    /// https://github.com/livekit/agents/issues/4792 https://github.com/livekit/agents/pull/6084
+    #[test]
+    fn task_restoration_preserves_causal_history() {
+        use crate::agent::{Source, Visibility};
+        use crate::agent_session::tests::agent_update;
+        use crate::agent_session::{SayText, SpeechCommand};
+        use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput};
+        let at = std::time::UNIX_EPOCH;
+        let call = |id: &str| -> ChatItem {
+            FunctionCall {
+                id: format!("{id}-item"),
+                call_id: id.into(),
+                name: id.into(),
+                arguments: "{}".into(),
+                created_at: at,
+                extra: Default::default(),
+                group_id: None,
+            }
+            .into()
+        };
+        let output = |id: &str| -> ChatItem {
+            let mut o = FunctionCallOutput::new(format!("{id}-out"), id, "done", false, at);
+            o.name = id.into();
+            o.into()
+        };
+        let view = |driver: &VoiceDriver| -> Vec<String> {
+            let ctx = driver.session.chat_ctx.agent_chat_ctx();
+            ctx.items.iter().map(|i| i.id().to_owned()).collect()
+        };
+
+        let mut driver = crate::agent_session::tests::driver();
+        driver.on_speech(
+            Ts::ZERO,
+            SpeechCommand::Say {
+                text: SayText::Text("One moment.".into()),
+                allow_interruptions: None,
+                add_to_chat_ctx: false,
+                call: None,
+            },
+        );
+        driver.settle_step();
+        let parent_speech = driver.activity.speeches().next().expect("the parent's speech");
+        let (tool_call, tool_output) = (
+            Source::ToolCall { speech: parent_speech, step: 1 },
+            Source::ToolOutput { speech: parent_speech, step: 1 },
+        );
+        // The parent's step calls `collect` (which awaits the task) and `lookup` in parallel.
+        driver.commit_item(call("collect"), tool_call.clone(), Visibility::Both);
+        driver.commit_item(call("lookup"), tool_call, Visibility::Both);
+
+        driver.activity.voice_tasks.stack.push(Suspended {
+            id: VoiceTaskId(1),
+            call: RequestId(77),
+            awaiting: parent_speech,
+            agent: "task".into(),
+            parent: Box::new(agent_update("agent", None)),
+            dtmf: false,
+        });
+        driver.update_agent(Ts::ZERO, agent_update("task", None));
+        driver.settle_step();
+        // While the task drives, its own pair is recorded and the parent's sibling finishes.
+        driver.commit_item(call("task-done"), Source::HostCtx, Visibility::Both);
+        driver.commit_item(output("task-done"), Source::HostCtx, Visibility::Both);
+        driver.commit_item(output("lookup"), tool_output.clone(), Visibility::Both);
+        assert_eq!(
+            view(&driver),
+            ["task-done-item", "task-done-out"],
+            "the task sees its own pair"
+        );
+
+        driver.end_voice_tasks(Ts::ZERO, 0, None, Ok(VoiceTaskValue::Digits("1".into())));
+        driver.settle_step();
+        assert_eq!(driver.activity.agent, "agent");
+        driver.commit_item(output("collect"), tool_output, Visibility::Both);
+        assert_eq!(
+            view(&driver),
+            ["collect-item", "lookup-item", "lookup-out", "collect-out"],
+            "the parent's calls and results, each once, in the order they happened"
+        );
+    }
 }
 
 #[derive(Debug, lk_agents_abi::Vocabulary)]

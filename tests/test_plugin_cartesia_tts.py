@@ -16,6 +16,7 @@ from livekit.agents import (
     APIStatusError,
     http,
 )
+from livekit.agents.tts import SpeechChunk
 
 pytestmark = pytest.mark.plugin("cartesia")
 
@@ -58,8 +59,9 @@ def _text(payload: dict) -> http.WebSocketMessage:
 class _FakeWS:
     """Yield stale frames/done first, then the current context's frames/done."""
 
-    def __init__(self, *, include_context_id: bool = True) -> None:
+    def __init__(self, *, include_context_id: bool = True, words: list[str] | None = None) -> None:
         self._include_context_id = include_context_id
+        self._words = words
         self._sent: list[dict] = []
         self._context_id: str | None = None
         self._end_pkt_sent = asyncio.Event()
@@ -85,8 +87,16 @@ class _FakeWS:
         if self._queue:
             return self._queue.popleft()
 
-        # current frames; delay done until end_pkt so the tokenizer is closed
+        # current frames; delay done until end_pkt so the input has ended
         context = {"context_id": self._context_id or ""} if self._include_context_id else {}
+        if self._words:
+            timestamps = {
+                "words": self._words,
+                "start": [i * 0.1 for i in range(len(self._words))],
+                "end": [(i + 1) * 0.1 for i in range(len(self._words))],
+            }
+            self._queue.append(_text({**context, "word_timestamps": timestamps}))
+            self._words = None
         self._queue.append(_text({**context, "data": _b64(b"\x01" * 160)}))
         await self._end_pkt_sent.wait()
         self._queue.append(_text({**context, "done": True}))
@@ -137,6 +147,54 @@ async def test_synthesize_skips_stale_frames_from_previous_context(include_conte
     # stale frame (b"\x00") must be dropped; only current audio (b"\x01") is played
     assert frames, "no audio frames were synthesized"
     assert all(f == b"\x01" * 160 for f in frames)
+
+
+@pytest.mark.asyncio
+async def test_stream_sends_one_continued_packet_per_chunk():
+    """Each chunk goes out as is, then one closing packet ends the context."""
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.cartesia import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    ws = _FakeWS()
+    tts._pool = _FakePool(ws)  # type: ignore[assignment]
+
+    stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+    stream._push_chunk(SpeechChunk(text="Hello there.", said="Hello there."))
+    stream._push_chunk(SpeechChunk(text="How are you?", said="How are you?"))
+    stream.end_input()
+    async for _ in stream:
+        pass
+
+    assert [(p["transcript"], p["continue"]) for p in ws._sent] == [
+        ("Hello there. ", True),
+        ("How are you? ", True),
+        (" ", False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_aligns_word_timestamps_to_the_said_words():
+    """Markup goes to Cartesia but never shows up in the timed transcript."""
+    from livekit.agents import APIConnectOptions
+    from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
+    from livekit.plugins.cartesia import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    ws = _FakeWS(words=["Hello", "there."])
+    tts._pool = _FakePool(ws)  # type: ignore[assignment]
+
+    stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+    stream._push_chunk(
+        SpeechChunk(text='<emotion value="happy"/>Hello there.', said="Hello there.")
+    )
+    stream.end_input()
+    words: list[str] = []
+    async for ev in stream:
+        words += [w.text for w in ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])]
+
+    assert ws._sent[0]["transcript"] == '<emotion value="happy"/>Hello there. '
+    assert words == ["Hello", " there."]
 
 
 @pytest.mark.asyncio

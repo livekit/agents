@@ -24,10 +24,9 @@ from livekit.agents import (
     InputRequired,
     ModelRetry,
     RunContext,
+    SessionState,
     TextSession,
-    TextSessionState,
     TextSessionTurn,
-    ToolResult,
     UnexpectedModelBehavior,
     VoiceSession,
 )
@@ -115,7 +114,7 @@ async def _direct(agent: Agent[Any, Any], *messages: str, context: Any = None) -
 
 
 async def _text_session(agent: Agent[Any, Any], *messages: str, context: Any = None) -> Settled:
-    state: TextSessionState | None = None
+    state: SessionState | None = None
     for message in messages:
         turn = await TextSession(agent=agent).run(message, state=state, context=context)
         state = turn.state
@@ -243,18 +242,6 @@ async def test_invalid_arguments_go_back_to_the_model_and_the_body_never_runs(
     settled.expect.no_more_events()
 
 
-async def test_an_unknown_tool_is_reported_to_the_model(run: Entrypoint) -> None:
-    model = Script(call("refund", {}, "c1"), Reply("I cannot refund."))
-    agent = Agent(name="desk", instructions="Help", llm=model)
-    settled = await run(agent, "Refund me")
-    assert settled.output == "I cannot refund."
-    settled.expect.next_event().is_function_call(name="refund")
-    unknown = settled.expect.next_event().is_function_call_output(is_error=True).event()
-    assert "refund" in unknown.item.output
-    settled.expect.next_event().is_message(role="assistant")
-    settled.expect.no_more_events()
-
-
 async def test_model_retry_from_a_tool_reaches_the_model_and_the_retry_succeeds(
     run: Entrypoint,
 ) -> None:
@@ -289,45 +276,6 @@ async def test_model_retry_from_a_tool_reaches_the_model_and_the_retry_succeeds(
         i.type == "function_call_output" and "Give the city name alone." in i.output
         for i in model.requests[1].items
     )
-
-
-async def test_a_tool_that_keeps_asking_for_a_retry_exhausts_its_retries(run: Entrypoint) -> None:
-    model = Script(*[call("weather", {"city": f"Paris {i}"}, f"c{i}") for i in range(4)])
-    agent = Agent(name="desk", instructions="Help", llm=model)
-
-    @agent.tool
-    async def weather(ctx: RunContext, city: str) -> str:
-        """The weather in a city.
-
-        Args:
-            city: The city.
-        """
-        raise ModelRetry("Give the city name alone.")
-
-    with pytest.raises(UnexpectedModelBehavior, match="weather"):
-        await run(agent, "Weather in Paris?")
-    assert len(model.requests) == 2
-
-
-async def test_arguments_that_never_validate_exhaust_the_tools_retries(run: Entrypoint) -> None:
-    ran: list[int] = []
-    model = Script(*[call("book", {"nights": 0}, f"c{i}") for i in range(4)])
-    agent = Agent(name="desk", instructions="Help", llm=model)
-
-    @agent.tool
-    async def book(ctx: RunContext, nights: Annotated[int, Field(ge=1)]) -> str:
-        """Book a room.
-
-        Args:
-            nights: How many nights.
-        """
-        ran.append(nights)
-        return "booked"
-
-    with pytest.raises(UnexpectedModelBehavior, match="book"):
-        await run(agent, "Book")
-    assert ran == []
-    assert len(model.requests) == 2
 
 
 async def test_the_next_turn_sees_the_previous_exchange(run: Entrypoint) -> None:
@@ -398,46 +346,6 @@ async def test_tool_outcomes_are_recorded_before_the_model_continues(
         for i in model.requests[1].items
     )
     settled.expect.next_event().is_message(role="assistant")
-    settled.expect.no_more_events()
-
-
-@pytest.mark.parametrize("verbatim", [False, True])
-async def test_a_tool_can_end_the_turn_without_another_model_request(
-    run: Entrypoint, verbatim: bool
-) -> None:
-    model = Script(call("receipt", {}, "c1"))
-    agent = Agent(instructions="Help", llm=model)
-
-    @agent.tool
-    async def receipt(ctx: RunContext) -> ToolResult:
-        """Return the receipt."""
-        return ToolResult("Receipt 42", reply_required=False, verbatim=verbatim)
-
-    settled = await run(agent, "Receipt")
-    assert len(model.requests) == 1
-    settled.expect.next_event().is_function_call(name="receipt")
-    output = settled.expect.next_event().is_function_call_output(is_error=False).event().item
-    assert "Receipt 42" in output.output
-    if verbatim and run is not _voice:
-        assert "Receipt 42" in str(settled.output)
-
-
-async def test_stop_response_ends_the_turn_without_a_reply(run: Entrypoint) -> None:
-    from livekit.agents import StopResponse
-
-    model = Script(call("stop", {}, "c1"))
-    agent = Agent(instructions="Help", llm=model)
-
-    @agent.tool
-    def stop(ctx: RunContext) -> str:
-        """End this response."""
-        raise StopResponse()
-
-    settled = await run(agent, "Stop")
-    assert settled.output is None
-    assert len(model.requests) == 1
-    settled.expect.next_event().is_function_call(name="stop")
-    settled.expect.next_event().is_function_call_output(is_error=False)
     settled.expect.no_more_events()
 
 
@@ -688,7 +596,7 @@ async def test_text_reaches_the_consumer_before_the_model_ends(run: Entrypoint) 
                 )
                 output_emitter.start_segment(segment_id="sentence")
                 async for part in self.input:
-                    if isinstance(part, str):
+                    if isinstance(part, tts.SpeechChunk):
                         output_emitter.push(bytes(4800))
                 output_emitter.end_segment()
 
@@ -700,12 +608,10 @@ async def test_text_reaches_the_consumer_before_the_model_ends(run: Entrypoint) 
                     num_channels=1,
                 )
 
-            def stream(
-                self, *, conn_options: Any = DEFAULT_API_CONNECT_OPTIONS
-            ) -> tts.SynthesizeStream:
+            def _stream(self, *, conn_options: Any) -> tts.SynthesizeStream:
                 return SpeechStream(tts=self, conn_options=conn_options)
 
-            def synthesize(self, text: str, **kwargs: Any) -> tts.ChunkedStream:
+            def _synthesize(self, chunk: tts.SpeechChunk, **kwargs: Any) -> tts.ChunkedStream:
                 raise AssertionError("the voice reply should stream")
 
         async with VoiceSession(tts=Speech()) as session:

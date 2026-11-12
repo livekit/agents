@@ -232,3 +232,44 @@ fn content_leaves_only_with_capture_on() {
     assert_eq!(attr(off, "gen_ai.evaluation.explanation"), None);
     assert_eq!(attr(on, "gen_ai.evaluation.explanation"), Some(&Value::String("because".into())));
 }
+
+/// Jobs on threads of one process share its tracer, each under its own root with its job id.
+/// https://github.com/livekit/agents/pull/7171
+#[test]
+fn threaded_jobs_get_their_own_job_root_span() {
+    let (tracer, sink) = tracer();
+    let jobs: Vec<_> = ["AJ_one", "AJ_two"]
+        .into_iter()
+        .map(|id| {
+            let tracer = tracer.clone();
+            std::thread::spawn(move || {
+                let cx = tracer.root().with_job(Some(JobKey(id.into())));
+                let entry = start(&cx, job());
+                for _ in 0..50 {
+                    let cause = ShutdownCause::SessionClosed;
+                    let shutdown = start(entry.cx(), JobShutdown { reason: id.into(), cause });
+                    end(start(shutdown.cx(), OnSessionEnd { callback: id.into() }), ());
+                }
+            })
+        })
+        .collect();
+    for job in jobs {
+        job.join().unwrap();
+    }
+
+    let spans = sink.spans();
+    let roots: Vec<_> = spans.iter().filter(|s| s.parent.is_none()).collect();
+    assert_eq!(roots.len(), 2, "one job root per job: {roots:?}");
+    assert_ne!(roots[0].context.trace_id, roots[1].context.trace_id);
+    for root in &roots {
+        let job: Vec<_> =
+            spans.iter().filter(|s| s.context.trace_id == root.context.trace_id).collect();
+        assert_eq!(job.len(), 101, "{:?}", root.job);
+        for span in job {
+            assert_eq!(span.job, root.job);
+        }
+    }
+    let mut jobs: Vec<_> = roots.iter().map(|r| r.job.clone()).collect();
+    jobs.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    assert_eq!(jobs, [Some(JobKey("AJ_one".into())), Some(JobKey("AJ_two".into()))]);
+}

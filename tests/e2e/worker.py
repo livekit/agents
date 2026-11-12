@@ -1,7 +1,7 @@
 """Scripted application served by a real AgentServer in a separate Python process.
 
 Only model choice and the application service are scripted. Agent execution, tools,
-approval, lane leases, persistence and A2A streaming use the production implementation.
+approval, partition_key leases, persistence and A2A streaming use the production implementation.
 """
 
 from __future__ import annotations

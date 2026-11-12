@@ -32,6 +32,7 @@ use lk_agents_runtime::room_io::output::transcription::{
 use lk_agents_runtime::room_io::pre_connect_audio::PreConnectAudioHandler;
 use lk_agents_runtime::rtc::events::byte_streams;
 use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
+use lk_agents_voice::room_io::machine::output::TAKEN_AHEAD_MS;
 use std::collections::BTreeMap;
 use std::future::{Future, poll_fn};
 use std::pin::Pin;
@@ -254,6 +255,36 @@ async fn text_from_an_earlier_attachment_cannot_drive_the_new_attachment() {
     assert!(
         matches!(delivered, RoomIoEvent::TextInput(TextInput { text, .. }) if text == "current attachment")
     );
+    io.clone().aclose().await;
+}
+
+// Catches: chat streams read one after another, so a sender that never finishes its message held
+// back every later message in the room.
+#[tokio::test]
+async fn a_stalled_chat_sender_does_not_hold_back_the_next_message() {
+    let (room, clock) = fake_room("stalled-chat");
+    room.add_participant("person", ParticipantKind::Standard);
+    let room =
+        Arc::new(StreamingRoom { local: room.local().clone(), room, text: watch::channel(None).0 });
+    let config = RoomIoConfig { audio_output: None, text_input: true, ..config() };
+    let io = room_io(room.clone(), clock, config);
+    let (mut events, _) = io.events().unwrap();
+    io.clone().start(lk_agents_abi::telemetry::Cx::NONE);
+    io.wait_for_ready().await.expect("room io ready");
+    while events.try_recv().is_ok() {}
+
+    let stalled = room.open_chat();
+    stalled.send("a message never finished".into()).await.unwrap();
+    let chunks = room.open_chat();
+    chunks.send("hello".into()).await.unwrap();
+    drop(chunks);
+
+    let delivered = within_a_second(events.recv()).await.flatten();
+    assert!(
+        matches!(delivered, Some(RoomIoEvent::TextInput(TextInput { ref text, .. })) if text == "hello"),
+        "{delivered:?}"
+    );
+    drop(stalled);
     io.clone().aclose().await;
 }
 
@@ -918,16 +949,18 @@ async fn paused_room_output_backpressures_capture() {
     let output = audio_output(room, clock);
     output.start().await.unwrap();
     output.pause();
+    // the room takes audio ahead up to its bound, then holds the voice back
+    let second = silence_frame(24000, 24000, 1);
+    for _ in 0..TAKEN_AHEAD_MS / 1000 {
+        output.capture_frame(&second).await.unwrap();
+    }
     let result = lk_agents_abi::timeout(
         &RealClock::new(),
         Duration::from_millis(50),
-        output.capture(&lk_agents_abi::telemetry::Cx::NONE, &silence_frame(24000, 24000, 1)),
+        output.capture(&lk_agents_abi::telemetry::Cx::NONE, &second),
     )
     .await;
-    assert!(
-        result.is_err(),
-        "a paused sink must bound accepted audio instead of buffering a second"
-    );
+    assert!(result.is_err(), "a paused sink must bound accepted audio instead of buffering on");
     output.aclose().await;
 }
 
@@ -988,8 +1021,9 @@ async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
         let frame = silence_frame(480, 24_000, 1);
         let (refused, playback) = if mode == "blocked" {
             output.pause();
-            for _ in 0..10 {
-                output.capture_frame(&frame).await.unwrap();
+            let second = silence_frame(24_000, 24_000, 1);
+            for _ in 0..TAKEN_AHEAD_MS / 1000 {
+                output.capture_frame(&second).await.unwrap();
             }
             let mut waiting = Box::pin(output.capture_frame(&frame));
             pending(waiting.as_mut()).await;
@@ -1038,6 +1072,15 @@ async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
 
 #[path = "room_transcription_tests.rs"]
 mod transcription;
+
+#[path = "room_participant_tests.rs"]
+mod participant;
+
+#[path = "room_playback_tests.rs"]
+mod playback;
+
+#[path = "room_reconnect_tests.rs"]
+mod reconnect;
 
 #[derive(Default)]
 struct Spans(Mutex<Vec<lk_agents_abi::telemetry::record::SpanRecord>>);

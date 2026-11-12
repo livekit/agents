@@ -6,14 +6,15 @@ use lk_agents_abi::{ChatItem, MetricsReport};
 /// waits on it.
 pub const TOOL_NON_BLOCKING_EXTRA_KEY: &str = "__livekit_agents_tool_non_blocking";
 
-/// A [`SpeechId`] on the wire, `speech_{n}`: `Display` mints it and `FromStr` reads it back.
+/// A [`SpeechId`] on the wire, `speech_<12 hex>`: `Display` mints it and `FromStr` reads it back.
 impl std::fmt::Display for SpeechId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "speech_{}", self.0)
+        write!(f, "speech_{:012x}", self.0)
     }
 }
 
-/// A string that is not a `speech_{n}`. `Display` is the binding's `ValueError` text, verbatim.
+/// A string that is not a `speech_<12 hex>`. `Display` is the binding's `ValueError` text,
+/// verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotASpeechId(pub String);
 
@@ -30,7 +31,8 @@ impl std::str::FromStr for SpeechId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         s.strip_prefix("speech_")
-            .and_then(|n| n.parse::<u64>().ok())
+            .filter(|hex| hex.len() == 12)
+            .and_then(|hex| u64::from_str_radix(hex, 16).ok())
             .map(SpeechId)
             .ok_or_else(|| NotASpeechId(s.to_owned()))
     }
@@ -44,10 +46,10 @@ mod wire_id_tests {
     // never fires.
     #[test]
     fn a_wire_id_round_trips_and_a_foreign_one_is_named() {
-        let id = SpeechId(42);
-        assert_eq!(id.to_string(), "speech_42");
-        assert_eq!("speech_42".parse::<SpeechId>(), Ok(id));
-        for bad in ["42", "speech_", "speech_x1", "speech_ab12cd"] {
+        let id = SpeechId(0x3f9a_0c1b_2d4e);
+        assert_eq!(id.to_string(), "speech_3f9a0c1b2d4e");
+        assert_eq!("speech_3f9a0c1b2d4e".parse::<SpeechId>(), Ok(id));
+        for bad in ["42", "speech_", "speech_42", "speech_zz9a0c1b2d4e"] {
             let err = bad.parse::<SpeechId>().unwrap_err();
             assert_eq!(err.to_string(), format!("not a driver speech id: {bad:?}"));
         }
@@ -274,6 +276,9 @@ pub struct SpeechState {
     watchdog_armed: bool,
     /// The ids of what this speech committed to the conversation, in order.
     item_ids: Vec<String>,
+    /// A failure that cut the speech without ending its generation (its audio output raised):
+    /// the error the speech is done with, however its generation then ends.
+    failure: Option<ProviderError>,
     events: Vec<SpeechUpdate>,
     changed: bool,
 }
@@ -287,6 +292,7 @@ impl SpeechState {
             restore: allow_interruptions,
             watchdog_armed: false,
             item_ids: Vec::new(),
+            failure: None,
             events: vec![SpeechUpdate::Created],
             changed: true,
         }
@@ -446,8 +452,14 @@ impl SpeechState {
         }
     }
 
+    /// The speech's audio output failed under it: the speech is cut, and done with `error`.
+    pub fn output_failed(&mut self, error: ProviderError) {
+        self.failure.get_or_insert(error);
+    }
+
     /// `_mark_done`: the first error stays. The newest generation is done with the speech.
     pub fn mark_done(&mut self, error: Option<ProviderError>) {
+        let error = self.failure.take().or(error);
         let view = self.change();
         if !view.done() {
             view.phase = SpeechPhase::Done {

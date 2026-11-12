@@ -795,11 +795,8 @@ impl lk_agents_abi::a2a::door::TextEndpoint for Door {
             let exchange: Arc<dyn Any + Send + Sync> = exchange;
             let exchange = exchange.downcast::<Exchange>().expect("the worker's exchange");
             let served = format!(
-                "{} {:?} {:?} {}",
-                serving.request.route,
-                serving.endpoint_url,
-                serving.credentials,
-                serving.agent_name
+                "{} {:?} {}",
+                serving.request.route, serving.endpoint_url, serving.agent_name
             );
             exchange.send(start(200, &[])).await.unwrap();
             exchange.send(body(served.as_bytes(), false)).await.unwrap();
@@ -842,8 +839,7 @@ async fn a_door_route_is_served_by_its_door_and_everything_else_by_the_binding()
     let (out, _) = exchange_with(&server, raw, request("/desk/{path:path}")).await;
     assert_eq!(
         String::from_utf8(parse(&out).body).unwrap(),
-        "/desk/{path:path} Some(\"/agents/front/_/desk\") \
-         Some((\"key\", \"secret\")) front"
+        "/desk/{path:path} Some(\"/agents/front/_/desk\") front"
     );
     for route in ["/other/{path:path}", "/desk", "/desk/{id}", "/desk/v1/{path:path}"] {
         let (out, _) = exchange_with(&server, raw, request(route)).await;

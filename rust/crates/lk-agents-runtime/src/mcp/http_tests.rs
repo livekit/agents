@@ -92,6 +92,7 @@ fn client() -> CleanupClient {
         },
         clock: Arc::new(lk_agents_net::clock::RealClock::new()),
         receipt: Arc::new(TransportReceipt::default()),
+        cancel: tokio_util::sync::CancellationToken::new(),
     }
 }
 
@@ -176,4 +177,26 @@ async fn request_authorization_overrides_the_default_and_sdk_bearer() {
         "{wire}"
     );
     peer.close().await;
+}
+
+// Catches: the SDK awaiting its handshake POST without a cancellation, so a server that accepts
+// and never answers held a cancelled connection until `read_timeout`: setup took init_timeout
+// plus the teardown deadline, delaying a call's first reply.
+#[tokio::test]
+async fn a_cancelled_connection_abandons_a_post_the_server_never_answers() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url: Arc<str> = format!("http://{}/mcp", listener.local_addr().unwrap()).into();
+    let silent = tokio::spawn(async move {
+        let (_socket, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let client = CleanupClient { options: ApiConnectOptions::default(), ..client() };
+    let cancel = client.cancel.clone();
+    let post = client.post_message(url, tool_call(), None, None, HashMap::new());
+    tokio::pin!(post);
+    assert!(tokio::time::timeout(READ_INACTIVITY, &mut post).await.is_err(), "no answer yet");
+    cancel.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(1), post).await.expect("abandoned");
+    assert!(matches!(result, Err(Error::TransportChannelClosed)), "{result:?}");
+    silent.abort();
 }

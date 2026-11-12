@@ -15,7 +15,7 @@ pub const DEFAULT_POLICY_MAP: [(&str, Policy); 5] = [
     ("sms", Policy::Batch),
     ("whatsapp", Policy::Batch),
     ("email", Policy::Batch),
-    ("a2a", Policy::Interrupt),
+    ("a2a", Policy::Queue),
     ("delegation", Policy::Queue),
 ];
 
@@ -28,7 +28,6 @@ pub const DEFAULT_DEBOUNCE: [(&str, Duration); 5] = [
     ("delegation", Duration::ZERO),
 ];
 
-pub const INTERRUPTION_NEW_MESSAGE: &str = "new-message";
 pub const A2A_CHANNEL: &str = "a2a";
 pub const DELEGATION_CHANNEL: &str = "delegation";
 
@@ -58,7 +57,7 @@ pub fn resolve_policy(policy: &PolicySpec, channel: &str) -> Policy {
             table.insert(k.as_str(), *v);
         }
     }
-    table.get(channel).or_else(|| table.get(A2A_CHANNEL)).copied().unwrap_or(Policy::Interrupt)
+    table.get(channel).or_else(|| table.get(A2A_CHANNEL)).copied().unwrap_or(Policy::Queue)
 }
 
 /// The wait before a turn starts so a burst has landed; per channel, or one value for all. A

@@ -19,7 +19,6 @@ pub const STATE_OPTION_FIELDS: &[&str] = &[
     "transcription_timeout",
     "preemptive_generation",
     "min_consecutive_speech_delay",
-    "use_tts_aligned_transcript",
     "ivr_detection",
 ];
 

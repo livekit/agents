@@ -91,10 +91,10 @@ jobs:
             mypy-${{ matrix.python-version }}-
 
       - name: Check Types
-        run: uv run python scripts/check_types.py
+        run: make type-check
 
   # The Rust core and the package over it: every Rust rule (`make -C rust check`: fmt, Clippy,
-  # rust/check, generated drift), and livekit-agents-next builds and runs its smoke call end to end.
+  # rust/check, generated drift), and livekit-agents builds and runs its native integration tests.
   # The Rust test suites run once, in the launch gate.
   core:
     runs-on: ubuntu-latest
@@ -130,25 +130,25 @@ jobs:
           key: core-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: core-
 
-      - name: Build livekit-agents-next
+      - name: Build livekit-agents
         run: |
-          uv venv -p 3.12 .venv-next
-          uv pip install -p .venv-next/bin/python --no-config maturin pytest pytest-asyncio pytest-timeout ruff
-          cd livekit-agents-next
-          VIRTUAL_ENV=../.venv-next ../.venv-next/bin/maturin develop --uv
+          uv venv -p 3.12 .venv-native
+          uv pip install -p .venv-native/bin/python --no-config maturin pytest pytest-asyncio pytest-timeout pytest-asyncio-concurrent==0.5.2 requests ruff
+          cd livekit-agents
+          VIRTUAL_ENV=../.venv-native ../.venv-native/bin/maturin develop --uv
 
       # The plugin base classes (hand-written beside their proxies, e.g. `rust/crates/lk-agents-abi/src/tts/tts.py`)
       # merged with their records: linted like hand-written code (the repository's ruff excludes `_generated/`).
       - name: Lint the generated plugin bases
-        working-directory: livekit-agents-next/livekit/agents/_generated
+        working-directory: livekit-agents/livekit/agents/_generated
         run: |
-          ../../../../.venv-next/bin/ruff check llm.py stt.py tts.py vad.py realtime.py
-          ../../../../.venv-next/bin/ruff format --check llm.py stt.py tts.py vad.py realtime.py
+          ../../../../.venv-native/bin/ruff check llm.py stt.py tts.py vad.py realtime.py
+          ../../../../.venv-native/bin/ruff format --check llm.py stt.py tts.py vad.py realtime.py
 
-      - name: Smoke
-        run: .venv-next/bin/python livekit-agents-next/scripts/smoke.py
+      - name: Native integration tests
+        run: .venv-native/bin/python -m pytest tests/test_native_smoke.py --unit
 
       - name: Rust rules
         run: |
           rustup component add clippy rustfmt
-          PYO3_PYTHON=$PWD/.venv-next/bin/python make -C rust check CARGO_RUNNER=cargo
+          PYO3_PYTHON=$PWD/.venv-native/bin/python make -C rust check CARGO_RUNNER=cargo

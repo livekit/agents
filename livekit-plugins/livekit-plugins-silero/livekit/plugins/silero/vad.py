@@ -18,7 +18,7 @@ from livekit import agents
 from livekit.agents import inference
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
-VADStream = agents.VADStream
+VADStream = agents.vad.VADStream
 
 
 class VAD(inference.VAD):

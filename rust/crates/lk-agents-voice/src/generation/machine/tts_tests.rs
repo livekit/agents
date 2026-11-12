@@ -1,5 +1,5 @@
 use super::*;
-use crate::transcription::SpeechViews;
+use lk_agents_core::lexer::Vocabulary;
 
 fn stamp(word: &str, start: f64, end: f64) -> TranscriptChunk {
     TranscriptChunk { start_time: Some(start), end_time: Some(end), ..TranscriptChunk::new(word) }
@@ -10,7 +10,7 @@ fn aligned(
     reply: &str,
     stamps: &[TranscriptChunk],
 ) -> Vec<(String, Option<f64>, Option<f64>, bool)> {
-    let said = Visible::of(reply, &SpeechViews::default());
+    let said = Visible::of(reply, &Vocabulary::LiveKit);
     let mut state = AlignedTranscript::default();
     let mut effects: Vec<_> = stamps.iter().flat_map(|s| state.word(s, &said)).collect();
     effects.extend(state.end(&said));
@@ -85,11 +85,67 @@ fn stamps_that_never_match_map_by_position_rather_than_stall() {
 
 #[test]
 fn an_unstamped_segment_shows_the_transcript_whole() {
-    let said = Visible::of("**Hi** there", &SpeechViews::default());
+    let said = Visible::of("**Hi** there", &Vocabulary::LiveKit);
     let mut state = AlignedTranscript::default();
     let effects = state.end(&said);
     assert!(matches!(effects[0], AlignedTranscriptEffect::WarnUnaligned));
     let AlignedTranscriptEffect::Capture(chunks) = &effects[1] else { panic!() };
     assert_eq!(chunks, &said.shown);
     assert!(state.end(&said).is_empty(), "closing flushes once");
+}
+
+// Catches: a word the reply's deltas split (`Re` + `f`) read as two words, so the voice's stamp for
+// the whole word matched neither and every word after was mapped by position (survey seed 152).
+#[test]
+fn a_word_split_across_deltas_is_one_word() {
+    let mut said = Visible::of("Re", &Vocabulary::LiveKit);
+    said.extend(Visible::of("f #A1 and **Up", &Vocabulary::LiveKit));
+    said.extend(Visible::of("grade** now", &Vocabulary::LiveKit));
+    let mut state = AlignedTranscript::default();
+    let stamps = [
+        stamp("Ref ", 0.0, 0.3),
+        stamp("#A1 ", 0.3, 0.6),
+        stamp("and ", 0.6, 0.7),
+        stamp("Upgrade ", 0.7, 1.0),
+        stamp("now", 1.0, 1.2),
+    ];
+    let pieces: Vec<_> = stamps
+        .iter()
+        .flat_map(|s| state.word(s, &said))
+        .filter_map(|e| match e {
+            AlignedTranscriptEffect::CaptureTimed(c) => Some((c.text, c.start_time)),
+            _ => None,
+        })
+        .collect();
+    let at = |text: &str| pieces.iter().find(|p| p.0 == text).map(|p| p.1).expect(text);
+    assert_eq!((at("Re"), at("f")), (Some(0.0), Some(0.0)), "{pieces:?}");
+    assert_eq!((at("**Up"), at("grade**")), (Some(0.7), Some(0.7)), "{pieces:?}");
+    assert_eq!(at(" now"), Some(1.0), "every word after keeps its own stamp: {pieces:?}");
+}
+
+// Catches: a stamp mapped by position onto a word the reply had not finished writing, so the
+// transcript showed half a word (`Tuesda`) and a cut there kept it in the history (survey seed 152).
+#[test]
+fn a_word_still_being_written_waits_for_the_rest_of_it() {
+    let mut said = Visible::of("Monday. Tuesda", &Vocabulary::LiveKit);
+    let mut state = AlignedTranscript::default();
+    let shown = |effects: Vec<AlignedTranscriptEffect>| -> Vec<String> {
+        effects
+            .into_iter()
+            .flat_map(|e| match e {
+                AlignedTranscriptEffect::CaptureTimed(c) => vec![c.text],
+                AlignedTranscriptEffect::Capture(cs) => cs.into_iter().map(|c| c.text).collect(),
+                _ => Vec::new(),
+            })
+            .collect()
+    };
+    let mut got = shown(state.word(&stamp("Monday. ", 0.0, 0.5), &said));
+    for (i, word) in ["Tuesday ", "nine ", "to ", "five ", "sharp "].iter().enumerate() {
+        let at = 0.5 + i as f64 * 0.3;
+        got.extend(shown(state.word(&stamp(word, at, at + 0.3), &said)));
+    }
+    assert!(!got.iter().any(|t| t.contains("Tuesda")), "a half word was shown: {got:?}");
+    said.extend(Visible::of("y 9-5 sharp", &Vocabulary::LiveKit));
+    got.extend(shown(state.end(&said)));
+    assert_eq!(got.concat(), "Monday. Tuesday 9-5 sharp", "{got:?}");
 }

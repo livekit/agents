@@ -9,7 +9,7 @@ over A2A, which holds the airline's systems, decides, asks for what is missing a
 | `frontend_agent.py` | The front desk: `RemoteAgent(...).as_tool()` to the back office, the phone and text doors. |
 | `backend_agent.py`  | The back office: `triage` and `continue_request`, the specialists and the payment guards.  |
 | `skyline.py`        | The airline's own system: bookings, flights, baggage files, payments, the policy, in memory. |
-| `main.py`           | One worker for both, each on its own lane.                                                  |
+| `main.py`           | One worker for both, with separate voice, frontend-text and backend partitions.                                                  |
 | `scenarios/*.yaml`  | Simulation scenarios: `compensation`, `missing_details`, `spam`.                            |
 
 ## The back office
@@ -19,13 +19,16 @@ over A2A, which holds the airline's systems, decides, asks for what is missing a
 async def triage(ctx: RunContext[SupportContext], email: Email) -> TriageResult | InputRequired:
     ...
 
-@back_office.a2a_session(endpoint="backend", inbox="queue")
+@back_office.a2a_session(
+    partition_key="backend", endpoint="backend", description="Skyline Air back office", inbox="queue"
+)
 async def text(ctx: A2ASessionContext) -> RunResult[str]:
     app = SupportContext()
     await ctx.store.load_context(app)
-    result = await backend.run(ctx.message, message_history=ctx.message_history, context=app)
+    binding = ctx.store.bind(app)
+    turn = await TextSession(agent=backend).run(ctx.message, context=binding)
     await ctx.store.save_context(app)
-    return result
+    return turn.result
 ```
 
 - **Questions wait across turns.** Without a booking reference of the sender's own, or a bag's
@@ -43,15 +46,18 @@ async def text(ctx: A2ASessionContext) -> RunResult[str]:
 `TriageResult.action` is `resolved` (answered, and paid when something was due), `to_human`
 (above EUR 400, a reply failing review twice, or a booking never found) or `close` (spam).
 
+See [storage and conversation state](../README.md#storage-and-conversation-state) for
+the shared persistence, partition and binding setup.
+
 ## Run
 
 With the stack and the environment of [`../README.md`](../README.md), from this directory:
 
 ```sh
-uv run python main.py dev
+lk agent dev
 ```
 
-The console (`../../console`) then talks to the front desk. Try: "Tom Okafor,
+Run `lk agent console` from this directory to talk to the front desk. Try: "Tom Okafor,
 tom.okafor@example.com. You cancelled SK517 to Lisbon two days before departure", then the
 booking reference it asks for, SKY5C1: EUR 400 is paid.
 

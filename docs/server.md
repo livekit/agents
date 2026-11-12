@@ -38,8 +38,8 @@ to a completed task artifact, or `status="no_output"` to a completed task with
 no artifact. The handler saves application fields explicitly
 before returning either result.
 
-Called once per turn with the agent's lane already loaded; a batched burst
-is one call. The return value is the answer; the framework commits the lane
+Called once per turn with the agent's partition already loaded; a batched burst
+is one call. The return value is the answer; the framework commits the partition
 and delivers it. A handler that raises ends the task `failed`.
 
 For explicit streaming, consume `agent.run_stream(...)`, forward text through
@@ -56,18 +56,18 @@ A module defines its doors on an `AgentHandler` and leaves the server to
 the entrypoint, which serves them with `server.add(handler, ...)`:
 
 ```python
-back_office = AgentHandler(lane="backend")
+back_office = AgentHandler()
 
-@back_office.a2a_session(endpoint="backend", description="The back office.")
+@back_office.a2a_session(
+    endpoint="backend", description="The back office.", partition_key="backend"
+)
 async def text(ctx: A2ASessionContext) -> str: ...
 ```
 
-`lane=` names the lane its text doors write; left out, the worker's own. A
-handler with a lane of its own keeps its conversations apart from the
-worker's on the same thread ([lane mechanics](internals/storage.md#lanes)), which is how two
-agents share one process in `examples/`. Such a handler has text doors only:
-the voice door, the call's fast brain, takes no lane and writes the worker's,
-so `rtc_session()` on a handler with `lane=` raises. `livekit.agents.a2a_session` and
+Each text or voice entry point selects its own `partition_key`, defaulting to
+`"default"`. Matching keys in the same thread share history and write ownership;
+different keys keep independent conversations. A handler is only a grouping of
+entry points and can contain both text and voice. `livekit.agents.a2a_session` and
 `rtc_session` are the same decorators for a single door with no handler;
 `server.a2a_session` and `server.rtc_session` serve one in one step.
 
@@ -83,7 +83,7 @@ state, passes it to `session.run()`, and saves the returned state.
 | `store`             | managed storage for explicit application-context load/save |
 | `thread`           | the durable thread; see [threads.md](threads.md)                                                                  |
 | `task_id`           | the A2A task this turn answers                                                                                       |
-| `tasks`             | the lane's recent tasks                                                                                              |
+| `tasks`             | the partition's recent tasks                                                                                              |
 | `caller_history`    | a delegating caller's conversation, when it sent one; see [multi-agent composition](agents.md#working-with-other-agents)                           |
 | `update(text)`      | a progress message to the client while the turn runs                                                                 |
 | `stream(source)`    | forward text chunks from an async iterable as they arrive; returns the joined text                                   |
@@ -100,8 +100,7 @@ reaches, crosses to the turn in the order the handler awaited it:
   forwarding wait until the turn reads, so a handler never runs ahead of its turn.
 - **Checkpoints.** A run's checkpoint (before a model request or a result delivery,
   and `stream()` before its first chunk) waits for the turn's verdict. It yields once
-  a newer message waits under `interrupt` or the client cancelled the task; the run
-  then stops and the turn ends `interrupted`.
+  the client cancels the task; the run then stops and the task ends `canceled`.
 - **Cancellation.** A turn that loses its lease or fails a step cancels the handler.
   The handler sees `CancelledError` where it waits. Its cleanup (`finally`, `async with`)
   completes before the turn closes, up to the host teardown limit. A cancelled
@@ -139,13 +138,13 @@ It serves only:
 | `POST v1` `tasks/cancel` | no (403) | `write` |
 
 A grant covers only its scope's threads, and works on every door of the project: a
-browser's grant can call the back office as well as the front desk. History, lanes,
+browser's grant can call the back office as well as the front desk. History, partitions,
 context and the journal are never served here. Under `lk agent console` there is no
 authentication. Tokens: [protocol/a2a.md](protocol/a2a.md#tokens).
 
 `AgentServer(preload_modules=[...])` imports preload modules in the supplied
 order before job readiness. Import failures stop initialization and identify
-the module; see [Python preloading](internals/rust-core.md#python-preloading).
+the module; see [Python preloading](internals/processes.md#python-preloading).
 
 The Python entrypoint runs the server with `cli.run_app(server)`. The shared
 `lk-agents-cli` crate parses `start` and `console`; the Go `lk agent` command
@@ -364,12 +363,12 @@ deadline enforcement are shared host-neutral Rust services. Each language host s
 constructed server; the shared Rust CLI never searches for or imports application modules.
 Python logging conversion and asyncio ownership remain in the Python adapter.
 
-The agent is named once, `AgentServer(agent_name=)`: the lane every door of
-the server writes, and the first segment of every door's address,
+The agent is named once, `AgentServer(agent_name=)`: the first segment of every door's address,
 `/agents/{agent_name}/{deployment}/{endpoint}`. `LIVEKIT_AGENT_NAME` is the
 default and `LIVEKIT_AGENT_NAME_OVERRIDE` a launcher's force. The voice door,
 `@server.rtc_session(endpoint=)`, is named the same way, the agent's name when
-left empty.
+left empty. Each text or voice door selects its saved history and state with
+`partition_key=`, which defaults to `"default"` independently of these names.
 
 The endpoint is served at `/agents/<agent>/<deployment>/<endpoint>`, with
 `_` as the deployment of a worker registered without one. Where it is served
@@ -380,7 +379,7 @@ alike. The registration's edition is checked against it, and a mismatch is logge
 | Worker | Served by | Authentication |
 | --- | --- | --- |
 | registered with LiveKit Cloud | Cloud, at `https://<project>.livekit.cloud/agents/...` | Cloud verifies the bearer token |
-| registered with a self-hosted LiveKit server | the worker's public listener | the worker verifies the bearer token with the project's API secret |
+| registered with a self-hosted LiveKit server | the server, or the worker's public listener | the server verifies the bearer token; reached directly, the worker reads it unverified and warns that it runs in insecure mode |
 | `lk agent console` (not registered) | the worker's public listener on `127.0.0.1` only | **none**: every caller holds every thread permission, new threads in the `console` scope; the worker logs that its endpoints are unauthenticated |
 
 Every
@@ -397,10 +396,11 @@ one JSON-RPC call; another path is `404`, another method `405`. Before either it
 authenticates the caller, in this order:
 
 1. the console's listener (`lk agent console`) vouches for every caller;
-2. a worker holding the project's API key and secret verifies the bearer, from
-   `Authorization: Bearer` or `X-LiveKit-Thread-Grant`, as a Cloud node forwards it; with
-   none, a request a node authorized is the project;
-3. a worker without credentials admits only what a node authorized, as the project.
+2. otherwise the worker reads the claims of the token the node verified, from
+   `Authorization: Bearer`, else the `access_token` query parameter, and never verifies a
+   signature itself; with no token, a request a node authorized is the project.
+
+See [auth.md](auth.md#verification).
 
 A refusal is `401` or `403` with a JSON `{"error": message}` body, the same for the card.
 The body is read up to the 16 MiB payload budget; past it the call is refused with
@@ -474,7 +474,7 @@ A route of kind `text` goes to its A2A door
 ([`lk-agents-runtime/src/a2a/door/serve.rs`](../rust/crates/lk-agents-runtime/src/a2a/door/serve.rs))
 instead of the binding.
 Python route authoring and the ASGI adapter are in
-[`livekit/agents/http/server.py`](../livekit-agents-next/livekit/agents/http/server.py):
+[`livekit/agents/http/server.py`](../livekit-agents/livekit/agents/http/server.py):
 `AgentRoutes` defines the routes and runs the application once per exchange.
 
 ## Voice entrypoints
@@ -524,9 +524,8 @@ is set. Otherwise the channel is `livekit/channel`, or `a2a` when absent.
 
 | Policy       | Behaviour                                                                                                                                                                                                                                                                      | Default for                      |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- |
-| `interrupt`  | the running turn stops at its next safe point, its task ends `canceled` with `livekit/interrupted: true` and `livekit/interruptionReason: "new-message"`, and the new message gets its turn. Nothing already sent is retracted; tools that ran stay in the history            | `a2a`, and any unlisted channel  |
-| `queue`      | each message waits for the running turn, then gets its own turn and its own reply, in the order the messages arrived; nothing merged, nothing cancelled                                                                                                                       | `delegation`                     |
-| `batch`      | the message is queued in the lane's inbox; after `debounce`, every queued message is answered in one turn. The reply goes on the last message's task; the earlier ones complete with no artifact and `livekit/mergedInto` pointing at it                                     | `sms`, `whatsapp`, `email`       |
+| `queue`      | each message waits for the running turn, then gets its own turn and its own reply, in the order the messages arrived; nothing merged, nothing cancelled                                                                                                                       | `a2a`, `delegation`, and unlisted channels |
+| `batch`      | the message is queued in the partition's inbox; after `debounce`, every queued message is answered in one turn. The reply goes on the last message's task; the earlier ones complete with no artifact and `livekit/mergedInto` pointing at it                                     | `sms`, `whatsapp`, `email`       |
 | `concurrent` | runs take no lease and may overlap; they append to the history and cannot save application fields or routing state. Only for endpoints that do not write application data                                                                                                                                      | opt-in                           |
 | `reject`     | the request fails with `UnsupportedOperationError`, whose data names the running task as `runningTaskId`; no task is created. The client cancels the running task first                                                                                                      | opt-in                           |
 
@@ -543,9 +542,9 @@ async def support(ctx: A2ASessionContext):
 
 `inbox` is one policy for every channel or a map that
 overrides part of the default. `debounce` is the wait before a turn starts
-so a burst has landed, under `batch`, `interrupt` and `queue`: two seconds
+so a burst has landed, under `batch` and `queue`: two seconds
 for `sms`, `whatsapp` and `email` and zero for `a2a` and `delegation` by
-default. Under `interrupt` and `queue`, a message that has not had its turn
+default. Under `queue`, a message that has not had its turn
 after `wait_timeout` (a `timedelta`, a minute by default) fails `lease-timeout`;
 under `batch` it keeps waiting, since the run that drains the inbox owns its
 messages. `debounce` and `wait_timeout` are `timedelta`s.
@@ -553,7 +552,7 @@ messages. `debounce` and `wait_timeout` are `timedelta`s.
 ## Tasks on the wire
 
 Every turn is an A2A task in the thread's context. Its `submitted` row is
-written before the turn waits for the lane, so a client can `tasks/get`,
+written before the turn waits for the partition, so a client can `tasks/get`,
 `tasks/list` and `tasks/cancel` it from any worker at
 once. Each of these finds the thread from `contextId` in its params: A2A's
 task methods carry only the task id, so a stock client that sends just the
@@ -582,7 +581,6 @@ A stock client ignores them.
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `livekit/channel`                                   | the channel a message came on; `a2a` when absent                                             |
 | `livekit/kind`                                      | `delegation` on a message another agent sent                                                 |
-| `livekit/interrupted`, `livekit/interruptionReason` | on a `canceled` task the server ended for a newer message                                    |
 | `livekit/mergedInto`                                | on a `completed` task whose message was answered by another task's turn                      |
 | `livekit/reason`                                    | why a task failed: `thread-not-found`, `lease-timeout`, `worker-lost`, `storage-unavailable` |
 | `livekit/verbatim`                                  | the part of an answer or a question that reaches the person exactly as written               |

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use lk_agents_abi::llm::realtime::{RealtimeConfigurationError, RealtimeProvider};
-use serde_json::{Value, json};
+use lk_agents_abi::llm::realtime_options::{Eagerness, SemanticVad, ServerVad, TurnDetection};
 
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 
@@ -10,8 +10,6 @@ pub use lk_agents_abi::llm::realtime::{NUM_CHANNELS, SAMPLE_RATE};
 // xAI's extra inbound events are decoded for every dialect: OpenAI never sends them, and gating
 // would make the decoder depend on config.
 
-/// A string: `f64::INFINITY` would serialise as `null`.
-pub const DEFAULT_MAX_OUTPUT_TOKENS: &str = "inf";
 /// `_FATAL_ERROR_CODES`: the socket reconnects but every generation fails, so these stop the
 /// reconnect loop.
 pub const FATAL_ERROR_CODES: &[&str] =
@@ -23,65 +21,22 @@ pub fn is_fatal_error(code: Option<&str>, type_: Option<&str>) -> bool {
     c.is_some_and(|c| FATAL_ERROR_CODES.contains(&c))
 }
 
-/// Server-side turn detection, in the two shapes the API accepts; `Raw` passes any other shape.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum TurnDetection {
-    ServerVad {
-        threshold: f64,
-        prefix_padding_ms: u32,
-        silence_duration_ms: u32,
-        create_response: bool,
-        interrupt_response: bool,
-    },
-    SemanticVad {
-        eagerness: &'static str,
-        create_response: bool,
-        interrupt_response: bool,
-    },
-    #[serde(untagged)]
-    Raw(Value),
+/// `_server_turn_taking_enabled`: detects turns and answers them. `create_response is not
+/// False`, so an omitted key counts as enabled.
+pub fn server_turn_taking(td: Option<&TurnDetection>) -> bool {
+    td.is_some_and(|td| td.create_response() != Some(false))
 }
 
-impl TurnDetection {
-    pub fn to_json(&self) -> Value {
-        match self {
-            TurnDetection::ServerVad {
-                threshold,
-                prefix_padding_ms,
-                silence_duration_ms,
-                create_response,
-                interrupt_response,
-            } => json!({
-                "type": "server_vad",
-                "threshold": threshold,
-                "prefix_padding_ms": prefix_padding_ms,
-                "silence_duration_ms": silence_duration_ms,
-                "create_response": create_response,
-                "interrupt_response": interrupt_response,
-            }),
-            TurnDetection::SemanticVad { eagerness, create_response, interrupt_response } => {
-                json!({
-                    "type": "semantic_vad",
-                    "create_response": create_response,
-                    "eagerness": eagerness,
-                    "interrupt_response": interrupt_response,
-                })
-            }
-            TurnDetection::Raw(v) => v.clone(),
-        }
-    }
-
-    /// `_server_turn_taking_enabled`: detects turns and answers them. `create_response is not
-    /// False`, so an omitted key counts as enabled.
-    pub fn server_turn_taking(td: Option<&TurnDetection>) -> bool {
-        match td {
-            None => false,
-            Some(TurnDetection::ServerVad { create_response, .. })
-            | Some(TurnDetection::SemanticVad { create_response, .. }) => *create_response,
-            Some(TurnDetection::Raw(v)) => v.get("create_response") != Some(&Value::Bool(false)),
-        }
-    }
+/// Server VAD with every field set, as the dialects default it.
+const fn server_vad(silence_duration_ms: u32) -> TurnDetection {
+    TurnDetection::Server(ServerVad {
+        threshold: Some(0.5),
+        prefix_padding_ms: Some(300),
+        silence_duration_ms: Some(silence_duration_ms),
+        idle_timeout_ms: None,
+        create_response: Some(true),
+        interrupt_response: Some(true),
+    })
 }
 
 /// The capability bits a dialect flips after the shared computation; `None` keeps the
@@ -239,11 +194,11 @@ pub const OPENAI: Dialect = Dialect {
     default_voice: lk_agents_abi::llm::realtime::DEFAULT_VOICE,
     default_transcription_model: Some("gpt-4o-mini-transcribe"),
     // `DEFAULT_TURN_DETECTION`, "got from a default session from their API".
-    default_turn_detection: Some(TurnDetection::SemanticVad {
-        eagerness: "medium",
-        create_response: true,
-        interrupt_response: true,
-    }),
+    default_turn_detection: Some(TurnDetection::Semantic(SemanticVad {
+        eagerness: Some(Eagerness::Medium),
+        create_response: Some(true),
+        interrupt_response: Some(true),
+    })),
     default_max_session_duration: Some(Duration::from_secs(20 * 60)),
     forced_modalities: None,
     caps: CapabilityOverrides {
@@ -288,13 +243,7 @@ pub const XAI: Dialect = Dialect {
     default_voice: "Ara",
     default_transcription_model: Some("grok-transcribe"),
     // Server VAD: OpenAI's Azure defaults plus an explicit `interrupt_response`.
-    default_turn_detection: Some(TurnDetection::ServerVad {
-        threshold: 0.5,
-        prefix_padding_ms: 300,
-        silence_duration_ms: 200,
-        create_response: true,
-        interrupt_response: true,
-    }),
+    default_turn_detection: Some(server_vad(200)),
     // Never recycles. A 20-minute call on xAI holds one socket; on OpenAI it holds two.
     default_max_session_duration: None,
     forced_modalities: Some(&["audio", "text"]),
@@ -327,13 +276,7 @@ pub const VOICE_LIVE: Dialect = Dialect {
     default_voice: "en-US-AvaMultilingualNeural",
     // Chosen per model by the plugin: `azure-speech` is the only one text models accept.
     default_transcription_model: None,
-    default_turn_detection: Some(TurnDetection::ServerVad {
-        threshold: 0.5,
-        prefix_padding_ms: 300,
-        silence_duration_ms: 500,
-        create_response: true,
-        interrupt_response: true,
-    }),
+    default_turn_detection: Some(server_vad(500)),
     default_max_session_duration: None,
     // Voice Live has no `conversation.item.truncate`.
     caps: CapabilityOverrides { message_truncation: Some(false), ..OPENAI.caps },
@@ -386,9 +329,9 @@ impl Dialect {
         let c = self.caps;
         RealtimeCapabilities {
             message_truncation: c.message_truncation.unwrap_or(true),
-            turn_detection: TurnDetection::server_turn_taking(turn_detection),
+            turn_detection: server_turn_taking(turn_detection),
             // Same as `turn_detection` until the dialects say otherwise (R-11).
-            auto_turn_reply_generation: TurnDetection::server_turn_taking(turn_detection),
+            auto_turn_reply_generation: server_turn_taking(turn_detection),
             user_transcription,
             auto_tool_reply_generation: false,
             audio_output,
@@ -447,11 +390,19 @@ mod tests {
     // Catches: `_server_turn_taking_enabled` written as `create_response == Some(true)`.
     #[test]
     fn an_omitted_create_response_still_counts_as_server_turn_taking() {
-        let raw = TurnDetection::Raw(json!({"type": "server_vad"}));
-        assert!(TurnDetection::server_turn_taking(Some(&raw)));
-        let off = TurnDetection::Raw(json!({"type": "server_vad", "create_response": false}));
-        assert!(!TurnDetection::server_turn_taking(Some(&off)));
-        assert!(!TurnDetection::server_turn_taking(None));
+        let vad = |create_response| {
+            TurnDetection::Server(ServerVad {
+                threshold: None,
+                prefix_padding_ms: None,
+                silence_duration_ms: None,
+                idle_timeout_ms: None,
+                create_response,
+                interrupt_response: None,
+            })
+        };
+        assert!(server_turn_taking(Some(&vad(None))));
+        assert!(!server_turn_taking(Some(&vad(Some(false)))));
+        assert!(!server_turn_taking(None));
     }
 
     // Catches: reading only `error.code` when classifying a fatal error.

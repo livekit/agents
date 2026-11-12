@@ -5,6 +5,8 @@ use lk_agents_abi::agent::run::{RunResult, StreamEvent};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextSessionEffect {
+    /// A consistent accepted state before subsequent model/tool work.
+    Checkpoint(Box<super::TextSessionState>),
     /// The runtime binds this invocation to its frame and execution identity.
     InvocationStarted {
         frame_id: FrameId,

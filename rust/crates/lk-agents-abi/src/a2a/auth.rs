@@ -65,6 +65,9 @@ pub struct AuthGrant {
     pub read: bool,
     #[host(default = false)]
     pub delete: bool,
+    /// The covered threads' databases; never in a browser's grant.
+    #[host(default = false)]
+    pub sql: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,18 +154,6 @@ pub trait Credentials: Send + Sync + Sized + 'static {
         #[host(default = "")] deployment: String,
     ) -> Result<AuthPrincipal, AuthError>;
 
-    /// The caller of a request with these headers: its `Authorization` bearer token, else its
-    /// thread grant header (names compared case-insensitively); with neither, the project when
-    /// the LiveKit node authorized the call.
-    #[host(call)]
-    fn principal(
-        &self,
-        headers: std::collections::BTreeMap<String, String>,
-        #[host(kw)] agent_name: String,
-        #[host(default = "")] deployment: String,
-        #[host(default = false)] node_authorized: bool,
-    ) -> Result<AuthPrincipal, AuthError>;
-
     #[host(call)]
     fn project_token(
         &self,
@@ -193,15 +184,6 @@ pub trait CredentialsFacade {
         token: String,
         #[host(kw, default = "")] agent_name: String,
         #[host(default = "")] deployment: String,
-    ) -> Result<AuthPrincipal, AuthError>;
-    /// The caller of a request with these headers (`Credentials.principal`).
-    #[host(native = principal)]
-    fn _principal(
-        &self,
-        headers: std::collections::BTreeMap<String, String>,
-        #[host(kw)] agent_name: String,
-        #[host(default = "")] deployment: String,
-        #[host(default = false)] node_authorized: bool,
     ) -> Result<AuthPrincipal, AuthError>;
     fn project_token(
         &self,

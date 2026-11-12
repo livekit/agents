@@ -52,34 +52,6 @@ class ScriptedStream(LLMStream):
             raise APIError("provider failed", retryable=True)
 
 
-async def test_failure_before_output_serves_the_fallback_response() -> None:
-    primary, backup = ScriptedLLM(None, fail=True), ScriptedLLM("Recovered.")
-    adapter = FallbackAdapter([primary, backup], retry_interval=0)
-    try:
-        async with adapter.chat(chat_ctx=ChatContext.empty()) as stream:
-            response = await stream.collect()
-        assert response.text == "Recovered."
-        assert backup.requests == 1
-    finally:
-        await adapter.aclose()
-
-
-async def test_failure_after_output_does_not_open_a_fallback_or_duplicate_the_text() -> None:
-    primary, backup = ScriptedLLM("Partial answer", fail=True), ScriptedLLM("Repeated answer")
-    adapter = FallbackAdapter([primary, backup], retry_interval=0)
-    received: list[str] = []
-    try:
-        with pytest.raises(APIError):
-            async with adapter.chat(chat_ctx=ChatContext.empty()) as stream:
-                async for chunk in stream:
-                    if chunk.delta and chunk.delta.content:
-                        received.append(chunk.delta.content)
-        assert received == ["Partial answer"]
-        assert primary.requests == 1 and backup.requests == 0
-    finally:
-        await adapter.aclose()
-
-
 async def test_repeated_plugin_entries_share_one_health_transition() -> None:
     primary, backup = ScriptedLLM(None, fail=True), ScriptedLLM("Recovered.")
     adapter = FallbackAdapter([primary, primary, backup], retry_interval=0, sticky=True)

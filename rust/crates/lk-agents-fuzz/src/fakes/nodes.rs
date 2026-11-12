@@ -7,7 +7,7 @@ use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::nodes::TextNode;
 use lk_agents_abi::{
     ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, StreamOutput, Stt, SttSink,
-    SttSource, TranscriptChunk, Ts, Tts, TtsSink, TtsSource,
+    SttSource, TranscriptChunk, Ts, Tts, TtsSource,
 };
 
 use crate::record::NodeUse;
@@ -22,6 +22,8 @@ pub struct FakeNodes {
     llm: Option<Arc<dyn Llm>>,
     tts: Option<Arc<dyn Tts>>,
     stt: Option<Arc<dyn Stt>>,
+    /// What the `tts_node`'s synthesis paces by.
+    clock: Arc<dyn lk_agents_abi::Clock>,
     /// The `llm_node`'s own answer instead of calling the model.
     llm_text: Option<&'static str>,
 }
@@ -33,9 +35,10 @@ impl FakeNodes {
         llm: Option<Arc<dyn Llm>>,
         tts: Option<Arc<dyn Tts>>,
         stt: Option<Arc<dyn Stt>>,
+        clock: Arc<dyn lk_agents_abi::Clock>,
         llm_text: Option<&'static str>,
     ) -> Arc<Self> {
-        Arc::new(FakeNodes { registry, agent: agent.to_owned(), llm, tts, stt, llm_text })
+        Arc::new(FakeNodes { registry, agent: agent.to_owned(), llm, tts, stt, clock, llm_text })
     }
 
     /// The host's node override panics or never returns, when the run draws it.
@@ -225,26 +228,37 @@ impl NodeFactory for FakeNodes {
             if let Some(text) = self.llm_text {
                 return Ok(Box::new(NodeText(Some(text))) as LlmStream);
             }
-            self.llm.as_ref().ok_or_else(|| missing("LLM"))?.chat(&cx, req).await
+            // as the host's default node: the session's model through its leg, so what the model
+            // writes that is not for the person is taken out as it is without an override
+            let llm = self.llm.clone().ok_or_else(|| missing("LLM"))?;
+            lk_agents_runtime::voice::session::llm_leg(llm, None).chat(&cx, req).await
         })
     }
 
+    /// As the host's default node: a synthesis by the session's TTS, its text through the stage.
     fn tts_node(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        expressive: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
+        Result<lk_agents_abi::DuplexStream<lk_agents_abi::TextSink, TtsSource>, ProviderError>,
     > {
         Box::pin(async move {
             self.used(NodeUse::Tts);
             self.hazard().await;
-            self.tts
-                .as_ref()
-                .ok_or_else(|| missing("TTS"))?
-                .stream(&lk_agents_abi::telemetry::Cx::NONE, expressive)
-                .await
+            let tts = self.tts.clone().ok_or_else(|| missing("TTS"))?;
+            let once = lk_agents_abi::ApiConnectOptions {
+                max_retry: 0,
+                ..lk_agents_abi::ApiConnectOptions::default()
+            };
+            lk_agents_runtime::inference::tts::stream(
+                tts,
+                &lk_agents_abi::telemetry::Cx::NONE,
+                once,
+                self.clock.clone(),
+                None,
+            )
+            .await
         })
     }
 

@@ -34,11 +34,10 @@ from livekit.agents import (
     APIConnectOptions,
     APITimeoutError,
     LanguageCode,
-    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -79,7 +78,6 @@ class _TTSOptions:
     pitch: float
     effects_profile_id: str
     speaking_rate: float
-    tokenizer: tokenize.SentenceTokenizer
     volume_gain_db: float
     custom_pronunciations: CustomPronunciations | None
     enable_ssml: bool
@@ -108,7 +106,6 @@ class TTS(tts.TTS):
         credentials_info: NotGivenOr[dict[str, object]] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         custom_pronunciations: NotGivenOr[CustomPronunciations] = NOT_GIVEN,
         use_streaming: bool = True,
         enable_ssml: bool = False,
@@ -138,7 +135,6 @@ class TTS(tts.TTS):
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
             credentials (google.auth.credentials.Credentials, optional): A credentials object to use directly, e.g. from Workload Identity Federation, where credentials are obtained in memory and never exist on disk. Takes precedence over ``credentials_info`` and ``credentials_file``. Default is NOT_GIVEN.
-            tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Defaults to `livekit.agents.tokenize.SentenceTokenizer`.
             custom_pronunciations (CustomPronunciations, optional): Custom pronunciations for the TTS. Default is None.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
             enable_ssml (bool, optional): Whether to enable SSML support. Default is False.
@@ -199,9 +195,6 @@ class TTS(tts.TTS):
             else:
                 voice_params.name = "Charon"
 
-        if not is_given(tokenizer):
-            tokenizer = tokenize.SentenceTokenizer()
-
         pronunciations = None if not is_given(custom_pronunciations) else custom_pronunciations
 
         self._opts = _TTSOptions(
@@ -211,7 +204,6 @@ class TTS(tts.TTS):
             pitch=pitch,
             effects_profile_id=effects_profile_id,
             speaking_rate=speaking_rate,
-            tokenizer=tokenizer,
             volume_gain_db=volume_gain_db,
             custom_pronunciations=pronunciations,
             enable_ssml=enable_ssml,
@@ -309,9 +301,7 @@ class TTS(tts.TTS):
         assert self._client is not None
         return self._client
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -321,12 +311,12 @@ class TTS(tts.TTS):
         self._streams.add(stream)
         return stream
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             options=replace(self._opts),
             client_factory=self._ensure_client,
@@ -421,7 +411,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._client_factory = client_factory
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
         encoding = self._opts.encoding
         if encoding not in (texttospeech.AudioEncoding.OGG_OPUS, texttospeech.AudioEncoding.PCM):
             enc_name = texttospeech.AudioEncoding._member_names_[encoding]
@@ -449,19 +439,21 @@ class SynthesizeStream(tts.SynthesizeStream):
             custom_pronunciations=self._opts.custom_pronunciations,
         )
 
-        async def _tokenize_input() -> None:
-            input_stream = None
+        async def _split_segments() -> None:
+            segment_ch: utils.aio.Chan[str] | None = None
             async for input in self.input:
-                if isinstance(input, str):
-                    if input_stream is None:
-                        input_stream = self._opts.tokenizer.stream()
-                        segments_ch.send_nowait(input_stream)
-                    input_stream.push_text(input)
+                if isinstance(input, tts.SpeechChunk):
+                    if segment_ch is None:
+                        segment_ch = utils.aio.Chan[str]()
+                        segments_ch.send_nowait(segment_ch)
+                    segment_ch.send_nowait(input.text)
                 else:
-                    if input_stream:
-                        input_stream.end_input()
-                    input_stream = None
+                    if segment_ch:
+                        segment_ch.close()
+                    segment_ch = None
 
+            if segment_ch:
+                segment_ch.close()
             segments_ch.close()
 
         async def _run_segments() -> None:
@@ -469,7 +461,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await self._run_stream(input_stream, output_emitter, streaming_config)
 
         tasks = [
-            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_split_segments()),
             asyncio.create_task(_run_segments()),
         ]
         try:
@@ -479,7 +471,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_stream(
         self,
-        input_stream: tokenize.SentenceStream,
+        input_stream: AsyncIterable[str],
         output_emitter: tts.AudioEmitter,
         streaming_config: texttospeech.StreamingSynthesizeConfig,
     ) -> None:
@@ -491,12 +483,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
 
             is_first_input = True
-            async for input in input_stream:
+            async for text in input_stream:
                 self.mark_started()
                 # prompt is only supported in the first input chunk (for Gemini TTS)
                 synthesis_input = texttospeech.StreamingSynthesisInput(
-                    markup=input.token if self._opts.use_markup else None,
-                    text=None if self._opts.use_markup else input.token,
+                    markup=text if self._opts.use_markup else None,
+                    text=None if self._opts.use_markup else text,
                     prompt=self._opts.prompt if is_first_input else None,
                 )
                 is_first_input = False

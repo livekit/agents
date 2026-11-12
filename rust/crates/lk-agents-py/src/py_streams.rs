@@ -32,6 +32,7 @@ pub mod interfaces {
 }
 
 use crate::generated::accessors as access;
+use crate::py_calls::Child;
 use crate::py_calls::Started;
 use crate::py_calls::captured_pair;
 use crate::py_calls::start_in;
@@ -51,7 +52,6 @@ use parking_lot::Mutex;
 use pyo3::prelude::*;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Reads one host item as `T`.
 pub type Convert<T> = fn(&Bound<'_, PyAny>) -> PyResult<T>;
@@ -70,9 +70,27 @@ pub struct HostStream<T> {
     /// The pull whose caller stopped awaiting it: the next one resumes it.
     pending: Option<Started>,
     ended: bool,
-    input_stopped: Arc<AtomicBool>,
+    input: Arc<InputStop>,
     /// The input half's failure, which ends the output too.
     failure: Arc<Shared<Option<ProviderError>>>,
+}
+
+/// Whether a duplex stream still takes input, and the host task of the input entry in flight:
+/// stopping cancels it, so an input waiting on output nobody reads never outlives the stream.
+struct InputStop {
+    event_loop: Arc<Py<PyAny>>,
+    in_flight: Arc<Child>,
+}
+
+impl InputStop {
+    /// From any thread, a dropping one included: never waits for the GIL.
+    fn stop(&self) {
+        self.in_flight.cancel_later(&self.event_loop);
+    }
+
+    fn stopped(&self) -> bool {
+        self.in_flight.cancelled()
+    }
 }
 
 /// A host async iterator, the loop it runs on and its own context: a copy taken once, at open.
@@ -118,7 +136,10 @@ impl<T> HostStream<T> {
             clock,
             pending: None,
             ended: false,
-            input_stopped: Arc::new(AtomicBool::new(false)),
+            input: Arc::new(InputStop {
+                event_loop: Arc::new(event_loop.clone().unbind()),
+                in_flight: Arc::default(),
+            }),
             failure: Arc::new(Shared::new(None)),
         })
     }
@@ -140,7 +161,7 @@ impl<T> HostStream<T> {
                 event_loop: source.host.event_loop.clone_ref(py),
                 ctx: source.host.ctx.clone_ref(py),
                 to_host,
-                stopped: source.input_stopped.clone(),
+                stop: source.input.clone(),
                 failure: source.failure.clone(),
                 queue: Mutex::new(SinkQueue {
                     entries: VecDeque::new(),
@@ -178,7 +199,7 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
             let failure = self.failure.clone();
             if let Some(error) = failure.with(|failed| failed.clone()) {
                 self.ended = true;
-                self.input_stopped.store(true, Ordering::Release);
+                self.input.stop();
                 return Err(error);
             }
             let pull = match &mut self.pending {
@@ -189,7 +210,7 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
                 biased;
                 error = failure.wait_until(|failed| failed.clone()) => {
                     self.ended = true;
-                    self.input_stopped.store(true, Ordering::Release);
+                    self.input.stop();
                     return Err(error);
                 },
                 pulled = pull.settled() => pulled,
@@ -206,12 +227,12 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
                 Ok(Some(item)) => Ok(Some(item)),
                 Ok(None) => {
                     self.ended = true;
-                    self.input_stopped.store(true, Ordering::Release);
+                    self.input.stop();
                     Ok(None)
                 }
                 Err(e) => {
                     self.ended = true;
-                    self.input_stopped.store(true, Ordering::Release);
+                    self.input.stop();
                     Err(captured(e))
                 }
             }
@@ -227,7 +248,7 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
         // Closed here, however this close ends: the drop backstop stays off.
         self.ended = true;
         Box::pin(async move {
-            self.input_stopped.store(true, Ordering::Release);
+            self.input.stop();
             let clock = self.clock.clone();
             let pending = self.pending.take();
             let has_aclose =
@@ -269,7 +290,7 @@ impl<T: Send + 'static> lk_agents_abi::utils::stream::ProviderStream<T> for Host
 /// never runs on unowned.
 impl<T> Drop for HostStream<T> {
     fn drop(&mut self) {
-        self.input_stopped.store(true, Ordering::Release);
+        self.input.stop();
         if self.ended {
             return;
         }
@@ -412,7 +433,7 @@ struct SinkShared<I> {
     event_loop: Py<PyAny>,
     ctx: Py<PyAny>,
     to_host: ToHost<I>,
-    stopped: Arc<AtomicBool>,
+    stop: Arc<InputStop>,
     failure: Arc<Shared<Option<ProviderError>>>,
     queue: Mutex<SinkQueue<I>>,
 }
@@ -431,7 +452,7 @@ impl<I: Send + 'static> HostSink<I> {
             if let Some(failed) = self.shared.failure.with(|failed| failed.clone()) {
                 return Err(failed);
             }
-            if self.shared.stopped.load(Ordering::Acquire) || queue.ended {
+            if self.shared.stop.stopped() || queue.ended {
                 return Err(lk_agents_abi::errors::ApiError::new("stream input is closed").into());
             }
             let ending = matches!(entry, Entry::EndInput);
@@ -480,49 +501,85 @@ fn fail(failure: &Shared<Option<ProviderError>>, error: ProviderError) {
 }
 
 /// On the loop, inside the stream's context: everything queued, in order, until the queue is
-/// empty; the first failure stops delivery and is kept for the next push.
-fn drain<I>(py: Python<'_>, shared: &SinkShared<I>) {
+/// empty; the first failure stops delivery and is kept for the next push. An entry whose handling
+/// is awaitable runs as a task of that context, and the drain resumes once it settled: the queue
+/// stays scheduled meanwhile, so pushes queue behind it and the loop never blocks on it.
+fn drain<I: Send + 'static>(py: Python<'_>, shared: &Arc<SinkShared<I>>) {
     loop {
-        if shared.stopped.load(Ordering::Acquire) {
-            let _dropped = {
-                let mut queue = shared.queue.lock();
-                queue.scheduled = false;
-                std::mem::take(&mut queue.entries)
-            };
-            return;
-        }
-        let batch: Vec<Entry<I>> = {
+        let entry = {
             let mut queue = shared.queue.lock();
-            if queue.entries.is_empty() {
-                queue.scheduled = false;
-                return;
-            }
-            queue.entries.drain(..).collect()
+            let entry = if shared.stop.stopped() { None } else { queue.entries.pop_front() };
+            queue.scheduled = entry.is_some();
+            entry
         };
-        for entry in batch {
-            let target = shared.target.bind(py);
-            let delivered = match entry {
-                Entry::Item(item) => (shared.to_host)(py, item)
-                    .and_then(|v| access::StreamInput::push(target)?.call1((v,))),
-                Entry::Flush => access::StreamInput::flush(target).and_then(|call| call.call0()),
-                Entry::EndInput => {
-                    access::StreamInput::end_input(target).and_then(|call| call.call0())
+        let Some(entry) = entry else { return discard(shared) };
+        let handled = call_input(py, shared.target.bind(py), shared.to_host, entry)
+            .and_then(|value| crate::py_calls::as_coroutine(&value));
+        match handled {
+            Ok(None) => {}
+            Ok(Some(coroutine)) => {
+                if let Err(e) = await_then_drain(py, shared, &coroutine) {
+                    failed(py, shared, &e);
                 }
-            };
-            if let Err(e) = delivered {
-                // Capturing reads the exception's attributes: Python code, run before the lock.
-                let failed = crate::py_errors::capture(py, &e);
-                // Dropped after the guard: an item's host objects may run Python finalizers.
-                fail(&shared.failure, failed);
-                let _dropped = {
-                    let mut queue = shared.queue.lock();
-                    queue.scheduled = false;
-                    std::mem::take(&mut queue.entries)
-                };
                 return;
             }
+            Err(e) => return failed(py, shared, &e),
         }
     }
+}
+
+/// Runs `coroutine` as a task of the stream's context, published so a stop cancels it, then
+/// resumes the drain in that same context.
+fn await_then_drain<I: Send + 'static>(
+    py: Python<'_>,
+    shared: &Arc<SinkShared<I>>,
+    coroutine: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let task =
+        access::EventLoop::create_task(shared.event_loop.bind(py), coroutine, shared.ctx.bind(py))?;
+    let resumed = Arc::clone(shared);
+    let done = pyo3::types::PyCFunction::new_closure(py, None, None, move |args, _| {
+        let py = args.py();
+        resumed.stop.in_flight.settled(py);
+        match access::Task::result(&args.get_item(0)?)?.call0() {
+            Ok(_) => drain(py, &resumed),
+            // Cancelled by a stop: what is queued is discarded with the input. Any other
+            // cancellation (its loop closing) fails the input, so the queue is never left
+            // scheduled with nothing to drain it.
+            Err(e)
+                if resumed.stop.stopped()
+                    && e.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py) =>
+            {
+                discard(&resumed)
+            }
+            Err(e) => failed(py, &resumed, &e),
+        }
+        PyResult::Ok(())
+    })?;
+    let context = pyo3::types::PyDict::new(py);
+    context.set_item("context", shared.ctx.bind(py))?;
+    access::Task::add_done_callback(&task)?.call((done,), Some(&context))?;
+    shared.stop.in_flight.publish(py, &task)
+}
+
+/// The input failed: kept for the next push, and what is queued is discarded.
+fn failed<I>(py: Python<'_>, shared: &SinkShared<I>, error: &PyErr) {
+    // Capturing reads the exception's attributes: Python code, run before the lock.
+    fail(&shared.failure, crate::py_errors::capture(py, error));
+    discard(shared);
+}
+
+/// Unschedules the queue once stopped or failed, dropping what it holds.
+fn discard<I>(shared: &SinkShared<I>) {
+    if !shared.stop.stopped() && shared.failure.with(|failed| failed.is_none()) {
+        return;
+    }
+    // Dropped after the guard: an item's host objects may run Python finalizers.
+    let _dropped = {
+        let mut queue = shared.queue.lock();
+        queue.scheduled = false;
+        std::mem::take(&mut queue.entries)
+    };
 }
 
 impl<I: Send + Sync + 'static> StreamInput<I> for HostSink<I> {
@@ -550,7 +607,7 @@ impl<I: Send + Sync + 'static> StreamInput<I> for HostSink<I> {
             if let Some(failed) = shared.failure.with(|failed| failed.clone()) {
                 return Err(failed);
             }
-            if shared.stopped.load(Ordering::Acquire) {
+            if shared.stop.stopped() {
                 return Err(lk_agents_abi::errors::ApiError::new("stream input is closed").into());
             }
             let started = Python::attach(|py| {

@@ -221,12 +221,30 @@ pub fn end_of_track(sample_rate: u32, num_channels: u16) -> AudioFrame {
     silence_frame(sample_rate / 2, sample_rate, num_channels)
 }
 
-/// The pre-connect head a reader replays ahead of the live frames. A missing or expired head is
-/// no head, so the live track plays on; any other failure stops the reader with it.
-pub fn replayed_head(head: Result<Vec<AudioFrame>>) -> Result<Vec<AudioFrame>> {
+#[cfg(test)]
+mod disconnect_tests {
+    use super::*;
+
+    /// The silence padded at a disconnect holds half a second of samples for every channel.
+    /// https://github.com/livekit/agents/issues/7967
+    #[test]
+    fn disconnect_padding_has_half_a_second_per_channel() {
+        let frame = end_of_track(48_000, 2);
+
+        assert_eq!(frame.samples_per_channel, 24_000);
+        assert_eq!(frame.data.len(), 2 * 24_000 * 2, "16-bit samples for both channels");
+        assert!(frame.data.iter().all(|&b| b == 0));
+    }
+}
+
+/// The pre-connect head a reader replays ahead of the live frames, and why a head was dropped.
+/// The head is optional: a missing, expired or unreadable one is no head, so the live track
+/// plays on. Only an unreadable head is worth reporting.
+pub fn replayed_head(head: Result<Vec<AudioFrame>>) -> (Vec<AudioFrame>, Option<IoError>) {
     match head {
-        Err(IoError::PreConnectTimeout(_)) => Ok(Vec::new()),
-        head => head,
+        Ok(frames) => (frames, None),
+        Err(IoError::PreConnectTimeout(_)) => (Vec::new(), None),
+        Err(error) => (Vec::new(), Some(error)),
     }
 }
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import pytest
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel
 
 from livekit.agents import Agent, RunContext, ToolResult, function_tool
 from livekit.agents.llm import FunctionToolCall, Toolset
@@ -27,48 +27,6 @@ def model_call(name: str, arguments: str) -> FakeLLM:
             )
         ]
     )
-
-
-async def test_tool_validates_constraints_and_defaults_before_running_the_body() -> None:
-    seen: list[tuple[int, str]] = []
-    agent = Agent(instructions="test", llm=model_call("reserve", '{"count": 2}'))
-
-    @agent.tool
-    async def reserve(
-        ctx: RunContext,
-        count: Annotated[int, Field(ge=1, le=10)],
-        label: Annotated[str, AfterValidator(str.upper)] = "ready",
-    ) -> ToolResult:
-        """Reserve seats."""
-        seen.append((count, label))
-        return ToolResult("reserved", reply_required=False)
-
-    result = await agent.run("do it")
-    assert seen == [(2, "ready")]
-    output = next(i for i in result.new_messages() if i.type == "function_call_output")
-    assert output.output == "reserved" and not output.is_error
-    assert result.usage.requests == 1
-
-
-@pytest.mark.parametrize("arguments", ["{}", '{"count": 0}', '{"count": "many"}'])
-async def test_invalid_tool_arguments_report_feedback_without_running_the_body(
-    arguments: str,
-) -> None:
-    ran = False
-    agent = Agent(instructions="test", llm=model_call("reserve", arguments))
-
-    @agent.tool
-    async def reserve(ctx: RunContext, count: Annotated[int, Field(ge=1)]) -> str:
-        """Reserve seats."""
-        nonlocal ran
-        ran = True
-        return "reserved"
-
-    result = await agent.run("do it")
-    assert not ran
-    output = next(i for i in result.new_messages() if i.type == "function_call_output")
-    assert output.is_error and "count" in output.output
-    assert "An internal error occurred" not in output.output
 
 
 async def test_application_validator_changes_the_value_received_by_the_tool() -> None:

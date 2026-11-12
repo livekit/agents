@@ -140,15 +140,24 @@ pub struct Namespace {
 const LOCAL_PAGE: i64 = 100;
 
 impl Namespace {
-    /// A call's lane, its turns' health metrics recorded under the call's span `cx`.
+    /// A call's partition, its turns' health metrics recorded under the call's span `cx`.
     pub async fn voice_store(
         &self,
         thread_id: String,
-        lane: String,
+        partition_key: String,
         initial_history: Option<Vec<lk_agents_abi::ChatItem>>,
         cx: lk_agents_abi::telemetry::Cx,
+        activation: Option<ContextStore>,
     ) -> Result<VoiceStore, StorageError> {
-        VoiceStore::bound(self.storage().await?, thread_id, lane, initial_history, cx).await
+        VoiceStore::bound_with_activation(
+            self.storage().await?,
+            thread_id,
+            partition_key,
+            initial_history,
+            cx,
+            activation,
+        )
+        .await
     }
 
     async fn backend(&self) -> Result<&Backend, StorageError> {
@@ -235,7 +244,6 @@ fn thread_info(t: ThreadRecord) -> ThreadInfo {
         last_active: seconds_of(t.last_active),
         expires_at: seconds_of(t.expires_at),
         idle_ttl_seconds: t.idle_ttl.map_or(0, |d| d.seconds),
-        database_id: t.database_id,
     }
 }
 
@@ -254,7 +262,7 @@ pub fn thread_item_page(page: ItemPage) -> Result<ThreadItemPage, StorageError> 
         .into_iter()
         .map(|p| {
             Ok(ThreadItem {
-                agent: p.lane,
+                agent: p.partition_key,
                 seq: p.seq,
                 message_id: p.item.message_id.unwrap_or_default(),
                 item: chat_item(p.item.payload)?,
@@ -289,7 +297,7 @@ pub(crate) async fn thread_tasks(
                 thread_id: thread_id.to_owned(),
                 name: row.name,
                 status: row.status,
-                updated_at: row.updated_at / 1000,
+                updated_at: row.updated_at_ms / 1000,
             });
         }
         if page.next_page_token.is_empty() {
@@ -489,22 +497,23 @@ impl HostStorageClass for Namespace {
     async fn _core_context_store(
         &self,
         thread_id: String,
-        lane: String,
+        partition_key: String,
     ) -> Result<Self::ContextActivation, StorageError> {
-        ContextStore::bound(self.storage().await?, thread_id, lane, self.cx.clone()).await
+        ContextStore::bound(self.storage().await?, thread_id, partition_key, self.cx.clone()).await
     }
 
     async fn _core_turn_store(
         &self,
         thread_id: String,
-        lane: String,
+        partition_key: String,
         scopes: Vec<ContextScope>,
         routing_state: Option<Value>,
         read_only: bool,
     ) -> Result<Self::ContextActivation, StorageError> {
         let storage = self.storage().await?;
         let cx = self.cx.clone();
-        ContextStore::turn(storage, thread_id, lane, scopes, routing_state, read_only, cx).await
+        ContextStore::turn(storage, thread_id, partition_key, scopes, routing_state, read_only, cx)
+            .await
     }
 
     async fn aclose(&self) {
@@ -537,8 +546,8 @@ impl host::handles::Thread for Thread {
     fn id(&self) -> String {
         self.id().to_owned()
     }
-    async fn lanes(&self) -> Result<Vec<host::LaneRow>, StorageError> {
-        self.lanes().await
+    async fn partitions(&self) -> Result<Vec<host::PartitionRow>, StorageError> {
+        self.partitions().await
     }
     async fn journal(
         &self,
@@ -547,69 +556,94 @@ impl host::handles::Thread for Thread {
     ) -> Result<Vec<host::EventRow>, StorageError> {
         self.journal(after_id, limit).await
     }
-    async fn history(&self, lane: String) -> Result<Vec<host::ItemRow>, StorageError> {
-        self.lane(&lane).history().await?.into_iter().map(TryInto::try_into).collect()
+    async fn history(&self, partition_key: String) -> Result<Vec<host::ItemRow>, StorageError> {
+        self.partition(&partition_key).history().await?.into_iter().map(TryInto::try_into).collect()
     }
-    async fn tasks(&self, lane: String, limit: i64) -> Result<Vec<host::TaskRecord>, StorageError> {
-        Ok(self.lane(&lane).tasks(None, limit).await?.into_iter().map(Into::into).collect())
+    async fn tasks(
+        &self,
+        partition_key: String,
+        limit: i64,
+    ) -> Result<Vec<host::TaskRecord>, StorageError> {
+        Ok(self
+            .partition(&partition_key)
+            .tasks(None, limit)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
     async fn task(&self, task_id: String) -> Result<Option<host::TaskRecord>, StorageError> {
         Ok(self.task(&task_id).await?.map(Into::into))
     }
     async fn list_tasks(
         &self,
-        lane: Option<String>,
+        partition_key: Option<String>,
         status: Option<host::TaskState>,
         order: lk_agents_abi::storage::thread::TaskOrder,
         page_size: i64,
         page_token: Option<String>,
     ) -> Result<host::TaskPage, StorageError> {
-        let query =
-            crate::TaskQuery { lane, status, order, page_size, page_token, updated_after: 0 };
+        let query = crate::TaskQuery {
+            partition_key,
+            status,
+            order,
+            page_size,
+            page_token,
+            updated_after: 0,
+        };
         Ok(self.list_tasks(&query).await?.into())
     }
     async fn list_items(
         &self,
-        lane: Option<String>,
+        partition_key: Option<String>,
         after: Option<String>,
         limit: i64,
     ) -> Result<host::ThreadItemPage, StorageError> {
-        self.list_items(lane.as_deref(), after.as_deref().filter(|a| !a.is_empty()), limit)
+        self.list_items(partition_key.as_deref(), after.as_deref().filter(|a| !a.is_empty()), limit)
             .await
             .and_then(crate::storage::thread_item_page)
     }
-    async fn lane_info(&self, lane: String) -> Result<Option<host::LaneRow>, StorageError> {
-        self.lane(&lane).info().await
+    async fn partition_info(
+        &self,
+        partition_key: String,
+    ) -> Result<Option<host::PartitionRow>, StorageError> {
+        self.partition(&partition_key).info().await
     }
     async fn inbox(
         &self,
-        lane: String,
+        partition_key: String,
         pending: bool,
     ) -> Result<Vec<host::InboxRow>, StorageError> {
-        Ok(self.lane(&lane).inbox(pending).await?.into_iter().map(Into::into).collect())
+        Ok(self
+            .partition(&partition_key)
+            .inbox(pending)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
     async fn cancel_task(
         &self,
-        lane: String,
+        partition_key: String,
         task_id: String,
         metadata: Map<String, Value>,
     ) -> Result<Option<host::TaskRecord>, StorageError> {
-        Ok(self.lane(&lane).cancel_task(&task_id, metadata).await?.map(Into::into))
+        Ok(self.partition(&partition_key).cancel_task(&task_id, metadata).await?.map(Into::into))
     }
     async fn open_run(
         &self,
-        lane: String,
+        partition_key: String,
         run_id: String,
         channel: Option<String>,
         wait_timeout: Option<std::time::Duration>,
     ) -> Result<RunHandle, StorageError> {
-        let kind = crate::thread::run::LaneKind::Text;
+        let kind = crate::thread::run::PartitionKind::Text;
         let mut options = RunOptions { channel, kind, ..RunOptions::new(run_id.clone(), run_id) };
         if let Some(timeout) = wait_timeout {
             options.wait_timeout = timeout;
         }
         let owner = crate::Holder::new("run");
-        Ok(RunHandle::new(self.lane(&lane).open(options, &owner).await?))
+        Ok(RunHandle::new(self.partition(&partition_key).open(options, &owner).await?))
     }
     fn close(&self, env: &ProcessEnv) {
         let thread = self.clone();
@@ -684,7 +718,7 @@ impl host::handles::Run for RunHandle {
 pub struct ThreadHandle {
     namespace: Arc<Namespace>,
     thread_id: String,
-    agent: String,
+    partition_key: String,
 }
 
 impl ThreadHandle {
@@ -701,14 +735,14 @@ impl ThreadHandle {
 impl host::handles::ThreadHandle for ThreadHandle {
     type Namespace = Namespace;
 
-    fn new(namespace: Arc<Namespace>, thread_id: String, agent: String) -> Self {
-        Self { namespace, thread_id, agent }
+    fn new(namespace: Arc<Namespace>, thread_id: String, partition_key: String) -> Self {
+        Self { namespace, thread_id, partition_key }
     }
     fn id(&self) -> String {
         self.thread_id.clone()
     }
-    fn agent(&self) -> String {
-        self.agent.clone()
+    fn partition_key(&self) -> String {
+        self.partition_key.clone()
     }
     fn namespace(&self) -> Arc<Namespace> {
         self.namespace.clone()
@@ -726,22 +760,24 @@ impl host::handles::ThreadHandle for ThreadHandle {
     }
     async fn list_items(
         &self,
-        agent: Option<String>,
+        partition_key: Option<String>,
         after: Option<String>,
         limit: i64,
     ) -> Result<host::ThreadItemPage, StorageError> {
-        self.read(async |t| Reads::list_items(t, agent, after, limit).await).await
+        self.read(async |t| Reads::list_items(t, partition_key, after, limit).await).await
     }
     async fn list_tasks(
         &self,
-        agent: Option<String>,
+        partition_key: Option<String>,
         status: Option<host::TaskState>,
         order: lk_agents_abi::storage::thread::TaskOrder,
         page_token: Option<String>,
         limit: i64,
     ) -> Result<host::TaskPage, StorageError> {
-        self.read(async |t| Reads::list_tasks(t, agent, status, order, limit, page_token).await)
-            .await
+        self.read(async |t| {
+            Reads::list_tasks(t, partition_key, status, order, limit, page_token).await
+        })
+        .await
     }
     async fn task(&self, task_id: String) -> Result<Option<host::TaskRecord>, StorageError> {
         self.read(async |t| Reads::task(t, task_id).await).await
@@ -753,23 +789,25 @@ impl host::handles::ThreadHandle for ThreadHandle {
     ) -> Result<Vec<host::EventRow>, StorageError> {
         self.read(async |t| Reads::journal(t, after_id, limit).await).await
     }
-    async fn history(&self, agent: String) -> Result<Vec<host::ItemRow>, StorageError> {
-        self.read(async |t| Reads::history(t, agent).await).await
+    async fn history(&self, partition_key: String) -> Result<Vec<host::ItemRow>, StorageError> {
+        self.read(async |t| Reads::history(t, partition_key).await).await
     }
     async fn tasks(
         &self,
-        agent: String,
+        partition_key: String,
         status: Option<host::TaskState>,
         limit: i64,
     ) -> Result<Vec<host::TaskRecord>, StorageError> {
         match status {
-            None => self.read(async |t| Reads::tasks(t, agent, limit).await).await,
+            None => self.read(async |t| Reads::tasks(t, partition_key, limit).await).await,
             Some(status) => {
                 let page = self
                     .read(async |t| {
-                        let (agent, order) =
-                            (Some(agent), lk_agents_abi::storage::thread::TaskOrder::Updated);
-                        Reads::list_tasks(t, agent, Some(status), order, limit, None).await
+                        let (partition_key, order) = (
+                            Some(partition_key),
+                            lk_agents_abi::storage::thread::TaskOrder::Updated,
+                        );
+                        Reads::list_tasks(t, partition_key, Some(status), order, limit, None).await
                     })
                     .await?;
                 Ok(page.tasks)

@@ -18,6 +18,8 @@ pub enum JournalEvent {
     ConversationItemAdded {
         item: Box<crate::livekit_protocol::agent::chat_context::ChatItem>,
     },
+    /// An immutable history revision referenced by a compact session checkpoint.
+    SessionItem(Value),
     ToolExecutionUpdated(ToolExecution),
     Error {
         error: String,
@@ -161,6 +163,7 @@ mod tests {
                 "run_ended",
             ),
             (JournalEvent::Usage(usage), "usage"),
+            (JournalEvent::SessionItem(json!({"id": "item"})), "session_item"),
             (
                 JournalEvent::ConversationItemAdded { item: Box::default() },
                 "conversation_item_added",

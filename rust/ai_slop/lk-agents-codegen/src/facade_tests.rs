@@ -3,7 +3,56 @@ fn emit(source: &str) -> Result<String, String> {
     Ok(super::emit(&declarations, &[])?.remove(0).text)
 }
 
-const LANE: &str = r#"
+#[test]
+fn optional_generic_context_preserves_typed_and_context_free_call_forms() {
+    let source = r#"
+        #[crate::host(class(name = "_core_Activation"))]
+        pub trait Activation {
+            #[host(call)]
+            fn bind(&self, context: Option<crate::HostRef>) -> crate::HostRef;
+        }
+        #[crate::host(facade(path = "livekit.agents.storage", native = Activation))]
+        pub trait Store {
+            #[host(
+                annotation(context = ".storage_session.Context_T | None", ret = ".storage_session.BoundContext[Context_T] | .storage_session.BoundContext[None]"),
+                overloads(with_context(context = ".storage_session.Context_T", ret = ".storage_session.BoundContext[Context_T]"),
+                without_context(ret = ".storage_session.BoundContext[None]")))]
+            fn bind(&self, #[host(default = None)] context: Option<crate::HostRef>) -> crate::HostRef;
+        }
+    "#;
+    let python = emit(source).unwrap();
+    assert!(
+        python.contains(
+            "@overload\n    def bind(self, context: Context_T) -> BoundContext[Context_T]:"
+        )
+    );
+    assert!(python.contains("@overload\n    def bind(self) -> BoundContext[None]:"));
+    assert!(python.contains("context: Context_T | None = None"));
+    assert!(python.contains("self._native.bind(context)"));
+    assert!(emit(&source.replace("without_context(ret =", "without_context(unknown =")).is_err());
+}
+
+#[test]
+fn static_factories_forward_without_an_instance() {
+    let python = emit(
+        r#"
+        #[crate::host(class(name = "_core_View"))]
+        pub trait View: Sized {
+            #[host(call)] fn decode(data: String) -> String;
+        }
+        #[crate::host(facade(path = "livekit.agents.storage", native = View))]
+        pub trait Snapshot {
+            fn decode(data: String) -> String;
+        }
+    "#,
+    )
+    .unwrap();
+    assert!(python.contains("@staticmethod\n    def decode(data: str) -> str:"));
+    assert!(python.contains("return _core._core_View.decode(data)"));
+    assert!(!python.contains("self._native.decode"));
+}
+
+const PARTITION_KEY: &str = r#"
     #[crate::host(record(module = "rows", extract, emit))]
     pub struct Row { pub payload: String }
     #[crate::host(class(name = "_core_Transaction"))]
@@ -34,12 +83,12 @@ const LANE: &str = r#"
         #[host(call)]
         fn interrupt(&self, #[host(kw, default = false)] force: bool);
     }
-    /// One agent's lane.
+    /// One agent's partition.
     #[crate::host(facade(path = "livekit.agents.storage", native = Handle, from_native))]
-    pub trait Lane {
+    pub trait Partition {
         #[host(new)]
         fn new(agent: String) -> Self;
-        /// The lane's history.
+        /// The partition's history.
         #[host(bind(agent = "_agent"), returns = "..llm.ChatContext", each = Row::payload)]
         async fn history(&self) -> crate::HostRef;
         #[host(bind(agent = "_agent"))]
@@ -68,9 +117,9 @@ const LANE: &str = r#"
 // awaited native wrapped before it is awaited.
 #[test]
 fn a_bound_argument_comes_from_self_and_each_row_is_mapped_into_the_host_type() {
-    let text = emit(LANE).unwrap();
+    let text = emit(PARTITION_KEY).unwrap();
     assert!(text.contains(
-        "    async def history(self) -> ChatContext:\n        \"\"\"The lane's history.\"\"\"\n        return ChatContext([x.payload for x in await self._native.history(self._agent)])\n"
+        "    async def history(self) -> ChatContext:\n        \"\"\"The partition's history.\"\"\"\n        return ChatContext([x.payload for x in await self._native.history(self._agent)])\n"
     ));
     assert!(text.contains(
         "    async def tasks(self, *, limit: int = 50) -> list[str]:\n        return await self._native.tasks(self._agent, limit=limit)\n"
@@ -81,7 +130,7 @@ fn a_bound_argument_comes_from_self_and_each_row_is_mapped_into_the_host_type() 
 // Catches: a facade given its native object building another, or its parameters not kept.
 #[test]
 fn a_facade_from_its_native_object_keeps_it_and_its_parameters() {
-    let text = emit(LANE).unwrap();
+    let text = emit(PARTITION_KEY).unwrap();
     assert!(text.contains(
         "    def __init__(self, native: _core._core_Handle, agent: str) -> None:\n        self._native = native\n        self._agent = agent\n"
     ));
@@ -91,7 +140,7 @@ fn a_facade_from_its_native_object_keeps_it_and_its_parameters() {
 // not assigning the native property, or a chained call not answering `self`.
 #[test]
 fn getters_setters_and_chained_calls_read_as_the_python_class() {
-    let text = emit(LANE).unwrap();
+    let text = emit(PARTITION_KEY).unwrap();
     assert!(text.contains("    def done(self) -> bool:\n        return self._native.closed\n"));
     assert!(text.contains(
         "    @allow.setter\n    def allow(self, value: bool) -> None:\n        self._native.allow = value\n"
@@ -105,7 +154,7 @@ fn getters_setters_and_chained_calls_read_as_the_python_class() {
 // value handed to the block unwrapped.
 #[test]
 fn a_context_manager_through_a_delegate_commits_or_rolls_back_the_entered_value() {
-    let text = emit(LANE).unwrap();
+    let text = emit(PARTITION_KEY).unwrap();
     assert!(text.contains(
         "    @contextlib.asynccontextmanager\n    async def _transaction(self, *, independent: bool) -> AsyncIterator[storage.Transaction]:\n        \"\"\"A transaction.\"\"\"\n        target = self._activation\n        value = await target.transaction(independent)\n        try:\n            yield storage.Transaction(value)\n        except BaseException:\n            value.rollback()\n            raise\n        await value.commit()\n"
     ));
@@ -164,7 +213,7 @@ fn a_foreign_base_is_imported_from_its_own_package() {
 
 #[test]
 fn a_bound_argument_that_is_also_a_parameter_is_refused() {
-    let source = LANE.replace(
+    let source = PARTITION_KEY.replace(
         "async fn tasks(&self, #[host(kw, default = 50)] limit: i64) -> Vec<String>;\n        #[host(native",
         "async fn tasks(&self, agent: String, #[host(kw, default = 50)] limit: i64) -> Vec<String>;\n        #[host(native",
     );

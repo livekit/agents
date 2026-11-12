@@ -35,6 +35,10 @@ pub enum GenEvent {
         outcome: Box<TurnOutcome>,
         interrupted: bool,
     },
+    DeliveredProgress {
+        speech: SpeechId,
+        item: Box<lk_agents_abi::ChatMessage>,
+    },
 
     /// One of the speech's audio segments stopped playing at `position`: the sink's
     /// `PlaybackFinished`, or the progress it confirmed before its finish report was lost (a lower
@@ -159,6 +163,12 @@ pub enum GenEvent {
     ToolHandlingTemplateRendered {
         rendering: crate::tool_executor::Rendering,
         text: Option<String>,
+    },
+    /// The speech's audio output raised on a frame: the forwarding stops there, and the speech
+    /// is cut and done with `error`.
+    OutputFailed {
+        speech: SpeechId,
+        error: Box<ProviderError>,
     },
     /// `recoverable` when the budget retries it. Then the close policy.
     ProviderFailed {

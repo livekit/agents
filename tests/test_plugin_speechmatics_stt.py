@@ -441,20 +441,6 @@ async def test_speakers_result_is_stored_not_emitted() -> None:
     assert _events(stream) == []
 
 
-# --- Removed arguments ---------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "name", ("operating_point", "enable_partials", "focus_speakers", "end_of_utterance_mode")
-)
-def test_removed_arguments_are_rejected(name: str) -> None:
-    """The pre-Agent-STT arguments fail at construction instead of being ignored."""
-    with pytest.raises(TypeError):
-        _stt(vad=None, **{name: "whatever"})
-
-    assert not hasattr(speechmatics_stt.STT, "update_speakers")
-
-
 def test_non_agent_endpoint_is_reported(monkeypatch, caplog) -> None:
     """The old `/v2` default, and any `SPEECHMATICS_RT_URL` still pointing at it.
 

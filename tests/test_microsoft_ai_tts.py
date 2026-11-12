@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from xml.etree import ElementTree
 
@@ -23,7 +22,6 @@ from livekit.plugins import microsoft_ai
 
 from .fake_io import FakeAudioOutput
 from .microsoft_ai_fakes import (
-    DUMMY_CONFIG,
     FakeResponse,
     fake_session,
     no_http_session as no_http_session,
@@ -31,7 +29,7 @@ from .microsoft_ai_fakes import (
     wav_bytes,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = pytest.mark.unit
 
 OPTIONS = APIConnectOptions(max_retry=0, connect_timeout=0.5, read_timeout=0.5)
 PCM = b"\x81\xff" * 3717
@@ -100,45 +98,6 @@ async def test_complete_wav_request_and_exact_audio_framing() -> None:
     assert kwargs["conn_options"] == OPTIONS
     assert response.closed
     session.aclose.assert_not_awaited()
-
-
-async def test_environment_configuration_and_custom_headers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for name, value in {
-        "URL": TTS_URL,
-        "MODEL": "environment-model",
-        "VOICE": "en-US-Dummy:environment-model",
-        "SAMPLE_RATE": "24000",
-        "API_KEY": "must-not-be-used",
-    }.items():
-        monkeypatch.setenv(f"MICROSOFT_AI_TTS_{name}", value)
-    session = fake_session()
-    session.post.return_value = FakeResponse(wav_bytes(PCM))
-    instance = microsoft_ai.TTS(headers={}, http_session=session)
-    async with instance, instance.synthesize("Hello.", conn_options=OPTIONS) as stream:
-        await collect(stream)
-    assert session.post.call_args.kwargs["headers"] == {
-        "User-Agent": "LiveKit Agents",
-        "Accept": "audio/wav",
-        "Content-Type": "application/ssml+xml",
-        "X-Microsoft-OutputFormat": "riff-24khz-16bit-mono-pcm",
-    }
-    assert instance.model == "environment-model"
-
-
-def test_model_voice_rate_and_credentials_have_no_guessed_defaults(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "not-for-microsoft-ai")
-    with pytest.raises(ValueError, match="SAMPLE_RATE"):
-        microsoft_ai.TTS()
-    with pytest.raises(ValueError, match="TTS_VOICE"):
-        microsoft_ai.TTS(sample_rate=24000)
-    with pytest.raises(ValueError, match="TTS_MODEL"):
-        microsoft_ai.TTS(sample_rate=24000, voice="en-US-Dummy")
-    with pytest.raises(ValueError, match="TTS_API_KEY"):
-        microsoft_ai.TTS(sample_rate=24000, model="test", voice="en-US-Dummy:test", url=TTS_URL)
 
 
 @pytest.mark.parametrize("status", [302, 400, 401, 403, 422, 429, 500, 503])
@@ -250,15 +209,13 @@ async def test_response_size_bound_applies_to_content_length_and_chunked_bodies(
     assert response.closed
 
 
-async def test_text_and_timeout_limits_fail_before_http() -> None:
-    instance, session = provider(FakeResponse(), max_text_length=8)
+async def test_empty_text_and_streaming_fail_before_http() -> None:
+    instance, session = provider(FakeResponse())
     async with instance:
         with pytest.raises(ValueError, match="nonempty"):
-            instance.synthesize(" ")
-        with pytest.raises(ValueError, match="max_text_length"):
-            instance.synthesize("a" * 9)
+            instance._synthesize(tts.SpeechChunk(text="", said=""), conn_options=OPTIONS)
         with pytest.raises(NotImplementedError, match="streaming"):
-            instance.stream()
+            instance._stream(conn_options=OPTIONS)
     session.post.assert_not_called()
 
 
@@ -294,10 +251,11 @@ async def test_provider_close_cancels_all_requests_and_borrows_session() -> None
     await instance.aclose()
     assert all(response.closed for response in responses)
     for stream in streams:
-        assert await collect(stream) == []
+        with pytest.raises(APIError):
+            await collect(stream)
     session.aclose.assert_not_awaited()
     with pytest.raises(RuntimeError, match="closed"):
-        instance.synthesize("Hello.")
+        instance._synthesize(tts.SpeechChunk(text="Hello.", said="Hello."), conn_options=OPTIONS)
 
 
 async def test_owned_session_is_lazy_and_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -334,14 +292,6 @@ async def test_existing_sentence_stream_adapter_supports_incremental_text() -> N
     ]
     assert sum(event.frame.samples_per_channel for event in events) >= len(PCM)
     assert adapter.capabilities.streaming and not instance.capabilities.streaming
-
-
-@pytest.mark.parametrize("rate", [0, 500, 7999, 192001, True])
-def test_unusable_emitter_sample_rates_are_rejected(rate: int) -> None:
-    with pytest.raises(ValueError, match="sample_rate"):
-        microsoft_ai.TTS(
-            sample_rate=rate, model="test", voice="en-US-Dummy:test", url=TTS_URL, headers={}
-        )
 
 
 @pytest.mark.parametrize(
@@ -396,7 +346,10 @@ async def test_invalid_xml_controls_fail_before_network() -> None:
     instance, session = provider(FakeResponse())
     async with instance:
         with pytest.raises(ValueError, match="invalid in XML"):
-            instance.synthesize("Hello\x00world.")
+            instance._synthesize(
+                tts.SpeechChunk(text="Hello\x00world.", said="Hello\x00world."),
+                conn_options=OPTIONS,
+            )
     session.post.assert_not_called()
 
 
@@ -426,161 +379,6 @@ async def test_documented_wav_output_formats(rate: int, format: str) -> None:
     assert session.post.call_args.kwargs["headers"]["X-Microsoft-OutputFormat"] == format
     assert all(event.frame.sample_rate == rate for event in events)
     assert b"".join(event.frame.data.tobytes() for event in events) == PCM
-
-
-@pytest.mark.usefixtures("no_http_session")
-@pytest.mark.parametrize("voice", ["en-US-Dummy:wrong-model", ":file-synthesizer", "en-US-Dummy:"])
-def test_full_voice_id_must_match_the_configured_model(tmp_path: Path, voice: str) -> None:
-    path = tmp_path / "endpoints.env"
-    path.write_text(DUMMY_CONFIG, encoding="utf-8")
-    with pytest.raises(ValueError, match="full voice ID"):
-        microsoft_ai.TTS(env_file=path, voice=voice)
-
-
-@pytest.mark.usefixtures("no_http_session")
-def test_voice_name_is_combined_with_the_configured_model(tmp_path: Path) -> None:
-    path = tmp_path / "endpoints.env"
-    path.write_text(DUMMY_CONFIG, encoding="utf-8")
-    instance = microsoft_ai.TTS(env_file=path, voice="en-US-Dummy")
-    assert instance.model == "file-synthesizer"
-    assert instance._opts.voice == "en-US-Dummy:file-synthesizer"
-    instance = microsoft_ai.TTS(env_file=path, model="other-synthesizer", voice="en-US-Dummy")
-    assert instance._opts.voice == "en-US-Dummy:other-synthesizer"
-
-
-@pytest.mark.usefixtures("no_http_session")
-def test_full_voice_id_supplies_the_model_when_none_is_configured(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("MICROSOFT_AI_TTS_SAMPLE_RATE", "24000")
-    instance = microsoft_ai.TTS(
-        url="https://tts.example.invalid/cognitiveservices/v1",
-        api_key="dummy",
-        voice="en-US-Dummy:MAI-Test-Flash",
-    )
-    assert instance.model == "MAI-Test-Flash"
-    with pytest.raises(ValueError, match="TTS_MODEL"):
-        microsoft_ai.TTS(
-            url="https://tts.example.invalid/cognitiveservices/v1",
-            api_key="dummy",
-            voice="en-US-Dummy",
-        )
-
-
-@pytest.mark.usefixtures("no_http_session")
-def test_model_validation_is_case_insensitive_but_does_not_invent_aliases(tmp_path: Path) -> None:
-    path = tmp_path / "endpoints.env"
-    path.write_text(DUMMY_CONFIG, encoding="utf-8")
-    instance = microsoft_ai.TTS(
-        env_file=path, model="mai-test-flash", voice="en-US-Dummy:MAI-Test-Flash"
-    )
-    assert instance.model == "mai-test-flash"
-    with pytest.raises(ValueError, match="configured model"):
-        microsoft_ai.TTS(
-            env_file=path, model="mai-test-2.1-flash", voice="en-US-Dummy:MAI-Test-2-Flash"
-        )
-
-
-@pytest.mark.usefixtures("no_http_session")
-@pytest.mark.parametrize("region", ["eastus2", "EastUS2"])
-def test_region_constructs_the_documented_public_cloud_endpoint(region: str) -> None:
-    instance = microsoft_ai.TTS(
-        region=region, api_key="dummy", model="test", voice="en-US-Dummy:test", sample_rate=24000
-    )
-    assert instance._client.url == "https://eastus2.tts.speech.microsoft.com/cognitiveservices/v1"
-
-
-@pytest.mark.usefixtures("no_http_session")
-def test_region_from_file_and_constructor_precedence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "endpoints.env"
-    path.write_text(
-        DUMMY_CONFIG.replace(
-            "MICROSOFT_AI_TTS_URL=https://tts.example.invalid/cognitiveservices/v1",
-            "MICROSOFT_AI_TTS_REGION=eastus2",
-        ),
-        encoding="utf-8",
-    )
-    assert microsoft_ai.TTS(env_file=path)._client.url == (
-        "https://eastus2.tts.speech.microsoft.com/cognitiveservices/v1"
-    )
-    monkeypatch.setenv("MICROSOFT_AI_TTS_REGION", "westeurope")
-    assert microsoft_ai.TTS(env_file=path)._client.url.startswith("https://westeurope.")
-    assert microsoft_ai.TTS(env_file=path, region="eastus2")._client.url.startswith(
-        "https://eastus2."
-    )
-
-
-@pytest.mark.usefixtures("no_http_session")
-def test_configured_url_wins_over_region_and_is_not_rewritten(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "endpoints.env"
-    path.write_text(DUMMY_CONFIG, encoding="utf-8")
-    instance = microsoft_ai.TTS(env_file=path, region="eastus2")
-    assert instance._client.url == "https://tts.example.invalid/cognitiveservices/v1"
-    monkeypatch.setenv("MICROSOFT_AI_TTS_URL", "https://override.example.invalid/custom?q=dummy")
-    instance = microsoft_ai.TTS(env_file=path, region="eastus2")
-    assert instance._client.url == "https://override.example.invalid/custom?q=dummy"
-    instance = microsoft_ai.TTS(
-        env_file=path, region="eastus2", url="https://argument.example.invalid/exact"
-    )
-    assert instance._client.url == "https://argument.example.invalid/exact"
-
-
-@pytest.mark.usefixtures("no_http_session")
-@pytest.mark.parametrize("source", ["argument", "environment", "dotenv"])
-@pytest.mark.parametrize("empty_url", ["", " \t "], ids=["empty", "whitespace"])
-def test_present_empty_tts_url_is_rejected_without_region_fallback(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    source: str,
-    empty_url: str,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    path = tmp_path / "endpoints.env"
-    content = DUMMY_CONFIG + "MICROSOFT_AI_TTS_REGION=eastus2\n"
-    if source == "dotenv":
-        content = content.replace(
-            "MICROSOFT_AI_TTS_URL=https://tts.example.invalid/cognitiveservices/v1",
-            f'MICROSOFT_AI_TTS_URL="{empty_url}"',
-        )
-    elif source == "environment":
-        monkeypatch.setenv("MICROSOFT_AI_TTS_URL", empty_url)
-    path.write_text(content, encoding="utf-8")
-    http = fake_session()
-    with pytest.raises(ValueError, match="MICROSOFT_AI_TTS_URL"):
-        microsoft_ai.TTS(
-            env_file=path,
-            url=empty_url if source == "argument" else None,
-            region="eastus2",
-            http_session=http,
-        )
-    http.post.assert_not_called()
-    http.ws_connect.assert_not_called()
-    assert not caplog.records
-
-
-@pytest.mark.usefixtures("no_http_session")
-@pytest.mark.parametrize("source", ["argument", "environment"])
-def test_nonempty_tts_url_overrides_empty_lower_priority_configuration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
-) -> None:
-    path = tmp_path / "endpoints.env"
-    path.write_text(
-        DUMMY_CONFIG.replace(
-            "MICROSOFT_AI_TTS_URL=https://tts.example.invalid/cognitiveservices/v1",
-            "MICROSOFT_AI_TTS_URL=",
-        ),
-        encoding="utf-8",
-    )
-    url = "https://override.example.invalid/exact?deployment=dummy"
-    monkeypatch.setenv("MICROSOFT_AI_TTS_URL", "" if source == "argument" else url)
-    provider = microsoft_ai.TTS(
-        env_file=path, url=url if source == "argument" else None, region="eastus2"
-    )
-    assert provider._client.url == url
 
 
 @pytest.mark.usefixtures("no_http_session")

@@ -17,6 +17,7 @@ struct Flaky {
     reports: Mutex<Vec<bool>>,
     /// The first attempt is cancelled by the provider instead of failing.
     cancels: bool,
+    fatal: Option<ApiError>,
 }
 
 struct Count(Arc<Mutex<Vec<usize>>>, usize);
@@ -35,6 +36,7 @@ impl StreamInput<AudioFrame> for Count {
 /// `Fail`s at once, or yields one final transcript once its sink heard a frame, then ends.
 enum Attempt {
     Fail,
+    Fatal(ApiError),
     Cancelled,
     Final(Arc<Mutex<Vec<usize>>>, usize),
     Done,
@@ -45,6 +47,7 @@ impl StreamOutput<SpeechEvent> for Attempt {
         Box::pin(async move {
             match std::mem::replace(self, Attempt::Done) {
                 Attempt::Fail => Err(ApiError::new("hiccup").into()),
+                Attempt::Fatal(error) => Err(error.into()),
                 Attempt::Cancelled => Err(lk_agents_abi::errors::HostError {
                     kind: lk_agents_abi::errors::HostErrorKind::Cancelled,
                     ..lk_agents_abi::errors::HostError::new("")
@@ -83,7 +86,8 @@ impl Stt for Flaky {
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
-        Box::pin(async move { Err(ApiError::new("down").into()) })
+        let error = self.fatal.clone().unwrap_or_else(|| ApiError::new("down"));
+        Box::pin(async move { Err(error.into()) })
     }
     fn stream(
         &self,
@@ -100,7 +104,7 @@ impl Stt for Flaky {
             self.heard.lock().push(0);
             let attempt = match (opened.len(), self.cancels) {
                 (1, true) => Attempt::Cancelled,
-                (1, false) => Attempt::Fail,
+                (1, false) => self.fatal.clone().map(Attempt::Fatal).unwrap_or(Attempt::Fail),
                 (n, _) => Attempt::Final(Arc::clone(&self.heard), n - 1),
             };
             let sink = Count(Arc::clone(&self.heard), opened.len() - 1);
@@ -145,6 +149,37 @@ fn retrying(inner: Arc<Flaky>, max_retry: u32) -> Recognition {
         inner,
         options: ApiConnectOptions { max_retry, ..ApiConnectOptions::default() },
         clock,
+    }
+}
+
+/// A nonretryable provider error is not retried and reaches the caller of a batch or streaming
+/// recognition with its status and message. https://github.com/livekit/agents/pull/7474
+#[tokio::test(start_paused = true)]
+async fn a_nonretryable_error_reaches_the_caller_unretried() {
+    for streaming in [false, true] {
+        let fatal = ApiError::status("recognition refused", 401, None, None).with_retryable(false);
+        let stt = retrying(Arc::new(Flaky { fatal: Some(fatal), ..Default::default() }), 3);
+
+        let error = if streaming {
+            let (sink, mut source) =
+                stt.stream(&telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
+            // A retried attempt would answer this frame with a transcript instead of the error.
+            sink.push(AudioFrame::new(vec![0; 320], 16_000, 1, 160)).unwrap();
+            let result = source.next().await;
+            source.close(Ts::from_nanos(u64::MAX)).await;
+            result.expect_err("the streaming failure reaches the consumer")
+        } else {
+            stt.recognize(&telemetry::Cx::NONE, &[], None)
+                .await
+                .expect_err("the batch failure reaches the caller")
+        };
+
+        let ProviderError::Local(error) = error else { panic!("a native API error") };
+        assert_eq!(
+            (error.status_code, error.retryable, error.message.as_str()),
+            (Some(401), false, "recognition refused"),
+            "streaming: {streaming}"
+        );
     }
 }
 

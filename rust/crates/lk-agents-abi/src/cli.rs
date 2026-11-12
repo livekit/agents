@@ -65,6 +65,19 @@ pub enum CliError {
     Invalid(String),
 }
 
+/// How a log line is written: `json` in production, colored lines for a person reading them.
+#[crate::host(record(module = "cli", extract, emit))]
+#[crate::host(wire_strs(msg = format!("unknown log style {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogStyle {
+    /// One JSON object per line.
+    Json,
+    /// `HH:MM:SS LEVEL logger message {fields}`, colored (`lk agent dev`).
+    Dev,
+    /// [`LogStyle::Dev`] that first returns the cursor, over the console's own output.
+    Console,
+}
+
 /// A language host's normalized process log record.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[crate::host(record(module = "cli", extract))]
@@ -90,9 +103,9 @@ pub trait Cli {
     #[host(function)]
     fn host_log_level(level: LogLevel) -> u32;
 
-    /// One structured JSON line, including host-formatted exceptions and stack traces.
+    /// One log line in `style`, including host-formatted exceptions and stack traces.
     #[host(function, pid = false)]
-    fn format_log_record(record: LogRecord) -> String;
+    fn format_log_record(record: LogRecord, style: LogStyle) -> String;
 
     /// The development launcher connection.
     #[host(function)]

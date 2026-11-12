@@ -1,9 +1,7 @@
 use lk_agents_abi::a2a_protocol as a2a;
 use serde_json::{Map, Value};
 
-use lk_agents_abi::a2a::metadata::{
-    INTERRUPTED_KEY, INTERRUPTION_REASON_KEY, MERGED_INTO_KEY, REASON_KEY,
-};
+use lk_agents_abi::a2a::metadata::{INTERRUPTED_KEY, MERGED_INTO_KEY, REASON_KEY};
 use lk_agents_abi::livekit_protocol::agent::chat_context::chat_item;
 use lk_agents_abi::livekit_protocol::agent::{ChatRole, FunctionCallOutput};
 use lk_agents_abi::storage::journal::JournalEvent;
@@ -14,7 +12,7 @@ use lk_agents_abi::storage::thread::{
 };
 use lk_agents_abi::storage::{Ask, StorageError, TaskState};
 
-use crate::a2a::{HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, chat_message};
+use crate::a2a::{HandlerOutput, Message, TurnResult, chat_message};
 
 /// One microsecond, in Unix seconds: how far apart items made in the same instant are ordered.
 pub(crate) const ITEM_ORDER_STEP: f64 = 1e-6;
@@ -23,34 +21,14 @@ pub(crate) const ITEM_ORDER_STEP: f64 = 1e-6;
 pub fn interrupted_metadata() -> Map<String, Value> {
     let mut m = Map::new();
     m.insert(INTERRUPTED_KEY.into(), Value::Bool(true));
-    m.insert(INTERRUPTION_REASON_KEY.into(), Value::String(INTERRUPTION_NEW_MESSAGE.into()));
     m
 }
 
 /// Why a turn yields at a checkpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stop {
-    /// A newer message waits for the lane under `interrupt`.
-    Interrupted,
     /// A client canceled the task with `tasks/cancel`.
     ClientCanceled,
-}
-
-/// A checkpoint's decision from what the lane holds: another holder waiting for the lane stops
-/// the turn when it `yields_to_waiter` (under `interrupt`); a client's cancel of the message's
-/// task stops it under every policy.
-pub fn checkpoint_stop(
-    yields_to_waiter: bool,
-    other_waiting: bool,
-    canceled: bool,
-) -> Option<Stop> {
-    if yields_to_waiter && other_waiting {
-        Some(Stop::Interrupted)
-    } else if canceled {
-        Some(Stop::ClientCanceled)
-    } else {
-        None
-    }
 }
 
 /// One task row a turn writes: its status and what changes.
@@ -61,7 +39,7 @@ pub struct TaskTransition {
     pub patch: TaskPatch,
 }
 
-/// One change a turn makes to the lane's history.
+/// One change a turn makes to the partition's history.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HistoryEdit {
     /// The item, by its `created_at`, unless an item with its id is there; `message_id` (the A2A
@@ -225,9 +203,9 @@ pub struct Settle<'a> {
     pub answer_canceled: bool,
     /// The question of the task the message continued ([`PendingAnswer::continued`]).
     pub continued: Option<&'a Ask>,
-    /// A question becomes the lane's pending one, the next message's to answer; not under a run
-    /// without the lane's lease, which no lease orders against the lane's other turns.
-    pub lane_question: bool,
+    /// A question becomes the partition's pending one, the next message's to answer; not under a run
+    /// without the partition's lease, which no lease orders against the partition's other turns.
+    pub partition_question: bool,
     /// Unix seconds, after everything loaded.
     pub now: f64,
     pub ids: TurnIds,
@@ -275,11 +253,11 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
         return Ok(settled.failed(answer, err, base, s.ids.status_message));
     }
     if settled.interrupted {
-        return Ok(settled.canceled_by_new_message(answer, base));
+        return Ok(settled.canceled_by_handler(answer, base));
     }
     let metadata = Some(out.metadata.clone()).filter(|m| !m.is_empty());
     if let Some(question) = &out.input_required {
-        let asked = Asked { question, lane_question: s.lane_question, metadata };
+        let asked = Asked { question, partition_question: s.partition_question, metadata };
         return Ok(settled.input_required(out, answer, asked, base, s.ids.status_message));
     }
     let output = out.output.clone().filter(|o| !o.is_null());
@@ -334,7 +312,7 @@ fn history_edits(
 /// The question a turn ended on and how its answer row records it.
 struct Asked<'a> {
     question: &'a str,
-    lane_question: bool,
+    partition_question: bool,
     metadata: Option<Map<String, Value>>,
 }
 
@@ -399,14 +377,13 @@ impl Settlement {
         self
     }
 
-    fn canceled_by_new_message(mut self, answer: String, base: TaskPatch) -> Self {
+    fn canceled_by_handler(mut self, answer: String, base: TaskPatch) -> Self {
         self.transitions.push(TaskTransition {
             task_id: answer,
             status: TaskState::Canceled,
             patch: TaskPatch { metadata: Some(interrupted_metadata()), ..base },
         });
         self.outcome = RunOutcome::Canceled;
-        self.reason = Some(INTERRUPTION_NEW_MESSAGE.into());
         self
     }
 
@@ -428,7 +405,7 @@ impl Settlement {
         let waiting = wait_patch(&answer, asked.question, wait, status_message);
         let patch = TaskPatch {
             metadata: asked.metadata,
-            ask: waiting.ask.filter(|_| asked.lane_question),
+            ask: waiting.ask.filter(|_| asked.partition_question),
             status_message: waiting.status_message,
             ..base
         };
@@ -547,26 +524,26 @@ pub fn result_for(record: TaskRow, thread_id: &str, run_id: Option<&str>) -> Tur
     }
 }
 
-/// A failed record the worker could not write, at `updated_at` (Unix milliseconds), its status
+/// A failed record the worker could not write, at `updated_at_ms` (Unix milliseconds), its status
 /// message `message_id`.
 pub fn unpersisted_failed(
     task_id: &str,
-    lane: &str,
+    partition_key: &str,
     msg: Option<&Message>,
     reason: TaskReason,
-    updated_at: i64,
+    updated_at_ms: i64,
     message_id: String,
 ) -> TaskRow {
     let mut metadata = Map::new();
     metadata.insert(REASON_KEY.into(), Value::String(reason.as_str().to_owned()));
     TaskRow {
         task_id: task_id.to_owned(),
-        lane: lane.to_owned(),
-        seq: 0,
+        partition_key: partition_key.to_owned(),
+        pos: 0,
         name: None,
         message_id: msg.map(|m| m.message_id.clone()),
         status: TaskState::Failed,
-        updated_at,
+        updated_at_ms,
         data: TaskData {
             history: msg.map(|m| vec![m.to_a2a()]).unwrap_or_default(),
             artifacts: None,
@@ -643,7 +620,7 @@ mod tests {
             stop,
             answer_canceled,
             continued: None,
-            lane_question: true,
+            partition_question: true,
             now: 2.0,
             ids: ids(),
         })
@@ -652,15 +629,6 @@ mod tests {
 
     fn statuses(s: &Settlement) -> Vec<(&str, TaskState)> {
         s.transitions.iter().map(|t| (t.task_id.as_str(), t.status)).collect()
-    }
-
-    #[test]
-    fn a_checkpoint_yields_to_a_waiter_under_interrupt_and_to_a_client_cancel_always() {
-        let stop = checkpoint_stop;
-        assert_eq!(stop(true, true, false), Some(Stop::Interrupted));
-        assert_eq!(stop(false, true, false), None, "queue does not yield to a waiter");
-        assert_eq!(stop(false, false, true), Some(Stop::ClientCanceled));
-        assert_eq!(stop(true, false, false), None);
     }
 
     /// A handler's `Rejected` and `Working` set those task states with their text as the status message; neither completes with an artifact.
@@ -709,7 +677,7 @@ mod tests {
         assert_eq!(last.status, TaskState::InputRequired);
         assert_eq!(last.patch.ask.as_ref().map(|a| a.question.as_str()), Some("when?"));
 
-        let interrupted = settled(text("late"), Some(Stop::Interrupted), false);
+        let interrupted = settled(HandlerOutput { interrupted: true, ..text("late") }, None, false);
         assert_eq!(interrupted.transitions.last().unwrap().status, TaskState::Canceled);
         // A2A_SEED=3810 (request_answered_once, Inbox): the client's cancel owns the answer row,
         // and the batch's earlier messages still end, merged into it, rather than stay working
@@ -801,7 +769,7 @@ mod tests {
             stop,
             answer_canceled: false,
             continued: pending.continued.as_ref(),
-            lane_question: true,
+            partition_question: true,
             now: 2.0,
             ids: ids(),
         })
@@ -812,7 +780,7 @@ mod tests {
 
     /// A2A_SEED=8: a reply continuing a pending question by its `taskId`
     /// stamped its `messageId` on both the receipt and the continued task, and the thread's
-    /// unique (lane, message_id) task index refused the whole commit.
+    /// unique (partition, message_id) task index refused the whole commit.
     #[test]
     fn a_continuation_keeps_one_task_per_message_and_the_continued_history() {
         let out = HandlerOutput { output: Some(json!("booked")), ..HandlerOutput::default() };

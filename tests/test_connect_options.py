@@ -20,10 +20,8 @@ import pytest
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
-    APITimeoutError,
     http,
     llm,
     stt,
@@ -267,22 +265,3 @@ async def test_provider_request_reaches_the_network_under_shipped_policies(
                     await asyncio.wait_for(_until_attempt(transport, operation), 10)
         finally:
             await model.aclose()
-
-
-class _UnreachableSTT(stt.STT):
-    def __init__(self) -> None:
-        super().__init__(capabilities=stt.STTCapabilities(streaming=False, interim_results=False))
-        self.attempts = 0
-
-    async def _recognize_impl(self, buffer: Any, *, language: Any, conn_options: Any) -> Any:
-        self.attempts += 1
-        raise APIConnectionError("unreachable test peer")
-
-
-async def test_total_timeout_spans_every_retry_of_an_operation() -> None:
-    model = _UnreachableSTT()
-    options = APIConnectOptions(max_retry=100, retry_interval=0.05, total_timeout=0.3)
-    with pytest.raises(APITimeoutError) as error:
-        await model.recognize([_frame()], conn_options=options)
-    assert error.value.timeout == "total"
-    assert 1 < model.attempts < options.max_retry

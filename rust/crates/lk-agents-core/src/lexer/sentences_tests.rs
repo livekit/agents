@@ -2,10 +2,10 @@
 //! never lose a word, and never hold a sentence for prose that only looks like markup.
 
 use super::*;
+use crate::markup::Provider;
 use crate::tokenize::sentences::{SentenceOptions, SentenceStream};
-use crate::tts::markup::Provider;
 
-const SYNTHESIS: View = View::Synthesis { keep_markdown: false, keep_emoji: false };
+const SYNTHESIS: View = View::Synthesis;
 
 /// The TTS's sentences for `deltas`, split as a stream.
 fn sentences(deltas: &[&str]) -> Vec<String> {

@@ -14,7 +14,7 @@ import pytest
 
 from livekit.agents import inference
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture

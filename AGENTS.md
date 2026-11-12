@@ -16,7 +16,7 @@ make rust-check       # Check every Rust crate and test target, including FFmpeg
 For parallel worktrees, keep a private Cargo target directory per worktree.
 Make uses `mbx` by default for Rust commands; install it with
 `cargo install --locked mbx`. Use `CARGO_RUNNER=cargo` for ordinary Cargo.
-See `docs/internals/rust-core.md` (Local builds) for setup and other cache tools.
+See `docs/internals/development.md#local-builds` for setup and other cache tools.
 Do not point concurrent worktrees at one writable `CARGO_TARGET_DIR`.
 
 ### Versioning
@@ -46,6 +46,10 @@ make -C rust test-checks   # rust/check and codegen tests
 uv run pytest --unit                    # Run all unit tests
 uv run pytest tests/test_tools.py --unit # Run a single unit test file
 make unit-tests                         # Run unit tests that don't require cloud accounts
+make test                               # Run the default hermetic suite
+make bench                              # Run the standalone IPC benchmark
+make bench-startup                      # Time start, dev and console launches to ready
+make bench-host                         # Time the Rust-to-Python host boundary
 ```
 
 #### Test categories
@@ -63,7 +67,6 @@ Put test paths before category flags, whose optional argument is a provider name
 | `pytest.mark.audio_eot` | `--audio_eot` | hermetic audio end-of-turn / turn-detection suite |
 | `pytest.mark.plugin("name")` | `--plugin [name]` | provider integration test (needs that provider's deps/keys) |
 | `pytest.mark.stt("name")` | `--stt [name]` | speech-to-text suite, optionally for one provider; requires provider dependencies and credentials |
-| `pytest.mark.tts("name")` | `--tts [name]` | text-to-speech suite, optionally for one provider; requires provider dependencies and credentials |
 | `pytest.mark.realtime("name")` | `--realtime [name]` | realtime-model test |
 | `pytest.mark.evals` | `--evals` | behavioral evals against the LiveKit inference gateway |
 | `pytest.mark.docs` | `--docs` | tests for the docs-build tooling under `.github/` |
@@ -126,10 +129,11 @@ specification; implementation cleanup must follow the agreed contracts.
   `output`, while `status="input_required"` exposes `question`. Tools can request input
   with `InputRequired(...)`; framework outcomes remain separate from `output_type`.
 - **TextSession**: request-scoped text conversation orchestration, reconstructed from
-  shared agent configuration and explicitly supplied saved state.
+  shared agent configuration and explicitly supplied saved state or a store binding.
   Each child requires `output_type`; accepted final output fills the parent tool call.
-  Returns `result: RunResult` and `state: TextSessionState`; application code explicitly
-  loads and saves backend routing state. See `docs/text-session.md`.
+  Returns `result: RunResult` and a detached `state: SessionState`. `context=store.bind(app)`
+  opts into Rust-owned incremental persistence; plain context execution reads snapshots without
+  binding or saving them. See `docs/text-session.md`.
 - **VoiceTask[Output]**: fast-brain/frontend live interactions in an active voice session.
   `.run()` resolves the session from invocation-local runtime context; callers do not
   pass it explicitly. Calling outside a live interaction fails before execution.
@@ -138,10 +142,12 @@ specification; implementation cleanup must follow the agreed contracts.
   parent await remains in memory. Not for stateless workloads, backend orchestration,
   background execution, or recovery across requests/deployments. See `docs/voice-tasks.md`.
 - **Context persistence**: `persisted(...)` marks fields; `load_context` and `save_context`
-  are explicit. Runtime services remain application-supplied objects.
-- **Thread**: one conversation (`AT_...` id, the A2A `contextId`), with configured handler lanes,
+  are explicit. An optional persisted SessionState field is hydrated by load_context and keeps
+  its identity while explicitly bound. Session views, binding policy and checkpoints live in
+  Rust with generated Python APIs. Runtime services remain application-supplied objects.
+- **Thread**: one conversation (`AT_...` id, the A2A `contextId`), with persistence partitions,
   histories and transport tasks stored in its database (agent-db, or local SQLite).
-- **Rust core** (`rust/crates/`, see `docs/internals/rust-core.md`): the sans-I/O crates
+- **Rust core** (`rust/crates/`, see `docs/internals/architecture.md`): the sans-I/O crates
   (`lk-agents-core` with its `a2a` and MCP logic, `-voice`, `-media`) are synchronous (events and
   time in, effects out); media is CPU work with no async runtime. `lk-agents-runtime` is only the
   I/O layer of voice and text: the voice executor, room I/O, avatar transport, recording
@@ -161,8 +167,8 @@ specification; implementation cleanup must follow the agreed contracts.
   `lk-agents-abi` declares the boundary once and codegen emits the Python bindings from it; pyo3
   exists only in `lk-agents-py`.
 - **AgentHandler / AgentServer** (`worker.py`): a module declares an agent's doors on an
-  `AgentHandler(lane=)`: `rtc_session()` (a call, run on a `VoiceSession`) and
-  `a2a_session(endpoint=)` (an A2A text endpoint). The entrypoint's `AgentServer` serves them
+  `AgentHandler`: `rtc_session(partition_key=)` (a call, run on a `VoiceSession`) and
+  `a2a_session(endpoint=, partition_key=)` (an A2A text endpoint). The entrypoint's `AgentServer` serves them
   with `server.add(...)`; the examples' `main.py` adds a front desk and a back office.
   Registration, jobs, IPC, the process pool and supervision run in `lk-agents-worker`.
 - **Approval and verbatim**: `needs_approval=` holds approval in the framework (the body runs
@@ -184,7 +190,7 @@ specification; implementation cleanup must follow the agreed contracts.
 
 ### Key Directories
 ```
-livekit-agents-next/livekit/agents/   # the public Python API and host adapters
+livekit-agents/livekit/agents/   # the public Python API and host adapters
 ├── voice/              # Agent, VoiceSession, VoiceTask, the livekit.rtc room adapter
 ├── a2a.py              # The text door: A2A endpoint API, AgentClient, RemoteAgent, tokens
 ├── storage/            # AgentDBStorage, SQLiteStorage, thread handles, the context store
@@ -201,7 +207,7 @@ livekit-agents-next/livekit/agents/   # the public Python API and host adapters
 ├── _generated/         # Generated implementations and forwarding modules (never edited)
 └── _core.pyi           # Generated stubs of the Rust core extension
 
-rust/crates/            # The Rust core, built into livekit.agents._core; see docs/internals/rust-core.md
+rust/crates/            # The Rust core, built into livekit.agents._core; see docs/internals/architecture.md
 ├── lk-agents-abi       # Export declarations and typed boundary records
 ├── lk-agents-core      # AgentRun, tools/approval/output acceptance, TextSession, A2A and MCP logic
 ├── lk-agents-voice     # Voice session lifecycle, turns, speech scheduling, interruption
@@ -221,7 +227,6 @@ rust/ai_slop/           # Build tools: lk-agents-bindgen, lk-agents-host-derive,
 livekit-plugins/        # Provider plugins (openai, anthropic, google, deepgram, etc.)
 examples/               # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
 docs/                   # The 2.0 design, one feature per page
-console/                # Next.js web console: chat, call, and a live view of the thread
 skills/                 # Agent skills shipped with the repo (migrate-to-v2)
 tests/                  # Test suite with fakes (fake_stt.py, fake_vad.py)
 ```
@@ -240,7 +245,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 1. A text message reaches `/agents/<agent>/<deployment>/<endpoint>` as A2A; a call is a job dispatch.
 2. The platform resolves the thread: a text's `contextId` (none creates one), or a call's job
    `thread_id`, set by its dispatch (none runs the call without a shared thread).
-3. The worker takes the agent's lane lease and loads the lane from the thread's database.
+3. The worker takes the entrypoint's partition lease and loads the partition from the thread's database.
 4. The handler runs `agent.run(...)` (text) or the `VoiceSession` runs the agent (call).
 5. The framework commits history, explicitly saved context fields and task rows in one fenced
    write and releases the lease.
@@ -249,7 +254,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - `LIVEKIT_URL`: WebSocket URL of LiveKit server
 - `LIVEKIT_API_KEY`: API key for authentication
 - `LIVEKIT_API_SECRET`: API secret for authentication
-- `LIVEKIT_AGENT_NAME`: The agent's name: its lane in a thread and the first segment of its endpoints
+- `LIVEKIT_AGENT_NAME`: The agent's routing name and the first segment of its endpoints
 - Provider-specific keys: `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, etc.
 
 ## Code Style
@@ -263,7 +268,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 
 Tags: **[check]** fails in `make -C rust check` (the `rust/check` crate or codegen), **[lint]** is
 Clippy (`[workspace.lints]` or a `rust/check/*/clippy.toml` policy), **[review]** is on reviewers.
-`docs/internals/rust-core.md` explains the design behind each rule. No rule has a baseline: fix
+`docs/internals/architecture.md` explains the design behind each rule. No rule has a baseline: fix
 the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 
 ### Crate graph
@@ -334,8 +339,10 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 - A waiter waits only on an `lk_agents_net::signal` cell whose `Producer` lives where the
   progress happens (moved into its task, `TaskSet::spawn_settling`, or the owning loop's table):
   dropping it resolves every waiter, `Err(Ended)` when the state can no longer come. [lint, review]
-- No `Notify` or raw `watch` channel outside `signal.rs`; state several parties change is a
-  `signal::Shared` with a terminal value every wait accepts. [lint]
+- No `Notify`, raw `watch` channel or `futures` `Shared` outside `signal.rs`: state several
+  parties change is a `signal::Shared` with a terminal value every wait accepts, and work several
+  waiters share is driven by one of them in its own task (a `Shared` drops a wake that lands
+  while another waiter polls). [lint]
 - A task feeding a machine reports its death as an input (`TaskSet::scoped_feeding`). [review]
 - Every wait a host can await resolves when its session ends, drained or dropped. [review]
 

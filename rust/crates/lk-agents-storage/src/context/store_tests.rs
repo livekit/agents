@@ -9,6 +9,60 @@ fn field(name: &str, value: Value) -> ContextField {
     ContextField { name: name.into(), schema: json!({"type": "string"}), value }
 }
 
+#[tokio::test]
+async fn standalone_session_owns_a_run_and_settles_only_explicit_app_saves() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    let values = store
+        .load("root:desk".into(), "App".into(), vec![field("draft", json!("initial"))])
+        .await
+        .unwrap();
+    store.begin_session().await.unwrap();
+    store
+        .save(
+            "root:desk".into(),
+            "App".into(),
+            values.revision,
+            vec![field("draft", json!("saved"))],
+        )
+        .await
+        .unwrap();
+    store
+        .stage_session(json!({"version":1,"kind":"voice","agent":"desk","history_ids":[]}))
+        .unwrap();
+    store.flush_session(vec![]).await.unwrap();
+    let thread = fixture.thread().await;
+    assert!(thread.context_scopes("desk").await.unwrap().is_empty());
+    store.finish_session(true).await.unwrap();
+    assert_eq!(thread.context_scopes("desk").await.unwrap()[0].fields["draft"], json!("saved"));
+    store.begin_session().await.unwrap();
+    let values = store
+        .load("root:desk".into(), "App".into(), vec![field("draft", json!("default"))])
+        .await
+        .unwrap();
+    store
+        .save(
+            "root:desk".into(),
+            "App".into(),
+            values.revision,
+            vec![field("draft", json!("discard"))],
+        )
+        .await
+        .unwrap();
+    store.finish_session(false).await.unwrap();
+    assert_eq!(thread.context_scopes("desk").await.unwrap()[0].fields["draft"], json!("saved"));
+    assert_eq!(thread.partition("desk").info().await.unwrap().unwrap().lease_expires_at_ms, 0);
+    store.close();
+    fixture.cleanup(&[&thread]).await;
+}
+
 async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backend: Backend) {
     let fixture = backend.fixture(None).await;
     let first = ContextStore::bound(
@@ -138,7 +192,7 @@ async fn application_transactions_commit_on_exit_or_with_the_turn(backend: Backe
     assert_eq!(notes(&direct).await.len(), 1, "staged until the turn commits");
     let thread = fixture.thread().await;
     let mut run = thread
-        .lane("desk")
+        .partition("desk")
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
         .await
         .unwrap();
@@ -166,13 +220,13 @@ async fn a_turns_application_writes_never_apply_after_a_takeover(backend: Backen
     tx.commit().await.unwrap();
     let (s1, s2) = (fixture.thread().await, fixture.thread().await);
     let mut stale = s1
-        .lane("desk")
+        .partition("desk")
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
         .await
         .unwrap();
     stale.lease().unwrap().release(None).await.unwrap();
     let mut fresh = s2
-        .lane("desk")
+        .partition("desk")
         .open(RunOptions::new("r2", "AST_2"), &crate::Holder::new("test"))
         .await
         .unwrap();

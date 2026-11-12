@@ -306,7 +306,13 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     let cx = m.params.iter().find(|q| q.ty == Ty::Cx).map(|q| q.name.clone());
     // Returned capabilities inherit the operation's context, including inside containers.
     let returns_proxy = (p.captures_context() || m.context.is_some()) && m.ret.ok.holds_proxy();
-    let context = match m.ret.ok.holds_host_stream() || returns_proxy {
+    // A returned record's capabilities are taken in the call's context too, when it has one.
+    let returns_record = (p.captures_context() || m.context.is_some())
+        && !returns_proxy
+        && !m.ret.ok.holds_host_stream()
+        && crate::records::holds_record(&m.ret.ok)
+        && sdk_read(p, "o", &m.ret.ok, &at)?.is_none();
+    let context = match m.ret.ok.holds_host_stream() || returns_proxy || returns_record {
         true => format!(
             "        let context = ::lk_agents_abi::agent::HostContext::host_context({scope}).cloned();\n"
         ),
@@ -325,9 +331,10 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             }
             Some(read) => read,
             None if returns_proxy => returned_value("o", &m.ret.ok, &label, &at)?,
+            None if returns_record => returning(&from_host("o", &m.ret.ok, &label, &at)?),
             None => from_host("o", &m.ret.ok, &label, &at)?,
         };
-        let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
+        let unpack = if context.is_empty() || returns_record { String::new() } else { stream_context(&err) };
         return Ok(format!(
             "    {sig} -> {ret} {{\n{host}{moved}{context}        let out = ::lk_agents_runtime::host::call_now(&crate::py_calls::Entry, {host_call});\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.value.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n"
         ));
@@ -370,9 +377,10 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             let binding = if m.ret.ok == Ty::Unit { "()" } else { "out" };
             let read = match sdk_read(p, "o", &m.ret.ok, &at)? {
                 Some(read) => read,
+                None if returns_record => returning(&from_host("o", &m.ret.ok, &label, &at)?),
                 None => returned_value("o", &m.ret.ok, &label, &at)?,
             };
-            let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
+            let unpack = if context.is_empty() || returns_record { String::new() } else { stream_context(&err) };
             // `await(wrap = T)`: wrapped once the GIL is released, under the call's span.
             let (head, read_out, wrapped) = match &m.wrap {
                 None => (head, "", String::new()),
@@ -587,6 +595,14 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         ty if crate::records::holds_record(ty) => crate::records::emit(ty, v)?,
         _ => format!("::pyo3::IntoPyObjectExt::into_bound_py_any({v}, py)?"),
     })
+}
+
+/// `read` (a `PyResult` of `o`) with the proxies it takes in the call's returned context, when
+/// the call captured one.
+fn returning(read: &str) -> String {
+    format!(
+        "context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || {read}))"
+    )
 }
 
 /// Recursively extract returned capabilities using the returning operation's captured context.

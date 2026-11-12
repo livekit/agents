@@ -1,10 +1,11 @@
 use std::{collections::BTreeMap, time::SystemTime};
 
 use crate::realtime::{
-    Incoming, TurnDetection,
+    Incoming,
     protocol::{OutputItemKind, ResponseDone, TranscriptionCompleted, TranscriptionUsage},
 };
 use fastrand::Rng;
+use lk_agents_abi::llm::realtime_options::{TurnDetection, Voice};
 use lk_agents_abi::{
     AudioFrame, ChatItem, ChatMessage, FunctionCall, Role, ToolChoice, Ts,
     llm::realtime::{GenerationStatus, Modalities},
@@ -98,7 +99,7 @@ fn unhandled(event_type: &str) -> Incoming {
 struct Config {
     vad: Option<Vad>,
     instructions: Option<String>,
-    voice: Option<serde_json::Value>,
+    voice: Option<Voice>,
     create_response: bool,
     interrupt_response: bool,
     transcription: bool,
@@ -110,27 +111,13 @@ struct Config {
 
 impl Config {
     fn turn_detection(&mut self, td: Option<&TurnDetection>) {
-        let (vad, create, interrupt) = match td {
-            Some(TurnDetection::ServerVad { create_response, interrupt_response, .. }) => {
-                (Some(Vad::Server), *create_response, *interrupt_response)
-            }
-            Some(TurnDetection::SemanticVad { create_response, interrupt_response, .. }) => {
-                (Some(Vad::Semantic), *create_response, *interrupt_response)
-            }
-            Some(TurnDetection::Raw(v)) => {
-                let vad = match v["type"].as_str() {
-                    Some("semantic_vad") => Some(Vad::Semantic),
-                    Some("server_vad") => Some(Vad::Server),
-                    _ => None,
-                };
-                let flag = |k: &str| v[k].as_bool().unwrap_or(true);
-                (vad, flag("create_response"), flag("interrupt_response"))
-            }
-            None => (None, true, true),
+        self.vad = match td {
+            Some(TurnDetection::Server(_)) => Some(Vad::Server),
+            Some(TurnDetection::Semantic(_)) => Some(Vad::Semantic),
+            Some(TurnDetection::Azure(_)) | None => None,
         };
-        self.vad = vad;
-        self.create_response = create;
-        self.interrupt_response = interrupt;
+        self.create_response = td.and_then(TurnDetection::create_response).unwrap_or(true);
+        self.interrupt_response = td.and_then(TurnDetection::interrupt_response).unwrap_or(true);
     }
 }
 

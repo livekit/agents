@@ -209,9 +209,9 @@ executors and the real decision cores, with fakes only at the SDK and provider
 ports. Executors spawn and sleep only through an injected spawner and clock, so
 a deterministic scheduler using basic partial-order sampling decides every
 interleaving, and every `select!` is biased so no branch is chosen at random.
-The [Rust plan](internals/rust-core.md#deterministic-simulation-testing) owns
+The [implementation reference](internals/testing.md#deterministic-simulation-testing) owns
 that contract.
 
-The [Rust plan](internals/rust-core.md#support-algorithms-and-observations)
+The [implementation reference](internals/components.md#support-algorithms-and-observations)
 defines these implementation boundaries; this page owns the public testing,
 evaluation and simulation-context contracts.

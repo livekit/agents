@@ -124,7 +124,11 @@ async fn pump(
                 }
                 Event::Failed(ApiError::new("the avatar runner stopped reading audio").into())
             }
-            Ok(None) => Event::End,
+            Ok(None) => {
+                // A receiver that ran out still has its queued audio played.
+                let _ = sender.event(Event::End);
+                return;
+            }
             Err(error) => Event::Failed(error),
         };
     };

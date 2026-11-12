@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use livekit_token::{
-    AccessToken, AccessTokenError, AgentGrants, Claims, InferenceGrants, ObservabilityGrants,
-    TokenVerifier, VideoGrants,
+    AccessToken, AccessTokenError, AgentDatabaseGrants, AgentThreadGrants, Claims,
+    InferenceGrants, ObservabilityGrants, TokenVerifier, VideoGrants,
 };
 use lk_agents_abi::errors::ApiError;
 
@@ -100,17 +100,34 @@ pub fn token_identity(token: &str) -> Result<String, ApiError> {
     Ok(Claims::from_unverified(token).map_err(refused)?.sub)
 }
 
-/// The agent database's credential: [`DATABASE_TOKEN_TTL`] long, with `agent.databaseAdmin`.
-pub fn database_admin_token(api_key: &str, api_secret: &str) -> Result<String, ApiError> {
+
+/// A data-plane token for one database: a thread's (`AT_...`) through its thread grant's `sql`,
+/// a standalone one (`DB_...`) through `agentDatabase`.
+pub fn database_token(
+    api_key: &str,
+    api_secret: &str,
+    database_id: &str,
+) -> Result<String, ApiError> {
     require(api_key, api_secret)?;
-    AccessToken::with_api_key(api_key, api_secret)
-        .with_ttl(DATABASE_TOKEN_TTL)
-        .with_agent_grants(AgentGrants { database_admin: true, ..Default::default() })
-        .to_jwt()
-        .map_err(refused)
+    let token = AccessToken::with_api_key(api_key, api_secret).with_ttl(DATABASE_TOKEN_TTL);
+    let ids = vec![database_id.to_owned()];
+    let token = if database_id.starts_with("AT_") {
+        token.with_agent_thread_grants(AgentThreadGrants {
+            thread_ids: ids,
+            sql: true,
+            ..Default::default()
+        })
+    } else {
+        token.with_agent_database_grants(AgentDatabaseGrants {
+            database_ids: ids,
+            read: true,
+            write: true,
+            ..Default::default()
+        })
+    };
+    token.to_jwt().map_err(refused)
 }
 
-/// How long a gateway token lives; each request signs its own.
 pub const INFERENCE_TOKEN_TTL: Duration = Duration::from_secs(600);
 
 /// The LiveKit Inference gateway's bearer: identity `agent`, allowed to perform inference.

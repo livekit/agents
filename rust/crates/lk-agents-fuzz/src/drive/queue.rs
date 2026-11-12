@@ -169,7 +169,9 @@ fn label(event: &VoiceRuntimeEvent) -> &'static str {
             VoiceEvent::StorageReloaded { .. } => "StorageReloaded",
             VoiceEvent::StorageSettled(_) => "StorageSettled",
             VoiceEvent::StorageAbandoned(_) => "StorageAbandoned",
+            VoiceEvent::StorageCheckpointed { .. } => "StorageCheckpointed",
             VoiceEvent::StorageLost(_) => "StorageLost",
+            VoiceEvent::StorageFailed { .. } => "StorageFailed",
         },
     }
 }

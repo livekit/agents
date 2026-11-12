@@ -7,6 +7,7 @@ use crate::realtime::openai::{
 };
 use crate::testkit::NoImages;
 use lk_agents_abi::Maybe;
+use lk_agents_abi::llm::realtime_options::Voice;
 use serde_json::json;
 
 fn value(event: impl serde::Serialize) -> Value {
@@ -149,7 +150,7 @@ fn xai_sessions_match_its_schema_with_flat_function_tools() {
     );
     let event = value(encode::options_update(
         "e",
-        OptionsPatch { voice: Maybe::Given(json!("Eve")), ..Default::default() },
+        OptionsPatch { voice: Maybe::Given(Voice::Name("Eve".into())), ..Default::default() },
         &XAI,
     ));
     assert_eq!(event["session"], json!({"voice":"Eve"}));

@@ -826,3 +826,7 @@ impl AudioRecognition {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "speech_tests.rs"]
+mod tests;

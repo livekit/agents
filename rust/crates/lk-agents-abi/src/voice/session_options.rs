@@ -13,14 +13,6 @@ pub struct UnknownLiteral {
     pub expected: &'static str,
 }
 
-/// A `tts_text_transforms` entry that names no builtin. Refused, not skipped.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "unknown tts_text_transforms entry {0:?}; use \"filter_markdown\" / \"filter_emoji\", or apply \
-     your own transform in a tts_node"
-)]
-pub struct UnknownTextTransform(pub String);
-
 /// The turn detection mode a session or agent asks for; unsaid or `None` decides from the legs.
 #[crate::host(record(module = "session_options", name = "TurnDetectionMode", extract, emit))]
 #[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral {
@@ -43,59 +35,6 @@ pub enum TurnDetection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 pub enum DetectorKind {
     Streaming,
-}
-
-/// A transform the core applies to the text it sends to the TTS.
-#[crate::host(record(module = "session_options", name = "TextTransforms", extract, emit))]
-#[crate::host(wire_strs(err = UnknownTextTransform, msg = UnknownTextTransform(s.to_owned())))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TextTransform {
-    FilterMarkdown,
-    FilterEmoji,
-}
-
-/// Which builtin transforms run between the segmenter and the TTS.
-#[crate::host(codec(
-    extract,
-    host = "collections.abc.Sequence[.session_options.TextTransforms]",
-    via = Vec<String>
-))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-pub struct TextTransformSet {
-    pub filter_markdown: bool,
-    pub filter_emoji: bool,
-}
-
-impl TextTransformSet {
-    /// `DEFAULT_TTS_TEXT_TRANSFORMS = ["filter_markdown", "filter_emoji"]`.
-    pub const ALL: TextTransformSet =
-        TextTransformSet { filter_markdown: true, filter_emoji: true };
-
-    pub fn transforms(self) -> Vec<TextTransform> {
-        let TextTransformSet { filter_markdown, filter_emoji } = self;
-        [
-            (TextTransform::FilterMarkdown, filter_markdown),
-            (TextTransform::FilterEmoji, filter_emoji),
-        ]
-        .into_iter()
-        .filter_map(|(transform, on)| on.then_some(transform))
-        .collect()
-    }
-}
-
-impl TryFrom<Vec<String>> for TextTransformSet {
-    type Error = UnknownTextTransform;
-    fn try_from(names: Vec<String>) -> Result<Self, Self::Error> {
-        let transforms =
-            names.iter().map(|name| name.parse()).collect::<Result<Vec<TextTransform>, _>>()?;
-        Ok(TextTransformSet {
-            filter_markdown: transforms.contains(&TextTransform::FilterMarkdown),
-            filter_emoji: transforms.contains(&TextTransform::FilterEmoji),
-        })
-    }
 }
 
 /// ``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay.
@@ -404,9 +343,6 @@ pub struct SessionKwargs {
     pub turn_handling: Option<TurnHandlingKwargs>,
     #[host(default = 3)]
     pub max_tool_steps: i64,
-    pub use_tts_aligned_transcript: Maybe<bool>,
-    /// Unsaid, "none", or a set.
-    pub tts_text_transforms: Maybe<Option<TextTransformSet>>,
     #[host(default = 0.0)]
     pub min_consecutive_speech_delay: f64,
     pub expressive: Maybe<Expressive>,
@@ -439,7 +375,6 @@ pub struct UpdateKwargs {
     pub keyterms: Option<Vec<String>>,
     #[host(default = None)]
     pub min_consecutive_speech_delay: Option<f64>,
-    pub tts_text_transforms: Maybe<Option<TextTransformSet>>,
 }
 
 // `Maybe<T>` has `Debug` only for `Maybe<Option<T>>`, so these impls are written out.
@@ -479,11 +414,11 @@ debug_record!(SessionKwargs {
     turn_handling, max_tool_steps, min_consecutive_speech_delay,
     ivr_detection, user_away_timeout, transcription_timeout,
     session_close_transcript_timeout;
-    use_tts_aligned_transcript, tts_text_transforms, aec_warmup_duration, expressive
+    aec_warmup_duration, expressive
 });
 
 debug_record!(UpdateKwargs {
-    turn_handling, keyterms, min_consecutive_speech_delay; expressive, tts_text_transforms
+    turn_handling, keyterms, min_consecutive_speech_delay; expressive
 });
 
 /// `SessionLegs` as the host states it before `start()`, so `session.options` can resolve early.
@@ -628,8 +563,6 @@ pub struct ResolvedSessionOptions {
     pub endpointing_overrides: EndpointingOverrides,
     pub max_tool_steps: u32,
     pub min_consecutive_speech_delay: f64,
-    pub use_tts_aligned_transcript: Option<bool>,
-    pub tts_text_transforms: Option<Vec<TextTransform>>,
     pub ivr_detection: bool,
     pub user_away_timeout: Option<f64>,
     pub transcription_timeout: Option<f64>,

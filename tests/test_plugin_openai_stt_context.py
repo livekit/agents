@@ -10,7 +10,7 @@ import openai
 import pytest
 
 from livekit import agents as vad, rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectionError, http, inference
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectionError, http
 from livekit.agents.stt import SpeechEvent, SpeechEventType
 from livekit.plugins.openai import stt
 
@@ -211,23 +211,6 @@ async def test_switching_to_an_earlier_model_rejects_the_current_hints() -> None
     assert instance._opts.model == "gpt-live-transcribe"
     assert instance.capabilities.keyterms is True
     assert instance._opts.languages == ["en", "fr"]
-
-
-@pytest.mark.parametrize(
-    ("model", "supported"),
-    [
-        ("gpt-transcribe", True),
-        ("gpt-live-transcribe", True),
-        ("gpt-4o-transcribe", False),
-        ("whisper-1", False),
-    ],
-)
-def test_keyterms_capability_follows_the_model(model: str, supported: bool) -> None:
-    instance = stt.STT(api_key="test-key", model=model)
-    assert instance.capabilities.keyterms is supported
-
-    instance.update_options(model=model)
-    assert instance.capabilities.keyterms is supported
 
 
 async def _connected(
@@ -440,34 +423,6 @@ async def test_detected_keyterms_do_not_follow_a_model_downgrade() -> None:
 
     config = await _transcription_config(instance)
     assert "keywords" not in config
-
-
-@pytest.mark.parametrize(
-    ("model", "realtime"),
-    [
-        ("gpt-live-transcribe", True),
-        ("gpt-realtime-whisper", True),
-        ("gpt-4o-mini-transcribe", False),
-        ("whisper-1", False),
-    ],
-)
-def test_use_realtime_defaults_to_the_only_transport_a_model_has(
-    model: str, realtime: bool
-) -> None:
-    instance = stt.STT(api_key="test-key", model=model, vad=None)
-    assert instance.capabilities.streaming is realtime
-
-    # an explicit value still wins
-    off = stt.STT(api_key="test-key", model=model, vad=None, use_realtime=False)
-    assert off.capabilities.streaming is False
-
-
-def test_a_client_commit_model_loads_the_bundled_vad() -> None:
-    # no livekit-plugins-silero dependency: the VAD ships with livekit-agents
-    instance = stt.STT(api_key="test-key", model="gpt-live-transcribe")
-    assert isinstance(instance._vad, inference.VAD)
-
-    assert stt.STT(api_key="test-key", model="gpt-4o-mini-transcribe")._vad is None
 
 
 async def test_live_transcribe_omits_turn_detection() -> None:

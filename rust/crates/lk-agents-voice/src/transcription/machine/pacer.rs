@@ -1,19 +1,15 @@
-use crate::transcription::Heard;
-use crate::transcription::effects::TranscriptPacerEffect;
-use crate::transcription::machine::synchronizer::{Hyphenator, Liang};
+use crate::transcription::effects::TranscriptSyncEffect;
+use crate::transcription::estimate::{self, End, Span, Word};
+use crate::transcription::{Heard, HeardWords};
 use lk_agents_abi::TranscriptChunk;
-use lk_agents_core::tokenize::{WordStream, WordTokenizerOptions, split_words};
+use lk_agents_core::tokenize::{WordStream, WordTokenizerOptions};
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// The synchroniser's tokenizer settings: tokens must reassemble the input and punctuation is
 /// paced.
 pub const SYNC_TOKENIZER: WordTokenizerOptions =
     WordTokenizerOptions { ignore_punctuation: false, retain_format: true };
-
-/// Hyphens (syllables) per second at `speed = 1.0`, before a segment's own rate is known.
-pub const STANDARD_SPEECH_RATE: f64 = 3.83;
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub(in crate::transcription) enum TranscriptPacerEvent {
@@ -27,6 +23,12 @@ pub(in crate::transcription) enum TranscriptPacerEvent {
     TextEnd,
     Audio {
         secs: f64,
+    },
+    /// A silence in the segment's audio, in seconds from its start, found as the audio arrived. One
+    /// at the audio's start, or running to the end of the audio sent, bounds the speech.
+    Pause {
+        start: f64,
+        end: f64,
     },
     AudioEnd,
     Position(Duration),
@@ -104,25 +106,29 @@ pub(in crate::transcription) enum TranscriptPacerState {
 struct Planned {
     /// What the transcript shows for it.
     chunk: TranscriptChunk,
-    hyphens: usize,
-    offset: usize,
-    /// The TTS's `start_time` for the delta this word came from, or the segment start.
+    /// Its relative speaking time ([`estimate::weight`]); 0 for text with no speech.
+    weight: f64,
+    /// The weight planned before it since `base` moved: where it starts in its timed delta.
+    offset: f64,
+    /// The TTS's `start_time` for the delta this word came from; `None` for an untimed word.
     base: Option<f64>,
     /// The TTS's `end_time` for that delta: its audio is over by then whatever the pace says.
     limit: Option<f64>,
     /// The playhead when the word was planned: a word that arrives late starts no earlier.
     arrived: f64,
+    /// Its place among the segment's untimed words, which the alignment places.
+    untimed: Option<usize>,
 }
 
 impl Planned {
-    /// Its delta's onset plus the hyphens before it, at the pace; no later than the delta's end.
-    fn due(&self, speed: f64) -> f64 {
-        let paced = self.base.unwrap_or(0.0) + self.offset as f64 / speed;
+    /// Its delta's onset plus the weight before it, at the rate; no later than the delta's end.
+    fn due(&self, rate: f64) -> f64 {
+        let paced = self.base.unwrap_or(0.0) + self.offset / rate;
         self.limit.map_or(paced, |limit| paced.min(limit))
     }
 
-    fn end(&self, speed: f64) -> f64 {
-        let (due, paced) = (self.due(speed), self.due(speed) + self.hyphens as f64 / speed);
+    fn end(&self, rate: f64) -> f64 {
+        let (due, paced) = (self.due(rate), self.due(rate) + self.weight / rate);
         self.limit.map_or(paced, |limit| paced.min(limit).max(due))
     }
 }
@@ -130,22 +136,34 @@ impl Planned {
 pub(in crate::transcription) struct TranscriptPacer {
     state: TranscriptPacerState,
     opts: TranscriptPacerOptions,
-    speed: f64,
+    /// Weight per second: the prior, then the segment's own once its inputs ended (timed deltas).
+    rate: f64,
     /// A token is emitted once a following one proves it complete.
     words: WordStream,
     /// A delivery that arrived with no word yet: the next planned piece carries it.
     expression: Option<String>,
     queue: VecDeque<Planned>,
-    /// Hyphens planned since `base` moved (or since the segment start).
-    offset: usize,
+    /// Weight planned since `base` moved (or since the segment start).
+    offset: f64,
     base: Option<f64>,
-    planned_hyphens: usize,
+    planned_weight: f64,
+    /// The segment's untimed words, in order, and where the alignment starts each.
+    untimed: Vec<Word>,
+    starts: Vec<f64>,
+    /// `starts` is the alignment of the inputs as they are.
+    placed: bool,
+    /// The silences inside the speech, and where the speech starts and (once known) ends.
+    pauses: Vec<Span>,
+    speech_start: f64,
+    speech_end: Option<f64>,
     /// The TTS's `end_time` for the current aligned delta.
     limit: Option<f64>,
     /// The words shown, each with where its audio ends. Heard are the ones whose audio ended.
-    forwarded: Vec<(String, f64)>,
+    forwarded: HeardWords,
     /// Where the next unaligned word starts: the end of the last one shown (`None` before any).
     cursor: Option<f64>,
+    /// Where the last word shown started: none after it starts earlier.
+    shown_from: f64,
     /// The front word's `(start, end)`, fixed at the speed known when it started.
     front: Option<(f64, f64)>,
     audio_secs: f64,
@@ -160,20 +178,27 @@ pub(in crate::transcription) struct TranscriptPacer {
 
 impl TranscriptPacer {
     pub fn new(opts: TranscriptPacerOptions) -> TranscriptPacer {
-        let speed = STANDARD_SPEECH_RATE * opts.speed;
+        let rate = estimate::PRIOR_RATE * opts.speed;
         TranscriptPacer {
             state: TranscriptPacerState::Streaming,
             opts,
-            speed,
+            rate,
             words: WordStream::new(SYNC_TOKENIZER),
             expression: None,
             queue: VecDeque::new(),
-            offset: 0,
+            offset: 0.0,
             base: None,
-            planned_hyphens: 0,
+            planned_weight: 0.0,
+            untimed: Vec::new(),
+            starts: Vec::new(),
+            placed: false,
+            pauses: Vec::new(),
+            speech_start: 0.0,
+            speech_end: None,
             limit: None,
-            forwarded: Vec::new(),
+            forwarded: HeardWords::default(),
             cursor: None,
+            shown_from: 0.0,
             front: None,
             audio_secs: 0.0,
             frames: 0,
@@ -241,11 +266,10 @@ impl TranscriptPacer {
     pub fn step(
         mut self,
         ev: TranscriptPacerEvent,
-    ) -> (TranscriptPacer, Vec<TranscriptPacerEffect>) {
+    ) -> (TranscriptPacer, Vec<TranscriptSyncEffect>) {
         use TranscriptPacerState as S;
         let mut out = Vec::new();
-        let warn =
-            |out: &mut Vec<TranscriptPacerEffect>, w| out.push(TranscriptPacerEffect::Warn(w));
+        let warn = |out: &mut Vec<TranscriptSyncEffect>, w| out.push(TranscriptSyncEffect::Warn(w));
         match (self.state, ev) {
             (S::Closed, _) => warn(&mut out, TranscriptPacerWarning::AfterClose),
             (S::Finished, TranscriptPacerEvent::Close) => self.state = S::Closed,
@@ -291,12 +315,14 @@ impl TranscriptPacer {
             (S::Streaming | S::TextEnded, TranscriptPacerEvent::Audio { secs }) => {
                 self.count_audio(secs)
             }
+            (_, TranscriptPacerEvent::Pause { start, end }) => self.pause(start, end),
             (S::Streaming, TranscriptPacerEvent::AudioEnd) => self.end_audio(),
             (S::TextEnded, TranscriptPacerEvent::AudioEnd) => self.inputs_ended(&mut out),
             (_, TranscriptPacerEvent::Audio { .. } | TranscriptPacerEvent::AudioEnd) => {
                 warn(&mut out, TranscriptPacerWarning::AudioAfterEnd)
             }
         }
+        self.place();
         (self, out)
     }
 
@@ -308,7 +334,7 @@ impl TranscriptPacer {
             self.plan_tokens(held);
             self.base = Some(t);
             self.limit = end_time.filter(|end| *end >= t);
-            self.offset = 0;
+            self.offset = 0.0;
         }
         if chunk.expression.is_some() {
             self.expression.clone_from(&chunk.expression);
@@ -317,56 +343,108 @@ impl TranscriptPacer {
             let tokens = self.words.push(&chunk.text);
             self.plan_tokens(tokens);
         } else {
-            // text with no speech: the word before it is whole, and it costs no time
+            // text with no speech: the word before it is whole, and it costs no time; a line
+            // break in it (a list item) is a place the voice pauses
             let held = self.words.flush();
             self.plan_tokens(held);
-            self.plan_piece(TranscriptChunk { expression: None, ..chunk }, 0);
+            if chunk.text.contains('\n')
+                && let Some(word) = self.untimed.last_mut()
+            {
+                word.line_break = true;
+                self.placed = false;
+            }
+            self.plan_piece(TranscriptChunk { expression: None, ..chunk }, 0.0);
         }
     }
 
     fn plan_tokens(&mut self, tokens: Vec<String>) {
         for word in tokens {
-            let hyphens = self.hyphens(&word);
-            self.plan_piece(TranscriptChunk::new(word), hyphens);
+            if let Some(before) = self.untimed.last_mut() {
+                before.followed_by(&word);
+                self.placed = false;
+            }
+            let weight = estimate::weight(&word, false, false);
+            self.plan_piece(TranscriptChunk::new(word), weight);
         }
     }
 
-    fn plan_piece(&mut self, mut chunk: TranscriptChunk, hyphens: usize) {
+    fn plan_piece(&mut self, mut chunk: TranscriptChunk, weight: f64) {
         if chunk.text.is_empty() && self.expression.is_none() {
             return;
         }
         chunk.expression = self.expression.take();
+        let untimed = (self.base.is_none() && weight > 0.0).then(|| {
+            self.untimed.push(Word::new(chunk.text.clone()));
+            self.placed = false;
+            self.untimed.len() - 1
+        });
         self.queue.push_back(Planned {
             chunk,
-            hyphens,
+            weight,
             offset: self.offset,
             base: self.base,
             limit: self.limit,
             arrived: self.position.as_secs_f64(),
+            untimed,
         });
-        self.offset += hyphens;
-        self.planned_hyphens += hyphens;
+        self.offset += weight;
+        self.planned_weight += weight;
     }
 
-    /// Whitespace and markup cost nothing; everything else costs its hyphens.
-    fn hyphens(&self, clean: &str) -> usize {
-        if clean.trim().is_empty() {
-            return 0;
-        }
-        split_words(clean, SYNC_TOKENIZER)
-            .iter()
-            .map(|w| self.opts.hyphenator.hyphens(&w.text))
-            .sum()
-    }
-
-    /// The text ended: the held partial word is a whole word now, and a delivery with no word
-    /// after it still reaches the transcript.
+    /// The text ended: the held partial word is a whole word now, the last one is known, and a
+    /// delivery with no word after it still reaches the transcript.
     fn end_text(&mut self) {
         let tail = self.words.flush();
         self.plan_tokens(tail);
-        if self.expression.is_some() {
-            self.plan_piece(TranscriptChunk::silent(""), 0);
+        if let Some(word) = self.untimed.last_mut() {
+            word.last = true;
+            self.placed = false;
         }
+        if self.expression.is_some() {
+            self.plan_piece(TranscriptChunk::silent(""), 0.0);
+        }
+    }
+
+    /// A silence in the audio: one at its start or end bounds the speech, any other anchors it.
+    fn pause(&mut self, start: f64, end: f64) {
+        if start <= 0.0 && self.pauses.is_empty() {
+            self.speech_start = end;
+        } else if end >= self.audio_secs - 1e-6 {
+            // silence to the end of the audio: an inner pause is reported once speech resumes
+            self.speech_end = Some(start);
+        } else {
+            self.pauses.push(Span { start, end });
+        }
+        self.placed = false;
+    }
+
+    fn state_audio_ended(&self) -> bool {
+        matches!(self.state, TranscriptPacerState::AudioEnded | TranscriptPacerState::InputsEnded)
+    }
+
+    /// Where each untimed word starts, the alignment rerun if its inputs changed.
+    fn place(&mut self) {
+        if self.placed || self.untimed.is_empty() {
+            return;
+        }
+        let end = match self.speech_end {
+            Some(end) => End::Known(end),
+            None if self.state_audio_ended() => End::Known(self.audio_secs),
+            None => End::Open { received: self.audio_secs },
+        };
+        self.starts =
+            estimate::place(&self.untimed, &self.pauses, self.speech_start, end, self.opts.speed);
+        self.placed = true;
+    }
+
+    /// An untimed word's start and end: the alignment's, the end where the next word starts.
+    fn untimed_times(&self, i: usize) -> (f64, f64) {
+        let start = self.starts.get(i).copied().unwrap_or(self.speech_start);
+        let end =
+            self.starts.get(i + 1).copied().filter(|next| *next > start).unwrap_or_else(|| {
+                start + estimate::weight(&self.untimed[i].text, false, true) / self.rate
+            });
+        (start, end)
     }
 
     fn count_audio(&mut self, secs: f64) {
@@ -381,22 +459,24 @@ impl TranscriptPacer {
     }
 
     /// Both inputs ended: the segment's own rate is known.
-    fn inputs_ended(&mut self, out: &mut Vec<TranscriptPacerEffect>) {
+    fn inputs_ended(&mut self, out: &mut Vec<TranscriptSyncEffect>) {
         if self.frames == 0 {
             // Nothing will play it: shown whole now, as a segment that finished playing.
             self.finish(Duration::ZERO, false, out);
             return;
         }
         self.state = TranscriptPacerState::InputsEnded;
-        // A markup- or emoji-only segment would otherwise set the speed to zero.
-        if self.planned_hyphens > 0 && self.audio_secs > 0.0 {
-            self.speed = self.planned_hyphens as f64 / self.audio_secs;
+        self.placed = false;
+        // A markup- or emoji-only segment would otherwise set the rate to zero.
+        if self.planned_weight > 0.0 && self.audio_secs > 0.0 {
+            self.rate = self.planned_weight / self.audio_secs;
         }
     }
 
-    /// Each word starts where the previous one ended (or when it arrived), lasts its hyphens at the
-    /// speed known then, and is shown halfway through. An aligned word keeps the TTS's own timing.
-    fn release(&mut self, position: Duration, out: &mut Vec<TranscriptPacerEffect>) {
+    /// An untimed word is shown where the alignment starts it (never before it arrived, nor before
+    /// the word before it); a timed word keeps the TTS's own timing.
+    fn release(&mut self, position: Duration, out: &mut Vec<TranscriptSyncEffect>) {
+        self.place();
         self.position = position;
         let now = position.as_secs_f64();
         // The aligned delta's audio is over: its held word is whole, as any continuation would
@@ -417,18 +497,19 @@ impl TranscriptPacer {
             let word = self.queue.pop_front().expect("peeked");
             self.front = None;
             self.cursor = Some(end);
+            self.shown_from = start;
             self.forward(word, start, end, out);
         }
     }
 
-    /// The front word's `(start, end, shown_at)` in the segment's time, at the speed known now
-    /// unless its start already fixed it.
+    /// The front word's `(start, end, shown_at)` in the segment's time, as placed now unless its
+    /// start already fixed it.
     fn front_times(&self) -> Option<(f64, f64, f64)> {
-        let front = self.queue.front()?;
-        let (start, end) = match (self.front, front.base) {
-            (Some(timed), _) => timed,
-            (None, Some(base)) => {
-                let (start, end) = (front.due(self.speed), front.end(self.speed));
+        let front = self.queue.front()?.clone();
+        let (start, end) = match (self.front, front.base, front.untimed) {
+            (Some(timed), _, _) => timed,
+            (None, Some(base), _) => {
+                let (start, end) = (front.due(self.rate), front.end(self.rate));
                 // The next stamped delta starts where this one's audio is over: a token paced
                 // past it (the space after a word) must not hold it back.
                 match self.queue.get(1).and_then(|w| w.base).filter(|next| *next > base) {
@@ -436,13 +517,18 @@ impl TranscriptPacer {
                     None => (start, end),
                 }
             }
-            (None, None) => {
+            (None, None, Some(i)) => {
+                let (start, end) = self.untimed_times(i);
+                let start = start.max(front.arrived).max(self.shown_from);
+                (start, end.max(start))
+            }
+            // text with no speech shows when the word before it ends
+            (None, None, None) => {
                 let start = self.cursor.unwrap_or(0.0).max(front.arrived);
-                (start, start + front.hyphens as f64 / self.speed)
+                (start, start)
             }
         };
-        let shown_at = if front.base.is_some() { start } else { (start + end) / 2.0 };
-        Some((start, end, shown_at))
+        Some((start, end, start))
     }
 
     /// The next playhead, in the sink's current playout, at which a position would release
@@ -472,7 +558,7 @@ impl TranscriptPacer {
     }
 
     /// The word whose delay had begun is still shown; only the next word waits.
-    fn paused(&mut self, out: &mut Vec<TranscriptPacerEffect>) {
+    fn paused(&mut self, out: &mut Vec<TranscriptSyncEffect>) {
         let Some((start, end)) = self.front.take() else { return };
         let word = self.queue.pop_front().expect("a started word is the queue's front");
         self.cursor = Some(end);
@@ -484,28 +570,17 @@ impl TranscriptPacer {
         word: Planned,
         start_time: f64,
         end_time: f64,
-        out: &mut Vec<TranscriptPacerEffect>,
+        out: &mut Vec<TranscriptSyncEffect>,
     ) {
-        // The words are one voice: the last one's audio was over when this one's began, whatever
-        // pace it was shown at (a sentence's first word paced before its rate was known).
-        if let Some((_, end)) = self.forwarded.last_mut() {
-            *end = end.min(start_time);
-        }
-        self.forwarded.push((word.chunk.text.clone(), end_time));
-        out.push(TranscriptPacerEffect::Forward { chunk: word.chunk, start_time, end_time });
+        self.forwarded.push(&word.chunk.text, word.chunk.spoken, start_time, end_time);
+        out.push(TranscriptSyncEffect::PublishWord { chunk: word.chunk, start_time, end_time });
     }
 
     /// The words shown whose audio had ended by `position`.
     /// As history keeps it: plain, and ending at the last word heard.
     fn heard(&self, position: Duration) -> String {
         let at = position.as_secs_f64() + 1e-9;
-        let shown: String = self
-            .forwarded
-            .iter()
-            .take_while(|(_, end)| *end <= at)
-            .map(|(w, _)| w.as_str())
-            .collect();
-        crate::transcription::plain(shown.trim_end())
+        crate::transcription::plain(self.forwarded.heard(at).trim_end())
     }
 
     /// The playout ended. Complete: everything left is heard, at once. Cut: what was forwarded by
@@ -515,55 +590,63 @@ impl TranscriptPacer {
         &mut self,
         position: Duration,
         interrupted: bool,
-        out: &mut Vec<TranscriptPacerEffect>,
+        out: &mut Vec<TranscriptSyncEffect>,
     ) {
         if interrupted {
             self.release(position, out);
             self.queue.clear();
         } else {
             self.end_text();
+            self.place();
             let end = position.as_secs_f64();
-            while let Some(word) = self.queue.pop_front() {
+            while let Some((start, stop, _)) = self.front_times() {
+                let word = self.queue.pop_front().expect("peeked");
+                self.front = None;
                 // Stamped no later than the playout's own end: the audio is over.
-                let start_time = word.due(self.speed);
-                let end_time = word.end(self.speed).min(end.max(start_time));
+                let start_time = start.min(end);
+                let end_time = stop.min(end.max(start_time));
+                self.cursor = Some(end_time);
+                self.shown_from = start_time;
                 self.forward(word, start_time, end_time, out);
             }
         }
-        out.push(TranscriptPacerEffect::Flush);
+        out.push(TranscriptSyncEffect::FlushTranscript);
         let heard = if interrupted {
             Heard::cut(self.heard(position), position, self.frames)
         } else {
-            let all: String = self.forwarded.iter().map(|(w, _)| w.as_str()).collect();
-            Heard::complete(crate::transcription::plain(&all), position, self.frames)
+            Heard::complete(
+                crate::transcription::plain(&self.forwarded.all()),
+                position,
+                self.frames,
+            )
         };
-        out.push(TranscriptPacerEffect::Heard(heard));
+        out.push(TranscriptSyncEffect::ReportHeard(heard));
         self.state = TranscriptPacerState::Finished;
     }
 
     /// The audio was cleared at `position`: the words due by then are shown, the rest never are,
     /// and the words heard are reported.
-    fn clear(&mut self, position: Duration, out: &mut Vec<TranscriptPacerEffect>) {
+    fn clear(&mut self, position: Duration, out: &mut Vec<TranscriptSyncEffect>) {
         self.release(position, out);
         self.queue.clear();
-        out.push(TranscriptPacerEffect::Flush);
+        out.push(TranscriptSyncEffect::FlushTranscript);
         let heard = Heard::cut(self.heard(position), position, self.frames);
-        out.push(TranscriptPacerEffect::Heard(heard));
+        out.push(TranscriptSyncEffect::ReportHeard(heard));
         self.state = TranscriptPacerState::Cleared;
     }
 
     /// A cleared playout's finish at `position`: the words heard among those shown.
-    fn settle(&mut self, position: Duration, out: &mut Vec<TranscriptPacerEffect>) {
-        out.push(TranscriptPacerEffect::Flush);
+    fn settle(&mut self, position: Duration, out: &mut Vec<TranscriptSyncEffect>) {
+        out.push(TranscriptSyncEffect::FlushTranscript);
         let heard = Heard::cut(self.heard(position), position, self.frames);
-        out.push(TranscriptPacerEffect::Heard(heard));
+        out.push(TranscriptSyncEffect::ReportHeard(heard));
         self.state = TranscriptPacerState::Finished;
     }
 
     /// The words heard by `position` are this playout's; the next playout starts there.
-    fn split(&mut self, position: Duration, out: &mut Vec<TranscriptPacerEffect>) {
+    fn split(&mut self, position: Duration, out: &mut Vec<TranscriptSyncEffect>) {
         self.release(position, out);
-        out.push(TranscriptPacerEffect::Heard(Heard::cut(
+        out.push(TranscriptSyncEffect::ReportHeard(Heard::cut(
             self.heard(position),
             position,
             self.frames,
@@ -572,35 +655,33 @@ impl TranscriptPacer {
     }
 
     /// Closed before the playout finished: the words shown are the words heard.
-    fn cut(&mut self, out: &mut Vec<TranscriptPacerEffect>) {
+    fn cut(&mut self, out: &mut Vec<TranscriptSyncEffect>) {
         self.queue.clear();
-        out.push(TranscriptPacerEffect::Flush);
+        out.push(TranscriptSyncEffect::FlushTranscript);
         let heard = self.heard(self.position);
-        out.push(TranscriptPacerEffect::Heard(Heard::cut(heard, self.position, self.frames)));
+        out.push(TranscriptSyncEffect::ReportHeard(Heard::cut(heard, self.position, self.frames)));
         self.state = TranscriptPacerState::Closed;
     }
 }
 
 /// Pacing options; the word tokenizer is pinned to [`SYNC_TOKENIZER`].
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TranscriptPacerOptions {
-    /// The caller's `transcription_speed_factor`. Multiplies [`STANDARD_SPEECH_RATE`].
+    /// The caller's `transcription_speed_factor`: scales the speaking rate assumed before a
+    /// segment's own is known.
     pub speed: f64,
-    pub hyphenator: Arc<dyn Hyphenator>,
-}
-
-impl std::fmt::Debug for TranscriptPacerOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TranscriptPacerOptions").field("speed", &self.speed).finish_non_exhaustive()
-    }
 }
 
 impl Default for TranscriptPacerOptions {
     fn default() -> Self {
-        TranscriptPacerOptions { speed: 1.0, hyphenator: Arc::new(Liang) }
+        TranscriptPacerOptions { speed: 1.0 }
     }
 }
 
 #[cfg(test)]
 #[path = "pacer_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "sync_accuracy_tests.rs"]
+mod sync_accuracy;

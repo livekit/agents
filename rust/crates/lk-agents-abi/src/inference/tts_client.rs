@@ -1,5 +1,4 @@
 use super::fallback::TtsFallbacks;
-use crate::errors::ProviderError;
 use crate::{ApiConnectOptions, Tts};
 
 /// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`.
@@ -9,8 +8,6 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
-    #[host(class(name = "TtsStream"))]
-    type Stream;
     /// A client of `model` (``"provider/model[:voice]"``) on the gateway. Starts nothing. The
     /// gateway's URL and key pair resolve from the given values, the environment and the server's
     /// settings.
@@ -61,13 +58,10 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
         #[host(default = None, shape_error(kind = "ValueError", message = "expected a dict of extra kwargs, got {value}"))]
         extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
     );
-    /// A synthesis of the text pushed; its connection carries this view's job.
+    /// Closes the pooled sockets every session's view shares; a synthesis still running
+    /// finishes, its socket closed instead of pooled.
     #[host(await)]
-    async fn stream(
-        &self,
-        #[host(kw, default = None)] conn_options: Option<ApiConnectOptions>,
-        #[host(default = false)] expressive: bool,
-    ) -> Result<Self::Stream, ProviderError>;
+    async fn aclose(&self);
 }
 
 /// `inference.TTS`: the LiveKit Inference gateway's TTS.
@@ -77,7 +71,7 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
     name = "TTS",
     base = "tts.TTS",
     native = InferenceTts,
-    legs(synthesize, stream),
+    legs(_synthesize, _stream),
     leg = "_core_native",
     base_args(capabilities, sample_rate, num_channels)
 ))]
@@ -141,21 +135,6 @@ pub trait InferenceTtsFacade {
 
 /// `inference.TTS.stream()`: one gateway synthesis, text in, audio and alignment out; the client
 /// splits the sentences and converts the markup.
-#[crate::host(facade(
-    path = "livekit.agents.inference.tts",
-    base = "tts.SynthesizeStream",
-    native = InferenceTts,
-    stream(
-        op = stream,
-        owner = "_tts",
-        method = "stream",
-        base_args(conn_options),
-        state(expressive),
-        provider_default(conn_options)
-    )
-))]
-pub trait SynthesizeStream {}
-
 // Public data contracts. Python behavior remains in its adapters.
 
 #[crate::host(wire_strs)]

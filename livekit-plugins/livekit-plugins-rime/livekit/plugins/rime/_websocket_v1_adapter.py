@@ -14,11 +14,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
 
-from livekit.agents import APIConnectOptions, APIError, http, redacted_cause, tokenize, tts, utils
+from livekit.agents import APIConnectOptions, APIError, http, tts, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -27,10 +26,6 @@ from ._pool_manager import PoolManager
 from ._stream_tts import StreamTTS
 
 _Pool = utils.ConnectionPool[_websocket_v1.Connection]
-
-
-class _DrainTokenizer:
-    """Release buffered text from the current local sentence tokenizer."""
 
 
 @dataclass(frozen=True)
@@ -57,7 +52,6 @@ class WebSocketV1Adapter:
         websocket_protocol: _websocket_v1.WebSocketProtocol,
         api_key: str,
         ensure_session: Callable[[], http.HttpSession],
-        sentence_tokenizer: tokenize.SentenceTokenizer | None = None,
         allow_custom_endpoint: bool = False,
     ) -> None:
         _websocket_v1.validate_websocket_url(
@@ -69,11 +63,6 @@ class WebSocketV1Adapter:
         self._api_key = api_key
         self._ensure_session = ensure_session
         self._allow_custom_endpoint = allow_custom_endpoint
-        self._sentence_tokenizer = (
-            sentence_tokenizer
-            if sentence_tokenizer is not None
-            else tokenize.SentenceTokenizer(min_words=1)
-        )
         self._pools = PoolManager(self._new_pool())
 
     def _new_pool(self) -> _Pool:
@@ -128,7 +117,6 @@ class WebSocketV1Adapter:
             pool_manager=self._pools,
             options=protocol_options,
             conn_options=conn_options,
-            sentence_tokenizer=self._sentence_tokenizer,
         )
         return stream
 
@@ -166,7 +154,6 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         pool_manager: PoolManager[_websocket_v1.Connection],
         options: _websocket_v1.SynthesisOptions,
         conn_options: APIConnectOptions,
-        sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         self._sample_rate = tts_instance.sample_rate
         super().__init__(
@@ -174,37 +161,17 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         )
         self._pool = pool
         self._options = options
-        self._sentence_tokenizer = sentence_tokenizer
-        self._end_input_sentinel: object | None = None
         pool_manager.track_stream(pool, self._task)
 
-    def _enqueue_tokenizer_drain(self) -> tts.SynthesizeStream.Flush:
-        sentinel = self.Flush()
-        self.input.send_nowait(sentinel)
-        return sentinel
-
     def flush(self) -> None:
-        """Drain the local tokenizer without ending Rime input.
+        """Keep the Rime context open: the v1 protocol has no ``flush`` operation.
 
-        This implements the LiveKit stream interface. It does not send a Rime
-        protocol message because the Rime v1 protocol has no ``flush`` operation.
-        Any released text is sent through the current context as a normal ``text``
-        message. The stream accepts more text after this call.
+        The stream is one Rime context and one LiveKit segment, so no segment boundary
+        is recorded and the stream accepts more text after this call.
         """
-        if self.input.closed:
-            return
-
-        # Do not call super().flush(), which records a LiveKit segment boundary. Keep
-        # the Rime context, metric text, and segment state active while the local
-        # sentence tokenizer drains.
-        self._enqueue_tokenizer_drain()
 
     def end_input(self) -> None:
         """Finalize Rime input and let the stream wait for the provider ``done`` event."""
-        if self.input.closed:
-            return
-
-        self._end_input_sentinel = self._enqueue_tokenizer_drain()
         self.input.close()
 
     async def aclose(self) -> None:
@@ -212,19 +179,10 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        async def _raw_input_events() -> AsyncIterable[str | _DrainTokenizer]:
-            async for event in self.input:
-                if isinstance(event, self.Flush):
-                    if event is not self._end_input_sentinel:
-                        yield _DrainTokenizer()
-                else:
-                    yield event
-
-        input_events = _sentence_tokenized_input_events(
-            _raw_input_events(),
-            sentence_tokenizer=self._sentence_tokenizer,
-            language=self._options.language,
-        )
+        async def input_events() -> AsyncIterable[str]:
+            async for chunk in self.input:
+                if isinstance(chunk, tts.SpeechChunk):
+                    yield chunk.text + " "
 
         connection = await self._pool.get(conn_options=self._conn_options)
         reusable = False
@@ -234,7 +192,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
                 context_id=utils.shortuuid(),
                 options=self._options,
                 sample_rate=self._sample_rate,
-                input_events=input_events,
+                input_events=input_events(),
                 output_emitter=output_emitter,
                 read_timeout=self._conn_options.read_timeout,
                 write_timeout=self._conn_options.write_timeout,
@@ -250,83 +208,3 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
             else:
                 self._pool.remove(connection)
                 await _websocket_v1.close(connection)
-
-
-async def _sentence_tokenized_input_events(
-    input_events: AsyncIterable[str | _DrainTokenizer],
-    *,
-    sentence_tokenizer: tokenize.SentenceTokenizer,
-    language: str,
-) -> AsyncIterable[str]:
-    """Convert text fragments to sentence units and handle local drain requests."""
-    output = utils.aio.Chan[str]()
-
-    async def _drive_input() -> None:
-        sentence_stream: tokenize.SentenceStream | None = None
-        forward_task: asyncio.Task[None] | None = None
-        next_input_task: asyncio.Task[str | _DrainTokenizer] | None = None
-        input_iterator = aiter(input_events)
-
-        async def _next_input() -> str | _DrainTokenizer:
-            return await anext(input_iterator)
-
-        async def _forward_sentences(stream: tokenize.SentenceStream) -> None:
-            async for event in stream:
-                text = event.token
-                if text and not text[-1].isspace():
-                    text += " "
-                if text:
-                    output.send_nowait(text)
-
-        def _start_forwarding(stream: tokenize.SentenceStream) -> asyncio.Task[None]:
-            return asyncio.create_task(
-                _forward_sentences(stream), name="rime-v1-sentence-tokenizer-output"
-            )
-
-        try:
-            sentence_stream = sentence_tokenizer.stream(language=language)
-            forward_task = _start_forwarding(sentence_stream)
-            while True:
-                next_input_task = asyncio.create_task(_next_input(), name="rime-v1-next-input")
-                # A tokenizer failure must interrupt an open, idle input stream.
-                await asyncio.wait(
-                    (next_input_task, forward_task), return_when=asyncio.FIRST_COMPLETED
-                )
-                if forward_task.done():
-                    await forward_task
-                try:
-                    event = await next_input_task
-                except StopAsyncIteration:
-                    break
-                if isinstance(event, _DrainTokenizer):
-                    sentence_stream.end_input()
-                    await forward_task
-                    sentence_stream = sentence_tokenizer.stream(language=language)
-                    forward_task = _start_forwarding(sentence_stream)
-                else:
-                    sentence_stream.push_text(event)
-
-            sentence_stream.end_input()
-            await forward_task
-        except Exception as cause:
-            raise APIError(
-                "Rime sentence tokenization failed", retryable=False
-            ) from redacted_cause(cause)
-        finally:
-            try:
-                if next_input_task is not None:
-                    await utils.aio.cancel_and_wait(next_input_task)
-                if forward_task is not None:
-                    await utils.aio.cancel_and_wait(forward_task)
-                if sentence_stream is not None and not sentence_stream.closed:
-                    await sentence_stream.aclose()
-            finally:
-                output.close()
-
-    input_task = asyncio.create_task(_drive_input(), name="rime-v1-sentence-tokenizer-input")
-    try:
-        async for event in output:
-            yield event
-        await input_task
-    finally:
-        await utils.aio.cancel_and_wait(input_task)

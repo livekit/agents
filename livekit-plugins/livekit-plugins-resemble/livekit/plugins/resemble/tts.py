@@ -30,11 +30,9 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     http,
-    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from .log import logger
 from .models import TTSModels
@@ -62,7 +60,6 @@ class _WebSocketMessage(BaseModel):
 class _TTSOptions:
     voice_uuid: str
     sample_rate: int
-    tokenizer: tokenize.SentenceTokenizer
     model: str | None
 
 
@@ -73,7 +70,6 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         voice_uuid: str | None = None,
         model: TTSModels | str | None = None,
-        tokenizer: tokenize.SentenceTokenizer | None = None,
         sample_rate: int = 44100,
         http_session: http.HttpSession | None = None,
         use_streaming: bool = True,
@@ -89,7 +85,6 @@ class TTS(tts.TTS):
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 44100.
             api_key (str | None, optional): The Resemble API key. If not provided, it will be read from the RESEMBLE_API_KEY environment variable.
             http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, a new session will be created.
-            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.SentenceTokenizer`.
             use_streaming (bool, optional): Whether to use streaming or not. Defaults to True.
         """  # noqa: E501
         super().__init__(
@@ -106,16 +101,12 @@ class TTS(tts.TTS):
             )
         self._api_key = api_key
 
-        if tokenizer is None:
-            tokenizer = tokenize.SentenceTokenizer()
-
         if voice_uuid is None:
             voice_uuid = DEFAULT_VOICE_UUID
 
         self._opts = _TTSOptions(
             voice_uuid=voice_uuid,
             sample_rate=sample_rate,
-            tokenizer=tokenizer,
             model=model,
         )
 
@@ -169,21 +160,19 @@ class TTS(tts.TTS):
         self._opts.voice_uuid = voice_uuid or self._opts.voice_uuid
         self._opts.model = model if model is not None else self._opts.model
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             opts=replace(self._opts),
             http_session=self._ensure_session,
             api_key=self._api_key,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self, opts=replace(self._opts), pool=self._pool, conn_options=conn_options
         )
@@ -288,7 +277,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -298,32 +287,29 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/mp3",
         )
 
-        async def _tokenize_input() -> None:
-            """tokenize text from the input_ch to words"""
-            input_stream = None
-            async for text in self.input:
-                if isinstance(text, str):
-                    if input_stream is None:
-                        # new segment (after flush for e.g)
-                        input_stream = self._opts.tokenizer.stream()
-                        segments_ch.send_nowait(input_stream)
-                    input_stream.push_text(text)
-                else:
-                    if input_stream is not None:
-                        input_stream.end_input()
-                    input_stream = None
+        async def _split_segments() -> None:
+            segment: utils.aio.Chan[str] | None = None
+            async for item in self.input:
+                if isinstance(item, tts.SpeechChunk):
+                    if segment is None:
+                        segment = utils.aio.Chan[str]()
+                        segments_ch.send_nowait(segment)
+                    segment.send_nowait(item.text)
+                elif segment is not None:
+                    segment.close()
+                    segment = None
 
-            if input_stream is not None:
-                input_stream.end_input()
+            if segment is not None:
+                segment.close()
 
             segments_ch.close()
 
         async def _process_segments() -> None:
-            async for input_stream in segments_ch:
-                await self._run_ws(input_stream, output_emitter)
+            async for segment in segments_ch:
+                await self._run_ws(segment, output_emitter)
 
         tasks = [
-            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_split_segments()),
             asyncio.create_task(_process_segments()),
         ]
         try:
@@ -335,9 +321,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             await utils.aio.cancel_and_wait(*tasks)
 
-    async def _run_ws(
-        self, input_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter
-    ) -> None:
+    async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
@@ -348,11 +332,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _send_task(ws: http.WebSocket) -> None:
             nonlocal input_ended, last_index
-            async for data in input_stream:
+            async for text in segment:
                 last_index += 1
                 payload: dict[str, object] = {
                     "voice_uuid": self._opts.voice_uuid,
-                    "data": data.token,
+                    "data": text,
                     "request_id": last_index,
                     "sample_rate": self._opts.sample_rate,
                     "precision": "PCM_16",

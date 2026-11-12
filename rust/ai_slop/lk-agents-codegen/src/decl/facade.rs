@@ -137,6 +137,8 @@ pub struct Adapt {
     /// `each = Record::field`: with `returns`, each element of the native list as that field.
     pub each: Option<String>,
     pub annotations: Vec<(String, String)>,
+    /// Typed call forms; each lists its required parameters and `ret` annotation.
+    pub overloads: Vec<Vec<(String, String)>>,
     pub resolve: Vec<(String, String)>,
     /// `bind(p = "a.b")`: the native's `p` is `self.a.b`, not a Python parameter.
     pub bind: Vec<(String, String)>,

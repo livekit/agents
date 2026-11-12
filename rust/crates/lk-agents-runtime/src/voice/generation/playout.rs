@@ -276,6 +276,7 @@ impl PlaybackObserver for ShownUnvoiced {
             start: word.start_time.unwrap_or_default(),
             end: word.end_time.unwrap_or_default(),
             played: Duration::from_secs_f64(word.start_time.unwrap_or_default().max(0.0)),
+            spoken: word.spoken,
         });
     }
 }
@@ -545,7 +546,15 @@ impl Playing<'_> {
                         tap.recorder.capture_frame(tap.now(), frame);
                     }
                 }
-                Some(Err(_)) | None => return Err(Ended::Cut),
+                Some(Err(error)) => {
+                    // The core cuts the speech for it; the cut is that interruption's.
+                    let error = Box::new(error.into());
+                    let speech = self.handle.id();
+                    self.shared.report(GenEvent::OutputFailed { speech, error });
+                    self.handle.wait_for_interrupted().await;
+                    return Err(Ended::Cut);
+                }
+                None => return Err(Ended::Cut),
             }
         }
         Ok(())

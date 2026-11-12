@@ -7,7 +7,7 @@ use lk_agents_abi::{
 };
 use lk_agents_core::agent_run::planning;
 use lk_agents_core::llm::history::ChatContextExt;
-use lk_agents_core::tts::markup::MarkupExt;
+use lk_agents_core::markup::MarkupExt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -86,6 +86,7 @@ pub struct TurnAccumulator {
     first_tts_segment: Option<usize>,
     first_tts: TtsStats,
     forwarded_text: String,
+    recorded_prefix: usize,
     /// A segment's synthesis failed for good, or the output cut one under it: the item reads as
     /// cut short.
     cut_short: bool,
@@ -105,6 +106,7 @@ impl TurnAccumulator {
             first_tts_segment: None,
             first_tts: TtsStats::default(),
             forwarded_text: String::new(),
+            recorded_prefix: 0,
             cut_short: false,
             cut_at: None,
         }
@@ -164,6 +166,28 @@ impl TurnAccumulator {
     /// One forwarded segment's text (`segment_outputs.append(out)`).
     pub fn record(&mut self, forwarded_text: &str) {
         self.forwarded_text.push_str(forwarded_text);
+    }
+
+    /// A stable-id recovery item containing only segments whose delivery has settled.
+    pub fn take_progress(&mut self, message_id: &str) -> Option<ChatMessage> {
+        if self.forwarded_text.len() == self.recorded_prefix {
+            return None;
+        }
+        self.recorded_prefix = self.forwarded_text.len();
+        self.progress_text(message_id, &self.forwarded_text)
+    }
+
+    pub(super) fn progress_text(&self, message_id: &str, text: &str) -> Option<ChatMessage> {
+        if text.is_empty() {
+            return None;
+        }
+        let created_at = self
+            .started_speaking_at
+            .and_then(lk_agents_abi::wall_from_secs)
+            .unwrap_or(self.reply_started_at);
+        let mut item = ChatMessage::text(message_id, Role::Assistant, text, created_at);
+        item.interrupted = true;
+        Some(item)
     }
 
     /// The metrics block and the assistant message (`._pipeline_reply_task_impl`).
@@ -279,7 +303,7 @@ impl PlanSpec {
                 }
             }
             None => {
-                lk_agents_core::tts::markup::remove_expressive_instructions(&mut ctx);
+                lk_agents_core::markup::remove_expressive_instructions(&mut ctx);
             }
         }
 
@@ -305,7 +329,7 @@ impl PlanSpec {
 /// `update_expressive_instructions`: the keyed system message, replaced in place (its stamp kept)
 /// or appended.
 fn upsert_expressive_instructions(ctx: &mut ChatContext, text: &str, now: SystemTime) {
-    use lk_agents_core::tts::markup::EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID as ID;
+    use lk_agents_core::markup::EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID as ID;
     match ctx.items.iter().position(|it| it.id() == ID) {
         Some(idx) => {
             let created_at = ctx.items[idx].created_at();
@@ -330,21 +354,18 @@ pub struct ExpressiveLayers {
 
 impl ExpressiveLayers {
     /// `_resolve_expressive_options` and `_inject_expressive_instructions`: this turn's markup
-    /// guide, `None` when expressive is off. Off without a TTS, without a markup dialect, and for
-    /// a natively streaming TTS nothing lowers markup for; `Some("")` is on with nothing to inject.
+    /// guide, `None` when expressive is off. Off without a TTS or without a markup dialect;
+    /// `Some("")` is on with nothing to inject.
     pub fn guide(
         &self,
         tts: Option<&lk_agents_abi::resources::TtsRef>,
         modality: lk_agents_abi::Modality,
     ) -> Option<String> {
         use lk_agents_abi::voice::session_options::Instructions;
-        use lk_agents_core::tts::markup::SpeechSteering;
+        use lk_agents_core::markup::SpeechSteering;
         let tts = tts?;
         let markup = tts.markup;
         markup.llm_instructions(None)?;
-        if tts.capabilities.streaming && !tts.lowers_markup {
-            return None;
-        }
         let cfg = self.agent.as_ref().unwrap_or(&self.session).0.as_ref()?;
         // `resolve_expressive_options`: the user's steering over `DEFAULT_SPEECH_STEERING_OPTIONS`.
         let user = cfg.speech_steering.clone().unwrap_or_default();
@@ -631,10 +652,10 @@ mod expressive_tests {
     use lk_agents_abi::resources::{ResourceId, TtsRef};
     use lk_agents_abi::voice::session_options::{Expressive, ExpressiveConfig};
     use lk_agents_abi::{ChatContext, TtsCapabilities};
-    use lk_agents_core::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
+    use lk_agents_core::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
     use std::time::Duration;
 
-    fn tts(provider: &str, streaming: bool, lowers_markup: bool) -> TtsRef {
+    fn tts(provider: &str, streaming: bool) -> TtsRef {
         TtsRef {
             id: ResourceId(1),
             provider: lk_agents_abi::ProviderId::of_label("t".to_owned()),
@@ -642,7 +663,6 @@ mod expressive_tests {
             sample_rate: 24_000,
             num_channels: 1,
             markup: Markup::from_provider_key(provider),
-            lowers_markup,
         }
     }
 
@@ -650,10 +670,31 @@ mod expressive_tests {
         Expressive(Some(cfg))
     }
 
+    /// A custom localized expressive template is the whole guide, with no English filler added.
+    /// https://github.com/livekit/agents/issues/6407 https://github.com/livekit/agents/issues/7554
+    #[test]
+    #[ignore = "https://github.com/livekit/agents/issues/7554 reproduces: custom guide always gains English filler guidance"]
+    fn a_custom_localized_guide_does_not_gain_english_filler_instructions() {
+        let template = "日本語で話してください。言いよどみには、えっと、あの、を使います。";
+        let layers = ExpressiveLayers {
+            session: on(ExpressiveConfig {
+                tts_instructions_template: Some(
+                    lk_agents_abi::voice::session_options::Instructions::plain(template),
+                ),
+                ..Default::default()
+            }),
+            agent: None,
+        };
+        for modality in [Modality::Audio, Modality::Text] {
+            let guide = layers.guide(Some(&tts("cartesia", false)), modality).unwrap();
+            assert_eq!(guide, template);
+        }
+    }
+
     // Catches: the agent's `expressive` not winning over the session's, in either direction.
     #[test]
     fn the_agents_setting_overrides_the_sessions() {
-        let t = tts("cartesia", false, true);
+        let t = tts("cartesia", false);
         let mut layers = ExpressiveLayers { session: on(Default::default()), agent: None };
         assert!(layers.guide(Some(&t), Modality::Audio).is_some());
         layers.agent = Some(Expressive(None));
@@ -663,15 +704,14 @@ mod expressive_tests {
         assert!(layers.guide(Some(&t), Modality::Audio).is_some(), "Agent(expressive=True)");
     }
 
-    // Catches: markup taught to the LLM when no TTS can speak it: no dialect, no TTS, or a
-    // natively streaming plugin nothing lowers markup for.
+    // Catches: markup taught to the LLM when no TTS can speak it (no dialect, no TTS), or kept
+    // from a natively streaming plugin, whose input the framework lowers like any other.
     #[test]
-    fn it_is_off_without_a_dialect_or_a_lowering_path() {
+    fn it_is_off_only_without_a_dialect() {
         let layers = ExpressiveLayers { session: on(Default::default()), agent: None };
         assert_eq!(layers.guide(None, Modality::Audio), None);
-        assert_eq!(layers.guide(Some(&tts("", false, true)), Modality::Audio), None);
-        assert_eq!(layers.guide(Some(&tts("cartesia", true, false)), Modality::Audio), None);
-        assert!(layers.guide(Some(&tts("cartesia", true, true)), Modality::Audio).is_some());
+        assert_eq!(layers.guide(Some(&tts("", false)), Modality::Audio), None);
+        assert!(layers.guide(Some(&tts("cartesia", true)), Modality::Audio).is_some());
     }
 
     // Catches: `{}` read as off (the reference's `not expr and not isinstance(expr, dict)`), the
@@ -679,7 +719,7 @@ mod expressive_tests {
     // append not landing last.
     #[test]
     fn an_empty_dict_is_on_and_the_guide_is_rendered_from_the_template() {
-        let t = tts("cartesia", false, true);
+        let t = tts("cartesia", false);
         let layers = ExpressiveLayers {
             session: on(ExpressiveConfig {
                 tts_instructions_append: Some("Be brief.".into()),

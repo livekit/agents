@@ -47,15 +47,15 @@ pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{COMPLETION_TOKENS, FakeLlm};
 pub use nodes::FakeNodes;
 pub use output::{
-    FakeAudioInput, FakeAudioOutput, FakeSoundStream, FakeTranscriptionOutput, FakeVideoInput,
-    HALF, room_camera,
+    CaptureFault, FakeAudioInput, FakeAudioOutput, FakeSoundStream, FakeTranscriptionOutput,
+    FakeVideoInput, HALF, UnreportedClear, room_camera,
 };
 pub use realtime::{FakeDuplex, FakeRealtime, RealtimeDelays, ServerSetup, Vad as RealtimeVad};
 pub use recorder::FakeRecorder;
 pub use storage::{FakeStore, death_resends, storage_faults, worker_deaths};
 pub use stt::FakeStt;
 pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};
-pub use tts::{FakeTts, MS_PER_WORD, TtsOptions};
+pub use tts::{FakeTts, HELD_INPUT, MS_PER_WORD, TtsOptions};
 pub use vad::FakeVad;
 
 pub const SAMPLE_RATE: u32 = 24_000;
@@ -341,7 +341,7 @@ pub struct Registry {
     voice_due: std::sync::Mutex<BTreeMap<u32, tokio::time::Instant>>,
     /// When the last storage answer owed on the fake's own clock is due.
     storage_due: std::sync::Mutex<lk_agents_abi::Ts>,
-    /// Acquires of the voice lane still awaited.
+    /// Acquires of the voice partition still awaited.
     storage_pending: AtomicU32,
     chat_responses: std::sync::Mutex<BTreeMap<String, u32>>,
     /// Armed once the session started, in a stressed run only.
@@ -588,13 +588,13 @@ impl Registry {
         *due = (*due).max(at);
     }
 
-    /// Counts an acquire of the voice lane until the guard drops: answered or cancelled.
+    /// Counts an acquire of the voice partition until the guard drops: answered or cancelled.
     fn storage_pending(self: &Arc<Self>) -> StoragePending {
         self.storage_pending.fetch_add(1, Ordering::SeqCst);
         StoragePending(self.clone())
     }
 
-    /// Whether an acquire of the voice lane is in flight: where a cancelled caller can leave the
+    /// Whether an acquire of the voice partition is in flight: where a cancelled caller can leave the
     /// database ahead of it.
     pub fn storage_in_flight(&self) -> bool {
         self.storage_pending.load(Ordering::SeqCst) > 0

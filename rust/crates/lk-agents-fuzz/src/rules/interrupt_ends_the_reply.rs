@@ -17,12 +17,12 @@ pub struct InterruptEndsTheReply;
 impl Rule for InterruptEndsTheReply {
     const CONTRACT: Contract = Contract {
         id: "interrupt_ends_the_reply",
-        guarantee: "An interrupted speech's reply ends on its own: the interruption watchdog ends it only while the reply awaits what an interrupt does not cancel, application code (one of its tool calls, or a host hook issued for it) or the voice lane it commits the person's turn to (its take, or its settle or abandon receipt).",
+        guarantee: "An interrupted speech's reply ends on its own: the interruption watchdog ends it only while the reply awaits what an interrupt does not cancel, application code (one of its tool calls, or a host hook issued for it) or the voice partition_key it commits the person's turn to (its take, or its settle or abandon receipt).",
         examples: &[
             ended_before_the_watchdog,
             watchdog_ends_a_running_tool,
             watchdog_ends_an_awaited_hook,
-            watchdog_ends_a_lane_wait,
+            watchdog_ends_a_partition_wait,
             watchdog_ends_a_receipt_wait,
             wait_ends_in_the_watchdogs_instant,
         ],
@@ -30,8 +30,8 @@ impl Rule for InterruptEndsTheReply {
             watchdog_ends_a_stuck_reply,
             tool_ended_before_the_watchdog,
             hook_answered_before_the_watchdog,
-            lane_taken_before_the_watchdog,
-            lane_loss_watched,
+            partition_taken_before_the_watchdog,
+            partition_loss_watched,
         ],
         probe: None,
     };
@@ -61,7 +61,7 @@ impl Rule for InterruptEndsTheReply {
             // reply. It does not cut application code (agents.md, "Cancellation and cleanup"): a
             // tool call handed to the runner, or a host hook the reply awaits
             // (`function_tools_executed`), runs on, and the watchdog is what cancels the speech's
-            // tasks (`SpeechTasks`). Nor the lane: the voice turn holds it to the commit of its
+            // tasks (`SpeechTasks`). Nor the partition: the voice turn holds it to the commit of its
             // reply (voice-session.md), an interrupted reply still commits the person's turn, and
             // its storage receipt precedes its completion.
             let application_code = steps.iter().any(|(from, step)| {
@@ -87,8 +87,8 @@ impl Rule for InterruptEndsTheReply {
                 };
                 open_at_watchdog(*from, until)
             });
-            // The lane's take and its settle or abandon receipt; observing its loss is no wait.
-            let lane = storage.iter().any(|(asked, step)| {
+            // The partition's take and its settle or abandon receipt; observing its loss is no wait.
+            let partition_key = storage.iter().any(|(asked, step)| {
                 let StorageStep::Requested { speech: s, operation } = step else { return false };
                 let answered = storage.iter().find_map(|(at, step)| match step {
                     StorageStep::Answered { speech: a, operation: o, .. }
@@ -102,9 +102,9 @@ impl Rule for InterruptEndsTheReply {
                     && *operation != StorageOperation::ObserveLoss
                     && open_at_watchdog(*asked, answered)
             });
-            check.expect_with(Subject::Speech(speech), application_code || lane, || {
+            check.expect_with(Subject::Speech(speech), application_code || partition_key, || {
                 format!(
-                    "the interruption watchdog ended the reply at {} ms while it awaited no tool call, hook or lane: a wait the interrupt should cut kept it alive",
+                    "the interruption watchdog ended the reply at {} ms while it awaited no tool call, hook or partition_key: a wait the interrupt should cut kept it alive",
                     fired.at_ms
                 )
             });
@@ -155,7 +155,7 @@ fn hook(speech: u64, finished: bool) -> Step {
     }
 }
 
-fn lane(operation: StorageOperation, answered: bool) -> StorageStep {
+fn partition(operation: StorageOperation, answered: bool) -> StorageStep {
     match answered {
         false => StorageStep::Requested { speech: 1, operation },
         true => StorageStep::Answered { speech: 1, operation, result: Ok(()), delivered: true },
@@ -195,10 +195,10 @@ fn watchdog_ends_an_awaited_hook() -> Recording {
         .done()
 }
 
-/// The reply still waits for the lane a slow database holds.
-fn watchdog_ends_a_lane_wait() -> Recording {
+/// The reply still waits for the partition a slow database holds.
+fn watchdog_ends_a_partition_wait() -> Recording {
     Authored::new()
-        .storage(lane(StorageOperation::Acquire, false))
+        .storage(partition(StorageOperation::Acquire, false))
         .journal(interrupted(1))
         .later(5_000)
         .journal(watchdog(1))
@@ -258,38 +258,38 @@ fn hook_answered_before_the_watchdog() -> Recording {
         .done()
 }
 
-/// The reply took the lane, then waited out the watchdog.
-fn lane_taken_before_the_watchdog() -> Recording {
+/// The reply took the partition, then waited out the watchdog.
+fn partition_taken_before_the_watchdog() -> Recording {
     Authored::new()
-        .storage(lane(StorageOperation::Acquire, false))
+        .storage(partition(StorageOperation::Acquire, false))
         .journal(interrupted(1))
         .later(100)
-        .storage(lane(StorageOperation::Acquire, true))
+        .storage(partition(StorageOperation::Acquire, true))
         .later(4_900)
         .journal(watchdog(1))
         .speech_done(1, SpeechOutcome::Interrupted)
         .done()
 }
 
-/// The reply's lane release waits on a slow database: its receipt precedes its completion.
+/// The reply's partition release waits on a slow database: its receipt precedes its completion.
 fn watchdog_ends_a_receipt_wait() -> Recording {
     Authored::new()
-        .storage(lane(StorageOperation::Acquire, false))
-        .storage(lane(StorageOperation::Acquire, true))
+        .storage(partition(StorageOperation::Acquire, false))
+        .storage(partition(StorageOperation::Acquire, true))
         .journal(interrupted(1))
-        .storage(lane(StorageOperation::Abandon, false))
+        .storage(partition(StorageOperation::Abandon, false))
         .later(5_000)
         .journal(watchdog(1))
         .speech_done(1, SpeechOutcome::Interrupted)
         .done()
 }
 
-/// Watching for the lane's loss is no wait: the reply had nothing left to await.
-fn lane_loss_watched() -> Recording {
+/// Watching for the partition's loss is no wait: the reply had nothing left to await.
+fn partition_loss_watched() -> Recording {
     Authored::new()
-        .storage(lane(StorageOperation::Acquire, false))
-        .storage(lane(StorageOperation::Acquire, true))
-        .storage(lane(StorageOperation::ObserveLoss, false))
+        .storage(partition(StorageOperation::Acquire, false))
+        .storage(partition(StorageOperation::Acquire, true))
+        .storage(partition(StorageOperation::ObserveLoss, false))
         .journal(interrupted(1))
         .later(5_000)
         .journal(watchdog(1))

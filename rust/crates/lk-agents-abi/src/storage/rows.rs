@@ -62,7 +62,7 @@ pub struct TaskInternal {
     pub answered: bool,
 }
 
-/// One history item of a lane.
+/// One history item of a partition.
 #[crate::host(record(module = "storage_class", extract, emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemRow {
@@ -83,21 +83,23 @@ pub struct TaskData {
     pub status_message: Option<Value>,
 }
 
-/// One A2A task of a lane: `id = task_id`, `contextId` the thread id, `status = (status,
-/// data.status_message, updated_at)`, plus the fields of `data`.
+/// One A2A task of a partition: `id = task_id`, `contextId` the thread id, `status = (status,
+/// data.status_message, updated_at_ms)`, plus the fields of `data`.
 #[crate::host(record(module = "storage_class", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskRecord {
     pub task_id: String,
-    pub lane: String,
-    /// Submission order; the lane runs its runnable tasks in it.
-    pub seq: i64,
+    pub partition_key: String,
+    /// Submission order; the partition runs its runnable tasks in it.
+    pub pos: i64,
     /// An optional application task label.
     pub name: Option<String>,
+    /// Optional initiating A2A message id, used for retry deduplication.
+    /// None for tasks initiated without an incoming message.
     pub message_id: Option<String>,
     pub status: TaskState,
     /// Unix milliseconds.
-    pub updated_at: i64,
+    pub updated_at_ms: i64,
     pub data: TaskData,
     /// What the framework keeps to resume the task: its pending question and handler settlement.
     pub internal: Option<TaskInternal>,
@@ -115,20 +117,18 @@ pub struct TaskPage {
     pub total_size: i64,
 }
 
-/// One lane: a registered agent's state, lease and inbox cursor.
+/// One partition: a registered agent's state, lease and inbox cursor.
 #[crate::host(record(module = "storage_class", emit))]
 #[derive(Debug, Clone, PartialEq)]
-pub struct LaneRow {
-    pub lane: String,
+pub struct PartitionRow {
+    pub partition_key: String,
     /// The fencing token: a run loaded at `v` commits only `WHERE version = v`.
     pub version: i64,
     /// The application's typed state, one snapshot per run.
     pub state: Option<Value>,
     pub lease_holder: Option<String>,
-    /// Unix seconds on agent-db's clock; `0` is released.
-    pub lease_until: i64,
-    /// A worker that failed the lease under `interrupt` and is polling for it.
-    pub waiter: Option<String>,
+    /// Unix milliseconds on agent-db's clock; `0` is released.
+    pub lease_expires_at_ms: i64,
     /// The id of the last inbox row a drain consumed.
     pub drained_id: i64,
 }
@@ -138,23 +138,23 @@ pub struct LaneRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventRow {
     pub id: i64,
-    pub ts_ms: i64,
-    pub lane: String,
+    pub occurred_at_ms: i64,
+    pub partition_key: String,
     pub run_id: String,
     pub r#type: String,
     pub payload: Value,
 }
 
-/// One message received while the lane was running, under the `inbox` policy.
+/// One message received while the partition was running, under the `inbox` policy.
 #[crate::host(record(module = "storage_class", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboxRow {
     pub id: i64,
-    pub lane: String,
+    pub partition_key: String,
     /// The task created for the message; also its answer stream.
     pub task_id: String,
     pub message_id: String,
     /// The A2A `Message`.
     pub message: Value,
-    pub received_at: i64,
+    pub received_at_ms: i64,
 }

@@ -1,5 +1,5 @@
 use lk_agents_abi::{ChatItem, FunctionCall, Role, llm::tool_executor::WAITING_PREFIX};
-use lk_agents_core::tts::markup::ChatMessageExt;
+use lk_agents_core::markup::ChatMessageExt;
 use lk_agents_voice::{
     events::SessionEvent,
     trace::{HandoffStep, Step},

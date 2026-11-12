@@ -31,7 +31,7 @@ from livekit.agents import (
     TokenUsage,
     tts,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import aio, is_given
 
 from .models import TTSModels, TTSVoices
@@ -219,12 +219,15 @@ class TTS(tts.TTS):
         tts._owns_client = True
         return tts
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _core_max_text_len(self) -> int | None:
+        return 4096
+
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             options=replace(self._opts),
             client=self._client,

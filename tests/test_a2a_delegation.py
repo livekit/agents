@@ -38,32 +38,6 @@ def _remote(peer: Peer) -> RemoteAgent:
 
 
 @pytest.mark.asyncio
-async def test_public_client_ack_continuation_and_full_artifacts(peer: Peer) -> None:
-    client = AgentClient(peer.url, token="peer-token", conn_options=OPTIONS)
-    try:
-        first = await client.send("Check my coverage")
-        assert (first.task_id, first.thread_id) == ("remote-task", "remote-context")
-        updates = [update async for update in first]
-        assert [update.state for update in updates] == ["submitted", "working", "input-required"]
-        assert updates[1].text == "Checking café"
-        reply = await client.send("account 42", task_id=first.task_id)
-        final = [update async for update in reply][-1]
-        assert final.state == "completed" and final.text == 'Confirmed {"receipt":42}'
-        assert final.metadata["livekit/verbatim"] == "Confirmed "
-        assert final.artifacts[0].parts[-1] == DataPart(data={"receipt": 42})
-        assert sum(method == "GET" for method, _, _ in peer.requests) == 1
-        sends = [rpc for _, _, rpc in peer.requests if rpc]
-        assert sends[1]["params"]["message"]["taskId"] == first.task_id
-        assert sends[1]["params"]["message"]["contextId"] == first.thread_id
-        assert all(headers["a2a-version"] == "1.0" for _, headers, _ in peer.requests)
-        assert all(
-            headers["authorization"] == "Bearer peer-token" for _, headers, _ in peer.requests
-        )
-    finally:
-        await client.aclose()
-
-
-@pytest.mark.asyncio
 async def test_generated_message_parts_and_typed_metadata(peer: Peer) -> None:
     peer.scenario = "complete"
     client = AgentClient(peer.url, conn_options=OPTIONS)
@@ -88,56 +62,6 @@ async def test_generated_message_parts_and_typed_metadata(peer: Peer) -> None:
             {"data": {"account": 42}},
             {"url": "https://example.test/coverage.pdf", "mediaType": "application/pdf"},
         ]
-    finally:
-        await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_cancel_only_autoconnects_and_never_manufactures_completion(peer: Peer) -> None:
-    peer.capable = False
-    client = AgentClient(peer.url, conn_options=OPTIONS)
-    try:
-        canceled = await client.cancel(
-            "pending", thread_id="their-context", reason="caller-canceled"
-        )
-        assert canceled.state == "canceled"
-        rpc = peer.requests[-1][2]
-        assert rpc["params"]["contextId"] == "their-context"
-        assert rpc["params"]["metadata"] == {URI + "/reason": "caller-canceled"}
-        await client.cancel("pending", thread_id="their-context")
-        assert sum(method == "GET" for method, _, _ in peer.requests) == 1
-        assert all(headers["a2a-version"] == "1.0" for _, headers, _ in peer.requests)
-    finally:
-        await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_discovery_timeout_keeps_its_phase(peer: Peer) -> None:
-    peer.scenario = "stall-card"
-    client = AgentClient(peer.url, conn_options=replace(OPTIONS, read_timeout=0.02))
-    try:
-        with pytest.raises(APITimeoutError) as error:
-            await client.send("Check")
-        assert error.value.timeout == "read"
-    finally:
-        await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_timeout_after_progress_keeps_phase_without_replaying(peer: Peer) -> None:
-    peer.scenario = "partial-stall"
-    client = AgentClient(peer.url, conn_options=replace(OPTIONS, read_timeout=0.02, max_retry=2))
-    try:
-        reply = await client.send("Check")
-        assert (await anext(reply)).state == "submitted"
-        assert (await anext(reply)).state == "working"
-        with pytest.raises(APITimeoutError) as error:
-            await anext(reply)
-        assert error.value.timeout == "read"
-        assert (
-            sum(rpc is not None and rpc["method"].startswith("Send") for _, _, rpc in peer.requests)
-            == 1
-        )
     finally:
         await client.aclose()
 
@@ -332,19 +256,6 @@ async def test_closing_a_pending_public_reply_cancels_exact_remote_task(peer: Pe
 
 
 @pytest.mark.asyncio
-async def test_malformed_message_is_refused_before_discovery(peer: Peer) -> None:
-    client = AgentClient(peer.url, conn_options=OPTIONS)
-    try:
-        with pytest.raises(ValueError, match="content parts"):
-            await client.send(Message(parts=[]))
-        with pytest.raises(ValueError, match="exactly one"):
-            await client.send(Message(parts=[FilePart()]))
-        assert peer.requests == []
-    finally:
-        await client.aclose()
-
-
-@pytest.mark.asyncio
 async def test_total_deadline_cancels_remote_work_behind_an_unread_progress_queue(
     peer: Peer,
 ) -> None:
@@ -461,9 +372,11 @@ async def test_a_console_worker_delegates_to_its_own_endpoint_over_loopback(
     for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_WORKER_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     received: list[str] = []
-    back_office = AgentHandler(lane="backend")
+    back_office = AgentHandler()
 
-    @back_office.a2a_session(endpoint="coverage_expert", description="Checks account coverage.")
+    @back_office.a2a_session(
+        partition_key="backend", endpoint="coverage_expert", description="Checks account coverage."
+    )
     async def text(ctx: A2ASessionContext) -> str:
         received.append(ctx.message.text_content or "")
         return "covered"

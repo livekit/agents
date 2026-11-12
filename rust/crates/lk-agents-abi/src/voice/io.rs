@@ -250,6 +250,15 @@ pub trait PlaybackReports {
     }
 }
 
+/// A stage registered as the parent of an output that already has another: an output belongs to
+/// one chain.
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, thiserror::Error)]
+#[error("{label} is already the next_in_chain of another output; an output belongs to one chain")]
+pub struct OutputAlreadyChained {
+    pub label: String,
+}
+
 /// Invalid host sink input, raised before any segment is consumed.
 #[crate::host(error(kind = "ValueError"))]
 #[derive(Debug, thiserror::Error)]
@@ -263,10 +272,13 @@ fn seconds(value: f64, path: &'static str) -> std::result::Result<Duration, Inva
     Duration::try_from_secs_f64(value).map_err(|_| InvalidPlaybackTime { path, value })
 }
 
-/// What a host wrapper over a core leg hears of its playback (`_ParticipantAudioOutput`, re-emitting
-/// the leg's events as its own): `io.AudioOutput`'s `on_playback_*`, called by keyword.
+/// The host stage a native output was wrapped by (`next_in_chain=`): the output's playback reports
+/// reach it through `io.AudioOutput`'s `on_playback_*`, called by keyword, in order, on its loop.
 #[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput"))]
 pub trait PlaybackListener: Send + Sync {
+    /// The stage's own tracker, one per stage: its identity in the chain.
+    #[host(read_once, getter = "_tracker")]
+    fn tracker(&self) -> &Arc<dyn PlaybackTracker>;
     #[host(notify)]
     fn on_playback_started(&self, #[host(kw)] segment: PlaybackSegment, created_at: f64);
     #[host(notify)]
@@ -584,6 +596,17 @@ impl From<crate::errors::ProviderError> for IoError {
     }
 }
 
+/// What a speech failed with when its audio output did: the host's own exception, or the
+/// output's message.
+impl From<IoError> for crate::errors::ProviderError {
+    fn from(error: IoError) -> Self {
+        match error {
+            IoError::Host(error) => error.into(),
+            error => crate::errors::ApiError::new(error.to_string()).into(),
+        }
+    }
+}
+
 impl From<crate::ResampleError> for IoError {
     fn from(e: crate::ResampleError) -> Self {
         IoError::Resample(e.to_string())
@@ -591,6 +614,25 @@ impl From<crate::ResampleError> for IoError {
 }
 
 // Public data contracts. Python behavior remains in its adapters.
+
+/// `AudioOutputError`: the session's audio output raised on a frame. The speech it was playing
+/// ended interrupted there; the output stays the session's.
+#[crate::host(record(
+    module = "output_errors",
+    path = "livekit.agents.voice.io",
+    pydantic,
+    arbitrary_types,
+    constant(type = "audio_output_error")
+))]
+pub struct AudioOutputError {
+    #[host(default_factory = "time.time")]
+    pub timestamp: f64,
+    pub label: String,
+    #[host(annotation = "typing.Annotated[Exception, pydantic.Field(exclude=True)]")]
+    pub error: crate::HostRef,
+    #[host(default = true)]
+    pub recoverable: bool,
+}
 
 #[crate::host(record(
     module = "playback_events",

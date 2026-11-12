@@ -340,7 +340,23 @@ mod tests {
     }
 
     /// Recognizes each utterance as the next of its texts.
-    struct BatchStt(Mutex<VecDeque<&'static str>>);
+    struct BatchStt {
+        replies: Mutex<VecDeque<Result<&'static str, lk_agents_abi::errors::ApiError>>>,
+        loaded: std::sync::atomic::AtomicBool,
+        requires_prewarm: bool,
+    }
+
+    impl BatchStt {
+        fn new(
+            replies: impl IntoIterator<Item = Result<&'static str, lk_agents_abi::errors::ApiError>>,
+        ) -> Self {
+            Self {
+                replies: Mutex::new(replies.into_iter().collect()),
+                loaded: std::sync::atomic::AtomicBool::new(false),
+                requires_prewarm: false,
+            }
+        }
+    }
 
     impl Stt for BatchStt {
         fn label(&self) -> String {
@@ -349,6 +365,9 @@ mod tests {
         fn capabilities(&self) -> SttCapabilities {
             SttCapabilities { keyterms: true, ..SttCapabilities::default() }
         }
+        fn prewarm(&self) {
+            self.loaded.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         fn recognize(
             &self,
             _cx: &telemetry::Cx,
@@ -356,7 +375,12 @@ mod tests {
             _: Option<&LanguageCode>,
         ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
             Box::pin(async move {
-                let text = self.0.lock().pop_front().unwrap_or_default();
+                if self.requires_prewarm && !self.loaded.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(lk_agents_abi::errors::ApiError::new("model is not loaded")
+                        .with_retryable(false)
+                        .into());
+                }
+                let text = self.replies.lock().pop_front().unwrap_or(Ok(""))?;
                 let mut ev = SpeechEvent::new(SpeechEventType::FinalTranscript);
                 ev.alternatives.push(lk_agents_abi::SpeechData::new("en", text));
                 Ok(ev)
@@ -380,7 +404,7 @@ mod tests {
     #[tokio::test]
     async fn each_utterance_is_recognized_once_it_ends() {
         use VadEventType::{EndOfSpeech, InferenceDone, StartOfSpeech};
-        let stt = Arc::new(BatchStt(Mutex::new(VecDeque::from(["hello", ""]))));
+        let stt = Arc::new(BatchStt::new([Ok("hello"), Ok("")]));
         let vad = Arc::new(ScriptedVad(vec![
             StartOfSpeech,
             InferenceDone,
@@ -408,6 +432,101 @@ mod tests {
                 (T::StartOfSpeech, None),
                 (T::EndOfSpeech, None),
             ]
+        );
+    }
+
+    /// An utterance recognized before a provider error is delivered, then the error ends the
+    /// stream. https://github.com/livekit/agents/pull/2215
+    #[tokio::test]
+    async fn queued_utterances_deliver_their_transcript_and_then_the_provider_error() {
+        use SpeechEventType as T;
+        use lk_agents_abi::errors::ApiError;
+        let stt = Arc::new(BatchStt::new([
+            Ok("first utterance"),
+            Err(ApiError::status("recognition refused", 401, None, None)),
+        ]));
+        let vad = Arc::new(ScriptedVad(vec![
+            VadEventType::StartOfSpeech,
+            VadEventType::EndOfSpeech,
+            VadEventType::StartOfSpeech,
+            VadEventType::EndOfSpeech,
+        ]));
+        let adapter =
+            StreamAdapter::adapted(stt, Some(vad), Arc::new(lk_agents_net::clock::SimClock::new()));
+        let (sink, mut source) =
+            adapter.stream(&telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
+        sink.end_input();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut events = Vec::new();
+            loop {
+                match source.next().await {
+                    Ok(Some(event)) => events.push((
+                        event.kind,
+                        event.best_alternative().map(|alternative| alternative.text.clone()),
+                    )),
+                    Ok(None) => panic!("recognition failure became a clean end of stream"),
+                    Err(error) => break (events, error),
+                }
+            }
+        })
+        .await;
+        source.close(Ts::from_nanos(u64::MAX)).await;
+        let (events, error) = result.expect("queued speech must drain without hanging");
+        assert_eq!(
+            events,
+            [
+                (T::StartOfSpeech, None),
+                (T::EndOfSpeech, None),
+                (T::FinalTranscript, Some("first utterance".into())),
+                (T::StartOfSpeech, None),
+                (T::EndOfSpeech, None),
+            ]
+        );
+        assert_eq!(error.status_code(), Some(401));
+        assert!(!error.retryable());
+        assert_eq!(error.message(), "recognition refused");
+    }
+
+    /// Prewarming a fallback over a VAD stream adapter loads the model that recognizes.
+    /// https://github.com/livekit/agents/pull/6583
+    #[tokio::test]
+    async fn prewarming_nested_fallback_and_stream_adapters_loads_the_recognizing_model() {
+        use crate::fallback::{ChainPolicy, FallbackStt};
+        let stt = Arc::new(BatchStt {
+            requires_prewarm: true,
+            ..BatchStt::new([Ok("the model is ready")])
+        });
+        let vad =
+            Arc::new(ScriptedVad(vec![VadEventType::StartOfSpeech, VadEventType::EndOfSpeech]));
+        let (clock, spawner, observer) = crate::testkit::fallback::parts();
+        let stream_adapter = StreamAdapter::adapted(stt, Some(vad), clock.clone());
+        let fallback = FallbackStt::new(
+            vec![stream_adapter],
+            ChainPolicy { max_retry_per_backend: 0, ..ChainPolicy::stt_defaults() },
+            clock,
+            spawner,
+            observer,
+        )
+        .unwrap();
+        fallback.prewarm();
+        let (sink, mut source) =
+            fallback.stream(&telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
+        sink.end_input();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut words = Vec::new();
+            while let Some(event) = source.next().await? {
+                if let Some(alternative) = event.best_alternative() {
+                    words.push(alternative.text.clone());
+                }
+            }
+            Ok::<_, ProviderError>(words)
+        })
+        .await;
+        source.close(Ts::from_nanos(u64::MAX)).await;
+        fallback.aclose();
+        assert_eq!(
+            result.expect("the preloaded model must finish recognition").unwrap(),
+            ["the model is ready"]
         );
     }
 }

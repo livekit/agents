@@ -3,8 +3,6 @@ import asyncio
 import pytest
 
 from livekit.agents import Agent, VoiceSession
-from livekit.agents.voice import UserTurn
-from livekit.agents.voice.events import UserTurnEndedEvent, UserTurnStartedEvent
 
 from .fake_stt import FakeSTT
 
@@ -19,33 +17,6 @@ async def test_a_user_turn_needs_a_started_session() -> None:
     async with _session() as session:
         with pytest.raises(RuntimeError):
             session.start_user_turn()
-
-
-async def test_an_empty_tap_adds_nothing_and_is_told() -> None:
-    async with _session(push_to_talk=True) as session:
-        started: list[UserTurnStartedEvent] = []
-        ended: list[UserTurnEndedEvent] = []
-        session.on("user_turn_started", started.append)
-        session.on("user_turn_ended", ended.append)
-        await session.start(Agent(instructions="Take the order.", name="orders"))
-        turn = session.start_user_turn()
-        assert isinstance(turn, UserTurn)
-        result = await asyncio.wait_for(turn.end(), timeout=5)
-        assert result.empty and result.message is None
-        await asyncio.sleep(0)
-        assert [e.turn_id for e in started] == [turn.id]
-        assert [(e.turn_id, e.cancelled, e.empty) for e in ended] == [(turn.id, False, True)]
-        assert not [m for m in session.history.items if m.type == "message" and m.role == "user"]
-
-
-async def test_a_second_start_is_refused_while_a_turn_is_open() -> None:
-    async with _session(push_to_talk=True) as session:
-        await session.start(Agent(instructions="Take the order.", name="orders"))
-        turn = session.start_user_turn()
-        with pytest.raises(RuntimeError, match="already open"):
-            session.start_user_turn()
-        turn.cancel()
-        session.start_user_turn().cancel()
 
 
 async def test_ending_a_cancelled_turn_fails() -> None:

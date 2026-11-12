@@ -29,12 +29,10 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
-    tokenize,
     tts,
     utils,
 )
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
@@ -115,7 +113,6 @@ class TTS(tts.TTS):
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         client: AsyncSpeechify | None = None,
     ) -> None:
         """Create a new instance of Speechify TTS.
@@ -123,12 +120,12 @@ class TTS(tts.TTS):
         Both ``synthesize()`` and ``stream()`` use the
         ``/v1/audio/stream/with-timestamps`` endpoint, which streams raw PCM
         (24 kHz mono) together with word-level speech marks, so audio and aligned
-        timestamps are emitted as they arrive. ``stream()`` splits its input into
-        sentences and issues one streaming request per sentence. Speech marks are
+        timestamps are emitted as they arrive. ``stream()`` issues one streaming
+        request per text chunk the framework prepares. Speech marks are
         produced by the streaming-native models (``simba-3.0`` and ``simba-3.2``);
         the legacy ``simba-english`` and ``simba-multilingual`` models do not
         serve the streaming route and use one non-streamed ``/v1/audio/speech``
-        request per input (``synthesize()``) or per sentence (``stream()``).
+        request per input (``synthesize()``) or per chunk (``stream()``).
 
         Requests share one keep-alive connection, which ``prewarm()`` opens
         before the first request.
@@ -150,7 +147,6 @@ class TTS(tts.TTS):
             api_key: Speechify API key. Falls back to the ``SPEECHIFY_API_KEY``
                 environment variable.
             base_url: Override the Speechify API base URL.
-            tokenizer: Sentence tokenizer used to chunk input in ``stream()``.
             client: A preconfigured ``AsyncSpeechify`` client. When provided,
                 ``api_key`` and ``base_url`` are ignored.
         """
@@ -186,7 +182,6 @@ class TTS(tts.TTS):
                 httpx_client=self._httpx_client,
             )
 
-        self._tokenizer = tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
         self._opts = _TTSOptions(
             voice_id=voice_id,
             model=model,
@@ -258,31 +253,23 @@ class TTS(tts.TTS):
             self._opts.text_normalization = text_normalization
         _warn_voice_model_compat(self._opts.voice_id, self._opts.model)
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             opts=replace(self._opts),
             client=self._client,
         )
 
-    def stream(
-        self,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         return SynthesizeStream(
             tts=self,
             conn_options=conn_options,
             opts=replace(self._opts),
             client=self._client,
-            tokenizer=self._tokenizer,
         )
 
 
@@ -519,12 +506,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
         client: AsyncSpeechify,
-        tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
         self._client = client
-        self._tokenizer = tokenizer
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -537,43 +522,22 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=request_id)
 
-        sent_stream = self._tokenizer.stream()
-
-        async def _forward_input() -> None:
+        offset = 0.0
+        try:
             async for data in self.input:
                 if isinstance(data, self.Flush):
-                    sent_stream.flush()
-                    continue
-                sent_stream.push_text(data)
-            sent_stream.end_input()
-
-        async def _synthesize() -> None:
-            offset = 0.0
-            async for ev in sent_stream:
-                if not (text := ev.token.strip()):
                     continue
                 self.mark_started()
-                sentence_bytes = await _synthesize_text(
+                chunk_bytes = await _synthesize_text(
                     self._client,
-                    text,
+                    data.text,
                     self._opts,
                     self._conn_options,
                     output_emitter,
                     offset=offset,
                 )
                 output_emitter.flush()
-                offset += sentence_bytes / (2 * SAMPLE_RATE * NUM_CHANNELS)
-
-            output_emitter.end_segment()
-
-        tasks = [
-            asyncio.create_task(_forward_input()),
-            asyncio.create_task(_synthesize()),
-        ]
-        try:
-            await asyncio.gather(*tasks)
+                offset += chunk_bytes / (2 * SAMPLE_RATE * NUM_CHANNELS)
         except Exception as e:
             _raise_from(e)
-        finally:
-            await sent_stream.aclose()
-            await utils.aio.cancel_and_wait(*tasks)
+        output_emitter.end_segment()

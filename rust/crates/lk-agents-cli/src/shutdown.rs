@@ -166,7 +166,11 @@ pub(crate) fn release(watchdog: &Arc<Watchdog>) {
 fn on_signal() {
     let owner = OWNER.lock().upgrade();
     if let Some(owner) = owner {
-        owner.begin();
+        // The first signal drains; one during the shutdown is the operator insisting, as the
+        // `lk agent` launcher relays it ("first = graceful shutdown, second = force exit").
+        if !owner.begin() {
+            terminate(b"livekit.agents: signal during shutdown; exiting forcefully\n");
+        }
     } else {
         // The permanent OS handler must never swallow signals between launcher runs.
         terminate(b"livekit.agents: termination requested without an active launcher\n");

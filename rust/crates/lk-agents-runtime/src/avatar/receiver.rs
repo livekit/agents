@@ -372,8 +372,19 @@ impl DataStreamAudioReceiver {
         let inner = &self.inner;
         inner.state.lock().check_open()?;
         let mut events = inner.room.events();
-        let remote = inner.choose_sender(&mut events).await?;
-        let streams = self.register_clear_buffer(remote).await?;
+        // Taken before the sender is chosen: an agent streams as soon as this worker is in the
+        // room (v1 agents that do not wait for its video), and the SDK drops a stream it has no
+        // handler for. They wait in `streams` until the sender is known.
+        let streams = self.register_streams().await?;
+        let routed = match inner.choose_sender(&mut events).await {
+            Ok(remote) => self.register_clear_buffer(remote),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = routed {
+            let deadline = inner.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+            let _ = streams.close(deadline).await;
+            return Err(error);
+        }
         let pump = Arc::clone(inner).admit_streams(streams);
         let main = Arc::clone(inner).serve();
         let mut execution = self.execution.lock();
@@ -383,39 +394,15 @@ impl DataStreamAudioReceiver {
         Ok(())
     }
 
-    /// Registers the `clear_buffer` RPC and the audio streams, then routes `remote`'s calls to
-    /// this receiver; a receiver stopped meanwhile undoes the stream registration.
-    async fn register_clear_buffer(
-        &self,
-        remote: String,
-    ) -> std::result::Result<Receiver<ByteStream>, ReceiverEnd> {
+    /// Takes the room's audio streams; a receiver stopped meanwhile undoes the registration.
+    async fn register_streams(&self) -> std::result::Result<Receiver<ByteStream>, ReceiverEnd> {
         let inner = &self.inner;
-        // Each receiver retains its registration. The room adapter owns the shared router.
-        let receiver = Arc::downgrade(inner);
-        let callback = RpcHandler::new(move |_, _| {
-            receiver.upgrade().map_or_else(|| "reject".into(), |rx| rx.on_clear_buffer())
-        });
-        let routes = inner.room.rpc_router().clone();
-        let rpc_routes = routes.clone();
-        let handler = RpcHandler::new(move |caller, payload| rpc_routes.call(caller, payload));
-        inner
-            .room
-            .local()
-            .register_rpc_method(RPC_CLEAR_BUFFER.to_owned(), handler)
-            .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
-
         let streams = crate::rtc::events::byte_streams(inner.room.as_ref(), AUDIO_STREAM_TOPIC)
             .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
         let admitted = {
             let mut execution = self.execution.lock();
             let open = inner.state.lock().check_open();
-            if open.is_ok() {
-                execution.streams_registered = true;
-                // Publish only after SDK admission succeeds. This native room-router operation
-                // is serialized with stop; no host call happens under the execution lock.
-                let registration = routes.insert(remote.clone(), callback);
-                execution.route = Some((remote, registration));
-            }
+            execution.streams_registered = open.is_ok();
             open
         };
         if let Err(error) = admitted {
@@ -427,13 +414,40 @@ impl DataStreamAudioReceiver {
         Ok(streams)
     }
 
+    /// Registers the `clear_buffer` RPC and routes `remote`'s calls to this receiver.
+    fn register_clear_buffer(&self, remote: String) -> std::result::Result<(), ReceiverEnd> {
+        let inner = &self.inner;
+        // Each receiver retains its registration. The room adapter owns the shared router.
+        let receiver = Arc::downgrade(inner);
+        let callback = RpcHandler::new(move |_, _| {
+            receiver.upgrade().map_or_else(|| "reject".into(), |rx| rx.on_clear_buffer())
+        });
+        let routes = inner.room.rpc_router().clone();
+        let rpc_routes = routes.clone();
+        let handler = RpcHandler::new(move |caller, payload| {
+            rpc_routes.call(RPC_CLEAR_BUFFER, caller, payload)
+        });
+        inner
+            .room
+            .local()
+            .register_rpc_method(RPC_CLEAR_BUFFER.to_owned(), handler)
+            .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
+        let mut execution = self.execution.lock();
+        inner.state.lock().check_open()?;
+        // This native room-router operation is serialized with stop; no host call happens under
+        // the execution lock.
+        let registration = routes.insert(RPC_CLEAR_BUFFER, remote.clone(), callback);
+        execution.route = Some((remote, registration));
+        Ok(())
+    }
+
     pub fn notify_playback_finished(
         &self,
         segment: AvatarPlaybackSegment,
         playback_position: f64,
         interrupted: bool,
     ) -> std::result::Result<(), ReceiverEnd> {
-        let report = PlaybackReport::finished(&segment, playback_position, interrupted)?;
+        let report = PlaybackReport::finished(&segment, playback_position, interrupted);
         self.inner.rpc.send(report).map_err(|_| ReceiverEnd::Closed)
     }
 
@@ -441,7 +455,7 @@ impl DataStreamAudioReceiver {
         &self,
         segment: AvatarPlaybackSegment,
     ) -> std::result::Result<(), ReceiverEnd> {
-        let report = PlaybackReport::started(&segment)?;
+        let report = PlaybackReport::started(&segment);
         self.inner.rpc.send(report).map_err(|_| ReceiverEnd::Closed)
     }
 
@@ -477,7 +491,7 @@ impl DataStreamAudioReceiver {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "avatar receive handler could not unregister: {error}");
         }
         if let Some((caller, id)) = retired.route {
-            self.inner.room.rpc_router().remove(&caller, id);
+            self.inner.room.rpc_router().remove(RPC_CLEAR_BUFFER, &caller, id);
         }
         // Cancelled, not awaited.
         drop(retired.tasks);

@@ -105,13 +105,29 @@ pub struct AlignedTranscript {
 /// the transcript does not have, and one that merged two words skips one.
 const LOOKAHEAD: usize = 4;
 
-/// A piece of the transcript still to show: silent text, or one spoken word with its lead.
+/// A piece of the transcript still to show: silent text, or one spoken word with its lead. A word
+/// the reply's deltas split (`Re` + `f`), or markup glued to it (`**` + `Upgrade`), is one piece of
+/// several transcript chunks.
 struct Pending {
-    chunk: TranscriptChunk,
+    chunks: Vec<TranscriptChunk>,
     /// The word, normalized for matching; `None` for silent text.
     word: Option<String>,
     /// Where the cursor is once this piece is shown.
     next: (usize, usize),
+}
+
+impl Pending {
+    fn text(&self) -> &str {
+        self.chunks.last().map_or("", |c| c.text.as_str())
+    }
+
+    /// Whether `next` continues the word this piece ends.
+    fn continued_by(&self, next: &Pending) -> bool {
+        crate::transcription::continues_word(
+            self.text(),
+            next.chunks.first().map_or("", |c| &c.text),
+        )
+    }
 }
 
 fn normalized(word: &str) -> String {
@@ -119,8 +135,28 @@ fn normalized(word: &str) -> String {
 }
 
 impl AlignedTranscript {
-    /// The pieces from the cursor on: silent chunks whole, spoken chunks word by word.
+    /// The pieces from the cursor on: silent chunks whole, spoken chunks word by word, a word
+    /// split across chunks joined.
     fn pending(&self, said: &Visible) -> Vec<Pending> {
+        let mut out: Vec<Pending> = Vec::new();
+        for slice in self.slices(said) {
+            match out.last_mut() {
+                Some(last) if last.continued_by(&slice) => {
+                    last.chunks.extend(slice.chunks);
+                    last.word = match (last.word.take(), slice.word) {
+                        (None, None) => None,
+                        (a, b) => Some(a.unwrap_or_default() + &b.unwrap_or_default()),
+                    };
+                    last.next = slice.next;
+                }
+                _ => out.push(slice),
+            }
+        }
+        out
+    }
+
+    /// The pieces from the cursor on as each chunk cuts them.
+    fn slices(&self, said: &Visible) -> Vec<Pending> {
         let mut out = Vec::new();
         let (mut chunk, mut byte) = (self.chunk, self.byte);
         while let Some(piece) = said.shown.get(chunk) {
@@ -128,7 +164,7 @@ impl AlignedTranscript {
             if !piece.spoken || rest.is_empty() {
                 if !rest.is_empty() || byte == 0 {
                     out.push(Pending {
-                        chunk: TranscriptChunk { text: rest.to_owned(), ..piece.clone() },
+                        chunks: vec![TranscriptChunk { text: rest.to_owned(), ..piece.clone() }],
                         word: None,
                         next: (chunk + 1, 0),
                     });
@@ -143,7 +179,7 @@ impl AlignedTranscript {
             let end = if len + tail == rest.len() { rest.len() } else { len };
             let expression = if byte == 0 { piece.expression.clone() } else { None };
             out.push(Pending {
-                chunk: TranscriptChunk { expression, ..TranscriptChunk::new(&rest[..end]) },
+                chunks: vec![TranscriptChunk { expression, ..TranscriptChunk::new(&rest[..end]) }],
                 word: Some(normalized(&rest[lead..len])),
                 next: if byte + end == piece.text.len() {
                     (chunk + 1, 0)
@@ -173,11 +209,11 @@ impl AlignedTranscript {
         let pending = self.pending(said);
         let words: Vec<usize> =
             pending.iter().enumerate().filter(|(_, p)| p.word.is_some()).map(|(i, _)| i).collect();
-        if words.is_empty() {
-            // the voice is ahead of the transcript it was given: show what it said
-            self.words.push_str(&stamp.text);
-            return vec![AlignedTranscriptEffect::CaptureTimed(stamp.clone())];
-        }
+        // a word the reply has not finished writing (its text ends mid-word) takes only a stamp
+        // that says it whole: position never maps a stamp onto it, the rest of it may yet come
+        let unfinished = |i: usize| {
+            i + 1 == pending.len() && pending[i].text().ends_with(|c: char| !c.is_whitespace())
+        };
         let said_word = normalized(&stamp.text);
         let found = words
             .iter()
@@ -186,7 +222,12 @@ impl AlignedTranscript {
             .find(|&i| pending[i].word.as_deref() == Some(said_word.as_str()));
         let upto = match found {
             Some(i) => i,
-            None if self.held.len() < LOOKAHEAD => {
+            // the voice is ahead of the transcript it was given: show what it said
+            None if words.is_empty() => {
+                self.words.push_str(&stamp.text);
+                return vec![AlignedTranscriptEffect::CaptureTimed(stamp.clone())];
+            }
+            None if self.held.len() < LOOKAHEAD || unfinished(words[0]) => {
                 self.held.push(stamp.clone());
                 return Vec::new();
             }
@@ -223,13 +264,17 @@ impl AlignedTranscript {
                 Some(_) => (skipped.start_time, skipped.end_time),
                 None => (skipped.start_time, skipped.start_time),
             };
-            self.words.push_str(&piece.chunk.text);
             (self.chunk, self.byte) = piece.next;
-            effects.push(AlignedTranscriptEffect::CaptureTimed(TranscriptChunk {
-                start_time,
-                end_time,
-                ..piece.chunk
-            }));
+            for chunk in piece.chunks {
+                self.words.push_str(&chunk.text);
+                // syntax glued to its word shows when the word starts, at no cost
+                let end_time = if chunk.spoken { end_time } else { start_time };
+                effects.push(AlignedTranscriptEffect::CaptureTimed(TranscriptChunk {
+                    start_time,
+                    end_time,
+                    ..chunk
+                }));
+            }
         }
         effects
     }
@@ -245,7 +290,7 @@ impl AlignedTranscript {
             let rest: Vec<TranscriptChunk> = self
                 .pending(said)
                 .into_iter()
-                .map(|p| p.chunk)
+                .flat_map(|p| p.chunks)
                 .filter(|c| !c.text.is_empty())
                 .collect();
             for chunk in &rest {

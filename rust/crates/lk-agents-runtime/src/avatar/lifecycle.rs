@@ -1,5 +1,5 @@
 use crate::voice::session::owner::SessionOwner;
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
 use lk_agents_abi::metrics::base::{AvatarMetrics, Metadata};
 use lk_agents_abi::voice::avatar::{self, AvatarHost, AvatarJoinError};
 use lk_agents_abi::voice::rtc::RtcRoom;
@@ -98,6 +98,9 @@ struct Inner {
     attached: u64,
     /// The join wait's outcome; the wait task's, so its end (a close cancels it) ends the wait.
     joined: signal::Cell<Option<Result<(), AvatarJoinError>>>,
+    /// Why the avatar's audio fails at once: set when the avatar is past its join timeout, cleared
+    /// when it joins. The wait task's.
+    absence: signal::Cell<Option<String>>,
     waiting: Arc<TaskSet>,
     closed: OnceCell<()>,
 }
@@ -105,6 +108,7 @@ struct Inner {
 impl avatar::AvatarLifecycle for AvatarLifecycle {
     type Env = ProcessEnv;
     type Owner = SessionOwner;
+    type Output = crate::avatar::output::DataStreamAudioOutput;
 
     fn new(
         env: &ProcessEnv,
@@ -128,6 +132,10 @@ impl avatar::AvatarLifecycle for AvatarLifecycle {
         lk_agents_abi::timeout(self.0.clock.as_ref(), wait, outcome)
             .await
             .unwrap_or(Err(AvatarJoinError::Timeout(limit)))
+    }
+
+    fn attach_output(&self, output: Arc<crate::avatar::output::DataStreamAudioOutput>) {
+        output.follow_absence(self.0.absence.clone());
     }
 
     async fn aclose(&self) {
@@ -170,6 +178,8 @@ impl AvatarLifecycle {
         let attached =
             owner.avatars().attach(Attached { provider: provider.clone(), host: avatar.clone() });
         let (settle, joined) = signal::once();
+        let (overdue, absence) = signal::signal(None);
+        let deadline = clock.now().saturating_add(avatar::JOIN_TIMEOUT);
         let inner = Arc::new(Inner {
             owner,
             room,
@@ -178,6 +188,7 @@ impl AvatarLifecycle {
             job,
             attached,
             joined,
+            absence,
             waiting: Arc::default(),
             closed: OnceCell::new(),
         });
@@ -185,8 +196,20 @@ impl AvatarLifecycle {
         let wait = async move {
             let (room, identity, clock) =
                 (waiter.room.clone(), waiter.identity.clone(), waiter.clock.clone());
-            let joined =
-                crate::avatar::receiver::wait_avatar_join_room(room, identity, clock).await;
+            let join =
+                crate::avatar::receiver::wait_avatar_join_room(room, identity, clock.clone());
+            tokio::pin!(join);
+            let joined = tokio::select! {
+                biased;
+                joined = &mut join => joined,
+                () = clock.wait_until(deadline) => {
+                    let timeout = AvatarJoinError::Timeout(avatar::JOIN_TIMEOUT.as_secs_f64());
+                    overdue.set(Some(timeout.to_string()));
+                    waiter.report_overdue(&timeout);
+                    join.await
+                }
+            };
+            overdue.set(None);
             let outcome = joined.map(|(started, joined)| {
                 let metrics = AvatarMetrics {
                     timestamp: joined,
@@ -205,6 +228,16 @@ impl AvatarLifecycle {
 }
 
 impl Inner {
+    /// The avatar missed its join timeout: the session's one recoverable `avatar_error`.
+    fn report_overdue(&self, timeout: &AvatarJoinError) {
+        log::warn!(target: lk_agents_abi::LOG_TARGET, identity = self.identity.as_str();
+            "{timeout}; its audio fails until it joins");
+        let Some(session) = self.owner.session() else { return };
+        let error = ProviderError::from(ApiError::new(timeout.to_string()));
+        // A closed session reports no more errors.
+        let _ = session.send(lk_agents_voice::agent_session::Command::AvatarError(error));
+    }
+
     /// Inside a job, while the room is connected: the avatar participant leaves the room.
     async fn remove_participant(&self) {
         let Some(job) = &self.job else { return };

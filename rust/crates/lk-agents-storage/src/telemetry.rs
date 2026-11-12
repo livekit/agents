@@ -6,10 +6,10 @@ use std::time::Duration;
 use lk_agents_abi::LOG_TARGET;
 pub(crate) use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::telemetry::health::{
-    HEALTH_LOG_INTERVAL, LaneAcquireWait, LaneLeaseLapsed, LaneOwnerlessWait, STUCK_LANE_WAIT,
-    StorageWriteUncertain, TeardownOverrun,
+    HEALTH_LOG_INTERVAL, PartitionAcquireWait, PartitionLeaseLapsed, PartitionOwnerlessWait,
+    STUCK_PARTITION_WAIT, StorageWriteUncertain, TeardownOverrun,
 };
-pub(crate) use lk_agents_abi::telemetry::health::{LaneKind, StorageWrite, TeardownStage};
+pub(crate) use lk_agents_abi::telemetry::health::{PartitionKind, StorageWrite, TeardownStage};
 use parking_lot::Mutex;
 use tokio::time::Instant;
 
@@ -44,38 +44,38 @@ static UNCERTAIN: Throttle = Throttle::new();
 /// a holder that had stopped renewing.
 pub(crate) fn acquire_waited(
     cx: &Cx,
-    kind: LaneKind,
-    lane: &str,
+    kind: PartitionKind,
+    partition_key: &str,
     waited: Duration,
     ownerless: Option<Duration>,
 ) {
-    lk_agents_telemetry::measure(cx, &LaneAcquireWait { kind }, waited.as_secs_f64());
+    lk_agents_telemetry::measure(cx, &PartitionAcquireWait { kind }, waited.as_secs_f64());
     if let Some(ownerless) = ownerless {
-        lk_agents_telemetry::measure(cx, &LaneOwnerlessWait { kind }, ownerless.as_secs_f64());
+        lk_agents_telemetry::measure(cx, &PartitionOwnerlessWait { kind }, ownerless.as_secs_f64());
         if let Some(suppressed) = OWNERLESS.admit() {
-            log::warn!(target: LOG_TARGET, lane, lane_kind:? = kind, wait_s = ownerless.as_secs_f64(), suppressed; "lane held by a lease its holder stopped renewing");
+            log::warn!(target: LOG_TARGET, partition_key, partition_kind:? = kind, wait_s = ownerless.as_secs_f64(), suppressed; "partition_key held by a lease its holder stopped renewing");
         }
     }
-    if waited >= STUCK_LANE_WAIT
+    if waited >= STUCK_PARTITION_WAIT
         && let Some(suppressed) = STUCK.admit()
     {
-        log::warn!(target: LOG_TARGET, lane, lane_kind:? = kind, wait_s = waited.as_secs_f64(), suppressed; "lane acquire waited past the stuck threshold");
+        log::warn!(target: LOG_TARGET, partition_key, partition_kind:? = kind, wait_s = waited.as_secs_f64(), suppressed; "partition_key acquire waited past the stuck threshold");
     }
 }
 
 /// An acquire took over a lease that lapsed instead of being released.
-pub(crate) fn lease_lapsed(cx: &Cx, kind: LaneKind, lane: &str, holder: &str) {
-    lk_agents_telemetry::measure(cx, &LaneLeaseLapsed { kind }, 1u64);
+pub(crate) fn lease_lapsed(cx: &Cx, kind: PartitionKind, partition_key: &str, holder: &str) {
+    lk_agents_telemetry::measure(cx, &PartitionLeaseLapsed { kind }, 1u64);
     if let Some(suppressed) = LAPSED.admit() {
-        log::warn!(target: LOG_TARGET, lane, lane_kind:? = kind, holder, suppressed; "took over a lease that lapsed instead of being released");
+        log::warn!(target: LOG_TARGET, partition_key, partition_kind:? = kind, holder, suppressed; "took over a lease that lapsed instead of being released");
     }
 }
 
 /// A teardown ran past its bound.
-pub(crate) fn teardown_overrun(cx: &Cx, stage: TeardownStage, lane: &str) {
+pub(crate) fn teardown_overrun(cx: &Cx, stage: TeardownStage, partition_key: &str) {
     lk_agents_telemetry::measure(cx, &TeardownOverrun { stage }, 1u64);
     if let Some(suppressed) = OVERRUN.admit() {
-        log::warn!(target: LOG_TARGET, lane, stage:? = stage, suppressed; "teardown ran past its bound");
+        log::warn!(target: LOG_TARGET, partition_key, stage:? = stage, suppressed; "teardown ran past its bound");
     }
 }
 

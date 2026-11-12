@@ -34,7 +34,7 @@ pub use lk_agents_abi::a2a::options::{Policy, TurnOptions};
 pub use lk_agents_abi::a2a::turn::{PendingCall, TurnEvent, TurnHost};
 use lk_agents_abi::storage::journal::ToolExecution;
 
-// A turn yields at a checkpoint once a newer message waits under `interrupt` or a client canceled
+// A turn yields at a checkpoint once a client canceled
 // its task.
 
 /// One incoming A2A message, as the handler sees it in `ctx.messages`.
@@ -51,7 +51,7 @@ pub struct Message {
     pub received_at: f64,
     pub task_id: Option<String>,
     pub context_id: Option<String>,
-    /// The A2A message as received, less a delegation's `chat_ctx` part.
+    /// The original wire message, including caller history needed for durable dispatch.
     pub raw: a2a::Message,
 }
 
@@ -79,7 +79,7 @@ impl Message {
             received_at,
             task_id: task_id.map(str::to_owned).or_else(|| nonempty(&message.task_id)),
             context_id: nonempty(&message.context_id),
-            raw,
+            raw: message.clone(),
         })
     }
 
@@ -123,8 +123,15 @@ impl Message {
             .collect()
     }
 
-    /// The message as received; a user's when the wire named no role.
+    /// The public task history excludes the caller's separate conversation attachment.
     pub fn to_a2a(&self) -> a2a::Message {
+        let mut out = self.received_message();
+        out.parts.retain(|part| !is_chat_ctx_part(part));
+        out
+    }
+
+    /// The durable inbox retains the complete request needed to recover its own handler.
+    pub(crate) fn received_message(&self) -> a2a::Message {
         let mut out = self.raw.clone();
         if out.role == a2a::Role::Unspecified {
             out.role = a2a::Role::User;
@@ -199,24 +206,24 @@ pub fn host_error(e: ProviderError) -> StorageError {
 pub struct TurnContext {
     /// The database id of the session this turn runs in.
     pub thread_id: String,
-    /// The lane: the registered agent this turn belongs to.
-    pub lane: String,
+    /// The partition: the registered agent this turn belongs to.
+    pub partition_key: String,
     /// The batch as one user chat message (`batch_to_chat_message`).
     pub message: ChatItem,
     /// The individual messages with their channel and time; `batch.last()` is the one answered.
     pub batch: Vec<Message>,
-    /// The lane's history as loaded, plus the pending input-required answer when there was one.
+    /// The partition's history as loaded, plus the pending input-required answer when there was one.
     pub history: Vec<ItemRow>,
-    /// The state as loaded; `None` for a fresh lane.
+    /// The state as loaded; `None` for a fresh partition.
     pub state: Option<Value>,
     pub context_scope_id: String,
     pub context_scopes: Vec<lk_agents_abi::storage::context::ContextScope>,
-    /// Context field writes require the lane's exclusive lease.
+    /// Context field writes require the partition's exclusive lease.
     #[serde(default)]
     pub read_only: bool,
     /// The task that carries the reply.
     pub task_id: String,
-    /// The lane's task rows, newest first, up to 50.
+    /// The partition's task rows, newest first, up to 50.
     pub tasks: Vec<TaskRow>,
     /// A delegating caller's conversation when the message carried a `chat_ctx` data part, as the
     /// part's `data`.
@@ -297,9 +304,9 @@ mod tests {
     fn policy_and_debounce_resolution() {
         let none = PolicySpec::Default;
         assert_eq!(resolve_policy(&none, "sms"), Policy::Batch);
-        assert_eq!(resolve_policy(&none, "a2a"), Policy::Interrupt);
+        assert_eq!(resolve_policy(&none, "a2a"), Policy::Queue);
         assert_eq!(resolve_policy(&none, "delegation"), Policy::Queue);
-        assert_eq!(resolve_policy(&none, "carrier-pigeon"), Policy::Interrupt);
+        assert_eq!(resolve_policy(&none, "carrier-pigeon"), Policy::Queue);
         let map = PolicySpec::ByChannel([("a2a".to_owned(), Policy::Queue)].into_iter().collect());
         assert_eq!(resolve_policy(&map, "a2a"), Policy::Queue);
         assert_eq!(resolve_policy(&map, "sms"), Policy::Batch);
@@ -308,11 +315,11 @@ mod tests {
         assert_eq!(Policy::parse("batch"), Some(Policy::Batch));
         let d = DebounceSpec::Default;
         assert_eq!(resolve_debounce(&d, "sms", Policy::Batch), Duration::from_secs(2));
-        assert_eq!(resolve_debounce(&d, "a2a", Policy::Interrupt), Duration::ZERO);
+        assert_eq!(resolve_debounce(&d, "a2a", Policy::Queue), Duration::ZERO);
         assert_eq!(resolve_debounce(&d, "pigeon", Policy::Batch), Duration::from_secs(2));
         assert_eq!(resolve_debounce(&d, "pigeon", Policy::Queue), Duration::ZERO);
         let one = DebounceSpec::All(Duration::from_secs(1));
-        assert_eq!(resolve_debounce(&one, "a2a", Policy::Interrupt), Duration::from_secs(1));
+        assert_eq!(resolve_debounce(&one, "a2a", Policy::Queue), Duration::from_secs(1));
         let per = DebounceSpec::ByChannel(
             [("sms".to_owned(), Duration::from_secs(5))].into_iter().collect(),
         );

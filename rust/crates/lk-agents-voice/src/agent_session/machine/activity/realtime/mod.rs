@@ -1148,3 +1148,7 @@ impl VoiceDriver {
         Some(pending)
     }
 }
+
+#[cfg(test)]
+#[path = "realtime_tests.rs"]
+mod tests;

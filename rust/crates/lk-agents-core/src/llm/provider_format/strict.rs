@@ -577,6 +577,39 @@ mod tests {
         }
     }
 
+    /// A nullable use of a shared `$defs` enum does not make its required uses nullable.
+    /// https://github.com/livekit/agents/issues/5078 https://github.com/livekit/agents/pull/7760
+    #[test]
+    fn shared_nullable_enum_does_not_widen_required_reference() {
+        let color = json!({"enum": ["red", "blue"], "type": "string"});
+        let schema = json!({
+            "$defs": {"Color": color},
+            "type": "object",
+            "properties": {
+                "paint": {"$ref": "#/$defs/Color", "description": "required"},
+                "trim": {
+                    "anyOf": [{"$ref": "#/$defs/Color", "description": "optional"}, {"type": "null"}],
+                    "default": null,
+                },
+                "accent": {"$ref": "#/$defs/Color", "description": "also required"},
+            },
+            "required": ["paint", "accent"],
+        });
+        for sentinel in [false, true] {
+            let out = Value::Object(to_strict_json_schema(&schema, sentinel).unwrap());
+            assert_eq!(out["$defs"]["Color"], color, "the shared definition stays non-nullable");
+            for required in ["paint", "accent"] {
+                let field = &out["properties"][required];
+                let inlined = if field.get("$ref").is_some() { &color } else { field };
+                assert_eq!(inlined["enum"], json!(["red", "blue"]), "{required} gained null");
+                assert_eq!(inlined["type"], "string", "{required} gained null");
+            }
+            let trim = serde_json::to_string(&out["properties"]["trim"]).unwrap();
+            assert!(trim.contains("null"), "the optional field still accepts null: {trim}");
+            assert_eq!(out["required"], json!(["paint", "trim", "accent"]));
+        }
+    }
+
     // Catches: a malformed schema panicking, or a `$ref` cycle overflowing the stack.
     #[test]
     fn malformed_input_is_an_error_and_a_ref_cycle_is_bounded() {

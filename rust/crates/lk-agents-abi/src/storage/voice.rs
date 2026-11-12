@@ -29,9 +29,15 @@ pub trait VoiceStorage: Send + Sync {
     ) -> Result<(), StorageError>;
     fn acquire(&self, speech: u64, local: Vec<ChatItem>) -> StorageWork<'_, Vec<ChatItem>>;
     fn lease_lost(&self) -> bool;
+    fn checkpoint(
+        &self,
+        sequence: u64,
+        agent: String,
+        history: Vec<ChatItem>,
+    ) -> StorageWork<'_, ()>;
 }
 
-/// The stable context store and initial snapshot belonging to one live call's lane.
+/// The stable context store and initial snapshot belonging to one live call's partition.
 #[crate::host(class(name = "_core_VoiceStore", native = VoiceStorage))]
 pub trait VoiceStore: Send + Sync + Sized + 'static {
     #[host(class(name = "_core_ContextActivation"))]

@@ -1,23 +1,17 @@
 use super::pacing::trim_python_whitespace;
-use super::sentences::{AdapterInput, HostSentences, Sentences, Split};
-use super::stream::TtsStream;
 use crate::telemetry;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::TranscriptChunk;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::tts::stream_adapter::{
-    HostSentenceTokenizer, SentenceTextProcessor, SplitterFactory, TextPacing,
-    TextProcessorFactory, TtsStreamAdapter,
+use lk_agents_abi::tts::stream_adapter::TtsStreamAdapter;
+use lk_agents_abi::tts::types::{
+    SpeechChunk, SynthesizedAudio, TextUnit, Tts, TtsCapabilities, TtsOptions, TtsSink, TtsSource,
 };
-use lk_agents_abi::tts::stream_pacer::{HostSentenceStream, SentenceStreamPacer};
-use lk_agents_abi::tts::types::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
 use lk_agents_core::metrics::provider::TtsMetricState;
-use lk_agents_core::tokenize::sentences::sentence_splitter;
-use lk_agents_core::tts::markup::markup_vocabulary;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::strings::shortuuid;
 use parking_lot::Mutex;
@@ -27,43 +21,26 @@ use tokio::sync::mpsc;
 
 // `is_final` needs a one-frame hold, taken only once no further sentence can arrive.
 
+/// A TTS with no duplex path as a streaming one: each chunk its stage prepared is synthesized on
+/// its own.
 #[derive(Clone)]
 pub struct StreamAdapter {
     tts: Arc<dyn Tts>,
-    splitter: SplitterFactory,
-    text_processor: TextProcessorFactory,
     /// Bounds the per-sentence inner closes done inside `next()`.
     clock: Arc<dyn Clock>,
     /// Each sentence's retries (`ChunkedStream`'s own loop in the reference): a sentence failing
     /// after earlier ones were heard is synthesized again, not the whole reply lost.
     budget: lk_agents_abi::ApiConnectOptions,
-    /// `(min_remaining_audio, max_text_length)`: sentences released as the audio plays out.
-    pacing: Option<SentenceStreamPacer>,
-    /// The host tokenizer each stream's text is split by, in place of the native splitter.
-    tokenizer: Option<Arc<dyn HostSentenceTokenizer>>,
 }
 
 impl StreamAdapter {
     /// No sentence is retried; see [`with_budget`](Self::with_budget).
-    pub fn new(
-        tts: Arc<dyn Tts>,
-        splitter: SplitterFactory,
-        text_processor: TextProcessorFactory,
-        clock: Arc<dyn Clock>,
-    ) -> Self {
+    pub fn new(tts: Arc<dyn Tts>, clock: Arc<dyn Clock>) -> Self {
         let budget = lk_agents_abi::ApiConnectOptions {
             max_retry: 0,
             ..lk_agents_abi::ApiConnectOptions::default()
         };
-        StreamAdapter {
-            tts,
-            splitter,
-            text_processor,
-            clock,
-            budget,
-            pacing: None,
-            tokenizer: None,
-        }
+        StreamAdapter { tts, clock, budget }
     }
 
     /// Each sentence retried within `budget`.
@@ -72,42 +49,17 @@ impl StreamAdapter {
         self
     }
 
-    /// Its sentences paced by `(min_remaining_audio, max_text_length)`.
-    pub fn with_pacing(mut self, pacing: Option<SentenceStreamPacer>) -> Self {
-        self.pacing = pacing;
-        self
-    }
-
     /// Itself when it has a duplex path, else adapted, each sentence retried within `budget`;
-    /// decided per instance by its capabilities.
+    /// Itself when it has a duplex path, else adapted, each chunk retried within `budget`.
     pub fn adapted(
         tts: Arc<dyn Tts>,
-        splitter: SplitterFactory,
-        text_processor: TextProcessorFactory,
         clock: Arc<dyn Clock>,
         budget: lk_agents_abi::ApiConnectOptions,
     ) -> Arc<dyn Tts> {
         if tts.capabilities().streaming {
             return tts;
         }
-        Arc::new(StreamAdapter::new(tts, splitter, text_processor, clock).with_budget(budget))
-    }
-
-    /// [`adapted`](Self::adapted) with the default sentence splitting and provider markup: a
-    /// voice session's TTS leg.
-    pub fn adapted_for(
-        tts: Arc<dyn Tts>,
-        clock: Arc<dyn Clock>,
-        budget: lk_agents_abi::ApiConnectOptions,
-    ) -> Arc<dyn Tts> {
-        let splitter = splitter_for(tts.as_ref());
-        Self::adapted(
-            tts,
-            splitter,
-            Arc::new(lk_agents_core::tts::markup::text_processor),
-            clock,
-            budget,
-        )
+        Arc::new(StreamAdapter::new(tts, clock).with_budget(budget))
     }
 }
 
@@ -151,76 +103,69 @@ impl Tts for StreamAdapter {
         self.tts.markup_provider()
     }
 
-    /// The framework's input path for every non-streaming TTS: it lowers the markup.
-    fn lowers_markup(&self) -> bool {
+    fn text_unit(&self) -> TextUnit {
+        self.tts.text_unit()
+    }
+
+    fn max_text_len(&self) -> Option<usize> {
+        self.tts.max_text_len()
+    }
+
+    /// Each chunk is retried on its own, within the budget its view carries.
+    fn retries_itself(&self) -> bool {
         true
+    }
+
+    fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
+        let tts = self.tts.with_conn_options(conn).unwrap_or_else(|| self.tts.clone());
+        Some(Arc::new(StreamAdapter { tts, budget: *conn, clock: self.clock.clone() }))
+    }
+
+    fn options(&self) -> TtsOptions {
+        self.tts.options()
     }
 
     /// `stream_adapter.py:58`.
     fn synthesize<'a>(
         &'a self,
         cx: &telemetry::Cx,
-        text: &'a str,
+        chunk: &'a SpeechChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         let cx = cx.clone();
-        Box::pin(async move { self.tts.synthesize(&cx, text).await })
+        Box::pin(async move { self.tts.synthesize(&cx, chunk).await })
     }
     fn stream(
         &self,
         cx: &telemetry::Cx,
-        expressive: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
     > {
         let cx = cx.clone();
-        Box::pin(async move {
-            let sentences = match &self.tokenizer {
-                Some(tokenizer) => Some(tokenizer.stream(&cx).await?),
-                None => None,
-            };
-            self.open(&cx, expressive, sentences)
-        })
+        Box::pin(async move { self.open(&cx) })
     }
 }
 
 impl StreamAdapter {
-    /// One stream, split natively, or by `sentences`, a host tokenizer's stream.
+    /// One stream: each chunk pushed synthesized in turn.
     pub(crate) fn open(
         &self,
         cx: &telemetry::Cx,
-        expressive: bool,
-        sentences: Option<Arc<dyn HostSentenceStream>>,
     ) -> Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError> {
         self.budget
             .validate()
             .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
         // Unbounded on purpose: text -> TTS may not drop, a lost token mangles speech.
-        let (tx, rx) = mpsc::unbounded_channel();
-        let processor =
-            || expressive.then(|| (self.text_processor)(&self.tts.markup_provider())).flatten();
-        let lowering = processor();
-        // A host tokenizer knows nothing of the voice's tags: its sentences are glued here until
-        // none ends inside one, as the native splitter does.
-        let markup = sentences
-            .as_ref()
-            .and_then(|_| markup_vocabulary(&self.tts.markup_provider(), lowering.is_some()));
-        let split = match sentences {
-            Some(stream) => Split::Host(HostSentences::read(stream, cx)),
-            None => Split::Native((self.splitter)(lowering.is_some())),
-        };
-        let sentences =
-            Sentences::new(rx, split, processor(), markup, self.pacing, Arc::clone(&self.clock));
+        let (tx, chunks) = mpsc::unbounded_channel();
         let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
         let source = AdapterSource {
             tts: self.tts.clone(),
             cx: cx.clone(),
             budget: self.budget,
-            sentence: None,
+            chunk: None,
             report: None,
             clock: Arc::clone(&self.clock),
-            sentences,
-            lowering,
+            chunks,
             current: None,
             inner_closed: Closed::Clean,
             duration: 0.0,
@@ -242,12 +187,12 @@ impl StreamAdapter {
 }
 
 struct AdapterSink {
-    tx: Mutex<Option<mpsc::UnboundedSender<AdapterInput>>>,
+    tx: Mutex<Option<mpsc::UnboundedSender<SpeechChunk>>>,
     closed: AtomicBool,
 }
 
 impl AdapterSink {
-    fn send(&self, item: AdapterInput) -> Result<(), ProviderError> {
+    fn send(&self, item: SpeechChunk) -> Result<(), ProviderError> {
         let guard = self.tx.lock();
         match guard.as_ref() {
             // The source was dropped without `aclose`. Nothing will ever read this.
@@ -259,26 +204,21 @@ impl AdapterSink {
     }
 }
 
-impl StreamInput<String> for AdapterSink {
-    fn push(&self, item: String) -> Result<(), ProviderError> {
-        // `tts/tts.py:744`: an empty token or a closed input is a silent no-op.
-        if item.is_empty() || self.closed.load(Ordering::Acquire) {
+impl StreamInput<SpeechChunk> for AdapterSink {
+    fn push(&self, item: SpeechChunk) -> Result<(), ProviderError> {
+        // a chunk with nothing to say is not input; nor is one after the input closed
+        if trim_python_whitespace(&item.text).is_empty() || self.closed.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.send(AdapterInput::Text(item))
+        self.send(item)
     }
 
+    /// Each chunk is its own synthesis already.
     fn flush(&self) -> Result<(), ProviderError> {
-        // `tts/tts.py:771`: silent once the input channel is closed.
-        if self.closed.load(Ordering::Acquire) {
-            return Ok(());
-        }
-        self.send(AdapterInput::Flush)
+        Ok(())
     }
 
     fn end_input(&self) {
-        // `tts/tts.py:785`: `flush()` then `close()`, in that order.
-        let _ = self.flush();
         self.closed.store(true, Ordering::Release);
         drop(self.tx.lock().take());
     }
@@ -289,14 +229,14 @@ struct AdapterSource {
     /// What each sentence's synthesis runs under: the stream's caller.
     cx: telemetry::Cx,
     budget: lk_agents_abi::ApiConnectOptions,
-    /// The sentence being synthesized and its failed attempts: what a retry synthesizes again.
-    sentence: Option<String>,
+    /// The chunk being synthesized: what a retry synthesizes again.
+    chunk: Option<SpeechChunk>,
     /// Who hears of each retried sentence (the engine's error event and journal).
     report: Option<lk_agents_abi::utils::stream::RetryReport>,
     clock: Arc<dyn Clock>,
-    sentences: Sentences,
-    /// The markup lowered before synthesis; `None` when expressive is off or there is no dialect.
-    lowering: Option<Box<dyn SentenceTextProcessor>>,
+    /// The chunks pushed, each in the wrapped TTS's syntax with its words; closed once the input
+    /// ended.
+    chunks: mpsc::UnboundedReceiver<SpeechChunk>,
     current: Option<TtsSource>,
     /// Folded into `close`.
     inner_closed: Closed,
@@ -367,20 +307,20 @@ impl AdapterSource {
                 }
                 continue;
             }
-            let Some(sentence) = self.sentences.next(self.duration).await? else { return Ok(None) };
-            // The transcript uses the unstripped token and precedes the empty check
-            // (`stream_adapter.py:125`).
-            self.pending_transcript.push(TranscriptChunk {
-                text: sentence.clone(),
-                start_time: Some(self.duration),
-                ..TranscriptChunk::default()
-            });
-            let text = self.speakable(&sentence);
-            if text.is_empty() {
+            let Some(chunk) = self.chunks.recv().await else { return Ok(None) };
+            if trim_python_whitespace(&chunk.text).is_empty() {
                 continue;
             }
-            self.sentence = Some(text);
-            self.open_sentence().await?;
+            // the chunk's words start where its audio does
+            if !chunk.said.is_empty() {
+                self.pending_transcript.push(TranscriptChunk {
+                    text: chunk.said.clone(),
+                    start_time: Some(self.duration),
+                    ..TranscriptChunk::default()
+                });
+            }
+            self.chunk = Some(chunk);
+            self.open_chunk().await?;
         }
     }
 
@@ -411,19 +351,9 @@ impl AdapterSource {
         }
     }
 
-    /// The sentence as spoken: whitespace-only is falsy in Python, and several plugins raise on
-    /// empty input. Markup is re-normalized: a marker split across two input chunks escaped the
-    /// push's pass.
-    fn speakable(&self, sentence: &str) -> String {
-        let text = trim_python_whitespace(sentence);
-        let Some(markup) = &self.lowering else { return text.to_owned() };
-        let lowered = markup.convert(&markup.normalize(text));
-        trim_python_whitespace(&lowered).to_owned()
-    }
-
-    /// The current sentence's synthesis, retried while its open fails within the budget.
-    async fn open_sentence(&mut self) -> Result<(), ProviderError> {
-        let Some(text) = self.sentence.clone() else { return Ok(()) };
+    /// The current chunk's synthesis, retried while its open fails within the budget.
+    async fn open_chunk(&mut self) -> Result<(), ProviderError> {
+        let Some(chunk) = self.chunk.clone() else { return Ok(()) };
         let start = lk_agents_abi::unix_secs(self.clock.wall());
         let (report, clock, tts) = (self.report.clone(), self.clock.clone(), self.tts.clone());
         let observer: crate::retry::Observer = Arc::new(move |error, retry, attempt| {
@@ -434,7 +364,8 @@ impl AdapterSource {
                 }
             }
         });
-        let open = super::request::synthesis(self.tts.clone(), &self.cx, &text, self.budget);
+        let text = chunk.text.clone();
+        let open = super::request::synthesis(self.tts.clone(), &self.cx, chunk, self.budget);
         self.current = Some(
             crate::retry::stream(
                 &self.budget,
@@ -457,7 +388,6 @@ impl AdapterSource {
     /// segment boundary (`tts/tts.py:1183`): the inner provider's ids and `is_final` are not ours.
     fn stamp(&mut self, mut frame: SynthesizedAudio) -> SynthesizedAudio {
         self.duration += frame.frame.duration();
-        self.sentences.drain(self.duration);
         frame.is_final = false;
         frame.request_id.clone_from(&self.request_id);
         frame.segment_id.clone_from(&self.segment_id);
@@ -478,9 +408,9 @@ impl AdapterSource {
         self.held.replace(frame)
     }
 
-    /// A queued whitespace-only sentence is not audio. Once false it stays false.
+    /// Once the input ended and every chunk was taken, no more audio can come.
     fn more_audio_coming(&self) -> bool {
-        self.sentences.more_coming()
+        !(self.chunks.is_closed() && self.chunks.is_empty())
     }
 
     /// The held last frame, final. Alignment for trailing sentences that produced no audio rides
@@ -523,7 +453,7 @@ impl StreamOutput<SynthesizedAudio> for AdapterSource {
                 Some(cur) => cur.close(deadline).await,
                 None => Closed::Clean,
             };
-            self.sentences.close(&self.cx, deadline).await;
+            self.chunks.close();
             self.inner_closed.and(current)
         })
     }
@@ -544,31 +474,10 @@ impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for AdapterS
 
 /// `_core.TtsStreamAdapter`: the generated adapter calls this.
 impl TtsStreamAdapter for StreamAdapter {
-    type Stream = TtsStream;
     type Env = ProcessEnv;
 
-    fn new(
-        env: &ProcessEnv,
-        tts: Arc<dyn Tts>,
-        sentence_tokenizer: Option<Arc<dyn HostSentenceTokenizer>>,
-        text_pacing: Option<TextPacing>,
-    ) -> Self {
-        let splitter = splitter_for(tts.as_ref());
-        let pacing = match text_pacing {
-            Some(TextPacing::Pacer(pacer)) => Some(pacer),
-            Some(TextPacing::On(true)) => Some(SentenceStreamPacer::default()),
-            Some(TextPacing::On(false)) | None => None,
-        };
-        StreamAdapter {
-            pacing,
-            tokenizer: sentence_tokenizer,
-            ..StreamAdapter::new(
-                tts,
-                splitter,
-                Arc::new(lk_agents_core::tts::markup::text_processor),
-                env.clock.clone(),
-            )
-        }
+    fn new(env: &ProcessEnv, tts: Arc<dyn Tts>) -> Self {
+        StreamAdapter::new(tts, env.clock.clone())
     }
 
     fn capabilities(&self) -> TtsCapabilities {
@@ -582,31 +491,8 @@ impl TtsStreamAdapter for StreamAdapter {
     fn num_channels(&self) -> u16 {
         Tts::num_channels(self)
     }
-
-    async fn stream(
-        &self,
-        cx: telemetry::Cx,
-        conn_options: Option<ApiConnectOptions>,
-        expressive: bool,
-    ) -> Result<Self::Stream, ProviderError> {
-        // Each sentence retried within `conn`, the wrapped TTS's calls carrying it. Not the
-        // adapter's `with_conn_options`: a single-attempt request must not replace its budget.
-        let conn = conn_options.unwrap_or(lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS);
-        let tts = self.tts.with_conn_options(&conn).unwrap_or_else(|| self.tts.clone());
-        let configured = StreamAdapter { tts, budget: conn, ..self.clone() };
-        let (sink, source) = Tts::stream(&configured, &cx, expressive).await?.split();
-        Ok(TtsStream::new(Some(sink), source, self.clock.clone()))
-    }
 }
 
 #[cfg(test)]
 #[path = "sentence_adapter_tests.rs"]
 mod tests;
-
-/// The adapter's default splitter, keeping whole the markup `tts` speaks while it flows.
-pub(crate) fn splitter_for(tts: &dyn Tts) -> SplitterFactory {
-    let markup_provider = tts.markup_provider();
-    Arc::new(move |expressive| {
-        Box::new(sentence_splitter(None, markup_vocabulary(&markup_provider, expressive)))
-    })
-}

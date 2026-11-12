@@ -159,7 +159,11 @@ fn a_speech_is_itself_across_handles() {
 #[test]
 fn the_host_reads_the_loops_verdict_on_its_interrupt() {
     let (pending, _signals) = pending_speech(SpeechId(3), false);
-    assert_eq!(HostSpeech::id(&*pending), "speech_3", "the id exists as the call returns");
+    assert_eq!(
+        HostSpeech::id(&*pending),
+        "speech_000000000003",
+        "the id exists as the call returns"
+    );
     assert!(HostSpeech::interrupt(&*pending, false).is_err(), "disallowed at the call");
 
     let mut speech = Speech::created(true);

@@ -33,6 +33,12 @@ pub fn emit(decls: &Declarations, bases: &[crate::bases::Bases]) -> Result<Vec<O
         if !constants.is_empty() {
             imports.push_str("from typing import Final\n");
         }
+        if constants
+            .iter()
+            .any(|constant| matches!(constant.value, ConstValue::NativeString { .. }))
+        {
+            imports.push_str("from .. import _core\n");
+        }
         if let Some(base) = base {
             let mut checking = String::new();
             for (module, name) in &base.imports {
@@ -58,6 +64,10 @@ pub fn emit(decls: &Declarations, bases: &[crate::bases::Bases]) -> Result<Vec<O
             let mut ty = String::new();
             let value = match &constant.value {
                 ConstValue::Literal(value) => value.clone(),
+                ConstValue::NativeString { .. } => {
+                    ty = "[str]".into();
+                    format!("_core.{}", constant.name)
+                }
                 ConstValue::ProtoEnums { module, name, variants } => {
                     let (package, alias) = module.rsplit_once('.').unwrap_or(("", module));
                     imports.push_str(&if package.is_empty() {

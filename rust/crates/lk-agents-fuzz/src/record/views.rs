@@ -361,7 +361,8 @@ impl<'a> HostView<'a> {
             .collect()
     }
 
-    /// Every speech the host knows of: one it was told about, or one it holds a handle for.
+    /// Every speech the host knows of: one it was told about, or one it holds a handle for, in
+    /// turn order (`Recording::speech_order`).
     pub fn speeches(&self) -> Vec<SpeechView<'a>> {
         let mut ids: BTreeSet<u64> = self.0.handles.keys().copied().collect();
         ids.extend(self.0.index.host_by_speech.keys().copied());
@@ -369,6 +370,9 @@ impl<'a> HostView<'a> {
             Id::Speech(id) if o.kind == Kind::Speech => Some(id.0),
             _ => None,
         }));
+        let order = self.0.speech_order();
+        let mut ids: Vec<u64> = ids.into_iter().collect();
+        ids.sort_by_key(|id| order.get(id).copied().unwrap_or(usize::MAX));
         ids.into_iter().map(|id| self.speech(id)).collect()
     }
 
@@ -931,7 +935,7 @@ impl<'a> SpeechTrace<'a> {
     }
 
     /// When the interruption watchdog ended it: its aborted tasks never report its turn, so its
-    /// lane is released after the speech is done (voice-session.md: "within 30 seconds").
+    /// partition is released after the speech is done (voice-session.md: "within 30 seconds").
     pub fn timed_out_at(&self) -> Option<Observed> {
         self.first(|s| matches!(s, Step::Interrupt(InterruptStep::InterruptionTimedOut { .. })))
     }

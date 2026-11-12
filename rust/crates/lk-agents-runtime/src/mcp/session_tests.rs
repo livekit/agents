@@ -28,6 +28,8 @@ pub(super) struct Peer {
     lost: Notify,
     cancelled: Notify,
     silent: bool,
+    /// Tool list pages served.
+    lists: AtomicUsize,
 }
 
 /// The server: each connection attempt is a new peer.
@@ -59,6 +61,7 @@ impl Server {
             lost: Notify::new(),
             cancelled: Notify::new(),
             silent: self.silent.load(Ordering::SeqCst),
+            lists: AtomicUsize::new(0),
         });
         self.peers.lock().push(peer.clone());
         FakeTransport { peer, refuse: self.refuse.load(Ordering::SeqCst) }
@@ -118,6 +121,7 @@ impl Peer {
                 ServerResult::InitializeResult(result)
             }
             ClientRequest::ListToolsRequest(request) => {
+                self.lists.fetch_add(1, Ordering::SeqCst);
                 let second = request.params.and_then(|p| p.cursor).as_deref() == Some("second");
                 ServerResult::ListToolsResult(ListToolsResult {
                     tools: vec![Tool::new(
@@ -133,6 +137,17 @@ impl Peer {
                 self.called.notify_one();
                 match call.params.name.as_ref() {
                     "echo" => text("hello"),
+                    "change_tools" => {
+                        let changed = ServerNotification::ToolListChangedNotification(
+                            ToolListChangedNotification::default(),
+                        );
+                        let notification = ServerJsonRpcMessage::Notification(JsonRpcNotification {
+                            jsonrpc: JsonRpcVersion2_0,
+                            notification: changed,
+                        });
+                        let _ = self.send.send(notification).await;
+                        text("changed")
+                    }
                     "lose" => {
                         self.lost.notify_one();
                         return;
@@ -208,6 +223,34 @@ async fn connected_with_timeout(request: Option<f64>) -> (Arc<McpSession>, Arc<S
 
 async fn call(session: &McpSession, name: &str) -> Result<serde_json::Value, McpError> {
     session.call_tool(name.into(), Default::default(), None, None, None).await
+}
+
+// Catches: a server's `tools/list_changed` ignored, so a tool it enables stays invisible until
+// the idle close; or every listing fetching again once it was seen.
+#[tokio::test]
+async fn a_tools_changed_notification_makes_the_next_listing_fetch_again() {
+    let (session, server) = connected().await;
+    session.list_tools().await.unwrap();
+    let peer = server.peer();
+    assert_eq!(peer.lists.load(Ordering::SeqCst), 2);
+    session.list_tools().await.unwrap();
+    assert_eq!(peer.lists.load(Ordering::SeqCst), 2, "an unchanged listing is cached");
+    assert!(!session.tools_changed());
+
+    call(&session, "change_tools").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !session.tools_changed() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the notification is seen");
+    session.list_tools().await.unwrap();
+    assert_eq!(peer.lists.load(Ordering::SeqCst), 4, "both pages fetched again");
+    assert!(!session.tools_changed());
+    session.list_tools().await.unwrap();
+    assert_eq!(peer.lists.load(Ordering::SeqCst), 4, "and cached again");
+    session.close().await;
 }
 
 #[tokio::test]
@@ -403,7 +446,8 @@ async fn an_unlimited_call_ends_with_its_session() {
 }
 
 mod lifecycle {
-    // Uses MCP_TEST_PYTHON (default python3) with the MCP SDK and uvicorn installed.
+    // Runs tests_new/host/mcp_peer.py with MCP_TEST_PYTHON (default python3), which needs the
+    // MCP SDK, FastMCP and uvicorn: the repository's dev environment.
     use std::error::Error;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -430,7 +474,7 @@ mod lifecycle {
                 directory,
                 python: std::env::var("MCP_TEST_PYTHON").unwrap_or_else(|_| "python3".into()),
                 script: Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("fixtures/mcp_server.py")
+                    .join("../../../tests_new/host/mcp_peer.py")
                     .display()
                     .to_string(),
             }
@@ -438,11 +482,13 @@ mod lifecycle {
         fn args(&self, mode: &str) -> Vec<String> {
             vec![self.script.clone(), mode.into(), self.directory.display().to_string()]
         }
-        async fn receipt(&self, name: &str) -> Result<String> {
+        /// The file `name` once it exists and `ready` accepts its text.
+        async fn receipt_when(&self, name: &str, ready: impl Fn(&str) -> bool) -> Result<String> {
             Ok(tokio::time::timeout(Duration::from_secs(10), async {
                 loop {
                     match std::fs::read_to_string(self.directory.join(name)) {
-                        Ok(text) => return Ok::<_, std::io::Error>(text),
+                        Ok(text) if ready(&text) => return Ok::<_, std::io::Error>(text),
+                        Ok(_) => tokio::time::sleep(Duration::from_millis(10)).await,
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                             tokio::time::sleep(Duration::from_millis(10)).await
                         }
@@ -461,10 +507,11 @@ mod lifecycle {
 
     async fn exercise(session: Arc<McpSession>, peer: &Peer) -> Result {
         let tools = session.list_tools().await?;
-        assert_eq!(tools.as_array().unwrap().len(), 2, "must discover both pages");
-        assert_eq!(tools[1]["name"], "second");
+        let names: Vec<_> = tools.as_array().unwrap().iter().map(|tool| &tool["name"]).collect();
+        assert!(names.contains(&&"echo".into()), "first page: {names:?}");
+        assert!(names.contains(&&"exit".into()), "second page: {names:?}");
         let error =
-            session.call_tool("rpc_error".into(), Map::new(), None, None, None).await.unwrap_err();
+            session.call_tool("reject".into(), Map::new(), None, None, None).await.unwrap_err();
         match &error {
             McpError::Protocol { code, data, cause, .. } => {
                 assert_eq!(*code, -32602);
@@ -477,7 +524,7 @@ mod lifecycle {
         let call = tokio::spawn(async move {
             caller.call_tool("wait".into(), Map::new(), None, None, None).await
         });
-        peer.receipt("called").await?;
+        peer.receipt_when("journal.jsonl", |text| text.contains(r#""event": "entered""#)).await?;
         session.close().await;
         assert!(
             matches!(call.await?, Err(McpError::Cancelled(_))),
@@ -494,7 +541,7 @@ mod lifecycle {
         let result = async {
             session.connect_stdio(peer.python.clone(), peer.args("stdio"), None, None).await?;
             exercise(session.clone(), &peer).await?;
-            let pid: i32 = peer.receipt("pid").await?.parse()?;
+            let pid: i32 = peer.receipt_when("pid", |_| true).await?.parse()?;
             #[cfg(unix)]
             assert!(
                 !tokio::process::Command::new("kill")
@@ -520,7 +567,7 @@ mod lifecycle {
             .spawn()?;
         let session = Arc::new(McpSession::new(5.0, Some(30.0), Some(30.0))?);
         let result = async {
-            let url = peer.receipt("url").await?;
+            let url = peer.receipt_when("url", |_| true).await?;
             session
                 .connect_http(&ProcessEnv::current_runtime(), url, Default::default(), None)
                 .await?;

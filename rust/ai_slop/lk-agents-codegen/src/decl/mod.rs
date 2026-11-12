@@ -95,6 +95,10 @@ pub struct Constant {
 #[derive(Debug, Clone)]
 pub enum ConstValue {
     Literal(String),
+    /// A string constant read from the compiled ABI, including dependency-owned values.
+    NativeString {
+        rust: String,
+    },
     Record {
         rust: String,
         fields: Vec<(String, String)>,

@@ -1,14 +1,17 @@
 use super::fed::{Fed, TextLog};
+use super::stage::Stage;
 use crate::{retry, telemetry};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::utils::stream::Entry;
 use lk_agents_abi::{
-    ApiConnectOptions, BoxFuture, Clock, DuplexStream, StreamInput, SynthesizedAudio, Tts, TtsSink,
-    TtsSource,
+    ApiConnectOptions, BoxFuture, Clock, DuplexStream, StreamInput, SynthesizedAudio, TextSink,
+    Tts, TtsSource,
 };
 use lk_agents_net::signal;
 use std::sync::Arc;
 
+/// A synthesis of `text`, whole: one request retried within `options`, or, when it passes the
+/// provider's request limit, one per chunk, each retried on its own.
 pub async fn synthesize(
     tts: Arc<dyn Tts>,
     cx: &telemetry::Cx,
@@ -20,7 +23,13 @@ pub async fn synthesize(
     options.validate().map_err(|error| {
         lk_agents_abi::errors::ApiError::new(error.to_string()).with_retryable(false)
     })?;
-    let open = synthesis(tts.clone(), cx, text, options);
+    let mut chunks = super::stage::one_shot(tts.as_ref(), text);
+    if chunks.len() > 1 {
+        return in_chunks(tts, cx, chunks, options, clock);
+    }
+    let chunk = chunks.pop().unwrap_or_default();
+    let open = synthesis(tts.clone(), cx, chunk, options);
+    let (_, options) = attempts(&tts, options);
     Ok(retry::stream(
         &options,
         clock,
@@ -32,46 +41,88 @@ pub async fn synthesize(
     .await)
 }
 
+/// One synthesis of `chunks` in turn, each its own request retried within `budget`.
+pub(crate) fn in_chunks(
+    tts: Arc<dyn Tts>,
+    cx: &telemetry::Cx,
+    chunks: Vec<lk_agents_abi::SpeechChunk>,
+    budget: ApiConnectOptions,
+    clock: Arc<dyn Clock>,
+) -> Result<TtsSource, ProviderError> {
+    let adapter = super::sentence_adapter::StreamAdapter::new(tts, clock).with_budget(budget);
+    let (sink, source) = adapter.open(cx)?.split();
+    for chunk in chunks {
+        sink.push(chunk)?;
+    }
+    sink.end_input();
+    Ok(source)
+}
+
 pub(crate) fn synthesis(
     tts: Arc<dyn Tts>,
     cx: &telemetry::Cx,
-    text: &str,
+    chunk: lk_agents_abi::SpeechChunk,
     options: ApiConnectOptions,
 ) -> retry::Open<SynthesizedAudio> {
-    let attempt = ApiConnectOptions { max_retry: 0, ..options };
-    let provider = tts.with_conn_options(&attempt).unwrap_or(tts);
-    let (cx, text) = (cx.clone(), text.to_owned());
+    let (provider, _) = attempts(&tts, options);
+    let cx = cx.clone();
     Arc::new(move || {
-        let (provider, cx, text) = (provider.clone(), cx.clone(), text.clone());
-        Box::pin(async move { provider.synthesize(&cx, &text).await })
+        let (provider, cx, chunk) = (provider.clone(), cx.clone(), chunk.clone());
+        Box::pin(async move { provider.synthesize(&cx, &chunk).await })
     })
 }
 
+/// A synthesis of the text pushed: its input logged, each attempt reading the log through a
+/// stage of its own (see [`Stage`]), the attempts retried within `options`.
 pub async fn stream(
     tts: Arc<dyn Tts>,
     cx: &telemetry::Cx,
-    expressive: bool,
     options: ApiConnectOptions,
     clock: Arc<dyn Clock>,
     observer: Option<retry::Observer>,
-) -> Result<DuplexStream<TtsSink, TtsSource>, ProviderError> {
+) -> Result<DuplexStream<TextSink, TtsSource>, ProviderError> {
+    let (sink, opening) = start(tts, cx, options, clock, observer)?;
+    Ok(DuplexStream::new(sink, opening.await))
+}
+
+/// [`stream`], its input taking text at once and its first attempt opened by the future.
+pub fn start(
+    tts: Arc<dyn Tts>,
+    cx: &telemetry::Cx,
+    options: ApiConnectOptions,
+    clock: Arc<dyn Clock>,
+    observer: Option<retry::Observer>,
+) -> Result<(TextSink, BoxFuture<'static, TtsSource>), ProviderError> {
     options.validate().map_err(|error| {
         lk_agents_abi::errors::ApiError::new(error.to_string()).with_retryable(false)
     })?;
-    let attempt = ApiConnectOptions { max_retry: 0, ..options };
-    let provider = tts.with_conn_options(&attempt).unwrap_or_else(|| tts.clone());
+    let (provider, options) = attempts(&tts, options);
     let stop = tokio_util::sync::CancellationToken::new();
     let input = Arc::new(Input { entries: signal::Shared::new(Vec::new()), stop: stop.clone() });
-    let (cx, pending) = (cx.clone(), input.clone());
+    let (cx, pending, staged, stage_clock) =
+        (cx.clone(), input.clone(), tts.clone(), clock.clone());
     let open = Arc::new(move || {
         let (provider, cx, input) = (provider.clone(), cx.clone(), pending.clone());
+        let (staged, clock) = (staged.clone(), stage_clock.clone());
         Box::pin(async move {
-            let (sink, source) = provider.stream(&cx, expressive).await?.split();
-            Ok(Box::new(Fed::new(input, sink, source)) as TtsSource)
+            let (sink, source) = provider.stream(&cx).await?.split();
+            // each attempt reads the log from its start through a stage of its own
+            let stage = Stage::new(staged.as_ref(), input, true, &cx, clock);
+            Ok(Box::new(Fed::new(stage, sink, source)) as TtsSource)
         }) as BoxFuture<'static, _>
     });
-    let output = retry::stream(&options, clock, open, |_| true, report(tts, observer), stop).await;
-    Ok(DuplexStream::new(Box::new(Sink(input)) as TtsSink, output))
+    let report = report(tts, observer);
+    let opening = async move { retry::stream(&options, clock, open, |_| true, report, stop).await };
+    Ok((Box::new(Sink(input)) as TextSink, Box::pin(opening)))
+}
+
+/// The provider each attempt runs on, and the request's own retry policy: a single attempt's view
+/// under the request's retries, or, for a TTS that retries itself, the whole policy handed to it
+/// and one attempt.
+fn attempts(tts: &Arc<dyn Tts>, options: ApiConnectOptions) -> (Arc<dyn Tts>, ApiConnectOptions) {
+    let once = ApiConnectOptions { max_retry: 0, ..options };
+    let (given, request) = if tts.retries_itself() { (options, once) } else { (once, options) };
+    (tts.with_conn_options(&given).unwrap_or_else(|| tts.clone()), request)
 }
 
 fn report(tts: Arc<dyn Tts>, observer: Option<retry::Observer>) -> retry::Observer {
@@ -109,6 +160,13 @@ impl TextLog for Input {
 }
 
 struct Sink(Arc<Input>);
+
+/// A request whose input is dropped has no more text: what it was given is still spoken.
+impl Drop for Sink {
+    fn drop(&mut self) {
+        let _ = self.0.send(Entry::EndInput);
+    }
+}
 
 impl StreamInput<String> for Sink {
     fn push(&self, text: String) -> Result<(), ProviderError> {

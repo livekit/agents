@@ -334,7 +334,7 @@ pub fn admit(
     }
 }
 
-/// A method's failure on a storage error: a `reject` lane's refusal names the running task,
+/// A method's failure on a storage error: a `reject` partition's refusal names the running task,
 /// a caller error is invalid params, anything else internal.
 pub fn storage_failure(id: JsonRpcId, error: &StorageError) -> DoorFrame {
     let mut rpc = rpc_error(error_code::INTERNAL_ERROR, error.to_string());
@@ -419,13 +419,13 @@ pub fn listed(
 }
 
 /// What a message naming `taskId` meets before its turn: the task's row on the thread. A task
-/// not in the thread is not found, a terminal one takes no follow-up; a question of this lane
+/// not in the thread is not found, a terminal one takes no follow-up; a question of this partition
 /// waiting is the task the answer is announced under.
 pub fn follow_up(
     id: JsonRpcId,
     task: &TaskRef,
     row: Option<&TaskRow>,
-    lane: &str,
+    partition_key: &str,
 ) -> Result<Option<String>, DoorFrame> {
     match row {
         None => Err(task_not_found(id, task)),
@@ -436,7 +436,7 @@ pub fn follow_up(
                 None,
             ))
         }
-        Some(row) => Ok((row.lane == lane
+        Some(row) => Ok((row.partition_key == partition_key
             && row.status == TaskState::InputRequired
             && row.internal.as_ref().is_some_and(|internal| internal.ask.is_some()))
         .then(|| task.id.clone())),
@@ -445,10 +445,15 @@ pub fn follow_up(
 
 /// The task of a message for a thread that does not exist: failed `thread-not-found`, never
 /// stored.
-pub fn unknown_thread_task(task_id: &str, lane: &str, now_ms: i64, message_id: String) -> TaskRow {
+pub fn unknown_thread_task(
+    task_id: &str,
+    partition_key: &str,
+    now_ms: i64,
+    message_id: String,
+) -> TaskRow {
     crate::a2a::unpersisted_failed(
         task_id,
-        lane,
+        partition_key,
         None,
         TaskReason::ThreadNotFound,
         now_ms,
@@ -467,7 +472,11 @@ pub fn unpersisted(
 ) -> Vec<DoorFrame> {
     if streaming {
         vec![
-            wire::success(id.clone(), wire::submitted(&row.task_id, context, row.updated_at), None),
+            wire::success(
+                id.clone(),
+                wire::submitted(&row.task_id, context, row.updated_at_ms),
+                None,
+            ),
             wire::success(id, wire::final_status(row, context), None),
         ]
     } else {
@@ -702,7 +711,7 @@ mod tests {
         assert_eq!(code(canceled(id(), &task, Some(&row(TaskState::Canceled)))), Value::Null);
     }
 
-    // Catches: a `reject` lane answering INTERNAL_ERROR, which hides the task the client must
+    // Catches: a `reject` partition answering INTERNAL_ERROR, which hides the task the client must
     // cancel first.
     #[test]
     fn a_rejected_message_names_the_running_task() {

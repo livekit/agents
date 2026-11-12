@@ -2,7 +2,7 @@
 //! resolves, and the work per delta is linear in the delta.
 
 use super::*;
-use crate::tts::markup::Provider;
+use crate::markup::Provider;
 
 fn speech() -> Rules {
     Rules {
@@ -64,7 +64,7 @@ fn a_construct_is_held_only_until_it_resolves() {
 #[test]
 fn spoken_words_leave_with_the_delta_that_completes_them() {
     let mut lexer = Lexer::new(speech());
-    let mut said = Projector::new(View::Spoken { keep_markdown: false, keep_emoji: false });
+    let mut said = Projector::new(View::Spoken);
     assert_eq!(said.text(&lexer.push("Sure! Here's ")), "Sure! Here's ");
     assert_eq!(said.text(&lexer.push("the **sho")), "the ");
     assert_eq!(said.text(&lexer.push("rt** version")), "short version");
@@ -80,11 +80,8 @@ fn throughput() {
         let parts = deltas(&text, size);
         let start = std::time::Instant::now();
         let mut lexer = Lexer::new(speech());
-        let mut said = Projector::new(View::Spoken { keep_markdown: false, keep_emoji: false });
-        let mut sync = Units::new(
-            View::Spoken { keep_markdown: false, keep_emoji: false },
-            View::Display { keep_emoji: true },
-        );
+        let mut said = Projector::new(View::Spoken);
+        let mut sync = Units::new(View::Spoken, View::Display);
         let mut n = 0;
         for d in &parts {
             let tokens = lexer.push(d);

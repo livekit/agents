@@ -29,5 +29,9 @@ livekit-protocol.workspace = true
 prost.workspace = true
 pbjson-types.workspace = true
 
+[features]
+# Decodes the checked-in Opus replies of the transcript sync accuracy test.
+ffmpeg = ["lk-agents-media/ffmpeg"]
+
 [lints]
 workspace = true

@@ -1,12 +1,18 @@
 use lk_agents_abi::errors::{HostError, ProviderError, PullError};
+use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_pacer::PushedAudio;
 use lk_agents_abi::tts::streams::DrainError;
+use lk_agents_abi::utils::stream::ProviderStream;
 use lk_agents_abi::utils::strings::PYTHON_WHITESPACE;
-use lk_agents_abi::{Closed, StreamInput, SynthesizedAudio, TtsSink, TtsSource};
+use lk_agents_abi::{
+    ApiConnectOptions, BoxFuture, Closed, StreamInput, StreamOutput, SynthesizedAudio, TextSink,
+    Ts, Tts, TtsSource,
+};
 use lk_agents_net::source::{Pulled, SharedStream};
 use lk_agents_net::strings::shortuuid;
 use std::sync::Arc;
 
+/// A synthesis as the host drives it: the text pushed into its request, its audio read out.
 pub struct TtsStream {
     sink: Option<Arc<dyn StreamInput<String>>>,
     source: SharedStream<SynthesizedAudio>,
@@ -14,7 +20,7 @@ pub struct TtsStream {
 
 impl TtsStream {
     pub fn new(
-        sink: Option<TtsSink>,
+        sink: Option<TextSink>,
         source: TtsSource,
         clock: Arc<dyn lk_agents_abi::Clock>,
     ) -> Self {
@@ -34,7 +40,87 @@ impl TtsStream {
     }
 }
 
+/// A synthesis's audio, its first attempt opened when the audio is first read.
+enum Opening {
+    Pending(BoxFuture<'static, Result<TtsSource, ProviderError>>),
+    Open(TtsSource),
+}
+
+impl Opening {
+    async fn source(&mut self) -> Result<&mut TtsSource, ProviderError> {
+        if let Opening::Pending(opening) = self {
+            *self = Opening::Open(opening.await?);
+        }
+        match self {
+            Opening::Open(source) => Ok(source),
+            Opening::Pending(_) => unreachable!("opened above"),
+        }
+    }
+}
+
+impl StreamOutput<SynthesizedAudio> for Opening {
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
+        Box::pin(async move { self.source().await?.next().await })
+    }
+
+    /// An open still under way finishes, within the close's deadline, and what it opened is
+    /// closed: never dropped halfway.
+    fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
+        match *self {
+            Opening::Pending(opening) => Box::pin(async move {
+                match opening.await {
+                    Ok(source) => source.close(deadline).await,
+                    Err(_) => Closed::Clean,
+                }
+            }),
+            Opening::Open(source) => source.close(deadline),
+        }
+    }
+}
+
+impl ProviderStream<SynthesizedAudio> for Opening {
+    fn started_time(&self) -> Option<f64> {
+        match self {
+            Opening::Open(source) => source.started_time(),
+            Opening::Pending(_) => None,
+        }
+    }
+    fn take_call_metrics(&mut self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
+        match self {
+            Opening::Open(source) => source.take_call_metrics(in_flight),
+            Opening::Pending(_) => None,
+        }
+    }
+}
+
 impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
+    type Env = lk_agents_net::env::ProcessEnv;
+
+    fn new(
+        env: &Self::Env,
+        tts: Arc<dyn Tts>,
+        text: Option<String>,
+        conn_options: Option<ApiConnectOptions>,
+    ) -> Self {
+        let options = conn_options.unwrap_or(lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS);
+        let (cx, clock) = (crate::telemetry::Cx::NONE, env.clock.clone());
+        let (sink, opening): (_, BoxFuture<'static, Result<TtsSource, ProviderError>>) = match text
+        {
+            Some(text) => {
+                let clock = clock.clone();
+                let opening = async move {
+                    super::request::synthesize(tts, &cx, &text, options, clock, None).await
+                };
+                (None, Box::pin(opening))
+            }
+            None => match super::request::start(tts, &cx, options, clock.clone(), None) {
+                Ok((sink, opening)) => (Some(sink), Box::pin(async move { Ok(opening.await) })),
+                Err(error) => (None, Box::pin(std::future::ready(Err(error)))),
+            },
+        };
+        TtsStream::new(sink, Box::new(Opening::Pending(opening)), clock)
+    }
+
     fn push_text(&self, text: String) -> Result<(), ProviderError> {
         self.sink()?.push(text)
     }
@@ -57,15 +143,18 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
         emitter: Arc<dyn PushedAudio>,
         stream: bool,
     ) -> Result<(), DrainError> {
-        let mut started = !stream;
+        // a streamed synthesis keeps its provider's segments: a new id starts the next
+        let mut segment: Option<String> = None;
         while let Some(audio) = self.recv().await? {
-            if !started {
-                started = true;
-                let segment_id = match audio.segment_id.is_empty() {
-                    true => shortuuid(""),
-                    false => audio.segment_id,
-                };
-                emitter.start_segment(segment_id)?;
+            let next = (!audio.segment_id.is_empty()).then_some(&audio.segment_id);
+            if stream && (segment.is_none() || next.is_some_and(|id| segment.as_ref() != Some(id)))
+            {
+                if segment.is_some() {
+                    emitter.end_segment()?;
+                }
+                let id = next.cloned().unwrap_or_else(|| shortuuid(""));
+                emitter.start_segment(id.clone())?;
+                segment = Some(id);
             }
             emitter.push_timed_transcript(audio.timed_transcript)?;
             emitter.push_frame(audio.frame)?;
@@ -154,6 +243,12 @@ mod tests {
 pub struct SynthesisChecks;
 
 impl lk_agents_abi::tts::streams::SynthesisChecks for SynthesisChecks {
+    fn default_tts_pacing(
+        capabilities: lk_agents_abi::TtsCapabilities,
+    ) -> Option<lk_agents_abi::tts::stream_pacer::SentenceStreamPacer> {
+        capabilities.default_pacing()
+    }
+
     fn validate_synthesis(
         text: &str,
         duration: f64,

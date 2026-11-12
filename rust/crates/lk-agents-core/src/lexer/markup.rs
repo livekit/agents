@@ -1,7 +1,7 @@
 //! Markup tags: the vocabulary, the tag grammar and the botched-tag recovery.
 
 use super::floor_char;
-use crate::tts::markup::{Provider, ProviderExt};
+use crate::markup::{Provider, ProviderExt};
 
 /// The expressive dialect the guide teaches, recognized under every voice.
 pub const EXPR: &str = "expr";

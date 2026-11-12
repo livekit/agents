@@ -7,7 +7,6 @@ from dataclasses import dataclass, replace
 from typing import cast
 
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIError,
@@ -147,15 +146,12 @@ class TTS(tts.TTS):
             self._session = http.http_session()
         return self._session
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             opts=replace(self._opts),
             api_key=self._api_key,

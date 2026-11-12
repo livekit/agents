@@ -12,7 +12,7 @@ use crate::generation::ReplySource;
 use crate::tool_executor::{Delivery, HostedTool, ToolOutcome, answer};
 use lk_agents_abi::llm::tool_executor::ASK_IN_OWN_WORDS;
 use lk_agents_abi::{ChatItem, ChatMessage, Role, Ts};
-use lk_agents_core::tts::markup::ChatMessageExt;
+use lk_agents_core::markup::ChatMessageExt;
 
 // A detached call of a configured remote tool is a delegation: its updates are the expert's
 // progress and questions, and its end resolves the originating call in place.

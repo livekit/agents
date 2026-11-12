@@ -138,7 +138,7 @@ mod ordinary_completed_replies {
 }
 
 mod stored_answer_reaches_the_read_back {
-    //! On a stored lane, the person's answer to a read-back is recorded as that call's output.
+    //! On a stored partition, the person's answer to a read-back is recorded as that call's output.
     use lk_agents_abi::ChatItem;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{Input, Millis, Ref, ToolArgs, TurnMode, UserText};
@@ -147,8 +147,8 @@ mod stored_answer_reaches_the_read_back {
     /// The fixture tool the runs declare with `needs_approval=True`.
     const APPROVAL_TOOL: &str = "transfer";
 
-    // Catches: the preemptive reply's rendering of the answer, given back by the lane's store, taken
-    // as the lane's edit, so the stored output was the model's rendering, never the person's words
+    // Catches: the preemptive reply's rendering of the answer, given back by the partition's store, taken
+    // as the partition's edit, so the stored output was the model's rendering, never the person's words
     // (`tool_output_follows_outcome`, survey seed 21687).
     #[test]
     fn the_answer_is_the_read_backs_output() {
@@ -1210,5 +1210,383 @@ mod host_body_close_ownership {
         );
         assert!(outcome.ok(), "{:?}", outcome.failures);
         assert!(!outcome.stopped_early, "{:?}", outcome.ending);
+    }
+}
+
+mod interrupted_during_tools_frees_the_floor {
+    //! Interrupting a reply while its tool runs gives the conversation back at once: the
+    //! interrupted speech is done and the next reply answered without waiting on the tool, whose
+    //! late result still commits, once, with no follow-up reply.
+    use lk_agents_abi::ChatItem;
+    use lk_agents_fuzz::drive::{Policy, Run, Setup, StorageSetup, simulate_with};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, UserText};
+    use lk_agents_fuzz::record::{Kind, StorageOperation, StorageStep};
+    use lk_agents_voice::events::SessionEvent;
+
+    /// The reply calls `lookup`, which hangs; the person interrupts at 300 ms and asks again.
+    fn interrupted_during_lookup() -> Vec<Input> {
+        vec![
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "lookup".into(),
+                args: ToolArgs("{}".into()),
+            },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(200) },
+            Input::Interrupt { force: false, wait: false },
+            Input::Advance { ms: Millis(50) },
+            Input::GenerateReply {
+                user_input: Some(UserText("are you there?".into())),
+                instructions: None,
+                allow: None,
+            },
+            Input::Advance { ms: Millis(500) },
+            Input::LlmText { chat: Ref::new(1), text: AgentText("Yes.".into()) },
+            Input::LlmEnd { chat: Ref::new(1) },
+            Input::Advance { ms: Millis(1_000) },
+        ]
+    }
+
+    fn run(late: &[Input]) -> Run {
+        run_inputs(&interrupted_during_lookup(), late, 0, Policy::default())
+    }
+
+    fn run_inputs(inputs: &[Input], late: &[Input], schedule: u64, policy: Policy) -> Run {
+        let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
+        run_setup(&setup, inputs, late, schedule, policy)
+    }
+
+    /// A call with a thread: every turn holds the voice partition until it commits.
+    fn run_stored(late: &[Input], schedule: u64, policy: Policy) -> Run {
+        let setup = Setup {
+            tools: vec!["lookup".into()],
+            storage: Some(StorageSetup::default()),
+            ..Setup::default()
+        };
+        run_setup(&setup, &interrupted_during_lookup(), late, schedule, policy)
+    }
+
+    fn run_setup(
+        setup: &Setup,
+        inputs: &[Input],
+        late: &[Input],
+        schedule: u64,
+        policy: Policy,
+    ) -> Run {
+        let setup = setup.clone();
+        simulate_with(schedule, async move {
+            let mut run = Run::start(&setup, schedule, policy).await;
+            // A speaker that reports its playout, so a reply's audio ends as played.
+            for input in inputs.iter().chain(late) {
+                crate::playout::apply_with_playout(&mut run, input).await;
+            }
+            run
+        })
+    }
+
+    fn outputs(run: &Run) -> Vec<String> {
+        let events = run.record.host_view().events();
+        let added = events.into_iter().filter_map(|(_, ev)| match ev {
+            SessionEvent::ConversationItemAdded { item, .. } => Some(item),
+            _ => None,
+        });
+        added
+            .filter_map(|item| match item.as_ref() {
+                ChatItem::FunctionCallOutput(o) => Some(o.output.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// When each speech was done, in speech order.
+    fn done_at(run: &Run) -> Vec<u64> {
+        let order = run.record.speech_order();
+        let mut done: Vec<_> = run
+            .record
+            .host_view()
+            .events()
+            .into_iter()
+            .filter_map(|(at, ev)| match ev {
+                SessionEvent::SpeechDone { speech, .. } => Some((order[&speech.0], at.at_ms)),
+                _ => None,
+            })
+            .collect();
+        done.sort();
+        done.into_iter().map(|(_, at)| at).collect()
+    }
+
+    // Catches: the interrupted reply's speech held until its tool ended or the 5s interruption
+    // watchdog fired, so `interrupt()` and anything awaiting the speech stalled for 5s.
+    #[test]
+    fn the_interrupted_speech_is_done_while_its_tool_still_runs() {
+        let late = [
+            Input::ToolAnswered {
+                tool: Ref::new(0),
+                answer: ToolAnswer::Value,
+                text: AgentText("found".into()),
+            },
+            Input::Advance { ms: Millis(6_000) },
+        ];
+        let run = run(&late);
+        let done = done_at(&run);
+        assert!(done.len() == 2 && done[0] < 1_000, "speeches done at {done:?} ms; cut at 300 ms");
+        assert_eq!(outputs(&run), ["found"], "the late result commits once");
+        assert_eq!(
+            run.record.live().opened(Kind::Chat),
+            2,
+            "no follow-up for the interrupted reply"
+        );
+    }
+
+    // Catches: a cut landing while the step's end was still on its way, which reached the tools
+    // already cut and was held to the watchdog. Every cut point in the step's first 50 ms, under
+    // each queue policy: the race is the executor's.
+    #[test]
+    fn a_cut_at_any_point_after_the_call_is_done_at_once() {
+        for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
+            for schedule in 0..16 {
+                for after in [0, 1, 2, 5, 10, 20, 50] {
+                    let mut inputs = interrupted_during_lookup();
+                    inputs[4] = Input::Advance { ms: Millis(after) };
+                    let late = [Input::Advance { ms: Millis(6_000) }];
+                    let run = run_inputs(&inputs, &late, schedule, policy);
+                    let done = done_at(&run);
+                    let cut = 100 + after;
+                    assert!(
+                        done.first().is_some_and(|at| *at < cut + 1_000),
+                        "{policy:?} schedule {schedule}, cut {after} ms after the call: \
+                         speeches done at {done:?} ms"
+                    );
+                }
+            }
+        }
+    }
+
+    // Catches: a tool that never answers outliving the reply that gave the floor back: the
+    // watchdog still ends it, with one output.
+    #[test]
+    fn the_watchdog_still_ends_a_hung_tool() {
+        let run = run(&[Input::Advance { ms: Millis(6_000) }]);
+        assert!(done_at(&run).first().is_some_and(|at| *at < 1_000), "{:?}", done_at(&run));
+        assert_eq!(outputs(&run).len(), 1, "outputs: {:?}", outputs(&run));
+        assert_eq!(run.record.live().opened(Kind::Chat), 2);
+    }
+    /// Each turn's storage requests and answers, in order: `(speech, operation, answered)`.
+    fn turns(run: &Run) -> Vec<(u64, StorageOperation, bool)> {
+        let ended = |op| matches!(op, StorageOperation::Settle | StorageOperation::Abandon);
+        run.record
+            .host_view()
+            .storage()
+            .iter()
+            .filter_map(|(_, step)| match step {
+                StorageStep::Requested { speech, operation } if ended(*operation) => {
+                    Some((*speech, *operation, false))
+                }
+                StorageStep::Answered { speech, operation, .. } if ended(*operation) => {
+                    Some((*speech, *operation, true))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The case's scenario happened: the reply's call started before the person cut it. A seed
+    /// whose storage answered late may end the reply before its model ever called the tool.
+    fn tool_started(run: &Run) -> bool {
+        !run.record.internal_view().tool_calls_started().is_empty()
+    }
+
+    fn storage_failures(run: &Run) -> Vec<String> {
+        let (failures, _) = lk_agents_fuzz::check::check_all(&run.record);
+        failures
+            .iter()
+            .filter(|f| f.contract.starts_with("storage_"))
+            .map(|f| format!("{f:?}"))
+            .collect()
+    }
+
+    /// Each turn ends once, and a later turn's end is asked for only after every earlier one
+    /// was answered.
+    fn assert_in_turn_order(run: &Run) {
+        let order = run.record.speech_order();
+        let turns = turns(run);
+        let turn = |speech: &u64| order[speech];
+        let mut asked: Vec<u64> = turns.iter().filter(|t| !t.2).map(|t| t.0).collect();
+        let answered: Vec<u64> = turns.iter().filter(|t| t.2).map(|t| t.0).collect();
+        assert_eq!(asked.len(), 2, "each turn ends once: {turns:?}");
+        assert!(
+            asked.windows(2).all(|w| turn(&w[0]) < turn(&w[1])),
+            "out of turn order: {turns:?}"
+        );
+        asked.sort_by_key(turn);
+        let first_answer = turns.iter().position(|t| t.2 && t.0 == asked[0]);
+        let second_ask = turns.iter().position(|t| !t.2 && t.0 == asked[1]);
+        assert!(first_answer < second_ask, "the second turn did not wait: {turns:?}");
+        assert_eq!(answered, asked, "every end answered: {turns:?}");
+    }
+
+    // Catches: on a call with a thread, the interrupted reply held the person until its tool ended,
+    // or, once freed, its turn committed after the next one (out of order) or never released its
+    // hold on the partition.
+    #[test]
+    fn on_a_thread_the_floor_is_free_and_turns_commit_in_order() {
+        let mut exercised = 0;
+        for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
+            for schedule in 0..8 {
+                let late = [
+                    Input::ToolAnswered {
+                        tool: Ref::new(0),
+                        answer: ToolAnswer::Value,
+                        text: AgentText("found".into()),
+                    },
+                    Input::Advance { ms: Millis(6_000) },
+                ];
+                let run = run_stored(&late, schedule, policy);
+                if !tool_started(&run) {
+                    continue;
+                }
+                exercised += 1;
+                let done = done_at(&run);
+                // Cut at 300 ms, the tool answering at 1850 ms: the first is done at once, and the
+                // second when it has played, not held for the first turn's commit.
+                assert!(
+                    done.len() == 2 && done[0] < 1_000 && done[1] < 4_000,
+                    "{policy:?} {schedule}: speeches done at {done:?} ms; cut at 300 ms"
+                );
+                assert_eq!(outputs(&run), ["found"], "{policy:?} {schedule}");
+                assert!(
+                    turns(&run).iter().all(|t| t.1 == StorageOperation::Settle),
+                    "{policy:?} {schedule}: {:?}",
+                    turns(&run)
+                );
+                assert_in_turn_order(&run);
+                assert_eq!(storage_failures(&run), Vec::<String>::new(), "{policy:?} {schedule}");
+            }
+        }
+        assert!(exercised >= 12, "the scenario ran in only {exercised} of 24 runs");
+    }
+
+    // Catches: an interrupted turn whose tool hangs to the watchdog blocking the next turn's commit
+    // forever, or ending twice.
+    #[test]
+    fn on_a_thread_a_turn_ended_by_the_watchdog_lets_the_next_commit() {
+        let mut exercised = 0;
+        for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
+            for schedule in 0..8 {
+                let late = [Input::Advance { ms: Millis(40_000) }];
+                let run = run_stored(&late, schedule, policy);
+                if !tool_started(&run) {
+                    continue;
+                }
+                exercised += 1;
+                let done = done_at(&run);
+                // The watchdog ends the first turn at 5300 ms; neither speech waits for it.
+                assert!(
+                    done.len() == 2 && done[0] < 1_000 && done[1] < 4_000,
+                    "{policy:?} {schedule}: speeches done at {done:?} ms"
+                );
+                assert_eq!(outputs(&run).len(), 1, "{policy:?} {schedule}: {:?}", outputs(&run));
+                assert_in_turn_order(&run);
+                let order = run.record.speech_order();
+                let second = turns(&run).into_iter().filter(|t| !t.2).max_by_key(|t| order[&t.0]);
+                assert!(
+                    second.is_some_and(|t| t.1 == StorageOperation::Settle),
+                    "{policy:?} {schedule}: the answered turn commits: {:?}",
+                    turns(&run)
+                );
+                assert_eq!(storage_failures(&run), Vec::<String>::new(), "{policy:?} {schedule}");
+            }
+        }
+        assert!(exercised >= 12, "the scenario ran in only {exercised} of 24 runs");
+    }
+    fn failures_of(run: &Run, contract: &str) -> Vec<String> {
+        let (failures, _) = lk_agents_fuzz::check::check_all(&run.record);
+        failures.iter().filter(|f| f.contract == contract).map(|f| format!("{f:?}")).collect()
+    }
+
+    fn closed() -> [Input; 2] {
+        [Input::Close { drain: false }, Input::AwaitExit {}]
+    }
+
+    // Catches: the session's opening handoff saved after the person's first words, or inside the
+    // second turn: a turn's start wrote the model's view, which leaves the handoff out, as the
+    // partition's history.
+    #[test]
+    fn on_a_thread_the_handoff_is_saved_where_it_happened() {
+        let inputs = [
+            Input::GenerateReply {
+                user_input: Some(UserText("book it".into())),
+                instructions: None,
+                allow: None,
+            },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "lookup".into(),
+                args: ToolArgs("{}".into()),
+            },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(200) },
+            Input::ToolAnswered {
+                tool: Ref::new(0),
+                answer: ToolAnswer::Value,
+                text: AgentText("found".into()),
+            },
+            Input::Advance { ms: Millis(300) },
+            Input::LlmText { chat: Ref::new(1), text: AgentText("Booked.".into()) },
+            Input::LlmEnd { chat: Ref::new(1) },
+            Input::Advance { ms: Millis(3_000) },
+            Input::GenerateReply {
+                user_input: Some(UserText("are you there?".into())),
+                instructions: None,
+                allow: None,
+            },
+            Input::Advance { ms: Millis(300) },
+            Input::LlmText { chat: Ref::new(2), text: AgentText("Yes.".into()) },
+            Input::LlmEnd { chat: Ref::new(2) },
+            Input::Advance { ms: Millis(3_000) },
+        ];
+        for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
+            for schedule in 0..8 {
+                let setup = Setup {
+                    tools: vec!["lookup".into()],
+                    storage: Some(StorageSetup::default()),
+                    ..Setup::default()
+                };
+                let run = run_setup(&setup, &inputs, &closed(), schedule, policy);
+                let order = failures_of(&run, "storage_saves_the_conversation_in_order");
+                assert_eq!(order, Vec::<String>::new(), "{policy:?} {schedule}");
+            }
+        }
+    }
+
+    // Catches: the cut turn's late output saved after the next turn the person took meanwhile,
+    // or kept at the end of the session's history instead of right after its call.
+    #[test]
+    fn on_a_thread_a_late_output_is_saved_with_its_turn() {
+        let mut exercised = 0;
+        for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
+            for schedule in 0..8 {
+                let mut late = vec![
+                    Input::ToolAnswered {
+                        tool: Ref::new(0),
+                        answer: ToolAnswer::Value,
+                        text: AgentText("found".into()),
+                    },
+                    Input::Advance { ms: Millis(6_000) },
+                ];
+                late.extend(closed());
+                let run = run_stored(&late, schedule, policy);
+                if !tool_started(&run) {
+                    continue;
+                }
+                exercised += 1;
+                let order = failures_of(&run, "storage_saves_the_conversation_in_order");
+                assert_eq!(order, Vec::<String>::new(), "{policy:?} {schedule}");
+            }
+        }
+        assert!(exercised >= 12, "the scenario ran in only {exercised} of 24 runs");
     }
 }

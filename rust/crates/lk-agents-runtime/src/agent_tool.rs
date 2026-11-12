@@ -252,6 +252,7 @@ impl Delegate {
         };
         let input = RunInput {
             invocation_id: invocation_id.clone(),
+            id_seed: telemetry::random_seed(),
             opening: Opening::Message(Box::new(message)),
             history,
             answer_tool: None,

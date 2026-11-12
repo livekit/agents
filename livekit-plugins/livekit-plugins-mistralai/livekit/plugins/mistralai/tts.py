@@ -17,7 +17,7 @@ from livekit.agents import (
     TokenUsage,
     tts,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from mistralai.client import Mistral
 from mistralai.client.errors import HTTPValidationError, SDKError
@@ -137,12 +137,12 @@ class TTS(tts.TTS):
         if is_given(response_format):
             self._opts.response_format = response_format
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             opts=replace(self._opts),
             client=self._client,

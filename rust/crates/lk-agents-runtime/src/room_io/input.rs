@@ -595,13 +595,10 @@ impl ParticipantAudioInput {
         let (Some(input_stream), Some(handler)) = (input_stream, &self.pre_connect) else {
             return true;
         };
-        let frames = match replayed_head(handler.wait_for_data(sid).await) {
-            Ok(frames) => frames,
-            Err(error) => {
-                self.readers.deliver(generation, Err(error));
-                return false;
-            }
-        };
+        let (frames, dropped) = replayed_head(handler.wait_for_data(sid).await);
+        if let Some(error) = dropped {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "pre-connect audio dropped for track {sid}: {error}");
+        }
         if let Some((span, _)) = self.first_frame.lock().as_ref() {
             let duration: Duration =
                 frames.iter().map(lk_agents_abi::voice::rtc::frame_duration).sum();

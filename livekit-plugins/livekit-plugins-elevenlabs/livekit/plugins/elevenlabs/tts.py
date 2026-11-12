@@ -112,7 +112,6 @@ class TTS(tts.TTS):
         auto_mode: NotGivenOr[bool] = NOT_GIVEN,
         apply_text_normalization: Literal["auto", "off", "on"] = "auto",
         apply_language_text_normalization: NotGivenOr[bool] = NOT_GIVEN,
-        word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
         enable_ssml_parsing: bool = False,
         enable_logging: bool = True,
         chunk_length_schedule: NotGivenOr[list[int]] = NOT_GIVEN,  # range is [50, 500]
@@ -138,11 +137,10 @@ class TTS(tts.TTS):
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
             auto_mode (bool): Reduces latency by disabling chunk schedule and buffers.
-                Sentence tokenizer will be used to synthesize one sentence at a time.
+                Text is synthesized one sentence at a time.
                 Defaults to True unless ``chunk_length_schedule`` is provided.
             apply_text_normalization (Literal["auto", "off", "on"]): This parameter controls text normalization with three modes: ‘auto’, ‘on’, and ‘off’. When set to ‘auto’, the system will automatically decide whether to apply text normalization (e.g., spelling out numbers). With ‘on’, text normalization will always be applied, while with ‘off’, it will be skipped.
             apply_language_text_normalization (bool): This parameter controls language text normalization. This helps with proper pronunciation of text in some supported languages.
-            word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to `livekit.agents.tokenize.WordTokenizer` when auto_mode=False, `livekit.agents.tokenize.SentenceTokenizer` otherwise.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
@@ -174,18 +172,6 @@ class TTS(tts.TTS):
         if not is_given(auto_mode):
             auto_mode = not is_given(chunk_length_schedule)
 
-        if not is_given(word_tokenizer):
-            word_tokenizer = (
-                tokenize.WordTokenizer(ignore_punctuation=False)
-                if not auto_mode
-                else tokenize.SentenceTokenizer()
-            )
-        elif auto_mode and not isinstance(word_tokenizer, tokenize.SentenceTokenizer):
-            logger.warning(
-                "auto_mode is enabled, it expects full sentences or phrases, "
-                "please provide a SentenceTokenizer instead of a WordTokenizer."
-            )
-
         self._opts = _TTSOptions(
             voice_id=voice_id,
             voice_settings=voice_settings,
@@ -194,7 +180,6 @@ class TTS(tts.TTS):
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
             encoding=encoding,
             sample_rate=self.sample_rate,
-            word_tokenizer=word_tokenizer,
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
             enable_logging=enable_logging,
@@ -223,6 +208,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "ElevenLabs"
+
+    def _core_text_unit(self) -> str:
+        return "sentences" if self._opts.auto_mode else "words"
 
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:
@@ -348,20 +336,18 @@ class TTS(tts.TTS):
                 self.__current_connection = conn
                 return conn
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             opts=replace(self._opts),
             get_session=self._ensure_session,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             opts=replace(self._opts),
@@ -526,8 +512,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._context_id = utils.shortuuid()
         self._alignment = _AlignmentBuffer()
 
-        sent_tokenizer_stream = self._opts.word_tokenizer.stream()
-
         output_emitter.initialize(
             request_id=self._context_id,
             sample_rate=self._opts.sample_rate,
@@ -556,61 +540,24 @@ class SynthesizeStream(tts.SynthesizeStream):
         context_closed = False
 
         async def _input_task() -> None:
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    sent_tokenizer_stream.flush()
-                    continue
-                sent_tokenizer_stream.push_text(data)
-            sent_tokenizer_stream.end_input()
-
-        async def _sentence_stream_task() -> None:
             nonlocal context_closed
 
-            flush_on_chunk = (
-                isinstance(self._opts.word_tokenizer, tokenize.SentenceTokenizer)
-                and is_given(self._opts.auto_mode)
-                and self._opts.auto_mode
-            )
-            xml_content: list[str] = []
-            async for data in sent_tokenizer_stream:
-                text = data.token
-                # send xml tags fully formed
-                xml_start_tokens = ["<phoneme", "<break"]
-                xml_end_tokens = ["</phoneme>", "/>"]
-
-                if (
-                    self._opts.enable_ssml_parsing
-                    and any(text.startswith(start) for start in xml_start_tokens)
-                    or xml_content
-                ):
-                    xml_content.append(text)
-
-                    if any(text.find(end) > -1 for end in xml_end_tokens):
-                        text = (
-                            self._opts.word_tokenizer.format_words(xml_content)
-                            if isinstance(self._opts.word_tokenizer, tokenize.WordTokenizer)
-                            else " ".join(xml_content)
-                        )
-                        xml_content = []
-                    else:
-                        continue
-
-                formatted_text = f"{text} "  # must always end with a space
-                # when using auto_mode, we are flushing for each sentence
+            # in auto_mode each chunk is a sentence, flushed on its own
+            flush_on_chunk = is_given(self._opts.auto_mode) and self._opts.auto_mode
+            async for data in self.input:
+                if isinstance(data, self.Flush):
+                    continue
+                # must always end with a space
                 connection.send_content(
-                    _SynthesizeContent(self._context_id, formatted_text, flush=flush_on_chunk)
+                    _SynthesizeContent(self._context_id, f"{data.text} ", flush=flush_on_chunk)
                 )
                 self.mark_started()
-
-            if xml_content:
-                logger.warning("ElevenLabs stream ended with incomplete xml content")
 
             connection.send_content(_SynthesizeContent(self._context_id, "", flush=True))
             connection.close_context(self._context_id)
             context_closed = True
 
         input_t = asyncio.create_task(_input_task())
-        stream_t = asyncio.create_task(_sentence_stream_task())
 
         try:
             await waiter
@@ -625,11 +572,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             # after close_context() isn't pushed into an emitter with no open segment
             connection.unregister_stream(self._context_id)
             output_emitter.end_segment()
-            await utils.aio.cancel_and_wait(input_t, stream_t)
+            await utils.aio.cancel_and_wait(input_t)
             if not context_closed:
                 with contextlib.suppress(Exception):
                     connection.close_context(self._context_id)
-            await sent_tokenizer_stream.aclose()
 
 
 @dataclass
@@ -642,7 +588,6 @@ class _TTSOptions:
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
-    word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     chunk_length_schedule: NotGivenOr[list[int]]
     enable_ssml_parsing: bool
     enable_logging: bool
@@ -956,7 +901,7 @@ class _Connection:
                 data = TTSFrame.model_validate_json(msg.data)
                 # ElevenLabs currently sends snake_case context IDs on the websocket API,
                 # while older responses and some examples use camelCase.
-                context_id = data.camel_context_id or data.context_id
+                context_id = data.context_id
                 ctx = self._context_data.get(context_id) if context_id is not None else None
 
                 if error := data.error:
@@ -982,7 +927,7 @@ class _Connection:
                         "ignoring elevenlabs message for inactive context",
                         extra={"context_id": context_id, "lk.pii.data": data},
                     )
-                    if data.is_final_legacy:
+                    if data.is_final:
                         # the server released the context, keep the drain check working
                         self._active_contexts.discard(context_id)
                         if not self._is_current and not self._active_contexts:
@@ -1017,7 +962,7 @@ class _Connection:
                         # the final response is still pending, keep the idle timeout active
                         self._start_timeout_timer(context_id)
 
-                if data.is_final_legacy:
+                if data.is_final:
                     timed_words, _ = _to_timed_words(
                         alignment.text,
                         alignment.start_times_ms,

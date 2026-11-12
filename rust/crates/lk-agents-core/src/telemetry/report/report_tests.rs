@@ -338,6 +338,15 @@ fn upload_matches_the_ingest_contract() {
     );
     assert_eq!(user["created_at"], json!(1_700_000_001.25));
     assert_eq!(user["metrics"]["started_speaking_at"], json!(1_700_000_000.5));
+    // Simulation summaries and Cloud transcripts read tool calls from this upload alone.
+    assert_eq!(
+        (items[1]["name"].as_str(), items[1]["arguments"].as_str()),
+        (Some("book"), Some("{}"))
+    );
+    assert_eq!(
+        (items[2]["output"].as_str(), items[2]["is_error"].as_bool()),
+        (Some("no slot"), Some(true))
+    );
 
     let summary: Value = serde_json::from_str(&header.session_summary).unwrap();
     assert_eq!(

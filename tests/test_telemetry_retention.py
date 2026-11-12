@@ -24,7 +24,7 @@ from livekit.agents.voice.events import (
 )
 from livekit.protocol import agent as job_protocol
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = pytest.mark.unit
 
 
 def _job_context(job_id: str, agent_name: str = "", enable_recording: bool = False) -> JobContext:

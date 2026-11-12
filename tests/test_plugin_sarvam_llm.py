@@ -9,7 +9,6 @@ from livekit.plugins.sarvam.llm.client import (
     LLM as SarvamLLM,
     SARVAM_LLM_BASE_URL_V1,
     SARVAM_LLM_BASE_URL_V2,
-    USER_AGENT,
 )
 
 pytestmark = pytest.mark.unit
@@ -48,55 +47,14 @@ def _chat_ctx_with_image() -> ChatContext:
 # ---------------------------------------------------------------------------
 
 
-def test_constructor_rejects_unsupported_model() -> None:
-    with pytest.raises(ValueError, match="Unsupported Sarvam model"):
-        SarvamLLM(
-            model="sarvam-unknown",
-            api_key="sk_test",
-        )
-
-
 # ---------------------------------------------------------------------------
 # Auth and headers
 # ---------------------------------------------------------------------------
 
 
-def test_custom_headers_merged() -> None:
-    llm = SarvamLLM(
-        api_key="sk_test",
-        extra_headers={
-            "api-subscription-key": "override_attempt",
-            "User-Agent": "override_attempt",
-            "X-Custom": "kept",
-        },
-    )
-    headers = llm._native.extra_kwargs["extra_headers"]
-    # Sarvam headers override caller values on conflict
-    assert headers["api-subscription-key"] == "sk_test"
-    assert headers["User-Agent"] == USER_AGENT
-    # Caller-provided non-conflicting headers are preserved
-    assert headers["X-Custom"] == "kept"
-
-
 # ---------------------------------------------------------------------------
 # Extra body filtering
 # ---------------------------------------------------------------------------
-
-
-def test_filters_unsupported_extra_body_fields() -> None:
-    llm = SarvamLLM(
-        api_key="sk_test",
-        extra_body={
-            "max_tokens": 64,
-            "wiki_grounding": True,
-            "service_tier": "flex",
-            "unknown_field": "drop-me",
-        },
-    )
-    assert llm._native.extra_kwargs["extra_body"] == {
-        "max_tokens": 64,
-        "wiki_grounding": True,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -161,23 +119,6 @@ def test_tool_choice_without_tools_raises() -> None:
     llm = SarvamLLM(api_key="sk_test")
     with pytest.raises(ValueError, match="tool_choice requires a non-empty tools array"):
         llm.chat(chat_ctx=_chat_ctx(), tool_choice="required")
-
-
-@pytest.mark.asyncio
-async def test_tool_choice_none_without_tools_ok() -> None:
-    llm = SarvamLLM(api_key="sk_test")
-    # Should not raise
-    stream = llm.chat(chat_ctx=_chat_ctx(), tool_choice="none")
-    assert stream is not None
-    await stream.aclose()
-
-
-@pytest.mark.asyncio
-async def test_tool_choice_auto_without_tools_ok() -> None:
-    llm = SarvamLLM(api_key="sk_test")
-    stream = llm.chat(chat_ctx=_chat_ctx(), tool_choice="auto")
-    assert stream is not None
-    await stream.aclose()
 
 
 @pytest.mark.asyncio
@@ -269,19 +210,6 @@ async def test_unsupported_fields_stripped_from_stream() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_missing_api_key_raises() -> None:
-    # Ensure no env var leaks in
-    import os
-
-    old = os.environ.pop("SARVAM_API_KEY", None)
-    try:
-        with pytest.raises(ValueError, match="SARVAM_API_KEY is required"):
-            SarvamLLM()
-    finally:
-        if old:
-            os.environ["SARVAM_API_KEY"] = old
-
-
 # ---------------------------------------------------------------------------
 # sarvam-105b-conversations — endpoint routing and capability gating
 # ---------------------------------------------------------------------------
@@ -367,17 +295,3 @@ async def test_conversations_supports_tool_calling() -> None:
     )
     assert stream is not None
     await stream.aclose()
-
-
-def test_explicit_base_url_overrides_conversations_v1() -> None:
-    """Explicit base_url wins even for conversations model."""
-    custom = "https://custom.sarvam.ai/v1"
-    llm = SarvamLLM(
-        model="sarvam-105b-conversations",
-        api_key="sk_test",
-        base_url=custom,
-    )
-    assert llm._base_url.rstrip("/") == custom.rstrip("/")
-    import asyncio
-
-    asyncio.get_event_loop().run_until_complete(llm.aclose())

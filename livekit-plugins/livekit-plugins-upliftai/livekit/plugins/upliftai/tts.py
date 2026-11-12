@@ -22,11 +22,10 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APITimeoutError,
-    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -85,7 +84,6 @@ class _TTSOptions:
     base_url: str
     api_key: str
     voice_settings: VoiceSettings
-    word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     sample_rate: int
     num_channels: int
     phrase_replacement_config_id: str | None
@@ -103,7 +101,6 @@ class TTS(tts.TTS):
         output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT,
         num_channels: int = DEFAULT_NUM_CHANNELS,
         phrase_replacement_config_id: NotGivenOr[str] = NOT_GIVEN,
-        word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Uplift TTS.
@@ -124,7 +121,6 @@ class TTS(tts.TTS):
             sample_rate: Sample rate for audio output. Defaults to 22050
             num_channels: Number of audio channels. Defaults to 1 (mono)
             phrase_replacement_config_id: Optional ID for phrase replacement configuration
-            word_tokenizer: Tokenizer for processing text. Defaults to `livekit.agents.tokenize.WordTokenizer`.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -150,18 +146,10 @@ class TTS(tts.TTS):
                 "API key is required, either as argument or set UPLIFTAI_API_KEY environment variable"
             )
 
-        # Use provided tokenizer or create default
-        resolved_word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
-        if is_given(word_tokenizer):
-            resolved_word_tokenizer = word_tokenizer
-        else:
-            resolved_word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
-
         self._opts = _TTSOptions(
             base_url=resolved_base_url,
             api_key=resolved_api_key,
             voice_settings=VoiceSettings(voice_id=voice_id, output_format=output_format),
-            word_tokenizer=resolved_word_tokenizer,
             sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=num_channels,
             phrase_replacement_config_id=phrase_replacement_config_id
@@ -190,22 +178,18 @@ class TTS(tts.TTS):
         if is_given(output_format):
             self._opts.voice_settings.output_format = output_format
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
-        """Synthesize text to speech using chunked stream."""
         return ChunkedStream(
             tts=self,
             opts=self._opts,
             synthesize_request=self._synthesize_request,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
-        """Create a streaming synthesis session."""
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             opts=self._opts,
@@ -508,7 +492,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Execute streaming synthesis"""
         request_id = utils.shortuuid()
-        segments_ch = utils.aio.Chan[tokenize.WordStream | tokenize.SentenceStream]()
 
         output_emitter.initialize(
             request_id=request_id,
@@ -518,75 +501,35 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type=get_content_type_from_output_format(self._opts.voice_settings.output_format),
         )
 
-        async def _tokenize_input() -> None:
-            """Tokenize input text"""
-            word_stream = None
-            async for input in self.input:
-                if isinstance(input, str):
-                    if word_stream is None:
-                        word_stream = self._opts.word_tokenizer.stream()
-                        segments_ch.send_nowait(word_stream)
-
-                    word_stream.push_text(input)
-                else:
-                    if word_stream is not None:
-                        word_stream.end_input()
-                    word_stream = None
-
-            if word_stream is not None:
-                word_stream.end_input()
-
-            segments_ch.close()
-
-        async def _process_segments() -> None:
-            """Process segments"""
-            async for word_stream in segments_ch:
-                await self._run_segment(word_stream, output_emitter)
-
-        tasks = [
-            asyncio.create_task(_tokenize_input()),
-            asyncio.create_task(_process_segments()),
-        ]
-
         try:
-            await asyncio.gather(*tasks)
+            parts: list[str] = []
+            async for data in self.input:
+                if isinstance(data, tts.SpeechChunk):
+                    parts.append(data.text)
+                elif parts:
+                    await self._run_segment(" ".join(parts), output_emitter)
+                    parts = []
+            if parts:
+                await self._run_segment(" ".join(parts), output_emitter)
         except TimeoutError:
             raise APITimeoutError() from None
         except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
 
     async def _run_segment(
         self,
-        word_stream: tokenize.WordStream | tokenize.SentenceStream,
+        text: str,
         output_emitter: tts.AudioEmitter,
     ) -> None:
-        """Process a single segment"""
+        """Synthesize one segment's text in a single request"""
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
         try:
-            # Collect text
-            text_parts: list[str] = []
-            async for data in word_stream:
-                text_parts.append(data.token)
-
-            if not text_parts:
-                return
-
-            # Format text
-            if isinstance(self._opts.word_tokenizer, tokenize.WordTokenizer):
-                full_text = self._opts.word_tokenizer.format_words(text_parts)
-            else:
-                full_text = " ".join(text_parts)
-
             self.mark_started()
-
-            # Synthesize
-            audio_queue = await self._synthesize_request(full_text, segment_id)
+            audio_queue = await self._synthesize_request(text, segment_id)
 
             read_deadline = self._core_attempts
             read_deadline.expect_response(final=True)

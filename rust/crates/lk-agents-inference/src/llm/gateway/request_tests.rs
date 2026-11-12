@@ -212,3 +212,26 @@ fn tool_schemas_are_built_in_the_strict_openai_form() {
     assert_eq!(built[0]["function"]["parameters"]["required"], json!(["q"]));
     assert!(tool_schemas(&[], true).unwrap().is_empty());
 }
+
+/// A strict parameterless tool is sent as an object schema with an empty `required` list.
+/// https://github.com/livekit/agents/issues/7637
+#[test]
+#[ignore = "https://github.com/livekit/agents/issues/7637 reproduces: a strict parameterless tool schema has no required array"]
+fn a_strict_parameterless_tool_has_an_empty_required_list() {
+    for json_schema in [json!({"type": "object", "properties": {}}), json!({"type": "object"})] {
+        let tool = ToolSpec {
+            provider_tool: None,
+            name: "ping".into(),
+            description: String::new(),
+            json_schema,
+            flags: Default::default(),
+        };
+
+        let built = tool_schemas(&[tool], true).expect("a usable schema");
+
+        let parameters = &built[0]["function"]["parameters"];
+        assert_eq!(parameters["type"], json!("object"), "{parameters}");
+        assert!(parameters["properties"].is_object(), "{parameters}");
+        assert_eq!(parameters["required"], json!([]), "{parameters}");
+    }
+}

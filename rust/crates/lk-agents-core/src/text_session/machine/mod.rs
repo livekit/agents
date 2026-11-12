@@ -31,6 +31,9 @@ pub use routing::{ChatHistory, LocalAgentTool, RoutingError, SessionAgent, TextS
 /// Runtime inputs: identities and saved state; no services nor an instruction to load/save them.
 pub struct TextSessionInput {
     pub session_id: String,
+    /// The random value this request's runs mint their chat items under: drawn afresh
+    /// per request, so nothing about it is saved.
+    pub id_seed: u64,
     pub execution_id: String,
     pub task_id: Option<String>,
     pub state: Option<TextSessionState>,
@@ -42,6 +45,7 @@ pub struct TextSessionInput {
 /// Every event belonging to an invocation carries its identity. Late receipts cannot mutate
 /// a new invocation of the same frame, nor a new request reconstructed from the returned state.
 pub enum TextSessionEvent {
+    PersistenceFailed(lk_agents_abi::storage::StorageError),
     Start(ChatMessage),
     Run {
         invocation_id: String,
@@ -129,10 +133,15 @@ pub struct TextSession {
     failure_input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
     config: TextSessionConfig,
     state: TextSessionState,
+    id_seed: u64,
     wall: WallAnchor,
     cleanup_timeout: Duration,
     delegated: bool,
     checkpoints: bool,
+    persistence_failure: Option<lk_agents_abi::storage::StorageError>,
+    recording: bool,
+    checkpoint_due: Option<Ts>,
+    checkpoint_bytes: usize,
     phase: Phase,
     /// The turn's ended invocations: the live one is added to it when read.
     usage: Ledger,
@@ -194,10 +203,15 @@ impl TextSession {
             failure_input_requirements: Vec::new(),
             config,
             state,
+            id_seed: input.id_seed,
             wall: input.wall,
             cleanup_timeout: input.cleanup_timeout,
             delegated: input.delegated,
             checkpoints: false,
+            persistence_failure: None,
+            recording: false,
+            checkpoint_due: None,
+            checkpoint_bytes: 0,
             phase: Phase::NotStarted,
             usage: Ledger::default(),
             sequence: 0,
@@ -215,8 +229,16 @@ impl TextSession {
         format!("{}/{kind}_{}", self.state.session_id, self.state.next_id)
     }
 
+    pub fn with_persistence(mut self) -> Self {
+        self.recording = true;
+        self
+    }
+
     pub fn wake_at(&self) -> Option<Ts> {
-        self.phase.invocation().and_then(|i| i.run.wake_at())
+        match (self.phase.invocation().and_then(|i| i.run.wake_at()), self.checkpoint_due) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     pub fn handle(&mut self, event: TextSessionEvent, now: Ts) -> Vec<TextSessionEffect> {
@@ -239,6 +261,10 @@ impl TextSession {
             return effects;
         }
         match event {
+            TextSessionEvent::PersistenceFailed(error) => {
+                self.persistence_failure = Some(error);
+                return self.handle(TextSessionEvent::Cancel, now);
+            }
             TextSessionEvent::Start(message) if matches!(self.phase, Phase::NotStarted) => {
                 let frame = self.active_frame_mut();
                 record_delivered(frame, message.clone());
@@ -308,6 +334,57 @@ impl TextSession {
             }
             _ => {}
         }
+        for effect in &effects {
+            if !self.recording {
+                break;
+            }
+            if let TextSessionEffect::Emit {
+                event: lk_agents_abi::agent::run::StreamEvent::TextDelta { delta, .. },
+                ..
+            } = effect
+            {
+                self.checkpoint_bytes = self.checkpoint_bytes.saturating_add(delta.len());
+                self.checkpoint_due
+                    .get_or_insert(now.saturating_add(std::time::Duration::from_millis(250)));
+            }
+        }
+        let flush_due =
+            self.checkpoint_bytes >= 64 * 1024 || self.checkpoint_due.is_some_and(|due| due <= now);
+        let failed = effects
+            .iter()
+            .any(|effect| matches!(effect, TextSessionEffect::Finished { result: Err(_), .. }));
+        if failed {
+            self.checkpoint_due = None;
+            self.checkpoint_bytes = 0;
+        }
+        if self.recording
+            && !failed
+            && (flush_due
+                || effects.iter().any(|effect| {
+                    matches!(
+                        effect,
+                        TextSessionEffect::InvocationStarted { .. }
+                            | TextSessionEffect::InvocationParked { .. }
+                            | TextSessionEffect::InvocationSettled { .. }
+                            | TextSessionEffect::Finished { result: Ok(_), .. }
+                            | TextSessionEffect::Run {
+                                effect: agent_run::AgentRunEffect::ToolExecute { .. }
+                                    | agent_run::AgentRunEffect::HostCheckpoint { .. },
+                                ..
+                            }
+                    )
+                }))
+            && self.persistence_failure.is_none()
+        {
+            self.checkpoint_due = None;
+            self.checkpoint_bytes = 0;
+            let mut state = self.state.clone();
+            if let Some(invocation) = self.phase.invocation() {
+                state.frames.get_mut(&invocation.frame_id).expect("invoked frame exists").history =
+                    invocation.run.progress_history();
+            }
+            effects.insert(0, TextSessionEffect::Checkpoint(Box::new(state)));
+        }
         effects
     }
 
@@ -341,6 +418,7 @@ impl TextSession {
         );
         let input = RunInput {
             invocation_id: invocation_id.clone(),
+            id_seed: lk_agents_abi::types::ids::splitmix64(self.id_seed, self.state.next_id),
             opening: Opening::Message(Box::new(message)),
             history: frame.history.clone(),
             answer_tool: frame.answer_tool.clone(),
@@ -741,9 +819,13 @@ impl TextSession {
 
     fn finish(
         &mut self,
-        mut result: Result<TextSessionTurn, TextSessionError>,
+        result: Result<TextSessionTurn, TextSessionError>,
         effects: &mut Vec<TextSessionEffect>,
     ) {
+        let mut result = match self.persistence_failure.take() {
+            Some(error) => Err(TextSessionError::Storage(error)),
+            None => result,
+        };
         let invocation_id = match &result {
             Err(TextSessionError::Run(_)) => {
                 self.phase.invocation().map(|invocation| invocation.id.clone())

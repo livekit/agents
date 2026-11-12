@@ -125,9 +125,9 @@ async def served(
     )
     add_routes(server.http)
     # A server serves at least one door.
-    backend = AgentHandler(lane="backend")
+    backend = AgentHandler()
 
-    @backend.a2a_session(endpoint="noop", description="Unused.")
+    @backend.a2a_session(endpoint="noop", description="Unused.", partition_key="backend")
     async def noop(ctx: A2ASessionContext) -> str:  # noqa: ARG001
         return ""
 

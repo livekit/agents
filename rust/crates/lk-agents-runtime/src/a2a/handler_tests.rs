@@ -36,7 +36,7 @@ fn open(
 ) -> Handler {
     let ctx = lk_agents_abi::a2a::turn::TurnContext {
         thread_id: "AT_1".into(),
-        lane: "desk".into(),
+        partition_key: "desk".into(),
         message: lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::text(
             "message",
             lk_agents_abi::Role::User,

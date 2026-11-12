@@ -1,4 +1,4 @@
-"""Type checks for ``Agent[Context, Output]``, run by ``scripts/check_types.py``.
+"""Type checks for ``Agent[Context, Output]``, run by ``.github/check_types.py``.
 
 The constructor infers both parameters, as pydantic-ai's: ``context_type`` the context,
 ``output_type`` the output, ``str`` when omitted.

@@ -83,6 +83,8 @@ impl Run {
         }
         self.record.set_driver_finished(self.session.is_none());
         self.record.set_resources_left(self.api.resources().live());
+        let sources = self.room.local_participant().sources();
+        self.record.set_room_speakers(sources.iter().map(|source| source.speaker()).collect());
         self.record.set_parks(tokio::runtime::Handle::current().metrics().worker_park_count(0));
         self.record.set_now(now);
     }
@@ -315,6 +317,16 @@ impl Run {
                 // A detached tool ran on past its answer; its final update is its end.
                 Step::Tool(ToolStep::Updated { call_id, is_final: true, .. }) => {
                     if let Some(nth) = self.tool_by_call_id(call_id) {
+                        self.controls.remove(&Slot { kind: Kind::Tool, nth });
+                        self.record.close(at, Kind::Tool, nth);
+                    }
+                }
+                // A body that detached in the instant the driver ended its call on a report of its
+                // own: nothing is left to end it (`tool_call_ended`).
+                Step::Tool(ToolStep::CallEnded { call_id, end: Some(_), .. }) => {
+                    if let Some(nth) = self.tool_by_call_id(call_id)
+                        && self.tool_detached(nth)
+                    {
                         self.controls.remove(&Slot { kind: Kind::Tool, nth });
                         self.record.close(at, Kind::Tool, nth);
                     }

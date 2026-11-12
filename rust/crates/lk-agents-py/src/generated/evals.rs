@@ -231,6 +231,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(context).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -241,7 +242,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::generated::records::evals::judgment_result_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::evals::judgment_result_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

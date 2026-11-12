@@ -21,10 +21,16 @@ impl TaskMachine {
         completion: Completion,
         now: Duration,
     ) -> Result<Option<Operation>, Finish> {
-        let rows = match completion {
+        let routed = match completion {
             Completion::Inbox(rows) => rows,
             other => return Err(self.unexpected(other)),
         };
+        self.drain_endpoint = routed.first().and_then(|entry| entry.endpoint.clone());
+        let rows: Vec<_> = routed
+            .into_iter()
+            .take_while(|entry| entry.endpoint == self.drain_endpoint)
+            .map(|entry| entry.row)
+            .collect();
         if rows.is_empty() && !self.leased {
             return Ok(self.poll(now));
         }
@@ -73,8 +79,9 @@ impl TaskMachine {
             }
             Some(_) => {
                 // the receipt's id stays apart from the client's continuation target
-                let message = Message::from_a2a(&row.message, row.received_at as f64, None)
-                    .map_err(Finish::Error)?;
+                let message =
+                    Message::from_a2a(&row.message, row.received_at_ms as f64 / 1000.0, None)
+                        .map_err(Finish::Error)?;
                 self.batch.push(message);
                 self.task_ids.push(row.task_id.clone());
             }

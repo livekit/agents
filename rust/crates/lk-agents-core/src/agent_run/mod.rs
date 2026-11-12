@@ -2,6 +2,8 @@ pub mod effects;
 pub mod execution;
 pub mod machine;
 pub mod planning;
+#[cfg(test)]
+mod planning_tests;
 
 pub use effects::AgentRunEffect;
 pub use machine::{

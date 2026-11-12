@@ -2,7 +2,6 @@
 
 import pytest
 
-from livekit.agents import Agent
 from livekit.agents.beta.workflows import WarmTransfer, WorkflowInstructions
 
 pytestmark = pytest.mark.unit
@@ -23,16 +22,6 @@ def test_workflow_sections_produce_static_agent_instructions() -> None:
     assert instructions.count("You are the desk.") == 1
     for placeholder in ("{persona}", "{extra}", "{_conversation_history}"):
         assert placeholder not in instructions
-
-
-def test_agent_instructions_refuse_non_text_authoring() -> None:
-    class ModalInstructions:
-        common = "common"
-        audio = "voice"
-        text = "text"
-
-    with pytest.raises(TypeError, match="instructions must be a string"):
-        Agent(instructions=ModalInstructions())  # type: ignore[arg-type]
 
 
 def test_fixed_workflow_instructions_replace_the_template() -> None:

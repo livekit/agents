@@ -387,6 +387,7 @@ fn setup(
     };
     let input = RunInput {
         invocation_id: "run_1".into(),
+        id_seed: 0,
         opening: lk_agents_core::agent_run::Opening::Message(Box::new(ChatMessage::text(
             "m1",
             Role::User,

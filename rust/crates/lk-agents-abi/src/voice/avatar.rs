@@ -1,6 +1,9 @@
 use crate::errors::ProviderError;
 use crate::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
-use crate::voice::io::AvatarPlaybackSegment;
+use crate::voice::io::{
+    AvatarPlaybackSegment, IoError, OutputAlreadyChained, PlaybackFinishedEvent, PlaybackListener,
+    PlaybackSegment,
+};
 
 /// What the avatar runner reads from its receiver: the clear epoch the frame was captured in,
 /// whether this first frame opened a segment, the segment, and the frame (`None` at the end).
@@ -175,6 +178,51 @@ pub trait DataStreamAudioOutput: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn sample_rate(&self) -> Option<u32>;
 
+    // `io.AudioOutput`'s surface, so a host stage wraps this output (`next_in_chain=`) as it
+    // wraps a host sink: the stage forwards its calls here and this output reports to it.
+
+    /// Admit the key before capturing; raises when another segment is still capturing.
+    #[host(call)]
+    fn begin_segment(&self, segment: PlaybackSegment) -> Result<(), IoError>;
+    /// A capture the stage refused or cancelled before any audio was taken: the segment it
+    /// opened is withdrawn here too (`io.AudioOutput._withdraw_capture`).
+    #[host(call, name = "_withdraw_capture")]
+    fn withdraw_capture(&self) -> Result<(), IoError>;
+    /// The admitted key, latched by the stage before it passes audio on.
+    #[host(getter)]
+    fn playback_segment(&self) -> Option<PlaybackSegment>;
+    /// Waits for the avatar to join, then streams the frame into the segment's byte stream.
+    #[host(await)]
+    async fn capture_frame(&self, frame: crate::AudioFrame) -> Result<(), IoError>;
+    /// Ends the segment: its stream's trailer ends it on the avatar.
+    #[host(call)]
+    fn flush(&self);
+    /// Asks the avatar to drop what it holds of the segment (`lk.clear_buffer`).
+    #[host(call)]
+    fn clear_buffer(&self);
+    /// False: the avatar cannot pause.
+    #[host(getter)]
+    fn can_pause(&self) -> bool;
+    #[host(call)]
+    fn pause(&self);
+    #[host(call)]
+    fn resume(&self);
+    #[host(call)]
+    fn on_attached(&self);
+    #[host(call)]
+    fn on_detached(&self);
+    /// Until the segments captured so far played out; the last one's event.
+    #[host(await)]
+    async fn wait_for_playout(&self) -> PlaybackFinishedEvent;
+    /// The stage built over this output (`next_in_chain=`): each playback report reaches its
+    /// `on_playback_*`, in order, on its loop, until the close. Registering the same stage again
+    /// does nothing; another one raises.
+    #[host(call, name = "_set_parent")]
+    fn set_parent(
+        &self,
+        parent: std::sync::Arc<dyn PlaybackListener>,
+    ) -> Result<(), OutputAlreadyChained>;
+
     /// Stop admitting audio, settle startup and pending writes, close streams and retire RPC routes.
     #[host(await)]
     async fn aclose(&self);
@@ -319,13 +367,38 @@ pub enum AvatarJoinError {
     Rtc(#[from] crate::voice::rtc::RtcError),
 }
 
+/// How long an avatar has to join after `AvatarSession.start()`: `wait_for_join`'s default
+/// timeout.
+pub const JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `AvatarError`: the avatar session failed while the call went on (it did not join in time).
+#[crate::host(record(
+    module = "avatar_errors",
+    path = "livekit.agents.voice.avatar",
+    pydantic,
+    arbitrary_types,
+    constant(type = "avatar_error")
+))]
+pub struct AvatarError {
+    #[host(default_factory = "time.time")]
+    pub timestamp: f64,
+    #[host(default = "avatar")]
+    pub label: String,
+    #[host(annotation = "typing.Annotated[Exception, pydantic.Field(exclude=True)]")]
+    pub error: crate::HostRef,
+    #[host(default = true)]
+    pub recoverable: bool,
+}
+
 /// `_core_AvatarLifecycle`: an agent's avatar from `AvatarSession.start()` to its close. Created,
 /// it waits in the background for the avatar participant to join `room` and publish video (once
 /// `room` is connected) and reports the join as `AvatarMetrics` (`session_started_time` when the
 /// room was connected, `avatar_joined_time` when the video was published); a session's assistant
 /// message added with a `playback_latency` is reported as `AvatarMetrics(playback_latency=..)`
 /// until the close. Each metric reaches the avatar's `metrics_collected` and the session's
-/// metrics once it runs. Inside a job, the job's shutdown runs the avatar's `aclose`.
+/// metrics once it runs. Inside a job, the job's shutdown runs the avatar's `aclose`. An avatar
+/// not joined [`JOIN_TIMEOUT`] after its start is the session's one recoverable `avatar_error`,
+/// and its attached output stops waiting for it; the join wait goes on.
 #[crate::host(class(name = "_core_AvatarLifecycle"))]
 pub trait AvatarLifecycle: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
@@ -333,6 +406,8 @@ pub trait AvatarLifecycle: Send + Sync + Sized + 'static {
     type Env;
     #[host(class(name = "_core_SessionOwner"))]
     type Owner: Send + Sync + 'static;
+    #[host(class(name = "DataStreamAudioOutput"))]
+    type Output: Send + Sync + 'static;
 
     #[host(new)]
     fn new(
@@ -348,6 +423,11 @@ pub trait AvatarLifecycle: Send + Sync + Sized + 'static {
     /// Until the avatar joined; `timeout` seconds at most (`None` waits as long as it takes).
     #[host(await)]
     async fn wait_for_join(&self, timeout: Option<f64>) -> Result<(), AvatarJoinError>;
+
+    /// The avatar's audio output: once the avatar has not joined within [`JOIN_TIMEOUT`], its
+    /// audio fails at once with that error instead of waiting, until the avatar joins.
+    #[host(call)]
+    fn attach_output(&self, output: std::sync::Arc<Self::Output>);
 
     /// Stops the join wait and the metrics, then, inside a job and while `room` is connected,
     /// removes the avatar participant from the room through the job's RoomService

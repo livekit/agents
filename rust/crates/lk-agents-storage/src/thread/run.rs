@@ -1,9 +1,9 @@
-pub use lk_agents_abi::telemetry::health::LaneKind;
+pub use lk_agents_abi::telemetry::health::PartitionKind;
 use std::time::Duration;
 
 use crate::thread::db::{Commit, Committed, EventWrite, Fenced, Resolution};
 use crate::thread::schema::*;
-use crate::{LaneAccess, LeaseAfterCommit, StorageError, TaskPickup, TaskWrite, WhenHeld};
+use crate::{LeaseAfterCommit, PartitionAccess, StorageError, TaskPickup, TaskWrite, WhenHeld};
 use livekit_protocol::agent::chat_context::ChatItem;
 use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use lk_agents_abi::storage::journal::{JournalEvent, RunEnded, RunStarted};
@@ -11,14 +11,15 @@ use lk_agents_abi::usage::Usage;
 use serde_json::Value;
 
 use crate::shortuuid;
+use crate::sql::Bind as _;
 use crate::thread::lease::Lease;
 use lk_agents_net::clock::unix_now_ms;
 
-use super::{Lane, Resend, db};
+use super::{Partition, Resend, db};
 use lk_agents_abi::storage::Unacknowledged;
 use std::collections::BTreeMap;
 
-pub use crate::thread::schema::{ItemRow, LaneRow, TaskRow};
+pub use crate::thread::schema::{ItemRow, PartitionRow, TaskRow};
 
 /// a waiter that has not acquired after 60 s fails `lease-timeout`.
 pub use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
@@ -34,8 +35,8 @@ pub struct RunWrites<'a> {
     pub run_id: &'a str,
     pub task_id: &'a str,
     pub channel: Option<&'a str>,
-    /// How the run took its lane; `Concurrent` writes append-only.
-    pub access: LaneAccess,
+    /// How the run took its partition; `Concurrent` writes append-only.
+    pub access: PartitionAccess,
     pub history: &'a [ItemRow],
     /// What was loaded, by id, in order.
     pub loaded: &'a [(String, ChatItem)],
@@ -60,7 +61,7 @@ pub struct RunWrites<'a> {
 /// no state and may only add items: editing or deleting a loaded one is refused.
 pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
     let (items, delete_items) = item_changes(w.history, w.loaded);
-    let concurrent = w.access == LaneAccess::Concurrent;
+    let concurrent = w.access == PartitionAccess::Concurrent;
     if concurrent {
         let edited = items.iter().find(|i| w.loaded.iter().any(|(id, _)| *id == i.id));
         if let Some(id) = edited.map(|i| &i.id).or(delete_items.first()) {
@@ -91,6 +92,7 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
         events.push(EventWrite::new(w.now_ms, JournalEvent::Usage(w.usage.clone())));
     }
     Ok(Commit {
+        session_items: Vec::new(),
         run_id: w.run_id.to_owned(),
         delete_items,
         items,
@@ -141,7 +143,7 @@ pub use lk_agents_abi::a2a::metadata::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSummary {
     pub run_id: String,
-    pub lane: String,
+    pub partition_key: String,
     pub task_id: Option<String>,
     pub channel: Option<String>,
     pub started_at_ms: i64,
@@ -172,10 +174,10 @@ impl RunSummary {
                 JournalEvent::RunStarted(started) => {
                     let summary = RunSummary {
                         run_id: ev.run_id.clone(),
-                        lane: ev.lane.clone(),
+                        partition_key: ev.partition_key.clone(),
                         task_id: started.task_id,
                         channel: started.channel,
-                        started_at_ms: ev.ts_ms,
+                        started_at_ms: ev.occurred_at_ms,
                         ended_at_ms: None,
                         outcome: None,
                         reason: None,
@@ -187,7 +189,7 @@ impl RunSummary {
                 }
                 JournalEvent::RunEnded(ended) => {
                     if let Some(run) = runs.iter_mut().find(|r| r.run_id == ev.run_id) {
-                        run.ended_at_ms = Some(ev.ts_ms);
+                        run.ended_at_ms = Some(ev.occurred_at_ms);
                         run.outcome = Some(ended.outcome);
                         run.reason = ended.reason;
                     }
@@ -210,14 +212,14 @@ pub struct RunOptions {
     pub run_id: String,
     /// The A2A task this run serves.
     pub task_id: String,
-    pub access: LaneAccess,
+    pub access: PartitionAccess,
     /// The request's channel, for the `run_started` event.
     pub channel: Option<String>,
     pub wait_timeout: Duration,
     /// What the acquire does with `task_id`'s row (`Run::picked_up`).
     pub pickup: TaskPickup,
-    /// What the run is, for the lane health metrics.
-    pub kind: LaneKind,
+    /// What the run is, for the partition health metrics.
+    pub kind: PartitionKind,
 }
 
 impl RunOptions {
@@ -225,16 +227,16 @@ impl RunOptions {
         Self {
             run_id: run_id.into(),
             task_id: task_id.into(),
-            access: LaneAccess::Exclusive(WhenHeld::Wait),
+            access: PartitionAccess::Exclusive(WhenHeld::Wait),
             channel: None,
             wait_timeout: LEASE_WAIT_TIMEOUT,
             pickup: TaskPickup::Leave,
-            kind: LaneKind::A2a,
+            kind: PartitionKind::A2a,
         }
     }
 }
 
-/// What this run appends to the lane's journal, stamped as recorded.
+/// What this run appends to the partition's journal, stamped as recorded.
 #[derive(Default)]
 pub struct EventLog {
     new: Vec<EventWrite>,
@@ -264,10 +266,11 @@ pub struct CommitOptions {
 
 /// Everything a run reads and writes, committed together.
 pub struct Run {
-    pub(super) lane: Lane,
+    pub(super) session_items: crate::session_snapshot::SessionItems,
+    pub(super) partition_key: Partition,
     /// The lease the run holds; `None` under the `concurrent` policy, which takes none.
     pub(super) lease: Option<Lease>,
-    pub(super) access: LaneAccess,
+    pub(super) access: PartitionAccess,
     pub(super) holder: String,
     pub(super) run_id: String,
     pub(super) task_id: String,
@@ -278,7 +281,7 @@ pub struct Run {
     pub(super) history: Vec<ItemRow>,
     /// What was loaded, by id, in order.
     pub(super) loaded: Vec<(String, ChatItem)>,
-    /// The state snapshot as loaded, `None` for a fresh lane; the caller can replace it
+    /// The state snapshot as loaded, `None` for a fresh partition; the caller can replace it
     /// explicitly, and the commit writes it when it differs from what was loaded.
     pub(super) state: Option<Value>,
     pub(super) context_scopes: Vec<ContextScope>,
@@ -379,6 +382,14 @@ impl Run {
         commit.context_scopes = self.context_scopes.clone();
         commit.scope_writes = self.scope_writes.clone();
         commit.app_writes = self.app_writes.clone();
+        if let Some(state) = &commit.state {
+            let (packed, items) =
+                self.session_items.clone().pack(state, &shortuuid("session_item_"))?;
+            commit.state = Some(packed);
+            commit.session_items = items;
+        }
+        commit.loaded_state =
+            commit.loaded_state.as_ref().map(crate::session_snapshot::routing_budget);
         Ok(commit)
     }
 
@@ -387,6 +398,81 @@ impl Run {
             return Err(StorageError::Invalid(format!("run {} already ended", self.run_id)));
         }
         self.finished = true;
+        Ok(())
+    }
+
+    /// Persist conversation progress without committing application fields or releasing ownership.
+    pub async fn checkpoint_session(
+        &mut self,
+        state: Value,
+        history: Vec<ChatItem>,
+    ) -> Result<(), StorageError> {
+        if self.closed || self.finished {
+            return Err(StorageError::Invalid("the run has ended".into()));
+        }
+        let lease = self.lease.as_ref().ok_or_else(|| {
+            StorageError::Invalid("session checkpoints require an exclusive turn".into())
+        })?;
+        lease.check()?;
+        let rows: Vec<_> = history
+            .into_iter()
+            .map(|payload| {
+                payload.item.map(ItemRow::new).ok_or_else(|| {
+                    StorageError::Invalid(
+                        "an empty conversation item cannot be checkpointed".into(),
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let mut commit = run_commit(RunWrites {
+            run_id: &self.run_id,
+            task_id: &self.task_id,
+            channel: self.channel.as_deref(),
+            access: self.access,
+            history: &rows,
+            loaded: &self.loaded,
+            state: Some(&state),
+            loaded_state: self.loaded_state.as_ref(),
+            events: &[],
+            tasks: &[],
+            usage: &Usage::default(),
+            outcome: self.outcome,
+            reason: None,
+            now_ms: unix_now_ms(),
+            drained_id: None,
+            answer_task: None,
+        })?;
+        commit.context_scopes = self.context_scopes.clone();
+        let id = shortuuid("checkpoint_");
+        let mut cache = self.session_items.clone();
+        let (packed, items) = cache.pack(&state, &id)?;
+        commit.state = Some(packed);
+        commit.session_items = items;
+        let conn = &*self.partition_key.thread.conn;
+        let partition_key = self.partition_key.name();
+        let fence = lease.fence();
+        let write = || async {
+            lease.check()?;
+            db::session_checkpoint(conn, partition_key, fence, &id, &commit).await
+        };
+        let probe = || async {
+            let rows = conn.query(SelectAppliedWrite { id: &id }.bind()).await?;
+            Ok((!rows.is_empty()).then_some(()))
+        };
+        self.partition_key
+            .thread
+            .resend(crate::telemetry::StorageWrite::Commit)
+            .probed(write, probe)
+            .await?;
+        self.loaded = rows
+            .iter()
+            .filter(|row| row.stored())
+            .map(|row| (row.id.clone(), row.payload.clone()))
+            .collect();
+        self.history = rows;
+        self.session_items = cache;
+        self.loaded_state = Some(state.clone());
+        self.state = Some(state);
         Ok(())
     }
 
@@ -403,7 +489,7 @@ impl Run {
             return released.map(|()| Committed { version, task: None });
         }
         if self.lease.is_none() {
-            self.lane.thread.ensure_schema().await?;
+            self.partition_key.thread.ensure_schema().await?;
         }
         let lease = opts.lease;
         let out = match self.writes(opts) {
@@ -443,7 +529,7 @@ impl Run {
         lease: LeaseAfterCommit,
         why: Unacknowledged,
     ) -> Result<Committed, StorageError> {
-        log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
         match self.resolve(&commit, lease, RESOLVE_WAIT, why).await {
             Err(StorageError::Uncertain(why)) => {
                 self.unresolved = Some((commit, lease, why.clone()));
@@ -453,14 +539,16 @@ impl Run {
         }
     }
 
-    /// A commit carrying application SQL the database refused: a lane that moved on aborted it
+    /// A commit carrying application SQL the database refused: a partition that moved on aborted it
     /// at its fence (`VersionConflict`); otherwise an application statement was refused.
     async fn refused_commit(&self, commit: &Commit, why: String) -> StorageError {
         let fence = self.lease.as_ref().map(Lease::fence);
-        let (conn, read_task) = (&*self.lane.thread.conn, commit.read_task.as_deref());
-        match db::resolve_commit(conn, self.lane.name(), &self.run_id, fence, read_task).await {
+        let (conn, read_task) = (&*self.partition_key.thread.conn, commit.read_task.as_deref());
+        match db::resolve_commit(conn, self.partition_key.name(), &self.run_id, fence, read_task)
+            .await
+        {
             Ok(Resolution::Rejected) => StorageError::VersionConflict {
-                lane: self.lane.name().to_owned(),
+                partition_key: self.partition_key.name().to_owned(),
                 expected: fence.map_or(0, |f| f.version),
             },
             _ => StorageError::Invalid(why),
@@ -475,14 +563,16 @@ impl Run {
     ) -> Result<Committed, StorageError> {
         let fenced = self.lease.as_ref().map(|lease| Fenced {
             fence: lease.fence(),
-            keep: (after == LeaseAfterCommit::Keep).then(|| self.lane.thread.timing.secs()),
+            keep: (after == LeaseAfterCommit::Keep)
+                .then(|| self.partition_key.thread.timing.millis()),
         });
-        db::commit(&*self.lane.thread.conn, self.lane.name(), commit, fenced).await
+        db::commit(&*self.partition_key.thread.conn, self.partition_key.name(), commit, fenced)
+            .await
     }
 
     /// A commit whose acknowledgment was lost, resolved by the run's identity: committed (its
     /// record), not applied while the fence holds (sent again: the fence and the run id make it
-    /// safe), or rejected (`VersionConflict`: the lane moved on without it). `Uncertain` once
+    /// safe), or rejected (`VersionConflict`: the partition moved on without it). `Uncertain` once
     /// `wait` passes with no authoritative answer.
     async fn resolve(
         &self,
@@ -492,13 +582,13 @@ impl Run {
         lost: Unacknowledged,
     ) -> Result<Committed, StorageError> {
         let fence = self.lease.as_ref().map(Lease::fence);
-        let (conn, read_task) = (&*self.lane.thread.conn, commit.read_task.as_deref());
-        let (lane, run_id) = (self.lane.name(), self.run_id.as_str());
+        let (conn, read_task) = (&*self.partition_key.thread.conn, commit.read_task.as_deref());
+        let (partition_key, run_id) = (self.partition_key.name(), self.run_id.as_str());
         let probe = || async move {
-            match db::resolve_commit(conn, lane, run_id, fence, read_task).await {
+            match db::resolve_commit(conn, partition_key, run_id, fence, read_task).await {
                 Ok(Resolution::Committed(committed)) => Ok(Some(*committed)),
                 Ok(Resolution::Rejected) => Err(StorageError::VersionConflict {
-                    lane: lane.to_owned(),
+                    partition_key: partition_key.to_owned(),
                     expected: fence.map_or(0, |f| f.version),
                 }),
                 Ok(Resolution::NotApplied) => Ok(None),
@@ -506,7 +596,7 @@ impl Run {
                 Err(e) => Err(StorageError::Unavailable(format!("resolving: {e}"))),
             }
         };
-        let cx = &self.lane.thread.cx;
+        let cx = &self.partition_key.thread.cx;
         Resend::after_lost(wait, cx, crate::telemetry::StorageWrite::Commit, lost)
             .probed(|| self.send(commit, lease), probe)
             .await
@@ -540,7 +630,7 @@ impl Run {
         let released = lease.release(Some((&self.run_id, &ended))).await;
         lease.stop();
         if let Err(e) = released {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
         }
         Ok(())
     }
@@ -559,37 +649,37 @@ impl Drop for Run {
     }
 }
 
-/// The lane's task rows as this run writes them.
+/// The partition's task rows as this run writes them.
 pub struct Tasks {
-    lane: Lane,
+    partition_key: Partition,
     /// In write order.
     writes: Vec<TaskWrite>,
-    /// The lane's newest rows as the acquire loaded them, newest first: what the run's lookups
+    /// The partition's newest rows as the acquire loaded them, newest first: what the run's lookups
     /// read instead of the database. Complete when shorter than [`LOOKUP_LIMIT`].
     loaded: Option<Vec<TaskRow>>,
 }
 
 impl Tasks {
-    pub fn new(lane: Lane) -> Self {
-        Self { lane, writes: Vec::new(), loaded: None }
+    pub fn new(partition_key: Partition) -> Self {
+        Self { partition_key, writes: Vec::new(), loaded: None }
     }
 
     /// Over the rows an acquire loaded, newest first.
-    pub fn loaded(lane: Lane, loaded: Vec<TaskRow>) -> Self {
-        Self { lane, writes: Vec::new(), loaded: Some(loaded) }
+    pub fn loaded(partition_key: Partition, loaded: Vec<TaskRow>) -> Self {
+        Self { partition_key, writes: Vec::new(), loaded: Some(loaded) }
     }
 
-    /// The loaded rows, when they are the whole lane.
+    /// The loaded rows, when they are the whole partition.
     fn snapshot(&self) -> Option<&[TaskRow]> {
         self.loaded.as_deref().filter(|rows| rows.len() < LOOKUP_LIMIT as usize)
     }
 
-    /// The lane's newest rows, `limit` of them, as of the acquire.
+    /// The partition's newest rows, `limit` of them, as of the acquire.
     pub async fn recent(&self, limit: i64) -> Result<Vec<TaskRow>, StorageError> {
         if let Some(rows) = self.loaded.as_deref() {
             return Ok(rows.iter().take(limit as usize).cloned().collect());
         }
-        self.lane.tasks(None, limit).await
+        self.partition_key.tasks(None, limit).await
     }
 
     /// The `working` rows, oldest first: a dead holder's, as of the acquire.
@@ -602,7 +692,7 @@ impl Tasks {
                 .cloned()
                 .collect());
         }
-        let working = self.lane.tasks(Some(TaskState::Working), LOOKUP_LIMIT).await?;
+        let working = self.partition_key.tasks(Some(TaskState::Working), LOOKUP_LIMIT).await?;
         Ok(working.into_iter().rev().collect())
     }
 
@@ -611,7 +701,7 @@ impl Tasks {
         &self.writes
     }
 
-    /// The first loaded row that matches, else, when the loaded rows are not the whole lane, the
+    /// The first loaded row that matches, else, when the loaded rows are not the whole partition, the
     /// stored one `read` finds.
     async fn find(
         &self,
@@ -632,7 +722,7 @@ impl Tasks {
     ) -> Result<Option<TaskRow>, StorageError> {
         if let Some(task_id) = task_id {
             return Ok(self
-                .find(|row| row.task_id == task_id, self.lane.task(task_id))
+                .find(|row| row.task_id == task_id, self.partition_key.task(task_id))
                 .await?
                 .filter(|row| {
                     row.status == TaskState::InputRequired
@@ -650,7 +740,7 @@ impl Tasks {
                 .cloned());
         }
         Ok(self
-            .lane
+            .partition_key
             .tasks(Some(TaskState::InputRequired), PENDING_ASK_LIMIT)
             .await?
             .into_iter()
@@ -668,10 +758,12 @@ impl Tasks {
     ) -> Result<(), StorageError> {
         let base = match self.writes.iter().find(|w| w.task_id == task_id) {
             Some(w) => Some(w.clone()),
-            None => match self.find(|r| r.task_id == task_id, self.lane.task(task_id)).await? {
-                Some(row) if row.terminal() => return Ok(()),
-                row => row.map(TaskWrite::from),
-            },
+            None => {
+                match self.find(|r| r.task_id == task_id, self.partition_key.task(task_id)).await? {
+                    Some(row) if row.terminal() => return Ok(()),
+                    row => row.map(TaskWrite::from),
+                }
+            }
         };
         let write = merge_write(task_id, base.as_ref(), status, patch)?;
         match self.writes.iter().position(|w| w.task_id == task_id) {

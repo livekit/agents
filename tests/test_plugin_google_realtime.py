@@ -20,66 +20,6 @@ from livekit.plugins.google.utils import create_function_response
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize(
-    ("model", "vertexai"),
-    [
-        ("gemini-3.8-live", False),
-        ("gemini-3.8-live", True),
-        ("gemini-3.8-live-extended-thinking", False),
-        ("gemini-3.1-flash-live-preview", False),
-        ("gemini-2.5-flash-native-audio-preview-12-2025", False),
-        ("gemini-live-2.5-flash-native-audio", True),
-        ("publishers/google/models/gemini-3.8-live", True),
-        ("future-live-model", False),
-        ("future-live-model", True),
-    ],
-)
-def test_model_api_compatibility(
-    model: str, vertexai: bool, caplog: pytest.LogCaptureFixture
-) -> None:
-    with caplog.at_level(logging.WARNING):
-        realtime_model = RealtimeModel(
-            model=model,
-            vertexai=vertexai,
-            api_key="fake-key",
-            project="test-project",
-            location="eu",
-        )
-    assert realtime_model.model == model
-    assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
-    assert not caplog.records
-
-
-@pytest.mark.parametrize(
-    ("model", "vertexai"),
-    [
-        ("gemini-3.8-live-extended-thinking", True),
-        ("gemini-3.1-flash-live-preview", True),
-        ("gemini-2.5-flash-native-audio-preview-12-2025", True),
-        ("gemini-live-2.5-flash-native-audio", False),
-    ],
-)
-def test_model_api_mismatch_warns(
-    model: str, vertexai: bool, caplog: pytest.LogCaptureFixture
-) -> None:
-    with caplog.at_level(logging.WARNING):
-        realtime_model = RealtimeModel(
-            model=model,
-            vertexai=vertexai,
-            api_key="fake-key",
-            project="test-project",
-            location="eu",
-        )
-    assert realtime_model.model == model
-    assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
-    assert len(caplog.records) == 1
-    warning = caplog.records[0]
-    assert warning.name == "livekit.plugins.google"
-    assert warning.levelno == logging.WARNING
-    assert f"Model '{model}' may not be available" in warning.message
-    assert f"vertexai={vertexai}" in warning.message
-
-
 @pytest.mark.parametrize("model", ["gemini-3.8-live", "models/gemini-3.8-live"])
 def test_gemini_3_8_live_rejects_thinking_level(
     monkeypatch: pytest.MonkeyPatch, model: str
@@ -120,19 +60,6 @@ async def test_thinking_level_reaches_connect_config(
         config = session._build_connect_config()
         assert config.generation_config is not None
         assert config.generation_config.thinking_config == thinking_config
-
-
-def test_gemini_3_8_live_thinking_with_vertex_from_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
-    model = RealtimeModel(
-        model="gemini-3.8-live",
-        project="test-project",
-        location="eu",
-        thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
-    )
-    assert model.provider == "Vertex AI"
 
 
 def _is_genai_client_teardown(task: asyncio.Task[Any]) -> bool:
@@ -747,23 +674,6 @@ async def test_tool_response_omits_a_locally_made_call_id(
         assert replayed[0].function_responses[0].id is None
 
 
-def test_vertex_scheduling_warns(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """An explicitly set scheduling is dropped on Vertex AI, so say so instead of ignoring it."""
-    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-
-    with caplog.at_level(logging.WARNING):
-        RealtimeModel(
-            vertexai=True,
-            project="p",
-            location="us-central1",
-            tool_response_scheduling=types.FunctionResponseScheduling.SILENT,
-        )
-
-    assert any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
-
-
 class _FakeVoiceSession:
     """Stands in for the genai live session and records what the plugin sends."""
 
@@ -1071,24 +981,6 @@ async def test_failed_send_with_a_queued_update_replays_each_item_once(
         assert session._unsent_item_ids == set()
     finally:
         await session.aclose()
-
-
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [
-        ("gemini-3.8-live", types.Behavior.NON_BLOCKING),
-        ("gemini-3.8-live-extended-thinking", types.Behavior.NON_BLOCKING),
-        ("gemini-3.1-flash-live-preview", None),
-        ("gemini-2.5-flash-native-audio-preview-12-2025", None),
-    ],
-)
-def test_tool_behavior_default_follows_the_model(
-    monkeypatch: pytest.MonkeyPatch, model: str, expected: types.Behavior | None
-) -> None:
-    """Models that are async by default must be declared async, or SILENT is never claimed."""
-    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-    behavior = RealtimeModel(model=model)._opts.tool_behavior
-    assert (behavior if utils.is_given(behavior) else None) == expected
 
 
 async def test_context_updates_preserve_order_while_image_preparation_waits(

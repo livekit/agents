@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import APIConnectOptions, http
+from livekit.agents import APIConnectOptions, http, tts as tts_module
 from livekit.plugins.xai import tts as xai_tts
 
 pytestmark = pytest.mark.plugin("xai")
@@ -70,13 +70,19 @@ async def test_streaming_segments_reuse_websocket_connection(monkeypatch: pytest
     monkeypatch.setattr(tts, "_close_ws", close_ws)
 
     try:
-        async with tts.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
-            stream.push_text("first")
+        async with tts._stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+            stream._push_chunk(tts_module.SpeechChunk(text="first", said="first"))
             stream.flush()
-            stream.push_text("second")
+            stream._push_chunk(tts_module.SpeechChunk(text="second", said="second"))
             stream.end_input()
             heard = b"".join([event.frame.data.tobytes() async for event in stream])
         assert len(websockets) == 1
+        assert [packet.get("delta") for packet in websockets[0].sent] == [
+            "first ",
+            None,
+            "second ",
+            None,
+        ]
         assert not websockets[0].closed
         assert heard == b"\x00\x00" * 480
     finally:

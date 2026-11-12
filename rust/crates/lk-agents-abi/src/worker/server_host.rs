@@ -11,7 +11,12 @@ use crate::worker::types::{ProcessOptions, ProcessStartOptions, ServerOptions};
 
 /// Preserve the native configuration identity shared by a server and its options surface.
 #[crate::host(native(refused = "expected a native ServerConfig"))]
-pub trait ServerConfiguration: Any + Send + Sync {}
+pub trait ServerConfiguration: Any + Send + Sync {
+    /// Resolve a configured endpoint during durable inbox recovery.
+    fn text_endpoint(&self, _name: &str) -> Option<Arc<dyn TextEndpoint>> {
+        None
+    }
+}
 
 #[crate::host(class(name = "ServerConfig", native = ServerConfiguration))]
 pub trait ServerConfig: Send + Sync + Sized + 'static {
@@ -188,6 +193,8 @@ pub enum HealthState {
     Ready,
     /// The connection dropped; the worker is registering again.
     Reconnecting,
+    /// Reconnecting for longer than the reconnect grace: a restart may get the pod back.
+    Disconnected,
     Draining,
     /// Reconnection gave up, or the pool cannot start.
     Failed,

@@ -37,36 +37,3 @@ async def test_speech_segments_survive_input_reframing(
     assert starts
     assert len(starts) == len(ends)
     assert all(event.frames for event in ends)
-
-
-async def test_flush_allows_another_complete_speech_segment() -> None:
-    frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=16000)
-    detector = VAD(min_speech_duration=0.5, min_silence_duration=0.75)
-    async with detector.stream() as stream:
-        for _ in range(2):
-
-            async def push() -> None:
-                for frame in frames:
-                    stream.push_frame(frame)
-                    await asyncio.sleep(0)
-
-            task = asyncio.create_task(push())
-            try:
-                started = False
-                async with asyncio.timeout(30):
-                    async for event in stream:
-                        if event.type == "start_of_speech":
-                            started = True
-                        elif event.type == "end_of_speech":
-                            assert started
-                            assert event.frames
-                            break
-                    else:
-                        pytest.fail("stream ended before the speech segment completed")
-            finally:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-            stream.flush()

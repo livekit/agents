@@ -127,6 +127,8 @@ pub struct SessionParts {
     pub agent: String,
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
     pub session_id: String,
+    /// The random value the runtime drew for this session's ids (`types::ids`).
+    pub id_seed: u64,
     pub storage_enabled: bool,
     /// The job's trace the session's spans join.
     pub telemetry: crate::telemetry::SessionTelemetry,
@@ -146,6 +148,7 @@ impl VoiceSessionState {
             agent,
             chat_ctx: opening_items,
             session_id,
+            id_seed,
             storage_enabled,
             telemetry: _,
         } = parts;
@@ -165,7 +168,7 @@ impl VoiceSessionState {
             aec: AecWarmup::new(cfg.timers.aec_warmup()),
             by_audio_activity: cfg.turn.interruption.by_audio_activity(),
             errors: ErrorCounts { max: max_unrecoverable_errors, ..Default::default() },
-            ids: IdMint { session: session_id, next: next_id, user_item: None },
+            ids: IdMint { session: session_id, id_seed, next: next_id, user_item: None },
             config,
             chat_ctx,
             llm,
@@ -369,8 +372,8 @@ impl ErrorCounts {
             S::Stt => &mut self.stt,
             S::Llm => &mut self.llm,
             S::Tts => &mut self.tts,
-            S::Realtime => return true,
-            S::AudioProcessing => return false,
+            S::Realtime | S::Storage => return true,
+            S::AudioProcessing | S::Avatar | S::AudioOutput => return false,
         };
         *count += 1;
         *count > self.max
@@ -393,9 +396,11 @@ impl ErrorCounts {
 /// their speech's id from it as they return the handle) and supplies the core its next value.
 pub type NextId = Box<dyn FnMut() -> u64 + Send>;
 
-/// The session's own ids: speeches and items share one sequence, items carry the session's id.
+/// The session's own ids, v1's `<prefix>_<12 hex>`: speeches, items and reply runs share one
+/// sequence under the session's seed.
 pub struct IdMint {
     session: String,
+    id_seed: u64,
     next: NextId,
     /// The user item an interim transcript opened, reused until its final.
     user_item: Option<String>,
@@ -407,12 +412,16 @@ impl IdMint {
     }
 
     pub(crate) fn mint(&mut self, prefix: &str) -> String {
-        let n = self.next_speech_id().0;
-        format!("{}_{prefix}_{n:04}", self.session)
+        lk_agents_abi::types::ids::short(prefix, self.id_seed, (self.next)())
+    }
+
+    /// The seed of a reply run's own id stream, forked from the session's.
+    pub(crate) fn run_seed(&mut self) -> u64 {
+        lk_agents_abi::types::ids::splitmix64(self.id_seed, (self.next)())
     }
 
     pub(crate) fn next_speech_id(&mut self) -> SpeechId {
-        SpeechId((self.next)())
+        SpeechId::nth(self.id_seed, (self.next)())
     }
 
     pub(crate) fn user_transcript_item(&mut self, is_final: bool) -> String {

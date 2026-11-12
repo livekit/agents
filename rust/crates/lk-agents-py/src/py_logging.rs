@@ -257,7 +257,11 @@ impl Forwarder {
             .name("lk-log-drain".into())
             .spawn(move || drain(lines, &drained))
             .ok()?;
-        *queue = Some(Queue { pid, sender: sender.clone(), progress: progress.clone() });
+        let parents =
+            queue.replace(Queue { pid, sender: sender.clone(), progress: progress.clone() });
+        // A forked child never drops its parent's sender: disconnecting would wake the parent's
+        // drain, which does not exist here (on macOS, a trap in libdispatch).
+        std::mem::forget(parents);
         Some((sender, progress))
     }
 }

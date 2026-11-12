@@ -98,9 +98,9 @@ mod agent_state_written_on_connect {
 }
 
 mod stored_turn_keeps_the_history {
-    //! A turn that takes the voice lane keeps the session's history whole, whatever its agent reads.
+    //! A turn that takes the voice partition keeps the session's history whole, whatever its agent reads.
     use lk_agents_abi::ChatItem;
-    use lk_agents_core::tts::markup::ChatMessageExt;
+    use lk_agents_core::markup::ChatMessageExt;
     use lk_agents_fuzz::drive::{Run, Setup, StorageSetup, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, Role, UserText};
     use lk_agents_voice::events::SessionEvent;
@@ -112,7 +112,8 @@ mod stored_turn_keeps_the_history {
                 instructions: None,
                 allow: None,
             },
-            Input::Advance { ms: Millis(20) },
+            // The turn takes the partition before its model request opens.
+            Input::Advance { ms: Millis(100) },
             Input::LlmText { chat: Ref::new(chat), text: AgentText(said.into()) },
             Input::LlmEnd { chat: Ref::new(chat) },
             Input::Advance { ms: Millis(20) },
@@ -123,7 +124,7 @@ mod stored_turn_keeps_the_history {
         ]
     }
 
-    // Catches: the session's history replaced by the active agent's own view of the lane, dropping
+    // Catches: the session's history replaced by the active agent's own view of the partition, dropping
     // items that view does not hold, so a waiting question never got its answer
     // (`tool_output_follows_outcome`, survey seeds 13386, 15374).
     #[test]
@@ -308,5 +309,234 @@ mod turn_hook_sees_agent_context {
         assert_eq!(turn_hooks(&run).len(), 1, "the second turn's hook waits for the first's");
         let replies = run.record.host_view().speeches().len();
         assert_eq!(replies, 0, "no turn is answered while the first hook runs");
+    }
+}
+
+mod tool_text_history {
+    use lk_agents_abi::ChatItem;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
+    use lk_agents_fuzz::record::{Detail, Kind};
+    use lk_agents_voice::events::SessionEvent;
+
+    /// The text the model says alongside a tool call reaches the follow-up request once, with the
+    /// call and its output. https://github.com/livekit/agents/issues/1069 https://github.com/livekit/agents/issues/3407
+    #[test]
+    fn the_text_beside_a_tool_call_reaches_the_follow_up_once() {
+        let run = simulate(async {
+            let mut run =
+                Run::start(&Setup { tts: false, ..Setup::default() }, 0, Default::default()).await;
+            for input in [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmText { chat: Ref::new(0), text: AgentText("Let me check.".into()) },
+                Input::LlmToolCall {
+                    chat: Ref::new(0),
+                    name: "lookup".into(),
+                    args: ToolArgs("{}".into()),
+                },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+                Input::ToolAnswered {
+                    tool: Ref::new(0),
+                    answer: ToolAnswer::Value,
+                    text: AgentText("12C".into()),
+                },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmText { chat: Ref::new(1), text: AgentText("Your seat is 12C.".into()) },
+                Input::LlmEnd { chat: Ref::new(1) },
+                Input::Advance { ms: Millis(500) },
+            ] {
+                run.apply(&input).await;
+            }
+            run
+        });
+
+        let events = run.record.host_view().events();
+        let first_step: Vec<_> = events
+            .iter()
+            .filter_map(|(_, event)| match event {
+                SessionEvent::ConversationItemAdded { item, .. } => Some(item),
+                _ => None,
+            })
+            .filter(|item| match item.as_ref() {
+                ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_) => true,
+                item => {
+                    item.as_message().and_then(|m| m.raw_text_content()).as_deref()
+                        == Some("Let me check.")
+                }
+            })
+            .collect();
+        assert_eq!(first_step.len(), 3, "the text, the call and its output: {first_step:#?}");
+        let follow_up = run.record.resource(Kind::Chat, 1).expect("a follow-up request");
+        let Detail::Chat { ctx_ids, .. } = follow_up.detail() else { panic!("not a chat") };
+        for item in first_step {
+            let sent = ctx_ids.iter().filter(|id| id.as_str() == item.id()).count();
+            assert_eq!(sent, 1, "{} sent {sent} times: {ctx_ids:?}", item.id());
+        }
+    }
+}
+
+mod empty_reply_settles {
+    use lk_agents_abi::Role;
+    use lk_agents_abi::voice::events::AgentState;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
+    use lk_agents_voice::events::SessionEvent;
+
+    /// An empty model reply returns the agent to listening and the next reply is heard.
+    /// https://github.com/livekit/agents/issues/4480 https://github.com/livekit/agents/issues/8469
+    #[test]
+    fn an_empty_model_reply_settles_and_allows_the_next_turn() {
+        let run = simulate(async {
+            let mut run =
+                Run::start(&Setup { tts: false, ..Setup::default() }, 0, Default::default()).await;
+            for input in [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(500) },
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmText { chat: Ref::new(1), text: AgentText("Still here.".into()) },
+                Input::LlmEnd { chat: Ref::new(1) },
+                Input::Advance { ms: Millis(500) },
+            ] {
+                run.apply(&input).await;
+            }
+            run
+        });
+
+        let events = run.record.host_view().events();
+        let listening = events.iter().filter(|(_, event)| {
+            matches!(event, SessionEvent::AgentStateChanged { new: AgentState::Listening, .. })
+        });
+        assert_eq!(listening.count(), 3, "at startup and after each reply");
+        let said: Vec<_> = events
+            .iter()
+            .filter_map(|(_, event)| match event {
+                SessionEvent::ConversationItemAdded { item, .. } => item
+                    .as_message()
+                    .filter(|m| m.role == Role::Assistant)
+                    .and_then(|m| m.raw_text_content()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(said, ["Still here."]);
+    }
+}
+
+mod handoff_retires_parked_preflight {
+    use lk_agents_abi::Role;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, TurnMode, UserText};
+    use lk_agents_voice::events::SessionEvent;
+
+    /// A handoff discards the reply prepared for a preflight transcript, and the new agent
+    /// answers. https://github.com/livekit/agents/issues/6858 https://github.com/livekit/agents/issues/5990
+    #[test]
+    fn a_handoff_discards_the_preflight_reply_and_the_new_agent_answers() {
+        let setup = Setup {
+            stt: true,
+            preemptive: true,
+            turn: TurnMode::Stt,
+            tts: false,
+            ..Setup::default()
+        };
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::SttStart { stt: Ref::new(0) },
+                Input::SttPreflight {
+                    utterance: Ref::new(0),
+                    text: UserText("transfer me".into()),
+                    speaker: None,
+                },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmText { chat: Ref::new(0), text: AgentText("Old agent.".into()) },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+                Input::Handoff {
+                    agent: "replacement".into(),
+                    instructions: AgentText("Answer the caller.".into()),
+                    tools: vec!["lookup".into()],
+                    turn: None,
+                },
+                Input::Advance { ms: Millis(1_000) },
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmText { chat: Ref::new(1), text: AgentText("Replacement ready.".into()) },
+                Input::LlmEnd { chat: Ref::new(1) },
+                Input::Advance { ms: Millis(500) },
+            ] {
+                run.apply(&input).await;
+            }
+            run
+        });
+
+        let said: Vec<_> = run
+            .record
+            .host_view()
+            .events()
+            .into_iter()
+            .filter_map(|(_, event)| match event {
+                SessionEvent::ConversationItemAdded { item, .. } => item
+                    .as_message()
+                    .filter(|m| m.role == Role::Assistant)
+                    .and_then(|m| m.raw_text_content()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(said, ["Replacement ready."]);
+    }
+}
+
+mod reasoning_under_an_llm_node {
+    //! A model's reasoning never reaches anyone, under an `llm_node` that defers to the default.
+    use lk_agents_fuzz::drive::{NodeSetup, Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
+
+    // Catches: an overriding `llm_node` that calls the default reading the model without its leg,
+    // so the reasoning an expressive model opens its text with was shown in the transcript and kept
+    // in the history (survey seed 28).
+    #[test]
+    fn reasoning_is_hidden_under_a_deferring_llm_node() {
+        let nodes =
+            NodeSetup { llm: true, tts: false, stt: false, llm_text: None, transcription: false };
+        let setup =
+            Setup { tts: false, expressive_model: true, nodes: Some(nodes), ..Setup::default() };
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmToolCall {
+                    chat: Ref::new(0),
+                    name: "lookup".into(),
+                    args: ToolArgs("{}".into()),
+                },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmText { chat: Ref::new(0), text: AgentText("Be right back.".into()) },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+                Input::ToolAnswered {
+                    tool: Ref::new(0),
+                    answer: ToolAnswer::Value,
+                    text: AgentText("12C".into()),
+                },
+                Input::Advance { ms: Millis(500) },
+            ] {
+                run.apply(&input).await;
+            }
+            run
+        });
+        let leaked: Vec<String> = run
+            .record
+            .journal()
+            .iter()
+            .map(|(_, step)| format!("{step:?}"))
+            .filter(|step| step.contains("planning the reply"))
+            .collect();
+        assert!(leaked.is_empty(), "the model's reasoning reached: {leaked:#?}");
     }
 }

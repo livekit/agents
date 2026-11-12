@@ -200,6 +200,9 @@ class VADStream(ABC):
         self.input.close()
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
+        # The reader is done with the stream: what was buffered for it is dropped, not returned.
+        while not self._event_ch.empty():
+            self._event_ch.recv_nowait()
 
     async def __anext__(self) -> VADEvent:
         try:

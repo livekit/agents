@@ -11,8 +11,8 @@ use lk_agents_abi::voice::session::{
 };
 use lk_agents_abi::voice::session_effects::{DeliveredState, SessionEvents};
 use lk_agents_abi::voice::session_options::{
-    Expressive, RecordingOptions, ResolvedSessionOptions, SessionLegs, TextTransformSet,
-    TurnHandlingKwargs, UpdateKwargs,
+    Expressive, RecordingOptions, ResolvedSessionOptions, SessionLegs, TurnHandlingKwargs,
+    UpdateKwargs,
 };
 use lk_agents_abi::voice::session_owner::SessionOwner as _;
 use lk_agents_abi::voice::session_owner::{
@@ -86,7 +86,13 @@ impl SessionOwner {
             started_at: self.started_at(),
             timestamp,
             duration: recording_started_at.map(|at| timestamp - at),
-            audio_recording_path: self.recording_path(),
+            // A failed recording's file is truncated: the report offers no audio.
+            audio_recording_path: self
+                .0
+                .audio
+                .get()
+                .filter(|(_, recorder)| !recorder.failed())
+                .map(|(path, _)| path.clone()),
             audio_recording_started_at: recording_started_at,
             sdk_version: job.sdk_version,
             ..session
@@ -259,7 +265,7 @@ impl Inner {
         let mut args = bindings.args;
         self.join_job(host.as_ref(), &mut args, bindings.record_audio)?;
         if let Some(recorder) = self.recorder.get() {
-            recorder.ready().await.map_err(|error| HostError::new(error.to_string()))?;
+            recorder.ready().await?;
         }
         if args.chat_ctx.is_none() {
             args.chat_ctx = self.start_history.lock().take();
@@ -649,7 +655,6 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         vad: Maybe<Option<HostRef>>,
         turn_handling: Maybe<TurnHandlingKwargs>,
         min_consecutive_speech_delay: Maybe<f64>,
-        tts_text_transforms: Maybe<Option<TextTransformSet>>,
         expressive: Maybe<Expressive>,
         keyterms: Maybe<Vec<String>>,
     ) -> Result<(), OptionsRefused> {
@@ -658,7 +663,6 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             expressive,
             keyterms: keyterms.given(),
             min_consecutive_speech_delay: min_consecutive_speech_delay.given(),
-            tts_text_transforms,
         };
         validate_session_update(&update)?;
         if let Some(session) = self.0.session.get() {
@@ -676,12 +680,10 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         vad: Maybe<Option<HostRef>>,
         turn_handling: Maybe<TurnHandlingKwargs>,
         min_consecutive_speech_delay: Maybe<f64>,
-        tts_text_transforms: Maybe<Option<TextTransformSet>>,
     ) -> Result<u64, OptionsRefused> {
         let update = UpdateKwargs {
             turn_handling: turn_handling.given(),
             min_consecutive_speech_delay: min_consecutive_speech_delay.given(),
-            tts_text_transforms,
             ..UpdateKwargs::default()
         };
         validate_session_update(&update)?;

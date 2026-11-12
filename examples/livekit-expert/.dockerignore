@@ -1,0 +1,10 @@
+**/__pycache__/
+**/.venv/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.env
+**/.env.*
+.git
+.DS_Store
+README.md
+tests/

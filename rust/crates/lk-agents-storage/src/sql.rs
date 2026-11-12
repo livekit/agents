@@ -581,8 +581,8 @@ mod schema_tests {
         }
         tx.commit().unwrap();
         db.execute(
-            "INSERT INTO tasks (task_id, lane, seq, message_id, status, updated_at, data) \
-             VALUES ('AST_first', 'front-desk', 1, 'first', 'submitted', 1, '{}')",
+            "INSERT INTO tasks (task_id, partition_key, message_id, status, updated_at_ms, data) \
+             VALUES ('AST_first', 'front-desk', 'first', 'submitted', 1, '{}')",
             [],
         )
         .unwrap();

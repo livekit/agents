@@ -8,13 +8,13 @@ use lk_agents_runtime::storage::ThreadDbConnection as _;
 use lk_agents_runtime::storage::sql::{SqlValue, Statement};
 use lk_agents_runtime::storage::thread::LeaseTiming;
 
-use super::{FakeDatabase, LANE};
+use super::{FakeDatabase, PARTITION_KEY};
 use crate::record::{StorageFault, StorageStep};
 
 // Faults of the storage layer itself, on top of latency, lost answers and outages: SQLite
-// refusing a statement as `sqlite_error` maps it, the wall clock `unixepoch()` reads jumping,
+// refusing a statement as `sqlite_error` maps it, the wall clock `CAST(unixepoch('subsec') * 1000 AS INTEGER)` reads jumping,
 // the database's worker crashing with a write applied (the next request reopens the file and
-// recovers its WAL), and another worker's connection holding the free lane or stealing it.
+// recovers its WAL), and another worker's connection holding the free partition or stealing it.
 // Stress frequencies, not measured rates, drawn from a stream of their own so the older faults
 // keep their draws.
 
@@ -29,7 +29,7 @@ pub fn storage_faults() -> [u64; 5] {
     INJECTED.each_ref().map(|n| n.load(Ordering::Relaxed))
 }
 
-/// The run's clock with its wall reading skewed: what the database's `unixepoch()` reads.
+/// The run's clock with its wall reading skewed: what the database's `CAST(unixepoch('subsec') * 1000 AS INTEGER)` reads.
 pub(super) struct Skewed {
     pub(super) inner: Arc<dyn Clock>,
     skew_ms: AtomicI64,
@@ -62,7 +62,7 @@ pub(super) struct Layer {
     pub(super) refused: Option<StorageError>,
     /// The worker crashes once the write applied, its answer lost.
     pub(super) crash: bool,
-    /// Another worker's connection comes for the lane: `Some(true)` steals it.
+    /// Another worker's connection comes for the partition: `Some(true)` steals it.
     pub(super) intrude: Option<bool>,
 }
 
@@ -133,7 +133,7 @@ impl FakeDatabase {
         StorageError::Uncertain(Unacknowledged::sent("the sqlite worker stopped mid-batch"))
     }
 
-    /// Another worker's connection takes the lane, free (`steal` false) or not, holds it for a
+    /// Another worker's connection takes the partition, free (`steal` false) or not, holds it for a
     /// while renewing as a live owner does (one to four seconds), then releases it.
     pub(super) async fn intrude(self: Arc<Self>, steal: bool) {
         let (hold_ms, serial) = {
@@ -142,18 +142,24 @@ impl FakeDatabase {
             (state.layer.u64(1_000..=4_000), state.intruders)
         };
         let token = format!("{INTRUDER}{serial}");
-        let ttl = LeaseTiming::default().ttl.as_secs();
-        let params = || vec![SqlValue::Text(token.clone()), SqlValue::Text(LANE.into())];
-        let free = if steal { "" } else { " AND lease_until < unixepoch()" };
+        let ttl = LeaseTiming::default().ttl.as_millis();
+        let params = || vec![SqlValue::Text(token.clone()), SqlValue::Text(PARTITION_KEY.into())];
+        let free = if steal {
+            ""
+        } else {
+            " AND lease_expires_at_ms < CAST(unixepoch('subsec') * 1000 AS INTEGER)"
+        };
         let take = format!(
-            "UPDATE lanes SET lease_holder = 'intruder', lease_token = ?1, \
-             lease_until = unixepoch() + {ttl} WHERE lane = ?2{free}"
+            "UPDATE partitions SET lease_holder = 'intruder', lease_token = ?1, \
+             lease_expires_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER) + {ttl} WHERE partition_key = ?2{free}"
         );
         // The lease it replaces, read in the take's own transaction: the call's take may apply
         // between a separate read and the steal. It speaks as it sends the take, as `plan` notes
         // an owner's request: the call's take may observe its lease before this task resumes.
-        let lessee = Statement::raw("SELECT lease_token, lease_until FROM lanes WHERE lane = ?1")
-            .with(vec![SqlValue::Text(LANE.into())]);
+        let lessee = Statement::raw(
+            "SELECT lease_token, lease_expires_at_ms FROM partitions WHERE partition_key = ?1",
+        )
+        .with(vec![SqlValue::Text(PARTITION_KEY.into())]);
         self.state.lock().touched.insert(token.clone(), self.clock.now());
         let took = self.observer.batch(vec![lessee, Statement::raw(take).with(params())]).await;
         let Ok(took) = took else {
@@ -170,7 +176,7 @@ impl FakeDatabase {
         });
         if steal
             && let Some((stolen, until)) = before
-            && until >= self.unix_secs()
+            && until >= self.unix_millis()
         {
             let mut state = self.state.lock();
             state.stolen.push(stolen);
@@ -178,7 +184,7 @@ impl FakeDatabase {
         }
         self.record_fault(if steal { StorageFault::Stolen } else { StorageFault::Held });
         let renew = format!(
-            "UPDATE lanes SET lease_until = unixepoch() + {ttl} WHERE lane = ?2 AND lease_token = ?1"
+            "UPDATE partitions SET lease_expires_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER) + {ttl} WHERE partition_key = ?2 AND lease_token = ?1"
         );
         let renewal = LeaseTiming::default().renew_interval.as_millis() as u64;
         let mut left = hold_ms;
@@ -189,15 +195,16 @@ impl FakeDatabase {
             self.state.lock().touched.insert(token.clone(), self.clock.now());
             let _ = self.observer.batch(vec![Statement::raw(renew.clone()).with(params())]).await;
         }
-        let release = "UPDATE lanes SET lease_until = 0, lease_token = NULL WHERE lane = ?2 AND lease_token = ?1";
+        let release = "UPDATE partitions SET lease_expires_at_ms = 0, lease_token = NULL WHERE partition_key = ?2 AND lease_token = ?1";
         let _ = self.observer.batch(vec![Statement::raw(release).with(params())]).await;
         self.state.lock().intruding = false;
     }
 
-    /// The lane's version while another worker holds it, or `None`.
+    /// The partition's version while another worker holds it, or `None`.
     async fn intruded_version(&self) -> Option<i64> {
-        let select = Statement::raw("SELECT version, lease_token FROM lanes WHERE lane = ?1")
-            .with(vec![SqlValue::Text(LANE.into())]);
+        let select =
+            Statement::raw("SELECT version, lease_token FROM partitions WHERE partition_key = ?1")
+                .with(vec![SqlValue::Text(PARTITION_KEY.into())]);
         let rows = self.observer.query(select).await.ok()?;
         match rows.first()?.as_slice() {
             [SqlValue::Int(version), SqlValue::Text(token)] if token.starts_with(INTRUDER) => {
@@ -216,7 +223,7 @@ impl FakeDatabase {
         })
     }
 
-    /// Around a write under a stolen token: whether it moved the lane while the thief held it.
+    /// Around a write under a stolen token: whether it moved the partition while the thief held it.
     pub(super) async fn fenced<T>(&self, write: impl std::future::Future<Output = T>) -> T {
         let before = self.intruded_version().await;
         let result = write.await;

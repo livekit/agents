@@ -23,7 +23,7 @@ pub struct SpansNestAndEnd;
 impl Rule for SpansNestAndEnd {
     const CONTRACT: Contract = Contract {
         id: "spans_nest_and_end",
-        guarantee: "Every span ends exactly once, under a declared parent and within it unless declared to outlive it; a session that ended, closed or dropped, exported its root, the close sweep ends nothing, no failure is recorded as cancelled, an agent turn names what interrupted it exactly when it was interrupted and where its playout stopped when cut while heard, and the work recorded under a turn carries its job and conversation.",
+        guarantee: "Every span ends exactly once, under a declared parent and within it unless declared to outlive it; a provider request never nests under another request's attempt; a session that ended, closed or dropped, exported its one root, the close sweep ends nothing, no failure is recorded as cancelled, an agent turn names what interrupted it exactly when it was interrupted and where its playout stopped when cut while heard, and the work recorded under a turn carries its job and conversation.",
         examples: &[spoke_once],
         counterexamples: &[
             wrong_parent,
@@ -34,6 +34,8 @@ impl Rule for SpansNestAndEnd {
             failure_cancelled,
             never_closed,
             dropped_without_close,
+            two_session_roots,
+            request_under_another_requests_attempt,
             interrupted_without_cause,
             turn_work_without_identity,
             cut_while_heard_without_position,
@@ -162,7 +164,25 @@ impl Rule for SpansNestAndEnd {
                 d.outlives_parent || span.end_unix_nanos <= parent.end_unix_nanos,
                 format!("{} ended after its parent {}", span.name, parent.name),
             );
+            // An attempt of a plain request holds no other request: one under it is a request
+            // made elsewhere that picked up this one's context (only an adapter's attempts
+            // make inner requests).
+            let request = |name: &str| name == "tts_request" || name == "llm_request";
+            let leaked = request(&span.name)
+                && parent.name.ends_with("_request_run")
+                && parent.parent.and_then(|id| by_id.get(&id)).is_some_and(|g| request(&g.name));
+            check.expect(
+                Subject::Session,
+                !leaked,
+                format!("{} nested under another request's {}", span.name, parent.name),
+            );
         }
+        let roots = by_id.values().filter(|s| s.name == session::AgentSession::NAME).count();
+        check.expect(
+            Subject::Session,
+            roots <= 1,
+            format!("the session exported {roots} agent_session roots"),
+        );
         // Gone, closed or dropped, a session that recorded anything exported its root: the
         // dashboard hangs every row on `agent_session`.
         let opened = spans.iter().any(|s| manual(&s.name));
@@ -269,6 +289,27 @@ fn never_closed() -> Recording {
             error: None,
         })
         .driver_finished()
+        .done()
+}
+
+/// Two `agent_session` roots for one session (https://github.com/livekit/agents/pull/3726).
+fn two_session_roots() -> Recording {
+    Authored::new()
+        .session(ended(vec![session_root(2), span(5, Some(99), "agent_session", 3)]))
+        .done()
+}
+
+/// Interleaved synthesis: one request's `tts_request` under another request's attempt
+/// (https://github.com/livekit/agents/issues/3554).
+fn request_under_another_requests_attempt() -> Recording {
+    Authored::new()
+        .session(ended(vec![
+            span(5, Some(4), "tts_request", 3),
+            span(4, Some(3), "tts_request_run", 4),
+            span(3, Some(2), "tts_request", 5),
+            span(2, Some(1), "agent_turn", 6),
+            session_root(9),
+        ]))
         .done()
 }
 

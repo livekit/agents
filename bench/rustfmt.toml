@@ -1,0 +1,3 @@
+# bench/host.rs is a Cargo target of rust/crates/lk-agents-py: format it as the workspace does.
+max_width = 100
+use_small_heuristics = "Max"

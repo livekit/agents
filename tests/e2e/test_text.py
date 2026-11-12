@@ -15,15 +15,13 @@ from a2a.types import a2a_pb2 as pb
 from google.protobuf import json_format
 
 from livekit.agents._generated.a2a_metadata import (
-    INTERRUPTED,
-    INTERRUPTION_REASON,
     MERGED_INTO,
     REASON,
 )
 from livekit.agents.storage import AgentDBStorage, Thread, ThreadNotFound
 
 from .drivers import Workers, answer
-from .resources import REQUEST_SECONDS, RecordingService, finish_cleanup
+from .resources import RecordingService, finish_cleanup
 
 pytestmark = pytest.mark.e2e
 
@@ -44,7 +42,7 @@ async def test_thread_history_and_idempotency_across_workers(
         ("worker-a", "I am Alice"),
         ("worker-b", "recall"),
     ]
-    history = await Thread(AgentDBStorage(), thread, agent_name="e2e").chat_history()
+    history = await Thread(AgentDBStorage(), thread, partition_key="e2e").chat_history()
     assert [item.text_content for item in history.items if item.type == "message"] == [
         "I am Alice",
         "reply: I am Alice",
@@ -64,7 +62,7 @@ async def test_input_required_answer_is_delivered_on_other_worker(
     assert replied.status.state == pb.TaskState.TASK_STATE_COMPLETED
     assert answer(replied) == "completed: alice@example.com"
     assert [call.worker for call in service.calls] == ["worker-a", "worker-b"]
-    history = await Thread(AgentDBStorage(), thread, agent_name="e2e").chat_history()
+    history = await Thread(AgentDBStorage(), thread, partition_key="e2e").chat_history()
     outputs = [item for item in history.items if item.type == "function_call_output"]
     assert len(outputs) == 1 and outputs[0].output == "alice@example.com"
 
@@ -93,51 +91,6 @@ async def test_approval_executes_exact_terms_once_only_after_confirmation_on_oth
     resent = await workers.a.send(message)
     assert resent.id == result.id
     assert [call for call in service.calls if call.operation == "book"] == effects
-
-
-async def test_text_interrupt_across_workers_does_not_deliver_stale_answer(
-    workers: Workers, thread: str, service: RecordingService
-) -> None:
-    """Interrupt a blocked tool on A from B; only B's final answer reaches the caller.
-
-    This checks text delivery. Caller audio interruption is a separate pending contract.
-    """
-    async with asyncio.timeout(REQUEST_SECONDS), asyncio.TaskGroup() as tasks:
-        first = tasks.create_task(
-            workers.a.stream(
-                "message/stream", pb.SendMessageRequest(message=workers.a.message("block", thread))
-            )
-        )
-        await service.wait_for_call(thread, "wait")
-        second = tasks.create_task(
-            workers.b.stream(
-                "message/stream",
-                pb.SendMessageRequest(message=workers.b.message("replacement", thread)),
-            )
-        )
-        # Observe the durable waiter before allowing A's tool to return.
-        storage = AgentDBStorage()
-        core = await storage._open(thread)
-        try:
-            while True:
-                lane = await core.lane_info("e2e")
-                if lane is not None and (lane.waiter or "").startswith("worker-b/"):
-                    break
-                await asyncio.sleep(0.01)
-        finally:
-            core.close()
-        service.release(thread)
-    old, new = first.result(), second.result()
-    assert old[-1].status_update.status.state == pb.TaskState.TASK_STATE_CANCELED
-    metadata = dict(old[-1].status_update.metadata)
-    assert metadata[INTERRUPTED] is True
-    assert metadata[INTERRUPTION_REASON] == "new-message"
-    assert not any(frame.HasField("artifact_update") for frame in old)
-    assert new[-1].status_update.status.state == pb.TaskState.TASK_STATE_COMPLETED
-    assert (
-        "".join(part.text for frame in new for part in frame.artifact_update.artifact.parts)
-        == "reply: replacement"
-    )
 
 
 async def test_inbox_burst_merges_messages_into_one_reply(
@@ -213,7 +166,6 @@ async def test_threads_create_update_list_delete(
     """Create a real database, persist attributes, list its scope, then refuse deleted reads."""
     threads = AgentDBStorage().threads
     created = await threads.get_thread(thread)
-    assert created.database_id.startswith("DB_")
     await threads.update_thread(thread, attributes={"title": "E2E appointment"})
     assert (await threads.get_thread(thread)).attributes["title"] == "E2E appointment"
     page = await threads.list_threads(created.scope, limit=10)

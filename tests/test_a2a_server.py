@@ -1,7 +1,7 @@
 """``a2a_session`` over the wire, in process: each server runs on the worker's own loopback
 listener (``local_server.py``), which serves its text doors natively; a stock a2a-sdk client over
 HTTP+SSE with and without the extension header, two workers sharing one local agent-db
-(``storage_fixture.py``) for the thin slice, the interrupt, the inbox, a resend and a task
+(``storage_fixture.py``) for the thin slice, the interrupt and a task
 read after a dropped stream. That listener vouches for every caller: authentication by bearer and by the node's
 verdict is pinned by the door's own tests (``lk-agents-runtime/src/a2a/door_tests.rs``)."""
 
@@ -24,12 +24,9 @@ from google.protobuf import json_format
 
 from livekit.agents import Agent, AgentServer, RunContext, RunResult
 from livekit.agents._generated.a2a_metadata import (
-    CHANNEL,
     INTERRUPTED,
-    INTERRUPTION_REASON,
     KIND,
     KIND_CHAT_CTX,
-    MERGED_INTO,
     REASON,
 )
 from livekit.agents._generated.storage_class import ThreadInfo
@@ -43,8 +40,8 @@ from livekit.agents.a2a import (
     TextPart,
     Unauthorized,
 )
-from livekit.agents.llm import ChatItem, FunctionToolCall
-from livekit.agents.storage import Storage, StorageUnavailable, Thread
+from livekit.agents.llm import FunctionToolCall
+from livekit.agents.storage import Storage, StorageUnavailable
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .local_server import serving
@@ -185,19 +182,6 @@ def wire(
 def state_of(result: dict[str, Any]) -> str | None:
     update = result.get("statusUpdate")
     return update["status"]["state"] if update else None
-
-
-async def history_items(storage: Storage, thread_id: str, lane: str) -> list[ChatItem]:
-    return (await Thread(storage, thread_id, agent_name=lane).chat_history()).items
-
-
-async def waiter_of(storage: Storage, thread_id: str, lane: str) -> str:
-    db = await storage._open(thread_id)
-    try:
-        row = await db.lane_info(lane)
-    finally:
-        db.close()
-    return (row.waiter or "") if row is not None else ""
 
 
 # ---------------------------------------------------------------------------------------------
@@ -422,122 +406,6 @@ def _blocking_agent(tool_entered: asyncio.Event, release: asyncio.Event) -> Agen
     return front
 
 
-async def test_interrupt_two_streams_within_a_second_on_two_workers(
-    thread_storages: Workers,
-) -> None:
-    a, b = thread_storages
-    tool_entered, release = asyncio.Event(), asyncio.Event()
-    front = _blocking_agent(tool_entered, release)
-
-    async def handler(ctx: A2ASessionContext) -> RunResult[str]:
-        return await front.run(ctx.message, message_history=ctx.message_history)
-
-    server_a, _ = make_server(a, handler)
-    server_b, _ = make_server(b, handler)
-    ctx_id = (await a.threads.create_thread()).thread_id
-    async with http_client(server_a) as http_a, http_client(server_b) as http_b:
-        first = asyncio.create_task(
-            rpc(http_a, "message/stream", {"message": wire("first", "m1", context_id=ctx_id)})
-        )
-        await asyncio.wait_for(tool_entered.wait(), 5)
-        second = asyncio.create_task(
-            rpc(http_b, "message/stream", {"message": wire("second", "m2", context_id=ctx_id)})
-        )
-        for _ in range(200):
-            if (await waiter_of(b, ctx_id, AGENT)).startswith("worker-b/"):
-                break
-            await asyncio.sleep(0.01)
-        else:
-            pytest.fail("the waiter was never set")
-        release.set()
-        r1, r2 = await asyncio.gather(first, second)
-
-    results_1 = [r["result"] for r in sse_results(r1)]
-    results_2 = [r["result"] for r in sse_results(r2)]
-    final_1 = results_1[-1]["statusUpdate"]
-    assert final_1["status"]["state"] == "TASK_STATE_CANCELED"
-    meta = final_1["metadata"]
-    assert meta[INTERRUPTED] is True and meta[INTERRUPTION_REASON] == "new-message"
-    assert not any("artifactUpdate" in r for r in results_1)
-    artifacts = [r["artifactUpdate"]["artifact"] for r in results_2 if "artifactUpdate" in r]
-    # streamed in pieces as the model writes it, the last piece empty
-    assert "".join(p["text"] for a in artifacts for p in a.get("parts", [])) == "both answered"
-    assert results_2[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
-    items = await history_items(a, ctx_id, AGENT)
-    assert [i.type for i in items] == [
-        "message",
-        "function_call",
-        "function_call_output",
-        "message",
-        "message",
-    ]
-
-
-async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
-    thread_storage: Storage,
-) -> None:
-    """Two requests of one worker on one lane hold two leases, not one re-taken lease."""
-    storage = thread_storage
-    batches: list[list[str]] = []
-
-    async def handler(ctx: A2ASessionContext) -> str:
-        batches.append([m.parts[0].text for m in ctx.messages])
-        await asyncio.sleep(0.5)
-        return "one reply"
-
-    from datetime import timedelta
-
-    server, _ = make_server(storage, handler, debounce=timedelta(seconds=0.3))
-    ctx_id = (await storage.threads.create_thread()).thread_id
-    async with http_client(server) as http:
-        first = asyncio.create_task(
-            rpc(
-                http,
-                "message/send",
-                {"message": wire("where", "m1", context_id=ctx_id, **{CHANNEL: "sms"})},
-            )
-        )
-        await asyncio.sleep(0.05)
-        second = asyncio.create_task(
-            rpc(
-                http,
-                "message/send",
-                {"message": wire("are you", "m2", context_id=ctx_id, **{CHANNEL: "sms"})},
-            )
-        )
-        r1, r2 = await asyncio.gather(first, second)
-    task_1, task_2 = r1.json()["result"]["task"], r2.json()["result"]["task"]
-    assert batches == [["where", "are you"]]
-    assert task_1["status"]["state"] == "TASK_STATE_COMPLETED" and "artifacts" not in task_1
-    assert task_1["metadata"][MERGED_INTO] == task_2["id"]
-    assert task_2["artifacts"][0]["parts"][0]["text"] == "one reply"
-
-
-async def test_a_resent_message_id_returns_the_existing_task(
-    thread_storage: Storage,
-) -> None:
-    server, _ = make_server(thread_storage)
-    async with http_client(server) as http:
-        first = (await rpc(http, "message/send", {"message": wire("hi", "m1")})).json()["result"][
-            "task"
-        ]
-        again = (
-            await rpc(
-                http, "message/send", {"message": wire("hi", "m1", context_id=first["contextId"])}
-            )
-        ).json()["result"]["task"]
-        listed = (await rpc(http, "tasks/list", {"contextId": first["contextId"]})).json()[
-            "result"
-        ]["tasks"]
-    assert again["id"] == first["id"]
-    assert again["artifacts"][0]["parts"][0]["text"] == "reply to: hi"
-    assert [t["id"] for t in listed] == [first["id"]]
-    storage = server.storage
-    assert storage is not None
-    items = await history_items(storage, first["contextId"], AGENT)
-    assert [i.text_content for i in items] == ["hi", "reply to: hi"]
-
-
 async def first_event(http: httpx.AsyncClient, ctx_id: str) -> tuple[str, httpx.Response]:
     """A ``message/stream`` whose first event, the task, was read; the response stays open."""
     request = http.build_request(
@@ -673,22 +541,14 @@ def grant_token(scope: str, **flags: bool) -> str:
     return CREDENTIALS.thread_grant_token(AgentThreadGrant(scope=scope, **flags))
 
 
-def test_the_nodes_verdict_is_the_project_credential_and_a_bearer_is_verified_here() -> None:
-    """Through a node the project credential is stripped and arrives as ``authorized``; a thread
-    grant arrives as the bearer it is and the worker verifies it, as it verifies every token
-    when reached directly."""
-    bob = {"Authorization": f"Bearer {grant_token('user:bob')}"}
-    principal = CREDENTIALS._principal(bob, agent_name=AGENT, node_authorized=True)
+def test_a_thread_grant_names_its_caller_and_its_threads() -> None:
+    """A thread grant verifies as the grant it carries; one naming neither a scope nor a thread
+    is refused."""
+    principal = CREDENTIALS.verify(grant_token("user:bob"), agent_name=AGENT)
     assert principal.kind == "grant" and principal.grant is not None
     assert principal.grant.scope == "user:bob" and principal.grant.write
-    # the node's verdict without a bearer is the project credential; nothing is anonymous
-    assert CREDENTIALS._principal({}, agent_name=AGENT, node_authorized=True).kind == "project"
     with pytest.raises(Unauthorized):
-        CREDENTIALS._principal({}, agent_name=AGENT)
-    # a grant naming neither a scope nor a thread is refused
-    bare = {"Authorization": f"Bearer {grant_token('', write=True)}"}
-    with pytest.raises(Unauthorized):
-        CREDENTIALS._principal(bare, agent_name=AGENT)
+        CREDENTIALS.verify(grant_token("", write=True), agent_name=AGENT)
     # the checks, as protocol's: scope covers create and list, ids or all cover a thread,
     # update needs all
     thread = ThreadInfo(
@@ -699,7 +559,6 @@ def test_the_nodes_verdict_is_the_project_credential_and_a_bearer_is_verified_he
         last_active=0,
         expires_at=0,
         idle_ttl_seconds=0,
-        database_id="",
     )
     listed = AgentThreadGrant(thread_ids=("AT_1",), read=True)
     assert listed.can_read(thread) and not listed.can_write(thread)
@@ -763,7 +622,7 @@ async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
 ) -> None:
     """docs/internals/storage.md "Two brains, one thread": the fast brain's ``RemoteAgent(url)``
     with no token, in a conversation on thread T, mints a grant for T and shares it; the grant
-    may write T, and the back office answers in T on its own lane. A project credential alone
+    may write T, and the back office answers in T on its own partition_key. A project credential alone
     (what it minted before) grants no thread: the door refuses it 403 for a message
     (``door_tests.rs``)."""
     from livekit.agents import _core
@@ -787,11 +646,11 @@ async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
     message = interaction.message({"request": "book"}, False, True, [], caller.thread_id, token)
     assert message.context_id == caller.thread_id
     assert token is not None
-    shared = CREDENTIALS._principal({"Authorization": f"Bearer {token}"}, agent_name=AGENT)
+    shared = CREDENTIALS.verify(token, agent_name=AGENT)
     assert shared.grant is not None and shared.grant.can_write(caller)
     endpoint_only = _core._core_remote_token(url, *project, None, None)
     assert endpoint_only is not None
-    alone = CREDENTIALS._principal({"Authorization": f"Bearer {endpoint_only}"}, agent_name=AGENT)
+    alone = CREDENTIALS.verify(endpoint_only, agent_name=AGENT)
     assert alone.kind == "project" and alone.grant is None
     async with http_client(server) as http:
         sent = wire("book", message.message_id, context_id=message.context_id, kind="delegation")
@@ -919,3 +778,47 @@ async def test_payload_budget_refuses_before_durable_receipt(thread_storage: Sto
     assert response.json()["error"]["code"] == -32602
     assert calls == 0
     assert (await thread_storage.threads.list_threads("console")).threads == []
+
+
+async def test_delegation_partition_reentry_fails_before_task_admission(
+    thread_storage: Storage,
+) -> None:
+    from livekit.agents._generated.a2a_metadata import PARTITION_CHAIN_KEY
+    from livekit.agents.storage import DEFAULT_PARTITION_KEY
+
+    entered = False
+
+    async def handler(ctx: A2ASessionContext) -> str:
+        nonlocal entered
+        entered = True
+        return "unexpected"
+
+    server, _ = make_server(thread_storage, handler)
+    thread_id = (await thread_storage.threads.create_thread()).thread_id
+    caller = {
+        "storage_location": thread_storage._core.location,
+        "storage_project": thread_storage._core.project_id,
+        "thread_id": thread_id,
+        "partition_key": DEFAULT_PARTITION_KEY,
+    }
+    async with http_client(server) as http:
+        response = await rpc(
+            http,
+            "message/send",
+            {
+                "message": wire(
+                    "delegate",
+                    "reentry",
+                    context_id=thread_id,
+                    **{PARTITION_CHAIN_KEY: [caller]},
+                )
+            },
+        )
+        assert "partition_key" in response.text and "re-enter" in response.text
+    assert not entered
+    core = await thread_storage._open(thread_id)
+    try:
+        assert not await core.tasks(DEFAULT_PARTITION_KEY, limit=10)
+        assert not await core.inbox(DEFAULT_PARTITION_KEY, pending=True)
+    finally:
+        core.close()

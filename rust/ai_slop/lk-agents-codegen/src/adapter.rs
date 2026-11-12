@@ -57,6 +57,11 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         root.push_str(&format!("    type {}: {}{bounds};\n", c.rust_name, c.trait_path));
     }
     root.push_str("}\n\n/// Adds every declared class to `_core`.\npub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {\n");
+    for constant in &decls.constants {
+        if let crate::decl::ConstValue::NativeString { rust } = &constant.value {
+            root.push_str(&format!("    m.add({:?}, {rust})?;\n", constant.name));
+        }
+    }
     for c in &decls.classes {
         if c.form == Form::Functions {
             for f in &c.methods {

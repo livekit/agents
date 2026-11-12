@@ -1,7 +1,7 @@
 use super::*;
 
-const SPOKEN: View = View::Spoken { keep_markdown: false, keep_emoji: false };
-const DISPLAY: View = View::Display { keep_emoji: true };
+const SPOKEN: View = View::Spoken;
+const DISPLAY: View = View::Display;
 
 fn markdown() -> Rules {
     Rules { markdown: true, emoji: true, ..Rules::default() }
@@ -73,20 +73,13 @@ fn markdown_is_not_spoken() {
 fn the_transcript_keeps_markdown_and_emoji_as_written() {
     let text = "## Plan\n- **ship** it 🚀\n```sh\nmake\n```\nsee [docs](u)";
     assert_eq!(view(DISPLAY, &[text]), text);
-    assert_eq!(view(View::Display { keep_emoji: false }, &["go 🚀 now"]), "go now");
+    assert_eq!(view(SPOKEN, &["go 🚀 now"]), "go now");
 }
 
 #[test]
 fn history_is_plain_and_keeps_code_and_link_targets() {
     let text = "## Plan\n- **ship** ~~not~~ it 🚀\n```sh\nmake\n```\nsee [docs](https://x.y)";
     assert_eq!(view(View::Plain, &[text]), "Plan\nship it 🚀\nmake\nsee docs (https://x.y)");
-}
-
-#[test]
-fn markdown_spoken_as_written_when_its_transform_is_off() {
-    let keep = View::Spoken { keep_markdown: true, keep_emoji: true };
-    let text = "**a** ~~b~~ ```x``` 🚀";
-    assert_eq!(view(keep, &[text]), text);
 }
 
 #[test]
@@ -264,14 +257,10 @@ fn a_construct_running_past_its_window_is_literal_however_it_arrives() {
 #[test]
 fn the_synthesis_view_reads_markdown_and_emoji_as_the_spoken_view_does() {
     let tokens = Lexer::all(markdown(), "**a** ~~b~~ `c` 🚀\n```\nd\n```\n");
-    for keep_markdown in [false, true] {
-        for keep_emoji in [false, true] {
-            assert_eq!(
-                Projector::new(View::Synthesis { keep_markdown, keep_emoji }).text(&tokens),
-                Projector::new(View::Spoken { keep_markdown, keep_emoji }).text(&tokens),
-            );
-        }
-    }
+    assert_eq!(
+        Projector::new(View::Synthesis).text(&tokens),
+        Projector::new(View::Spoken).text(&tokens),
+    );
 }
 
 #[test]

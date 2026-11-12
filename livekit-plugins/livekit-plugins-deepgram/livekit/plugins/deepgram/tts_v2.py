@@ -14,12 +14,10 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
-    tokenize,
     tts,
     utils,
 )
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
@@ -67,7 +65,6 @@ class _TTSOptionsV2:
     model: FluxTTSModels | str
     encoding: str
     sample_rate: int
-    word_tokenizer: tokenize.WordTokenizer
     base_url: str
     api_key: str
     mip_opt_out: bool = False
@@ -84,7 +81,6 @@ class TTSv2(tts.TTS):
         bit_rate: int | None = None,
         api_key: str | None = None,
         base_url: str = BASE_URL_V2,
-        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: http.HttpSession | None = None,
         mip_opt_out: bool = False,
     ) -> None:
@@ -105,7 +101,6 @@ class TTSv2(tts.TTS):
                 linear16 streaming path.
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
             base_url (str): Base URL for Deepgram Flux TTS API. Defaults to "https://api.deepgram.com/v2/speak"
-            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to `livekit.agents.tokenize.WordTokenizer`.
             http_session (http.HttpSession): Optional HTTP session to use for requests.
             mip_opt_out (bool): Opt out of the Deepgram Model Improvement Program. Defaults to
                 False (requests may be used to improve models). See https://dpgr.am/deepgram-mip
@@ -121,15 +116,11 @@ class TTSv2(tts.TTS):
         if not api_key:
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
 
-        if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
-
         self._opts = _TTSOptionsV2(
             model=model,
             encoding=encoding,
             sample_rate=sample_rate,
             bit_rate=bit_rate,
-            word_tokenizer=word_tokenizer,
             base_url=base_url,
             api_key=api_key,
             mip_opt_out=mip_opt_out,
@@ -151,6 +142,12 @@ class TTSv2(tts.TTS):
     @property
     def provider(self) -> str:
         return "Deepgram"
+
+    def _core_text_unit(self) -> str:
+        return "words"
+
+    def _core_max_text_len(self) -> int | None:
+        return 2000
 
     async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         session = self._ensure_session()
@@ -234,20 +231,18 @@ class TTSv2(tts.TTS):
             # the wrong rate/encoding.
             self._pool.invalidate()
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStreamv2:
         return ChunkedStreamv2(
             tts=self,
             opts=replace(self._opts),
             get_session=self._ensure_session,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStreamv2:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStreamv2:
         stream = SynthesizeStreamv2(
             tts=self, opts=replace(self._opts), pool=self._pool, conn_options=conn_options
         )
@@ -344,7 +339,7 @@ class SynthesizeStreamv2(tts.SynthesizeStream):
                 f"{self._opts.encoding!r}. Use synthesize() for compressed batch output."
             )
 
-        segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -354,28 +349,27 @@ class SynthesizeStreamv2(tts.SynthesizeStream):
             stream=True,
         )
 
-        async def _tokenize_input() -> None:
-            # Converts incoming text into WordStreams and sends them into segments_ch
-            word_stream = None
+        async def _segment_input() -> None:
+            segment: utils.aio.Chan[str] | None = None
             async for input in self.input:
-                if isinstance(input, str):
-                    if word_stream is None:
-                        word_stream = self._opts.word_tokenizer.stream()
-                        segments_ch.send_nowait(word_stream)
-                    word_stream.push_text(input)
-                else:
-                    if word_stream:
-                        word_stream.end_input()
-                    word_stream = None
-
+                if isinstance(input, tts.SpeechChunk):
+                    if segment is None:
+                        segment = utils.aio.Chan[str]()
+                        segments_ch.send_nowait(segment)
+                    segment.send_nowait(input.text)
+                elif segment is not None:
+                    segment.close()
+                    segment = None
+            if segment is not None:
+                segment.close()
             segments_ch.close()
 
         async def _run_segments() -> None:
-            async for word_stream in segments_ch:
-                await self._run_ws(word_stream, output_emitter)
+            async for segment in segments_ch:
+                await self._run_ws(segment, output_emitter)
 
         tasks = [
-            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_segment_input()),
             asyncio.create_task(_run_segments()),
         ]
         try:
@@ -387,16 +381,14 @@ class SynthesizeStreamv2(tts.SynthesizeStream):
         finally:
             await utils.aio.cancel_and_wait(*tasks)
 
-    async def _run_ws(
-        self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
-    ) -> None:
+    async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
         input_sent_event = asyncio.Event()
 
         async def send_task(ws: http.WebSocket) -> None:
-            async for word in word_stream:
-                speak_msg = {"type": "Speak", "text": f"{word.token} "}
+            async for chunk in segment:
+                speak_msg = {"type": "Speak", "text": f"{chunk} "}
                 self.mark_started()
                 await ws.send_str(json.dumps(speak_msg))
                 input_sent_event.set()

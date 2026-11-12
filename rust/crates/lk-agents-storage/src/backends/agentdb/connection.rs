@@ -449,7 +449,7 @@ impl Conn {
     /// Dial, `Hello`, publish the writer.
     async fn connect(&self) -> Result<Socket, WsdbError> {
         let deadline = tokio::time::Instant::now() + self.0.opts.dial_timeout;
-        let token = self.0.minter.mint().map_err(|e| WsdbError::Io(e.to_string()))?;
+        let token = self.0.minter.mint(&self.0.opts.database_id).map_err(|e| WsdbError::Io(e.to_string()))?;
         // the token also rides the upgrade, so a proxy in front of agent-db can admit the socket
         let mut url = url::Url::parse(&self.0.opts.url)
             .map_err(|e| WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)))?;
@@ -877,9 +877,9 @@ impl TokenMinter {
         &self.api_secret
     }
 
-    /// A fresh token with the `agent.databaseAdmin` grant, signed by net.
-    pub fn mint(&self) -> Result<String, StorageError> {
-        lk_agents_net::token::database_admin_token(&self.api_key, &self.api_secret)
+    /// A fresh data-plane token for `database_id` alone, signed by net.
+    pub fn mint(&self, database_id: &str) -> Result<String, StorageError> {
+        lk_agents_net::token::database_token(&self.api_key, &self.api_secret, database_id)
             .map_err(|e| StorageError::Invalid(format!("token: {e}")))
     }
 }

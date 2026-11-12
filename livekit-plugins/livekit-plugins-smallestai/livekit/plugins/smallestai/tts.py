@@ -35,7 +35,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
@@ -257,25 +257,18 @@ class TTS(tts.TTS):
         if is_given(max_buffer_delay_ms):
             self._opts.max_buffer_delay_ms = max_buffer_delay_ms
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             opts=replace(self._opts),
             http_session=self._ensure_session,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         return SynthesizeStream(
             tts=self, opts=replace(self._opts), pool=self._pool, conn_options=conn_options
         )
@@ -465,17 +458,19 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _send_task(
         self, ws: http.WebSocket, context_id: str, ctx_state: dict[str, bool]
     ) -> bool:
-        # Forward each token as it arrives (continuous streaming) instead of buffering
-        # the whole segment, so the server can begin synthesis before the text is
-        # complete. The flush sentinel (or end of input) closes the segment. Returns
-        # whether any non-whitespace text was actually sent.
+        # Forward each chunk as it arrives so the server can begin synthesis before the
+        # segment is complete; the server concatenates them, so each ends with a space.
+        # The flush sentinel (or end of input) closes the segment. Returns whether any
+        # text was sent.
         sent_any = False
-        async for data in self.input:
-            if isinstance(data, self.Flush):
+        async for chunk in self.input:
+            if isinstance(chunk, self.Flush):
                 break
-            if not data.strip():
-                continue
-            token_pkt = {**self._base_payload(context_id), "text": data, "continue": True}
+            token_pkt = {
+                **self._base_payload(context_id),
+                "text": chunk.text + " ",
+                "continue": True,
+            }
             if not self._opts.use_continuations:
                 token_pkt["flush"] = False
             self.mark_started()

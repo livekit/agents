@@ -92,3 +92,5 @@ impl InterruptionSource for NativeInterruptionDetector {
         InterruptionLeg::open(&self.detector, anchor, cx)
     }
 }
+#[cfg(test)]
+mod shutdown_tests;

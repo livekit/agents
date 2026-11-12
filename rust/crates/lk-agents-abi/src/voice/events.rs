@@ -684,6 +684,8 @@ pub enum MetricsLeg {
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, crate::Vocabulary)]
 pub enum ErrorSource {
+    #[host(rename = "storage_error")]
+    Storage,
     #[host(rename = "stt_error")]
     Stt,
     #[host(rename = "llm_error")]
@@ -695,17 +697,27 @@ pub enum ErrorSource {
     /// An input audio processor; always recoverable.
     #[host(rename = "audio_processing_error")]
     AudioProcessing,
+    /// The avatar session (it did not join in time); always recoverable.
+    #[host(rename = "avatar_error")]
+    Avatar,
+    /// The session's audio output raised on a frame; always recoverable.
+    #[host(rename = "audio_output_error")]
+    AudioOutput,
 }
 
 impl ErrorSource {
-    /// The session slot whose provider failed; `None` for an audio processor.
+    /// The session slot whose provider failed; `None` for an audio processor, the avatar or the
+    /// audio output.
     pub fn slot(self) -> Option<crate::voice::session::ModelSlot> {
         use crate::voice::session::ModelSlot;
         match self {
             ErrorSource::Stt => Some(ModelSlot::Stt),
             ErrorSource::Llm | ErrorSource::Realtime => Some(ModelSlot::Llm),
             ErrorSource::Tts => Some(ModelSlot::Tts),
-            ErrorSource::AudioProcessing => None,
+            ErrorSource::AudioProcessing
+            | ErrorSource::Storage
+            | ErrorSource::Avatar
+            | ErrorSource::AudioOutput => None,
         }
     }
 }

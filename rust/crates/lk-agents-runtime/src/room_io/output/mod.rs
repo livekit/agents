@@ -416,7 +416,11 @@ impl ParticipantAudioOutput {
         let sample_rate = config.publish.sample_rate;
         let num_channels = config.publish.num_channels;
         let state = State {
-            playback: Playback::new(sample_rate, num_channels, config.publish.queue_size_ms),
+            playback: Playback::new(
+                sample_rate,
+                num_channels,
+                lk_agents_voice::room_io::machine::output::TAKEN_AHEAD_MS,
+            ),
             source: None,
             publication: Publication::default(),
             cleanup_finished: false,

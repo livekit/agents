@@ -7,7 +7,7 @@ pub struct TextA2aTaskNotOrphaned;
 impl TextRule for TextA2aTaskNotOrphaned {
     const CONTRACT: TextContract = TextContract {
         id: "a2a_task_not_orphaned",
-        guarantee: "Once every turn ended and the lane ran its next turn, a task whose client disconnected, cancelled or aborted is settled (completed, failed, canceled, rejected or waiting on input), never left submitted or working.",
+        guarantee: "Once every turn ended and the partition_key ran its next turn, a task whose client disconnected, cancelled or aborted is settled (completed, failed, canceled, rejected or waiting on input), never left submitted or working.",
         examples: &[cancelled, completed],
         counterexamples: &[left_working],
     };

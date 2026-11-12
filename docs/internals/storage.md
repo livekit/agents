@@ -39,7 +39,7 @@ A server with no storage still speaks standard A2A: every message still
 gets an A2A task id, and a text run has no `ctx.thread`. A call is never
 without a thread: a `VoiceSession` given none runs on a new thread of the
 local `SQLiteStorage()`, in its default directory. A supplied thread whose
-lane does not load fails the start with its `StorageError` (`NotFound`,
+partition does not load fails the start with its `StorageError` (`NotFound`,
 `Unavailable`, ...); no other thread replaces it (see
 [voice-session.md](../voice-session.md#the-calls-thread)).
 
@@ -48,15 +48,15 @@ How each text request and call names its thread is specified in
 
 ## Rust interface
 
-Storage follows the [Rust plan](rust-core.md#storage-and-a2a).
+Storage follows the [component ownership contract](components.md#storage-and-a2a).
 
 The engine has three layers:
 
-| Layer | Responsibility |
-| --- | --- |
-| `Storage` | Thread lifecycle and opening a thread; implemented by AgentDB and local SQLite backends |
-| Shared `Thread`, `Lane`, `Run` and `Lease` | Typed reads, submission, lane acquisition and renewal, fencing and managed commits |
-| `ThreadDbConnection` | Execute the shared engine's reads and atomic statement batches against Cloud or local SQLite |
+| Layer                                      | Responsibility                                                                               |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `Storage`                                  | Thread lifecycle and opening a thread; implemented by AgentDB and local SQLite backends      |
+| Shared `Thread`, `Partition`, `Run` and `Lease` | Typed reads, submission, partition acquisition and renewal, fencing and managed commits           |
+| `ThreadDbConnection`                       | Execute the shared engine's reads and atomic statement batches against Cloud or local SQLite |
 
 `lk-agents-storage` is a plain async crate that owns all database interaction:
 both backends, retries, fencing, lease renewal, resolution of lost
@@ -74,17 +74,17 @@ Rust declarations through the ABI machinery.
 
 The crate groups implementation by responsibility:
 
-| Location | Responsibility |
-| --- | --- |
-| `backends/` | Backend contracts; `agentdb/` and `sqlite/` each hold the backend (`mod.rs`) and its connection (`connection.rs`), and SQLite its cross-process `lifecycle.rs` |
-| `thread/` | `Thread` (`mod.rs`), `Lane` (`lane.rs`), `Run` and its commit (`run.rs`), lease ownership (`lease.rs`), batched operations (`db.rs`) and every thread-database statement (`schema.rs`) |
-| `context/` | Context scope validation and activation (`mod.rs`), the host's field store (`store.rs`) and application transactions (`transaction.rs`) |
-| `storage.rs` | The host's `Storage` class, `ctx.thread`, and the thread and run handles |
-| `voice.rs` | Voice-session storage over a thread lane |
-| `http/` | Generated ThreadService contract, request handling and the local listener |
-| `sql.rs` | Bound statements, typed results, row decoding and schema splitting |
-| `cursor.rs` | Opaque page cursors |
-| `testing.rs` | Test support: temporary local storage and thread fixtures |
+| Location     | Responsibility                                                                                                                                                                         |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backends/`  | Backend contracts; `agentdb/` and `sqlite/` each hold the backend (`mod.rs`) and its connection (`connection.rs`), and SQLite its cross-process `lifecycle.rs`                         |
+| `thread/`    | `Thread` (`mod.rs`), `Partition` (`partition.rs`), `Run` and its commit (`run.rs`), lease ownership (`lease.rs`), batched operations (`db.rs`) and every thread-database statement (`schema.rs`) |
+| `context/`   | Context scope validation and activation (`mod.rs`), the host's field store (`store.rs`) and application transactions (`transaction.rs`)                                                |
+| `storage.rs` | The host's `Storage` class, `ctx.thread`, and the thread and run handles                                                                                                               |
+| `voice.rs`   | Voice-session storage over a thread partition                                                                                                                                               |
+| `http/`      | Generated ThreadService contract, request handling and the local listener                                                                                                              |
+| `sql.rs`     | Bound statements, typed results, row decoding and schema splitting                                                                                                                     |
+| `cursor.rs`  | Opaque page cursors                                                                                                                                                                    |
+| `testing.rs` | Test support: temporary local storage and thread fixtures                                                                                                                              |
 
 SQL is declared with `statement!` beside the database it runs on: the thread database's in
 `thread/schema.rs`, the local registry's in `backends/sqlite/mod.rs`.
@@ -115,7 +115,7 @@ pub trait Storage: Send + Sync {
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError>;
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError>;
     async fn open(&self, thread_id: &str) -> Result<Thread, StorageError>;
-    async fn get_thread_items(&self, id: &str, lane: Option<&str>, after: Option<&str>, limit: i64)
+    async fn get_thread_items(&self, id: &str, partition: Option<&str>, after: Option<&str>, limit: i64)
         -> Result<ThreadItemPage, StorageError>;
     async fn get_thread_tasks(&self, id: &str, status: Option<TaskState>)
         -> Result<Vec<ThreadTask>, StorageError>;
@@ -123,16 +123,16 @@ pub trait Storage: Send + Sync {
 }
 ```
 
-| Operation | Contract |
-| --- | --- |
-| `create_thread` | Accept optional scope, attributes and idle TTL; mint an `AT_` id and return only after its metadata and database exist. A partially created thread must not become usable. |
-| `get_thread` | Return thread metadata; unknown, deleted or expired threads fail with `NotFound` (Python `ThreadNotFound`). |
-| `list_threads` | Page thread metadata by the supported scope and cursor, with the same ordering and expiry filtering on both backends. |
-| `update_thread` | Merge attributes (an empty value deletes the key) and apply an idle-TTL update, returning the updated metadata. This is the activity boundary that moves expiry. |
-| `delete_thread` | Make the thread unavailable, coordinate with active handles, and reclaim its metadata and database; repeating deletion is safe. |
-| `open` | Resolve an existing thread and return the shared engine's `Thread` handle. Opening alone does not acquire a lane lease; each lease names the owner that takes it. |
-| `get_thread_items`, `get_thread_tasks` | Namespace reads of one thread's items and tasks through the backend's read interface; the default borrows the thread with `open` and releases it on either result. |
-| `close` | Release backend-owned resources after active handles have settled; repeated close is safe. |
+| Operation                              | Contract                                                                                                                                                                   |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create_thread`                        | Accept optional scope, attributes and idle TTL; mint an `AT_` id and return only after its metadata and database exist. A partially created thread must not become usable. |
+| `get_thread`                           | Return thread metadata; unknown, deleted or expired threads fail with `NotFound` (Python `ThreadNotFound`).                                                                |
+| `list_threads`                         | Page thread metadata by the supported scope and cursor, with the same ordering and expiry filtering on both backends.                                                      |
+| `update_thread`                        | Merge attributes (an empty value deletes the key) and apply an idle-TTL update, returning the updated metadata. This is the activity boundary that moves expiry.           |
+| `delete_thread`                        | Make the thread unavailable, coordinate with active handles, and reclaim its metadata and database; repeating deletion is safe.                                            |
+| `open`                                 | Resolve an existing thread and return the shared engine's `Thread` handle. Opening alone does not acquire a partition lease; each lease names the owner that takes it.          |
+| `get_thread_items`, `get_thread_tasks` | Namespace reads of one thread's items and tasks through the backend's read interface; the default borrows the thread with `open` and releases it on either result.         |
+| `close`                                | Release backend-owned resources after active handles have settled; repeated close is safe.                                                                                 |
 
 Thread creation/deletion spans registry and database resources. Backends must
 recover partial lifecycle operations; the trait does not imply a SQL transaction
@@ -159,11 +159,11 @@ pub trait ThreadDbConnection: Send + Sync {
 }
 ```
 
-| Operation | Contract |
-| --- | --- |
-| `query` | Execute a read and return its rows, without changing the database. |
-| `batch` | Execute ordered statements in one atomic transaction, returning each statement's rows, including `RETURNING`, and affected-row count. Success means the transaction committed. |
-| `close` | Release this connection; repeated close is safe. Backend cleanup also handles cancellation and exceptional exit. |
+| Operation | Contract                                                                                                                                                                       |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `query`   | Execute a read and return its rows, without changing the database.                                                                                                             |
+| `batch`   | Execute ordered statements in one atomic transaction, returning each statement's rows, including `RETURNING`, and affected-row count. Success means the transaction committed. |
+| `close`   | Release this connection; repeated close is safe. Backend cleanup also handles cancellation and exceptional exit.                                                               |
 
 Connections preserve the distinction between a rejected write and a commit
 whose acknowledgment was lost. A timeout or disconnect must not be reported as
@@ -178,22 +178,22 @@ Opening a thread returns a handle with typed content reads. These are shared
 engine operations implemented using `ThreadDbConnection`; callers do not write
 SQL and backends do not implement a separate history/task repository.
 
-| Thread operation | Returns |
-| --- | --- |
-| `list_items(lane, cursor, limit)` | A page of chat items with an optional lane filter, an opaque continuation cursor and a bounded limit |
-| `list_tasks(TaskQuery)` | A page of task records with lane/status filters and explicit paging and ordering for the requested listing |
-| `task(task_id)` | One task record, or no record if it does not exist in this thread |
-| `journal(after_id, limit)` | A page of journal events for authorized runtime/operations callers |
+| Thread operation                  | Returns                                                                                                    |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `list_items(partition, cursor, limit)` | A page of chat items with an optional partition filter, an opaque continuation cursor and a bounded limit       |
+| `list_tasks(TaskQuery)`           | A page of task records with partition/status filters and explicit paging and ordering for the requested listing |
+| `task(task_id)`                   | One task record, or no record if it does not exist in this thread                                          |
+| `journal(after_id, limit)`        | A page of journal events for authorized runtime/operations callers                                         |
 
 Python's `ctx.thread` exposes the same three content reads under the same
 names, `list_items`, `list_tasks` and `task` ([threads](../threads.md)), with
 `journal` beside them.
 
-Content reads require neither an active agent run nor a lane lease. A backend
+Content reads require neither an active agent run nor a partition lease. A backend
 can open a thread solely for reading. Reads observe committed records; staged
 context writes and in-flight history are not exposed.
 
-Item pagination uses insertion position (`items.pos`), with an optional lane
+Item pagination uses insertion position (`items.pos`), with an optional partition
 filter. Task queries distinguish insertion-order thread browsing (`tasks.pos`)
 from A2A `tasks/list`'s last-updated ordering. Each listing has a stable
 tie-breaker and an opaque cursor bound to its filters/order; a cursor is not
@@ -213,10 +213,10 @@ capability. With AgentDB, a frontend can call `GetThreadItems` and
 `GetThreadTasks` through the threads service to render a conversation, using
 an authorized thread read grant. Project API secrets stay on the backend.
 
-| Caller | AgentDBStorage | SQLiteStorage |
-| --- | --- | --- |
-| Worker or application backend | Typed reads through the thread handle | The same typed reads against local files |
-| Browser frontend | Cloud threads API with an authorized read grant | An application-provided HTTP API that calls the thread handle |
+| Caller                        | AgentDBStorage                                  | SQLiteStorage                                                 |
+| ----------------------------- | ----------------------------------------------- | ------------------------------------------------------------- |
+| Worker or application backend | Typed reads through the thread handle           | The same typed reads against local files                      |
+| Browser frontend              | Cloud threads API with an authorized read grant | An application-provided HTTP API that calls the thread handle |
 
 Local SQLite files live on the worker's machine. The browser cannot use the
 Cloud threads API to read those files, and a local thread id is not registered
@@ -231,7 +231,7 @@ Applications can build one without writing SQL or invoking an agent. Their
 frontend uses the application API rather than assuming the Cloud threads
 service exists for every storage backend.
 
-Conveniences such as `chat_history(agent=)` and `lane(...).history()` can
+Conveniences such as `chat_history(partition_key=)` and `partition(...).history()` can
 assemble the corresponding pages. They do not replace the paginated read
 operations needed for large conversations and task listings. Saved application
 fields and the operations journal retain their separate access boundaries;
@@ -239,16 +239,16 @@ external item/task reads do not grant access to either.
 
 ## What is saved
 
-The database holds one lane per configured handler that took part (see
-[lane mechanics](#lanes)) and one journal for the thread.
+The database holds one partition per configured handler that took part (see
+[partition mechanics](#partitions)) and one journal for the thread.
 
-| Record | Scope and contents | Ownership |
-| --- | --- | --- |
-| History | Per lane: messages, tool calls and results | Application-editable model context |
-| State | Explicitly saved context fields and routing state, identified by scope | Application chooses load/save; framework validates and commits |
-| Tasks | Per lane: A2A status, question, result and transport history | Framework |
-| Inbox | Per lane: transport messages waiting under the `batch` policy | Framework |
-| Journal | Per thread: append-only events | Framework; see [journal](#journal) |
+| Record  | Scope and contents                                                     | Ownership                                                      |
+| ------- | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
+| History | Per partition: messages, tool calls and results                             | Application-editable model context                             |
+| State   | Explicitly saved context fields and routing state, identified by scope | Application chooses load/save; framework validates and commits |
+| Tasks   | Per partition: A2A status, question, result and transport history           | Framework                                                      |
+| Inbox   | Per partition: transport messages waiting under the `batch` policy          | Framework                                                      |
+| Journal | Per thread: append-only events                                         | Framework; see [journal](#journal)                             |
 
 Unmarked context values, including runtime clients, are not saved. Python
 stack frames and local variables are not restored between turns. Media bytes
@@ -259,58 +259,62 @@ Payloads are JSON and queryable in place. Schema changes require compatibility
 validation and explicit migrations where needed; adding a key is not sufficient
 to guarantee compatibility. State is JSON-shaped and under 64 KiB: a field that cannot be written as JSON raises
 `NotSerializable` naming it, a larger state raises `TooLarge`.
-The byte budget counts the complete keyed map of saved fields in the lane's
+The byte budget counts the complete keyed map of saved fields in the partition's
 referenced scopes and saved routing state, once per scope. Schema manifests
 and revisions are metadata, separate from application values.
 
-## Lanes
+## Partitions
 
-A lane is an endpoint or handler's storage and concurrency boundary within a
-thread. `AgentHandler(lane=...)` selects it; the worker's configured agent
-name is the default. It holds transport history and tasks. A local agent
-invocation does not allocate a lane merely because it has another agent name.
+A partition is a storage and concurrency boundary within a thread.
+`a2a_session(partition_key=...)` and `rtc_session(partition_key=...)` select it;
+both default to the protocol's `DEFAULT_PARTITION_KEY` (`"default"`). The framework
+resolves omitted keys before issuing SQL. Every stored row requires an explicit,
+non-empty key, so a missing internal key fails instead of silently sharing history.
+Agent, handler and endpoint names do not select
+persistence identity. It holds transport history and tasks. A local agent
+invocation does not allocate a partition merely because it has another agent name.
 
-Local routing frames and their private histories are saved through
-application-owned session state. Several frames may reference the same agent
+Local routing frames and their private histories are saved by an explicit session binding.
+An optional application SessionState field exposes a read-only view. Several frames may reference the same agent
 definition while remaining separate conversations.
 
 ```
 thread AT_...                one database
-├─ lane "front-desk"         history, application data, tasks of the front desk
-├─ lane "eligibility"        the same for the expert it delegates to
-└─ journal                   every event from every lane, append-only
+├─ partition "front-desk"         history, application data, tasks of the front desk
+├─ partition "eligibility"        the same for the expert it delegates to
+└─ journal                   every event from every partition, append-only
 ```
 
-The database and journal are shared by all lanes. History, tasks, inbox and
-lease ownership are per lane; saved fields retain their explicit context-scope
+The database and journal are shared by all partitions. History, tasks, inbox and
+lease ownership are per partition; saved fields retain their explicit context-scope
 identity. See [what is saved](#what-is-saved).
 
-A call writes the worker's own lane (the voice door takes no lane), so it
-shares transport history with the worker's own text doors, not with a handler's
-lane. Their application data remains subject to explicit load/save.
+A call and a text endpoint share transport history when they select the same
+partition in the same thread. Their application data remains subject to explicit
+load/save. The grouping handler supplies no partition identity.
 
 Each direct `agent.run()` executes the selected agent. An optional
 [TextSession](../text-session.md) owns local routing frames and private histories;
-the application stores that routing state explicitly. Remote endpoints using
-the same project thread own their configured lanes.
+the application opts into incremental routing persistence with `ctx.store.bind(app)`. Remote endpoints using
+the same project thread own their configured partitions.
 
 Context sharing is explicit. Shared persisted scopes serialize updates;
 separate child contexts have independent fields. See
 [application context](../context.md).
 
-The lane inbox batches incoming transport messages. The live session's
+The partition inbox batches incoming transport messages. The live session's
 [conversation-owned inbox](../voice-session.md#conversation-owned-inbox) holds
 expert events and reply correlation in process for the originating frontend
 conversation. It is push-driven and does not require AgentDB. Persistence for
-frontend event recovery is optional and separate from lane request batching.
-Sharing a lane or thread database does not share that frontend queue. Neither
+frontend event recovery is optional and separate from partition request batching.
+Sharing a partition or thread database does not share that frontend queue. Neither
 mechanism requires application code to manage another public queue API.
 
 ### One writer at a time
 
-A lane has exactly one writer at a time, held two ways:
+A partition has exactly one writer at a time, held two ways:
 
-- **The lease.** A run takes the lane's lease before it loads anything and
+- **The lease.** A run takes the partition's lease before it loads anything and
   keeps it until its commit. The lease lives for 10 seconds and the holder
   renews it every 3; both are storage options. The renewal interval must be
   positive and less than half the TTL, leaving room for a renewal request
@@ -349,28 +353,27 @@ It cannot forcibly stop application code or undo an already-started action.
 Independent application writes and external actions use their receiving
 system's conditional-write, fencing and idempotency contracts. Idempotency
 deduplicates an operation; it does not by itself reject a stale owner's action.
-The lane's unique token is checked against its database row; it is not a monotonically
+The partition's unique token is checked against its database row; it is not a monotonically
 increasing fencing epoch that an independent downstream service can order.
 Uncertain effects require reconciliation. Sharing a thread database or taking
-its lane lease does not extend the managed fence to another transaction or
+its partition lease does not extend the managed fence to another transaction or
 service. See [application records and transactions](../context.md#application-records-and-transactions).
 
-Runs waiting for a lane execute in the order their messages arrived: each
+Runs waiting for a partition execute in the order their messages arrived: each
 message's `submitted` row is written before its run waits for the lease,
-and the rows' order is the order the waiters run in. Under `interrupt` and
-`queue`, a waiter that has not taken the lane within 60 seconds gives up,
+and the rows' order is the order the waiters run in. Under `queue`, a waiter that has not taken the partition within 60 seconds gives up,
 and its task fails with `livekit/reason` `lease-timeout`. Under `batch` a
 waiter keeps waiting: the run that drains the inbox owns its messages.
 
 The `concurrent` policy is the one exception: its runs take no lease and
 commit append-only, with no fence, and write no state.
 
-### Voice and text share a lane
+### Voice and text share a partition
 
 A call's `VoiceSession`, given `thread=ctx.thread`, keeps the conversation
-in memory and takes the lane's lease for each voice turn, from the end of the
+in memory and takes the partition's lease for each voice turn, from the end of the
 person's turn to the commit of the reply, then releases it. A text that arrives between two voice
-turns runs on any worker that takes the lane. When the call's next turn
+turns runs on any worker that takes the partition. When the call's next turn
 takes the lease and finds a newer version than the one it last committed,
 it reloads the transport history. Application code must reload marked context
 fields before using updates saved by another activation.
@@ -380,11 +383,11 @@ fields before using updates saved by another activation.
 When a call delegates to an expert that shares the caller's thread (under
 [explicit authority](../protocol/a2a.md#delegation-and-conversation-data); the
 card's `capabilities.extensions` entry is only a capability hint), the
-caller's worker writes the caller's lane and the expert's worker writes the
+caller's worker writes the caller's partition and the expert's worker writes the
 expert's. Neither writes the other's rows. The expert's result reaches the caller through the delegate tool; the
-expert's own turns stay in its lane. A tool reads another agent's history
-with `ctx.thread.lane(agent).history()`; the journal, shared, orders every
-lane's events in one sequence.
+expert's own turns stay in its partition. A tool reads another agent's history
+with `ctx.thread.partition(partition_key).history()`; the journal, shared, orders every
+partition's events in one sequence.
 
 ## The unit of work
 
@@ -392,7 +395,7 @@ A managed turn is a unit of work for framework records and explicitly staged
 context writes. Independently committed application transactions and external
 effects have their own commit boundaries.
 
-- **Load.** Taking the lane's lease loads its history, state and
+- **Load.** Taking the partition's lease loads its history, state and
   journal events in one acquire/load batch. The whole history is loaded;
   compaction, when a conversation outgrows a context window, sits in front of the run and is
   not part of storage.
@@ -401,8 +404,14 @@ effects have their own commit boundaries.
   fenced on the version loaded and the lease token, and releases the lease.
   A run that lost its lease meanwhile gets `VersionConflict` and writes
   nothing.
-- **Fail.** A run that raises writes only its `run_ended` event and
-  releases the lease. When it raised a storage error (the database lost, or
+- **Checkpoint.** A bound session writes accepted conversation progress under its existing
+  fence without advancing the partition version, ending its task, saving ordinary application
+  fields or releasing the lease. Immutable `session_item` journal entries hold referenced
+  history revisions. Private forks can retain an older revision of an edited item. Only the
+  compact routing state and its references count against the context-state budget.
+- **Fail.** A run that raises discards its uncommitted suffix and staged app writes, records
+  `run_ended` and releases the lease. Previously committed conversation checkpoints remain.
+  When it raised a storage error (the database lost, or
   the handler's own save refused: a stale save, a field that is not JSON, a
   state too large), its task then ends `failed` `storage-unavailable`. A
   failure no task row can carry (a `reject` message whose row was never
@@ -415,15 +424,30 @@ effects have their own commit boundaries.
   outcome. The framework never reports a failure it did not
   observe.
 - **No double answers.** A message is identified by its `messageId`, unique
-  per lane: a resend returns the task the first send created, finished or
+  per partition: a resend returns the task the first send created, finished or
   still running, and runs nothing new. A run id that already committed
   yields a closed run that writes nothing.
 - **An early row.** Each message's task row is written `submitted` before
   its run waits for the lease, so `tasks/get` from any worker finds it at
-  once; it goes `working` when the run takes the lane and reaches its
+  once; it goes `working` when the run takes the partition and reaches its
   terminal state in the commit.
 - **A dead worker.** A run whose worker died is not run again: its task
   fails `worker-lost` when the next holder finds it, and the client resends.
+
+Text streaming checkpoints coalesce at 250 ms or 64 KiB of new text and flush at execution
+boundaries. Incomplete replies retain their stable item id and are marked interrupted. Voice
+pipeline progress records delivered speech segments, with final delivery/truncation replacing
+the partial item. Generated but unheard text is never stored as completed speech. A stored
+tool call without a result requires reconciliation before new execution; recovery does not
+replay its body automatically.
+
+SQLite uses WAL with `synchronous=NORMAL`. A successful checkpoint survives process crashes;
+power loss can lose recent commits that have not reached stable storage. No numeric loss
+window is promised. Immutable history revisions and message/task receipts remain for the
+thread's lifetime. Consumed inbox rows are deleted in a fenced commit once their task is terminal;
+retries still resolve through the retained task receipt. Nonterminal rows are retained.
+Internal applied-write receipts have a 24-hour horizon, exceeding the bounded write-resolution
+period. History pruning must preserve every referenced item revision and ordered history list.
 
 ### Application writes and failure boundaries
 
@@ -474,7 +498,7 @@ storage failure is reported; it never causes a fallback to Cloud.
 
 The registry holds thread metadata for lookup, listing and lifecycle operations.
 Each thread has one database file named `<thread_id>.sqlite`, containing all
-its lanes, history, saved application fields, tasks, inbox and journal. SQLite
+its partitions, history, saved application fields, tasks, inbox and journal. SQLite
 may create its own WAL and shared-memory sidecar files alongside these files.
 
 The local backend mints `AT_` ids and creates the thread database when creating
@@ -498,12 +522,12 @@ running agent-db service.
 `AgentDBStorage` uses LiveKit Cloud's agentstore: agent-db holds thread
 databases and the threads service mints `AT_` ids and manages thread metadata.
 
-| Argument                 | Environment variable when omitted                                         |
-| ------------------------ | ------------------------------------------------------------------------- |
-| `api_key`, `api_secret`  | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`                                    |
-| `lease_ttl`              | a `timedelta`; `LIVEKIT_AGENTDB_LEASE_TTL` in seconds, else 10 seconds     |
-| `renew_interval`         | a `timedelta`; `LIVEKIT_AGENTDB_RENEW_INTERVAL` in seconds, else 3 seconds; positive and less than half `lease_ttl` |
-| `holder`                 | this worker's lease holder id, `<hostname>-<pid>` by default               |
+| Argument                | Environment variable when omitted                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `api_key`, `api_secret` | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`                                                                             |
+| `lease_ttl`             | a `timedelta`; `LIVEKIT_AGENTDB_LEASE_TTL` in seconds, else 10 seconds                                              |
+| `renew_interval`        | a `timedelta`; `LIVEKIT_AGENTDB_RENEW_INTERVAL` in seconds, else 3 seconds; positive and less than half `lease_ttl` |
+| `holder`                | this worker's lease holder id, `<hostname>-<pid>` by default                                                        |
 
 #### Connection and authentication
 
@@ -513,15 +537,16 @@ API, at one base URL derived from `LIVEKIT_URL`
 `https://beta-api.staging.livekit.cloud`, `wss://<project>.livekit.cloud`
 `https://beta-api.livekit.cloud`).
 
-| Service | Under the base URL |
-| --- | --- |
-| the data plane, a WebSocket | `/v0/agentstore/db` |
-| threads, `ThreadService` | `/v0/projects/p_/threads` |
+| Service                      | Under the base URL          |
+| ---------------------------- | --------------------------- |
+| the data plane, a WebSocket  | `/v0/agentstore/db`         |
+| threads, `ThreadService`     | `/v0/projects/p_/threads`   |
 | databases, `DatabaseService` | `/v0/projects/p_/databases` |
 
 `p_` is the project of the request's token. The worker mints its own tokens
-from the project's key and secret: the data plane takes an
-`agent.databaseAdmin` token, one hour, minted per dial; the threads and
+from the project's key and secret: the data plane takes a token for the one
+database it dials, one hour, minted per dial: a thread's database, which has the
+thread's id, through `agentThread` with `sql` ([auth](../auth.md#threads-and-databases)); the threads and
 databases services a short-lived one per request. HTTP requests carry it as
 `Authorization: Bearer`; the data plane carries it as `access_token` on
 the WebSocket upgrade, so a proxy admits the connection before the first
@@ -536,22 +561,44 @@ implicitly touch a thread.
 The schema is livekit/protocol `livekit/agent/thread_schema_v1.sql`, which
 `livekit-protocol` carries as `agent::THREAD_SCHEMA_V1`; the framework runs it
 on a database's first write. The framework adds its private `context_scopes`
-table for persisted application fields. JSONB columns hold JSON. The file
+table for persisted application fields. Every stored timestamp is a Unix millisecond
+integer, including leases, inbox arrivals and application write receipts.
+JSONB columns hold JSON. The file
 tags each column with who reads it: the platform (the threads service's
 GetThreadItems and GetThreadTasks), the A2A methods, or the framework.
-`seq` is a position within a lane; `pos` on `items` and `tasks` is the
+The stored `partition_key` names a history/state/write-ownership partition; it is
+independent of the destination endpoint. `tasks.endpoint` records that destination
+once, and inbox dispatch joins it by `(partition_key, task_id)`. Request acceptance must
+retain the destination on retries, and batching must not cross endpoint boundaries.
+`events.event_key` optionally identifies an incremental recording write so it can
+be retried without appending twice. These columns do not define SQL session frames
+or change the typed routing-state format.
+
+Indexes cover model-context order, insertion pagination, task status, message
+deduplication, inbox dispatch and journal reads. The run-receipt index contains
+only `run_ended` events, so ordinary journal events do not pay for that lookup.
+A separate `(updated_at_ms, task_id)` index serves A2A's task listing order.
+Payload contents have no indexes: these typed documents are loaded by their row
+keys, rather than searched by arbitrary JSON fields.
+
+SQLite item pages use separate query branches for an entire thread and a single
+partition, so the partition index can seek past unrelated history in either
+direction. The local registry indexes `(scope, last_active, thread_id)` for thread
+listings. Writes already use WAL and batch each commit in one transaction.
+
+`items.seq` is a model-context position within a partition; `pos` on `items` and `tasks` is the
 insertion order, never reused, the platform's page cursor; `id` on
 `events` and `inbox` is the insertion order.
 
-| Table            | One row per                  | Columns |
-| ---------------- | ---------------------------- | ------- |
-| `schema_version` | database                     | `version` |
-| `items`          | history item                 | `pos`, `id` (the item's id), `lane`, `seq`, `message_id`, `payload`: the item as `livekit.agent.ChatContext.ChatItem` protobuf JSON, which the threads service reads |
-| `tasks`          | A2A task | `pos`, `task_id`, `lane`, `seq`, `name` (an optional application task label), `message_id`, `status`, `status_message`, `updated_at`, `data`, `internal` |
-| `lanes`          | lane                         | `lane`, `version`, `state`, `lease_holder`, `lease_token`, `lease_until`, `waiter`, `drained_id` (the last inbox `id` a run consumed) |
-| `events`         | journal entry                | `id`, `ts_ms`, `lane`, `run_id`, `type`, `payload` |
-| `inbox`          | message received during a run | `id`, `lane`, `task_id`, `message_id`, `message`, `received_at` |
-| `context_scopes` | persisted application scope | `scope_id`, `lane` (the committing owner), `revision`, `fields`, `contracts`, `manifests` |
+| Table            | One row per                   | Columns                                                                                                                                                              |
+| ---------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema_version` | database                      | `version`                                                                                                                                                            |
+| `items`          | history item                  | `pos`, `id` (the item's id), `partition_key`, `seq`, `message_id`, `payload`: the item as `livekit.agent.ChatContext.ChatItem` protobuf JSON, which the threads service reads |
+| `tasks`          | A2A task                      | `pos`, `task_id`, `partition_key`, `endpoint`, `name` (an optional application task label), `message_id`, `status`, `updated_at_ms`, `data`, `internal` |
+| `partitions` | partition | `partition_key`, `version`, `state`, `lease_holder`, `lease_token`, `lease_expires_at_ms`, `drained_id` (the last inbox `id` a run consumed)                                |
+| `events`         | journal entry                 | `id`, `occurred_at_ms`, `partition_key`, `run_id`, `event_key`, `type`, `payload` |
+| `inbox`          | message received during a run | `id`, `partition_key`, `task_id`, `message_id`, `message`, `received_at_ms`                                                                                                      |
+| `context_scopes` | persisted application scope   | `scope_id`, `partition_key` (the committing owner), `revision`, `fields`, `contracts`, `manifests`                                                                            |
 
 An item's `payload` keeps what the model needs to see the conversation
 again: messages and their text, function calls with their `extra`, function
@@ -564,8 +611,10 @@ reads back exactly; a value that is not JSON, as rows written before stored a
 string, reads as that string.
 
 A task row is the A2A `Task`: `id` is `task_id`, `contextId` the thread id,
-`status` is `status`, `status_message` and `updated_at`, and `data` holds
-the rest under the A2A names (`history`, `artifacts`, `metadata`).
+`status` is assembled from `status`, `data.status_message` and `updated_at_ms`.
+`data` also holds `history`, `artifacts` and `metadata`.
+`message_id` is optional: it links the initiating incoming message for retry
+deduplication. Tasks initiated without an incoming message leave it `NULL`.
 `internal` holds framework transport metadata, including the pending question
 (`ask`), `deadline`, `parent`, durable references to the task's delivery
 streams, and `answered` when a handler answered the turn `Working`. The task id is minted by
@@ -575,7 +624,7 @@ belonged to a worker that died, unless a handler answered it `Working`: no run h
 ## Journal
 
 Every thread keeps two records of itself. The **history** is what the model
-sees: messages, tool calls and results, one per lane, owned by the developer
+sees: messages, tool calls and results, one per partition, owned by the developer
 and editable, since truncating it, inserting a summary or deleting an item
 are the developer's tools for managing context. The **journal** is what
 happened, owned by the framework and append-only: who ran, when, on which
@@ -599,25 +648,27 @@ channel, what a tool did. A developer cannot edit it, which is the point.
 
 ### What is in it
 
-One journal per thread, shared by every lane. Each event carries:
+One journal per thread, shared by every partition. Each event carries:
 
-| Field     | What                                              |
-| --------- | ------------------------------------------------- |
-| `id`      | its position in the thread's journal             |
-| `ts_ms`   | when it was written, in milliseconds              |
-| `lane`    | the agent it belongs to                           |
-| `run_id`  | the run it happened in                            |
-| `type`    | one of the types below                            |
-| `payload` | the event, as JSON                                |
+| Field     | What                                 |
+| --------- | ------------------------------------ |
+| `id`      | its position in the thread's journal |
+| `occurred_at_ms`   | when it was written, in milliseconds |
+| `partition_key`    | the agent it belongs to              |
+| `run_id`  | the run it happened in               |
+| `event_key` | optional retry identity for incremental writes |
+| `type`    | one of the types below               |
+| `payload` | the event, as JSON                   |
 
-| Event                     | What it records                                                                                                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Event                     | What it records                                                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `run_started`             | a run began: its task id and channel. A `run_started` with no `run_ended` after it is how an interrupted run is found |
-| `run_ended`               | how the run ended: `outcome` (`completed`, `input-required`, `failed`, `canceled`, `rejected`) and `reason`                                        |
-| `usage`                   | the run's model requests, tokens and tool calls                                                                                        |
-| `conversation_item_added` | an item entered the history: a message, a function call, a function call output                                            |
-| `tool_execution_updated`  | one call's lifecycle: started, a progress update from `ctx.update()`, ended                                                           |
-| `error`                   | a failure the runtime recorded                                                                                                        |
+| `run_ended`               | how the run ended: `outcome` (`completed`, `input-required`, `failed`, `canceled`, `rejected`) and `reason`           |
+| `usage`                   | the run's model requests, tokens and tool calls                                                                       |
+| `conversation_item_added` | an item entered the history: a message, a function call, a function call output                                       |
+| `session_item`            | an immutable item revision or ordered list of revision references used by compact session routing |
+| `tool_execution_updated`  | one call's lifecycle: started, a progress update from `ctx.update()`, ended                                           |
+| `error`                   | a failure the runtime recorded                                                                                        |
 
 Each type is one declared record (`lk_agents_abi::storage::journal::JournalEvent`)
 that the core or storage producing the event builds; a stored payload of the
@@ -626,14 +677,14 @@ wrong shape for its type is refused when read.
 On a call, the voice runtime's own events are recorded as well: agent and
 user state changes, transcripts, interruptions, end-of-turn and
 answering-machine detection. They are the same `AgentSessionEvent`
-payloads the console shows and are not listed here.
+payloads exposed by live session events and are not listed here.
 
 ### Reading it
 
 Inside a run, `await ctx.thread.journal(after_id=0, limit=100)` returns one
 page in order; pass the last `id` to read the next. Outside the agent the
 journal is readable only through the admin-only
-[admin API](../clients.md#admin-reads), which the console uses; the public
+[admin API](../clients.md#admin-reads); the public
 threads API and A2A do not expose it.
 
 ### What is not in it

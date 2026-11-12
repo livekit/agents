@@ -151,7 +151,6 @@ impl Resources {
         let (provider, capabilities) = (tts.id(), tts.capabilities());
         let (sample_rate, num_channels) = (tts.sample_rate(), tts.num_channels());
         let markup = lk_agents_abi::tts::markup::Markup::from_provider_key(&tts.markup_provider());
-        let lowers_markup = tts.lowers_markup();
         TtsRef {
             id: self.insert(Resource::Tts(tts)),
             provider,
@@ -159,7 +158,6 @@ impl Resources {
             sample_rate,
             num_channels,
             markup,
-            lowers_markup,
         }
     }
 

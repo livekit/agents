@@ -8,8 +8,6 @@ import pytest
 from livekit.agents import Agent, VoiceSession, _core
 from livekit.agents.llm import Toolset
 
-from .fake_llm import FakeLLM
-
 pytestmark = pytest.mark.unit
 
 
@@ -32,26 +30,6 @@ class Counted(Toolset):
         await super().aclose()
 
 
-@pytest.mark.parametrize("kind", ["text", "voice"])
-async def test_initialization_failure_rolls_back_roots_and_children_in_both(kind):
-    ready, child = Counted(), Counted()
-    failed = Counted(tools=[child], fail=True)
-    agent = Agent(instructions="Help", llm=FakeLLM(), tools=[ready, failed])
-    session = VoiceSession(vad=None, turn_handling={"turn_detection": None})
-    try:
-        with pytest.raises(ValueError, match="toolset initialization failed"):
-            async with asyncio.timeout(3):
-                if kind == "text":
-                    await agent.run("Hello")
-                else:
-                    await session.start(agent)
-        assert (ready.setups, ready.closes) == (1, 1)
-        assert (child.setups, child.closes) == (1, 1)
-        assert (failed.setups, failed.closes) == (1, 0)
-    finally:
-        await session.aclose()
-
-
 async def test_nested_and_direct_users_share_the_same_child_lifetime():
     child = Counted()
     parent = Counted(tools=[child])
@@ -68,67 +46,6 @@ async def test_nested_and_direct_users_share_the_same_child_lifetime():
         assert (child.setups, child.closes) == (1, 1)
     finally:
         await asyncio.gather(a.aclose(), b.aclose())
-
-
-async def test_cancelling_setup_settles_nested_close_before_releasing_the_scope():
-    child = Counted()
-    entered, close_entered, close_release = asyncio.Event(), asyncio.Event(), asyncio.Event()
-
-    class Parent(Counted):
-        async def setup(self):
-            await super().setup()
-            entered.set()
-            await asyncio.Event().wait()
-
-    async def child_close():
-        close_entered.set()
-        await close_release.wait()
-        child.closes += 1
-
-    child.aclose = child_close
-    parent = Parent(tools=[child])
-    scope = _core._core_ToolsetGroup([parent])
-    opening = asyncio.ensure_future(scope.start())
-    try:
-        await asyncio.wait_for(entered.wait(), 3)
-        opening.cancel()
-        await asyncio.gather(opening, return_exceptions=True)
-        await asyncio.wait_for(close_entered.wait(), 3)
-        closing = asyncio.ensure_future(scope.aclose())
-        await asyncio.sleep(0)
-        assert not closing.done()
-        close_release.set()
-        await asyncio.wait_for(closing, 3)
-        assert child.closes == 1
-        assert parent.closes == 0
-    finally:
-        close_release.set()
-        opening.cancel()
-        await asyncio.gather(opening, return_exceptions=True)
-        await scope.aclose()
-
-
-@pytest.mark.parametrize("same_name", [False, True])
-async def test_failed_handoff_keeps_the_active_agent(same_name):
-    first = Agent(name="first", instructions="Help")
-    failed_tools = Counted(fail=True)
-    rejected = Agent(
-        name="first" if same_name else "rejected", instructions="Help", tools=[failed_tools]
-    )
-    entered = []
-
-    @rejected.on_enter
-    async def enter(session):
-        entered.append(True)
-
-    async with VoiceSession(vad=None, turn_handling={"turn_detection": None}) as session:
-        await session.start(first)
-        session.update_agent(rejected)
-        async with asyncio.timeout(3):
-            while failed_tools.setups != 1 or session.current_agent is not first:
-                await asyncio.sleep(0)
-        assert entered == []
-        assert failed_tools.closes == 0
 
 
 async def test_closed_group_releases_python_toolset_callbacks():

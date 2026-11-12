@@ -170,7 +170,7 @@ mod background_audio {
 mod failed_synthesis_item {
     //! A reply whose voice failed mid-step commits what was heard of it, marked cut short.
     use lk_agents_abi::{ChatItem, Role};
-    use lk_agents_core::tts::markup::ChatMessageExt;
+    use lk_agents_core::markup::ChatMessageExt;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
     use lk_agents_voice::{events::SessionEvent, trace::Step};
@@ -186,10 +186,11 @@ mod failed_synthesis_item {
             let inputs = [
                 Input::GenerateReply { user_input: None, instructions: None, allow: None },
                 Input::Advance { ms: Millis(20) },
-                Input::LlmText { chat: Ref::new(0), text: text("Hello there.") },
+                // the next text decides the first sentence, which goes to the voice on its own
+                Input::LlmText { chat: Ref::new(0), text: text("Hello there, nice to meet you.") },
+                Input::LlmText { chat: Ref::new(0), text: text(" How are you?") },
                 Input::Advance { ms: Millis(20) },
                 Input::TtsHold { tts: Ref::new(0) },
-                Input::LlmText { chat: Ref::new(0), text: text(" How are you?") },
                 Input::LlmEnd { chat: Ref::new(0) },
                 Input::Advance { ms: Millis(20) },
                 Input::TtsFail { tts: Ref::new(0) },
@@ -217,7 +218,10 @@ mod failed_synthesis_item {
         let [msg] = &messages[..] else { panic!("one reply, got {messages:?}") };
         assert!(msg.interrupted, "the reply is marked cut short");
         // The synchroniser heard the played segment through: its words are all of it.
-        assert_eq!(msg.text_content().as_deref(), Some("Hello there. How are you?"));
+        assert_eq!(
+            msg.text_content().as_deref(),
+            Some("Hello there, nice to meet you. How are you?")
+        );
     }
 }
 
@@ -261,6 +265,69 @@ mod failed_synthesis_plays_out {
         });
         let speeches = run.record.host_view().speeches();
         assert!(speeches[0].completed_normally(), "the playout released the speech");
+    }
+}
+
+mod held_voice_input {
+    //! A voice that stops taking text holds the reply's text instead of refusing it, as a host
+    //! TTS whose loop is busy does.
+    use lk_agents_abi::{ChatItem, Role};
+    use lk_agents_core::markup::ChatMessageExt;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::fakes::HELD_INPUT;
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
+    use lk_agents_voice::{events::SessionEvent, trace::Step};
+
+    // Catches: text pushed into a voice past what its held input takes, refused and turned into a
+    // synthesis failure, so the reply was cut short after its first sentence instead of waiting
+    // for the voice.
+    #[test]
+    fn a_reply_longer_than_a_held_voice_takes_is_spoken_whole() {
+        let text = |t: &str| AgentText(t.into());
+        let later: Vec<String> = (0..HELD_INPUT * 2).map(|i| format!(" Point {i}.")).collect();
+        let run = simulate(async {
+            let mut run = Run::start(&Setup::default(), 0, Default::default()).await;
+            let mut inputs = vec![
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(20) },
+                Input::LlmText { chat: Ref::new(0), text: text("Hello there.") },
+                Input::Advance { ms: Millis(20) },
+                Input::TtsHold { tts: Ref::new(0) },
+            ];
+            for sentence in &later {
+                inputs.push(Input::LlmText { chat: Ref::new(0), text: text(sentence) });
+                inputs.push(Input::Advance { ms: Millis(20) });
+            }
+            inputs.extend([
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(20) },
+                Input::TtsRelease { tts: Ref::new(0) },
+                Input::Advance { ms: Millis(20) },
+                Input::PlayoutFinished { segment: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+            ]);
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            run
+        });
+        let messages: Vec<_> = run
+            .record
+            .journal()
+            .iter()
+            .filter_map(|(_, step)| match step {
+                Step::Emitted(SessionEvent::ConversationItemAdded { item, .. }) => match &**item {
+                    ChatItem::Message(msg) if msg.role == Role::Assistant => Some(msg.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let [msg] = &messages[..] else { panic!("one reply, got {messages:?}") };
+        assert!(!msg.interrupted, "the voice waited out the hold: nothing was cut short");
+        assert_eq!(msg.text_content(), Some(format!("Hello there.{}", later.concat())));
+        let speeches = run.record.host_view().speeches();
+        assert!(speeches[0].completed_normally(), "the reply's speech finished");
     }
 }
 
@@ -691,15 +758,13 @@ mod tts_first_byte_anchor {
     }
 }
 
-mod tts_text_transforms {
-    //! The session's `tts_text_transforms` reach the voice: by default markdown and emoji never do.
+mod spoken_text {
+    //! The voice is never given markdown syntax or emoji; the transcript keeps them.
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, SayInput};
 
-    // Catches: the resolved `tts_text_transforms` option (default `filter_markdown` + `filter_emoji`)
-    // never reaching the synthesis pipeline, which read only a constructor argument no host passes, so
-    // every reply's markdown and emoji were spoken; and the markdown stage starting mid-line, so a
-    // reply's leading `# ` heading was spoken too.
+    // Catches: a reply's markdown or emoji spoken aloud, and the markdown reader starting mid-line,
+    // so a reply's leading `# ` heading was spoken too.
     #[test]
     fn markdown_and_emoji_never_reach_the_voice() {
         let say = Input::Say {
@@ -826,6 +891,57 @@ mod pre_connect_behind_a_slow_connect {
     }
 }
 
+mod pre_connect_from_mobile_clients {
+    //! The pre-connect buffer as the Swift, Android and Flutter SDKs send it: headerless PCM16
+    //! declared `application/octet-stream`.
+    use lk_agents_fuzz::drive::{
+        Case, Outcome, PreConnect, RoomLegs, Run, Setup, finish, simulate,
+    };
+    use lk_agents_fuzz::fakes::{SAMPLE_RATE, SAMPLES_PER_CHUNK};
+    use lk_agents_fuzz::input::{Count, Input, Millis, Ref};
+    use lk_agents_fuzz::record::{Kind, Tag};
+
+    /// The words a mobile caller spoke before the agent joined reach the recogniser, ahead of
+    /// the live microphone.
+    #[test]
+    fn a_mobile_clients_buffered_words_reach_the_recogniser() {
+        let setup = Setup {
+            stt: true,
+            vad: true,
+            room_legs: Some(RoomLegs { pre_connect: Some(PreConnect::Mobile) }),
+            ..Setup::default()
+        };
+        let inputs = vec![
+            Input::Advance { ms: Millis(100) },
+            Input::MicFrames { mic: Ref::new(0), chunks: Count(50) },
+            Input::Advance { ms: Millis(1_000) },
+        ];
+        let case = Case { setup: setup.clone(), inputs: inputs.clone(), ..Case::default() };
+        let (heard, outcome) = simulate(async move {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            let frames = run.record.inference_view().frames_heard();
+            let tags: Vec<Tag> = frames
+                .iter()
+                .filter(|heard| heard.kind == Kind::Stt)
+                .flat_map(|heard| heard.tags)
+                .copied()
+                .collect();
+            (tags, finish(run, Outcome { case, ..Outcome::default() }).await)
+        });
+        assert!(outcome.ok(), "{:#?}", outcome.failures);
+        let replay = heard.iter().filter(|tag| matches!(tag, Tag::Unknown(0))).count();
+        let mic = heard.iter().filter(|tag| matches!(tag, Tag::Mic { .. })).count();
+        assert_eq!(replay, SAMPLE_RATE as usize / 2, "the buffered half second was dropped");
+        assert_eq!(mic, 50 * SAMPLES_PER_CHUNK, "the live microphone after it");
+        let first_mic = heard.iter().position(|tag| matches!(tag, Tag::Mic { .. }));
+        let last_replay = heard.iter().rposition(|tag| matches!(tag, Tag::Unknown(0)));
+        assert!(last_replay < first_mic, "the buffered words come first");
+    }
+}
+
 mod stalled_plugin_detector {
     //! A plugin's detector that takes no audio for seconds: its queue keeps the pre-connect
     //! replay in full and drops the rest to the newest audio, and nothing fails.
@@ -882,5 +998,58 @@ mod stalled_plugin_detector {
             vad_mic > 0 && vad_mic <= 51 * SAMPLES_PER_CHUNK,
             "the detector resumed on current audio: {vad_mic} samples"
         );
+    }
+}
+
+mod a_stalled_pre_connect_blocks_nothing {
+    //! A client that opens its pre-connect stream and never finishes it costs that buffer only.
+    use lk_agents_fuzz::drive::{
+        Case, Outcome, PRE_CONNECT_TIMEOUT_MS, PreConnect, RoomLegs, Run, Setup, finish, simulate,
+    };
+    use lk_agents_fuzz::fakes::SAMPLES_PER_CHUNK;
+    use lk_agents_fuzz::input::{AgentText, Count, Input, Millis, Ref, SayInput};
+    use lk_agents_fuzz::record::Kind;
+
+    /// While the stream stalls the agent speaks at once, and every live microphone sample still
+    /// reaches the recogniser; the stalled part of the buffer is dropped, never replayed.
+    #[test]
+    fn the_agent_speaks_and_the_microphone_is_heard_while_the_buffer_stalls() {
+        let setup = Setup {
+            stt: true,
+            vad: true,
+            room_legs: Some(RoomLegs { pre_connect: Some(PreConnect::Stalled) }),
+            ..Setup::default()
+        };
+        let inputs = vec![
+            Input::Say {
+                text: AgentText("Hello, how can I help?".into()),
+                input: SayInput::Words,
+                allow: None,
+                to_ctx: true,
+            },
+            Input::Advance { ms: Millis(100) },
+            Input::MicFrames { mic: Ref::new(0), chunks: Count(50) },
+            Input::Advance { ms: Millis(2_000) },
+        ];
+        let case = Case { setup: setup.clone(), inputs: inputs.clone(), ..Case::default() };
+
+        let (spoken_ms, heard, outcome) = simulate(async move {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            let spoken_ms = run.record.produced().iter().map(|(at, ..)| at.at_ms).min();
+            let frames = run.record.inference_view().frames_heard();
+            let heard: usize =
+                frames.iter().filter(|heard| heard.kind == Kind::Stt).map(|h| h.tags.len()).sum();
+            (spoken_ms, heard, finish(run, Outcome { case, ..Outcome::default() }).await)
+        });
+
+        assert!(outcome.ok(), "{:#?}", outcome.failures);
+        assert!(
+            spoken_ms.is_some_and(|at| at < PRE_CONNECT_TIMEOUT_MS),
+            "speech waited: {spoken_ms:?}"
+        );
+        assert_eq!(heard, 50 * SAMPLES_PER_CHUNK, "the microphone exactly, no replayed buffer");
     }
 }

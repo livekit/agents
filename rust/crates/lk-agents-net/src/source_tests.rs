@@ -187,3 +187,54 @@ async fn abandoning_a_read_resumes_the_same_pending_pull() {
     assert_eq!(reads.load(Ordering::SeqCst), 1, "a cancelled waiter must not repeat next()");
     assert_eq!(source.aclose().await, Closed::Clean);
 }
+
+/// Its read blocks its poll for a while, then waits forever: a close lands mid-poll.
+struct SlowPoll {
+    polling: Arc<tokio::sync::Notify>,
+}
+
+impl StreamOutput<u32> for SlowPoll {
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<u32>, ProviderError>> {
+        let polling = self.polling.clone();
+        Box::pin(std::future::poll_fn(move |_| {
+            polling.notify_one();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::task::Poll::Pending
+        }))
+    }
+
+    fn close(self: Box<Self>, _: Ts) -> BoxFuture<'static, Closed> {
+        Box::pin(async { Closed::Clean })
+    }
+}
+
+impl lk_agents_abi::utils::stream::ProviderStream<u32> for SlowPoll {}
+
+// Catches: a close whose cancel woke the read while a reader that was going away polled it, lost
+// by the shared read (`futures::Shared` drops a wake that lands mid-poll), so the close waited out the
+// whole teardown deadline and left the source open: a `tts.stream()` interrupted as it started.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_close_landing_while_the_read_is_polled_is_not_lost() {
+    let polling = Arc::new(tokio::sync::Notify::new());
+    let source = SharedStream::new(
+        Box::new(SlowPoll { polling: polling.clone() }),
+        Arc::new(crate::clock::RealClock::new()),
+    );
+    let reader = tokio::spawn({
+        let source = source.clone();
+        async move { source.try_pull().unwrap().await }
+    });
+    polling.notified().await;
+    // the reader is cancelled mid-poll (a host cancelled its pull): only the close is left
+    reader.abort();
+    // a timer would wake the close by chance: it must not need one
+    let started = std::time::Instant::now();
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(3), source.aclose()).await;
+    let took = started.elapsed();
+    assert_eq!(closed, Ok(Closed::Clean));
+    assert!(
+        took < std::time::Duration::from_millis(500),
+        "the close waited {took:?} on a read that never saw it"
+    );
+    assert!(reader.await.unwrap_err().is_cancelled());
+}

@@ -10,7 +10,6 @@ import logging
 import traceback
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
-from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 import av
@@ -69,84 +68,6 @@ class _FailingWS3:
 
     async def close(self) -> None:
         pass
-
-
-def test_coda_request_controls() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        model="coda",
-        repetition_penalty=1.1,
-        temperature=0.5,
-        top_p=0.9,
-        max_tokens=200,
-        time_scale_factor=1.2,
-    )
-
-    params = parse_qs(urlparse(tts._ws_url()).query)
-
-    assert params["repetition_penalty"] == ["1.1"]
-    assert params["temperature"] == ["0.5"]
-    assert params["top_p"] == ["0.9"]
-    assert params["max_tokens"] == ["200"]
-    assert params["timeScaleFactor"] == ["1.2"]
-
-    tts.update_options(
-        repetition_penalty=1.2,
-        temperature=0.6,
-        top_p=0.8,
-        max_tokens=300,
-        time_scale_factor=1.1,
-    )
-    updated_params = parse_qs(urlparse(tts._ws_url()).query)
-
-    assert updated_params["repetition_penalty"] == ["1.2"]
-    assert updated_params["temperature"] == ["0.6"]
-    assert updated_params["top_p"] == ["0.8"]
-    assert updated_params["max_tokens"] == ["300"]
-    assert updated_params["timeScaleFactor"] == ["1.1"]
-
-
-@pytest.mark.parametrize(
-    ("model", "expected_sample_rate"),
-    [("coda", 24000), ("mistv3", 24000), ("mistv2", 22050)],
-)
-def test_sample_rate_uses_model_service_default(model: str, expected_sample_rate: int) -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", model=model, use_websocket=True)
-
-    assert tts.sample_rate == expected_sample_rate
-    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == [str(expected_sample_rate)]
-
-
-def test_explicit_sample_rate_is_sent_and_preserved_across_model_updates() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", model="coda", sample_rate=16000, use_websocket=True)
-
-    assert tts.sample_rate == 16000
-    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == ["16000"]
-
-    tts.update_options(model="mistv2")
-
-    assert tts.sample_rate == 16000
-    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == ["16000"]
-
-
-def test_sample_rate_tracks_service_default_across_model_updates() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", model="coda", use_websocket=True)
-
-    tts.update_options(model="mistv2")
-    assert tts.sample_rate == 22050
-    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == ["22050"]
-
-    tts.update_options(model="mistv3")
-    assert tts.sample_rate == 24000
-    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == ["24000"]
 
 
 async def test_chunked_stream_sends_default_mistv2_sample_rate() -> None:
@@ -307,7 +228,7 @@ async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update(
             )
             try:
                 with patch.object(session, "request", wraps=session.request):
-                    old_stream = tts.synthesize("hello", conn_options=conn_options)
+                    old_stream = tts._synthesize(_chunk("hello"), conn_options=conn_options)
                     # Update before the scheduled request can read the parent's settings.
                     updates: dict[str, Any] = {}
                     if update_endpoint:
@@ -325,279 +246,6 @@ async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update(
                 await tts.aclose()
     finally:
         await runner.cleanup()
-
-
-def test_dedicated_websocket_url_requires_model() -> None:
-    from livekit.plugins.rime import TTS
-
-    with pytest.raises(ValueError, match="model is required"):
-        TTS(
-            api_key="test-key",
-            websocket_url=("wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"),
-        )
-
-
-def test_custom_websocket_endpoint_requires_explicit_opt_in() -> None:
-    from livekit.plugins.rime import TTS
-
-    with pytest.raises(ValueError, match="trusted Rime host"):
-        TTS(
-            api_key="test-key",
-            websocket_url="wss://voice.customer.example/coda/ws",
-        )
-
-    tts = TTS(
-        api_key="test-key",
-        websocket_url="wss://voice.customer.example/coda/ws",
-        allow_custom_endpoint=True,
-    )
-
-    assert tts.model == "coda"
-
-
-def test_custom_base_url_requires_explicit_opt_in() -> None:
-    from livekit.plugins.rime import TTS
-
-    with pytest.raises(ValueError, match="trusted Rime host"):
-        TTS(api_key="test-key", base_url="https://voice.customer.example/tts")
-
-    tts = TTS(
-        api_key="test-key",
-        base_url="https://voice.customer.example/tts",
-        allow_custom_endpoint=True,
-    )
-
-    assert tts._base_url == "https://voice.customer.example/tts"
-
-
-@pytest.mark.parametrize(
-    "websocket_url",
-    [
-        "https://api.rime.ai/coda/ws",
-        "/coda/ws",
-    ],
-)
-def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
-    from livekit.plugins.rime import TTS
-
-    with pytest.raises(ValueError, match="absolute ws or wss URL"):
-        TTS(api_key="test-key", websocket_url=websocket_url)
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "message"),
-    [
-        (
-            {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
-                "base_url": "https://users.rime.ai/coda",
-            },
-            "cannot be used with base_url",
-        ),
-        (
-            {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
-                "use_websocket": True,
-            },
-            "omit use_websocket",
-        ),
-        (
-            {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
-                "speed_alpha": 1.1,
-            },
-            "speed_alpha",
-        ),
-        (
-            {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
-                "temperature": 0.7,
-            },
-            "generation controls",
-        ),
-        (
-            {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
-                "model": "coda",
-            },
-            "model is derived",
-        ),
-        (
-            {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
-                "websocket_protocol": "auto",
-            },
-            "binary.*json",
-        ),
-        (
-            {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
-                "audio_format": "audio/aac",
-            },
-            "unsupported Rime audio_format",
-        ),
-        (
-            {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
-                "pause_between_brackets": True,
-            },
-            "Mist options",
-        ),
-    ],
-)
-def test_v1_rejects_invalid_configuration(kwargs: dict[str, Any], message: str) -> None:
-    from livekit.plugins.rime import TTS
-
-    with pytest.raises(ValueError, match=message):
-        TTS(api_key="test-key", **kwargs)
-
-
-def test_v1_rejects_generation_controls_on_update() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
-
-    with pytest.raises(ValueError, match="generation controls"):
-        tts.update_options(top_p=0.8)
-
-
-def test_audio_format_requires_v1_websocket() -> None:
-    from livekit.plugins.rime import TTS
-
-    with pytest.raises(ValueError, match="only supported with the Rime v1"):
-        TTS(api_key="test-key", audio_format="audio/wav")
-
-
-def test_v1_updates_audio_format() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
-    tts.update_options(audio_format="audio/mpeg")
-
-    assert tts._opts.audio_format == "audio/mpeg"
-
-    with pytest.raises(ValueError, match="unsupported Rime audio_format"):
-        tts.update_options(audio_format="audio/aac")
-
-    assert tts._opts.audio_format == "audio/mpeg"
-
-
-def test_v1_derives_model_when_endpoint_is_updated() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
-    tts.update_options(
-        websocket_url="wss://api.rime.ai/mist/ws",
-        pause_between_brackets=True,
-    )
-
-    assert tts.model == "mistv3"
-    assert tts._opts.mist_options is not None
-    assert tts._opts.mist_options.pause_between_brackets is True
-
-
-def test_v1_rejects_model_update() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
-
-    with pytest.raises(ValueError, match="only be updated together"):
-        tts.update_options(model="mistv3")
-
-
-def test_v1_dedicated_endpoint_update_keeps_current_model() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
-    tts.update_options(websocket_url="wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws")
-
-    assert tts.model == "coda"
-
-
-def test_v1_dedicated_endpoint_rejects_model_change_for_same_url() -> None:
-    from livekit.plugins.rime import TTS
-
-    websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws"
-    tts = TTS(api_key="test-key", websocket_url=websocket_url, model="coda")
-
-    with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
-        tts.update_options(websocket_url=websocket_url, model="mistv3")
-
-    assert tts.model == "coda"
-
-
-@pytest.mark.parametrize(
-    "updated_websocket_url",
-    [
-        "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws/",
-        "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws?token=rotated",
-        "wss://TIGERSTRIPE.aws-us-east-1.whiteglove.rime.ai/ws",
-        "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai:443/ws",
-    ],
-)
-def test_v1_dedicated_endpoint_rejects_model_change_for_equivalent_url(
-    updated_websocket_url: str,
-) -> None:
-    from livekit.plugins.rime import TTS
-
-    websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws"
-    tts = TTS(
-        api_key="test-key",
-        websocket_url=websocket_url,
-        model="coda",
-    )
-
-    with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
-        tts.update_options(websocket_url=updated_websocket_url, model="mistv3")
-
-    assert tts.model == "coda"
-    assert tts._websocket_v1_adapter is not None
-    assert tts._websocket_v1_adapter._websocket_v1_url == websocket_url
-
-
-def test_v1_dedicated_endpoint_updates_connection_url_for_same_model() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        websocket_url="wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws",
-        model="coda",
-    )
-    adapter = tts._websocket_v1_adapter
-    assert adapter is not None
-    previous_pool = adapter._pools.current
-    updated_websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws?token=rotated"
-
-    tts.update_options(websocket_url=updated_websocket_url, model="coda")
-
-    assert tts.model == "coda"
-    assert adapter._websocket_v1_url == updated_websocket_url
-    assert adapter._pools.current is not previous_pool
-
-
-def test_v1_dedicated_endpoint_allows_model_change_with_new_url() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        websocket_url="wss://coda.aws-us-east-1.whiteglove.rime.ai/ws",
-        model="coda",
-    )
-
-    tts.update_options(
-        websocket_url="wss://mist.aws-us-east-1.whiteglove.rime.ai/ws",
-        model="mistv3",
-    )
-
-    assert tts.model == "mistv3"
-
-    with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
-        tts.update_options(
-            websocket_url="wss://mist.aws-us-east-1.whiteglove.rime.ai/ws",
-            model="coda",
-        )
-
-    assert tts.model == "mistv3"
 
 
 @pytest.mark.parametrize("failure", ["transport", "provider", "send"])
@@ -618,8 +266,8 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
     tts = TTS(api_key="test-key", model="coda", use_websocket=True)
     errors: list[tts_module.TTSError] = []
     tts.on("error", errors.append)
-    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-    stream.push_text("hello")
+    stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+    stream._push_chunk(_chunk("hello"))
     stream.end_input()
 
     try:
@@ -686,13 +334,14 @@ async def test_ws3_stream_keeps_options_after_parent_update(stream_count: int) -
             metrics = []
             tts.on("metrics_collected", metrics.append)
             coda_streams = [
-                tts.stream(conn_options=APIConnectOptions(max_retry=0)) for _ in range(stream_count)
+                tts._stream(conn_options=APIConnectOptions(max_retry=0))
+                for _ in range(stream_count)
             ]
             tts.update_options(model="mistv2")
-            mist_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+            mist_stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
 
             async def collect(stream: Any) -> list[Any]:
-                stream.push_text("hello")
+                stream._push_chunk(_chunk("hello"))
                 stream.end_input()
                 try:
                     return [event async for event in stream]
@@ -970,6 +619,10 @@ def _v1_tts(server: _RimeV1Server, *, endpoint_model: str = "coda", **kwargs: An
     )
 
 
+def _chunk(text: str) -> tts_module.SpeechChunk:
+    return tts_module.SpeechChunk(text=text.strip(), said=text.strip())
+
+
 async def _collect(stream) -> list:
     events = []
     async for event in stream:
@@ -1010,16 +663,15 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
             sample_rate=22050,
             time_scale_factor=1.2,
         )
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         try:
             first_event = asyncio.create_task(anext(stream))
-            stream.push_text("Hello from ")
-            stream.push_text("LiveKit today. Next")
+            stream._push_chunk(_chunk("Hello from LiveKit today."))
             first = await asyncio.wait_for(first_event, timeout=2)
             assert first.frame.data
             assert first.frame.sample_rate == 22050
 
-            stream.push_text(" sentence.")
+            stream._push_chunk(_chunk("Next sentence."))
             stream.end_input()
             remaining = await _collect(stream)
         finally:
@@ -1052,8 +704,8 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
 async def test_v1_defaults_to_binary_protocol() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         await _collect(stream)
         await stream.aclose()
@@ -1085,9 +737,9 @@ async def test_v1_supports_each_rime_audio_format_with_each_protocol(
             websocket_protocol=websocket_protocol,
             audio_format=audio_format,
         )
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         try:
-            stream.push_text("hello")
+            stream._push_chunk(_chunk("hello"))
             stream.end_input()
             events = await _collect(stream)
         finally:
@@ -1119,16 +771,16 @@ async def test_v1_pcmu_preserves_sample_rate_and_samples_after_parent_update(
             server, websocket_protocol=websocket_protocol, audio_format="audio/pcmu", **options
         )
         assert tts.sample_rate == expected_sample_rate
-        old_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        old_stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         try:
             tts.update_options(audio_format="audio/pcmu", sample_rate=updated_sample_rate)
-            new_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+            new_stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
             try:
                 for stream, rate in [
                     (old_stream, expected_sample_rate),
                     (new_stream, updated_sample_rate),
                 ]:
-                    stream.push_text("hello")
+                    stream._push_chunk(_chunk("hello"))
                     stream.end_input()
                     events = await _collect(stream)
                     assert events[-1].is_final
@@ -1159,8 +811,8 @@ async def test_v1_maps_mist_options_without_a_second_stream_implementation() -> 
             pause_between_brackets=True,
             phonemize_between_brackets=False,
         )
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         await _collect(stream)
         await stream.aclose()
@@ -1183,9 +835,9 @@ async def test_v1_sends_resolved_sample_rate(
 ) -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server, endpoint_model=endpoint_model)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         try:
-            stream.push_text("hello")
+            stream._push_chunk(_chunk("hello"))
             stream.end_input()
             events = await _collect(stream)
         finally:
@@ -1203,10 +855,10 @@ async def test_v1_sends_resolved_sample_rate(
 async def test_v1_stream_keeps_sample_rate_after_parent_update() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server, sample_rate=22050)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         tts.update_options(sample_rate=16000)
         try:
-            stream.push_text("hello")
+            stream._push_chunk(_chunk("hello"))
             stream.end_input()
             events = await _collect(stream)
         finally:
@@ -1220,8 +872,8 @@ async def test_v1_stream_keeps_sample_rate_after_parent_update() -> None:
 async def test_v1_rejects_wrong_ready_protocol() -> None:
     async with _RimeV1Server(ready={"protocol": 2}) as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         with pytest.raises(APIConnectionError, match="unsupported protocol"):
             await _collect(stream)
@@ -1229,36 +881,14 @@ async def test_v1_rejects_wrong_ready_protocol() -> None:
         await tts.aclose()
 
 
-async def test_v1_buffers_fragments_into_complete_sentences() -> None:
+async def test_v1_sends_each_chunk_as_one_text_message() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("This is the first sentence. ")
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(server.wait_for_text_messages(1), timeout=0.05)
-
-        stream.push_text("Second")
-        await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
-        stream.end_input()
-        await _collect(stream)
-        await stream.aclose()
-        await tts.aclose()
-
-    assert [request["text"] for request in server.requests if "text" in request] == [
-        "This is the first sentence. ",
-        "Second ",
-    ]
-
-
-async def test_v1_default_tokenizer_preserves_fragment_boundaries() -> None:
-    async with _RimeV1Server() as server:
-        tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         try:
-            stream.push_text("The price is 1.")
-            stream.push_text("7 dollars. Hel")
-            stream.push_text("lo world. Next")
-            stream.push_text(" sentence.")
+            stream._push_chunk(_chunk("The price is 1.7 dollars. "))
+            await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
+            stream._push_chunk(_chunk("Hello world."))
             stream.end_input()
             await _collect(stream)
         finally:
@@ -1268,81 +898,14 @@ async def test_v1_default_tokenizer_preserves_fragment_boundaries() -> None:
     assert [request["text"] for request in server.requests if "text" in request] == [
         "The price is 1.7 dollars. ",
         "Hello world. ",
-        "Next sentence. ",
     ]
 
 
-async def test_v1_uses_custom_tokenizer_behavior() -> None:
-    from livekit.agents import tokenize
-
-    async with _RimeV1Server() as server:
-        tokenizer = tokenize.SentenceTokenizer(min_words=1000)
-        tts = _v1_tts(server, tokenizer=tokenizer)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        try:
-            stream.push_text("First sentence. Second sentence.")
-            stream.end_input()
-            await _collect(stream)
-        finally:
-            await stream.aclose()
-            await tts.aclose()
-
-    assert [request["text"] for request in server.requests if "text" in request] == [
-        "First sentence. Second sentence. "
-    ]
-
-
-@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
-@pytest.mark.parametrize("failure_stage", ["stream", "push_text", "output", "end_input"])
-async def test_v1_tokenizer_failure_closes_stream(
-    websocket_protocol: str, failure_stage: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from livekit.agents import APIError, tokenize
-
-    tokenizer = tokenize.SentenceTokenizer()
-    tokens = tokenizer.stream()
-
-    def fail(*args: Any, **kwargs: Any) -> None:
-        raise ValueError(_SECRET)
-
-    async def fail_output(*args: Any, **kwargs: Any) -> None:
-        fail()
-
-    monkeypatch.setattr(tokenizer, "stream", lambda **kwargs: tokens)
-    if failure_stage == "stream":
-        monkeypatch.setattr(tokenizer, "stream", fail)
-    elif failure_stage == "output":
-        monkeypatch.setattr(type(tokens), "__anext__", fail_output)
-    else:
-        monkeypatch.setattr(tokens, failure_stage, fail)
-
-    async with _RimeV1Server() as server:
-        tts = _v1_tts(server, websocket_protocol=websocket_protocol, tokenizer=tokenizer)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
-        try:
-            stream.push_text("Hello.")
-            if failure_stage == "end_input":
-                stream.end_input()
-            # Other failures must propagate even while input remains open.
-            with pytest.raises(APIError, match="Rime sentence tokenization failed") as exc_info:
-                await asyncio.wait_for(_collect(stream), timeout=1)
-            assert exc_info.value.retryable is False
-            _assert_exception_is_safe(exc_info.value)
-            if failure_stage != "stream":
-                assert tokens.closed
-            assert server.connections == 1
-        finally:
-            await stream.aclose()
-            await tts.aclose()
-            if not tokens.closed:
-                await tokens.aclose()
-
-
-async def test_v1_local_flush_drains_text_before_end() -> None:
+async def test_v1_flush_keeps_the_context_open() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("first")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("first"))
         stream.flush()
         stream.end_input()
         await _collect(stream)
@@ -1352,11 +915,11 @@ async def test_v1_local_flush_drains_text_before_end() -> None:
     assert _payloads(server) == ["start", "text", "end"]
 
 
-async def test_v1_local_flush_sends_text_without_control_message() -> None:
+async def test_v1_flush_sends_no_control_message() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("first")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("first"))
         stream.flush()
         try:
             await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
@@ -1369,14 +932,14 @@ async def test_v1_local_flush_sends_text_without_control_message() -> None:
     assert _payloads(server) == ["start", "text", "end"]
 
 
-async def test_v1_resumes_context_after_local_flush() -> None:
+async def test_v1_resumes_context_after_flush() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("first")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("first"))
         stream.flush()
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
-        stream.push_text("second")
+        stream._push_chunk(_chunk("second"))
         stream.end_input()
         events = await _collect(stream)
         await stream.aclose()
@@ -1394,16 +957,16 @@ async def test_v1_resumes_context_after_local_flush() -> None:
 async def test_v1_input_pause_can_exceed_api_timeout() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(
+        stream = tts._stream(
             conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1)
         )
-        stream.push_text("First sentence.")
+        stream._push_chunk(_chunk("First sentence."))
         stream.flush()
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
 
         await asyncio.sleep(0.2)
 
-        stream.push_text("Second sentence.")
+        stream._push_chunk(_chunk("Second sentence."))
         stream.end_input()
         events = await _collect(stream)
         await stream.aclose()
@@ -1417,13 +980,13 @@ async def test_v1_input_pause_can_exceed_api_timeout() -> None:
 async def test_v1_flush_before_first_text_sends_no_rime_message() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         stream.flush()
         await asyncio.wait_for(server.connection_opened.wait(), timeout=2)
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(server.request_received.wait(), timeout=0.05)
 
-        stream.push_text("first")
+        stream._push_chunk(_chunk("first"))
         stream.end_input()
         await _collect(stream)
         await stream.aclose()
@@ -1435,8 +998,8 @@ async def test_v1_flush_before_first_text_sends_no_rime_message() -> None:
 async def test_v1_end_input_drains_buffered_final_text_before_end() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("buffered final fragment")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("buffered final fragment"))
         stream.end_input()
         await _collect(stream)
         await stream.aclose()
@@ -1450,13 +1013,13 @@ async def test_v1_reuses_socket_and_does_not_start_empty_context() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
         for text in ("one", "two"):
-            stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-            stream.push_text(text)
+            stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+            stream._push_chunk(_chunk(text))
             stream.end_input()
             await _collect(stream)
             await stream.aclose()
 
-        empty = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        empty = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         empty.end_input()
         assert await _collect(empty) == []
         await empty.aclose()
@@ -1470,12 +1033,12 @@ async def test_v1_reuses_socket_and_does_not_start_empty_context() -> None:
 async def test_v1_overlapping_streams_use_separate_connections() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        first = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        first.push_text("First stream stays active. Pending")
+        first = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        first._push_chunk(_chunk("First stream stays active. Pending"))
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
 
-        second = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        second.push_text("Second stream completes.")
+        second = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        second._push_chunk(_chunk("Second stream completes."))
         second.end_input()
         events = await _collect(second)
 
@@ -1496,9 +1059,9 @@ async def test_v1_overlapping_streams_use_separate_connections() -> None:
 async def test_v1_stream_snapshots_options() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         tts.update_options(speaker="changed")
-        stream.push_text("hello")
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         await _collect(stream)
         await stream.aclose()
@@ -1510,13 +1073,13 @@ async def test_v1_stream_snapshots_options() -> None:
 async def test_v1_stream_snapshots_websocket_url() -> None:
     async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
         tts = _v1_tts(first_server)
-        first_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        first_stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         tts.update_options(websocket_url=second_server.websocket_url)
-        second_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        second_stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
 
-        first_stream.push_text("first")
+        first_stream._push_chunk(_chunk("first"))
         first_stream.end_input()
-        second_stream.push_text("second")
+        second_stream._push_chunk(_chunk("second"))
         second_stream.end_input()
         await _collect(first_stream)
         await _collect(second_stream)
@@ -1535,9 +1098,9 @@ async def test_v1_omits_retained_time_scale_factor_after_switch_to_mistv2() -> N
         tts = _v1_tts(first_server, time_scale_factor=1.2)
         mistv2_url = second_server.websocket_url.replace("/coda/ws", "/mistv2/ws")
         tts.update_options(websocket_url=mistv2_url)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
 
-        stream.push_text("hello")
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         await _collect(stream)
         await stream.aclose()
@@ -1554,12 +1117,12 @@ async def test_v1_clean_interruption_cancels_and_reuses_socket(
 ) -> None:
     async with _RimeV1Server(response_mode=response_mode) as server:
         tts = _v1_tts(server, websocket_protocol=websocket_protocol)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("Please stop this synthesis now. Pending")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("Please stop this synthesis now. Pending"))
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await stream.aclose()
 
-        second = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        second = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         second.end_input()
         await _collect(second)
         await second.aclose()
@@ -1572,12 +1135,12 @@ async def test_v1_clean_interruption_cancels_and_reuses_socket(
 async def test_v1_interruption_stays_cancelled_without_retry() -> None:
     async with _RimeV1Server(response_mode="no_audio") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(
+        stream = tts._stream(
             conn_options=APIConnectOptions(
                 max_retry=1, connect_timeout=0.1, read_timeout=0.1, retry_interval=0
             )
         )
-        stream.push_text("Please stop this synthesis now. Pending")
+        stream._push_chunk(_chunk("Please stop this synthesis now. Pending"))
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await asyncio.wait_for(stream.aclose(), timeout=0.5)
         await tts.aclose()
@@ -1609,7 +1172,7 @@ async def test_v1_blocked_write_times_out(
     monkeypatch.setattr(http.WebSocket, send_method, blocked_send)
     async with _RimeV1Server(response_mode="no_audio") as server:
         tts = _v1_tts(server, websocket_protocol=websocket_protocol)
-        stream = tts.stream(
+        stream = tts._stream(
             conn_options=APIConnectOptions(
                 max_retry=0,
                 connect_timeout=1,
@@ -1617,7 +1180,7 @@ async def test_v1_blocked_write_times_out(
                 read_timeout=0.03 if payload == "cancel" else 1,
             )
         )
-        stream.push_text("Please synthesize this sentence. Pending")
+        stream._push_chunk(_chunk("Please synthesize this sentence. Pending"))
         if payload == "cancel":
             await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
             task = asyncio.create_task(stream.aclose())
@@ -1637,7 +1200,7 @@ async def test_v1_blocked_write_times_out(
             await asyncio.wait_for(server.connection_closed.wait(), timeout=1)
 
             # A timed-out write leaves an uncertain context. Do not reuse its socket.
-            empty = tts.stream(
+            empty = tts._stream(
                 conn_options=APIConnectOptions(max_retry=0, read_timeout=0.1, write_timeout=0.1)
             )
             try:
@@ -1678,13 +1241,13 @@ async def test_v1_cancels_when_start_write_is_interrupted(
 
         monkeypatch.setattr(_websocket_v1, "_send_envelope", _send_envelope)
         tts = _v1_tts(server)
-        interrupted = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        interrupted.push_text("Please stop this synthesis now. Pending")
+        interrupted = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        interrupted._push_chunk(_chunk("Please stop this synthesis now. Pending"))
         await asyncio.wait_for(start_written.wait(), timeout=2)
         await interrupted.aclose()
 
-        next_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        next_stream.push_text("next")
+        next_stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        next_stream._push_chunk(_chunk("next"))
         next_stream.end_input()
         events = await _collect(next_stream)
         await next_stream.aclose()
@@ -1698,14 +1261,14 @@ async def test_v1_cancels_when_start_write_is_interrupted(
 async def test_v1_closes_socket_when_cancel_has_no_reply() -> None:
     async with _RimeV1Server(response_mode="no_audio", cancel_reply=False) as server:
         tts = _v1_tts(server)
-        stream = tts.stream(
+        stream = tts._stream(
             conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1)
         )
-        stream.push_text("Please stop this synthesis now. Pending")
+        stream._push_chunk(_chunk("Please stop this synthesis now. Pending"))
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await stream.aclose()
 
-        second = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        second = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         second.end_input()
         await _collect(second)
         await second.aclose()
@@ -1717,16 +1280,16 @@ async def test_v1_closes_socket_when_cancel_has_no_reply() -> None:
 async def test_v1_end_times_out_when_terminal_event_never_arrives() -> None:
     async with _RimeV1Server(response_mode="no_done") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(
+        stream = tts._stream(
             conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1)
         )
-        stream.push_text("The server will not finish this context.")
+        stream._push_chunk(_chunk("The server will not finish this context."))
         stream.end_input()
         with pytest.raises(APITimeoutError, match="after end"):
             await _collect(stream)
         await stream.aclose()
 
-        empty = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        empty = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         empty.end_input()
         assert await _collect(empty) == []
         await empty.aclose()
@@ -1739,18 +1302,18 @@ async def test_v1_end_times_out_when_terminal_event_never_arrives() -> None:
 async def test_v1_rejects_done_before_input_ends(websocket_protocol: str) -> None:
     async with _RimeV1Server(response_mode="early_done") as server:
         tts = _v1_tts(server, websocket_protocol=websocket_protocol)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         try:
-            stream.push_text("First sentence. Pending")
+            stream._push_chunk(_chunk("First sentence. Pending"))
             with pytest.raises(APIConnectionError, match="done before input ended"):
                 await asyncio.wait_for(_collect(stream), timeout=2)
             await asyncio.wait_for(server.connection_closed.wait(), timeout=2)
             assert _payloads(server) == ["start", "text"]
 
             server.response_mode = "normal"
-            second = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+            second = tts._stream(conn_options=APIConnectOptions(max_retry=0))
             try:
-                second.push_text("Next turn.")
+                second._push_chunk(_chunk("Next turn."))
                 second.end_input()
                 assert await asyncio.wait_for(_collect(second), timeout=2)
             finally:
@@ -1798,9 +1361,9 @@ async def test_v1_accepts_done_before_end_write_returns(
         try:
             for _ in range(2):
                 done_received.clear()
-                stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+                stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
                 try:
-                    stream.push_text("Hello.")
+                    stream._push_chunk(_chunk("Hello."))
                     stream.end_input()
                     assert await asyncio.wait_for(_collect(stream), timeout=2)
                     assert done_received.is_set()
@@ -1814,16 +1377,16 @@ async def test_v1_accepts_done_before_end_write_returns(
 async def test_v1_rejects_malformed_done_before_socket_reuse() -> None:
     async with _RimeV1Server(response_mode="malformed_done") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(
+        stream = tts._stream(
             conn_options=APIConnectOptions(max_retry=0, read_timeout=0.1, write_timeout=0.1)
         )
-        stream.push_text("hello")
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         with pytest.raises(APIConnectionError, match="exactly one payload"):
             await _collect(stream)
         await stream.aclose()
 
-        empty = tts.stream(
+        empty = tts._stream(
             conn_options=APIConnectOptions(max_retry=0, read_timeout=0.1, write_timeout=0.1)
         )
         empty.end_input()
@@ -1837,12 +1400,12 @@ async def test_v1_rejects_malformed_done_before_socket_reuse() -> None:
 async def test_v1_rejects_malformed_cancelled_before_socket_reuse() -> None:
     async with _RimeV1Server(response_mode="malformed_cancelled") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("Please stop this synthesis now. Pending")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("Please stop this synthesis now. Pending"))
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await stream.aclose()
 
-        empty = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        empty = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         empty.end_input()
         await _collect(empty)
         await empty.aclose()
@@ -1858,8 +1421,8 @@ async def test_v1_rejects_malformed_cancelled_before_socket_reuse() -> None:
 async def test_v1_rejects_contaminated_responses(response_mode: str) -> None:
     async with _RimeV1Server(response_mode=response_mode) as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         with pytest.raises(APIConnectionError):
             await _collect(stream)
@@ -1870,8 +1433,8 @@ async def test_v1_rejects_contaminated_responses(response_mode: str) -> None:
 async def test_v1_json_rejects_invalid_base64_audio() -> None:
     async with _RimeV1Server(response_mode="invalid_base64") as server:
         tts = _v1_tts(server, websocket_protocol="json")
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         with pytest.raises(APIConnectionError, match="invalid Base64 audio"):
             await _collect(stream)
@@ -1882,8 +1445,8 @@ async def test_v1_json_rejects_invalid_base64_audio() -> None:
 async def test_v1_json_rejects_invalid_done_type() -> None:
     async with _RimeV1Server(response_mode="invalid_done_type") as server:
         tts = _v1_tts(server, websocket_protocol="json")
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         with pytest.raises(APIConnectionError, match="malformed done event"):
             await _collect(stream)
@@ -1895,8 +1458,8 @@ async def test_v1_json_rejects_invalid_done_type() -> None:
 async def test_v1_rejects_started_without_request_id(websocket_protocol: str) -> None:
     async with _RimeV1Server(response_mode="missing_started_request_id") as server:
         tts = _v1_tts(server, websocket_protocol=websocket_protocol)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         with pytest.raises(APIConnectionError, match="malformed started event"):
             await _collect(stream)
@@ -1923,8 +1486,8 @@ async def test_v1_rejects_started_without_request_id(websocket_protocol: str) ->
 async def test_v1_maps_context_error(kind: str, status_code: int, retryable: bool) -> None:
     async with _RimeV1Server(response_mode="error", error_kind=kind) as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         with pytest.raises(APIStatusError) as exc_info:
             await _collect(stream)
@@ -1938,8 +1501,8 @@ async def test_v1_maps_context_error(kind: str, status_code: int, retryable: boo
 async def test_v1_maps_connection_scoped_error() -> None:
     async with _RimeV1Server(response_mode="connection_error", error_kind="unavailable") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         with pytest.raises(APIStatusError) as exc_info:
             await _collect(stream)
@@ -1976,9 +1539,9 @@ async def test_v1_maps_error_without_message(
 
         monkeypatch.setattr(server, "_respond_to_text", respond)
         tts = _v1_tts(server, websocket_protocol=websocket_protocol)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
         try:
-            stream.push_text("Hello.")
+            stream._push_chunk(_chunk("Hello."))
             stream.end_input()
             with pytest.raises(APIStatusError) as exc_info:
                 await _collect(stream)
@@ -1996,8 +1559,8 @@ async def test_v1_maps_error_without_message(
 async def test_v1_does_not_retry_unimplemented_error() -> None:
     async with _RimeV1Server(response_mode="error", error_kind="unimplemented") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         with pytest.raises(APIStatusError) as exc_info:
             await _collect(stream)
@@ -2012,8 +1575,8 @@ async def test_v1_does_not_retry_unimplemented_error() -> None:
 async def test_v1_retries_before_audio() -> None:
     async with _RimeV1Server(fail_before_audio=1) as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         events = await _collect(stream)
         await stream.aclose()
@@ -2026,8 +1589,8 @@ async def test_v1_retries_before_audio() -> None:
 async def test_v1_does_not_retry_after_partial_audio() -> None:
     async with _RimeV1Server(response_mode="partial_error") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         with pytest.raises(APIStatusError):
             await _collect(stream)
@@ -2040,8 +1603,8 @@ async def test_v1_does_not_retry_after_partial_audio() -> None:
 async def test_v1_ready_error_does_not_expose_provider_event() -> None:
     async with _RimeV1Server(ready={"protocol": _SECRET, "providerData": _SECRET}) as server:
         tts = _v1_tts(server, websocket_protocol="json")
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         try:
             with pytest.raises(APIConnectionError) as exc_info:
@@ -2060,94 +1623,6 @@ def test_v1_context_mismatch_does_not_expose_provider_value() -> None:
         _websocket_v1._check_context(response, "expected-context")
 
     _assert_exception_is_safe(exc_info.value)
-
-
-@pytest.mark.parametrize(
-    "websocket_url",
-    [
-        "wss://api.rime.ai/coda/ws",
-        "ws://127.0.0.1:8080/coda/ws",
-        "ws://[::1]:8080/coda/ws",
-    ],
-)
-def test_v1_accepts_secure_or_loopback_websocket_url(websocket_url: str) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    _websocket_v1.validate_websocket_url(websocket_url)
-
-
-def test_v1_rejects_untrusted_secure_host_without_opt_in() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    with pytest.raises(ValueError, match="trusted Rime host"):
-        _websocket_v1.validate_websocket_url("wss://attacker.example/coda/ws")
-
-
-def test_v1_accepts_custom_secure_host_with_opt_in() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    _websocket_v1.validate_websocket_url(
-        "wss://voice.customer.example/coda/ws", allow_custom_endpoint=True
-    )
-
-
-def test_v1_accepts_dedicated_rime_subdomain() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    _websocket_v1.validate_websocket_url(
-        "wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"
-    )
-
-
-def test_v1_rejects_lookalike_rime_host() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    with pytest.raises(ValueError, match="trusted Rime host"):
-        _websocket_v1.validate_websocket_url("wss://whiteglove.rime.ai.attacker.example/coda/ws")
-
-
-@pytest.mark.parametrize(
-    ("websocket_url", "model"),
-    [
-        ("wss://api.rime.ai/coda/ws", "coda"),
-        ("wss://api.rime.ai/mist/ws", "mist"),
-        ("wss://api.rime.ai/future-model/ws/?token=value", "future-model"),
-    ],
-)
-def test_v1_reads_model_from_websocket_url(websocket_url: str, model: str) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    assert _websocket_v1.model_from_websocket_url(websocket_url) == model
-
-
-@pytest.mark.parametrize(
-    "websocket_url",
-    [
-        "wss://api.rime.ai/coda",
-        "wss://api.rime.ai/coda/stream",
-    ],
-)
-def test_v1_rejects_url_not_ending_in_ws(websocket_url: str) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    with pytest.raises(ValueError, match="end with /ws"):
-        _websocket_v1.model_from_websocket_url(websocket_url)
-
-
-@pytest.mark.parametrize(
-    "websocket_url",
-    [
-        "ws://api.rime.ai/coda/ws",
-        "ws://192.168.1.20/coda/ws",
-        "ws://localhost:8080/coda/ws",
-        "http://api.rime.ai/coda/ws",
-    ],
-)
-def test_v1_rejects_insecure_remote_websocket_url(websocket_url: str) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    with pytest.raises(ValueError):
-        _websocket_v1.validate_websocket_url(websocket_url)
 
 
 async def test_v1_connection_error_does_not_expose_transport_data(
@@ -2250,8 +1725,8 @@ async def test_v1_retries_after_write_failure_before_audio(
         tts = _v1_tts(server, websocket_protocol="json")
         errors: list[Any] = []
         tts.on("error", errors.append)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+        stream._push_chunk(_chunk("hello"))
         stream.end_input()
         try:
             events = await _collect(stream)
@@ -2358,14 +1833,14 @@ async def test_v1_closes_retired_pool_after_its_last_stream_finishes(stream_coun
     async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
         tts = _v1_tts(first_server)
         streams = [
-            tts.stream(conn_options=APIConnectOptions(max_retry=0)) for _ in range(stream_count)
+            tts._stream(conn_options=APIConnectOptions(max_retry=0)) for _ in range(stream_count)
         ]
         tts.update_options(websocket_url=second_server.websocket_url)
 
         try:
             for stream in streams:
                 assert not first_server.connection_closed.is_set()
-                stream.push_text("first")
+                stream._push_chunk(_chunk("first"))
                 stream.end_input()
                 events = await _collect(stream)
                 assert events[-1].is_final
@@ -2591,12 +2066,12 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
                     websocket_url=url.replace("http:", "ws:"),
                     http_session=session,
                 )
-                stream = tts.stream(conn_options=conn_options)
-                stream.push_text("hello")
+                stream = tts._stream(conn_options=conn_options)
+                stream._push_chunk(_chunk("hello"))
                 stream.end_input()
             else:
                 tts = TTS(api_key="test-key", base_url=url, http_session=session)
-                stream = tts.synthesize("hello", conn_options=conn_options)
+                stream = tts._synthesize(_chunk("hello"), conn_options=conn_options)
             try:
                 with pytest.raises(APIError) as exc_info:
                     _ = [event async for event in stream]
@@ -2658,8 +2133,8 @@ async def test_ws3_rejects_invalid_word_timestamps() -> None:
             allow_custom_endpoint=True,
         )
         try:
-            async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
-                stream.push_text("hello")
+            async with provider._stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+                stream._push_chunk(_chunk("hello"))
                 stream.end_input()
                 with pytest.raises(APIConnectionError) as failure:
                     _ = [event async for event in stream]

@@ -8,7 +8,7 @@
       "brief": "Attributes declared in `lk_agents_abi::telemetry::health`.",
       "attributes": [
         {
-          "id": "lane_kind",
+          "id": "partition_kind",
           "type": {
             "members": [
               {
@@ -38,7 +38,7 @@
             ]
           },
           "stability": "development",
-          "brief": "The run that took, or waited for, the lane."
+          "brief": "The run that took, or waited for, the partition."
         },
         {
           "id": "stage",
@@ -99,12 +99,6 @@
                 "id": "submit",
                 "value": "submit",
                 "brief": "submit",
-                "stability": "development"
-              },
-              {
-                "id": "waiter",
-                "value": "waiter",
-                "brief": "waiter",
                 "stability": "development"
               },
               {

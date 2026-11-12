@@ -1,6 +1,7 @@
 use super::testfix::{RealtimeMachine, Step};
 use super::wire;
-use crate::realtime::dialect::{NUM_CHANNELS, OPENAI, SAMPLE_RATE, TurnDetection, XAI};
+use crate::realtime::dialect::{NUM_CHANNELS, OPENAI, SAMPLE_RATE, XAI};
+use crate::realtime::machine::transcription;
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
 use crate::realtime::openai::testfix::{machine, msg};
 use lk_agents_abi::RealtimeCommand as Command;
@@ -8,6 +9,10 @@ use lk_agents_abi::llm::realtime::*;
 use lk_agents_abi::llm::realtime::{
     GenerateReply, GenerationCreated, Interrupt, PushAudio, PushItem, Say, UpdateChatCtx,
     UpdateInstructions,
+};
+use lk_agents_abi::llm::realtime_options::{
+    AudioTranscription, NoiseReduction, NoiseReductionType, Reasoning, ReasoningEffort, ServerVad,
+    TurnDetection, Voice,
 };
 use lk_agents_abi::{ChatContext, ChatItem, Maybe, Ts};
 use lk_agents_abi::{Clock, VirtualClock};
@@ -718,9 +723,12 @@ fn a_finished_function_call_completes_its_arguments_in_the_mirror() {
 #[test]
 fn the_session_carries_every_option_as_the_reference_sends_it() {
     let mut opts = SessionOptions::from_dialect(&OPENAI, false);
-    opts.transcription = Some(json!({"model": "gpt-4o-transcribe", "language": "fr"}));
-    opts.noise_reduction = Some(json!({"type": "near_field"}));
-    opts.reasoning = Some(json!({"effort": "low"}));
+    opts.transcription = Some(AudioTranscription {
+        language: Some("fr".into()),
+        ..transcription("gpt-4o-transcribe")
+    });
+    opts.noise_reduction = Some(NoiseReduction::Microphone(NoiseReductionType::NearField));
+    opts.reasoning = Some(Reasoning { effort: Some(ReasoningEffort::Low) });
     let caps = OPENAI.capabilities(opts.turn_detection.as_ref(), false, true, true);
     let mut m = RealtimeMachine::new(
         OPENAI,
@@ -745,7 +753,7 @@ fn an_options_update_changes_reasoning_for_the_next_session_too() {
     let mut m = machine(OPENAI);
     m.open(at(0));
     let step = m.update_options(OptionsPatch {
-        reasoning: Maybe::Given(Some(json!({"effort": "high"}))),
+        reasoning: Maybe::Given(Some(Reasoning { effort: Some(ReasoningEffort::High) })),
         ..Default::default()
     });
     assert_eq!(step.frames[0]["session"]["reasoning"], json!({"effort": "high"}));
@@ -758,12 +766,16 @@ fn an_options_update_changes_reasoning_for_the_next_session_too() {
 #[test]
 fn the_legacy_azure_session_carries_reasoning() {
     let mut opts = SessionOptions::from_dialect(&OPENAI, false);
-    opts.transcription = Some(json!({"model": "whisper-1"}));
-    opts.turn_detection = Some(TurnDetection::Raw(json!({
-        "type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300,
-        "silence_duration_ms": 200, "create_response": true,
-    })));
-    opts.reasoning = Some(json!({"effort": "medium"}));
+    opts.transcription = Some(transcription("whisper-1"));
+    opts.turn_detection = Some(TurnDetection::Server(ServerVad {
+        threshold: Some(0.5),
+        prefix_padding_ms: Some(300),
+        silence_duration_ms: Some(200),
+        idle_timeout_ms: None,
+        create_response: Some(true),
+        interrupt_response: None,
+    }));
+    opts.reasoning = Some(Reasoning { effort: Some(ReasoningEffort::Medium) });
     let caps = OPENAI.capabilities(opts.turn_detection.as_ref(), false, true, true);
     let mut m = RealtimeMachine::new(
         OPENAI,
@@ -784,7 +796,7 @@ fn update_options_moves_the_capabilities_and_skips_a_no_op() {
     m.open(at(0));
     assert!(
         m.update_options(OptionsPatch {
-            voice: Maybe::Given("marin".into()),
+            voice: Maybe::Given(Voice::Name("marin".into())),
             ..Default::default()
         })
         .frames

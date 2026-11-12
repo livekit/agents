@@ -122,6 +122,19 @@ impl TextSessionConfig {
                     return Err(invalid("child has no pending parent call"));
                 }
             }
+            for item in &frame.history {
+                if let lk_agents_abi::ChatItem::FunctionCall(call) = item {
+                    let completed = frame.history.iter().any(|item| matches!(item,
+                        lk_agents_abi::ChatItem::FunctionCallOutput(output) if output.call_id == call.call_id));
+                    let local_child =
+                        self.agents[&frame.agent_name].agent_tools.contains_key(&call.name);
+                    if !completed && !local_child {
+                        return Err(invalid(
+                            "an admitted tool has no recorded result; reconcile its outcome before resuming",
+                        ));
+                    }
+                }
+            }
             for pending in &frame.pending_calls {
                 if pending.parent.frame_id != *id
                     || pending.execution_id != state.execution_id

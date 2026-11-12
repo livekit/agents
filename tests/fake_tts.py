@@ -14,7 +14,7 @@ from livekit.agents.tts import (
     SynthesizeStream,
     TTSCapabilities,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.types import APIConnectOptions
 
 
 class FakeTTSResponse(BaseModel):
@@ -106,16 +106,14 @@ class FakeTTS(TTS):
     def fake_response_map(self) -> dict[str, FakeTTSResponse]:
         return self._fake_response_map
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> FakeChunkedStream:
-        stream = FakeChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        stream = FakeChunkedStream(tts=self, input_text=chunk.text, conn_options=conn_options)
         self._synthesize_ch.send_nowait(stream)
         return stream
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> FakeSynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> FakeSynthesizeStream:
         stream = FakeSynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -224,8 +222,9 @@ class FakeSynthesizeStream(SynthesizeStream):
 
         input_text = ""
         async for data in self.input:
-            if isinstance(data, str):
-                input_text += data
+            if isinstance(data, tts.SpeechChunk):
+                # chunks arrive trimmed: a segment's text is its chunks, spaced
+                input_text = f"{input_text} {data.text}" if input_text else data.text
                 continue
             elif isinstance(data, SynthesizeStream.Flush) and not input_text:
                 continue
@@ -261,7 +260,7 @@ class FakeSynthesizeStream(SynthesizeStream):
             if delay > 0.0:
                 await asyncio.sleep(delay)
 
-            output_emitter.flush()
+            output_emitter.end_segment()
 
         if (exc := self._tts._consume_fake_exception()) is not None:
             raise exc

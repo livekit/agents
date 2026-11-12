@@ -23,6 +23,21 @@ fn _extract_chat_context_plans_truncate_plan_max_items(
 type ChatContextPlansTruncatePlanMaxItemsInput = i64;
 type ChatContextPlansRemoveInstructionsOutput = ::std::vec::Vec<usize>;
 
+/// Decode a persisted protobuf ChatItem with the shared history codec.
+#[pyfunction]
+#[pyo3(signature = (payload))]
+pub fn _core_payload_to_item<'py>(
+    py: Python<'py>,
+    payload: Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let payload = match crate::py_values::value_from_py(payload.as_any(), "payload")? {
+        ::serde_json::Value::Object(map) => Ok(map),
+        _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("payload", ": expected a dict"))),
+    }?;
+    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::_core_payload_to_item(payload)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+    crate::generated::records::chat_items::chat_item_to_py(py, out)
+}
+
 /// `ChatContext.copy` as an index plan over the host's own items.
 #[pyfunction]
 #[pyo3(signature = (items, *, exclude_function_call = false, exclude_instructions = false, exclude_empty_message = false, exclude_handoff = false, exclude_config_update = false, tools = None))]
@@ -840,54 +855,6 @@ impl FallbackTts {
                 <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::aclose(&this)
                     .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
-        })
-    }
-
-    #[pyo3(signature = (input_text, *, conn_options = None))]
-    fn synthesize<'py>(
-        &self,
-        py: Python<'py>,
-        input_text: ::std::string::String,
-        conn_options: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let conn_options = conn_options
-            .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
-            .transpose()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::synthesize(&this, input_text, conn_options)
-                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    super::tts::TtsStream(::std::sync::Arc::new(out)),
-                    py,
-                )
-            })
-        })
-    }
-
-    #[pyo3(signature = (*, conn_options = None, expressive = false))]
-    fn stream<'py>(
-        &self,
-        py: Python<'py>,
-        conn_options: Option<Bound<'_, PyAny>>,
-        expressive: bool,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let conn_options = conn_options
-            .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
-            .transpose()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::stream(&this, conn_options, expressive)
-                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    super::tts::TtsStream(::std::sync::Arc::new(out)),
-                    py,
-                )
-            })
         })
     }
 }
@@ -3037,6 +3004,10 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
         ::lk_agents_abi::errors::HostError,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -3059,7 +3030,20 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
                 }
             };
             let o = out.value.bind(py);
-            let out = (crate::generated::records::duplex::duplex_capabilities_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+            let out = (context
+                .as_ref()
+                .map(|context| out.returned_context(py, context))
+                .transpose()
+                .and_then(|context| {
+                    crate::py_calls::returning(context, || {
+                        crate::generated::records::duplex::duplex_capabilities_from_py(o.as_any())
+                    })
+                }))
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -3527,6 +3511,10 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -3537,7 +3525,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::duplex::duplex_audio_frame_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || if o.is_none() { Ok(None) } else { (crate::generated::records::duplex::duplex_audio_frame_from_py(o.as_any())).map(Some) }))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -3569,6 +3557,10 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -3579,7 +3571,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::duplex::duplex_event_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || if o.is_none() { Ok(None) } else { (crate::generated::records::duplex::duplex_event_from_py(o.as_any())).map(Some) }))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -4499,6 +4491,10 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -4509,7 +4505,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::py_objects::object_ref_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::llm::realtime::RealtimeError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::py_objects::object_ref_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::llm::realtime::RealtimeError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -4544,6 +4540,10 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -4554,7 +4554,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::py_objects::object_ref_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::llm::realtime::RealtimeError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::py_objects::object_ref_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::llm::realtime::RealtimeError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -4650,6 +4650,10 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -4660,7 +4664,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::realtime_wire::event_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || if o.is_none() { Ok(None) } else { (crate::generated::records::realtime_wire::event_from_py(o.as_any())).map(Some) }))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

@@ -15,7 +15,7 @@ on:
           - "minor-rc    (1.5.1 → 1.6.0.rc1)"
           - "major-rc    (1.5.1 → 2.0.0.rc1)"
           - "next-rc     (.rc1 → .rc2)"
-          - "beta        (2.0.0.dev0 → 2.0.0b1, .b1 → .b2; livekit-agents-next only)"
+          - "beta        (2.0.0.dev0 → 2.0.0b1, .b1 → .b2; livekit-agents only)"
           - "promote     (1.6.0.rc2 → 1.6.0)"
           - "republish   (retry failed publish, no version bump)"
       branch:
@@ -106,7 +106,7 @@ jobs:
       - name: Read new version
         id: version
         run: |
-          version=$(grep -m1 '__version__' livekit-agents-next/livekit/agents/version.py | sed 's/.*"\(.*\)".*/\1/')
+          version=$(grep -m1 '__version__' livekit-agents/livekit/agents/version.py | sed 's/.*"\(.*\)".*/\1/')
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "New version: $version"
 
@@ -165,13 +165,13 @@ jobs:
         run: |
           packages=()
 
-          packages+=("livekit-agents-next")
-          release=$(grep -m1 '__version__' livekit-agents-next/livekit/agents/version.py | sed 's/.*"\(.*\)".*/\1/')
+          packages+=("livekit-agents")
+          release=$(grep -m1 '__version__' livekit-agents/livekit/agents/version.py | sed 's/.*"\(.*\)".*/\1/')
 
           for dir in livekit-plugins/livekit-plugins-*; do
             if [ ! -d "$dir" ]; then continue; fi
 
-            # a beta (2.0.0b1) is livekit-agents-next alone; the plugins keep their releases
+            # a beta (2.0.0b1) is livekit-agents alone; the plugins keep their releases
             if echo "$release" | grep -qE '[0-9]b[0-9]+$'; then
               break
             fi

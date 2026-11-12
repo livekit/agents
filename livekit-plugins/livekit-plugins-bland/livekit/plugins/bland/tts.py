@@ -33,7 +33,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -252,21 +252,19 @@ class TTS(tts.TTS):
             if self._pool is not None:
                 self._pool.invalidate()
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             get_session=self._ensure_session,
             api_key=self._api_key,
             opts=replace(self._opts),
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         if self._pool is None:
             raise RuntimeError(
                 "streaming is disabled on this Bland TTS instance; construct it with "
@@ -401,7 +399,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 text_sent = True
                 self.mark_started()
                 await ws.send_str(
-                    json.dumps({"type": "speak", "context_id": context_id, "text": data})
+                    json.dumps({"type": "speak", "context_id": context_id, "text": data.text + " "})
                 )
                 input_sent.set()
 

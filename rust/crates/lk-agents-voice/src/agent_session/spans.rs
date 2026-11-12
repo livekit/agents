@@ -6,7 +6,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::rtc::{ConnectionState, DisconnectReason};
-use lk_agents_core::tts::markup::ChatMessageExt;
+use lk_agents_core::markup::ChatMessageExt;
 
 /// The session's trace: span ids from `telemetry.ids`, else seeded from the session id (tests,
 /// the DST); `gen_ai.conversation.id` the call's, else the session's own id.

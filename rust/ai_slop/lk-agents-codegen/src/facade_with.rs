@@ -206,6 +206,9 @@ pub(super) fn known_roots(facade: &FacadeClass, new: Option<&FacadeMethod>) -> V
 
 /// `self.<path>`, read through `Any` when its root is an attribute the subclass provides.
 pub(super) fn bound_path(known: &[String], path: &str) -> String {
+    if path == "self" {
+        return "self".into();
+    }
     let root = path.split(['.', '(']).next().unwrap_or(path);
     match known.iter().any(|k| k == root) || path[root.len()..].starts_with("()") {
         true => format!("self.{path}"),

@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn positions_are_bound_to_the_complete_listing() {
-        let listing = ("tasks", Some("lane:*:one"), "updated");
+        let listing = ("tasks", Some("partition_key:*:one"), "updated");
         let token = Cursor::encode(listing, (42_i64, "task:one"));
         assert_eq!(
             Cursor::position(Some(&token), listing, (0_i64, String::new())).unwrap(),

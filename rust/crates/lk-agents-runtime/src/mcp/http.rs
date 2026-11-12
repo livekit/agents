@@ -19,6 +19,7 @@ use rmcp::transport::streamable_http_client::{
     StreamableHttpPostResponse,
 };
 use sse_stream::{Error as SseError, Sse};
+use tokio_util::sync::CancellationToken;
 
 use super::McpError;
 use super::transport::TransportReceipt;
@@ -36,12 +37,29 @@ pub(super) struct CleanupClient {
     pub options: ApiConnectOptions,
     pub clock: Arc<dyn Clock>,
     pub receipt: Arc<TransportReceipt>,
+    /// The connection's cancellation. The SDK awaits its handshake POSTs without one, so a
+    /// silent server would hold a cancelled connection until `read_timeout`.
+    pub cancel: CancellationToken,
 }
 
 struct Response {
     exchange: Exchange,
     status: StatusCode,
     headers: HeaderMap,
+    cancel: CancellationToken,
+}
+
+/// The exchange's next event, or the transport closing once the connection is cancelled;
+/// dropping the exchange aborts its request.
+async fn next_event(
+    exchange: &mut Exchange,
+    cancel: &CancellationToken,
+) -> Result<HttpEvent, Error> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(Error::TransportChannelClosed),
+        event = exchange.next() => event.map_err(Error::Client),
+    }
 }
 
 impl CleanupClient {
@@ -76,10 +94,11 @@ impl CleanupClient {
             ResponsePolicy::Protocol,
         );
         loop {
-            match exchange.next().await.map_err(Error::Client)? {
+            match next_event(&mut exchange, &self.cancel).await? {
                 HttpEvent::Headers(headers) => {
                     let status = exchange.status().expect("response headers have a status");
-                    return Ok(Response { exchange, status, headers });
+                    let cancel = self.cancel.clone();
+                    return Ok(Response { exchange, status, headers, cancel });
                 }
                 HttpEvent::Started => {}
                 _ => unreachable!("headers precede the response body"),
@@ -97,6 +116,7 @@ impl CleanupClient {
         stream.expect_response(role == StreamRole::PostReply);
         let events = stream
             .into_stream()
+            .take_until(response.cancel.cancelled_owned())
             .map(|event| {
                 event
                     .map(|event| Sse {
@@ -157,7 +177,7 @@ impl Response {
     async fn body(mut self) -> Result<Vec<u8>, Error> {
         let mut body = Vec::new();
         loop {
-            match self.exchange.next().await.map_err(Error::Client)? {
+            match next_event(&mut self.exchange, &self.cancel).await? {
                 HttpEvent::Bytes(bytes) => {
                     if bytes.len() > BODY_LIMIT.saturating_sub(body.len()) {
                         return Err(Error::UnexpectedServerResponse(

@@ -1,23 +1,10 @@
-#![allow(
-    clippy::disallowed_types,
-    clippy::disallowed_methods,
-    reason = "tests drive tokio's sync primitives directly"
-)]
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::time::Duration;
-
-use lk_agents_abi::errors::{HostError, ProviderError};
-use lk_agents_abi::media::emitter::EmitterError;
-use lk_agents_abi::tts::stream_pacer::{HostSentenceStream, PushedAudio};
-use parking_lot::Mutex;
-use tokio::sync::Notify;
-
 use super::*;
 
+// Catches: the first sentence held, a later batch sent before the audio played out, or a batch
+// not joined up to the text length.
 #[test]
 fn first_sentence_is_immediate_then_wait_for_audio_and_batch() {
-    let mut p = SentencePacer::new(5.0, 4);
+    let mut p = SentencePacer::new(5.0, 4, None);
     p.push("hello".into());
     p.push("你好".into());
     p.push("ab".into());
@@ -29,144 +16,27 @@ fn first_sentence_is_immediate_then_wait_for_audio_and_batch() {
     assert_eq!(p.poll(107.0, 10.0).delay, None);
 }
 
-/// A host sentence stream: sentences queued by the test, the end once `ended`.
-#[derive(Default)]
-struct Host {
-    queued: Mutex<VecDeque<String>>,
-    ended: Mutex<bool>,
-    closed: Mutex<bool>,
-    changed: Notify,
-}
-
-impl Host {
-    fn send(&self, sentence: &str) {
-        self.queued.lock().push_back(sentence.into());
-        self.changed.notify_waiters();
+// Catches: a paced batch joined past the provider's request limit.
+#[test]
+fn a_batch_is_never_joined_past_the_provider_limit() {
+    let mut p = SentencePacer::new(5.0, 1000, Some(25));
+    for sentence in ["First one.", "Second one.", "Third one.", "Fourth one."] {
+        p.push(sentence.to_owned());
     }
-    fn end(&self) {
-        *self.ended.lock() = true;
-        self.changed.notify_waiters();
+    p.end();
+    let first = p.poll(0.0, 0.0).text.expect("the first sentence goes at once");
+    assert_eq!(first, "First one.");
+    // the audio played out: the rest go, batched within the limit
+    let mut batches = Vec::new();
+    let mut now = 0.0;
+    while p.holds_any() {
+        now += 10.0;
+        p.poll(now, 0.0);
+        now += 10.0;
+        if let Some(text) = p.poll(now, 0.0).text {
+            batches.push(text);
+        }
     }
-}
-
-impl HostSentenceStream for Host {
-    fn push_text(&self, _text: String) {}
-    fn flush(&self) {}
-    fn end_input(&self) {}
-    fn next(
-        &self,
-        _cx: &telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<
-        '_,
-        Result<Option<lk_agents_abi::tokenize::TokenData>, ProviderError>,
-    > {
-        Box::pin(async move {
-            loop {
-                let changed = self.changed.notified();
-                if let Some(token) = self.queued.lock().pop_front() {
-                    let segment_id = String::new();
-                    return Ok(Some(lk_agents_abi::tokenize::TokenData { segment_id, token }));
-                }
-                if *self.ended.lock() {
-                    return Ok(None);
-                }
-                changed.await;
-            }
-        })
-    }
-    fn aclose(&self, _cx: &telemetry::Cx) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
-        *self.closed.lock() = true;
-        Box::pin(async { Ok(()) })
-    }
-}
-
-/// The emitter's pushed audio, set by the test.
-#[derive(Default)]
-struct Audio(Mutex<f64>);
-
-impl PushedAudio for Audio {
-    fn pushed_duration(&self) -> f64 {
-        *self.0.lock()
-    }
-    fn start_segment(&self, _: String) -> Result<(), EmitterError> {
-        Ok(())
-    }
-    fn push_frame(&self, _: lk_agents_abi::AudioFrame) -> Result<(), EmitterError> {
-        Ok(())
-    }
-    fn push_timed_transcript(
-        &self,
-        _: Vec<lk_agents_abi::TranscriptChunk>,
-    ) -> Result<(), EmitterError> {
-        Ok(())
-    }
-    fn report_usage(
-        &self,
-        _: Option<lk_agents_abi::usage::TokenUsage>,
-        _: Option<u64>,
-    ) -> Result<(), EmitterError> {
-        Ok(())
-    }
-}
-
-fn paced(host: &Arc<Host>, audio: &Arc<Audio>) -> PacedSentences {
-    let env = ProcessEnv::current_runtime();
-    PacedSentences::new(
-        &env,
-        host.clone(),
-        audio.clone(),
-        SentenceStreamPacer { min_remaining_audio: 5.0, max_text_length: 300 },
-    )
-}
-
-#[tokio::test(start_paused = true)]
-async fn the_first_sentence_goes_at_once_and_the_rest_wait_for_the_audio_to_play_out() {
-    let (host, audio) = (Arc::new(Host::default()), Arc::new(Audio::default()));
-    let paced = Arc::new(paced(&host, &audio));
-    host.send("One.");
-    host.send("Two.");
-    host.send("Three.");
-    let start = tokio::time::Instant::now();
-    assert_eq!(paced.next(telemetry::Cx::NONE).await.unwrap().as_deref(), Some("One."));
-    assert_eq!(start.elapsed(), Duration::ZERO);
-
-    // Eight seconds of audio arrive at once: the rest waits until five remain.
-    *audio.0.lock() = 8.0;
-    let next = tokio::spawn({
-        let paced = paced.clone();
-        async move { paced.next(telemetry::Cx::NONE).await }
-    });
-    host.end();
-    let batch = next.await.unwrap().unwrap();
-    assert_eq!(batch.as_deref(), Some("Two. Three."));
-    let waited = start.elapsed().as_secs_f64();
-    assert!((3.0..3.7).contains(&waited), "released after {waited}s");
-    assert_eq!(paced.next(telemetry::Cx::NONE).await.unwrap(), None);
-}
-
-#[tokio::test(start_paused = true)]
-async fn aclose_ends_a_pending_next_and_closes_the_host_stream() {
-    let (host, audio) = (Arc::new(Host::default()), Arc::new(Audio::default()));
-    let paced = Arc::new(paced(&host, &audio));
-    let next = tokio::spawn({
-        let paced = paced.clone();
-        async move { paced.next(telemetry::Cx::NONE).await }
-    });
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    paced.aclose(telemetry::Cx::NONE).await;
-    assert_eq!(next.await.unwrap().unwrap(), None);
-    assert!(*host.closed.lock());
-}
-
-/// A paced stream whose input ends with no sentence ends instead of waiting forever.
-/// https://github.com/livekit/agents/pull/3146
-#[tokio::test(start_paused = true)]
-async fn an_input_that_ends_without_a_sentence_ends_the_paced_stream() {
-    let (host, audio) = (Arc::new(Host::default()), Arc::new(Audio::default()));
-    let paced = paced(&host, &audio);
-    host.end();
-    let next = tokio::time::timeout(Duration::from_secs(30), paced.next(telemetry::Cx::NONE))
-        .await
-        .expect("an empty input must end the paced stream");
-    assert_eq!(next.unwrap(), None);
+    assert_eq!(batches, ["Second one. Third one.", "Fourth one."]);
+    assert!(batches.iter().all(|b| b.chars().count() <= 25));
 }

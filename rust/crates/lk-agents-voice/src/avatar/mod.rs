@@ -13,28 +13,21 @@ pub fn stream_name(segment: PlaybackSegment) -> String {
     format!("AUDIO_{}_{}", segment.attachment, segment.segment)
 }
 
-pub fn stream_segment(name: &str) -> std::result::Result<PlaybackSegment, ReceiverEnd> {
-    let parsed = name.strip_prefix("AUDIO_").and_then(|name| name.split_once('_'));
-    let Some((attachment, segment)) = parsed else {
-        return Err(ReceiverEnd::BadStream("avatar stream name has no playback identity".into()));
-    };
-    let attachment = attachment
-        .parse()
-        .map_err(|_| ReceiverEnd::BadStream("invalid output attachment".into()))?;
-    let segment =
-        segment.parse().map_err(|_| ReceiverEnd::BadStream("invalid output segment".into()))?;
-    Ok(PlaybackSegment { attachment, segment })
+/// The agent's playback identity in a 2.0 stream name; `None` for a name a v1 agent chose
+/// (`AUDIO_<shortuuid>`), whose reports go to the plain methods.
+pub fn stream_segment(name: &str) -> Option<PlaybackSegment> {
+    let (attachment, segment) = name.strip_prefix("AUDIO_")?.split_once('_')?;
+    Some(PlaybackSegment { attachment: attachment.parse().ok()?, segment: segment.parse().ok()? })
 }
 
-pub fn playback_method(
-    base: &str,
-    segment: &AvatarPlaybackSegment,
-) -> std::result::Result<String, ReceiverEnd> {
-    let id = segment
-        .stream_id
-        .as_ref()
-        .ok_or_else(|| ReceiverEnd::BadStream("avatar report has no byte-stream id".into()))?;
-    Ok(format!("{base}/{id}/{}", stream_name(segment.playback)))
+/// Where a report about `segment` goes: the 2.0 agent's route for that stream
+/// (`<base>/<stream id>/<stream name>`), or the plain v1 method when the stream carried no
+/// playback identity.
+pub fn playback_method(base: &str, segment: &AvatarPlaybackSegment) -> String {
+    match &segment.stream_id {
+        Some(id) => format!("{base}/{id}/{}", stream_name(segment.playback)),
+        None => base.to_owned(),
+    }
 }
 
 /// `lk.playback_finished`'s payload, sent by the avatar worker's receiver.

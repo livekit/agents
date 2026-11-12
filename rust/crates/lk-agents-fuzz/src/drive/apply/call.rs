@@ -79,6 +79,7 @@ impl Run {
             | Input::HookDone { .. }
             | Input::HookDoneLate { .. }
             | Input::HostMetrics { .. }
+            | Input::AvatarError { .. }
             | Input::PauseAuthorization { .. }
             | Input::ResumeAuthorization { .. } => self.call_workflow(input),
             Input::Drain { .. } | Input::Close { .. } | Input::Run { .. } => {
@@ -383,6 +384,7 @@ impl Run {
                         streaming: !self.setup.chunked_tts,
                         alignment: self.setup.tts_alignment,
                         markup: self.setup.tts_markup,
+                        pacing: self.setup.tts_pacing,
                     },
                 ) as Arc<Tts>))
             }
@@ -434,6 +436,8 @@ impl Run {
                         registry.clone(),
                         self.setup.pausable_output,
                         self.setup.lagging_output,
+                        self.setup.output_fault,
+                        self.setup.unreported_clear,
                     ) as _
                 }))
                 .ok()?,
@@ -478,6 +482,10 @@ impl Run {
                 api.send_from(VoiceCommandOrigin::Amd, SpeechCommand::ResumeAuthorization).ok()?
             }
             Input::HostMetrics {} => api.report_avatar_metrics(avatar_metrics()).ok()?,
+            Input::AvatarError {} => {
+                let error = lk_agents_abi::errors::ApiError::new("the avatar did not join");
+                api.send(Command::AvatarError(error.into())).ok()?
+            }
             // A hung hook is one the host never answers, whatever the case sends.
             Input::HookDone { hook, .. } if self.hung_hooks.contains(&hook.nth) => return None,
             Input::HookDone { hook, answer, text: AgentText(text) } => {

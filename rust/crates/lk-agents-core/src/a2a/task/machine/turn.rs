@@ -9,7 +9,7 @@ use super::{
 };
 use crate::a2a::{
     HandlerOutput, Message, Policy, Settle, Stop, TurnIds, answer_pending, batch_to_chat_message,
-    checkpoint_stop, settle,
+    settle,
 };
 
 // Every storage read and the handler's stream are separate steps, so other requests and clients
@@ -38,8 +38,6 @@ pub(super) struct Turning {
     task_ids: Vec<String>,
     /// A batch inbox's drain, under the runner's kept lease.
     pub(super) drain: bool,
-    /// A checkpoint yields while another holder waits for the lane: under `interrupt`.
-    yields_to_waiter: bool,
     /// Unix seconds: after everything the run loaded.
     at: f64,
     answer_task: String,
@@ -74,7 +72,6 @@ impl TaskMachine {
             batch,
             task_ids,
             drain,
-            yields_to_waiter: !drain && self.policy == Policy::Interrupt,
             at,
             answer_task,
             answer_tool: None,
@@ -125,14 +122,10 @@ impl TaskMachine {
                     Operation::Checkpoint(tasks)
                 }
             }
-            (Step::Checkpoint, Completion::Checkpoint { holder, rows }) => {
-                // another holder marked itself waiting, or a client canceled one of the tasks
-                let other_waiting = rows.iter().any(|(waiter, _)| {
-                    waiter.as_ref().is_some_and(|w| !w.is_empty() && *w != holder)
-                });
-                let canceled = rows.iter().any(|(_, status)| *status == Some(TaskState::Canceled));
+            (Step::Checkpoint, Completion::Checkpoint { statuses }) => {
+                let canceled = statuses.contains(&Some(TaskState::Canceled));
                 let turn = self.turning();
-                turn.stop = checkpoint_stop(turn.yields_to_waiter, other_waiting, canceled);
+                turn.stop = canceled.then_some(Stop::ClientCanceled);
                 let should_yield = turn.stop.is_some();
                 self.phase = Phase::Turn(Step::Next);
                 Operation::Next(Some(should_yield))
@@ -199,14 +192,20 @@ impl TaskMachine {
 
     fn open_handler(&mut self) -> Operation {
         let id = self.mint("item");
-        let lane = self.lane.clone();
+        let partition_key = self.partition_key.clone();
         let read_only = self.policy == Policy::Concurrent;
+        let endpoint = if self.turn.as_ref().is_some_and(|turn| turn.drain) {
+            self.drain_endpoint.clone()
+        } else {
+            self.endpoint.clone()
+        };
         let turn = self.turning();
         let message = batch_to_chat_message(&turn.batch, turn.at, id);
         turn.user_message = Some(message.clone());
         let handle = Handle {
-            context_scope_id: format!("root:{lane}"),
-            lane,
+            endpoint,
+            context_scope_id: format!("root:{partition_key}"),
+            partition_key,
             read_only,
             recent_tasks: TASKS_IN_CONTEXT,
             message,
@@ -229,7 +228,7 @@ impl TaskMachine {
             status_message: self.mint("msg"),
             artifact: self.mint("art"),
         };
-        let lane_question = self.policy != Policy::Concurrent;
+        let partition_question = self.policy != Policy::Concurrent;
         let turn = self.turning();
         let out = turn.output.take().unwrap_or_default();
         let settled = settle(Settle {
@@ -241,7 +240,7 @@ impl TaskMachine {
             stop: turn.stop,
             answer_canceled,
             continued: turn.continued.as_ref(),
-            lane_question,
+            partition_question,
             now: turn.at,
             ids,
         });

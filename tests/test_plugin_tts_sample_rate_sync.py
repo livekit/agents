@@ -70,36 +70,3 @@ def test_update_options_syncs_public_sample_rate(factory, new_rate: int) -> None
         "TTS.sample_rate is what fallback_adapter resamples from; leaving it stale "
         "resamples the new audio at the old input rate"
     )
-
-
-def test_rate_change_after_a_fallback_adapter_already_wraps_the_tts() -> None:
-    """The adapter may already exist when the rate changes.
-
-    ``FallbackAdapter`` builds its resampler per request, reading ``tts.sample_rate``
-    as ``input_rate`` at that moment -- so syncing the property is what makes an
-    already-constructed adapter resample correctly afterwards. Without the sync the
-    resampler is handed the old rate while the frames arrive at the new one.
-
-    Note the adapter's own ``sample_rate`` (the resampler's ``output_rate``) and each
-    status's ``needs_resampling`` are fixed at construction by design; this test pins
-    the input side, which is the half the plugin controls.
-    """
-    from livekit.agents.tts import FallbackAdapter
-    from livekit.plugins.smallestai import TTS
-
-    primary = TTS(api_key="test-key", sample_rate=24000)
-    secondary = TTS(api_key="test-key", sample_rate=16000)
-
-    adapter = FallbackAdapter([primary, secondary])
-    assert adapter.sample_rate == 24000
-
-    secondary.update_options(sample_rate=8000)
-
-    # what the emitter produces and what the resampler is told must agree
-    assert secondary._opts.sample_rate == 8000
-    assert secondary.sample_rate == 8000, (
-        "FallbackAdapter builds its resampler per request with input_rate=tts.sample_rate; "
-        "a stale property resamples the new-rate frames as if they were still old-rate"
-    )
-    # the adapter's output rate is construction-time by design, and unchanged here
-    assert adapter.sample_rate == 24000

@@ -329,24 +329,50 @@ async fn a_wrapped_llm_receives_the_chains_conn_options_not_the_callers() {
     stream.close(NO_DEADLINE).await;
 }
 
-// Catches: counting a content-less chunk (the usage frame) as output sent (`llm:281-285`).
+/// Metadata-only chunks (an empty frame, a role-only delta, usage) are not output, so a primary
+/// that sends only those and dies falls over to the backup, whose tool call arrives once.
+/// https://github.com/livekit/agents/issues/1207 https://github.com/livekit/agents/issues/5660
 #[tokio::test]
 async fn a_contentless_chunk_does_not_block_the_failover() {
-    let bare = LlmChunk { id: "u".into(), ..Default::default() };
-    let primary = FakeLlm::dying("p", vec![bare]);
-    let backup = FakeLlm::new("b", Some(vec![chunk("recovered")]));
-    let fb = llm_chain(vec![primary, backup.clone()]);
+    let bare = LlmChunk { id: "p".into(), ..Default::default() };
+    let role_only = LlmChunk {
+        id: "p".into(),
+        delta: Some(ChoiceDelta {
+            role: Some(lk_agents_abi::Role::Assistant),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let usage = LlmChunk { id: "p".into(), usage: Some(Box::default()), ..Default::default() };
+    let tool_call = LlmChunk {
+        id: "b".into(),
+        delta: Some(ChoiceDelta {
+            tool_calls: vec![lk_agents_abi::FunctionToolCall {
+                name: "lookup".into(),
+                arguments: r#"{"q":"x"}"#.into(),
+                call_id: "call_1".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let primary = FakeLlm::dying("p", vec![bare, role_only, usage]);
+    let backup = FakeLlm::new("b", Some(vec![tool_call]));
+    let fb = llm_chain(vec![primary, backup]);
 
     let mut stream =
         within("chat", fb.chat(&lk_agents_abi::telemetry::Cx::NONE, &ChatRequest::default()))
             .await
             .expect("a stream");
-    let texts: Vec<String> = drain_llm(&mut stream)
+    let calls: Vec<String> = drain_llm(&mut stream)
         .await
         .into_iter()
-        .map(|c| c.delta.and_then(|d| d.content).unwrap_or_default())
+        .flat_map(|c| c.delta.map(|d| d.tool_calls).unwrap_or_default())
+        .map(|call| call.call_id)
         .collect();
-    assert_eq!(texts, vec![String::new(), "recovered".to_string()]);
+
+    assert_eq!(calls, ["call_1"]);
     stream.close(NO_DEADLINE).await;
 }
 

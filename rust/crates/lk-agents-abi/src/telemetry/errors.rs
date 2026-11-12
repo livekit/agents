@@ -118,6 +118,20 @@ impl SpanError for crate::storage::StorageError {
     }
 }
 
+/// A recording that failed, as the exception the host raises for it.
+impl SpanError for crate::recorder::RecordingFailure {
+    fn error_type(&self) -> ErrorType {
+        let class = match self {
+            Self::Create(_) | Self::Io(_) => "OSError",
+            _ => "RuntimeError",
+        };
+        ErrorType::Exception(class.to_owned())
+    }
+    fn message(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// A session's start that failed: what failed it.
 impl SpanError for crate::voice::session::StartFailed {
     fn error_type(&self) -> ErrorType {
@@ -125,18 +139,19 @@ impl SpanError for crate::voice::session::StartFailed {
             Self::Driver(_) => ErrorType::Exception("RuntimeError".to_owned()),
             Self::Storage(error) => error.error_type(),
             Self::Host(error) => error.error_type(),
+            Self::Recording(error) => error.error_type(),
         }
     }
     fn message(&self) -> String {
         match self {
-            Self::Driver(_) | Self::Storage(_) => self.to_string(),
+            Self::Driver(_) | Self::Storage(_) | Self::Recording(_) => self.to_string(),
             Self::Host(error) => error.message(),
         }
     }
     fn stacktrace(&self) -> Option<String> {
         match self {
             Self::Host(error) => error.stacktrace(),
-            Self::Driver(_) | Self::Storage(_) => None,
+            Self::Driver(_) | Self::Storage(_) | Self::Recording(_) => None,
         }
     }
 }

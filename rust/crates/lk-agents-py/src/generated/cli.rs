@@ -33,15 +33,18 @@ pub fn host_log_level(py: Python<'_>, level: Bound<'_, PyAny>) -> PyResult<u32> 
     ::pyo3::PyResult::Ok(out)
 }
 
-/// One structured JSON line, including host-formatted exceptions and stack traces.
+/// One log line in `style`, including host-formatted exceptions and stack traces.
 #[pyfunction]
-#[pyo3(signature = (record))]
+#[pyo3(signature = (record, style))]
 pub fn format_log_record(
     py: Python<'_>,
     record: Bound<'_, PyAny>,
+    style: Bound<'_, PyAny>,
 ) -> PyResult<::std::string::String> {
     let record = crate::generated::records::cli::log_record_from_py(record.as_any())?;
-    let out = py.detach(|| <CliImpl as ::lk_agents_abi::cli::Cli>::format_log_record(record));
+    let style = crate::generated::records::cli::log_style_from_py(style.as_any())?;
+    let out =
+        py.detach(|| <CliImpl as ::lk_agents_abi::cli::Cli>::format_log_record(record, style));
     ::pyo3::PyResult::Ok(out)
 }
 

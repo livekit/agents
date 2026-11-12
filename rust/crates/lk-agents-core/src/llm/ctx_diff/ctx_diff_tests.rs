@@ -17,6 +17,30 @@ fn ids(v: &[Anchored]) -> Vec<(Option<&str>, &str)> {
     v.iter().map(|(p, i)| (p.as_deref(), i.as_str())).collect()
 }
 
+/// Diffing an appended item costs linear work and memory and yields one create.
+/// https://github.com/livekit/agents/pull/7626
+#[test]
+fn unique_history_append_has_bounded_work_and_minimal_edits() {
+    for n in [128, 512, 2048] {
+        let old = ChatContext::new(
+            (0..n).map(|i| msg(&format!("item_{i}"), Role::User, "hello", i as u64)).collect(),
+        );
+        let mut new = old.clone();
+        new.push(msg("appended", Role::Assistant, "world", n as u64));
+        let mut diff = ChatContextDiff::default();
+        let mut steps = 0;
+        while !diff.advance(&old, &new, 1) {
+            steps += 1;
+            assert!(steps < 12 * n, "append must not visit a quadratic edit table");
+            assert!(diff.retained_units() < 20 * n, "append must not allocate an edit matrix");
+        }
+        let operations = diff.take_operations();
+        assert_eq!(operations.to_create, [(Some(format!("item_{}", n - 1)), "appended".into())]);
+        assert!(operations.to_remove.is_empty() && operations.to_update.is_empty());
+        assert_eq!(compute_chat_ctx_diff(&old, &new), operations);
+    }
+}
+
 // Catches: diffing content instead of ids.
 #[test]
 fn an_edited_message_is_an_update_not_a_remove_and_create() {

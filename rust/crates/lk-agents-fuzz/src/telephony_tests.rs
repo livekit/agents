@@ -435,3 +435,57 @@ mod amd_hung_provider_ends_with_the_detector {
         assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
     }
 }
+
+mod dtmf_debounce_follows_user_state {
+    use lk_agents_fuzz::drive::{RoomSetup, Run, Setup, simulate};
+    use lk_agents_fuzz::input::{Count, DtmfInput, DtmfKey, Input, Millis, RoomIn};
+    use lk_agents_fuzz::record::{Answer, Recording};
+
+    /// The user speaking holds back a pending DTMF collection until the agent listens again.
+    /// https://github.com/livekit/agents/pull/5900
+    #[test]
+    fn user_speech_postpones_dtmf_collection_until_listening_resumes() {
+        let dtmf = |input| Input::Dtmf {
+            input,
+            key: DtmfKey::Two,
+            digits: Count(0),
+            confirm: false,
+            timeout: Millis(300),
+        };
+        let setup = Setup {
+            room: Some(RoomSetup { close_on_disconnect: false, delete_room_on_close: false }),
+            ..Setup::default()
+        };
+        simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::Room { event: RoomIn::Linked },
+                Input::Advance { ms: Millis(100) },
+                dtmf(DtmfInput::Start),
+                Input::Advance { ms: Millis(10) },
+                dtmf(DtmfInput::Digit),
+                Input::Advance { ms: Millis(100) },
+                Input::ClaimUserTurn {},
+                Input::Advance { ms: Millis(1_000) },
+            ] {
+                run.apply(&input).await;
+            }
+            let answered = |record: &Recording| {
+                record
+                    .host_view()
+                    .api_calls()
+                    .iter()
+                    .filter(|call| matches!(call.returned(), Some((_, Answer::Dtmf(_)))))
+                    .count()
+            };
+            assert_eq!(
+                answered(&run.record),
+                0,
+                "a user speaking during debounce must postpone collection"
+            );
+            run.apply(&Input::ReleaseUserTurn {}).await;
+            run.apply(&Input::Advance { ms: Millis(400) }).await;
+            assert_eq!(answered(&run.record), 1, "listening must rearm the debounce");
+        });
+    }
+}

@@ -202,14 +202,13 @@ impl HeadBytes {
         if info.total_length.is_some_and(|length| length > MAX_BYTES as u64) {
             return Err(HeadError::Capacity("encoded byte"));
         }
-        let raw = info.mime_type.is_empty() || info.mime_type == "audio/pcm";
-        let pcm_limit = raw.then(|| sample_limit(format) * 2);
-        Ok(Self {
-            format,
-            container: lk_agents_media::mime_container(&info.mime_type),
-            pcm_limit,
-            data: Vec::new(),
-        })
+        // A head that names no audio container is headerless PCM16, its format in the `sampleRate`
+        // and `channels` attributes. The Swift, Android and Flutter SDKs send their buffer this
+        // way without setting a mime type, so it arrives as the byte-stream default
+        // `application/octet-stream`; only the web SDK sends a container (`audio/webm`).
+        let container = lk_agents_media::mime_container(&info.mime_type);
+        let pcm_limit = container.is_none().then(|| sample_limit(format) * 2);
+        Ok(Self { format, container, pcm_limit, data: Vec::new() })
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> std::result::Result<(), HeadError> {
@@ -263,6 +262,10 @@ impl HeadBytes {
                 Ok(())
             },
         )?;
+        // Input processing takes whole 10 ms frames: a codec's last frame (AAC decodes 1024
+        // samples at a time) is padded with silence to the next 10 ms.
+        let ten_ms = (target.0 as usize / 100) * usize::from(target.1);
+        pcm.resize(pcm.len().div_ceil(ten_ms) * ten_ms, 0);
         let chunk = (target.0 as usize / 20) * usize::from(target.1);
         Ok(frames(format, &pcm, chunk).collect())
     }
@@ -303,6 +306,28 @@ pub fn source_format(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A head whose length is no whole number of 10 ms (Safari's AAC decodes 1024 samples at a
+    /// time) replays as whole 10 ms frames, so input processing never sees a ragged frame.
+    #[test]
+    fn a_ragged_head_replays_as_whole_ten_millisecond_frames() {
+        let info = lk_agents_abi::voice::rtc::StreamInfo {
+            mime_type: "application/octet-stream".into(),
+            attributes: [("sampleRate", "48000"), ("channels", "1")]
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect(),
+            ..Default::default()
+        };
+        let mut head = HeadBytes::new(&info).unwrap();
+        head.push(&[1u8; 2 * 49_152]).unwrap();
+
+        let frames = head.decode((48_000, 1)).unwrap();
+
+        assert!(frames.iter().all(|f| f.samples_per_channel % 480 == 0), "ragged frame");
+        let samples: u32 = frames.iter().map(|f| f.samples_per_channel).sum();
+        assert_eq!(samples, 49_440, "the tail is padded, not dropped");
+    }
 
     fn buffer() -> PreConnectBuffer {
         PreConnectBuffer {

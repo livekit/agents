@@ -12,6 +12,113 @@ use serde_json::json;
 use std::time::Duration;
 
 #[tokio::test]
+async fn restarting_voice_refuses_to_replay_a_tool_with_an_unknown_outcome() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let thread = fixture.thread().await;
+    let mut run = thread
+        .partition("desk")
+        .open(crate::RunOptions::new("crashed", ""), &crate::Holder::new("old"))
+        .await
+        .unwrap();
+    let call = ChatItem::FunctionCall(lk_agents_abi::FunctionCall {
+        id: "tool".into(),
+        call_id: "external-effect".into(),
+        name: "charge".into(),
+        arguments: "{}".into(),
+        created_at: std::time::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    });
+    run.checkpoint_session(
+        json!({"version":1,"kind":"voice","agent":"desk","history_ids":["tool"]}),
+        vec![lk_agents_abi::llm::chat_context::protocol::encode_chat_item(&call)],
+    )
+    .await
+    .unwrap();
+    run.abandon(crate::RunOutcome::Failed, "worker-lost").await.unwrap();
+    let restored = VoiceStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        None,
+        Cx::NONE,
+    )
+    .await;
+    assert!(
+        matches!(restored, Err(StorageError::Invalid(message)) if message.contains("reconcile"))
+    );
+    fixture.cleanup(&[&thread]).await;
+}
+
+#[tokio::test]
+async fn a_host_flush_preserves_the_confirmed_partial_prefix() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = std::sync::Arc::new(
+        VoiceStore::bound(
+            fixture.storage.clone(),
+            fixture.thread_id.clone(),
+            "desk".into(),
+            None,
+            Cx::NONE,
+        )
+        .await
+        .unwrap(),
+    );
+    store.acquire(1, vec![]).await.unwrap();
+    let partial = ChatItem::Message(ChatMessage::text(
+        "reply",
+        Role::Assistant,
+        "heard prefix",
+        std::time::UNIX_EPOCH,
+    ));
+    store.checkpoint(1, "desk".into(), vec![partial]).await.unwrap();
+    store
+        .session_sink()
+        .save_session(json!({"version":1,"kind":"voice","agent":"desk","history_ids":[]}), vec![])
+        .await
+        .unwrap();
+    store.aclose().await.unwrap();
+    let thread = fixture.thread().await;
+    let rows = thread.partition("desk").history().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "reply");
+    fixture.cleanup(&[&thread]).await;
+}
+
+#[tokio::test]
+async fn voice_checkpoints_never_regress_when_their_tasks_arrive_out_of_order() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = VoiceStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        None,
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    store.acquire(1, vec![]).await.unwrap();
+    let history = |text| {
+        vec![ChatItem::Message(ChatMessage::text(
+            "reply",
+            Role::Assistant,
+            text,
+            std::time::UNIX_EPOCH,
+        ))]
+    };
+    store.checkpoint(2, "desk".into(), history("latest")).await.unwrap();
+    store.checkpoint(1, "desk".into(), history("stale")).await.unwrap();
+    store.aclose().await.unwrap();
+    let thread = fixture.thread().await;
+    let rows = thread.partition("desk").history().await.unwrap();
+    let item =
+        lk_agents_abi::llm::chat_context::protocol::decode_chat_item(rows[0].payload.clone())
+            .unwrap();
+    assert_eq!(item.as_message().unwrap().raw_text_content().as_deref(), Some("latest"));
+    fixture.cleanup(&[&thread]).await;
+}
+
+#[tokio::test]
 async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() {
     let fixture =
         Backend::Sqlite.fixture(Some((Duration::from_secs(5), Duration::from_millis(10)))).await;
@@ -61,7 +168,7 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     let abandoned = events.recv().await;
     assert!(matches!(abandoned, Some(VoiceStorageEvent::Abandoned { speech: 1, result: Ok(()) })));
     let thread = fixture.thread().await;
-    assert!(thread.lane("desk").history().await.unwrap().is_empty());
+    assert!(thread.partition("desk").history().await.unwrap().is_empty());
     let restored = ContextStore::bound(
         fixture.storage.clone(),
         fixture.thread_id.clone(),
@@ -131,9 +238,9 @@ impl lk_agents_abi::StreamInput<VoiceStorageEvent> for Events {
     fn end_input(&self) {}
 }
 
-/// A call's lane metrics are the job's: Cloud receives only measurements keyed to a job.
+/// A call's partition metrics are the job's: Cloud receives only measurements keyed to a job.
 #[tokio::test]
-async fn a_turns_lane_metrics_record_under_the_calls_job() {
+async fn a_turns_partition_metrics_record_under_the_calls_job() {
     use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink};
     #[derive(Default)]
     struct Jobs(parking_lot::Mutex<Vec<(&'static str, Option<JobKey>)>>);
@@ -161,7 +268,7 @@ async fn a_turns_lane_metrics_record_under_the_calls_job() {
     .unwrap();
     store.acquire(1, Vec::new()).await.unwrap();
     let measured = sink.0.lock().clone();
-    assert!(measured.contains(&("lk.agents.lane.acquire_wait", Some(job))), "{measured:?}");
+    assert!(measured.contains(&("lk.agents.partition.acquire_wait", Some(job))), "{measured:?}");
 }
 
 /// A turn's own edit to a committed row (a question answered since the last commit) survives
@@ -200,7 +307,7 @@ async fn a_turns_edit_survives_another_writers_commit() {
     // A text turn appends an exchange and rewrites `a`.
     let thread = fixture.thread().await;
     let mut run = thread
-        .lane("desk")
+        .partition("desk")
         .open(RunOptions::new("text_1", ""), &Holder::new("text"))
         .await
         .unwrap();

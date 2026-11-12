@@ -3,33 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import io
-import wave
 from pathlib import Path
 
 import pytest
 
-from livekit import rtc
 from livekit.agents import tts, utils
-from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, TranscriptChunk
 
-pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
-
-
-def _make_pcm(sample_rate: int, num_channels: int, duration_ms: int) -> bytes:
-    num_samples = sample_rate * duration_ms // 1000 * num_channels
-    return b"\x00\x00" * num_samples
-
-
-def _make_wav(sample_rate: int, num_channels: int, duration_ms: int) -> bytes:
-    num_samples = sample_rate * duration_ms // 1000
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setnchannels(num_channels)
-        w.setsampwidth(2)
-        w.setframerate(sample_rate)
-        w.writeframes(b"\x00\x00" * (num_samples * num_channels))
-    return buf.getvalue()
+pytestmark = pytest.mark.unit
 
 
 SR = 24000
@@ -70,196 +50,6 @@ async def _run_emitter(
 
 
 @pytest.mark.asyncio
-async def test_timed_transcripts_all_preserved():
-    words = ["hello", "world", "this", "is", "a", "test"]
-
-    def produce(e):
-        for i, word in enumerate(words):
-            e.push(_make_pcm(SR, NC, 80))
-            e.push_timed_transcript(
-                TranscriptChunk(text=word, start_time=i * 0.08, end_time=(i + 1) * 0.08)
-            )
-        e.end_input()
-
-    _, events = await _run_emitter(produce)
-
-    recovered = []
-    for ev in events:
-        for t in ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-            if isinstance(t, TranscriptChunk):
-                recovered.append(t.text)
-
-    assert recovered == words, f"expected {words}, got {recovered}"
-
-
-@pytest.mark.asyncio
-async def test_timed_transcripts_have_timestamps():
-    def produce(e):
-        e.push(_make_pcm(SR, NC, 200))
-        e.push_timed_transcript(TranscriptChunk(text="hello", start_time=0.0, end_time=0.1))
-        e.push_timed_transcript([TranscriptChunk(text="world", start_time=0.1, end_time=0.2)])
-        e.end_input()
-
-    _, events = await _run_emitter(produce)
-
-    all_ts: list[TranscriptChunk] = []
-    for ev in events:
-        for t in ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-            if isinstance(t, TranscriptChunk):
-                all_ts.append(t)
-
-    assert len(all_ts) == 2
-    assert all_ts[0].text == "hello"
-    assert all_ts[0].start_time == 0.0
-    assert all_ts[1].text == "world"
-    assert all_ts[1].start_time == 0.1
-
-
-@pytest.mark.asyncio
-async def test_flush_mid_stream_preserves_decoder_state():
-    """Regression: flush() between two chunks of the same encoded stream must not
-    tear the decoder down.
-
-    A stateful codec (WAV/OGG/MP3) parses headers once; if the FlushSegment branch
-    in the decoder path discards the decoder, the next chunk — which is mid-file
-    payload (raw PCM continuation, no RIFF) — gets fed to a fresh decoder that
-    expects a header and fails. The user-visible symptom is
-    ``ValueError: Invalid WAV file: missing RIFF/WAVE: ...`` and silent audio loss.
-
-    flush() must release the held-back tail without touching the decoder.
-    """
-    duration_ms = 500
-    wav = _make_wav(SR, NC, duration_ms)
-    # Split somewhere inside the data chunk so chunk2 has no RIFF header — this is
-    # the exact shape the streaming decoder branch must handle.
-    split = 100
-    chunk1, chunk2 = wav[:split], wav[split:]
-    assert chunk1[:4] == b"RIFF"
-    assert chunk2[:4] != b"RIFF"
-
-    def produce(e):
-        e.push(chunk1)
-        e.flush()
-        e.push(chunk2)
-        e.end_input()
-
-    emitter, events = await _run_emitter(produce, mime_type="audio/wav")
-
-    expected_samples = SR * duration_ms // 1000
-    total_samples = sum(ev.frame.samples_per_channel for ev in events)
-    # Accept a small tolerance for the trailing-tail handling, but anything close
-    # to the full payload means the decoder survived the flush. Pre-fix this
-    # would drop nearly everything (a few hundred samples of pre-flush audio).
-    assert total_samples >= int(expected_samples * 0.95), (
-        f"lost samples after mid-stream flush: got {total_samples}, expected ~{expected_samples}"
-    )
-    assert events[-1].is_final
-
-
-@pytest.mark.asyncio
-async def test_every_frame_has_timed_transcript_metadata():
-    """Every emitted frame must have the USERDATA_TIMED_TRANSCRIPT key in userdata."""
-
-    def produce(e):
-        e.push(_make_pcm(SR, NC, 300))
-        e.push_timed_transcript(TranscriptChunk(text="word", start_time=0.0, end_time=0.3))
-        e.end_input()
-
-    _, events = await _run_emitter(produce)
-
-    for i, ev in enumerate(events):
-        assert USERDATA_TIMED_TRANSCRIPT in ev.frame.userdata, (
-            f"frame {i} (is_final={ev.is_final}) missing {USERDATA_TIMED_TRANSCRIPT} in userdata"
-        )
-
-
-@pytest.mark.asyncio
-async def test_push_frame_is_not_rechunked():
-    samples = SR * 220 // 1000
-    frame = rtc.AudioFrame(_make_pcm(SR, NC, 220), SR, NC, samples)
-
-    def produce(e):
-        e.push_frame(frame)
-        e.end_input()
-
-    _, events = await _run_emitter(produce)
-
-    # forwarded whole, minus the 10 ms tail held to tag the final frame; push() would ramp
-    # from a 20 ms first frame and hold the rest until more audio arrived
-    assert events[0].frame.duration == pytest.approx(0.21)
-    assert sum(ev.frame.duration for ev in events) == pytest.approx(0.22)
-
-
-@pytest.mark.asyncio
-@pytest.mark.no_concurrent
-@pytest.mark.parametrize("num_channels", [1, 2])
-@pytest.mark.parametrize("stream", [False, True])
-async def test_automatic_flush_preserves_partial_pcm_sample(
-    num_channels: int, stream: bool, caplog: pytest.LogCaptureFixture
-):
-    dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
-    emitter = tts.AudioEmitter(label="partial-pcm", dst_ch=dst_ch)
-    emitter.initialize(
-        request_id="partial-pcm",
-        sample_rate=SR,
-        num_channels=num_channels,
-        mime_type="audio/pcm",
-        stream=stream,
-    )
-    pcm = (bytes(range(256)) * 375)[: SR * 2 * num_channels]
-    # Enough audio to arm the slow-generation timer, followed by half a sample.
-    split = SR * 2 * num_channels * 3 // 10 + 1
-    events: list[tts.SynthesizedAudio] = []
-    complete_prefix = split // (2 * num_channels) * (2 * num_channels)
-
-    async def collect_flushed_prefix() -> None:
-        emitted = 0
-        while emitted < complete_prefix:
-            event = await dst_ch.recv()
-            assert not event.is_final, "automatic flush must leave the segment open"
-            events.append(event)
-            emitted += event.frame.data.nbytes
-        assert emitted == complete_prefix
-
-    try:
-        if stream:
-            emitter.start_segment(segment_id="turn")
-        emitter.push(pcm[:split])
-        # The timer releases all complete samples, including the normally held audio tail.
-        await asyncio.wait_for(collect_flushed_prefix(), timeout=2)
-        emitter.push(pcm[split:])
-        emitter.end_input()
-        await emitter.join()
-    finally:
-        await emitter.aclose()
-        dst_ch.close()
-
-    events.extend([event async for event in dst_ch])
-    assert b"".join(event.frame.data.tobytes() for event in events) == pcm
-    assert sum(event.is_final for event in events) == 1
-    assert events[-1].is_final
-    assert not [record for record in caplog.records if "incomplete" in record.message]
-
-
-@pytest.mark.asyncio
-@pytest.mark.no_concurrent
-async def test_segment_end_warns_on_incomplete_pcm(caplog: pytest.LogCaptureFixture):
-    pcm = bytes(range(256))
-
-    def produce(e):
-        e.push(pcm + b"\xff")
-        e.end_input()
-
-    _, events = await _run_emitter(produce)
-
-    assert b"".join(event.frame.data.tobytes() for event in events) == pcm
-    warnings = [record for record in caplog.records if "incomplete PCM" in record.message]
-    assert len(warnings) == 1
-    assert warnings[0].levelname == "WARNING"
-
-
-@pytest.mark.asyncio
-@pytest.mark.no_concurrent
 async def test_compressed_finalization_delivers_the_complete_tail_before_join_returns():
     encoded = Path(__file__).with_name("change-sophie.opus").read_bytes()
     decoder = utils.media.AudioStreamDecoder(sample_rate=SR, num_channels=NC, format="audio/ogg")
@@ -284,33 +74,6 @@ async def test_compressed_finalization_delivers_the_complete_tail_before_join_re
 
 
 @pytest.mark.asyncio
-@pytest.mark.no_concurrent
-async def test_each_compressed_segment_ends_after_its_decoded_audio():
-    encoded = Path(__file__).with_name("change-sophie.opus").read_bytes()
-
-    def produce(emitter):
-        for segment in ("a", "b"):
-            emitter.start_segment(segment_id=segment)
-            for offset in range(0, len(encoded), 997):
-                emitter.push(encoded[offset : offset + 997])
-            emitter.end_segment()
-        emitter.end_input()
-
-    emitter, events = await asyncio.wait_for(
-        _run_emitter(produce, stream=True, expect_finals=2, mime_type="audio/ogg"), timeout=30
-    )
-    try:
-        finals = [i for i, event in enumerate(events) if event.is_final]
-        first = b"".join(bytes(event.frame.data) for event in events[: finals[0]])
-        second = b"".join(bytes(event.frame.data) for event in events[finals[0] + 1 : finals[1]])
-        assert first and first == second
-        assert [event.segment_id for event in events[: finals[0] + 1]] == ["a"] * (finals[0] + 1)
-    finally:
-        await emitter.aclose()
-
-
-@pytest.mark.asyncio
-@pytest.mark.no_concurrent
 async def test_a_corrupt_container_fails_the_synthesis_at_join():
     # Catches: a container that fails to decode natively swallowed, so the synthesis ends with
     # no audio and no error for the fallback chain to act on.

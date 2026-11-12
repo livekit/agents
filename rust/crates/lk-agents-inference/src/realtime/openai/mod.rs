@@ -1,6 +1,10 @@
+#[cfg(test)]
+mod context_sync_tests;
 mod encode;
 mod model;
 pub(crate) mod queue;
+#[cfg(test)]
+mod response_tests;
 pub mod session;
 #[cfg(test)]
 mod testfix;

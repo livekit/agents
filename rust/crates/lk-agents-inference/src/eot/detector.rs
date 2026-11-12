@@ -245,6 +245,9 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         let model = |version, hosted| select(version, hosted, true, "url", "key", "secret", true);
         assert_eq!(model(None, false).unwrap().model, TurnDetectorModel::V1);
+        // Hosted on Cloud in production: the cloud model, as in development (1.x `is_hosted()`).
+        let hosted = select(None, true, false, "url", "key", "secret", true).unwrap();
+        assert_eq!(hosted.model, TurnDetectorModel::V1);
         assert_eq!(model(Some("v1-mini"), true).unwrap().model, TurnDetectorModel::V1Mini);
         assert_eq!(select(None, false, false, "", "", "", false).unwrap().warnings.len(), 1);
     }

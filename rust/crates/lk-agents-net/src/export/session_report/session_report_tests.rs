@@ -208,6 +208,90 @@ async fn retries_follow_retry_info_and_disabled_recording_stops() {
     assert!(sent.is_err());
 }
 
+/// Transient refusals (an overloaded or restarting ingest, no `RetryInfo`) are retried with
+/// backoff until the ingest takes the upload; past four attempts the last refusal is the outcome.
+#[tokio::test]
+async fn transient_upload_failures_are_retried() {
+    // The backoff waits on a virtual clock, advanced while the upload runs.
+    async fn upload(url: String) -> Result<(), PostError> {
+        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+        let sent = tokio::spawn({
+            let clock = clock.clone();
+            async move { recording::upload(&cloud(&url), &recording(None), None, &*clock).await }
+        });
+        while !sent.is_finished() {
+            clock.advance(Duration::from_millis(500));
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        sent.await.unwrap()
+    }
+    let (url, mut rx) = peer(vec![(503, Vec::new()), (502, Vec::new()), (500, Vec::new())]).await;
+    upload(url).await.unwrap();
+    for _ in 0..4 {
+        rx.recv().await.expect("three refusals, then the accepted attempt");
+    }
+    assert!(rx.try_recv().is_err());
+
+    let (url, mut rx) = peer(vec![(503, Vec::new()); 5]).await;
+    assert!(matches!(upload(url).await, Err(PostError::Refused { status: 503, .. })));
+    for _ in 0..4 {
+        rx.recv().await.unwrap();
+    }
+    assert!(rx.try_recv().is_err(), "it gives up after four attempts");
+}
+
+/// A refused recording upload connection is retried until the ingest answers.
+/// https://github.com/livekit/agents/pull/6977
+#[tokio::test]
+async fn a_refused_upload_connection_is_retried() {
+    let address = TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
+    let url = format!("http://{address}");
+    let server = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let listener = TcpListener::bind(address).await.unwrap();
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut data = Vec::new();
+        let mut bytes = [0; 8192];
+        while !data.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = socket.read(&mut bytes).await.unwrap();
+            assert_ne!(n, 0);
+            data.extend_from_slice(&bytes[..n]);
+        }
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+    });
+
+    send(&url).await.unwrap();
+
+    server.await.unwrap();
+}
+
+/// A connection dropped after the upload was sent fails it without a retry.
+/// https://github.com/livekit/agents/issues/6832 https://github.com/livekit/agents/pull/6977
+#[tokio::test]
+async fn a_connection_dropped_after_sending_fails_the_upload_without_a_retry() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 64];
+            let _ = socket.read(&mut bytes).await;
+            let _ = tx.send(());
+            drop(socket);
+        }
+    });
+
+    let sent = send(&url).await;
+
+    assert!(matches!(sent, Err(PostError::Transport(_))), "{sent:?}");
+    rx.recv().await.unwrap();
+    assert!(rx.try_recv().is_err(), "a post-send disconnect is not retried");
+}
+
 async fn send(url: &str) -> Result<(), PostError> {
     recording::upload(&cloud(url), &recording(None), None, &*clock()).await
 }

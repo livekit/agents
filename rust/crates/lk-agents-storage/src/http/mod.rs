@@ -354,18 +354,20 @@ async fn items(
         Cursor::position(Some(&request.page_cursor), listing, if desc { i64::MAX } else { 0 })?;
     let limit = page_size(request.page_page_size)?;
     thread.ensure_schema().await?;
-    let lane = Some(request.agent.as_str()).filter(|lane| !lane.is_empty());
+    let partition_key =
+        Some(request.agent.as_str()).filter(|partition_key| !partition_key.is_empty());
     let page = if desc {
-        SelectItemsBefore { lane, before: after, limit: limit + 1 }.bind()
+        SelectItemsBefore { partition_key, before: after, limit: limit + 1 }.bind()
     } else {
-        SelectItemsAfter { lane, after, limit: limit + 1 }.bind()
+        SelectItemsAfter { partition_key, after, limit: limit + 1 }.bind()
     };
     let rows = thread.conn().query(page).await?;
     let more = rows.len() > limit as usize;
     let mut items = Vec::new();
     let mut last = after;
     for row in rows.iter().take(limit as usize) {
-        let (cells, item) = Cells::followed_by::<crate::ItemRow>(row, &["rowid", "lane", "seq"])?;
+        let (cells, item) =
+            Cells::followed_by::<crate::ItemRow>(row, &["rowid", "partition_key", "seq"])?;
         last = cells.get(0)?;
         items.push(agent_thread::Item {
             agent: cells.get(1)?,
@@ -413,7 +415,7 @@ async fn tasks(
     let limit = page_size(request.page_page_size)?;
     thread.ensure_schema().await?;
     let page = SelectThreadTasksInserted {
-        lane: None,
+        partition_key: None,
         status,
         updated_after: i64::MIN,
         after,
@@ -432,8 +434,8 @@ async fn tasks(
             name: task.name,
             status: Some(task_status(task.status)),
             updated_at: Some(Timestamp {
-                seconds: task.updated_at / 1000,
-                nanos: ((task.updated_at % 1000) * 1_000_000) as i32,
+                seconds: task.updated_at_ms / 1000,
+                nanos: ((task.updated_at_ms % 1000) * 1_000_000) as i32,
             }),
         });
     }

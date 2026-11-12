@@ -112,6 +112,7 @@ pub(crate) async fn realtime_generation_task(
             Err(failed) => {
                 if let Some(part) = failed.heard {
                     generation.state.played(part);
+                    generation.report_progress();
                 }
                 return Err(heard_until(&mut generation, wake, handle, failed.error));
             }
@@ -122,6 +123,7 @@ pub(crate) async fn realtime_generation_task(
             end_unvoiced(shared, handle.id(), output);
         }
         generation.state.played(part);
+        generation.report_progress();
         if let Err(error) = text_result {
             return Err(heard_until(&mut generation, wake, handle, error));
         }
@@ -264,7 +266,7 @@ struct Generation<'a> {
 
 /// A text message spoken by the TTS: its text goes in as it streams, its audio is the message's.
 struct Voiced {
-    sink: lk_agents_abi::TtsSink,
+    sink: lk_agents_abi::TextSink,
     source: lk_agents_net::owned::Owned<lk_agents_abi::TtsSource>,
     /// The message's text, read for what the voice says.
     said: SegmentText,
@@ -275,6 +277,15 @@ struct Voiced {
 }
 
 impl Generation<'_> {
+    fn report_progress(&mut self) {
+        if let Some(item) = self.state.take_progress(self.acc, &self.ctx.plan.message_id) {
+            self.shared.report(GenEvent::DeliveredProgress {
+                speech: self.handle.id(),
+                item: Box::new(item),
+            });
+        }
+    }
+
     fn dispatch_call(&mut self, ready: rt::FunctionCallReady) {
         let mut call = *ready.call;
         call.created_at = self.shared.time.wall();
@@ -312,7 +323,7 @@ impl Generation<'_> {
     /// The current message turned out to be text: the TTS speaks it, from the words so far.
     async fn voice_message(&mut self, idx: usize, words: String) -> Result<(), DriverError> {
         let tts = self.tts.clone().expect("the core admitted a configured TTS");
-        let mut said = SegmentText::new(self.ctx.views(self.shared));
+        let mut said = SegmentText::new(self.ctx.vocab(self.shared));
         let text = said.push(&words).said;
         let fed = text.clone();
         let segment = idx as u32;
@@ -325,7 +336,6 @@ impl Generation<'_> {
                 provider: id.provider,
                 model: id.model,
             });
-            let expressive = self.ctx.plan.request.expressive;
             let observer = super::llm::give_up_observer(
                 self.shared,
                 self.handle,
@@ -334,7 +344,6 @@ impl Generation<'_> {
             lk_agents_inference::tts::stream(
                 tts,
                 &self.ctx.turn_cx(self.shared),
-                expressive,
                 self.shared.conn.tts.unwrap_or_default(),
                 self.shared.time.clock(),
                 Some(observer),
@@ -515,7 +524,7 @@ impl Segment for Generation<'_> {
                     self.end_message().await;
                     let speech = self.handle.id();
                     self.leg = Some(TextLeg::new(self.text_out.clone(), None, self.shared, speech));
-                    self.segment = Some(SegmentText::new(self.ctx.views(self.shared)));
+                    self.segment = Some(SegmentText::new(self.ctx.vocab(self.shared)));
                 }
                 Some(RealtimeGenerationEffect::Text(delta)) => {
                     self.capture_text(&delta).await;
@@ -698,7 +707,7 @@ fn response(
 mod tests;
 
 /// A voiced message's text is all in: what its reading held is said, then the input ends.
-fn end_voice_input(sink: &lk_agents_abi::TtsSink, said: &mut SegmentText, input_done: &mut bool) {
+fn end_voice_input(sink: &lk_agents_abi::TextSink, said: &mut SegmentText, input_done: &mut bool) {
     let _ = super::tts::push_text(sink, &said.finish().said);
     sink.end_input();
     *input_done = true;

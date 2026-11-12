@@ -79,6 +79,7 @@ fn forwarded(text: &str) -> Step {
         speech: SpeechId(1),
         text: text.into(),
         start_time: None,
+        spoken: true,
     })
 }
 
@@ -89,6 +90,7 @@ fn shown(text: &str) -> Step {
         start: 0.0,
         end: 0.1,
         played: std::time::Duration::from_millis(50),
+        spoken: true,
     })
 }
 

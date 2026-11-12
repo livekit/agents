@@ -31,7 +31,8 @@ async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
         pool: Arc::default(),
         closed: AtomicBool::new(false),
     };
-    let result = pooled.batch(vec![Statement::raw("UPDATE lanes SET version = version + 1")]).await;
+    let result =
+        pooled.batch(vec![Statement::raw("UPDATE partitions SET version = version + 1")]).await;
     assert!(
         matches!(result, Err(StorageError::Uncertain(ref why)) if why.to_string().contains("database is shutting down")),
         "{result:?}"

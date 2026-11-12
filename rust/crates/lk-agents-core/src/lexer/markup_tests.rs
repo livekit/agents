@@ -1,5 +1,5 @@
 use super::*;
-use crate::tts::markup::{Provider, ProviderExt};
+use crate::markup::{Provider, ProviderExt};
 
 fn vocab(p: Provider) -> Vocabulary {
     Vocabulary::of(Some(p))
@@ -12,7 +12,7 @@ fn tags_only(v: &Vocabulary) -> Rules {
 /// The transcript of `text` under `v`, and the tags it carried.
 fn display(v: &Vocabulary, text: &str) -> (String, Vec<Tag>) {
     let tokens = Lexer::all(tags_only(v), text);
-    let shown = Projector::new(View::Display { keep_emoji: true }).text(&tokens);
+    let shown = Projector::new(View::Display).text(&tokens);
     let tags = tokens.into_iter().filter_map(|t| match t.kind {
         Kind::Tag(tag) => Some(tag),
         _ => None,
@@ -37,7 +37,7 @@ fn a_stream_cut_inside_a_marker_shows_none_of_it() {
 fn prose_angle_brackets_are_never_held_or_touched() {
     let v = vocab(Provider::Cartesia);
     let mut lexer = Lexer::new(tags_only(&v));
-    let mut view = Projector::new(View::Display { keep_emoji: true });
+    let mut view = Projector::new(View::Display);
     let mut out = String::new();
     for d in ["if a", "<b then ", "we ship. ", "3 < 5 and <3 and <b>bold</b>."] {
         out.push_str(&view.text(&lexer.push(d)));
@@ -127,7 +127,7 @@ fn a_botched_marker_loses_itself_and_keeps_the_words_after_it() {
 fn a_recognized_tag_never_holds_past_its_limit() {
     let v = vocab(Provider::Xai);
     let mut lexer = Lexer::new(tags_only(&v));
-    let mut view = Projector::new(View::Display { keep_emoji: true });
+    let mut view = Projector::new(View::Display);
     assert_eq!(view.text(&lexer.push(r#"Hi <expr type="sound" label="laugh""#)), "Hi ");
     assert!(lexer.held() > 0);
     let out = view.text(&lexer.push(&" and then a long reply".repeat(20)));
@@ -146,7 +146,7 @@ fn gemini_names_with_a_space_are_read_whole() {
     let v = vocab(Provider::Gemini);
     assert_eq!(shown(&v, "Wait <short pause> now"), "Wait now");
     let mut lexer = Lexer::new(tags_only(&v));
-    let mut view = Projector::new(View::Display { keep_emoji: true });
+    let mut view = Projector::new(View::Display);
     assert_eq!(view.text(&lexer.push("Wait <short")), "Wait ");
     assert!(lexer.held() > 0);
     assert_eq!(view.text(&lexer.push(" pause> now")), "now");
@@ -166,7 +166,7 @@ fn all_reads_any_tag_shaped_text_as_markup() {
     assert_eq!(shown(&v, "a <b>bold</b> <my-tag x=\"1\"/>c"), "a bold c");
     assert_eq!(shown(&v, "3 < 5, <3, a<b."), "3 < 5, <3, a<b.");
     let mut lexer = Lexer::new(tags_only(&v));
-    let mut view = Projector::new(View::Display { keep_emoji: true });
+    let mut view = Projector::new(View::Display);
     assert_eq!(view.text(&lexer.push("x <bol")), "x ");
     assert_eq!(view.text(&lexer.push("d>y</bold>")), "y");
 }
@@ -194,7 +194,7 @@ fn every_vocabulary_names_expr_and_only_its_voices_natives() {
 fn the_synthesis_view_spells_each_tag_canonically() {
     let rules = tags_only(&Vocabulary::names(["emphasis"]));
     let tokens = Lexer::all(rules, "Say <EMPHASIS level='strong'>this</Emphasis > now");
-    let synthesis = View::Synthesis { keep_markdown: false, keep_emoji: false };
+    let synthesis = View::Synthesis;
     assert_eq!(
         Projector::new(synthesis).text(&tokens),
         r#"Say <emphasis level="strong">this</emphasis> now"#
@@ -242,7 +242,7 @@ fn a_tag_past_its_limit_drops_at_most_the_limit_and_keeps_the_rest_as_text() {
             let mut lexer = Lexer::new(rules.clone());
             let mut tokens: Vec<Token> = deltas.iter().flat_map(|d| lexer.push(d)).collect();
             tokens.extend(lexer.finish());
-            let shown = Projector::new(View::Display { keep_emoji: true }).text(&tokens);
+            let shown = Projector::new(View::Display).text(&tokens);
             assert!(text.ends_with(&shown) && shown.ends_with("é tail"), "{shown:?}");
             assert!(!shown.contains("label"), "{shown:?}");
             let dropped = text.len() - shown.len();
@@ -254,7 +254,7 @@ fn a_tag_past_its_limit_drops_at_most_the_limit_and_keeps_the_rest_as_text() {
 #[test]
 fn what_no_rule_reads_is_prose() {
     let text = "*a* ~~b~~ `c` [d](e) !x _f_ 🚀 <b> <expr/> end";
-    let spoken = View::Spoken { keep_markdown: false, keep_emoji: false };
+    let spoken = View::Spoken;
     for (rules, want) in [
         (Rules::default(), text),
         (Rules::model(ModelSyntax::DEFAULT), text),

@@ -387,3 +387,46 @@ pub fn record_delegation(
 #[cfg(test)]
 #[path = "delegation_tests.rs"]
 mod tests;
+
+/// Decode a bounded caller chain before admission or outbound delegation.
+pub fn partition_chain(
+    metadata: &serde_json::Map<String, serde_json::Value>,
+) -> Result<
+    Vec<lk_agents_abi::a2a::remote::DelegationPartition>,
+    lk_agents_abi::a2a::client::AgentClientError,
+> {
+    use lk_agents_abi::a2a::client::AgentClientError;
+    let Some(value) = metadata.get(lk_agents_abi::a2a::metadata::PARTITION_CHAIN_KEY) else {
+        return Ok(Vec::new());
+    };
+    let chain: Vec<lk_agents_abi::a2a::remote::DelegationPartition> =
+        serde_json::from_value(value.clone()).map_err(|error| {
+            AgentClientError::InvalidInput(format!("invalid delegation partition chain: {error}"))
+        })?;
+    if chain.len() > 64
+        || chain.iter().any(|entry| {
+            entry.storage_location.is_empty()
+                || entry.thread_id.is_empty()
+                || entry.partition_key.is_empty()
+        })
+    {
+        return Err(AgentClientError::InvalidInput("invalid delegation partition chain".into()));
+    }
+    Ok(chain)
+}
+
+/// Different endpoints cannot delegate into a partition held by their active caller chain.
+pub fn validate_partition_delegation(
+    metadata: &serde_json::Map<String, serde_json::Value>,
+    target: &lk_agents_abi::a2a::remote::DelegationPartition,
+) -> Result<(), lk_agents_abi::storage::StorageError> {
+    let chain = partition_chain(metadata)
+        .map_err(|error| lk_agents_abi::storage::StorageError::Invalid(error.to_string()))?;
+    if chain.contains(target) {
+        return Err(lk_agents_abi::storage::StorageError::Invalid(format!(
+            "delegation cannot re-enter active partition_key {:?} in thread {}; use a separate partition_key for the delegated conversation",
+            target.partition_key, target.thread_id
+        )));
+    }
+    Ok(())
+}

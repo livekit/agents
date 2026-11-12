@@ -125,53 +125,46 @@ receive its typed result alone or the result plus visible dialogue. These
 history choices do not share or merge application context fields; context
 scopes retain their explicit ownership. See the [history policies](text-session.md#history-passed-to-the-child).
 
-## Persisting text session state
+## Session state and explicit binding
 
-`TextSessionState` belongs to backend orchestration across requests. Frontend
-`VoiceSession` interactions use their own in-process event and reply state;
-they do not require a text session record.
-
-An application-defined record can mark the session's serializable state for
-storage:
+TextSession and VoiceSession accept an application context with an optional persisted
+SessionState field:
 
 ```python
 @dataclass
-class Conversation:
-    session_state: TextSessionState | None = persisted(default=None)
-```
+class App:
+    services: Services
+    session: SessionState = persisted(default_factory=SessionState)
+    draft: Draft = persisted(default_factory=Draft)
 
-For each request, the runtime supplies `ctx.store` for the resolved thread.
-The application explicitly restores routing state, passes it to the session,
-and saves the returned state:
-
-```python
-session = TextSession(agent=main)
-conversation = Conversation()
-await ctx.store.load_context(conversation)
 await ctx.store.load_context(app)
-
-turn = await session.run(
-    ctx.message,
-    state=conversation.session_state,
-    context=app,
-)
-
-conversation.session_state = turn.state
-await ctx.store.save_context(app)
-await ctx.store.save_context(conversation)
+binding = ctx.store.bind(app)
+turn = await TextSession(agent=main).run(ctx.message, context=binding)
 ```
 
-`None` starts at the session's root agent. Existing state supplies the active
-frame and saved histories. The application constructs `app` with fresh
-customer and service objects and explicitly loads/saves its marked fields
-using the same store API and the appropriate application-data scope.
+`ctx.store.bind(app)` declares that session execution manages the selected conversation.
+Constructing the declaration performs no I/O and changes no application fields. Execution
+activates it, keeps the same app.session object current, checkpoints conversation progress,
+and unbinds during cleanup. Tools receive the original app through ctx.context.
 
-The session returns an envelope: `turn.result` is the agent's `RunResult`,
-and `turn.state` is the updated `TextSessionState`. Save the routing state when
-`turn.result.status == "input_required"` as well as on completion. Persist related routing and draft changes in the same managed
-transaction. Returning from `session.run()` or the handler does not implicitly
-save either record. See [TextSession](text-session.md#loading-and-saving-session-state)
-for the routing-state lifecycle.
+The marked field is discovered by its SessionState type, not its name. Without such a field,
+bound sessions restore their own state internally. A declared field must be hydrated through
+the same store before execution. Ordinary application fields remain explicitly saved with
+save_context; binding does not automatically save draft changes.
+
+Plain `context=app` executes from the supplied session snapshot without updating app.session
+or enabling automatic session writes. Two runs from unchanged context start from the same
+state; model outputs and tool side effects can still differ.
+
+`await ctx.store.load_session()` returns an immutable detached read of committed state.
+It never binds and never aliases app.session. Bound state can lead stored state until a
+checkpoint completes. `await ctx.store.flush()` waits for accepted conversation checkpoints;
+it does not commit ordinary application saves staged for the managed turn.
+
+TextSessionTurn.state is a detached snapshot. Retained snapshots and results do not follow
+later execution. Runtime services, Python stacks and media connections are not serialized.
+See [TextSession](text-session.md#loading-and-saving-session-state) and
+[voice persistence](voice-session.md#session-persistence).
 
 ## Explicit load and save on the store
 
@@ -214,7 +207,7 @@ application fields.
 Storage failures raise a `StorageError` from `livekit.agents.storage`:
 `VersionConflict` (a stale save), `LeaseLost`, `ThreadNotFound`, `TooLarge`,
 `NotSerializable`, `StorageUnavailable` (retryable: the database was unreachable or
-busy) or `RunRejected` (a `reject` lane refused the run; `running_task_id` names the
+busy) or `RunRejected` (a `reject` partition refused the run; `running_task_id` names the
 running turn).
 
 Top-level helpers are equivalent conveniences using the supplied store:

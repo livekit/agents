@@ -10,7 +10,7 @@ use crate::sql::{FromCell, json_cell, statement};
 use crate::thread::run::TaskState;
 
 pub use lk_agents_abi::storage::thread::{InboxRow, ItemRow, TaskData, TaskRow};
-pub use lk_agents_abi::storage::{Ask, EventRow, LaneRow, TaskInternal};
+pub use lk_agents_abi::storage::{Ask, EventRow, PartitionRow, TaskInternal};
 
 /// The `items` columns of [`ItemRow`].
 #[derive(Table)]
@@ -29,12 +29,12 @@ struct ItemColumns {
 #[expect(dead_code, reason = "a column declaration")]
 struct TaskColumns {
     task_id: String,
-    lane: String,
-    seq: i64,
+    partition_key: String,
+    pos: i64,
     name: Option<String>,
     message_id: Option<String>,
     status: TaskState,
-    updated_at: i64,
+    updated_at_ms: i64,
     #[table(json)]
     data: TaskData,
     #[table(json)]
@@ -47,25 +47,24 @@ struct TaskColumns {
 #[expect(dead_code, reason = "a column declaration")]
 struct InboxColumns {
     id: i64,
-    lane: String,
+    partition_key: String,
     task_id: String,
     message_id: String,
     #[table(json)]
     message: a2a::Message,
-    received_at: i64,
+    received_at_ms: i64,
 }
 
-/// The `lanes` columns of [`LaneRow`].
+/// The `partitions` columns of [`PartitionRow`].
 #[derive(Table)]
-#[table("lanes", remote = LaneRow)]
+#[table("partitions", remote = PartitionRow)]
 #[expect(dead_code, reason = "a column declaration")]
-struct LaneColumns {
-    lane: String,
+struct PartitionColumns {
+    partition_key: String,
     version: i64,
     state: Option<Value>,
     lease_holder: Option<String>,
-    lease_until: i64,
-    waiter: Option<String>,
+    lease_expires_at_ms: i64,
     drained_id: i64,
 }
 
@@ -75,8 +74,8 @@ struct LaneColumns {
 #[expect(dead_code, reason = "a column declaration")]
 struct EventColumns {
     id: i64,
-    ts_ms: i64,
-    lane: String,
+    occurred_at_ms: i64,
+    partition_key: String,
     run_id: String,
     r#type: String,
     payload: Value,
@@ -88,13 +87,13 @@ json_cell!(TaskData, TaskInternal, ChatItem, a2a::Message);
 /// apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementKind {
-    /// Takes the lane's lease: an acquire or an inbox receive.
+    /// Takes the partition's lease: an acquire or an inbox receive.
     LeaseTake,
-    /// Commits a run: bumps the lane's version.
+    /// Commits a run: bumps the partition's version.
     Commit,
-    /// Reads the lane's version and lease.
+    /// Reads the partition's version and lease.
     FenceRead,
-    /// Writes the lane row or the journal, nothing a run staged.
+    /// Writes the partition row or the journal, nothing a run staged.
     Bookkeeping,
 }
 
@@ -107,187 +106,155 @@ impl FromCell for TaskState {
 }
 
 statement! {
-    /// Creates the lane's row on its first use.
-    InsertLane<'a> { lane: &'a str } as Bookkeeping => "INSERT OR IGNORE INTO lanes (lane, version) VALUES (:lane, 0)"
+    /// Creates the partition's row on its first use.
+    InsertPartition<'a> { partition_key: &'a str } as Bookkeeping => "INSERT OR IGNORE INTO partitions (partition_key, version) VALUES (:partition_key, 0)"
 }
 
 statement! {
-    /// Takes the lane when nobody holds it, its lease lapsed, or this holder already has it,
+    /// Takes the partition when nobody holds it, its lease lapsed, or this holder already has it,
     /// unless an older message is still waiting for it: waiters go in arrival order. A waiting
     /// message stops counting once its row is older than `wait_ms`
     /// (its waiter died) or once it is queued in the inbox (drained as one batch). A run with no
-    /// task row (a voice turn) is not ordered. Answers the lane's version when taken.
+    /// task row (a voice turn) is not ordered. Answers the partition's version when taken.
     TakeLease<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         holder: &'a str,
         token: &'a str,
-        lease_secs: i64,
+        lease_ms: i64,
         task_id: &'a str,
         wait_ms: i64,
     } as LeaseTake => r#"
-UPDATE lanes
-SET waiter = CASE WHEN lease_holder = :holder THEN waiter END,
-    lease_holder = :holder, lease_token = :token, lease_until = unixepoch() + :lease_secs
-WHERE lane = :lane
-  AND (lease_until < unixepoch() OR lease_holder = :holder)
+UPDATE partitions
+SET lease_holder = :holder, lease_token = :token, lease_expires_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER) + :lease_ms
+WHERE partition_key = :partition_key
+  AND (lease_expires_at_ms < CAST(unixepoch('subsec') * 1000 AS INTEGER) OR lease_holder = :holder)
   AND NOT EXISTS (
     SELECT 1 FROM tasks older
-    WHERE older.lane = :lane
+    WHERE older.partition_key = :partition_key
       AND older.status = 'submitted'
       AND older.message_id IS NOT NULL
-      AND older.updated_at > CAST(unixepoch('subsec') * 1000 AS INTEGER) - :wait_ms
-      AND NOT EXISTS (SELECT 1 FROM inbox WHERE inbox.lane = :lane AND inbox.task_id = older.task_id)
-      AND older.seq < (SELECT seq FROM tasks WHERE lane = :lane AND task_id = :task_id)
+      AND older.updated_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER) - :wait_ms
+      AND NOT EXISTS (SELECT 1 FROM inbox WHERE inbox.partition_key = :partition_key AND inbox.task_id = older.task_id)
+      AND older.pos < (SELECT pos FROM tasks WHERE partition_key = :partition_key AND task_id = :task_id)
   )
 RETURNING version
 "#
 }
 
 statement! {
-    /// Takes the lane in the inbox receive, only for the request that inserted this inbox row,
-    /// so a retried message takes nothing. Answers the lane's version when taken.
+    /// Takes the partition in the inbox receive, only for the request that inserted this inbox row,
+    /// so a retried message takes nothing. Answers the partition's version when taken.
     TakeLeaseForMessage<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         holder: &'a str,
         token: &'a str,
-        lease_secs: i64,
+        lease_ms: i64,
         message_id: &'a str,
         task_id: &'a str,
     } as LeaseTake => r#"
-UPDATE lanes
-SET waiter = CASE WHEN lease_holder = :holder THEN waiter END,
-    lease_holder = :holder, lease_token = :token, lease_until = unixepoch() + :lease_secs
-WHERE lane = :lane
-  AND (lease_until < unixepoch() OR lease_holder = :holder)
-  AND EXISTS (SELECT 1 FROM inbox WHERE lane = :lane AND message_id = :message_id AND task_id = :task_id)
+UPDATE partitions
+SET lease_holder = :holder, lease_token = :token, lease_expires_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER) + :lease_ms
+WHERE partition_key = :partition_key
+  AND (lease_expires_at_ms < CAST(unixepoch('subsec') * 1000 AS INTEGER) OR lease_holder = :holder)
+  AND EXISTS (SELECT 1 FROM inbox WHERE partition_key = :partition_key AND message_id = :message_id AND task_id = :task_id)
 RETURNING version
 "#
 }
 
 statement! {
     /// Pushes the lease out while the token is still this one. A lapsed lease nobody took yet
-    /// extends, so a holder stalled behind a slow database keeps its lane; one another holder
+    /// extends, so a holder stalled behind a slow database keeps its partition; one another holder
     /// took (a new token) or one released (no token) does not.
-    ExtendLease<'a> { lane: &'a str, holder: &'a str, token: &'a str, lease_secs: i64 } => r#"
-UPDATE lanes
-SET lease_until = unixepoch() + :lease_secs
-WHERE lane = :lane AND lease_holder = :holder AND lease_token = :token
+    ExtendLease<'a> { partition_key: &'a str, holder: &'a str, token: &'a str, lease_ms: i64 } => r#"
+UPDATE partitions
+SET lease_expires_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER) + :lease_ms
+WHERE partition_key = :partition_key AND lease_holder = :holder AND lease_token = :token
 "#
 }
 
 statement! {
-    /// Frees the lane, if the lease is still this one.
-    ReleaseLease<'a> { lane: &'a str, token: &'a str } => r#"
-UPDATE lanes
-SET lease_until = 0, lease_token = NULL
-WHERE lane = :lane AND lease_token = :token
+    /// Frees the partition, if the lease is still this one.
+    ReleaseLease<'a> { partition_key: &'a str, token: &'a str } => r#"
+UPDATE partitions
+SET lease_expires_at_ms = 0, lease_token = NULL
+WHERE partition_key = :partition_key AND lease_token = :token
 "#
 }
 
 statement! {
-    /// Frees the lane only when no inbox row is waiting past `drained_id`, in the same
+    /// Frees the partition only when no inbox row is waiting past `drained_id`, in the same
     /// statement, so a message inserted meanwhile keeps the lease held and its runner loops.
-    ReleaseLeaseIfDrained<'a> { lane: &'a str, token: &'a str } => r#"
-UPDATE lanes
-SET lease_until = 0, lease_token = NULL
-WHERE lane = :lane AND lease_token = :token
-  AND NOT EXISTS (SELECT 1 FROM inbox WHERE inbox.lane = :lane AND inbox.id > lanes.drained_id)
+    ReleaseLeaseIfDrained<'a> { partition_key: &'a str, token: &'a str } => r#"
+UPDATE partitions
+SET lease_expires_at_ms = 0, lease_token = NULL
+WHERE partition_key = :partition_key AND lease_token = :token
+  AND NOT EXISTS (SELECT 1 FROM inbox WHERE inbox.partition_key = :partition_key AND inbox.id > partitions.drained_id)
 "#
-}
-
-statement! {
-    /// A waiter that took the lease is no longer waiting.
-    ClearWaiter<'a> { lane: &'a str, holder: &'a str, token: &'a str } => r#"
-UPDATE lanes
-SET waiter = NULL
-WHERE lane = :lane AND lease_token = :token AND waiter = :holder
-"#
-}
-
-statement! {
-    /// Withdraw only this waiter's mark, leaving a newer waiter untouched.
-    WithdrawWaiter<'a> { lane: &'a str, holder: &'a str } => r#"
-UPDATE lanes SET waiter = NULL WHERE lane = :lane AND waiter = :holder
-"#
-}
-
-statement! {
-    /// Records a holder waiting under `interrupt`, only while someone holds the lane; the
-    /// holder yields at its next checkpoint.
-    SetWaiter<'a> { lane: &'a str, holder: &'a str } => r#"
-UPDATE lanes
-SET waiter = :holder
-WHERE lane = :lane AND lease_until > unixepoch()
-"#
-}
-
-statement! {
-    /// The holder waiting for the lane, if any.
-    SelectWaiter<'a> { lane: &'a str } => "SELECT waiter FROM lanes WHERE lane = :lane"
 }
 
 statement! {
     /// A run's first event, only under this lease and never for a run that already ended, so a
     /// retried run writes nothing.
     InsertRunStarted<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         token: &'a str,
-        ts_ms: i64,
+        occurred_at_ms: i64,
         run_id: &'a str,
         payload: SqlValue,
     } as Bookkeeping => r#"
-INSERT INTO events (ts_ms, lane, run_id, type, payload)
-SELECT :ts_ms, :lane, :run_id, 'run_started', jsonb(:payload)
-FROM lanes
-WHERE lane = :lane AND lease_token = :token
-  AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')
+INSERT INTO events (occurred_at_ms, partition_key, run_id, type, payload)
+SELECT :occurred_at_ms, :partition_key, :run_id, 'run_started', jsonb(:payload)
+FROM partitions
+WHERE partition_key = :partition_key AND lease_token = :token
+  AND NOT EXISTS (SELECT 1 FROM events WHERE partition_key = :partition_key AND run_id = :run_id AND type = 'run_ended')
 "#
 }
 
 statement! {
     /// A run's last event when it ends without a commit (failed, canceled, or already
-    /// committed), once: under this lease, or while its holder still has the lane under another
-    /// token (its next turn re-entered before this cleanup applied). Another holder's lane is
+    /// committed), once: under this lease, or while its holder still has the partition under another
+    /// token (its next turn re-entered before this cleanup applied). Another holder's partition is
     /// left alone: the run is then found interrupted.
     InsertRunEnded<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         token: &'a str,
         holder: &'a str,
-        ts_ms: i64,
+        occurred_at_ms: i64,
         run_id: &'a str,
         payload: SqlValue,
     } as Bookkeeping => r#"
-INSERT INTO events (ts_ms, lane, run_id, type, payload)
-SELECT :ts_ms, :lane, :run_id, 'run_ended', jsonb(:payload)
-FROM lanes
-WHERE lane = :lane AND (lease_token = :token OR lease_holder = :holder)
-  AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')
+INSERT INTO events (occurred_at_ms, partition_key, run_id, type, payload)
+SELECT :occurred_at_ms, :partition_key, :run_id, 'run_ended', jsonb(:payload)
+FROM partitions
+WHERE partition_key = :partition_key AND (lease_token = :token OR lease_holder = :holder)
+  AND NOT EXISTS (SELECT 1 FROM events WHERE partition_key = :partition_key AND run_id = :run_id AND type = 'run_ended')
 "#
 }
 
 statement! {
-    /// The lane's lease as an acquire found it, and the database's clock.
-    SelectLeaseBefore<'a> { lane: &'a str } => "SELECT lease_holder, lease_token, lease_until, unixepoch() FROM lanes WHERE lane = :lane"
+    /// The partition's lease as an acquire found it, and the database's clock.
+    SelectLeaseBefore<'a> { partition_key: &'a str } => "SELECT lease_holder, lease_token, lease_expires_at_ms, CAST(unixepoch('subsec') * 1000 AS INTEGER) FROM partitions WHERE partition_key = :partition_key"
 }
 
 statement! {
-    /// The lane's fence as it stands: its version, lease token and lease expiry.
-    SelectFence<'a> { lane: &'a str } as FenceRead => "SELECT version, lease_token, lease_until FROM lanes WHERE lane = :lane"
+    /// The partition's fence as it stands: its version, lease token and lease expiry.
+    SelectFence<'a> { partition_key: &'a str } as FenceRead => "SELECT version, lease_token, lease_expires_at_ms FROM partitions WHERE partition_key = :partition_key"
 }
 
 statement! {
     /// Whether this run already committed.
-    SelectCommittedRun<'a> { lane: &'a str, run_id: &'a str } => r#"
-SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended' LIMIT 1
+    SelectCommittedRun<'a> { partition_key: &'a str, run_id: &'a str } => r#"
+SELECT 1 FROM events WHERE partition_key = :partition_key AND run_id = :run_id AND type = 'run_ended' LIMIT 1
 "#
 }
 
 statement! {
     /// A turn's `submitted` row, written before the lease is tried so a `tasks/get` before the
     /// commit finds it. A retried task id or message id inserts nothing; the commit's upsert
-    /// later moves the row to its end state and keeps its `seq`.
+    /// later moves the row to its end state and keeps its `pos`.
     InsertSubmittedTask<'a> {
-        lane: &'a str,
+        endpoint: Option<&'a str>,
+        partition_key: &'a str,
         task_id: &'a str,
         name: Option<&'a str>,
         message_id: Option<&'a str>,
@@ -295,8 +262,8 @@ statement! {
         internal: SqlValue,
     } => r#"
 INSERT OR IGNORE INTO tasks
-  (task_id, lane, seq, name, message_id, status, data, internal, updated_at)
-SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane), 0) + 1,
+  (task_id, partition_key, endpoint, name, message_id, status, data, internal, updated_at_ms)
+SELECT :task_id, :partition_key, :endpoint,
   :name, :message_id, 'submitted', jsonb(:data), jsonb(:internal), CAST(unixepoch('subsec') * 1000 AS INTEGER)
 "#
 }
@@ -305,94 +272,111 @@ statement! {
     /// A turn's `submitted` row in the inbox receive, only when this request inserted the
     /// inbox row; a retry after a lost acknowledgment inserts nothing.
     InsertSubmittedTaskForMessage<'a> {
+        endpoint: Option<&'a str>,
         internal: SqlValue,
-        lane: &'a str,
+        partition_key: &'a str,
         task_id: &'a str,
         message_id: &'a str,
         data: SqlValue,
     } => r#"
 INSERT INTO tasks
-  (task_id, lane, seq, name, message_id, status, data, internal, updated_at)
-SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane), 0) + 1,
+  (task_id, partition_key, endpoint, name, message_id, status, data, internal, updated_at_ms)
+SELECT :task_id, :partition_key, :endpoint,
   NULL, :message_id, 'submitted', jsonb(:data), jsonb(:internal), CAST(unixepoch('subsec') * 1000 AS INTEGER)
 FROM inbox
-WHERE lane = :lane AND message_id = :message_id AND task_id = :task_id
-  AND NOT EXISTS (SELECT 1 FROM tasks WHERE lane = :lane AND message_id = :message_id)
+WHERE partition_key = :partition_key AND message_id = :message_id AND task_id = :task_id
+  AND NOT EXISTS (SELECT 1 FROM tasks WHERE partition_key = :partition_key AND message_id = :message_id)
 "#
 }
 
 statement! {
     /// The pickup's first half: the status of a row still runnable (`working` means a dead
     /// holder had it; a row a turn answered `working` is no run's).
-    SelectPickupStatus<'a> { lane: &'a str, task_id: &'a str } => r#"
+    SelectPickupStatus<'a> { partition_key: &'a str, task_id: &'a str } => r#"
 SELECT status FROM tasks
-WHERE lane = :lane AND task_id = :task_id AND status IN ('submitted', 'working')
+WHERE partition_key = :partition_key AND task_id = :task_id AND status IN ('submitted', 'working')
   AND NOT COALESCE(json_extract(internal, '$.answered'), 0)
 "#
 }
 
 statement! {
     /// The pickup's second half: the row moves to `working`.
-    PickupTask<'a> { lane: &'a str, task_id: &'a str } => r#"
+    PickupTask<'a> { partition_key: &'a str, task_id: &'a str } => r#"
 UPDATE tasks
-SET status = 'working', updated_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
-WHERE lane = :lane AND task_id = :task_id AND status IN ('submitted', 'working')
+SET status = 'working', updated_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+WHERE partition_key = :partition_key AND task_id = :task_id AND status IN ('submitted', 'working')
   AND NOT COALESCE(json_extract(internal, '$.answered'), 0)
 "#
 }
 
 statement! {
     /// The pickup inside the acquire: the row moves to `working` only under this lease.
-    PickupTaskHeld<'a> { lane: &'a str, token: &'a str, task_id: &'a str } => r#"
+    PickupTaskHeld<'a> { partition_key: &'a str, token: &'a str, task_id: &'a str } => r#"
 UPDATE tasks
-SET status = 'working', updated_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
-WHERE lane = :lane AND task_id = :task_id AND status IN ('submitted', 'working')
+SET status = 'working', updated_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+WHERE partition_key = :partition_key AND task_id = :task_id AND status IN ('submitted', 'working')
   AND NOT COALESCE(json_extract(internal, '$.answered'), 0)
-  AND EXISTS (SELECT 1 FROM lanes WHERE lane = :lane AND lease_token = :token)
+  AND EXISTS (SELECT 1 FROM partitions WHERE partition_key = :partition_key AND lease_token = :token)
 "#
 }
 
 statement! {
     /// A task's status.
-    SelectTaskStatus<'a> { lane: &'a str, task_id: &'a str } => r#"
-SELECT status FROM tasks WHERE lane = :lane AND task_id = :task_id
+    SelectTaskStatus<'a> { partition_key: &'a str, task_id: &'a str } => r#"
+SELECT status FROM tasks WHERE partition_key = :partition_key AND task_id = :task_id
 "#
 }
 
 statement! {
     /// Fails a `working` row whose holder died.
-    FailOrphan<'a> { lane: &'a str, task_id: &'a str, status_message: SqlValue } => r#"
+    FailOrphan<'a> { partition_key: &'a str, task_id: &'a str, status_message: SqlValue } => r#"
 UPDATE tasks
 SET status = 'failed', data = jsonb_set(data, '$.status_message', jsonb(:status_message)),
-  updated_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
-WHERE lane = :lane AND task_id = :task_id AND status = 'working'
+  updated_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+WHERE partition_key = :partition_key AND task_id = :task_id AND status = 'working'
 "#
 }
 
 statement! {
     /// `tasks/cancel`: a row not yet terminal goes `canceled`, `metadata` merged over its own,
     /// its pending question dropped. A terminal row is left as it is.
-    CancelTask<'a> { lane: &'a str, task_id: &'a str, metadata: SqlValue } => r#"
+    CancelTask<'a> { partition_key: &'a str, task_id: &'a str, metadata: SqlValue } => r#"
 UPDATE tasks
 SET status = 'canceled', internal = NULL,
   data = jsonb_set(data, '$.metadata', jsonb(json_patch(COALESCE(data -> '$.metadata', '{}'), :metadata))),
-  updated_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
-WHERE lane = :lane AND task_id = :task_id AND status IN ('submitted', 'working', 'input-required')
+  updated_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+WHERE partition_key = :partition_key AND task_id = :task_id AND status IN ('submitted', 'working', 'input-required')
 "#
 }
 
 statement! {
-    /// A message received while the lane runs; a retried message id inserts nothing.
-    InsertInbox<'a> { lane: &'a str, task_id: &'a str, message_id: &'a str, message: SqlValue } => r#"
-INSERT OR IGNORE INTO inbox (lane, task_id, message_id, message, received_at)
-VALUES (:lane, :task_id, :message_id, jsonb(:message), unixepoch())
+    /// A message received while the partition runs; a retried message id inserts nothing.
+    InsertInbox<'a> { partition_key: &'a str, task_id: &'a str, message_id: &'a str, message: SqlValue } => r#"
+INSERT OR IGNORE INTO inbox (partition_key, task_id, message_id, message, received_at_ms)
+SELECT :partition_key, :task_id, :message_id, jsonb(:message), CAST(unixepoch('subsec') * 1000 AS INTEGER)
+WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE partition_key = :partition_key AND message_id = :message_id)
 "#
 }
 
 statement! {
     /// The task a message id was received under.
-    SelectInboxTask<'a> { lane: &'a str, message_id: &'a str } => r#"
-SELECT task_id FROM inbox WHERE lane = :lane AND message_id = :message_id
+    SelectInboxTask<'a> { partition_key: &'a str, message_id: &'a str } => r#"
+SELECT task_id FROM tasks WHERE partition_key = :partition_key AND message_id = :message_id
+UNION ALL
+SELECT task_id FROM inbox WHERE partition_key = :partition_key AND message_id = :message_id
+LIMIT 1
+"#
+}
+
+statement! {
+    /// Consumed terminal requests are temporary; their task receipts remain for deduplication.
+    PruneInbox<'a> { partition_key: &'a str, version: i64, token: &'a str, drained_id: Option<i64> } => r#"
+DELETE FROM inbox
+WHERE partition_key = :partition_key
+  AND id <= COALESCE(:drained_id, (SELECT drained_id FROM partitions WHERE partition_key = :partition_key))
+  AND EXISTS (SELECT 1 FROM partitions WHERE partition_key = :partition_key AND version = :version AND lease_token = :token)
+  AND EXISTS (SELECT 1 FROM tasks WHERE tasks.partition_key = inbox.partition_key AND tasks.task_id = inbox.task_id
+    AND tasks.status IN ('completed', 'failed', 'canceled', 'rejected'))
 "#
 }
 
@@ -416,100 +400,100 @@ statement! {
 }
 
 statement! {
-    /// Inserts or replaces a history item at the end of the lane. An id another lane holds sets
-    /// `lane` to NULL, which the NOT NULL column refuses: the whole commit fails, nothing moved.
+    /// Inserts or replaces a history item at the end of the partition. An id another partition holds sets
+    /// `partition_key` to NULL, which the NOT NULL column refuses: the whole commit fails, nothing moved.
     InsertItem<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         version: i64,
         token: &'a str,
         id: &'a str,
         message_id: Option<&'a str>,
         payload: SqlValue,
     } => r#"
-INSERT INTO items (id, lane, seq, message_id, payload)
-SELECT :id, :lane, COALESCE((SELECT MAX(seq) FROM items WHERE lane = :lane), 0) + 1, :message_id, jsonb(:payload)
-FROM lanes
-WHERE lane = :lane AND version = :version AND lease_token = :token
+INSERT INTO items (id, partition_key, seq, message_id, payload)
+SELECT :id, :partition_key, COALESCE((SELECT MAX(seq) FROM items WHERE partition_key = :partition_key), 0) + 1, :message_id, jsonb(:payload)
+FROM partitions
+WHERE partition_key = :partition_key AND version = :version AND lease_token = :token
 ON CONFLICT(id) DO UPDATE SET message_id = excluded.message_id, payload = excluded.payload,
-  lane = CASE WHEN items.lane = excluded.lane THEN items.lane END
+  partition_key = CASE WHEN items.partition_key = excluded.partition_key THEN items.partition_key END
 "#
 }
 
 statement! {
     /// [`InsertItem`] with no lease, guarded on its run: a re-sent commit writes nothing twice.
     InsertItemUnfenced<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         run_id: &'a str,
         id: &'a str,
         message_id: Option<&'a str>,
         payload: SqlValue,
     } => r#"
-INSERT INTO items (id, lane, seq, message_id, payload)
-SELECT :id, :lane, COALESCE((SELECT MAX(seq) FROM items WHERE lane = :lane), 0) + 1, :message_id, jsonb(:payload)
-FROM lanes
-WHERE lane = :lane AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')
+INSERT INTO items (id, partition_key, seq, message_id, payload)
+SELECT :id, :partition_key, COALESCE((SELECT MAX(seq) FROM items WHERE partition_key = :partition_key), 0) + 1, :message_id, jsonb(:payload)
+FROM partitions
+WHERE partition_key = :partition_key AND NOT EXISTS (SELECT 1 FROM events WHERE partition_key = :partition_key AND run_id = :run_id AND type = 'run_ended')
 ON CONFLICT(id) DO UPDATE SET message_id = excluded.message_id, payload = excluded.payload,
-  lane = CASE WHEN items.lane = excluded.lane THEN items.lane END
+  partition_key = CASE WHEN items.partition_key = excluded.partition_key THEN items.partition_key END
 "#
 }
 
 statement! {
     /// Removes a history item.
-    DeleteItem<'a> { lane: &'a str, version: i64, token: &'a str, id: &'a str } => r#"
+    DeleteItem<'a> { partition_key: &'a str, version: i64, token: &'a str, id: &'a str } => r#"
 DELETE FROM items
-WHERE lane = :lane AND id = :id
-  AND EXISTS (SELECT 1 FROM lanes WHERE lane = :lane AND version = :version AND lease_token = :token)
+WHERE partition_key = :partition_key AND id = :id
+  AND EXISTS (SELECT 1 FROM partitions WHERE partition_key = :partition_key AND version = :version AND lease_token = :token)
 "#
 }
 
 statement! {
     /// [`DeleteItem`] with no lease, guarded on its run: a re-sent commit writes nothing twice.
-    DeleteItemUnfenced<'a> { lane: &'a str, run_id: &'a str, id: &'a str } => r#"
+    DeleteItemUnfenced<'a> { partition_key: &'a str, run_id: &'a str, id: &'a str } => r#"
 DELETE FROM items
-WHERE lane = :lane AND id = :id
-  AND EXISTS (SELECT 1 FROM lanes WHERE lane = :lane AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended'))
+WHERE partition_key = :partition_key AND id = :id
+  AND EXISTS (SELECT 1 FROM partitions WHERE partition_key = :partition_key AND NOT EXISTS (SELECT 1 FROM events WHERE partition_key = :partition_key AND run_id = :run_id AND type = 'run_ended'))
 "#
 }
 
 statement! {
     /// Appends a journal event.
     InsertEvent<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         version: i64,
         token: &'a str,
-        ts_ms: i64,
+        occurred_at_ms: i64,
         run_id: &'a str,
         event_type: &'a str,
         payload: SqlValue,
     } as Bookkeeping => r#"
-INSERT INTO events (ts_ms, lane, run_id, type, payload)
-SELECT :ts_ms, :lane, :run_id, :event_type, jsonb(:payload)
-FROM lanes
-WHERE lane = :lane AND version = :version AND lease_token = :token
+INSERT INTO events (occurred_at_ms, partition_key, run_id, type, payload)
+SELECT :occurred_at_ms, :partition_key, :run_id, :event_type, jsonb(:payload)
+FROM partitions
+WHERE partition_key = :partition_key AND version = :version AND lease_token = :token
 "#
 }
 
 statement! {
     /// [`InsertEvent`] with no lease, guarded on its run: a re-sent commit writes nothing twice.
     InsertEventUnfenced<'a> {
-        lane: &'a str,
-        ts_ms: i64,
+        partition_key: &'a str,
+        occurred_at_ms: i64,
         run_id: &'a str,
         event_type: &'a str,
         payload: SqlValue,
     } as Bookkeeping => r#"
-INSERT INTO events (ts_ms, lane, run_id, type, payload)
-SELECT :ts_ms, :lane, :run_id, :event_type, jsonb(:payload)
-FROM lanes
-WHERE lane = :lane AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')
+INSERT INTO events (occurred_at_ms, partition_key, run_id, type, payload)
+SELECT :occurred_at_ms, :partition_key, :run_id, :event_type, jsonb(:payload)
+FROM partitions
+WHERE partition_key = :partition_key AND NOT EXISTS (SELECT 1 FROM events WHERE partition_key = :partition_key AND run_id = :run_id AND type = 'run_ended')
 "#
 }
 
 statement! {
-    /// Inserts a task row or updates every column but its `seq`; a terminal row stays as it is,
-    /// and a task id another lane holds fails the commit as [`InsertItem`] does.
+    /// Inserts a task row or updates every column but its `pos`; a terminal row stays as it is,
+    /// and a task id another partition holds fails the commit as [`InsertItem`] does.
     UpsertTask<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         version: i64,
         token: &'a str,
         task_id: &'a str,
@@ -520,16 +504,16 @@ statement! {
         internal: SqlValue,
     } => r#"
 INSERT INTO tasks
-  (task_id, lane, seq, name, message_id, status, data, internal, updated_at)
-SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane), 0) + 1,
+  (task_id, partition_key, name, message_id, status, data, internal, updated_at_ms)
+SELECT :task_id, :partition_key,
   :name, :message_id, :status, jsonb(:data), jsonb(:internal), CAST(unixepoch('subsec') * 1000 AS INTEGER)
-FROM lanes
-WHERE lane = :lane AND version = :version AND lease_token = :token
+FROM partitions
+WHERE partition_key = :partition_key AND version = :version AND lease_token = :token
 ON CONFLICT(task_id) DO UPDATE SET
   status = excluded.status, name = excluded.name, message_id = excluded.message_id,
   data = excluded.data, internal = excluded.internal,
-  updated_at = excluded.updated_at,
-  lane = CASE WHEN tasks.lane = excluded.lane THEN tasks.lane END
+  updated_at_ms = excluded.updated_at_ms,
+  partition_key = CASE WHEN tasks.partition_key = excluded.partition_key THEN tasks.partition_key END
 WHERE tasks.status NOT IN ('completed', 'failed', 'canceled', 'rejected')
 "#
 }
@@ -537,7 +521,7 @@ WHERE tasks.status NOT IN ('completed', 'failed', 'canceled', 'rejected')
 statement! {
     /// [`UpsertTask`] with no lease, guarded on its run: a re-sent commit writes nothing twice.
     UpsertTaskUnfenced<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         run_id: &'a str,
         task_id: &'a str,
         name: Option<&'a str>,
@@ -547,16 +531,16 @@ statement! {
         internal: SqlValue,
     } => r#"
 INSERT INTO tasks
-  (task_id, lane, seq, name, message_id, status, data, internal, updated_at)
-SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane), 0) + 1,
+  (task_id, partition_key, name, message_id, status, data, internal, updated_at_ms)
+SELECT :task_id, :partition_key,
   :name, :message_id, :status, jsonb(:data), jsonb(:internal), CAST(unixepoch('subsec') * 1000 AS INTEGER)
-FROM lanes
-WHERE lane = :lane AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')
+FROM partitions
+WHERE partition_key = :partition_key AND NOT EXISTS (SELECT 1 FROM events WHERE partition_key = :partition_key AND run_id = :run_id AND type = 'run_ended')
 ON CONFLICT(task_id) DO UPDATE SET
   status = excluded.status, name = excluded.name, message_id = excluded.message_id,
   data = excluded.data, internal = excluded.internal,
-  updated_at = excluded.updated_at,
-  lane = CASE WHEN tasks.lane = excluded.lane THEN tasks.lane END
+  updated_at_ms = excluded.updated_at_ms,
+  partition_key = CASE WHEN tasks.partition_key = excluded.partition_key THEN tasks.partition_key END
 WHERE tasks.status NOT IN ('completed', 'failed', 'canceled', 'rejected')
 "#
 }
@@ -565,31 +549,31 @@ statement! {
     /// Ends a commit and releases the lease: bumps `version` and writes the snapshots that
     /// changed (NULL keeps the stored one). No row answered means the run outlived its lease.
     CommitAndRelease<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         version: i64,
         token: &'a str,
         state: SqlValue,
         drained_id: Option<i64>,
     } as Commit => r#"
-UPDATE lanes
+UPDATE partitions
 SET version = version + 1,
   state = COALESCE(jsonb(:state), state),
   drained_id = COALESCE(:drained_id, drained_id),
-  lease_until = 0, lease_token = NULL
-WHERE lane = :lane AND version = :version AND lease_token = :token
+  lease_expires_at_ms = 0, lease_token = NULL
+WHERE partition_key = :partition_key AND version = :version AND lease_token = :token
 RETURNING version
 "#
 }
 
 statement! {
-    /// Aborts the enclosing batch unless the lease still holds the lane at `version`: inserting
-    /// a lane row without a version fails its NOT NULL constraint. What follows it in the batch,
+    /// Aborts the enclosing batch unless the lease still holds the partition at `version`: inserting
+    /// a partition row without a version fails its NOT NULL constraint. What follows it in the batch,
     /// application SQL that cannot itself be fenced, then never applies after a takeover.
-    AssertFence<'a> { lane: &'a str, version: i64, token: &'a str } as Bookkeeping => r#"
-INSERT INTO lanes (lane, version)
-SELECT :lane, NULL
+    AssertFence<'a> { partition_key: &'a str, version: i64, token: &'a str } as Bookkeeping => r#"
+INSERT INTO partitions (partition_key, version)
+SELECT :partition_key, NULL
 WHERE NOT EXISTS (
-  SELECT 1 FROM lanes WHERE lane = :lane AND version = :version AND lease_token = :token
+  SELECT 1 FROM partitions WHERE partition_key = :partition_key AND version = :version AND lease_token = :token
 )
 "#
 }
@@ -597,112 +581,127 @@ WHERE NOT EXISTS (
 statement! {
     /// [`CommitAndRelease`] that keeps the lease, extended, for a runner that continues.
     CommitAndExtend<'a> {
-        lane: &'a str,
+        partition_key: &'a str,
         version: i64,
         token: &'a str,
         state: SqlValue,
         drained_id: Option<i64>,
-        lease_secs: i64,
+        lease_ms: i64,
     } as Commit => r#"
-UPDATE lanes
+UPDATE partitions
 SET version = version + 1,
   state = COALESCE(jsonb(:state), state),
   drained_id = COALESCE(:drained_id, drained_id),
-  lease_until = unixepoch() + :lease_secs
-WHERE lane = :lane AND version = :version AND lease_token = :token
+  lease_expires_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER) + :lease_ms
+WHERE partition_key = :partition_key AND version = :version AND lease_token = :token
 RETURNING version
 "#
 }
 
 statement! {
-    /// The lane's history in order.
-    SelectItems<'a> { lane: &'a str } => r#"
-SELECT id, message_id, json(payload) FROM items WHERE lane = :lane ORDER BY seq
+    /// A conversation checkpoint retains the active run's version and ownership.
+    CheckpointState<'a> { partition_key: &'a str, version: i64, token: &'a str, state: SqlValue } as Commit => r#"
+UPDATE partitions SET state = COALESCE(jsonb(:state), state)
+WHERE partition_key = :partition_key AND version = :version AND lease_token = :token
+RETURNING version
 "#
 }
 
 statement! {
-    /// One page of the thread's items in insertion order (`pos`), after `after`, of one lane
-    /// when given: each row its position, lane and seq, then the item.
-    SelectItemsAfter<'a> { lane: Option<&'a str>, after: i64, limit: i64 } => r#"
-SELECT pos, lane, seq, id, message_id, json(payload) FROM items
-WHERE (:lane IS NULL OR lane = :lane) AND pos > :after
+    /// The partition's history in order.
+    SelectItems<'a> { partition_key: &'a str } => r#"
+SELECT id, message_id, json(payload) FROM items WHERE partition_key = :partition_key ORDER BY seq
+"#
+}
+
+statement! {
+    /// One page of the thread's items in insertion order (`pos`), after `after`, of one partition
+    /// when given: each row its position, partition and seq, then the item.
+    SelectItemsAfter<'a> { partition_key: Option<&'a str>, after: i64, limit: i64 } => r#"
+SELECT pos, partition_key, seq, id, message_id, json(payload) FROM items
+WHERE :partition_key IS NULL AND pos > :after
+UNION ALL
+SELECT pos, partition_key, seq, id, message_id, json(payload) FROM items
+WHERE :partition_key IS NOT NULL AND partition_key = :partition_key AND pos > :after
 ORDER BY pos LIMIT :limit
 "#
 }
 
 statement! {
     /// [`SelectItemsAfter`] newest first: the page before `before`.
-    SelectItemsBefore<'a> { lane: Option<&'a str>, before: i64, limit: i64 } => r#"
-SELECT pos, lane, seq, id, message_id, json(payload) FROM items
-WHERE (:lane IS NULL OR lane = :lane) AND pos < :before
+    SelectItemsBefore<'a> { partition_key: Option<&'a str>, before: i64, limit: i64 } => r#"
+SELECT pos, partition_key, seq, id, message_id, json(payload) FROM items
+WHERE :partition_key IS NULL AND pos < :before
+UNION ALL
+SELECT pos, partition_key, seq, id, message_id, json(payload) FROM items
+WHERE :partition_key IS NOT NULL AND partition_key = :partition_key AND pos < :before
 ORDER BY pos DESC LIMIT :limit
 "#
 }
 
 statement! {
-    /// The lane's journal after the event `after_id`.
-    SelectLaneEvents<'a> { lane: &'a str, after_id: i64 } => r#"
-SELECT id, ts_ms, lane, run_id, type, json(payload) FROM events
-WHERE lane = :lane AND id > :after_id ORDER BY id
+    /// The partition's journal after the event `after_id`.
+    SelectPartitionEvents<'a> { partition_key: &'a str, after_id: i64 } => r#"
+SELECT id, occurred_at_ms, partition_key, run_id, type, json(payload) FROM events
+WHERE partition_key = :partition_key AND id > :after_id ORDER BY id
 "#
 }
 
 statement! {
-    /// Every lane's journal after the event `after_id`, at most `limit` events.
+    /// Every partition's journal after the event `after_id`, at most `limit` events.
     SelectEvents { after_id: i64, limit: i64 } => r#"
-SELECT id, ts_ms, lane, run_id, type, json(payload) FROM events
+SELECT id, occurred_at_ms, partition_key, run_id, type, json(payload) FROM events
 WHERE id > :after_id ORDER BY id LIMIT :limit
 "#
 }
 
 statement! {
-    /// One lane's row.
-    SelectLane<'a> { lane: &'a str } => r#"
-SELECT lane, version, json(state), lease_holder, lease_until, waiter, drained_id
-FROM lanes WHERE lane = :lane
+    /// One partition's row.
+    SelectPartition<'a> { partition_key: &'a str } => r#"
+SELECT partition_key, version, json(state), lease_holder, lease_expires_at_ms, drained_id
+FROM partitions WHERE partition_key = :partition_key
 "#
 }
 
 statement! {
-    /// Every lane's row.
-    SelectLanes {} => r#"
-SELECT lane, version, json(state), lease_holder, lease_until, waiter, drained_id
-FROM lanes ORDER BY lane
+    /// Every partition's row.
+    SelectPartitions {} => r#"
+SELECT partition_key, version, json(state), lease_holder, lease_expires_at_ms, drained_id
+FROM partitions ORDER BY partition_key
 "#
 }
 
 statement! {
     /// The newest `limit` task rows.
-    SelectTasks<'a> { lane: &'a str, limit: i64 } => r#"
-SELECT task_id, lane, seq, name, message_id, status, updated_at,
+    SelectTasks<'a> { partition_key: &'a str, limit: i64 } => r#"
+SELECT task_id, partition_key, pos, name, message_id, status, updated_at_ms,
   json(data), json(internal)
-FROM tasks WHERE lane = :lane ORDER BY seq DESC LIMIT :limit
+FROM tasks WHERE partition_key = :partition_key ORDER BY pos DESC LIMIT :limit
 "#
 }
 
 statement! {
     /// The newest `limit` task rows of one status.
-    SelectTasksByStatus<'a> { lane: &'a str, status: &'a str, limit: i64 } => r#"
-SELECT task_id, lane, seq, name, message_id, status, updated_at,
+    SelectTasksByStatus<'a> { partition_key: &'a str, status: &'a str, limit: i64 } => r#"
+SELECT task_id, partition_key, pos, name, message_id, status, updated_at_ms,
   json(data), json(internal)
-FROM tasks WHERE lane = :lane AND status = :status ORDER BY seq DESC LIMIT :limit
+FROM tasks WHERE partition_key = :partition_key AND status = :status ORDER BY pos DESC LIMIT :limit
 "#
 }
 
 statement! {
     /// One task row.
-    SelectTask<'a> { lane: &'a str, task_id: &'a str } => r#"
-SELECT task_id, lane, seq, name, message_id, status, updated_at,
+    SelectTask<'a> { partition_key: &'a str, task_id: &'a str } => r#"
+SELECT task_id, partition_key, pos, name, message_id, status, updated_at_ms,
   json(data), json(internal)
-FROM tasks WHERE lane = :lane AND task_id = :task_id
+FROM tasks WHERE partition_key = :partition_key AND task_id = :task_id
 "#
 }
 
 statement! {
-    /// One task row, whichever lane it is on.
+    /// One task row, whichever partition it is on.
     SelectThreadTask<'a> { task_id: &'a str } => r#"
-SELECT task_id, lane, seq, name, message_id, status, updated_at,
+SELECT task_id, partition_key, pos, name, message_id, status, updated_at_ms,
   json(data), json(internal)
 FROM tasks WHERE task_id = :task_id
 "#
@@ -710,24 +709,24 @@ FROM tasks WHERE task_id = :task_id
 
 statement! {
     /// One page of the thread's tasks in A2A `tasks/list` order: last updated first, then by
-    /// task id. Of `lane` and `status` when given, updated after `updated_after`, and past the
+    /// task id. Of `partition_key` and `status` when given, updated after `updated_after`, and past the
     /// previous page's last row, `(before_at, before_id)`.
     SelectThreadTasksPage<'a> {
-        lane: Option<&'a str>,
+        partition_key: Option<&'a str>,
         status: Option<&'a str>,
         updated_after: i64,
         before_at: i64,
         before_id: &'a str,
         limit: i64,
     } => r#"
-SELECT task_id, lane, seq, name, message_id, status, updated_at,
+SELECT task_id, partition_key, pos, name, message_id, status, updated_at_ms,
   json(data), json(internal)
 FROM tasks
-WHERE (:lane IS NULL OR lane = :lane)
+WHERE (:partition_key IS NULL OR partition_key = :partition_key)
   AND (:status IS NULL OR status = :status)
-  AND updated_at > :updated_after
-  AND (updated_at < :before_at OR (updated_at = :before_at AND task_id < :before_id))
-ORDER BY updated_at DESC, task_id DESC
+  AND updated_at_ms > :updated_after
+  AND (updated_at_ms < :before_at OR (updated_at_ms = :before_at AND task_id < :before_id))
+ORDER BY updated_at_ms DESC, task_id DESC
 LIMIT :limit
 "#
 }
@@ -736,18 +735,18 @@ statement! {
     /// One page of the thread's tasks in insertion order (`pos`), after `after`, with
     /// [`SelectThreadTasksPage`]'s filters: each row its position, then the task.
     SelectThreadTasksInserted<'a> {
-        lane: Option<&'a str>,
+        partition_key: Option<&'a str>,
         status: Option<&'a str>,
         updated_after: i64,
         after: i64,
         limit: i64,
     } => r#"
-SELECT pos, task_id, lane, seq, name, message_id, status, updated_at,
+SELECT pos, task_id, partition_key, pos, name, message_id, status, updated_at_ms,
   json(data), json(internal)
 FROM tasks
-WHERE (:lane IS NULL OR lane = :lane)
+WHERE (:partition_key IS NULL OR partition_key = :partition_key)
   AND (:status IS NULL OR status = :status)
-  AND updated_at > :updated_after
+  AND updated_at_ms > :updated_after
   AND pos > :after
 ORDER BY pos
 LIMIT :limit
@@ -756,35 +755,35 @@ LIMIT :limit
 
 statement! {
     /// How many tasks a task page's filters match, every page.
-    CountThreadTasks<'a> { lane: Option<&'a str>, status: Option<&'a str>, updated_after: i64 } => r#"
+    CountThreadTasks<'a> { partition_key: Option<&'a str>, status: Option<&'a str>, updated_after: i64 } => r#"
 SELECT COUNT(*) FROM tasks
-WHERE (:lane IS NULL OR lane = :lane) AND (:status IS NULL OR status = :status)
-  AND updated_at > :updated_after
+WHERE (:partition_key IS NULL OR partition_key = :partition_key) AND (:status IS NULL OR status = :status)
+  AND updated_at_ms > :updated_after
 "#
 }
 
 statement! {
     /// The task row an A2A message id created.
-    SelectTaskForMessage<'a> { lane: &'a str, message_id: &'a str } => r#"
-SELECT task_id, lane, seq, name, message_id, status, updated_at,
+    SelectTaskForMessage<'a> { partition_key: &'a str, message_id: &'a str } => r#"
+SELECT task_id, partition_key, pos, name, message_id, status, updated_at_ms,
   json(data), json(internal)
-FROM tasks WHERE lane = :lane AND message_id = :message_id
+FROM tasks WHERE partition_key = :partition_key AND message_id = :message_id
 "#
 }
 
 statement! {
     /// Every inbox row in arrival order.
-    SelectInbox<'a> { lane: &'a str } => r#"
-SELECT id, lane, task_id, message_id, json(message), received_at FROM inbox
-WHERE lane = :lane ORDER BY id
+    SelectInbox<'a> { partition_key: &'a str } => r#"
+SELECT id, partition_key, task_id, message_id, json(message), received_at_ms FROM inbox
+WHERE partition_key = :partition_key ORDER BY id
 "#
 }
 
 statement! {
-    /// The inbox rows not yet drained, past the lane's `drained_id`.
-    SelectInboxPending<'a> { lane: &'a str } => r#"
-SELECT id, lane, task_id, message_id, json(message), received_at FROM inbox
-WHERE lane = :lane AND id > (SELECT drained_id FROM lanes WHERE lane = :lane) ORDER BY id
+    /// The inbox rows not yet drained, past the partition's `drained_id`.
+    SelectInboxPending<'a> { partition_key: &'a str } => r#"
+SELECT id, partition_key, task_id, message_id, json(message), received_at_ms FROM inbox
+WHERE partition_key = :partition_key AND id > (SELECT drained_id FROM partitions WHERE partition_key = :partition_key) ORDER BY id
 "#
 }
 
@@ -794,7 +793,7 @@ WHERE lane = :lane AND id > (SELECT drained_id FROM lanes WHERE lane = :lane) OR
 /// every acquire, so a database an older SDK created gains them.
 pub const FRAMEWORK_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS context_scopes (
         scope_id TEXT PRIMARY KEY,
-        lane TEXT NOT NULL,
+        partition_key TEXT NOT NULL,
         revision INTEGER NOT NULL,
         fields JSONB NOT NULL,
         contracts JSONB NOT NULL,
@@ -802,19 +801,19 @@ pub const FRAMEWORK_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS context_scopes (
     );
     CREATE TABLE IF NOT EXISTS applied_writes (
         id TEXT PRIMARY KEY,
-        applied_at INTEGER NOT NULL
+        applied_at_ms INTEGER NOT NULL
     )";
 
 statement! {
     /// Records an application transaction, first in its batch: a second apply fails the batch.
     RecordAppliedWrite<'a> { id: &'a str } => r#"
-INSERT INTO applied_writes (id, applied_at) VALUES (:id, unixepoch())
+INSERT INTO applied_writes (id, applied_at_ms) VALUES (:id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
 "#
 }
 
 statement! {
     /// Forgets the application transactions applied more than a day ago.
-    PruneAppliedWrites {} => "DELETE FROM applied_writes WHERE applied_at < unixepoch() - 86400"
+    PruneAppliedWrites {} => "DELETE FROM applied_writes WHERE applied_at_ms < CAST(unixepoch('subsec') * 1000 AS INTEGER) - 86400000"
 }
 
 statement! {
@@ -823,19 +822,19 @@ statement! {
 }
 
 statement! {
-    /// The lane's scopes.
-    SelectScopes<'a> { lane: &'a str } => r#"
+    /// The partition's scopes.
+    SelectScopes<'a> { partition_key: &'a str } => r#"
 SELECT scope_id, revision, json(fields), json(contracts), json(manifests)
-FROM context_scopes WHERE lane = :lane ORDER BY scope_id
+FROM context_scopes WHERE partition_key = :partition_key ORDER BY scope_id
 "#
 }
 
 statement! {
     /// Writes a scope when its stored revision is `expected_revision` (a missing scope is at
-    /// 0) and it is not another lane's; under the lane's lease when a fence is given.
+    /// 0) and it is not another partition's; under the partition's lease when a fence is given.
     UpsertScope<'a> {
         scope_id: &'a str,
-        lane: &'a str,
+        partition_key: &'a str,
         expected_revision: i64,
         revision: i64,
         fields: SqlValue,
@@ -844,16 +843,16 @@ statement! {
         version: Option<i64>,
         token: Option<&'a str>,
     } => r#"
-INSERT INTO context_scopes (scope_id, lane, revision, fields, contracts, manifests)
-SELECT :scope_id, :lane,
+INSERT INTO context_scopes (scope_id, partition_key, revision, fields, contracts, manifests)
+SELECT :scope_id, :partition_key,
   CASE WHEN COALESCE((SELECT revision FROM context_scopes WHERE scope_id = :scope_id), 0)
             = :expected_revision
        THEN :revision ELSE NULL END,
   jsonb(:fields), jsonb(:contracts), jsonb(:manifests)
 WHERE :version IS NULL OR EXISTS
-  (SELECT 1 FROM lanes WHERE lane = :lane AND version = :version AND lease_token = :token)
+  (SELECT 1 FROM partitions WHERE partition_key = :partition_key AND version = :version AND lease_token = :token)
 ON CONFLICT(scope_id) DO UPDATE SET
-  revision = CASE WHEN context_scopes.lane = excluded.lane THEN excluded.revision ELSE NULL END,
+  revision = CASE WHEN context_scopes.partition_key = excluded.partition_key THEN excluded.revision ELSE NULL END,
   fields = excluded.fields, contracts = excluded.contracts, manifests = excluded.manifests
 "#
 }
@@ -870,20 +869,19 @@ mod tests {
 
     #[test]
     fn a_row_decodes_and_a_bad_cell_names_its_column() {
-        let mut lane: Row = vec![
+        let mut partition_key: Row = vec![
             "front-desk".into(),
             SqlValue::Int(2),
             SqlValue::Null,
             SqlValue::Null,
             "not an int".into(),
-            SqlValue::Null,
             SqlValue::Int(0),
         ];
         assert!(
-            matches!(LaneRow::from_row(&lane), Err(StorageError::Invalid(m)) if m.starts_with("lease_until"))
+            matches!(PartitionRow::from_row(&partition_key), Err(StorageError::Invalid(m)) if m.starts_with("lease_expires_at_ms"))
         );
-        lane[4] = SqlValue::Int(0);
-        assert_eq!(LaneRow::from_row(&lane).unwrap().lease_until, 0);
+        partition_key[4] = SqlValue::Int(0);
+        assert_eq!(PartitionRow::from_row(&partition_key).unwrap().lease_expires_at_ms, 0);
     }
 
     /// Instructions and config updates are rendered per run, never stored.
@@ -909,7 +907,7 @@ mod tests {
     #[test]
     fn twin_statements_differ_only_where_they_should() {
         let fence = " AND version = :version AND lease_token = :token";
-        let run_not_ended = " AND NOT EXISTS (SELECT 1 FROM events WHERE lane = :lane AND run_id = :run_id AND type = 'run_ended')";
+        let run_not_ended = " AND NOT EXISTS (SELECT 1 FROM events WHERE partition_key = :partition_key AND run_id = :run_id AND type = 'run_ended')";
         for (fenced, unfenced) in [
             (InsertItem::SQL, InsertItemUnfenced::SQL),
             (DeleteItem::SQL, DeleteItemUnfenced::SQL),
@@ -921,8 +919,8 @@ mod tests {
         }
         assert_eq!(
             CommitAndRelease::SQL.replace(
-                "lease_until = 0, lease_token = NULL",
-                "lease_until = unixepoch() + :lease_secs"
+                "lease_expires_at_ms = 0, lease_token = NULL",
+                "lease_expires_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER) + :lease_ms"
             ),
             CommitAndExtend::SQL
         );
@@ -934,10 +932,10 @@ mod tests {
         let one_line = |sql: &str| sql.split_whitespace().collect::<Vec<_>>().join(" ");
         for (sql, columns) in [
             (SelectItems::SQL, ItemRow::SELECT),
-            (SelectLaneEvents::SQL, EventRow::SELECT),
+            (SelectPartitionEvents::SQL, EventRow::SELECT),
             (SelectEvents::SQL, EventRow::SELECT),
-            (SelectLane::SQL, LaneRow::SELECT),
-            (SelectLanes::SQL, LaneRow::SELECT),
+            (SelectPartition::SQL, PartitionRow::SELECT),
+            (SelectPartitions::SQL, PartitionRow::SELECT),
             (SelectTasks::SQL, TaskRow::SELECT),
             (SelectTasksByStatus::SQL, TaskRow::SELECT),
             (SelectTask::SQL, TaskRow::SELECT),
@@ -950,4 +948,33 @@ mod tests {
             assert!(one_line(sql).starts_with(&format!("SELECT {columns} FROM")), "{sql}");
         }
     }
+}
+
+statement! {
+    /// Pending inbox entries with their originally admitted handler destination.
+    SelectRoutedInbox<'a> { partition_key: &'a str } => r#"
+SELECT i.id, i.partition_key, i.task_id, i.message_id, json(i.message), i.received_at_ms, t.endpoint
+FROM inbox i JOIN tasks t ON t.partition_key = i.partition_key AND t.task_id = i.task_id
+WHERE i.partition_key = :partition_key
+  AND i.id > COALESCE((SELECT drained_id FROM partitions WHERE partition_key = :partition_key), 0)
+ORDER BY i.id
+"#
+}
+
+statement! {
+    /// Immutable values referenced by compact routing snapshots, indexed by event_key.
+    SelectSessionItems<'a> { partition_key: &'a str, keys: SqlValue } => r#"
+SELECT event_key, json(payload) FROM events
+WHERE partition_key = :partition_key AND type = 'session_item'
+  AND event_key IN (SELECT value FROM json_each(:keys))
+"#
+}
+
+statement! {
+    /// The checkpoint inserts new immutable history revisions before publishing references.
+    InsertSessionItem<'a> { partition_key: &'a str, version: i64, token: &'a str, key: &'a str, run_id: &'a str, occurred_at_ms: i64, value: SqlValue } => r#"
+INSERT INTO events (partition_key, run_id, occurred_at_ms, type, event_key, payload)
+SELECT :partition_key, :run_id, :occurred_at_ms, 'session_item', :key, jsonb(:value)
+WHERE EXISTS (SELECT 1 FROM partitions WHERE partition_key = :partition_key AND version = :version AND lease_token = :token)
+"#
 }

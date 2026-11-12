@@ -3,7 +3,7 @@
 Run from the repository root against the next package and its built native extension:
 
 ```sh
-PYTHONPATH=livekit-agents-next:. uv run --no-sync pytest tests/conformance --unit
+PYTHONPATH=livekit-agents:. uv run --no-sync pytest tests/conformance --unit
 ```
 
 `cases.json` contains language-neutral input/outcome tables. Non-finite floats and the

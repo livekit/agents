@@ -103,7 +103,7 @@ async fn a_commit_does_not_extend_expiry(backend: Backend) {
     tokio::time::sleep(Duration::from_millis(1100)).await;
     let thread = s.open(&t.thread_id).await.unwrap();
     let mut run = thread
-        .lane("front-desk")
+        .partition("front-desk")
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
         .await
         .unwrap();
@@ -198,15 +198,17 @@ async fn sqlite_delete_and_expiry_invalidate_open_handles() {
             .await
             .unwrap();
         let thread = storage.open(&record.thread_id).await.unwrap();
-        let lane = thread.lane("desk");
-        let mut run =
-            lane.open(RunOptions::new("held", "task"), &crate::Holder::new("test")).await.unwrap();
+        let partition_key = thread.partition("desk");
+        let mut run = partition_key
+            .open(RunOptions::new("held", "task"), &crate::Holder::new("test"))
+            .await
+            .unwrap();
         if expired {
             tokio::time::sleep(Duration::from_millis(2100)).await;
         } else {
             storage.delete_thread(&record.thread_id).await.unwrap();
         }
-        assert!(not_found(lane.history().await));
+        assert!(not_found(partition_key.history().await));
         assert!(not_found(run.commit(CommitOptions::default()).await));
         thread.close().await;
         storage.delete_thread(&record.thread_id).await.unwrap();
@@ -282,7 +284,7 @@ mod process {
         };
         let thread = storage.open(&input("THREAD")).await?;
         let mut run = thread
-            .lane("desk")
+            .partition("desk")
             .open(
                 RunOptions {
                     wait_timeout: Duration::from_secs(8),
@@ -297,7 +299,10 @@ mod process {
                 while !control.join("resume").exists() {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                if !matches!(thread.lane("desk").history().await, Err(StorageError::NotFound(_))) {
+                if !matches!(
+                    thread.partition("desk").history().await,
+                    Err(StorageError::NotFound(_))
+                ) {
                     return Err("a deleted thread remained readable in another process".into());
                 }
                 if !matches!(

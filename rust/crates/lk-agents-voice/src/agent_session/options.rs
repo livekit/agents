@@ -8,8 +8,8 @@ pub use lk_agents_abi::voice::session_options::{
     DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides, Expressive,
     InterruptionGateVerdict, InterruptionMode, RecordingOptions, ResolvedEndpointing,
     ResolvedInterruption, ResolvedPreemptiveGeneration, ResolvedSessionOptions,
-    ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet, TurnDetection,
-    TurnDetectionKwarg, TurnHandlingKwargs, UpdateKwargs,
+    ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TurnDetection, TurnDetectionKwarg,
+    TurnHandlingKwargs, UpdateKwargs,
 };
 use lk_agents_abi::{Maybe, Vocabulary, secs};
 use std::time::Duration;
@@ -138,17 +138,9 @@ option_group!(AgentSessionOptions {} groups(turn, speech, timers));
 pub struct SpeechOptions {
     pub max_tool_steps: Option<u32>,
     pub min_consecutive_speech_delay: Option<Duration>,
-    /// `None` is "if the TTS can", and stays `None` when resolved.
-    pub use_tts_aligned_transcript: Option<bool>,
-    /// `tts_text_transforms`: `None` is "run none".
-    pub tts_text_transforms: Maybe<Option<TextTransformSet>>,
 }
 
-option_group!(SpeechOptions {
-    max_tool_steps: u32,
-    min_consecutive_speech_delay: Duration,
-    tts_text_transforms: Option<TextTransformSet>,
-} optional(use_tts_aligned_transcript));
+option_group!(SpeechOptions { max_tool_steps: u32, min_consecutive_speech_delay: Duration });
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TimerOptions {
@@ -216,8 +208,6 @@ pub const fn defaults(legs: &SessionLegs) -> AgentSessionOptions {
         speech: SpeechOptions {
             max_tool_steps: Some(3),
             min_consecutive_speech_delay: Some(Duration::ZERO),
-            use_tts_aligned_transcript: None,
-            tts_text_transforms: Maybe::Given(Some(TextTransformSet::ALL)),
         },
         timers: TimerOptions {
             user_away: Maybe::Given(Some(Duration::from_millis(15_000))),
@@ -313,8 +303,6 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
     let SessionKwargs {
         turn_handling: _,
         max_tool_steps,
-        use_tts_aligned_transcript,
-        tts_text_transforms,
         min_consecutive_speech_delay,
         expressive: _,
         aec_warmup_duration,
@@ -328,8 +316,6 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
     o.turn.ivr_detection = Some(ivr_detection);
     o.speech.max_tool_steps = Some(count(max_tool_steps));
     o.speech.min_consecutive_speech_delay = Some(secs(min_consecutive_speech_delay));
-    o.speech.use_tts_aligned_transcript = use_tts_aligned_transcript.given();
-    o.speech.tts_text_transforms = tts_text_transforms;
     o.timers.user_away = Maybe::Given(user_away_timeout.map(secs));
     o.timers.transcription_timeout = Maybe::Given(transcription_timeout.map(secs));
     o.timers.aec_warmup = nullable(aec_warmup_duration, secs);
@@ -339,13 +325,8 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
 
 /// What `update_options(..)` or `override_options(..)` says.
 pub fn update_layer(kw: &UpdateKwargs) -> AgentSessionOptions {
-    let UpdateKwargs {
-        turn_handling,
-        expressive: _,
-        keyterms: _,
-        min_consecutive_speech_delay,
-        tts_text_transforms,
-    } = kw.clone();
+    let UpdateKwargs { turn_handling, expressive: _, keyterms: _, min_consecutive_speech_delay } =
+        kw.clone();
     let mut o = turn_handling.as_ref().map(turn_handling_layer).unwrap_or_default();
     // Unlike at construction, a given `None` reverts to automatic selection. A detector object
     // is refused by `running_layer` before a running session reads this.
@@ -353,7 +334,6 @@ pub fn update_layer(kw: &UpdateKwargs) -> AgentSessionOptions {
         o.turn.detection = Maybe::Given(None);
     }
     o.speech.min_consecutive_speech_delay = min_consecutive_speech_delay.map(secs);
-    o.speech.tts_text_transforms = tts_text_transforms;
     o
 }
 
@@ -393,13 +373,7 @@ pub fn resolved_session_options(
                 ivr_detection,
                 push_to_talk,
             },
-        speech:
-            SpeechOptions {
-                max_tool_steps,
-                min_consecutive_speech_delay,
-                use_tts_aligned_transcript,
-                tts_text_transforms,
-            },
+        speech: SpeechOptions { max_tool_steps, min_consecutive_speech_delay },
         timers:
             TimerOptions {
                 user_away,
@@ -448,8 +422,6 @@ pub fn resolved_session_options(
         },
         max_tool_steps: max_tool_steps.resolved(),
         min_consecutive_speech_delay: secs(min_consecutive_speech_delay.resolved()),
-        use_tts_aligned_transcript,
-        tts_text_transforms: tts_text_transforms.resolved().map(TextTransformSet::transforms),
         ivr_detection: ivr_detection.resolved(),
         user_away_timeout: user_away.resolved().map(secs),
         transcription_timeout: transcription_timeout.resolved().map(secs),

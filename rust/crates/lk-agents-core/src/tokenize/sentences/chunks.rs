@@ -2,8 +2,9 @@
 
 use std::ops::Range;
 
-use super::{SentenceOptions, collapse_newlines, is_space, spoken_words};
+use super::{Script, SentenceOptions, collapse_newlines, is_space, script, spoken_words};
 use crate::lexer::{TagSpan, Vocabulary, tag_may_follow, tag_spans};
+use lk_agents_abi::tts::types::TextUnit;
 
 /// A text and what the sentence rules read of it: the text without its tags.
 pub(super) struct View {
@@ -97,7 +98,9 @@ impl Chunker {
         self.held = self.held.map(|held| held - by);
     }
 
-    /// A clause mark breaks a sentence once `clause_words` are said since the last cut.
+    /// A clause mark breaks a sentence once `clause_words` are said since the last cut, and a
+    /// piece no rule cut is cut once it renders past the ceiling. Both read only the characters
+    /// up to the one they decide on, so a stream cuts where the whole text does.
     fn clauses(
         &mut self,
         view: &View,
@@ -105,15 +108,26 @@ impl Chunker {
         until: usize,
         out: &mut Vec<Range<usize>>,
     ) {
-        let Some(words) = opts.clause_words else { return };
+        let ceiling = opts.max_token_len.unwrap_or(MAX_PIECE);
         while self.mark < until {
             let at = self.mark;
             self.mark += 1;
-            if at >= self.cut
+            if at < self.cut {
+                continue;
+            }
+            if opts.unit == TextUnit::Words
+                && at > self.cut
+                && is_space(view.clean[at - 1])
+                && !is_space(view.clean[at])
+            {
+                self.cut_at(at, view, opts, out);
+            } else if let Some(words) = opts.clause_words
                 && is_clause_break(&view.clean, at)
                 && spoken_words(&view.clean[self.cut..=at].iter().collect::<String>()) >= words
             {
                 self.cut_at(at + 1, view, opts, out);
+            } else if over_ceiling(view, opts, self.cut..at + 1, ceiling) {
+                self.cut_at(hard_cut(&view.clean, self.cut, at), view, opts, out);
             }
         }
     }
@@ -155,6 +169,32 @@ impl Chunker {
 fn over(view: &View, opts: &SentenceOptions, span: Range<usize>) -> bool {
     opts.max_token_len
         .is_some_and(|max| view.render(span, opts.retain_format).chars().count() > max)
+}
+
+/// The ceiling of a piece no rule cut when `max_token_len` is unset: about a minute of speech.
+const MAX_PIECE: usize = 1000;
+
+/// Whether the clean span renders past `ceiling` characters (tags and all, as `over` measures).
+fn over_ceiling(view: &View, opts: &SentenceOptions, clean: Range<usize>, ceiling: usize) -> bool {
+    let span = view.to_orig(clean.start)..view.to_orig(clean.end);
+    span.len() > ceiling && view.render(span, opts.retain_format).chars().count() > ceiling
+}
+
+/// Where to cut `text[from..to]`, which fits while `text[from..=to]` does not: after its last
+/// clause mark, else at its last word boundary, else before `to`. A clean position is never
+/// inside a tag.
+fn hard_cut(text: &[char], from: usize, to: usize) -> usize {
+    let cuts = (from + 1..=to).rev();
+    let word = |b: usize| {
+        let (before, after) = (text[b - 1], text[b]);
+        (is_space(before) && !is_space(after))
+            || !matches!(script(before), Script::Spaced)
+            || !matches!(script(after), Script::Spaced)
+    };
+    cuts.clone()
+        .find(|&b| is_clause_break(text, b - 1))
+        .or_else(|| cuts.clone().find(|&b| word(b)))
+        .unwrap_or(to)
 }
 
 /// `,` `;` `:` before a space (not `1,000` or `12:30`), or a fullwidth or ideographic one not

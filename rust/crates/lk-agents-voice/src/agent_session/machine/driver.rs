@@ -54,14 +54,22 @@ pub enum VoiceEvent {
     /// Forwarded from the loop so they share one arrival order.
     RoomIo(crate::room_io::RoomIoEvent),
     Gen(GenEvent),
-    /// The lane storage gave back for a speech, and the request items it was read with.
+    /// The partition storage gave back for a speech, and the request items it was read with.
     StorageReloaded {
         read: Vec<lk_agents_abi::ChatItem>,
         history: Vec<lk_agents_abi::ChatItem>,
     },
     StorageSettled(crate::agent_session::machine::activity::scheduling::SpeechId),
     StorageAbandoned(crate::agent_session::machine::activity::scheduling::SpeechId),
+    StorageCheckpointed {
+        checkpoint: u64,
+        result: Result<(), lk_agents_abi::storage::StorageError>,
+    },
     StorageLost(crate::agent_session::machine::activity::scheduling::SpeechId),
+    StorageFailed {
+        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
+        error: lk_agents_abi::storage::StorageError,
+    },
     Realtime(crate::agent_session::machine::activity::realtime::RealtimeWake),
     Eot(
         lk_agents_abi::turn::detector::ReqId,
@@ -358,9 +366,15 @@ impl VoiceDriver {
             Some(VoiceEvent::StorageReloaded { read, history }) => {
                 self.storage_reloaded(read, history)
             }
+            Some(VoiceEvent::StorageCheckpointed { checkpoint, result }) => {
+                self.storage_checkpointed(now, checkpoint, result)
+            }
             Some(VoiceEvent::StorageSettled(speech)) => self.storage_settled(now, speech),
             Some(VoiceEvent::StorageAbandoned(speech)) => self.storage_abandoned(now, speech),
-            Some(VoiceEvent::StorageLost(speech)) => self.storage_lost(speech),
+            Some(VoiceEvent::StorageLost(speech)) => self.storage_lost(now, speech),
+            Some(VoiceEvent::StorageFailed { speech, error }) => {
+                self.storage_failed(now, speech, error)
+            }
             Some(VoiceEvent::Realtime(ev)) => self.on_realtime(now, ev),
             Some(VoiceEvent::Eot(req, p, thresholds)) => {
                 let (observations, effects) = self.activity.on_eot(now, req, p, thresholds);
@@ -470,6 +484,15 @@ impl VoiceDriver {
                     counted: false,
                 });
             }
+            Command::AvatarError(error) => {
+                let ev = crate::events::ErrorEvent::provider(
+                    crate::events::ErrorSource::Avatar,
+                    true,
+                    error,
+                    None,
+                );
+                self.publish_event(crate::events::SessionEvent::Error(Box::new(ev)));
+            }
             Command::DelegateUsage(usage) => self.session.usage.add(&usage),
             Command::SetStaticKeyterms(terms) => {
                 self.keyterms_step(now, crate::keyterm_detection::KeytermIn::StaticTerms(terms));
@@ -537,10 +560,11 @@ impl VoiceDriver {
                     self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Debounced)
                 }
                 Timer::EndCallReply => self.end_call_reply_timed_out(now),
+                Timer::OutputSettlement(binding) => self.output_settlement_overdue(now, binding),
                 // A realtime request the server never answered: the machine settles it.
                 Timer::RealtimeRequest(key) => self.realtime_request_timed_out(key),
                 Timer::Filler(id) => self.on_filler_timer(now, id),
-                Timer::LaneRelease(speech) => self.lane_release_due(speech),
+                Timer::PartitionRelease(speech) => self.partition_release_due(speech),
                 Timer::EotPredictionTimeout
                 | Timer::EndpointingDelay
                 | Timer::TranscriptionTimeout

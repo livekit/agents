@@ -7,7 +7,7 @@ use crate::AudioFrame;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, lk_agents_host_derive::Vocabulary)]
 #[crate::host(record(
     module = "vad",
-    path = "livekit.agents",
+    path = "livekit.agents.vad",
     name = "VADEventType",
     enum,
     extract,
@@ -33,7 +33,7 @@ pub enum VadEventType {
 // Read by hand (`conversions::vad_event_from_py`): `frames` is read only for an end of speech.
 #[crate::host(record(
     module = "vad",
-    path = "livekit.agents",
+    path = "livekit.agents.vad",
     name = "VADEvent",
     dataclass,
     boundary,

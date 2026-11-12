@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "livekit-agents-next>=1.8.6",
+    "livekit-agents>=1.8.6",
     "speechmatics-agent-stt~=0.1.0",
 ]
 
@@ -43,4 +43,4 @@ include = ["/livekit"]
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = { livekit-agents-next = "0 days" }
+exclude-newer-package = { livekit-agents = "0 days" }

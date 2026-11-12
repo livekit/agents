@@ -56,7 +56,7 @@ impl ChatContextDict for ChatDict {
             exclude_metrics,
             exclude_config_update,
         };
-        let strip = crate::tts::markup::strip_expr_markup;
+        let strip = crate::markup::strip_expr_markup;
         let host = ToDictHost {
             strip_expr_markup: strip_markup.then_some(&strip as &dyn Fn(&str) -> String),
             ..Default::default()

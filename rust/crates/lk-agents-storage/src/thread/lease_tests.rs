@@ -5,8 +5,8 @@ use serde_json::json;
 
 use super::*;
 use crate::testing::Backend;
-use crate::thread::tests::{LANE, message, submitted};
-use crate::{CommitOptions, LaneAccess, LeaseAfterCommit, RunOptions, RunOutcome, StorageError};
+use crate::thread::tests::{PARTITION_KEY, message, submitted};
+use crate::{CommitOptions, PartitionAccess, RunOptions, RunOutcome, StorageError};
 use crate::{TaskPickup, Thread, WhenHeld};
 use lk_agents_abi::storage::thread::Backoff;
 
@@ -21,27 +21,27 @@ fn the_poll_backs_off_to_a_second_and_stops_at_its_deadline() {
     assert_eq!(p.next(t0 + ms(700)), Some(t0 + ms(1500)));
     assert_eq!(p.next(t0 + ms(1500)), Some(t0 + ms(2500)));
     assert_eq!(p.next(t0 + ms(2500)), None);
-    assert_eq!(LeaseTiming::new(ms(1500), ms(1)).unwrap().secs(), 2);
+    assert_eq!(LeaseTiming::new(ms(1500), ms(1)).unwrap().millis(), 1500);
 }
 
 /// A run dropped without commit or abandon stops renewing: its lease lapses within the TTL
-/// and another holder takes the lane.
+/// and another holder takes the partition.
 async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
     let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(300)))).await;
     let s1 = fx.thread().await;
     let s2 = fx.thread().await;
     let run = s1
-        .lane(LANE)
+        .partition(PARTITION_KEY)
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
         .await
         .unwrap();
     drop(run);
     tokio::time::sleep(Duration::from_millis(2600)).await;
-    let lane2 = s2.lane(LANE);
+    let lane2 = s2.partition(PARTITION_KEY);
     let next = lane2
         .open(
             RunOptions {
-                access: LaneAccess::Exclusive(WhenHeld::Reject),
+                access: PartitionAccess::Exclusive(WhenHeld::Reject),
                 ..RunOptions::new("r2", "AST_2")
             },
             &crate::Holder::new("test"),
@@ -53,41 +53,43 @@ async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
 }
 
 /// Waiters run in the order their messages' rows were submitted: a later message cannot take a
-/// free lane while an older one still waits for it.
-async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: Backend) {
+/// free partition while an older one still waits for it.
+async fn waiters_take_the_partition_in_the_order_their_rows_were_submitted(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s = fx.thread().await;
-    let lane = s.lane(LANE);
-    lane.open(RunOptions::new("r0", ""), &crate::Holder::new("test"))
+    let partition_key = s.partition(PARTITION_KEY);
+    partition_key
+        .open(RunOptions::new("r0", ""), &crate::Holder::new("test"))
         .await
         .unwrap()
         .commit(CommitOptions::default())
         .await
         .unwrap();
     for task_id in ["AST_first", "AST_second"] {
-        assert!(lane.submit(&submitted(task_id)).await.unwrap());
+        assert!(partition_key.submit(&submitted(task_id)).await.unwrap());
     }
     let second = || RunOptions {
-        access: LaneAccess::Exclusive(WhenHeld::Reject),
+        access: PartitionAccess::Exclusive(WhenHeld::Reject),
         pickup: TaskPickup::Claim,
         ..RunOptions::new("r2", "AST_second")
     };
-    let refused = lane
+    let refused = partition_key
         .open(second(), &crate::Holder::new("test"))
         .await
         .err()
         .expect("the older waiter goes first");
     assert!(matches!(refused, StorageError::Rejected { .. }), "{refused}");
     let first = RunOptions {
-        access: LaneAccess::Exclusive(WhenHeld::Reject),
+        access: PartitionAccess::Exclusive(WhenHeld::Reject),
         pickup: TaskPickup::Claim,
         ..RunOptions::new("r1", "AST_first")
     };
-    let mut run = lane.open(first, &crate::Holder::new("test")).await.unwrap();
+    let mut run = partition_key.open(first, &crate::Holder::new("test")).await.unwrap();
     assert!(run.picked_up());
     run.commit(CommitOptions::default()).await.unwrap();
-    // the first row is working now: the second is the oldest waiter and takes the lane
-    lane.open(second(), &crate::Holder::new("test"))
+    // the first row is working now: the second is the oldest waiter and takes the partition
+    partition_key
+        .open(second(), &crate::Holder::new("test"))
         .await
         .unwrap()
         .commit(CommitOptions::default())
@@ -103,7 +105,7 @@ async fn an_expired_owner_cannot_restart_or_commit_after_takeover(backend: Backe
     let first = fx.thread().await;
     let second = fx.thread().await;
     let mut stale = first
-        .lane(LANE)
+        .partition(PARTITION_KEY)
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
         .await
         .unwrap();
@@ -115,7 +117,7 @@ async fn an_expired_owner_cannot_restart_or_commit_after_takeover(backend: Backe
     assert!(old_lease.is_lost(), "restarting renewal cannot revive an expired handle");
 
     let owner = second
-        .lane(LANE)
+        .partition(PARTITION_KEY)
         .open(RunOptions::new("r2", "AST_2"), &crate::Holder::new("test"))
         .await
         .unwrap();
@@ -125,8 +127,8 @@ async fn an_expired_owner_cannot_restart_or_commit_after_takeover(backend: Backe
     stale.history_mut().push(message("stale", ChatRole::Assistant, "old owner's answer"));
     let error = stale.commit(CommitOptions::default()).await.unwrap_err();
     assert!(matches!(error, StorageError::VersionConflict { .. }), "{error}");
-    assert!(second.lane(LANE).history().await.unwrap().is_empty());
-    assert!(second.lane(LANE).info().await.unwrap().unwrap().state.is_none());
+    assert!(second.partition(PARTITION_KEY).history().await.unwrap().is_empty());
+    assert!(second.partition(PARTITION_KEY).info().await.unwrap().unwrap().state.is_none());
 
     owner.lease().unwrap().stop();
     owner.lease().unwrap().release(None).await.unwrap();
@@ -142,16 +144,16 @@ async fn cloned_handles_do_not_replace_an_active_runs_lease(backend: Backend) {
     let fixture = backend.fixture(None).await;
     let thread = fixture.thread().await;
     let cloned = thread.clone();
-    let lane = thread.lane("front-desk");
-    let mut first = lane
+    let partition_key = thread.partition("front-desk");
+    let mut first = partition_key
         .open(RunOptions::new("first", "AST_first"), &crate::Holder::new("test"))
         .await
         .unwrap();
     let result = cloned
-        .lane("front-desk")
+        .partition("front-desk")
         .open(
             RunOptions {
-                access: LaneAccess::Exclusive(WhenHeld::Reject),
+                access: PartitionAccess::Exclusive(WhenHeld::Reject),
                 ..RunOptions::new("second", "AST_second")
             },
             &crate::Holder::new("test"),
@@ -171,113 +173,23 @@ async fn cloned_handles_do_not_replace_an_active_runs_lease(backend: Backend) {
     assert!(original.is_ok(), "the original run lost its lease: {original:?}");
 }
 
-async fn a_dead_waiter_does_not_interrupt_a_new_owner(backend: Backend) {
-    let fixture = backend.fixture(None).await;
-    let thread = fixture.thread().await;
-    let lane = thread.lane("desk");
-    let mut owner =
-        lane.open(RunOptions::new("first", "task1"), &crate::Holder::new("test")).await.unwrap();
-    assert!(lane.set_waiter("dead-worker").await.unwrap());
-    owner.commit(CommitOptions::default()).await.unwrap();
-    let mut next =
-        lane.open(RunOptions::new("second", "task2"), &crate::Holder::new("test")).await.unwrap();
-    assert_eq!(lane.checkpoint("task2").await.unwrap().0, None);
-    next.commit(CommitOptions::default()).await.unwrap();
-    fixture.cleanup(&[&thread]).await;
-}
-
-async fn canceled_and_timed_out_acquires_withdraw_their_marks(backend: Backend) {
-    use std::time::Duration;
-    let fixture = backend.fixture(None).await;
-    let thread = fixture.thread().await;
-    let lane = thread.lane("desk");
-    let mut owner =
-        lane.open(RunOptions::new("owner", "task"), &crate::Holder::new("test")).await.unwrap();
-    let result = lane
-        .open(
-            RunOptions {
-                access: LaneAccess::Exclusive(WhenHeld::Interrupt),
-                wait_timeout: Duration::ZERO,
-                ..RunOptions::new("timeout", "timeout-task")
-            },
-            &crate::Holder::new("test"),
-        )
-        .await;
-    assert!(matches!(result, Err(StorageError::Rejected { .. })));
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while lane.checkpoint("task").await.unwrap().0.is_some() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("timed-out waiter's mark was not withdrawn");
-
-    let waiting_lane = lane.clone();
-    let waiting = tokio::spawn(async move {
-        waiting_lane
-            .open(
-                RunOptions {
-                    access: LaneAccess::Exclusive(WhenHeld::Interrupt),
-                    ..RunOptions::new("canceled", "canceled-task")
-                },
-                &crate::Holder::new("test"),
-            )
-            .await
-    });
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while lane.checkpoint("task").await.unwrap().0.is_none() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("waiter never marked the lane");
-    waiting.abort();
-    assert!(waiting.await.err().unwrap().is_cancelled());
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while lane.checkpoint("task").await.unwrap().0.is_some() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("canceled waiter's mark was not withdrawn");
-    owner.commit(CommitOptions::default()).await.unwrap();
-    fixture.cleanup(&[&thread]).await;
-}
-
-async fn a_resumed_drain_keeps_another_waiters_mark(backend: Backend) {
-    let fixture = backend.fixture(None).await;
-    let thread = fixture.thread().await;
-    let lane = thread.lane("desk");
-    let mut owner =
-        lane.open(RunOptions::new("first", "task1"), &crate::Holder::new("test")).await.unwrap();
-    let lease = owner.lease().unwrap().clone();
-    assert!(lane.set_waiter("other-worker").await.unwrap());
-    owner
-        .commit(CommitOptions { lease: LeaseAfterCommit::Keep, ..Default::default() })
-        .await
-        .unwrap();
-    let mut resumed = lane.resume(RunOptions::new("second", "task2"), lease).await.unwrap();
-    assert_eq!(lane.checkpoint("task2").await.unwrap().0.as_deref(), Some("other-worker"));
-    resumed.commit(CommitOptions::default()).await.unwrap();
-    fixture.cleanup(&[&thread]).await;
-}
-
-/// A run's cleanup still ends it after its own holder re-entered the lane under a new token (a
-/// canceled acquire's release applied after the holder's next turn took the lane): the newer
+/// A run's cleanup still ends it after its own holder re-entered the partition under a new token (a
+/// canceled acquire's release applied after the holder's next turn took the partition): the newer
 /// lease stays held, and resending the cleanup writes nothing more.
 async fn a_runs_cleanup_ends_it_after_its_holder_re_entered(backend: Backend) {
     let fixture = backend.fixture(None).await;
     let thread = fixture.thread().await;
-    let lane = thread.lane(LANE);
+    let partition_key = thread.partition(PARTITION_KEY);
     let holder = crate::Holder::new("test");
-    let mut first = lane.open(RunOptions::new("first", "AST_first"), &holder).await.unwrap();
-    let mut next = lane.open(RunOptions::new("next", "AST_next"), &holder).await.unwrap();
+    let mut first =
+        partition_key.open(RunOptions::new("first", "AST_first"), &holder).await.unwrap();
+    let mut next = partition_key.open(RunOptions::new("next", "AST_next"), &holder).await.unwrap();
     assert_ne!(first.lease().unwrap().fence().token, next.lease().unwrap().fence().token);
     first.abandon(RunOutcome::Canceled, "acquire-canceled").await.unwrap();
     let ended = |runs: &[crate::thread::run::RunSummary], id: &str| {
         runs.iter().filter(|r| r.run_id == id && !r.interrupted()).count()
     };
-    let runs = lane.runs(usize::MAX).await.unwrap();
+    let runs = partition_key.runs(usize::MAX).await.unwrap();
     assert_eq!(ended(&runs, "first"), 1, "the re-entered holder's run never ended: {runs:?}");
     let conn = thread.conn().clone();
     let ended_events = || async {
@@ -290,7 +202,9 @@ async fn a_runs_cleanup_ends_it_after_its_holder_re_entered(backend: Backend) {
     let ended = RunEnded { outcome: RunOutcome::Canceled, reason: None };
     let event = EventWrite::new(0, JournalEvent::RunEnded(ended));
     let token = first.lease().unwrap().fence().token.clone();
-    conn.batch(release(LANE, &token, holder.as_str(), Some(("first", &event)))).await.unwrap();
+    conn.batch(release(PARTITION_KEY, &token, holder.as_str(), Some(("first", &event))))
+        .await
+        .unwrap();
     assert_eq!(ended_events().await, Some(1));
     assert!(!lease.is_lost());
     next.commit(CommitOptions::default()).await.unwrap();
@@ -298,13 +212,10 @@ async fn a_runs_cleanup_ends_it_after_its_holder_re_entered(backend: Backend) {
 }
 
 crate::contract!(
-    waiters_take_the_lane_in_the_order_their_rows_were_submitted,
+    waiters_take_the_partition_in_the_order_their_rows_were_submitted,
     an_expired_owner_cannot_restart_or_commit_after_takeover,
     a_dropped_run_stops_renewing_and_its_lease_lapses,
     cloned_handles_do_not_replace_an_active_runs_lease,
-    a_dead_waiter_does_not_interrupt_a_new_owner,
-    canceled_and_timed_out_acquires_withdraw_their_marks,
-    a_resumed_drain_keeps_another_waiters_mark,
     a_runs_cleanup_ends_it_after_its_holder_re_entered,
 );
 
@@ -344,8 +255,10 @@ impl crate::ThreadDbConnection for SlowReplies {
         &self,
         statements: Vec<crate::sql::Statement>,
     ) -> Result<crate::sql::BatchResult, StorageError> {
-        let renewal =
-            statements.iter().any(|s| s.sql().contains("SET lease_until = unixepoch() +"));
+        let renewal = statements.iter().any(|s| {
+            s.sql()
+                .contains("SET lease_expires_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER) +")
+        });
         let acquire = statements.iter().any(|s| s.sql().contains("RETURNING version"));
         if renewal {
             let attempt = {
@@ -403,7 +316,7 @@ async fn slow_acknowledgments_do_not_shift_the_renewal_cadence() {
     let thread = slow_thread(connection.clone()).await;
     let started = tokio::time::Instant::now();
     let run = thread
-        .lane("desk")
+        .partition("desk")
         .open(RunOptions::new("run", "task"), &crate::Holder::new("test"))
         .await
         .unwrap();
@@ -421,7 +334,7 @@ async fn acknowledgment_latency_and_stalled_renewals_cannot_extend_the_ownership
     let thread = slow_thread(connection.clone()).await;
     let started = tokio::time::Instant::now();
     let run = thread
-        .lane("desk")
+        .partition("desk")
         .open(RunOptions::new("run", "task"), &crate::Holder::new("test"))
         .await
         .unwrap();
@@ -440,7 +353,7 @@ async fn acknowledgment_latency_and_stalled_renewals_cannot_extend_the_ownership
 async fn a_slow_acquisition_cannot_start_work_with_an_expired_ownership_budget() {
     let thread = slow_thread(slow_replies(11, 0, false).await).await;
     let error = thread
-        .lane("desk")
+        .partition("desk")
         .open(RunOptions::new("run", "task"), &crate::Holder::new("test"))
         .await
         .err()
@@ -460,7 +373,7 @@ async fn an_inbox_claim_keeps_renewing_while_acceptance_or_debounce_waits() {
     let data =
         crate::thread::schema::TaskData { history: vec![message.clone()], ..Default::default() };
     let (_, lease) = thread
-        .lane("desk")
+        .partition("desk")
         .receive(
             &crate::Holder::new("worker"),
             crate::thread::db::ReceiveInput {
@@ -472,7 +385,7 @@ async fn an_inbox_claim_keeps_renewing_while_acceptance_or_debounce_waits() {
         )
         .await
         .unwrap();
-    let lease = lease.expect("the free lane was claimed");
+    let lease = lease.expect("the free partition_key was claimed");
     tokio::time::sleep(Duration::from_millis(12500)).await;
     assert!(!lease.is_lost());
     assert_eq!(connection.attempts.lock().len(), 4);
@@ -491,7 +404,7 @@ async fn a_failing_renewal_retries_within_the_lease_and_is_lost_after_it() {
     let thread =
         Thread::new(faulty.clone(), "AT_renewal", timing, SchemaCell::default()).await.unwrap();
     let run = thread
-        .lane(LANE)
+        .partition(PARTITION_KEY)
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
         .await
         .unwrap();

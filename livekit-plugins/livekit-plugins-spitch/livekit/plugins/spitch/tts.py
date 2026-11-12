@@ -7,7 +7,6 @@ import httpx  # spitch requires httpx<1 and isinstance-checks this Timeout
 
 import spitch
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
@@ -48,15 +47,12 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Spitch"
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             opts=self._opts,
             client=self._client,

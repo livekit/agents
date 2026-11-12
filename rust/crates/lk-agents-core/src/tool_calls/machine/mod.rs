@@ -449,6 +449,36 @@ impl ToolCalls {
         self.calls.iter().all(|c| matches!(c.phase, Phase::Settled(_)))
     }
 
+    /// Only admitted calls may have an external effect. Preserve running calls without
+    /// inventing a result, so recovery can refuse to replay an unknown outcome.
+    pub(crate) fn checkpoint_items(
+        &self,
+        mode: tool_outcome::Mode,
+        created_at: std::time::SystemTime,
+    ) -> Vec<ChatItem> {
+        let mut items = Vec::new();
+        for call in &self.calls {
+            if !matches!(call.phase, Phase::Running { .. } | Phase::Settled(_)) {
+                continue;
+            }
+            items.push(ChatItem::FunctionCall(call.item.clone()));
+            if let Phase::Settled(settled) = &call.phase {
+                let shape = tool_outcome::shape(&settled.outcome, mode);
+                let mut output = lk_agents_abi::FunctionCallOutput::new(
+                    format!("{}_out", call.item.id),
+                    &call.item.call_id,
+                    shape.text,
+                    shape.is_error,
+                    created_at,
+                );
+                output.name = call.item.name.clone();
+                output.reply_required = shape.reply_required;
+                items.push(ChatItem::FunctionCallOutput(output));
+            }
+        }
+        items
+    }
+
     pub(crate) fn has_terminal_outcome(&self) -> bool {
         self.calls.iter().any(|call| {
             matches!(&call.phase,

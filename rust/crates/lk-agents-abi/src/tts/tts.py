@@ -19,14 +19,24 @@ from .. import _bindings, _core
 from .._bindings import APIError
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
     APIConnectOptions,
+    NotGivenOr,
 )
-from ..utils import aio, shortuuid
+from ..utils import aio, is_given, shortuuid
 from .chat_items import MetricsMetadata
 from .expressive import SpeechSteeringOptions
-from .tts import MarkupInfo, SegmentCount, SynthesizedAudio, TTSCapabilities, TTSError
+from .tts import (
+    MarkupInfo,
+    SegmentCount,
+    SpeechChunk,
+    SynthesizedAudio,
+    TTSCapabilities,
+    TTSError,
+    TTSOptions,
+)
 from .types import ProviderId
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
@@ -39,8 +49,10 @@ class TTS(
 ):
     """A text-to-speech provider.
 
-    Plugins implement ``synthesize()`` for one-shot synthesis, and override ``stream()`` when the
-    service synthesizes text as it arrives.
+    ``synthesize()`` and ``stream()`` are the framework's: the text goes through its stage (split,
+    paced, lowered to the provider's markup) and each attempt is retried. Plugins implement one
+    provider attempt: ``_synthesize()``, and ``_stream()`` when the service synthesizes text as it
+    arrives.
     """
 
     def __init__(
@@ -52,6 +64,7 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._markup = self.Markup(self)
+        self._options = TTSOptions(pacing=_core.default_tts_pacing(capabilities))
 
     def _core_leg(self) -> object:
         """The Python provider implementation used by the native runtime's declared proxy."""
@@ -123,49 +136,65 @@ class TTS(
             """The instructions teaching the LLM this voice's markup, ``None`` without markup."""
             return self._core().llm_instructions(speech_steering=speech_steering)
 
-        def normalize(self, text: str) -> str:
-            """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
-            return self._core().normalize(text)
-
-        def convert(self, text: str) -> str:
-            """Lower the framework's markup to the provider's native syntax."""
-            return self._core().convert(text)
-
     @property
     def markup(self) -> Markup:
         """Access TTS markup capabilities (instructions for LLM, text stripping)."""
         return self._markup
 
-    @abstractmethod
+    @property
+    def options(self) -> TTSOptions:
+        """How the framework prepares this TTS's text: its sentence tokenizer and pacing."""
+        return self._options
+
+    @options.setter
+    def options(self, value: TTSOptions) -> None:
+        self._options = value
+
     def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, text: str, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
     ) -> ChunkedStream:
         """Synthesize ``text``, its attempts retried per ``conn_options``.
 
         Args:
             text: What to say.
-            conn_options: The timeout and retries of the request.
+            conn_options: The timeout and retries of the request; the TTS's own by default.
         """
+        return _Synthesis(tts=self, input_text=text, conn_options=self._conn(conn_options))
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
-        """Open a stream synthesizing text as it is pushed. Providers with the ``streaming``
-        capability override it; any other is wrapped in a ``StreamAdapter``.
+    def stream(self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN) -> SynthesizeStream:
+        """Open a stream synthesizing text as it is pushed. A TTS without the ``streaming``
+        capability needs a ``StreamAdapter``.
 
         Args:
-            conn_options: The timeout and retries of the connection.
+            conn_options: The timeout and retries of the connection; the TTS's own by default.
         """
+        return _Synthesizing(tts=self, conn_options=self._conn(conn_options))
+
+    def _conn(self, given: NotGivenOr[APIConnectOptions]) -> APIConnectOptions:
+        if is_given(given):
+            return given
+        return self._core_conn_options() or DEFAULT_API_CONNECT_OPTIONS
+
+    def _synthesize(self, chunk: SpeechChunk, *, conn_options: APIConnectOptions) -> ChunkedStream:
+        """One provider attempt at a whole text: ``chunk.text`` in the provider's syntax,
+        ``chunk.said`` the words it says. The framework retries it. Every plugin implements it;
+        a TTS the core runs natively has none."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement _synthesize")
+
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
+        """One provider attempt at a stream: its ``input`` yields each ``SpeechChunk`` the
+        framework prepared, a ``Flush`` at each segment's end. Providers with the ``streaming``
+        capability override it."""
         raise NotImplementedError(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"  # noqa: E501
         )
 
     def _synthesize_with_stream(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, chunk: SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
-        """``synthesize()`` for a provider that only streams: one push, then the end of
+        """``_synthesize()`` for a provider that only streams: one chunk, then the end of
         input."""
-        return _ChunkedStreamFromStream(tts=self, input_text=text, conn_options=conn_options)
+        return _ChunkedStreamFromStream(tts=self, chunk=chunk, conn_options=conn_options)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self.emit(
@@ -216,8 +245,20 @@ class TTS(
     def _core_markup_provider(self) -> str:
         return self.markup._provider_key()
 
-    def _core_lowers_markup(self) -> bool:
+    def _core_text_unit(self) -> str:
+        return "sentences"
+
+    def _core_max_text_len(self) -> int | None:
+        return None
+
+    def _core_retries_itself(self) -> bool:
         return False
+
+    def _core_options(self) -> TTSOptions:
+        # the built-in tokenizer is split by natively, a custom one through the host
+        return replace(
+            self._options, sentence_tokenizer=_bindings.core_leg(self._options.sentence_tokenizer)
+        )
 
     def _core_conn_options(self) -> APIConnectOptions | None:
         return None
@@ -226,18 +267,17 @@ class TTS(
         self._emit_error(error, recoverable)
 
     async def _core_synthesize(
-        self, text: str, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, chunk: SpeechChunk, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        out = self.synthesize(text, conn_options=conn)
+        out = self._synthesize(chunk, conn_options=conn)
         out._core_attempts.core = True
         return out
 
     async def _core_stream(
-        self, _expressive: bool, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        out = self.stream(conn_options=conn)
+        out = self._stream(conn_options=conn)
         out._core_attempts.core = True
-        out._expressive = _expressive
         return out
 
 
@@ -327,6 +367,9 @@ class ChunkedStream(ABC):
             await output_emitter.join()
             if problem := self._invalid(output_emitter):
                 raise APIError(problem)
+        except Exception:
+            await _deliver_pushed(output_emitter)
+            raise
         finally:
             await output_emitter.aclose()
 
@@ -344,6 +387,9 @@ class ChunkedStream(ABC):
         """Close is automatically called if the stream is completely collected"""
         await aio.cancel_and_wait(self._synthesize_task)
         self._event_ch.close()
+        # The reader is done with the stream: what was buffered for it is dropped, not returned.
+        while not self._event_ch.empty():
+            self._event_ch.recv_nowait()
 
     async def __anext__(self) -> SynthesizedAudio:
         try:
@@ -385,8 +431,9 @@ class ChunkedStream(ABC):
 class SynthesizeStream(ABC):
     """A live synthesis: text in through ``push_text``, ``SynthesizedAudio`` out.
 
-    Plugins implement ``_run``, reading ``input`` and pushing the provider's audio into the
-    ``AudioEmitter`` it is given; its attempts are retried per ``conn_options``.
+    Plugins implement ``_run`` for one provider attempt, reading ``input`` (each ``SpeechChunk``
+    the framework prepared, a ``Flush`` at each segment's end) and pushing the provider's audio
+    into the ``AudioEmitter`` it is given.
     """
 
     class Flush:
@@ -396,13 +443,15 @@ class SynthesizeStream(ABC):
         super().__init__()
         self._tts = tts
         self._conn_options = conn_options
-        self.input = aio.Chan[str | SynthesizeStream.Flush]()
-        """The text ``_run`` reads, a ``Flush`` at the end of each segment; a retry reads it
+        self.input = aio.Chan[SpeechChunk | SynthesizeStream.Flush]()
+        """The chunks ``_run`` reads, a ``Flush`` at the end of each segment; a retry reads them
         again from the start."""
-        self._input_log: list[str | SynthesizeStream.Flush] = []
+        self._input_log: list[SpeechChunk | SynthesizeStream.Flush] = []
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._emitter: _core.AudioEmitter | None = None
-        self._metrics = _core.TtsMetricState(True, tts.label, tts.model, tts.provider)
+        self._metrics: _core.TtsMetricState | None = _core.TtsMetricState(
+            True, tts.label, tts.model, tts.provider
+        )
         self._segment_text = ""
         self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
             "tts_stream", _attempted(self, conn_options), self
@@ -413,8 +462,6 @@ class SynthesizeStream(ABC):
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._started_time: float = 0
         self._pushed_text: str = ""
-        # whether this synthesis carries expressive markup; the framework sets it at open
-        self._expressive: bool = False
         self._segment_open = False
         self._num_segments = 0
 
@@ -476,6 +523,9 @@ class SynthesizeStream(ABC):
             await output_emitter.join()
             if problem := self._invalid(output_emitter):
                 raise APIError(problem)
+        except Exception:
+            await _deliver_pushed(output_emitter)
+            raise
         finally:
             await output_emitter.aclose()
 
@@ -484,7 +534,7 @@ class SynthesizeStream(ABC):
 
     def _replay(self) -> None:
         ended = self.input.closed
-        self.input = aio.Chan[str | SynthesizeStream.Flush]()
+        self.input = aio.Chan[SpeechChunk | SynthesizeStream.Flush]()
         for item in self._input_log:
             self.input.send_nowait(item)
         if ended:
@@ -504,22 +554,25 @@ class SynthesizeStream(ABC):
 
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
-        if not token or self.input.closed:
+        raise RuntimeError("push text to the stream tts.stream() returns")
+
+    def _push_chunk(self, chunk: SpeechChunk) -> None:
+        if not chunk.text or self.input.closed:
             return
         if not self._segment_open:
             self._segment_open = True
             self._num_segments += 1
-        self._pushed_text += token
-        self._segment_text += token
-        self._input_log.append(token)
-        self.input.send_nowait(token)
+        self._pushed_text += chunk.said
+        self._segment_text += chunk.text
+        self._input_log.append(chunk)
+        self.input.send_nowait(chunk)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
         if self.input.closed:
             return
         self._segment_open = False
-        if self._segment_text:
+        if self._segment_text and self._metrics is not None:
             self._metrics.queue_text(self._segment_text)
             self._segment_text = ""
         self._input_log.append(self.Flush())
@@ -531,9 +584,12 @@ class SynthesizeStream(ABC):
         self.input.close()
 
     async def aclose(self) -> None:
-        """Close ths stream immediately"""
+        """Close the stream immediately"""
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
+        # The reader is done with the stream: what was buffered for it is dropped, not returned.
+        while not self._event_ch.empty():
+            self._event_ch.recv_nowait()
         self.input.close()
 
     async def __anext__(self) -> SynthesizedAudio:
@@ -546,7 +602,9 @@ class SynthesizeStream(ABC):
         if self._started_time:
             val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
         # a segment's last frame closes its metrics; the next segment is timed from its own start
-        if self._metrics.observe(time.perf_counter(), self._started_time, val):
+        if self._metrics is not None and self._metrics.observe(
+            time.perf_counter(), self._started_time, val
+        ):
             record = self._metrics.finish(
                 time.perf_counter(),
                 self._started_time,
@@ -572,8 +630,8 @@ class SynthesizeStream(ABC):
     ) -> None:
         await self.aclose()
 
-    def _core_push(self, token: str) -> None:
-        self.push_text(token)
+    def _core_push(self, chunk: SpeechChunk) -> None:
+        self._push_chunk(chunk)
 
     def _core_flush(self) -> None:
         if not self.input.closed:
@@ -584,8 +642,88 @@ class SynthesizeStream(ABC):
             self.end_input()
 
 
+def _attempts_report_metrics(tts: TTS) -> bool:
+    """Whether the provider's own attempts report the metrics: a host plugin's do, a TTS the core
+    runs natively has none, so its request reports them."""
+    return _bindings.core_leg(tts) is tts
+
+
+class _Synthesis(ChunkedStream):
+    """``tts.synthesize()``: the framework's request over the TTS, which prepares the text and
+    retries the provider's attempts."""
+
+    _core_native_retries = True
+
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        if _attempts_report_metrics(tts):
+            self._metrics = None
+
+    async def _core_open(self) -> _core.TtsStream:
+        leg = _bindings.core_leg(self._tts)
+        return _core.TtsStream(tts=leg, text=self._input_text, conn_options=self._conn_options)
+
+    async def _run(self, output_emitter: _core.AudioEmitter) -> None:
+        await self._core_run_native(output_emitter)
+
+
+class _Synthesizing(SynthesizeStream):
+    """``tts.stream()``: the framework's request over the TTS; what is pushed goes to its stage,
+    which prepares each chunk for the provider."""
+
+    _core_native_retries = True
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        leg = _bindings.core_leg(tts)
+        self._native = _core.TtsStream(tts=leg, conn_options=conn_options)
+        super().__init__(tts=tts, conn_options=conn_options)
+        if leg is tts:
+            self._metrics = None
+
+    def push_text(self, token: str) -> None:
+        if not token or self.input.closed:
+            return
+        if not self._segment_open:
+            self._segment_open = True
+            self._num_segments += 1
+        self._pushed_text += token
+        self._segment_text += token
+        self.mark_started()
+        self._native.push_text(token)
+
+    def flush(self) -> None:
+        if self.input.closed:
+            return
+        self._segment_open = False
+        if self._segment_text and self._metrics is not None:
+            self._metrics.queue_text(self._segment_text)
+            self._segment_text = ""
+        self._native.flush()
+
+    def end_input(self) -> None:
+        if self.input.closed:
+            return
+        self.flush()
+        self.input.close()
+        self._native.end_input()
+
+    async def _core_open(self) -> _core.TtsStream:
+        return self._native
+
+    async def _run(self, output_emitter: _core.AudioEmitter) -> None:
+        _initialize(output_emitter, self._tts, stream=True)
+        try:
+            await self._native.drain_into(output_emitter, stream=True)
+        finally:
+            await self._native.aclose()
+
+
 class _ChunkedStreamFromStream(ChunkedStream):
-    """``synthesize()`` over a provider that only streams."""
+    """``_synthesize()`` over a provider that only streams: its stream fed the one chunk."""
+
+    def __init__(self, *, tts: TTS, chunk: SpeechChunk, conn_options: APIConnectOptions) -> None:
+        self._chunk = chunk
+        super().__init__(tts=tts, input_text=chunk.text, conn_options=conn_options)
 
     async def _run(self, output_emitter: _core.AudioEmitter) -> None:
         output_emitter.initialize(
@@ -595,16 +733,26 @@ class _ChunkedStreamFromStream(ChunkedStream):
             mime_type="audio/pcm",
             stream=False,
         )
-        async with self._tts.stream(conn_options=self._conn_options) as stream:
+        async with self._tts._stream(conn_options=self._conn_options) as stream:
             # The batch operation owns retries; reopening this child is one attempt.
             stream._core_attempts.core = True
-            stream.push_text(self._input_text)
+            stream._push_chunk(self._chunk)
             stream.end_input()
             async for ev in stream:
                 output_emitter.push(ev.frame.data.tobytes())
                 if timed_transcripts := ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
                     output_emitter.push_timed_transcript(timed_transcripts)
         output_emitter.flush()
+
+
+async def _deliver_pushed(output_emitter: _core.AudioEmitter) -> None:
+    """A failed attempt still delivers the audio it pushed, before its error is raised."""
+    try:
+        output_emitter.end_input()
+        await output_emitter.join()
+    except RuntimeError:
+        # never initialized, already ended, or a decode failure: the attempt's error stands
+        pass
 
 
 def _attempted(

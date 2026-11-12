@@ -82,12 +82,13 @@ pub trait RpcHandler: Send + Sync + Sized + 'static {
     fn respond(&self, caller_identity: String, payload: String) -> String;
 }
 
-/// Routes shared by receivers attached to one SDK room instance. Runtime owns registrations.
+/// One SDK room's RPC methods routed by caller, shared by the avatar ends attached to it, as v1
+/// routes `lk.clear_buffer` and `lk.playback_*` per caller. Runtime owns registrations.
 #[crate::host(native(refused = "expected the room's native RPC router"))]
 pub trait RpcRoutes: Send + Sync {
-    fn insert(&self, caller: String, callback: Arc<dyn RpcCallback>) -> u64;
-    fn remove(&self, caller: &str, registration: u64);
-    fn call(&self, caller: &str, payload: &str) -> String;
+    fn insert(&self, method: &str, caller: String, callback: Arc<dyn RpcCallback>) -> u64;
+    fn remove(&self, method: &str, caller: &str, registration: u64);
+    fn call(&self, method: &str, caller: &str, payload: &str) -> String;
 }
 
 /// Private room-adapter service; unrelated rooms never share mutable RPC routes.

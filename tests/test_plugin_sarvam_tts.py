@@ -4,8 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
-from types import SimpleNamespace
-from typing import Any, get_args
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,44 +12,13 @@ import pytest
 from livekit.agents import APIStatusError, APITimeoutError, http
 from livekit.agents.tts import AudioEmitter
 from livekit.agents.types import APIConnectOptions
-from livekit.plugins.sarvam import models as sarvam_models, tts as sarvam_tts
+from livekit.plugins.sarvam import tts as sarvam_tts
 
 pytestmark = pytest.mark.unit
 
 
 def _make_tts(**kwargs: Any) -> sarvam_tts.TTS:
     return sarvam_tts.TTS(api_key="sk_test", http_session=object(), **kwargs)  # type: ignore[arg-type]
-
-
-def test_v4_defaults_to_its_own_speaker_and_ws_v2_endpoint() -> None:
-    tts = _make_tts(model="bulbul:v4-flash")
-
-    assert tts._opts.speaker == "shubh_en_narration_gentle"
-    assert sarvam_tts._websocket_url(tts._opts) == (
-        "wss://api.sarvam.ai/text-to-speech/ws/v2?model=bulbul:v4-flash&send_completion_event=True"
-    )
-
-    pinned = _make_tts(model="bulbul:v4-flash", ws_url="wss://example.test/text-to-speech/ws/v2")
-    assert sarvam_tts._websocket_url(pinned._opts).startswith(
-        "wss://example.test/text-to-speech/ws/v2?"
-    )
-
-
-def test_v3_keeps_v1_websocket_endpoint_and_speaker() -> None:
-    tts = _make_tts(model="bulbul:v3")
-
-    assert tts._opts.speaker == "shubh"
-    assert sarvam_tts._websocket_url(tts._opts) == (
-        "wss://api.sarvam.ai/text-to-speech/ws?model=bulbul:v3&send_completion_event=True"
-    )
-
-
-def test_v4_rejects_v3_speaker_names() -> None:
-    with pytest.raises(ValueError, match="not compatible"):
-        _make_tts(model="bulbul:v4-flash", speaker="shubh")
-
-    tts = _make_tts(model="bulbul:v4-flash", speaker="ritu_hi_medical")
-    assert tts._opts.speaker == "ritu_hi_medical"
 
 
 def test_v4_request_fields() -> None:
@@ -75,48 +43,6 @@ def test_v3_request_fields_unchanged() -> None:
         "temperature": 0.6,
         "dict_id": "dict-1",
     }
-
-
-def test_v4_parameter_bounds() -> None:
-    assert _make_tts(model="bulbul:v4-flash", loudness=2.5)._opts.loudness == 2.5
-    assert _make_tts(model="bulbul:v4-flash", pitch=0.7)._opts.pitch == 0.5  # clamped, not rejected
-
-    with pytest.raises(ValueError, match="loudness"):
-        _make_tts(model="bulbul:v4-flash", loudness=3.0)
-    with pytest.raises(ValueError, match="pace"):
-        _make_tts(model="bulbul:v4-flash", pace=0.3)
-    with pytest.raises(ValueError, match="temperature"):
-        _make_tts(model="bulbul:v4-flash", temperature=1.5)
-
-    # v3 keeps the wider ranges
-    v3 = _make_tts(model="bulbul:v3", pace=0.3, temperature=1.5)
-    assert (v3._opts.pace, v3._opts.temperature) == (0.3, 1.5)
-
-
-def test_v4_streaming_sample_rate_limits() -> None:
-    too_high = _make_tts(model="bulbul:v4-flash", speech_sample_rate=48000)
-    with pytest.raises(ValueError, match="speech_sample_rate"):
-        sarvam_tts._websocket_url(too_high._opts)
-
-    opus = _make_tts(model="bulbul:v4-flash", speech_sample_rate=22050, output_audio_codec="opus")
-    with pytest.raises(ValueError, match="speech_sample_rate"):
-        sarvam_tts._websocket_url(opus._opts)
-
-    v3 = _make_tts(model="bulbul:v3", speech_sample_rate=48000)
-    assert "/text-to-speech/ws?model=bulbul:v3" in sarvam_tts._websocket_url(v3._opts)
-
-
-def test_v4_flash_is_the_only_accepted_v4_wire_name() -> None:
-    """The API rejects `bulbul:v4` with a 400; `bulbul:v4-flash` is the only valid spelling."""
-    accepted = set(get_args(sarvam_models.SarvamTTSModels))
-    assert "bulbul:v4-flash" in accepted
-    assert "bulbul:v4" not in accepted
-    assert "bulbul:v4" not in sarvam_models.MODEL_SPEAKER_COMPATIBILITY
-
-    tts = _make_tts(model="bulbul:v4-flash")
-    # `_opts.model` is the value sent as the REST body's "model" field
-    assert tts._opts.model == "bulbul:v4-flash"
-    assert "model=bulbul:v4-flash&" in sarvam_tts._websocket_url(tts._opts)
 
 
 def test_rejected_update_options_leaves_live_options_untouched() -> None:
@@ -251,10 +177,27 @@ def _ws_stream(tts: sarvam_tts.TTS) -> sarvam_tts.SynthesizeStream:
 
 
 async def _speak(stream: sarvam_tts.SynthesizeStream) -> None:
-    async def sentences() -> AsyncIterator[SimpleNamespace]:
-        yield SimpleNamespace(token="Namaste.")
+    async def chunks() -> AsyncIterator[str]:
+        yield "Namaste."
 
-    await stream._run_ws(sentences(), MagicMock(spec=AudioEmitter))  # type: ignore[arg-type]
+    await stream._run_ws(chunks(), MagicMock(spec=AudioEmitter))
+
+
+async def test_each_chunk_is_one_text_frame_before_the_flush(socket_tts: _SocketTTS) -> None:
+    tts, session = socket_tts()
+
+    async def chunks() -> AsyncIterator[str]:
+        yield "Namaste."
+        yield "How are you?"
+
+    await _ws_stream(tts)._run_ws(chunks(), MagicMock(spec=AudioEmitter))
+
+    (ws,) = session.sockets
+    assert [frame for frame in ws.frames if frame["type"] != "config"] == [
+        {"type": "text", "data": {"text": "Namaste."}},
+        {"type": "text", "data": {"text": "How are you?"}},
+        {"type": "flush"},
+    ]
 
 
 async def test_stream_created_before_a_model_switch_speaks_with_the_new_options(

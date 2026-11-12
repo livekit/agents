@@ -31,7 +31,6 @@ from livekit.agents import (
     APIStatusError,
     ProviderAttempts,
     http,
-    tokenize,
     tts,
     utils,
 )
@@ -105,7 +104,6 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
         http_session: http.HttpSession | None = None,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         stream_idle_timeout: float = DEFAULT_STREAM_IDLE_TIMEOUT,
     ) -> None:
         """Initialize instance of Soniox Text-to-Speech API service.
@@ -125,9 +123,6 @@ class TTS(tts.TTS):
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
             http_session (http.HttpSession): Optional HttpSession to use for requests.
-            tokenizer (tokenize.SentenceTokenizer): Tokenizer used to buffer input into complete
-                sentences before sending. Defaults to
-                `livekit.agents.tokenize.SentenceTokenizer`.
             stream_idle_timeout (float): Seconds without a new sentence before the current
                 stream is finalized; the next sentence starts a fresh stream. Prevents slow
                 LLM gaps from hitting the server's per-stream timeout (observed ~8-18s).
@@ -165,11 +160,6 @@ class TTS(tts.TTS):
             stream_idle_timeout=stream_idle_timeout,
         )
         self._session = http_session
-        self._sentence_tokenizer = (
-            tokenizer
-            if is_given(tokenizer)
-            else tokenize.SentenceTokenizer(retain_format=True)
-        )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
         # One persistent connection shared across streams (see _Connection).
@@ -258,20 +248,16 @@ class TTS(tts.TTS):
             self._opts.stream_idle_timeout = stream_idle_timeout
             # Live streams read this setting when they wait for the next segment.
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        return self._synthesize_with_stream(text, conn_options=conn_options)
+        return self._synthesize_with_stream(chunk, conn_options=conn_options)
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
-        """Create a streaming TTS session."""
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
             opts=replace(self._opts),
-            sentence_tokenizer=self._sentence_tokenizer,
             current_connection=self._current_connection,
             idle_timeout=lambda: self._opts.stream_idle_timeout,
         )
@@ -334,13 +320,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
-        sentence_tokenizer: tokenize.SentenceTokenizer,
         current_connection: Callable[[APIConnectOptions], Awaitable[_Connection]],
         idle_timeout: Callable[[], float],
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
-        self._sentence_tokenizer = sentence_tokenizer
         self._current_connection = current_connection
         self._idle_timeout = idle_timeout
         self._stream_id: str = ""
@@ -388,33 +372,19 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=utils.shortuuid())
 
-        sent_stream = self._sentence_tokenizer.stream()
-
-        async def _input_task() -> None:
-            async for data in self.input:
-                if self._cancelled.is_set():
-                    break
-                if isinstance(data, self.Flush):
-                    sent_stream.flush()
-                    continue
-                sent_stream.push_text(data)
-            sent_stream.end_input()
-
-        input_t = asyncio.create_task(_input_task(), name="soniox-tts-stream-input")
-
         active: _ActiveStream | None = None
         failure: APIError | None = None
-        next_task: asyncio.Future[tokenize.TokenData] | None = None
-        sent_iter = sent_stream.__aiter__()
+        next_task: asyncio.Future[tts.SpeechChunk | SynthesizeStream.Flush] | None = None
+        input_iter = self.input.__aiter__()
 
         try:
             while not self._cancelled.is_set():
                 if next_task is None:
-                    next_task = asyncio.ensure_future(sent_iter.__anext__())
+                    next_task = asyncio.ensure_future(input_iter.__anext__())
 
-                waiters: set[asyncio.Future[tokenize.TokenData] | asyncio.Future[None]] = {
-                    next_task
-                }
+                waiters: set[
+                    asyncio.Future[tts.SpeechChunk | SynthesizeStream.Flush] | asyncio.Future[None]
+                ] = {next_task}
                 if active is not None:
                     waiters.add(active.waiter)
                 await asyncio.wait(
@@ -436,13 +406,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 try:
-                    ev = next_task.result()
+                    chunk = next_task.result()
                 except StopAsyncIteration:
                     break
                 finally:
                     next_task = None
 
-                if not ev.token.strip():
+                if isinstance(chunk, self.Flush):
                     continue
 
                 self.mark_started()
@@ -455,7 +425,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if active is None:
                     active = await self._open_stream(output_emitter, request_id)
 
-                active.connection.send_text(active.stream_id, ev.token, text_end=False)
+                # the stream concatenates its text, so each chunk ends with a space
+                active.connection.send_text(active.stream_id, chunk.text + " ", text_end=False)
 
             if active is not None and not self._cancelled.is_set():
                 failure = await self._finalize_stream(active, output_emitter) or failure
@@ -469,8 +440,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 active.connection.cancel_stream(active.stream_id)
                 active.connection.unregister_stream(active.stream_id)
             output_emitter.end_segment()
-            await utils.aio.cancel_and_wait(input_t)
-            await sent_stream.aclose()
 
     async def _open_stream(
         self, output_emitter: tts.AudioEmitter, request_id: str

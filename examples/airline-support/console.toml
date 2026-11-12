@@ -1,6 +1,0 @@
-name = "Skyline Air"
-agent = "skyline-support"
-endpoint = "frontend"
-description = "An airline's customer care: a front desk over a back office that asks for what is missing, computes EU261 in code and pays only after a reviewed reply."
-voice = false
-start = "uv run python main.py dev"

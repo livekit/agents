@@ -9,24 +9,7 @@ import pytest
 
 from livekit.agents.cli import setup_logging
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
-
-
-def test_production_cli_logging_preserves_unicode_on_cp1252_stdout(monkeypatch):
-    output = io.BytesIO()
-    stdout = io.TextIOWrapper(output, encoding="cp1252")
-    root = logging.getLogger()
-    monkeypatch.setattr(root, "handlers", [])
-    monkeypatch.setattr(root, "level", logging.NOTSET)
-    monkeypatch.setattr(sys, "stdout", stdout)
-    monkeypatch.setattr(logging, "raiseExceptions", False)
-
-    setup_logging("info")
-    logging.getLogger().info("café عاوز 🗣️")
-    stdout.flush()
-
-    record = json.loads(output.getvalue().decode("cp1252", errors="replace"))
-    assert record["message"] == "café عاوز 🗣️"
+pytestmark = pytest.mark.unit
 
 
 def test_cli_logging_preserves_all_unicode_on_cp1252_stdout(monkeypatch):

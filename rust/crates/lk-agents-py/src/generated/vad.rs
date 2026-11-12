@@ -465,7 +465,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/vad/vad.rs.
 
-/// [`::lk_agents_abi::Vad`] over a host `livekit.agents.VAD`.
+/// [`::lk_agents_abi::Vad`] over a host `livekit.agents.vad.VAD`.
 #[derive(Clone)]
 pub struct VadProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

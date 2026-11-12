@@ -12,6 +12,12 @@ pub(crate) struct LoadHealth {
 }
 
 impl LoadHealth {
+    /// A worker that has not sampled yet: idle, as an unloaded worker is, until its first sample
+    /// is overdue. A load function or CPU counter that never answers still closes admission.
+    pub fn starting(now: Ts) -> Self {
+        LoadHealth { last_valid: Some(now), full: false }
+    }
+
     pub fn fresh(&self, now: Ts) -> bool {
         self.last_valid.is_some_and(|at| now.saturating_duration_since(at) < STALE_AFTER)
     }
@@ -159,6 +165,17 @@ pub enum WorkerStatus {
 mod tests {
     use super::*;
     use crate::config::{DEFAULT_LOAD_THRESHOLD_DEV, DEFAULT_LOAD_THRESHOLD_PROD};
+
+    // Catches: a fresh worker refusing its first jobs until it has measured itself, or one
+    // whose load never arrives taking jobs forever.
+    #[test]
+    fn a_starting_worker_is_idle_until_its_first_sample_is_overdue() {
+        let mut health = LoadHealth::starting(Ts::ZERO);
+        assert!(health.update(Ts::ZERO, 0.0, 0.7));
+        let almost = Ts::ZERO.saturating_add(STALE_AFTER - Duration::from_millis(1));
+        assert!(health.update(almost, 0.0, 0.7));
+        assert!(!health.update(Ts::ZERO.saturating_add(STALE_AFTER), 0.0, 0.7));
+    }
 
     #[test]
     fn hysteresis_and_freshness_share_one_admission_latch() {

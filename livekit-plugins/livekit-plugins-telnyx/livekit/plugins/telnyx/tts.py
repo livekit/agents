@@ -70,17 +70,12 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "telnyx"
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        return self._synthesize_with_stream(text, conn_options=conn_options)
+        return self._synthesize_with_stream(chunk, conn_options=conn_options)
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -122,14 +117,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         async def _collect_segments() -> None:
-            segment_text = ""
+            segment: list[str] = []
             async for input_data in self.input:
-                if isinstance(input_data, str):
-                    segment_text += input_data
-                else:
-                    if segment_text:
-                        self._segments_ch.send_nowait(segment_text)
-                        segment_text = ""
+                if isinstance(input_data, tts.SpeechChunk):
+                    segment.append(input_data.text)
+                elif segment:
+                    self._segments_ch.send_nowait(" ".join(segment))
+                    segment = []
             self._segments_ch.close()
 
         async def _run_segments() -> None:

@@ -1626,6 +1626,7 @@ class RealtimeSession(  # noqa: F811
                     if _is_recoverable_validation_error(ve):
                         logger.warning(f"Validation error: {ve}\nAttempting to recover...")
                         await self._restart_session(ve)
+                        break
                     elif "Tool Response parsing error" in ve.message:
                         # Tool parsing errors are recoverable - log and continue
                         logger.warning(f"Tool response parsing error (recoverable): {ve}")

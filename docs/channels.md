@@ -20,7 +20,7 @@ otherwise it uses `livekit/channel`, or `a2a` when absent. The channel picks
 the endpoint's policy and debounce for a message that arrives while a turn
 runs; see
 [server.md](server.md). Delegations default to `queue`, web
-chat and API clients to `interrupt`.
+chat and API clients to `queue`.
 
 Messages address a thread by ID; see [threads](threads.md). A routing key
 selects that ID before the message reaches the endpoint.
@@ -67,13 +67,13 @@ Dispatch, not to this framework.
 
 ## Shared conversation data
 
-A voice door and text endpoint configured for the same lane share transport
+A voice door and text endpoint configured for the same partition share transport
 history. Application code explicitly reloads marked context fields to observe
 changes made by another activation. Saved private `TextSessionState` histories
-remain separate from that transport view; lane sharing does not merge them.
+remain separate from that transport view; partition sharing does not merge them.
 
 A reply follows the channel of its incoming request. A text received during a
-voice turn waits under the endpoint's lane policy and is answered by text;
+voice turn waits under the endpoint's partition policy and is answered by text;
 its arrival does not silently take over the live call. Subsequent voice turns
 can observe newly committed transport history and explicitly loaded context.
 

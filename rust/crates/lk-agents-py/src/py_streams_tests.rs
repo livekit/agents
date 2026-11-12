@@ -111,8 +111,16 @@ async fn a_returned_stream_nobody_took_is_closed() {
 }
 
 fn duplex(g: &Py<PyAny>, context: &HostRef) -> (HostSink<String>, HostStream<String>) {
+    duplex_of(g, context, "Duplex")
+}
+
+fn duplex_of(
+    g: &Py<PyAny>,
+    context: &HostRef,
+    class: &str,
+) -> (HostSink<String>, HostStream<String>) {
     Python::attach(|py| {
-        let obj = g.bind(py).getattr("Duplex").unwrap().call0().unwrap();
+        let obj = g.bind(py).getattr(class).unwrap().call0().unwrap();
         let to_host: ToHost<String> = |py, s| pyo3::IntoPyObjectExt::into_bound_py_any(s, py);
         let convert: Convert<String> = |o| Ok(o.str()?.to_string());
         HostStream::duplex(py, &obj, context, to_host, convert, Arc::new(RealClock::new()))
@@ -138,6 +146,68 @@ async fn duplex_input_reaches_the_host_in_order_in_the_streams_context() {
         source.next().await.unwrap().as_deref(),
         Some("[('a', 'stream'), ('flush', 'stream'), ('b', 'stream'), ('end', 'stream')]")
     );
+}
+
+// Catches: an input whose `_core_*` methods are coroutines (a recognizer's) called without being
+// awaited, so pushes, flushes and the end of input were silently dropped, or awaited out of order
+// or outside the stream's context.
+#[tokio::test]
+async fn async_input_is_awaited_in_order_in_the_streams_context() {
+    Python::initialize();
+    let (g, context) = Python::attach(setup);
+    let (sink, mut source) = duplex_of(&g, &context, "AsyncDuplex");
+    sink.push("a".into()).unwrap();
+    sink.flush().unwrap();
+    sink.push("b".into()).unwrap();
+    sink.end_input();
+    let got = tokio::time::timeout(Duration::from_secs(2), source.next())
+        .await
+        .expect("the end of input must be awaited")
+        .unwrap();
+    assert_eq!(
+        got.as_deref(),
+        Some("[('a', 'stream'), ('flush', 'stream'), ('b', 'stream'), ('end', 'stream')]")
+    );
+}
+
+// Catches: an awaited input that never settles (a push behind an unread backlog) blocking the
+// loop or outliving its stream: what follows waits behind it, and closing the stream cancels it.
+#[tokio::test]
+async fn a_held_async_input_holds_what_follows_and_closing_cancels_it() {
+    Python::initialize();
+    let (g, context) = Python::attach(setup);
+    let (sink, source) = duplex_of(&g, &context, "AsyncDuplex");
+    sink.push("hold".into()).unwrap();
+    sink.push("after".into()).unwrap();
+    signalled_event(&g, "held_entered");
+    // The close runs on the same loop: a held input that blocked it would hang here.
+    assert_eq!(Box::new(source).close(deadline()).await, Closed::Clean);
+    signalled_event(&g, "held_cancelled");
+    assert!(sink.push("late".into()).is_err(), "the input stopped with its stream");
+}
+
+// Catches: an awaited input's failure lost, leaving input accepted and the output waiting.
+#[tokio::test]
+async fn a_failed_async_input_wakes_the_output_and_refuses_the_next_push() {
+    Python::initialize();
+    let (g, context) = Python::attach(setup);
+    let (sink, mut source) = duplex_of(&g, &context, "AsyncDuplex");
+    sink.push("bad".into()).unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(2), source.next())
+        .await
+        .expect("input failure must wake output")
+        .unwrap_err();
+    assert!(error.to_string().contains("refused"));
+    assert!(sink.push("next".into()).is_err());
+    assert_eq!(Box::new(source).close(deadline()).await, Closed::Clean);
+}
+
+/// Waits for the host to set its `event` (a `threading.Event`).
+fn signalled_event(g: &Py<PyAny>, event: &str) {
+    Python::attach(|py| {
+        let set = g.bind(py).getattr(event).unwrap().call_method1("wait", (5.0,)).unwrap();
+        assert!(set.is_truthy().unwrap(), "the host never set {event}");
+    });
 }
 
 #[tokio::test]
@@ -335,8 +405,9 @@ mod gil {
 
     use lk_agents_abi::errors::ProviderError;
     use lk_agents_abi::{
-        BoxFuture, StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities,
+        BoxFuture, SpeechChunk, StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities,
     };
+    use lk_agents_abi::tts::types::TextUnit;
     use lk_agents_abi::{Closed, Ts, TtsSink, TtsSource};
     use lk_agents_runtime::inference::fallback::{ChainPolicy, FallbackTts, IgnoreEvents};
     use lk_agents_runtime::inference::tts::stream::TtsStream;
@@ -351,8 +422,8 @@ mod gil {
 
     struct HostLikeSink(mpsc::SyncSender<()>);
 
-    impl StreamInput<String> for HostLikeSink {
-        fn push(&self, _item: String) -> Result<(), ProviderError> {
+    impl StreamInput<SpeechChunk> for HostLikeSink {
+        fn push(&self, _item: SpeechChunk) -> Result<(), ProviderError> {
             let _ = self.0.try_send(());
             Python::attach(|_| ());
             Ok(())
@@ -389,17 +460,20 @@ mod gil {
         fn num_channels(&self) -> u16 {
             1
         }
+        /// The text as pushed, unsplit: the replay reaches the sink with its first push.
+        fn text_unit(&self) -> TextUnit {
+            TextUnit::Text
+        }
         fn synthesize<'a>(
             &'a self,
             _cx: &lk_agents_abi::telemetry::Cx,
-            _text: &'a str,
+            _chunk: &'a SpeechChunk,
         ) -> BoxFuture<'a, Result<TtsSource, ProviderError>> {
             unreachable!("the test only streams")
         }
         fn stream(
             &self,
             _cx: &lk_agents_abi::telemetry::Cx,
-            _expressive: bool,
         ) -> BoxFuture<'_, Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>>
         {
             let opened = self.opened.clone();
@@ -434,12 +508,24 @@ mod gil {
         )
         .unwrap();
         let (sink, source) = runtime
-            .block_on(fallback.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+            .block_on(lk_agents_runtime::inference::tts::stream(
+                Arc::new(fallback),
+                &lk_agents_abi::telemetry::Cx::NONE,
+                lk_agents_abi::ApiConnectOptions::default(),
+                lk_agents_runtime::process::host_clock(),
+                None,
+            ))
             .unwrap()
             .split();
         let stream =
             Arc::new(TtsStream::new(Some(sink), source, lk_agents_runtime::process::host_clock()));
         lk_agents_abi::tts::streams::TtsStream::push_text(&*stream, "replayed".into()).unwrap();
+        // the text is fed as the audio is read
+        let reader = stream.clone();
+        let reading = runtime.clone();
+        std::thread::spawn(move || {
+            let _ = reading.block_on(lk_agents_abi::tts::streams::TtsStream::recv(&*reader));
+        });
 
         let (attached, attaching) = mpsc::channel();
         let (done, finished) = mpsc::channel();

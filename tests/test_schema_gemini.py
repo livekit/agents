@@ -9,7 +9,7 @@ from livekit.agents import llm
 from livekit.agents.llm import function_tool
 from livekit.plugins.google import utils
 
-pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+pytestmark = pytest.mark.unit
 
 #  Gemini Schema Tests
 

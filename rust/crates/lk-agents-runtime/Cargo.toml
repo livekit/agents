@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# The runtime half of the core/runtime boundary (docs/internals/rust-core.md "Ownership boundaries"):
+# The runtime half of the core/runtime boundary (docs/internals/architecture.md "Ownership boundaries"):
 # Tokio, sockets, real clocks, task ownership, effect execution and the async host bridge. Cores
 # never depend on it. Grown from consumers: each module lands with the slice that uses it.
 [dependencies]
@@ -14,6 +14,7 @@ lk-agents-cli = { path = "../lk-agents-cli" }
 parking_lot.workspace = true
 rmcp.workspace = true
 sse-stream = "0.2"
+url = "2"
 tokio-util = "0.7"
 lk-agents-abi = { path = "../lk-agents-abi" }
 lk-agents-inference = { path = "../lk-agents-inference", default-features = false }

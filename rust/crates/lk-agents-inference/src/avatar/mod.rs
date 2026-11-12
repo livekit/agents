@@ -1,7 +1,8 @@
 pub mod gateway;
 
 use lk_agents_abi::inference::avatar_session::AvatarError;
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::headers::{Headers, gateway_headers};
@@ -64,8 +65,7 @@ pub fn parse_model(model: &str) -> Result<(String, Option<String>), AvatarError>
 pub struct AvatarOptions {
     pub provider: String,
     pub avatar_id: Option<String>,
-    /// Provider options: the known ones become the gateway's first-class fields.
-    pub options: Map<String, Value>,
+    pub options: GatewayOptions,
     pub identity: String,
     pub name: String,
     pub base_url: String,
@@ -82,7 +82,8 @@ impl AvatarOptions {
         base_url: String,
     ) -> Result<Self, AvatarError> {
         let (provider, avatar_id) = parse_model(model)?;
-        if avatar_id.is_some() && options.contains_key("image_url") {
+        let options = GatewayOptions::parse(options)?;
+        if avatar_id.is_some() && options.image_url.is_some() {
             return Err(AvatarError::CatalogIdAndImage(provider));
         }
         let identity = identity.unwrap_or_else(|| format!("{provider}-inference-avatar"));
@@ -95,6 +96,73 @@ impl AvatarOptions {
             base_url,
         })
     }
+}
+
+/// The provider options the gateway takes as its own fields; any other is forwarded under
+/// `extra_kwargs`, where the gateway's allowlist decides.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct GatewayOptions {
+    /// The image the avatar is made from; exclusive with a catalog id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_prompt: Option<String>,
+    /// `idle_timeout`: seconds without input before the provider ends the session.
+    #[serde(rename = "idle_timeout_s", skip_serializing_if = "Option::is_none")]
+    pub idle_timeout: Option<i64>,
+    #[serde(skip_serializing_if = "Map::is_empty")]
+    pub extra_kwargs: Map<String, Value>,
+}
+
+impl GatewayOptions {
+    /// The known options out of `options`, typed; the rest as `extra_kwargs`. A `null` is unset.
+    pub fn parse(mut options: Map<String, Value>) -> Result<Self, AvatarError> {
+        fn take<T: DeserializeOwned>(
+            options: &mut Map<String, Value>,
+            key: &str,
+        ) -> Result<Option<T>, AvatarError> {
+            let Some(value) = options.remove(key).filter(|value| !value.is_null()) else {
+                return Ok(None);
+            };
+            serde_json::from_value(value)
+                .map(Some)
+                .map_err(|err| AvatarError::InvalidOption(format!("{key:?}: {err}")))
+        }
+        Ok(GatewayOptions {
+            image_url: take(&mut options, "image_url")?,
+            prompt: take(&mut options, "prompt")?,
+            idle_prompt: take(&mut options, "idle_prompt")?,
+            idle_timeout: take(&mut options, "idle_timeout")?,
+            extra_kwargs: options,
+        })
+    }
+}
+
+/// `POST /avatar/sessions`.
+#[derive(Serialize)]
+struct CreateBody<'a> {
+    provider: &'a str,
+    livekit_url: &'a str,
+    room_name: &'a str,
+    room_sid: &'a str,
+    avatar_identity: &'a str,
+    avatar_name: &'a str,
+    agent_identity: &'a str,
+    /// The catalog avatar; an empty id names none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_id: Option<&'a str>,
+    #[serde(flatten)]
+    options: &'a GatewayOptions,
+}
+
+/// `POST /avatar/sessions/terminate`.
+#[derive(Serialize)]
+struct TerminateBody<'a> {
+    provider: &'a str,
+    provider_session_id: &'a str,
+    terminate_token: &'a str,
 }
 
 /// Where the avatar joins: the gateway mints the avatar worker's token from these fields.
@@ -116,19 +184,17 @@ pub fn create_request(
     bearer: &str,
     idempotency_key: &str,
 ) -> HttpRequest {
-    let mut fields = Map::new();
-    for (key, value) in [
-        ("provider", &opts.provider),
-        ("livekit_url", &room.livekit_url),
-        ("room_name", &room.room_name),
-        ("room_sid", &room.room_sid),
-        ("avatar_identity", &opts.identity),
-        ("avatar_name", &opts.name),
-        ("agent_identity", &room.agent_identity),
-    ] {
-        fields.insert(key.into(), value.clone().into());
-    }
-    let body = payload(fields, opts.avatar_id.as_deref(), opts.options.clone());
+    let body = CreateBody {
+        provider: &opts.provider,
+        livekit_url: &room.livekit_url,
+        room_name: &room.room_name,
+        room_sid: &room.room_sid,
+        avatar_identity: &opts.identity,
+        avatar_name: &opts.name,
+        agent_identity: &room.agent_identity,
+        avatar_id: opts.avatar_id.as_deref().filter(|id| !id.is_empty()),
+        options: &opts.options,
+    };
     let mut headers = headers;
     headers.insert("Idempotency-Key", idempotency_key);
     request(opts, "/avatar/sessions", &body, headers, bearer)
@@ -141,18 +207,18 @@ pub fn terminate_request(
     headers: Headers,
     bearer: &str,
 ) -> Option<HttpRequest> {
-    let body = serde_json::json!({
-        "provider": opts.provider,
-        "provider_session_id": session.provider_session_id.as_ref()?,
-        "terminate_token": session.terminate_token.as_ref()?,
-    });
+    let body = TerminateBody {
+        provider: &opts.provider,
+        provider_session_id: session.provider_session_id.as_deref()?,
+        terminate_token: session.terminate_token.as_deref()?,
+    };
     Some(request(opts, "/avatar/sessions/terminate", &body, headers, bearer))
 }
 
 fn request(
     opts: &AvatarOptions,
     path: &str,
-    body: &Value,
+    body: &impl Serialize,
     mut headers: Headers,
     bearer: &str,
 ) -> HttpRequest {
@@ -161,39 +227,8 @@ fn request(
     HttpRequest {
         url: format!("{}{path}", opts.base_url.trim_end_matches('/')),
         headers,
-        body: body.to_string().into_bytes(),
+        body: serde_json::to_vec(body).expect("an avatar request body is plain JSON"),
     }
-}
-
-/// The create request: `fields`, the catalog id, and the options -- the known ones as the
-/// gateway's first-class fields, any other under `extra_kwargs` (the gateway's allowlist decides).
-pub fn payload(
-    mut fields: Map<String, Value>,
-    avatar_id: Option<&str>,
-    options: Map<String, Value>,
-) -> Value {
-    if let Some(id) = avatar_id.filter(|id| !id.is_empty()) {
-        fields.insert("avatar_id".into(), id.into());
-    }
-    let mut extra = Map::new();
-    for (key, value) in options {
-        let target = match key.as_str() {
-            "image_url" => Some("image_url"),
-            "prompt" => Some("prompt"),
-            "idle_prompt" => Some("idle_prompt"),
-            "idle_timeout" => Some("idle_timeout_s"),
-            _ => None,
-        };
-        if let Some(target) = target {
-            fields.insert(target.into(), value);
-        } else {
-            extra.insert(key, value);
-        }
-    }
-    if !extra.is_empty() {
-        fields.insert("extra_kwargs".into(), extra.into());
-    }
-    fields.into()
 }
 
 /// The create answer's known fields; any other is ignored.
@@ -235,19 +270,58 @@ mod tests {
             "invalid avatar model string: ' /id' (expected 'provider' or 'provider/<id>')"
         );
         assert_eq!(parse_model("lemonslice/").unwrap(), ("lemonslice".into(), None));
-        let options = json!({"idle_timeout": 0, "prompt": "", "other": {"x": true}});
+        let options = GatewayOptions::parse(object(
+            json!({"idle_timeout": 0, "prompt": "", "image_url": null, "other": {"x": true}}),
+        ))
+        .unwrap();
         assert_eq!(
-            payload(Map::new(), Some("id"), options.as_object().unwrap().clone()),
-            json!({"avatar_id":"id", "idle_timeout_s":0, "prompt":"", "extra_kwargs":{"other":{"x":true}}})
+            serde_json::to_value(options).unwrap(),
+            json!({"idle_timeout_s":0, "prompt":"", "extra_kwargs":{"other":{"x":true}}})
         );
-        assert_eq!(payload(Map::new(), Some(""), Map::new()), json!({}));
+        let wrong = GatewayOptions::parse(object(json!({"idle_timeout": "soon"})));
+        assert!(matches!(wrong, Err(AvatarError::InvalidOption(_))));
         let err = AvatarOptions::new(
             "lemonslice/a",
             None,
             None,
-            json!({"image_url": "u"}).as_object().unwrap().clone(),
+            object(json!({"image_url": "u"})),
             String::new(),
         );
         assert!(matches!(err, Err(AvatarError::CatalogIdAndImage(p)) if p == "lemonslice"));
+    }
+
+    // Catches: the create body missing a room field, an empty catalog id sent, or the options
+    // nested instead of beside the room's fields.
+    #[test]
+    fn the_create_body_carries_the_room_and_the_options_beside_it() {
+        let room = AvatarRoom {
+            livekit_url: "wss://lk".into(),
+            room_name: "r".into(),
+            room_sid: "RM_1".into(),
+            agent_identity: "agent".into(),
+        };
+        let opts = AvatarOptions::new(
+            "lemonslice/",
+            None,
+            None,
+            object(json!({"prompt": "hi"})),
+            "u".into(),
+        )
+        .unwrap();
+        let request = create_request(&opts, &room, Headers::new(), "t", "k");
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(
+            body,
+            json!({
+                "provider": "lemonslice", "livekit_url": "wss://lk", "room_name": "r",
+                "room_sid": "RM_1", "avatar_identity": "lemonslice-inference-avatar",
+                "avatar_name": "lemonslice-inference-avatar", "agent_identity": "agent",
+                "prompt": "hi",
+            })
+        );
+    }
+
+    fn object(value: Value) -> Map<String, Value> {
+        value.as_object().unwrap().clone()
     }
 }

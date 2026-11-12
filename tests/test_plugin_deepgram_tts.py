@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 import pytest
 
-from livekit.agents import APIConnectOptions, http
+from livekit.agents import APIConnectOptions, http, utils
 
 pytestmark = pytest.mark.plugin("deepgram")
 
@@ -84,17 +84,12 @@ class _FakeEmitter:
         self.pushed.append(data)
 
 
-class _FakeWordStream:
-    def __init__(self, words: list[str]) -> None:
-        self._words = deque(words)
-
-    def __aiter__(self) -> _FakeWordStream:
-        return self
-
-    async def __anext__(self):  # noqa: ANN201
-        if not self._words:
-            raise StopAsyncIteration
-        return SimpleNamespace(token=self._words.popleft())
+def _segment(chunks: list[str]) -> utils.aio.Chan[str]:
+    segment = utils.aio.Chan[str]()
+    for chunk in chunks:
+        segment.send_nowait(chunk)
+    segment.close()
+    return segment
 
 
 def _make_stream(ws: _FakeWS):  # noqa: ANN201
@@ -152,10 +147,13 @@ async def test_recv_ends_segment_on_speech_metadata_and_leaves_flushed():
     stream = _make_stream(ws)
     emitter = _FakeEmitter()
 
-    await asyncio.wait_for(
-        stream._run_ws(_FakeWordStream(["hello", "world"]), emitter), timeout=5.0
-    )
+    await asyncio.wait_for(stream._run_ws(_segment(["hello", "world"]), emitter), timeout=5.0)
 
+    assert [json.loads(m) for m in ws.sent] == [
+        {"type": "Speak", "text": "hello "},
+        {"type": "Speak", "text": "world "},
+        {"type": "Flush"},
+    ]
     assert emitter.segments_started == 1
     assert emitter.segments_ended == 1
     assert emitter.pushed == [b"\x00\x01\x02\x03"]
@@ -180,7 +178,7 @@ async def test_flushed_is_a_noop_before_speech_metadata():
     stream = _make_stream(ws)
     emitter = _FakeEmitter()
 
-    await asyncio.wait_for(stream._run_ws(_FakeWordStream(["hi"]), emitter), timeout=5.0)
+    await asyncio.wait_for(stream._run_ws(_segment(["hi"]), emitter), timeout=5.0)
 
     assert emitter.segments_ended == 1
     assert emitter.pushed == [b"\xaa\xbb"]

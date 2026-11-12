@@ -112,10 +112,12 @@ impl Run {
                     streaming: !setup.chunked_tts,
                     alignment: setup.tts_alignment,
                     markup: setup.tts_markup,
+                    pacing: setup.tts_pacing,
                 },
             ) as Arc<Tts>
         });
-        let providers = Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone() };
+        let providers =
+            Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone(), clock: time.clock() };
         let nodes = agent_nodes(setup, &registry, OPENING_AGENT, &providers);
         // The avatar worker is in the room before its stream is opened to it. Its reports cross
         // as they are sent, so the sink gives up on one after a clear as in production.
@@ -184,7 +186,6 @@ impl Run {
                 .map(lk_agents_abi::llm::fallback::RealtimeLeg::Native),
             tts,
             on_event: Some(Arc::new(WireSink)),
-            agent_use_tts_aligned_transcript: setup.agent_aligned_transcript,
             turn_detector: setup.eot.then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
             interruption_detector: adaptive.then(|| {
                 Arc::new(fakes::FakeInterruptionSource(registry.clone()))
@@ -211,6 +212,8 @@ impl Run {
                         registry.clone(),
                         setup.pausable_output,
                         setup.lagging_output,
+                        setup.output_fault,
+                        setup.unreported_clear,
                     ) as _
                 }),
             },
@@ -251,6 +254,7 @@ impl Run {
                 .keyterm_detection
                 .map(|_| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
             session_id: Some("AS_fuzz".into()),
+            id_seed: Some(0x5eed),
             // `ConsoleCall`: the session hosts the CLI's requests on the console's socket.
             remote_session: console.as_ref().map(|_| {
                 Arc::new(fakes::FakeConsolePort)
@@ -390,6 +394,7 @@ impl Run {
                 .collect(),
             host_mic: false,
             joins: 0,
+            stalled: Vec::new(),
             console,
             next_request: 0,
             background: None,
@@ -403,7 +408,7 @@ impl Run {
         run.record.set_conn(setup.conn.unwrap_or(ConnSetup::DEFAULT), setup.chunked_tts);
         run.record.set_transcript(TranscriptSetup {
             synchronized: setup.sync_transcription,
-            aligned: setup.agent_aligned_transcript.or(setup.aligned_transcript) == Some(true),
+            aligned: setup.tts_alignment != TtsAlignment::None || setup.chunked_tts,
             // A chunked voice's adapter stamps sentence by sentence and is not held to it (seed
             // 31412 came back with no stamp).
             stamps: setup.tts_alignment == TtsAlignment::Words && !setup.chunked_tts,
@@ -522,7 +527,11 @@ impl Run {
                 name: None,
                 id: format!("pre_connect_{}", self.joins),
                 topic: PRE_CONNECT_AUDIO_BUFFER_STREAM.into(),
-                mime_type: "audio/pcm".into(),
+                mime_type: match pre_connect {
+                    PreConnect::Mobile => "application/octet-stream",
+                    _ => "audio/pcm",
+                }
+                .into(),
                 total_length: None,
                 attributes,
                 timestamp: 0,
@@ -531,12 +540,18 @@ impl Run {
             // Half a second of what the person said before the agent joined: samples no case
             // frame carries, so nothing mistakes them for the microphone's.
             let buffered = vec![0u8; SAMPLE_RATE as usize];
-            if pre_connect != PreConnect::Never {
-                let error = self
-                    .room
-                    .send_byte_stream(CALLER, info, [buffered])
-                    .err()
-                    .map(|e| e.to_string());
+            let sent = match pre_connect {
+                PreConnect::Never => None,
+                PreConnect::Stalled => {
+                    Some(self.room.open_byte_stream(CALLER, info).map(|stream| {
+                        let _ = stream.try_send(buffered[..buffered.len() / 2].to_vec());
+                        self.stalled.push(stream);
+                    }))
+                }
+                _ => Some(self.room.send_byte_stream(CALLER, info, [buffered])),
+            };
+            if let Some(sent) = sent {
+                let error = sent.err().map(|e| e.to_string());
                 self.record.record_boundary(
                     self.stamps.next(),
                     crate::record::BoundaryOutcome {
@@ -631,8 +646,6 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
             push_to_talk: setup.push_to_talk.then_some(true),
         }),
         max_tool_steps: setup.max_tool_steps.map_or(3, i64::from),
-        use_tts_aligned_transcript: setup.aligned_transcript.map_or(Maybe::NotGiven, Maybe::Given),
-        tts_text_transforms: setup.text_transforms.map_or(Maybe::NotGiven, Maybe::Given),
         min_consecutive_speech_delay: secs(setup.speech_gap_ms.unwrap_or(0)),
         expressive: Default::default(),
         aec_warmup_duration: Maybe::NotGiven,
@@ -673,11 +686,13 @@ pub(super) fn tool_specs(tools: &[String]) -> Vec<lk_agents_abi::ToolSpec> {
 /// frame gets a fresh runner on the same registry, so a tool call after a handoff registers
 /// exactly like one before it.
 /// The session's providers as the host holds them.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct Legs {
     pub(super) llm: Option<Arc<Llm>>,
     pub(super) tts: Option<Arc<Tts>>,
     pub(super) stt: Option<Arc<Stt>>,
+    /// The run's clock, which a node's own synthesis paces by.
+    pub(super) clock: Arc<dyn lk_agents_abi::Clock>,
 }
 
 /// The node factories an agent installs: its `llm_node`, `tts_node` and `stt_node`, each over the
@@ -725,6 +740,7 @@ pub(super) fn agent_nodes(
                 legs.llm.clone(),
                 legs.tts.clone(),
                 legs.stt.clone(),
+                legs.clock.clone(),
                 on.llm_text,
             ) as Arc<dyn NodeFactory>
         })
@@ -748,7 +764,6 @@ pub(super) fn frame(
     tools: &[String],
 ) -> UpdateAgentArgs {
     let mut args = plain_frame(registry, agent, instructions, tools);
-    args.use_tts_aligned_transcript = setup.agent_aligned_transcript;
     if setup.nodes.is_some() {
         let nodes = agent_nodes(setup, registry, agent, legs);
         args.llm_node = nodes.llm;
@@ -784,7 +799,6 @@ fn plain_frame(
         vad: Maybe::NotGiven,
         turn_handling: None,
         min_consecutive_speech_delay: None,
-        use_tts_aligned_transcript: None,
         expressive: Maybe::NotGiven,
         llm_node: None,
         tts_node: None,

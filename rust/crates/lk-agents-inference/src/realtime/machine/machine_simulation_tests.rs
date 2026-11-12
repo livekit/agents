@@ -6,8 +6,8 @@ use std::{
 
 use crate::realtime::{
     INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, ReplyKind, SessionOptions, Step,
-    TurnDetection,
 };
+use lk_agents_abi::llm::realtime_options::{ServerVad, TurnDetection};
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, PushAudio, Ts,
     errors::ApiError,
@@ -119,13 +119,14 @@ impl Sim {
         let mut opts = SessionOptions::from_dialect(&INFERENCE, false);
         opts.turn_detection = match setup.vad {
             Some(Vad::Semantic) => opts.turn_detection,
-            Some(Vad::Server) => Some(TurnDetection::ServerVad {
-                threshold: 0.5,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 500,
-                create_response: true,
-                interrupt_response: true,
-            }),
+            Some(Vad::Server) => Some(TurnDetection::Server(ServerVad {
+                threshold: Some(0.5),
+                prefix_padding_ms: Some(300),
+                silence_duration_ms: Some(500),
+                idle_timeout_ms: None,
+                create_response: Some(true),
+                interrupt_response: Some(true),
+            })),
             None => None,
         };
         let caps = INFERENCE.capabilities(

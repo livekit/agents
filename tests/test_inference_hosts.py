@@ -13,15 +13,6 @@ pytestmark = pytest.mark.unit
 _CREDENTIALS = {"base_url": "https://gateway.invalid", "api_key": "key", "api_secret": "secret"}
 
 
-def test_each_instance_holds_one_client() -> None:
-    llm = inference.LLM("openai/gpt-4.1-mini", **_CREDENTIALS)
-    assert llm._native is llm._native
-    stt = inference.STT("deepgram/nova-3", **_CREDENTIALS)
-    assert stt._native is stt._native
-    tts = inference.TTS("cartesia/sonic-2", **_CREDENTIALS)
-    assert tts._native is tts._native
-
-
 def test_update_options_reaches_the_client_and_only_given_options_change() -> None:
     llm = inference.LLM(
         "openai/gpt-4.1-mini", extra_kwargs=ChatCompletionOptions(temperature=0.5), **_CREDENTIALS

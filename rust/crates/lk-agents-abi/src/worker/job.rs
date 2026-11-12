@@ -145,7 +145,7 @@ mod proto_bytes {
 
 #[crate::host(record(
     module = "job_records",
-    path = "livekit.agents.job",
+    path = "livekit.agents",
     enum,
     enum_base = "StrEnum",
     extract,

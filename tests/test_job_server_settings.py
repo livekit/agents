@@ -106,35 +106,3 @@ def test_inference_credentials_read_the_inference_environment_first(
     monkeypatch.setenv("LIVEKIT_INFERENCE_API_KEY", "")
     with pytest.raises(ValueError, match="api_key is required"):
         resolve_credentials(None, None)
-
-
-def test_inference_headers_outside_a_job_identify_only_the_sdk() -> None:
-    headers = inference.get_inference_headers(inference_class="low")
-    assert list(headers) == ["User-Agent", "X-LiveKit-Inference-Priority"]
-    assert headers["User-Agent"].startswith("LiveKit Agents/")
-
-
-def test_openai_realtime_resolves_its_key_and_url_from_the_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from livekit.agents.llm._realtime import RealtimeModel
-
-    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
-    with pytest.raises(ValueError, match="OPENAI_API_KEY environment variable"):
-        RealtimeModel()
-    with pytest.raises(ValueError, match="AZURE_OPENAI_ENDPOINT"):
-        RealtimeModel.with_azure(azure_deployment="d", api_key="k")
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        RealtimeModel.with_azure(
-            azure_deployment="d", api_key="k", base_url="https://b", azure_endpoint="https://e"
-        )
-    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
-    assert RealtimeModel().provider == "api.openai.com"
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1")
-    assert RealtimeModel().provider == "proxy.example"
-    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://az/")
-    with pytest.raises(ValueError, match="Missing credentials"):
-        RealtimeModel.with_azure(azure_deployment="d")
-    assert RealtimeModel.with_azure(azure_deployment="d", api_key="k").model

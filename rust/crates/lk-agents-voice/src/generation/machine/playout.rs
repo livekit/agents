@@ -130,10 +130,11 @@ impl Playout {
                 }
                 effects.push(AudioPlaybackAccountingEffect::Trace(PlayoutStep::TranscriptShown {
                     speech,
-                    text: word.text,
                     start: word.start_time.unwrap_or_default(),
                     end: word.end_time.unwrap_or_default(),
                     played: self.played,
+                    spoken: word.spoken,
+                    text: word.text,
                 }))
             }
             SinkReport::Cleared { segment, heard } => {

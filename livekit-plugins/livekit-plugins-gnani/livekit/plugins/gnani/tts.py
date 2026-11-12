@@ -35,7 +35,6 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
@@ -159,32 +158,30 @@ class TTS(tts.TTS):
             self._session = http.http_session()
         return self._session
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
         if self._opts.synthesize_method == "sse":
             return SSEChunkedStream(
                 get_session=self._ensure_session,
                 opts=replace(self._opts),
                 tts=self,
-                input_text=text,
+                input_text=chunk.text,
                 conn_options=conn_options,
             )
         if self._opts.synthesize_method == "websocket":
             return WebSocketChunkedStream(
-                opts=replace(self._opts), tts=self, input_text=text, conn_options=conn_options
+                opts=replace(self._opts), tts=self, input_text=chunk.text, conn_options=conn_options
             )
         return RESTChunkedStream(
             get_session=self._ensure_session,
             opts=replace(self._opts),
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         return SynthesizeStream(opts=replace(self._opts), tts=self, conn_options=conn_options)
 
     def update_options(
@@ -538,12 +535,12 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         text_parts: list[str] = []
         async for data in self.input:
-            if isinstance(data, str):
-                text_parts.append(data)
+            if isinstance(data, tts.SpeechChunk):
+                text_parts.append(data.text)
             else:
                 break
 
-        full_text = "".join(text_parts).strip()
+        full_text = " ".join(text_parts)
         if not full_text:
             return
 

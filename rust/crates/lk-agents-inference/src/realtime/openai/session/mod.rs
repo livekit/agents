@@ -15,11 +15,12 @@ use lk_agents_telemetry as telemetry;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::headers::{BoundIdentity, Headers, gateway_headers};
-use crate::realtime::dialect::{Dialect, Protocol, TurnDetection};
+use crate::realtime::dialect::{Dialect, Protocol};
 use crate::realtime::machine::connection::RealtimeConnection;
 use crate::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
 use crate::realtime::openai::wire::{self, Azure, IdGen, RandomIds, WireShape};
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
+use lk_agents_abi::llm::realtime_options::TurnDetection;
 use std::ops::ControlFlow;
 
 /// How a connection authenticates.
@@ -204,16 +205,14 @@ impl OpenAIRealtime {
 /// `_warn_on_half_disabled_turn_taking`: the client takes the turns but the server still cuts its
 /// own response on speech.
 pub fn warn_on_half_disabled_turn_taking(td: &lk_agents_abi::Maybe<Option<TurnDetection>>) {
-    if let lk_agents_abi::Maybe::Given(Some(td)) = td {
-        let v = td.to_json();
-        if v.get("create_response") == Some(&serde_json::Value::Bool(false))
-            && v.get("interrupt_response") != Some(&serde_json::Value::Bool(false))
-        {
-            log::warn!(target: lk_agents_abi::LOG_TARGET,
-                "create_response=False hands turn taking to the client, but the server still \
-                 cancels its response on user speech, pass interrupt_response=False as well"
-            );
-        }
+    if let lk_agents_abi::Maybe::Given(Some(td)) = td
+        && td.create_response() == Some(false)
+        && td.interrupt_response() != Some(false)
+    {
+        log::warn!(target: lk_agents_abi::LOG_TARGET,
+            "create_response=False hands turn taking to the client, but the server still \
+             cancels its response on user speech, pass interrupt_response=False as well"
+        );
     }
 }
 

@@ -29,7 +29,7 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
-const PYTHON_PACKAGES: &[&str] = &["livekit-agents-next"];
+const PYTHON_PACKAGES: &[&str] = &["livekit-agents"];
 const PYTHON_GENERATED: &str = "livekit/agents/_generated";
 const PYTHON_CORE: &str = "livekit/agents";
 const OTEL_REGISTRY: &str = "rust/otel/registry";
@@ -275,11 +275,11 @@ mod drift {
         let families = [
             "rust/crates/lk-agents-py/src/generated/mod.rs",
             CORE_NAMES,
-            "livekit-agents-next/livekit/agents/_generated/stt.py",
-            "livekit-agents-next/livekit/agents/_generated/__init__.py",
-            "livekit-agents-next/livekit/agents/_core.pyi",
-            "livekit-agents-next/livekit/agents/_generated/_core_voice.pyi",
-            "livekit-agents-next/livekit/agents/_generated/semconv.py",
+            "livekit-agents/livekit/agents/_generated/stt.py",
+            "livekit-agents/livekit/agents/_generated/__init__.py",
+            "livekit-agents/livekit/agents/_core.pyi",
+            "livekit-agents/livekit/agents/_generated/_core_voice.pyi",
+            "livekit-agents/livekit/agents/_generated/semconv.py",
             "rust/otel/schema.json",
             "rust/otel/registry/spans.yaml",
         ];

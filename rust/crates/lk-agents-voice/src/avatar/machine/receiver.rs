@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
-use lk_agents_abi::voice::io::AvatarPlaybackSegment;
+use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 use lk_agents_abi::voice::rtc::rpc::{RPC_UNSUPPORTED_METHOD, RpcError};
 use lk_agents_abi::voice::rtc::{ParticipantKind, StreamInfo};
 use lk_agents_media::AudioByteStream;
@@ -32,21 +32,21 @@ pub struct PlaybackReport {
 }
 
 impl PlaybackReport {
-    pub fn started(segment: &AvatarPlaybackSegment) -> Result<Self, ReceiverEnd> {
-        Ok(Self { method: playback_method(RPC_PLAYBACK_STARTED, segment)?, payload: String::new() })
+    pub fn started(segment: &AvatarPlaybackSegment) -> Self {
+        Self { method: playback_method(RPC_PLAYBACK_STARTED, segment), payload: String::new() }
     }
 
     pub fn finished(
         segment: &AvatarPlaybackSegment,
         playback_position: f64,
         interrupted: bool,
-    ) -> Result<Self, ReceiverEnd> {
+    ) -> Self {
         let payload =
             FinishedPayload { playback_position, interrupted, synchronized_transcript: None };
-        Ok(Self {
-            method: playback_method(RPC_PLAYBACK_FINISHED, segment)?,
+        Self {
+            method: playback_method(RPC_PLAYBACK_FINISHED, segment),
             payload: serde_json::to_string(&payload).expect("a playback report serializes"),
-        })
+        }
     }
 
     /// The attempts at sending it: at most `max_retries`, none when that is zero.
@@ -118,6 +118,8 @@ pub struct ReceiverState {
     superseded: bool,
     sender: Option<String>,
     start_admitted: bool,
+    /// Streams from a v1 agent so far: each one's playback key on this receiver.
+    v1_streams: u64,
 }
 
 pub struct ReaderState {
@@ -216,13 +218,14 @@ impl ReceiverState {
     ) -> Result<ReaderState, ReceiverEnd> {
         self.superseded = false;
         self.reading = true;
-        let name = info
-            .name
-            .as_deref()
-            .ok_or_else(|| ReceiverEnd::BadStream("avatar stream has no name".into()))?;
-        let segment = AvatarPlaybackSegment {
-            playback: stream_segment(name)?,
-            stream_id: Some(info.id.clone()),
+        let segment = match info.name.as_deref().and_then(stream_segment) {
+            Some(playback) => AvatarPlaybackSegment { playback, stream_id: Some(info.id.clone()) },
+            None => {
+                // A v1 agent names its streams freely and takes its reports on the plain methods.
+                self.v1_streams += 1;
+                let playback = PlaybackSegment { attachment: 0, segment: self.v1_streams };
+                AvatarPlaybackSegment { playback, stream_id: None }
+            }
         };
         let (Some(rate), Some(channels)) = (
             info.attributes.get("sample_rate").and_then(|v| v.parse::<u32>().ok()),
@@ -322,6 +325,21 @@ mod tests {
             matches!(items[2].3, Some(Received::Audio(ref frame)) if frame.samples_per_channel == 500)
         );
         assert!(matches!(items[3].3, Some(Received::SegmentEnd)));
+    }
+    #[test]
+    fn a_v1_stream_name_reports_on_the_plain_methods() {
+        let mut state = ReceiverState::default();
+        let v1 = StreamInfo { name: Some("AUDIO_hT3kW9mQx2Lp".into()), ..info() };
+        let first = state.begin(&v1, FRAME).unwrap().segment;
+        let second = state.begin(&v1, FRAME).unwrap().segment;
+        assert_ne!(first, second);
+        assert_eq!(PlaybackReport::finished(&first, 1.5, false).method, RPC_PLAYBACK_FINISHED);
+        assert_eq!(PlaybackReport::started(&first).method, RPC_PLAYBACK_STARTED);
+        let keyed = state.begin(&info(), FRAME).unwrap().segment;
+        assert_eq!(
+            PlaybackReport::finished(&keyed, 1.5, false).method,
+            "lk.playback_finished/STREAM/AUDIO_3_4"
+        );
     }
     #[test]
     fn a_clear_discards_queued_audio_but_keeps_the_old_end_epoch() {

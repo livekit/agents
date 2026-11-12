@@ -9,7 +9,7 @@ use lk_agents_abi::agent::run::{
 };
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{ChatItem, HostRef, Role, Ts};
-use lk_agents_core::tts::markup::ChatMessageExt;
+use lk_agents_core::markup::ChatMessageExt;
 use lk_agents_core::usage::{Ledger, ModelKind};
 use std::collections::BTreeMap;
 

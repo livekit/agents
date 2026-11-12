@@ -4,6 +4,17 @@ use crate::ChatItem;
 use crate::a2a::client::{AgentCard, AgentClientError, Message};
 use crate::llm::tool_executor::ToolOutcome;
 
+/// The storage partition whose caller remains active during a delegation.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+#[crate::host(record(module = "a2a_remote", emit, extract))]
+pub struct DelegationPartition {
+    pub storage_location: String,
+    pub storage_project: String,
+    pub thread_id: String,
+    pub partition_key: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[crate::host(record(module = "a2a_remote", emit))]
 pub enum RemoteEvent {
@@ -79,6 +90,10 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
         api_secret: String,
     ) -> Result<Self, AgentClientError>;
 
+    /// Caller identities carried to the receiving endpoint for partition re-entry checks.
+    #[host(call)]
+    fn set_partition_chain(&self, chain: Vec<DelegationPartition>) -> Result<(), AgentClientError>;
+
     /// The call's message; `thread_id` shares the caller's thread under `token`'s grant for it.
     #[host(call)]
     fn message(
@@ -129,6 +144,11 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
 
 #[crate::host(functions)]
 pub trait RemoteConfiguration: Send + Sync + Sized + 'static {
+    #[host(function)]
+    fn _core_delegation_chain(
+        metadata: Map<String, Value>,
+    ) -> Result<Vec<DelegationPartition>, AgentClientError>;
+
     /// The delegation tool declared in code: `name` and `description` are required, and the tool
     /// takes the request, stated in full. Nothing is fetched from the endpoint.
     #[host(function)]

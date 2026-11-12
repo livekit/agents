@@ -12,7 +12,8 @@ pub fn mime_container(mime: &str) -> Option<Container> {
         // Raw opus arrives in ogg in every producer; the reference maps it to `ogg` too.
         "audio/opus" | "audio/ogg" => Container::Ogg,
         "audio/webm" => Container::Webm,
-        "audio/mp4" => Container::Mp4,
+        // Safari's MediaRecorder records audio only as `video/mp4` (client-sdk-js pre-connect).
+        "audio/mp4" | "video/mp4" => Container::Mp4,
         _ => return None,
     })
 }

@@ -29,7 +29,7 @@ capture one on demand and compare it with the 1.8.10 baseline. From the reposito
 
 ```bash
 D=$(mktemp -d) && cp tests/telemetry/baseline/{agent_v2.py,scenarios.yaml} $D
-echo livekit-agents-next > $D/requirements.txt   # lets `lk` detect a Python project
+echo livekit-agents > $D/requirements.txt   # lets `lk` detect a Python project
 .venv/bin/python -I tests/telemetry/baseline/capture_proxy.py 4329 https://<project>.livekit.cloud $D/captures &
 (cd $D && PATH=$OLDPWD/.venv/bin:$PATH LIVEKIT_OBSERVABILITY_URL=http://127.0.0.1:4329 \
   lk --project <project> agent simulate audio --scenarios scenarios.yaml --yes agent_v2.py)

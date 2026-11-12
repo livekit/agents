@@ -74,7 +74,7 @@ pub trait Implementations: 'static {
     type InferenceCredentials: ::lk_agents_abi::inference::InferenceCredentials;
     type InferenceModels: ::lk_agents_abi::inference::InferenceModels;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
-    type InferenceTts: ::lk_agents_abi::inference::tts_client::InferenceTts<Stream = Self::TtsStream>;
+    type InferenceTts: ::lk_agents_abi::inference::tts_client::InferenceTts;
     type Logging: ::lk_agents_abi::invoke::Logging;
     type ChatContextPlans: ::lk_agents_abi::llm::chat_context::ChatContextPlans;
     type ChatContextDiffs: ::lk_agents_abi::llm::chat_context::ChatContextDiffs;
@@ -83,7 +83,7 @@ pub trait Implementations: 'static {
     type DuplexInput: ::lk_agents_abi::llm::duplex::DuplexInput;
     type DuplexRealtimeModel: ::lk_agents_abi::llm::duplex::DuplexRealtimeModel;
     type FallbackLlm: ::lk_agents_abi::llm::fallback::FallbackLlm;
-    type FallbackTts: ::lk_agents_abi::llm::fallback::FallbackTts<Stream = Self::TtsStream>;
+    type FallbackTts: ::lk_agents_abi::llm::fallback::FallbackTts;
     type RealtimeFallbackModel: ::lk_agents_abi::llm::fallback::RealtimeFallbackModel;
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
@@ -121,6 +121,11 @@ pub trait Implementations: 'static {
     type Run: ::lk_agents_abi::storage::handles::Run;
     type ThreadHandle: ::lk_agents_abi::storage::handles::ThreadHandle<Namespace = Self::Storage>;
     type ThreadServer: ::lk_agents_abi::storage::http::ThreadServer;
+    type PersistedSessionState: ::lk_agents_abi::storage::session::PersistedSessionState;
+    type SessionBinding: ::lk_agents_abi::storage::session::SessionBinding<
+            Activation = Self::ContextActivation,
+            View = Self::PersistedSessionState,
+        >;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
     type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
@@ -149,8 +154,7 @@ pub trait Implementations: 'static {
     type ToolSearch: ::lk_agents_abi::tokenize::search::ToolSearch<Document = Self::SearchDocument>;
     type MarkupFunctions: ::lk_agents_abi::tts::markup::MarkupFunctions;
     type MarkupClass: ::lk_agents_abi::tts::markup::MarkupClass;
-    type TtsStreamAdapter: ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter<Stream = Self::TtsStream>;
-    type PacedSentences: ::lk_agents_abi::tts::stream_pacer::PacedSentences;
+    type TtsStreamAdapter: ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter;
     type TtsStream: ::lk_agents_abi::tts::streams::TtsStream;
     type SynthesisChecks: ::lk_agents_abi::tts::streams::SynthesisChecks;
     type InferenceEot: ::lk_agents_abi::turn::inference::InferenceEot<Stream = Self::EotStream>;
@@ -170,7 +174,10 @@ pub trait Implementations: 'static {
     type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type DataStreamAudioReceiver: ::lk_agents_abi::voice::avatar::DataStreamAudioReceiver;
     type AvatarRunner: ::lk_agents_abi::voice::avatar::AvatarRunner<Synchronizer = Self::AVSynchronizer>;
-    type AvatarLifecycle: ::lk_agents_abi::voice::avatar::AvatarLifecycle<Owner = Self::SessionOwner>;
+    type AvatarLifecycle: ::lk_agents_abi::voice::avatar::AvatarLifecycle<
+            Owner = Self::SessionOwner,
+            Output = Self::DataStreamAudioOutput,
+        >;
     type QueueAudio: ::lk_agents_abi::voice::avatar_queue::QueueAudio;
     type PlayState: ::lk_agents_abi::voice::background_audio::PlayState;
     type BackgroundAudioPlayer: ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer<State = Self::PlayState>;
@@ -245,6 +252,7 @@ pub trait Implementations: 'static {
 
 /// Adds every declared class to `_core`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("DEFAULT_PARTITION_KEY", ::lk_agents_abi::storage::DEFAULT_PARTITION_KEY)?;
     m.add_class::<a2a::CoreCredentials>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_allows, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_can_create, m)?)?;
@@ -260,6 +268,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::AgentClient>()?;
     m.add_class::<a2a::CoreA2ADoor>()?;
     m.add_class::<a2a::CoreRemoteInteraction>()?;
+    m.add_function(wrap_pyfunction!(a2a::_core_delegation_chain, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_delegation_tool, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;
     m.add_class::<a2a::CoreHandlerTurn>()?;
@@ -304,6 +313,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<inference::InferenceAvatar>()?;
     m.add_class::<inference::InferenceTts>()?;
     m.add_function(wrap_pyfunction!(invoke::flush_logs, m)?)?;
+    m.add_function(wrap_pyfunction!(llm::_core_payload_to_item, m)?)?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_copy_plan, m)?)?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_truncate_plan, m)?)?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_merge_plan, m)?)?;
@@ -365,6 +375,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<storage::Run>()?;
     m.add_class::<storage::CoreThreadHandle>()?;
     m.add_class::<storage::CoreThreadServer>()?;
+    m.add_class::<storage::CorePersistedSessionState>()?;
+    m.add_class::<storage::CoreSessionBinding>()?;
     m.add_class::<storage::CoreVoiceStore>()?;
     m.add_class::<stt::FallbackStt>()?;
     m.add_class::<stt::FallbackRecognizeStream>()?;
@@ -413,8 +425,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tts::to_xml, m)?)?;
     m.add_class::<tts::Markup>()?;
     m.add_class::<tts::TtsStreamAdapter>()?;
-    m.add_class::<tts::CorePacedSentences>()?;
     m.add_class::<tts::TtsStream>()?;
+    m.add_function(wrap_pyfunction!(tts::default_tts_pacing, m)?)?;
     m.add_function(wrap_pyfunction!(tts::validate_synthesis, m)?)?;
     m.add_class::<turn::InferenceEot>()?;
     m.add_class::<turn::TurnDetectorStream>()?;

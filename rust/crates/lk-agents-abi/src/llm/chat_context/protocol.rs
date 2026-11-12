@@ -255,4 +255,86 @@ mod tests {
             serde_json::json!({"text": "asked", "n": 42}).as_object().unwrap().clone()
         );
     }
+
+    /// Every chat item variant crosses the proto with all of its fields.
+    /// https://github.com/livekit/agents/pull/6756 https://github.com/livekit/agents/pull/5824
+    /// https://github.com/livekit/agents/pull/2128 https://github.com/livekit/agents/pull/4160
+    #[test]
+    fn all_chat_variants_roundtrip_every_field() {
+        use crate::{AgentConfigUpdate, AgentHandoffItem, FunctionCall, FunctionCallOutput};
+        let at = UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_000);
+        let extra: Extra = serde_json::from_value(serde_json::json!({"k": {"a": 1}})).unwrap();
+        let mut spoken = ChatMessage::text("m1", Role::Assistant, "half a sent", at);
+        spoken.interrupted = true;
+        spoken.transcript_confidence = Some(0.25);
+        spoken.extra = extra.clone();
+        spoken.metrics = MetricsReport {
+            started_speaking_at: Some(1_700_000_000.5),
+            stopped_speaking_at: Some(1_700_000_002.5),
+            transcription_delay: Some(0.1),
+            end_of_turn_delay: Some(0.2),
+            on_user_turn_completed_delay: Some(0.3),
+            llm_node_ttft: Some(0.4),
+            tts_node_ttfb: Some(0.5),
+            e2e_latency: Some(0.6),
+            llm_node_tps: Some(42.0),
+            llm_node_ttfs: Some(0.7),
+            ..Default::default()
+        };
+        let mut failed = FunctionCallOutput::new("o1", "c1", "boom", true, at);
+        failed.name = "lookup".into();
+        let items: Vec<ChatItem> = vec![
+            spoken.into(),
+            ChatMessage::text("m2", Role::User, "plain", at).into(),
+            ChatMessage::text("m3", Role::Developer, "rules", at).into(),
+            FunctionCall {
+                id: "f1".into(),
+                call_id: "c1".into(),
+                arguments: r#"{"q":1}"#.into(),
+                name: "lookup".into(),
+                created_at: at,
+                extra,
+                group_id: None,
+            }
+            .into(),
+            failed.into(),
+            AgentHandoffItem {
+                id: "h1".into(),
+                old_agent_id: None,
+                new_agent_id: "desk".into(),
+                created_at: at,
+            }
+            .into(),
+            AgentHandoffItem {
+                id: "h2".into(),
+                old_agent_id: Some("desk".into()),
+                new_agent_id: "office".into(),
+                created_at: at,
+            }
+            .into(),
+            AgentConfigUpdate {
+                id: "u1".into(),
+                instructions: Some("be brief".into()),
+                tools_added: Some(vec!["a".into()]),
+                tools_removed: Some(vec!["b".into(), "c".into()]),
+                created_at: at,
+                tools: None,
+            }
+            .into(),
+            AgentConfigUpdate {
+                id: "u2".into(),
+                instructions: None,
+                tools_added: Some(Vec::new()),
+                tools_removed: Some(Vec::new()),
+                created_at: at,
+                tools: None,
+            }
+            .into(),
+        ];
+        for item in items {
+            let back = decode_chat_item(encode_chat_item(&item)).unwrap();
+            assert_eq!(back.kind(), item.kind(), "{}", item.id());
+            assert_eq!(back, item);
+        }
+    }
 }

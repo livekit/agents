@@ -330,3 +330,45 @@ fn a_refusal_renderer_settles_normally_before_the_next_model_step() {
     );
     assert!(driver.run.wake_at().is_none());
 }
+
+/// Resuming a run interrupted mid-tools sends only answered calls and reruns no tool body.
+/// https://github.com/livekit/agents/issues/1976 https://github.com/livekit/agents/issues/995
+/// https://github.com/livekit/agents/pull/6227 https://github.com/livekit/agents/pull/1729
+#[test]
+fn interrupted_snapshots_preserve_tool_pairs() {
+    use crate::llm::provider_format::host::to_provider_format;
+    use lk_agents_abi::llm::provider_format::ProviderFormat;
+
+    let tools = || vec![string_tool("charge", "x"), string_tool("ship", "x")];
+    let mut d = Driver::new(text_agent(tools()), "order it", vec![]);
+    d.reply("On it.", &[("charge", json!({"x": "1"})), ("ship", json!({"x": "2"}))]);
+    prepare_all(&mut d);
+    let calls: Vec<CallId> = d.executes().iter().map(|(c, ..)| *c).collect();
+    d.send(AgentRunEvent::ToolSettled { call: calls[0], outcome: value("charged") });
+
+    let snapshot = d.run.progress_history();
+    assert_eq!(
+        transcript(&snapshot)[1..],
+        pairs(&[
+            ("assistant", "On it."),
+            ("call", r#"charge({"x":"1"})"#),
+            ("output", "charged"),
+            ("call", r#"ship({"x":"2"})"#),
+        ]),
+        "the finished pair and the running call, with no invented result"
+    );
+    d.send(AgentRunEvent::Cancel);
+    d.send(AgentRunEvent::ToolSettled { call: calls[1], outcome: ToolOutcome::Cancelled });
+    assert_eq!(d.finished(), Some(&Err(RunError::Cancelled)));
+
+    let resumed = Driver::new(text_agent(tools()), "did it go through?", snapshot);
+    assert!(resumed.executes().is_empty(), "no completed body runs again");
+    let (_, ctx, _) = resumed.request();
+    for format in [ProviderFormat::OpenAi, ProviderFormat::Anthropic, ProviderFormat::Google] {
+        let (wire, _) =
+            to_provider_format(format, ctx.items.clone(), None, false, false, None).unwrap();
+        let text = serde_json::to_string(&wire).unwrap();
+        assert_eq!(text.matches("charged").count(), 1, "{format:?}: {text}");
+        assert!(!text.contains("ship"), "{format:?}: an unanswered call is not sent: {text}");
+    }
+}

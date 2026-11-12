@@ -65,6 +65,10 @@ fn caller_history_ingress_rejects_malformed_and_duplicate_parts_before_handler_u
     };
     let history_part = json!({"data": wire(), "metadata": {KIND_KEY: "chat_ctx"}});
     let message = make_message(json!([{"text": "request"}, history_part]));
+    let parsed = crate::a2a::Message::from_a2a(&message, 0.0, None).unwrap();
+    assert_eq!(parsed.text(), "request");
+    assert!(CallerHistory::from_message(&parsed.to_a2a()).unwrap().is_none());
+    assert!(CallerHistory::from_message(&parsed.received_message()).unwrap().is_some());
     assert_eq!(CallerHistory::from_message(&message).unwrap().unwrap().to_chat_items().len(), 3);
     let duplicate = make_message(json!([history_part, history_part]));
     assert!(CallerHistory::from_message(&duplicate).is_err());

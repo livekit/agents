@@ -64,6 +64,7 @@ pub(super) fn user(id: &str, text: &str) -> ChatMessage {
 pub(super) fn input(opening: Opening, history: Vec<ChatItem>) -> RunInput {
     RunInput {
         invocation_id: "run_1".into(),
+        id_seed: 0,
         opening,
         history,
         answer_tool: None,
@@ -343,6 +344,50 @@ fn text_streams_as_it_arrives_before_the_model_ends() {
         AgentRunEffect::Emit(StreamEvent::TextEnd { interrupted: false, .. })
     ));
     assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Text("Hello".into()) });
+}
+
+/// A silent model reply adds no empty assistant message.
+/// https://github.com/livekit/agents/pull/6779 https://github.com/livekit/agents/pull/2792
+#[test]
+fn a_silent_success_settles_without_an_empty_assistant_message() {
+    for content in [None, Some("")] {
+        let mut d = Driver::new(text_agent(vec![]), "hi", vec![]);
+        let (request, _, _) = d.request();
+        d.send(AgentRunEvent::LlmChunk { request, chunk: chunk(content, vec![], None) });
+        d.send(AgentRunEvent::LlmEnded { request });
+        let result = d.result();
+        assert_eq!(result.new_messages.len(), 1);
+        assert_eq!(result.new_messages[0].as_message().unwrap().role, Role::User);
+        assert_eq!(result.outcome, RunOutcome::Completed { output: Output::Text(String::new()) });
+    }
+}
+
+/// Each tool call keeps the time its model step made it.
+/// https://github.com/livekit/agents/pull/4453 https://github.com/livekit/agents/pull/6974
+#[test]
+fn calls_from_different_turns_keep_their_actual_creation_times() {
+    let mut d = Driver::new(text_agent(vec![string_tool("lookup", "q")]), "hi", vec![]);
+    d.advance(Duration::from_secs(5));
+    d.reply("Checking.", &[("lookup", json!({"q": "first"}))]);
+    d.run_tools(|_| value("first result"));
+    d.advance(Duration::from_secs(2));
+    d.reply("Checking again.", &[("lookup", json!({"q": "second"}))]);
+    d.run_tools(|_| value("second result"));
+    d.reply("Done.", &[]);
+    let result = d.result();
+    let calls: Vec<_> = result
+        .new_messages
+        .iter()
+        .filter_map(|item| match item {
+            ChatItem::FunctionCall(call) => Some(call),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        calls[1].created_at.duration_since(calls[0].created_at).unwrap(),
+        Duration::from_secs(2)
+    );
 }
 
 // Catches: identical inputs producing different ids, effects or history (ambient time, entropy

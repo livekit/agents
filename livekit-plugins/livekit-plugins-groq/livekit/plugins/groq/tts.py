@@ -29,7 +29,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
@@ -126,15 +125,12 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             options=replace(self._opts),
             session_factory=self._ensure_session,

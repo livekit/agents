@@ -152,10 +152,11 @@ fn start(
     let ChatItem::Message(message) = request.message.clone() else {
         return Err(Invalid("a session message must be a ChatMessage".into()));
     };
-    let session = TextSession::new(
+    let mut session = TextSession::new(
         config,
         TextSessionInput {
             session_id: request.session_id.clone(),
+            id_seed: request.id_seed.unwrap_or_else(telemetry::random_seed),
             execution_id: request.execution_id.clone(),
             task_id: request.task_id.clone(),
             state: request.state.clone(),
@@ -166,6 +167,9 @@ fn start(
     )
     .map_err(|e| Invalid(e.to_string()))?
     .with_checkpoints();
+    if request.session_sink.is_some() {
+        session = session.with_persistence();
+    }
     let cancel = CancellationToken::new();
     let (updates, receiver) = mpsc::channel(UPDATE_QUEUE);
     let (events_tx, events) = mpsc::channel(64);

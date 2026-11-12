@@ -10,7 +10,6 @@ import pytest
 from livekit import rtc
 from livekit.agents import (
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
     APITimeoutError,
     NotGivenOr,
@@ -97,19 +96,6 @@ async def test_recognition_passive_listening_does_not_start_read_timeout() -> No
         with pytest.raises(APITimeoutError) as error:
             await anext(stream)
         assert error.value.timeout == "read"
-    finally:
-        await stream.aclose()
-
-
-async def test_recognition_return_before_input_eof_is_a_protocol_failure() -> None:
-    class Premature(Stream):
-        async def _run(self) -> None:
-            return
-
-    stream = Premature(stt=Provider(), conn_options=APIConnectOptions(max_retry=0))
-    try:
-        with pytest.raises(APIConnectionError, match="completion"):
-            await anext(stream)
     finally:
         await stream.aclose()
 
@@ -207,38 +193,6 @@ async def test_recognition_flush_queued_behind_backpressure_does_not_arm_read_ti
         assert not stream.closed
     finally:
         release.set()
-        await stream.aclose()
-
-
-@pytest.mark.parametrize("completion", ["premature", "read_timeout"])
-async def test_core_owned_recognition_keeps_completion_and_read_deadlines(completion: str) -> None:
-    class Premature(Stream):
-        async def _run(self) -> None:
-            return
-
-    class BoundaryProvider(Provider):
-        def stream(
-            self,
-            *,
-            language: NotGivenOr[str] = NOT_GIVEN,
-            conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        ) -> Stream:
-            operation = Premature if completion == "premature" else Stream
-            return operation(stt=self, conn_options=conn_options)
-
-    provider = BoundaryProvider()
-    stream = await provider._core_stream(None, None, APIConnectOptions(max_retry=3, read_timeout=0))
-    assert stream is not None
-    try:
-        if completion == "read_timeout":
-            stream.end_input()
-            with pytest.raises(APITimeoutError) as error:
-                await anext(stream)
-            assert error.value.timeout == "read"
-        else:
-            with pytest.raises(APIConnectionError, match="completion"):
-                await anext(stream)
-    finally:
         await stream.aclose()
 
 

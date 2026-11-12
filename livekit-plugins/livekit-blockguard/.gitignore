@@ -1,5 +1,0 @@
-/build
-/dist
-*.egg-info
-*.so
-*.dylib

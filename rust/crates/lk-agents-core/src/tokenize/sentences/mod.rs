@@ -17,6 +17,8 @@ pub use stream::SentenceStream;
 
 use crate::lexer::Vocabulary;
 use chunks::{Chunker, View};
+use lk_agents_abi::tokenize::bindings::SentenceSettings;
+use lk_agents_abi::tts::types::TextUnit;
 
 /// Four words: about twenty characters of English.
 pub const DEFAULT_MIN_WORDS: usize = 4;
@@ -28,12 +30,15 @@ pub struct SentenceOptions {
     pub min_words: usize,
     /// A sentence past this many words without an end breaks at its next clause mark.
     pub clause_words: Option<usize>,
-    /// Batching never grows a chunk past this many characters; a longer sentence goes whole.
+    /// Batching never grows a chunk past this many characters, and a longer sentence is cut at
+    /// its last clause mark or word boundary before it (1000 characters when unset).
     pub max_token_len: Option<usize>,
     /// Keep the raw text; otherwise newlines collapse to spaces and each chunk is trimmed.
     pub retain_format: bool,
     /// The tags no chunk splits or leaves open.
     pub markup: Option<Vocabulary>,
+    /// Sentences, or each word on its own (an open wrapping tag holds its words).
+    pub unit: TextUnit,
 }
 
 impl Default for SentenceOptions {
@@ -44,33 +49,48 @@ impl Default for SentenceOptions {
             max_token_len: None,
             retain_format: false,
             markup: None,
+            unit: TextUnit::Sentences,
         }
     }
 }
 
-/// The sentence splitting a synthesis applies: without a provider, the sentence adapter's
-/// default; with one, its gateway limits. `markup` is what is never split; under it, sentences
-/// batch up to the provider's limit.
-pub fn sentence_splitter(provider: Option<&str>, markup: Option<Vocabulary>) -> SentenceStream {
-    let Some(provider) = provider else {
-        return SentenceStream::new(SentenceOptions {
-            retain_format: true,
-            markup,
-            ..SentenceOptions::default()
-        });
-    };
-    let cfg = crate::tts::markup::sentence_tokenizer_of(provider, markup.is_some());
-    let base = SentenceOptions::default();
-    SentenceStream::new(SentenceOptions {
-        min_words: if cfg.batch_to_max { usize::MAX } else { base.min_words },
-        max_token_len: cfg.max_token_len,
-        markup,
-        ..base
-    })
+impl SentenceOptions {
+    /// How a voice's stage cuts its text: the tokenizer's `settings`, with the voice's tags
+    /// kept whole, its unit, and no chunk past `max_text_len`, the provider's request limit.
+    pub fn for_voice(
+        settings: SentenceSettings,
+        markup_provider: &str,
+        unit: TextUnit,
+        max_text_len: Option<usize>,
+    ) -> SentenceOptions {
+        let max_token_len = match (settings.max_token_len, max_text_len) {
+            (Some(own), Some(limit)) => Some(own.min(limit)),
+            (own, limit) => own.or(limit),
+        };
+        SentenceOptions {
+            min_words: match unit {
+                TextUnit::Words | TextUnit::Text => 1,
+                TextUnit::Sentences => settings.min_words,
+            },
+            clause_words: settings.clause_words,
+            max_token_len,
+            retain_format: settings.retain_format,
+            markup: Some(crate::markup::markup_vocabulary(markup_provider)),
+            unit,
+        }
+    }
 }
 
 /// `tokenize.SentenceTokenizer`.
 pub struct SpeechSentenceTokenizer(SentenceOptions);
+
+impl lk_agents_abi::tokenize::bindings::NativeSentences for SpeechSentenceTokenizer {
+    fn settings(&self) -> SentenceSettings {
+        let SentenceOptions { min_words, clause_words, retain_format, max_token_len, .. } =
+            self.0.clone();
+        SentenceSettings { min_words, clause_words, retain_format, max_token_len }
+    }
+}
 
 impl lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer for SpeechSentenceTokenizer {
     type Stream = SentenceStream;
@@ -87,6 +107,7 @@ impl lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer for SpeechSenten
             max_token_len,
             retain_format,
             markup: None,
+            unit: TextUnit::Sentences,
         })
     }
 

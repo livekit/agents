@@ -629,6 +629,7 @@ fn waited_on_a_voice_fed_after_its_open() -> Recording {
             speech: SpeechId(4),
             text: "Hello there.".into(),
             start_time: None,
+            spoken: true,
         }))
         .produced(0, 0, "Hello there.")
         .first_audio_due(0, BOUND_MS * 3)

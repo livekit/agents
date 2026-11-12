@@ -114,3 +114,21 @@ fn a_bound_view_keeps_the_filter() {
     assert!(llm.with_conn_options(&Default::default()).is_none());
     assert_eq!(llm.model(), "m");
 }
+
+// Catches: reasoning a model writes after its tool calls in the same stream reaching the reader.
+#[test]
+fn reasoning_after_a_tool_call_never_reaches_the_reader() {
+    let call = lk_agents_abi::FunctionToolCall {
+        name: "transfer".into(),
+        arguments: "{}".into(),
+        call_id: "call-1".into(),
+        ..Default::default()
+    };
+    let tool = LlmChunk {
+        id: "c".into(),
+        delta: Some(ChoiceDelta { tool_calls: vec![call], ..Default::default() }),
+        ..Default::default()
+    };
+    let chunks = read("fake", vec![tool, text("<think>planning the reply</think>Be")]);
+    assert_eq!(said(&chunks), "Be");
+}

@@ -170,7 +170,7 @@ fn a_synchronised_transcript_flushes_only_segments_with_text() {
 /// agent transcript, whose header carries the expression as `lk.expression`: what the agents-ui
 /// avatar reads (components-js `useAgentExpression`). The framework's `<expr/>` dialect and
 /// Cartesia's `<emotion/>` alike, paced against the audio or not, and when the transcript is the
-/// voice's own stamped words (`use_tts_aligned_transcript`), which never carry the model's tag.
+/// voice's own stamped words, which never carry the model's tag.
 #[test]
 fn a_leading_expression_reaches_the_room_transcript_as_lk_expression() {
     let replies: [&[&str]; 2] = [
@@ -187,7 +187,6 @@ fn a_leading_expression_reaches_the_room_transcript_as_lk_expression() {
             sync_transcription,
             room_legs: Some(RoomLegs { pre_connect: None }),
             tts_alignment: if aligned { TtsAlignment::Words } else { TtsAlignment::None },
-            aligned_transcript: Some(aligned),
             // only the voice's own tags are markup: `<emotion/>` is Cartesia's
             tts_markup: "cartesia",
             ..Setup::default()

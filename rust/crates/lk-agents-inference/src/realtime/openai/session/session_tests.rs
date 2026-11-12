@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::Maybe;
+use lk_agents_abi::llm::realtime_options::{AzureVoice, AzureVoiceType, Voice};
 use lk_agents_inference::realtime::openai::{
     AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, OPENAI, OpenAIRealtime,
     OptionsPatch, SeqIds, VOICE_LIVE, XAI,
@@ -323,36 +324,44 @@ async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
     session.aclose().await;
 }
 
-// Catches: Azure reached with the OpenAI URL or auth. Azure takes the deployment as `model` and an
-// `api-key` header; its beta event names must read as the GA ones.
+/// Azure, with an API key, an Entra token or both, is reached at its deployment URL with each
+/// credential's header, and its beta event names read as the GA ones.
+/// https://github.com/livekit/agents/issues/2650 https://github.com/livekit/agents/issues/2671
 #[tokio::test]
-async fn azure_gets_its_url_and_header() {
-    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let connect = Connect {
-        base_url: "https://res.openai.azure.com/openai".into(),
-        azure: Some(Azure { deployment: Some("gpt-rt".into()) }),
-        auth: Auth::Azure { api_key: Some("az-key".into()), entra_token: None },
-        conn: Default::default(),
-    };
-    let session = model(ws.clone(), OPENAI).with_connect(connect).session(false).await;
+async fn azure_gets_its_url_and_header_for_every_credential() {
+    for (api_key, entra_token) in
+        [(Some("az-key"), None), (None, Some("entra-tok")), (Some("az-key"), Some("entra-tok"))]
+    {
+        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+        let connect = Connect {
+            base_url: "https://res.openai.azure.com/openai".into(),
+            azure: Some(Azure { deployment: Some("gpt-rt".into()) }),
+            auth: Auth::Azure {
+                api_key: api_key.map(str::to_owned),
+                entra_token: entra_token.map(str::to_owned),
+            },
+            conn: Default::default(),
+        };
+        let session = model(ws.clone(), OPENAI).with_connect(connect).session(false).await;
 
-    frames(&ws, 1).await;
-    let (url, headers) = ws.last_connect().unwrap();
-    assert_eq!(url, "wss://res.openai.azure.com/openai/v1/realtime?model=gpt-rt");
-    assert_eq!(headers.get("api-key"), Some("az-key"));
-    assert!(!headers.iter().any(|(k, _)| k == "Authorization"));
+        frames(&ws, 1).await;
+        let (url, headers) = ws.last_connect().unwrap();
+        assert_eq!(url, "wss://res.openai.azure.com/openai/v1/realtime?model=gpt-rt");
+        assert_eq!(headers.get("api-key"), api_key);
+        let bearer = entra_token.map(|t| format!("Bearer {t}"));
+        assert_eq!(headers.get("Authorization"), bearer.as_deref());
 
-    // a beta event name reads as the GA one
-    ws.feed(text(json!({"type": "conversation.item.created", "previous_item_id": null,
-        "item": {"id": "i1", "type": "message", "role": "user",
-                 "content": [{"type": "input_text", "text": "hi"}]}})));
-    loop {
-        if let Event::RemoteItemAdded(added) = next_event(&session).await {
-            assert_eq!(added.item.id(), "i1");
-            break;
+        ws.feed(text(json!({"type": "conversation.item.created", "previous_item_id": null,
+            "item": {"id": "i1", "type": "message", "role": "user",
+                     "content": [{"type": "input_text", "text": "hi"}]}})));
+        loop {
+            if let Event::RemoteItemAdded(added) = next_event(&session).await {
+                assert_eq!(added.item.id(), "i1");
+                break;
+            }
         }
+        session.aclose().await;
     }
-    session.aclose().await;
 }
 
 // Catches: the beta protocol applied to the machine but not the socket. Voice Live takes the Azure
@@ -369,7 +378,13 @@ async fn voice_live_connects_through_azure_and_sends_the_beta_session() {
     };
     let realtime = model(ws.clone(), VOICE_LIVE).with_connect(connect);
     realtime.update_options(OptionsPatch {
-        voice: Maybe::Given(json!({"type": "azure-standard", "name": "en-US-AvaNeural"})),
+        voice: Maybe::Given(Voice::Azure(AzureVoice {
+            name: "en-US-AvaNeural".into(),
+            r#type: AzureVoiceType::AzureStandard,
+            locale: None,
+            endpoint_id: None,
+            temperature: None,
+        })),
         ..Default::default()
     });
     let session = realtime.session(false).await;
@@ -438,7 +453,7 @@ async fn update_options_sends_only_what_changed_to_the_live_session() {
     frames(&ws, 1).await;
 
     realtime.update_options(OptionsPatch {
-        voice: Maybe::Given("cedar".into()),
+        voice: Maybe::Given(Voice::Name("cedar".into())),
         speed: Maybe::Given(1.0),
         ..Default::default()
     });

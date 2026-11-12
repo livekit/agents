@@ -1,10 +1,13 @@
 """SDK typing preparation protects directories it does not own."""
 
+import runpy
 from pathlib import Path
 
 import pytest
 
-from scripts.prepare_sdk_types import prepare
+prepare = runpy.run_path(
+    str(Path(__file__).resolve().parents[1] / ".github" / "prepare_sdk_types.py")
+)["prepare"]
 
 pytestmark = pytest.mark.unit
 

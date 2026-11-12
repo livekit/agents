@@ -1,10 +1,14 @@
 pub mod db;
-mod lane;
 pub mod lease;
+mod partition;
 pub mod run;
 pub mod schema;
 
-pub use lane::Lane;
+#[cfg(test)]
+#[path = "schema_routing_tests.rs"]
+mod schema_routing_tests;
+
+pub use partition::Partition;
 pub use run::{CommitOptions, EventLog, RESOLVE_LATER, RESOLVE_WAIT, Run, RunOptions, Tasks};
 
 use std::ops::ControlFlow;
@@ -36,9 +40,9 @@ pub struct LeaseTiming {
 
 impl LeaseTiming {
     pub fn new(ttl: Duration, renew_interval: Duration) -> Result<Self, StorageError> {
-        if ttl.is_zero() || ttl.as_secs() >= i64::MAX as u64 {
+        if ttl.is_zero() || ttl.as_nanos().div_ceil(1_000_000) > i64::MAX as u128 {
             return Err(StorageError::Invalid(
-                "lease_ttl must be positive and fit in signed seconds".into(),
+                "lease_ttl must be positive and fit in signed milliseconds".into(),
             ));
         }
         if renew_interval.is_zero() || renew_interval >= ttl.saturating_sub(renew_interval) {
@@ -49,9 +53,9 @@ impl LeaseTiming {
         Ok(Self { ttl, renew_interval })
     }
 
-    /// The TTL as the whole seconds the database counts, rounded up.
-    pub(crate) fn secs(&self) -> i64 {
-        (self.ttl.as_secs() + u64::from(self.ttl.subsec_nanos() > 0)) as i64
+    /// The TTL in database milliseconds, rounded up.
+    pub(crate) fn millis(&self) -> i64 {
+        self.ttl.as_nanos().div_ceil(1_000_000) as i64
     }
 }
 
@@ -171,7 +175,7 @@ pub(crate) async fn read_batch(
 /// What the engine knows of a database's schema: `None` until a probe or a write found it.
 pub type SchemaCell = Arc<Mutex<Option<i64>>>;
 
-/// The thread a worker opened: its database over one connection, shared by every lane. Cheap to
+/// The thread a worker opened: its database over one connection, shared by every partition. Cheap to
 /// clone.
 #[derive(Clone)]
 pub struct Thread {
@@ -251,8 +255,8 @@ impl Thread {
         self.background.track(name)
     }
 
-    pub fn lane(&self, name: &str) -> Lane {
-        Lane { thread: self.clone(), name: name.to_owned() }
+    pub fn partition(&self, name: &str) -> Partition {
+        Partition { thread: self.clone(), name: name.to_owned() }
     }
 
     pub(crate) fn conn(&self) -> &Arc<dyn ThreadDbConnection> {
@@ -341,12 +345,12 @@ impl Thread {
         self.resend(write).send(|| self.exec(statement())).await
     }
 
-    /// The journal, every lane, after the event `after_id`, at most `limit` events.
+    /// The journal, every partition, after the event `after_id`, at most `limit` events.
     pub async fn journal(&self, after_id: i64, limit: i64) -> Result<Vec<EventRow>, StorageError> {
         self.read(SelectEvents { after_id, limit }, EventRow::from_row).await
     }
 
-    /// One task, whichever lane it is on.
+    /// One task, whichever partition it is on.
     pub async fn task(&self, task_id: &str) -> Result<Option<TaskRow>, StorageError> {
         Ok(self.read(SelectThreadTask { task_id }, TaskRow::from_row).await?.into_iter().next())
     }
@@ -359,29 +363,32 @@ impl Thread {
         db::list_tasks(&*self.conn, q).await
     }
 
-    pub async fn lanes(&self) -> Result<Vec<LaneRow>, StorageError> {
-        self.read(SelectLanes {}, LaneRow::from_row).await
+    pub async fn partitions(&self) -> Result<Vec<PartitionRow>, StorageError> {
+        self.read(SelectPartitions {}, PartitionRow::from_row).await
     }
 
-    /// One page of the thread's committed items in insertion order, of `lane` when given,
+    /// One page of the thread's committed items in insertion order, of `partition_key` when given,
     /// after the opaque `cursor` of the previous page. No lease needed.
     pub async fn list_items(
         &self,
-        lane: Option<&str>,
+        partition_key: Option<&str>,
         cursor: Option<&str>,
         limit: i64,
     ) -> Result<ItemPage, StorageError> {
         if !self.refresh_schema().await? {
             return Ok(ItemPage { items: Vec::new(), next: None });
         }
-        db::list_items(&*self.conn, lane, cursor, limit).await
+        db::list_items(&*self.conn, partition_key, cursor, limit).await
     }
 
     /// A direct field store's committed scope snapshot. Initialization remains runtime-owned.
-    pub async fn context_scopes(&self, lane: &str) -> Result<Vec<ContextScope>, StorageError> {
+    pub async fn context_scopes(
+        &self,
+        partition_key: &str,
+    ) -> Result<Vec<ContextScope>, StorageError> {
         self.ensure_schema().await?;
         let mut statements: Vec<Statement> = db::framework_schema().collect();
-        statements.push(SelectScopes { lane }.bind());
+        statements.push(SelectScopes { partition_key }.bind());
         let scopes = statements.len() - 1;
         let result = read_batch(&*self.conn, statements).await?;
         crate::context::scopes_from_rows(result.at(scopes)?.rows())

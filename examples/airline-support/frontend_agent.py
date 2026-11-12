@@ -1,6 +1,6 @@
 import backend_agent
 
-from livekit.agents import Agent, AgentHandler, JobContext, RunResult, VoiceSession
+from livekit.agents import Agent, AgentHandler, JobContext, RunResult, TextSession, VoiceSession
 from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 
 LLM = "google/gemma-4-31b-it"
@@ -34,17 +34,22 @@ voice = Agent(
 )
 
 
-front_desk = AgentHandler()  # the worker's own lane: the phone and the text door share it
+front_desk = AgentHandler()  # Groups the voice and text entry points.
 
 
-@front_desk.rtc_session()
+@front_desk.rtc_session()  # Voice uses DEFAULT_PARTITION_KEY; text has its own partition.
 async def phone(ctx: JobContext) -> None:
-    session = VoiceSession(llm=LLM, thread=ctx.thread)
+    binding = ctx.store.bind()
+    session = VoiceSession(llm=LLM, context=binding)
     await session.start(agent=voice, room=ctx.room)
     if not session.history.items:
         await session.generate_reply(instructions="Greet the customer in one sentence.")
 
 
-@front_desk.a2a_session(endpoint="frontend", description="Skyline Air customer care.")
+@front_desk.a2a_session(
+    partition_key="frontend", endpoint="frontend", description="Skyline Air customer care."
+)
 async def text(ctx: A2ASessionContext) -> RunResult[str]:
-    return await chat.run(ctx.message, message_history=ctx.message_history)
+    binding = ctx.store.bind()
+    turn = await TextSession(agent=chat).run(ctx.message, context=binding)
+    return turn.result

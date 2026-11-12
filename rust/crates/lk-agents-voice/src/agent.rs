@@ -222,8 +222,8 @@ impl SessionChatCtx {
         (entry, outcome)
     }
 
-    /// The lane as storage reloaded it for a turn that read `read`, in the lane's order. Rows the
-    /// turn read are the lane's to change: another turn's edits replace them (a row given back as
+    /// The partition as storage reloaded it for a turn that read `read`, in the partition's order. Rows the
+    /// turn read are the partition's to change: another turn's edits replace them (a row given back as
     /// the turn read it is the turn's own rendering, never an edit), and rows it removed,
     /// compacted away or abandoned leave. Rows the turn did not read (another agent's,
     /// one dropped from the view, one committed since) stay where their instant puts them, and
@@ -240,12 +240,12 @@ impl SessionChatCtx {
         let mut held: BTreeMap<String, Committed> =
             self.items.drain(..).map(|entry| (entry.item.id().to_owned(), entry)).collect();
         // A row the turn read that the record does not hold is the request's own (its prompt, its
-        // new message): never the lane's to add.
+        // new message): never the partition's to add.
         self.items = items
             .into_iter()
             .filter(|item| item.id() != INSTRUCTIONS_MESSAGE_ID)
             .filter_map(|item| match held.remove(item.id()) {
-                // An unread row is not the lane's to change: the record's entry stays.
+                // An unread row is not the partition's to change: the record's entry stays.
                 Some(entry) if read.get(item.id()).is_none_or(|read| *read == &item) => Some(entry),
                 Some(entry) => Some(Committed { item, ..entry }),
                 None if read.contains_key(item.id()) => None,
@@ -355,6 +355,35 @@ impl SessionChatCtx {
         self.contains(id).then(|| self.items.iter().find(|c| c.item.id() == id)).flatten()
     }
 
+    /// When `call_id`'s group ends on the record: its call and the calls and outputs right after
+    /// it. `None` while the call is not on the record.
+    pub fn call_group_end(&self, call_id: &str) -> Option<std::time::SystemTime> {
+        let call = self.items.iter().position(
+            |c| matches!(&c.item, ChatItem::FunctionCall(call) if call.call_id == call_id),
+        )?;
+        let group = self.items[call..].iter().take_while(|c| {
+            matches!(c.item, ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_))
+        });
+        group.map(|c| c.item.created_at()).max()
+    }
+
+    /// How many leading items have their place for good while a call stamped `open_since` is still
+    /// open: what was stamped no later, then that call's group of tool items, since its output
+    /// lands right after them. `group` names the open turn's items.
+    pub fn settled_prefix(
+        &self,
+        open_since: std::time::SystemTime,
+        group: impl Fn(&Source) -> bool,
+    ) -> usize {
+        let after = self.items.iter().position(|c| c.item.created_at() > open_since);
+        let Some(after) = after else { return self.items.len() };
+        let tools = self.items[after..].iter().take_while(|c| {
+            matches!(c.item, ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_))
+                && group(&c.source)
+        });
+        after + tools.count()
+    }
+
     /// After the last item stamped at or before this one: ties go after.
     fn find_insertion_index(&self, item: &ChatItem) -> usize {
         let at = item.created_at();
@@ -403,7 +432,7 @@ mod tests {
 
     /// Seed 1227: a question another agent asked was answered after the last commit; a reload
     /// for a turn that did not read it gives back the committed, waiting row, and the answer
-    /// stays. A row the turn read and the lane changed is replaced.
+    /// stays. A row the turn read and the partition changed is replaced.
     #[test]
     fn a_reload_changes_only_the_rows_the_turn_read() {
         let at = SystemTime::UNIX_EPOCH;

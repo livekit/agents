@@ -226,14 +226,14 @@ impl Storage for AgentDbStorage {
             .await
     }
 
-    /// One connection to the thread's database, parked for the next open when the thread
-    /// closes.
+    /// One connection to the thread's database, which has the thread's id, parked for the next
+    /// open when the thread closes.
     async fn open(&self, thread_id: &str) -> Result<Thread, StorageError> {
-        let database_id = self.get_thread(thread_id).await?.database_id;
-        let (conn, schema) = match self.pool.take(&database_id) {
+        self.get_thread(thread_id).await?;
+        let (conn, schema) = match self.pool.take(thread_id) {
             Some(idle) => (idle.conn, idle.schema),
             None => {
-                let mut opts = connection::Options::new(self.data_plane.clone(), &database_id);
+                let mut opts = connection::Options::new(self.data_plane.clone(), thread_id);
                 opts.reconnect = self.opts.reconnect.clone();
                 let conn = Conn::dial(opts, self.minter.clone(), self.runtime.clone()).await?;
                 (conn, SchemaCell::default())
@@ -252,14 +252,14 @@ impl Storage for AgentDbStorage {
     async fn get_thread_items(
         &self,
         id: &str,
-        lane: Option<&str>,
+        partition_key: Option<&str>,
         after: Option<&str>,
         limit: i64,
     ) -> Result<lk_agents_abi::storage::ThreadItemPage, StorageError> {
         use lk_agents_abi::storage::{ThreadItem, ThreadItemPage};
         let request = livekit_protocol::agent::agent_thread::GetItemsRequest {
             thread_id: id.into(),
-            agent: lane.unwrap_or_default().into(),
+            agent: partition_key.unwrap_or_default().into(),
             page_token: after.unwrap_or_default().into(),
             limit: limit.clamp(1, 500) as i32,
             ..Default::default()

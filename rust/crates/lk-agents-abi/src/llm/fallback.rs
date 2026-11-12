@@ -150,8 +150,6 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
-    #[host(class(name = "TtsStream"))]
-    type Stream;
     /// `tts` in order; `sample_rate` defaults to the highest of theirs, the others resampled.
     #[host(new)]
     fn new(
@@ -172,18 +170,6 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     fn num_channels(&self) -> u16;
     #[host(await)]
     async fn aclose(&self);
-    #[host(await)]
-    async fn synthesize(
-        &self,
-        input_text: String,
-        #[host(kw, default = None)] conn_options: Option<crate::ApiConnectOptions>,
-    ) -> Result<Self::Stream, crate::errors::ProviderError>;
-    #[host(await)]
-    async fn stream(
-        &self,
-        #[host(kw, default = None)] conn_options: Option<crate::ApiConnectOptions>,
-        #[host(default = false)] expressive: bool,
-    ) -> Result<Self::Stream, crate::errors::ProviderError>;
 }
 
 /// `tts.FallbackAdapter`: several TTS behind one; a failed one is skipped until it recovers.
@@ -193,7 +179,7 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     name = "FallbackAdapter",
     base = "tts.TTS",
     native = FallbackTts,
-    legs(synthesize, stream),
+    legs(_synthesize, _stream),
     base_args(capabilities, sample_rate, num_channels),
     availability(
         observer = "on_availability",
@@ -221,40 +207,6 @@ pub trait FallbackTtsAdapter {
         #[host(default = None)] sample_rate: Option<u32>,
     ) -> Self;
 }
-
-/// `tts.FallbackAdapter.synthesize()`: the chain's synthesis, which retries and falls back.
-#[crate::host(facade(
-    path = "livekit.agents.tts",
-    base = "tts.ChunkedStream",
-    native = FallbackTts,
-    stream(
-        op = synthesize,
-        owner = "_tts",
-        native_retries,
-        method = "synthesize",
-        base_args(input_text, conn_options),
-        rename(input_text = "text"),
-        default(conn_options = "..types.DEFAULT_API_CONNECT_OPTIONS")
-    )
-))]
-pub trait FallbackChunkedStream {}
-
-/// `tts.FallbackAdapter.stream()`: the chain's synthesis, which retries and falls back.
-#[crate::host(facade(
-    path = "livekit.agents.tts",
-    base = "tts.SynthesizeStream",
-    native = FallbackTts,
-    stream(
-        op = stream,
-        owner = "_tts",
-        native_retries,
-        method = "stream",
-        base_args(conn_options),
-        state(expressive),
-        default(conn_options = "..types.DEFAULT_API_CONNECT_OPTIONS")
-    )
-))]
-pub trait FallbackSynthesizeStream {}
 
 /// A realtime model as the core takes it (a voice session's, a fallback member): a native model
 /// or a host provider. A fallback opens a host provider afresh on every attempt, so a failed

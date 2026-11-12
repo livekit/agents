@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from livekit.agents import http, tts as agents_tts, utils
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, http, tts as agents_tts, utils
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
 pytestmark = pytest.mark.plugin("elevenlabs")
@@ -555,7 +555,7 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
     monkeypatch.setattr(agents_tts.AudioEmitter, "end_segment", _end_segment)
 
     tts = elevenlabs_tts.TTS(api_key="test-key", encoding="pcm_24000")
-    stream = tts.stream(conn_options=agents_tts.DEFAULT_API_CONNECT_OPTIONS)
+    stream = tts.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     stream.push_text("hello world. ")
     consumer = asyncio.create_task(anext(stream))
     await asyncio.wait_for(registered.wait(), timeout=1)
@@ -567,6 +567,53 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
 
     assert calls.index("unregister_stream") < calls.index("end_segment")
     assert "close_context" in calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_mode", [True, False])
+async def test_stream_sends_each_chunk_as_is(
+    monkeypatch: pytest.MonkeyPatch, auto_mode: bool
+) -> None:
+    sent: list[tuple[str, bool]] = []
+    closed = asyncio.Event()
+
+    class _StubConnection:
+        def register_stream(self, **kwargs: object) -> None:
+            pass
+
+        def send_content(self, content: elevenlabs_tts._SynthesizeContent) -> None:
+            sent.append((content.text, content.flush))
+
+        def unregister_stream(self, context_id: str) -> None:
+            pass
+
+        def close_context(self, context_id: str) -> None:
+            closed.set()
+
+    connection = _StubConnection()
+
+    async def _current_connection(self: object, **kwargs: object) -> object:
+        return connection
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+
+    tts = elevenlabs_tts.TTS(api_key="test-key", encoding="pcm_24000", auto_mode=auto_mode)
+    assert tts._core_text_unit() == ("sentences" if auto_mode else "words")
+    stream = tts._stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    stream._push_chunk(agents_tts.SpeechChunk(text="Hello there.", said="Hello there."))
+    stream._push_chunk(agents_tts.SpeechChunk(text='<break time="1s"/>', said=""))
+    stream.flush()
+    stream._push_chunk(agents_tts.SpeechChunk(text="Bye.", said="Bye."))
+    stream.end_input()
+    await asyncio.wait_for(closed.wait(), timeout=1)
+    await stream.aclose()
+
+    assert sent == [
+        ("Hello there. ", auto_mode),
+        ('<break time="1s"/> ', auto_mode),
+        ("Bye. ", auto_mode),
+        ("", True),
+    ]
 
 
 # -- eleven_v3 / eleven_v4 (text-to-dialogue) ----------------------------------------
@@ -930,3 +977,14 @@ async def test_disabled_response_timeout_keeps_pending_context() -> None:
         if waiter.done() and not waiter.cancelled():
             waiter.exception()
         waiter.cancel()
+
+
+# Catches: the strict frame model refusing ElevenLabs' `"isFinal": null`, which it sends on every
+# audio frame but the last, so every streamed synthesis failed with "Could not synthesize".
+def test_a_frame_with_a_null_final_flag_is_not_final() -> None:
+    from livekit.plugins.elevenlabs.models import TTSFrame
+
+    frame = TTSFrame.model_validate_json('{"audio": "AAAA", "isFinal": null, "contextId": "c"}')
+    assert frame.audio == "AAAA" and frame.is_final is False and frame.context_id == "c"
+    assert TTSFrame.model_validate_json('{"isFinal": true}').is_final is True
+    assert TTSFrame.model_validate_json('{"is_final": true, "context_id": "d"}').context_id == "d"

@@ -1,12 +1,12 @@
-use lk_agents_abi::a2a::auth::{AuthError, AuthPrincipal, Credentials as _, PrincipalKind};
+use lk_agents_abi::a2a::auth::{AuthError, AuthPrincipal, bearer_token};
 use lk_agents_abi::a2a::card::EndpointDescriptor;
 use lk_agents_abi::a2a::door::{DoorError, TextServing};
-use lk_agents_abi::a2a::metadata::{AGENT_CARD_PATH, EXTENSIONS_HEADER, GRANT_HEADER, RPC_PATH};
+use lk_agents_abi::a2a::metadata::{AGENT_CARD_PATH, EXTENSIONS_HEADER, RPC_PATH};
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::http::{
     ExchangeEvent, ExchangeMessage, HttpExchange, HttpScheme, RequestHead,
 };
-use lk_agents_net::a2a_auth::Credentials;
+use lk_agents_net::a2a_auth::endpoint_caller;
 use serde_json::json;
 
 use super::{Door, MAX_PAYLOAD_BYTES};
@@ -38,7 +38,7 @@ pub async fn serve<E: HttpExchange>(
         }
         _ => return answer(exchange, 404, error("Not Found"), Vec::new()).await,
     };
-    let principal = match caller(&head.headers, &serving) {
+    let principal = match caller(&head, &serving) {
         Ok(principal) => principal,
         Err(refused) => return refuse(exchange, &refused).await,
     };
@@ -48,32 +48,25 @@ pub async fn serve<E: HttpExchange>(
     }
 }
 
-/// The caller, in order: the console's listener vouches for everyone; a worker holding the
-/// project's credentials verifies the bearer the node forwarded, the node's verdict standing for
-/// a request that carries none; without credentials only the node's verdict admits, as the
-/// project.
-fn caller(headers: &Headers, serving: &TextServing) -> Result<AuthPrincipal, AuthError> {
+/// The caller: the console's listener vouches for everyone; otherwise the claims of the token the
+/// node verified, its `Authorization` bearer else its `access_token` query parameter, and no
+/// other. The worker never verifies a signature ([auth](docs/auth.md)).
+fn caller(head: &RequestHead, serving: &TextServing) -> Result<AuthPrincipal, AuthError> {
     let request = &serving.request;
     if request.unauthenticated {
         return Ok(lk_agents_core::a2a::auth::unauthenticated());
     }
-    match &serving.credentials {
-        Some((key, secret)) => Credentials::new(key.clone(), secret.clone()).authenticate(
-            header(headers, "authorization").as_deref(),
-            header(headers, GRANT_HEADER).as_deref(),
-            request.authorized,
-            serving.agent_name.clone(),
-            serving.deployment.clone(),
+    let token = match header(&head.headers, "authorization") {
+        Some(value) => Some(
+            bearer_token(&value)
+                .ok_or_else(|| AuthError::Unauthorized("invalid Authorization header".into()))?
+                .to_owned(),
         ),
-        None if request.authorized => Ok(AuthPrincipal {
-            kind: PrincipalKind::Project,
-            grant: None,
-            identity: String::new(),
-            claims: Default::default(),
-            endpoint_call: true,
-        }),
-        None => Err(AuthError::Unauthorized("a LiveKit bearer token is required".into())),
-    }
+        None => url::form_urlencoded::parse(&head.query_string)
+            .find(|(key, _)| key == "access_token")
+            .map(|(_, token)| token.into_owned()),
+    };
+    endpoint_caller(token.as_deref(), request.authorized, &serving.agent_name, &serving.deployment)
 }
 
 /// The card, its URL where the request reached the endpoint: Cloud's, else the worker's path on

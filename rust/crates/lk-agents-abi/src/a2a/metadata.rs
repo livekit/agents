@@ -5,9 +5,6 @@ const _: () = ();
 pub const EXTENSION_URI: &str = "https://livekit.io/a2a/ext/agents/v1";
 #[crate::host(constant)]
 pub const EXTENSIONS_HEADER: &str = "A2A-Extensions";
-/// The request header that carries a thread grant beside `Authorization`.
-#[crate::host(constant)]
-pub const GRANT_HEADER: &str = "X-LiveKit-Thread-Grant";
 /// Where an endpoint publishes its agent card, under `/<endpoint>`.
 #[crate::host(constant(path = "livekit.agents.a2a"))]
 pub const AGENT_CARD_PATH: &str = "/.well-known/agent-card.json";
@@ -34,3 +31,7 @@ pub const KIND_DELEGATION: &str = "delegation";
 pub const KIND_CHAT_CTX: &str = "chat_ctx";
 #[crate::host(constant)]
 pub const ANSWER_ARTIFACT_NAME: &str = "answer";
+
+/// Active delegation ancestors, used to reject re-entry into their owned partitions.
+#[crate::host(constant)]
+pub const PARTITION_CHAIN_KEY: &str = "https://livekit.io/a2a/ext/agents/v1/partitionChain";

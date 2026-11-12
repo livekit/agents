@@ -167,7 +167,7 @@ async def test_reports_after_the_answer_are_dropped_and_checkpoints_yield(
         assert await reports.checkpoint()
 
 
-async def test_a_thread_handle_reads_each_lane_through_its_own_open_database(
+async def test_a_thread_handle_reads_each_partition_through_its_own_open_database(
     tmp_path: Path,
 ) -> None:
     storage = SQLiteStorage(directory=tmp_path)
@@ -183,13 +183,13 @@ async def test_a_thread_handle_reads_each_lane_through_its_own_open_database(
             answered = await _core.Turn(core, "desk", _Host(run)).run(message)
         finally:
             core.close()
-        thread = Thread(storage, thread_id, agent_name="desk")
+        thread = Thread(storage, thread_id, partition_key="desk")
         reads = await asyncio.gather(
             thread.info(),
             thread.chat_history(),
-            thread.lane("desk").tasks(status="completed"),
-            thread.lane("other").history(),
-            thread.list_tasks(agent="desk", order="updated"),
+            thread.partition("desk").tasks(status="completed"),
+            thread.partition("other").history(),
+            thread.list_tasks(partition_key="desk", order="updated"),
             thread.task(answered.task.task_id),
             thread.journal(),
             thread.list_items(),

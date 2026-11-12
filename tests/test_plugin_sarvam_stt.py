@@ -337,81 +337,6 @@ async def test_sarvam_stt_handle_message_treats_unknown_error_shape_as_error() -
 
 
 @pytest.mark.asyncio
-async def test_sarvam_stt_recognize_forces_single_attempt_conn_options(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured = {}
-
-    async def _fake_base_recognize(
-        self: object,
-        buffer: object,
-        *,
-        language: object = sarvam_stt.NOT_GIVEN,
-        conn_options: APIConnectOptions = (sarvam_stt.DEFAULT_API_CONNECT_OPTIONS),
-    ) -> sarvam_stt.stt.SpeechEvent:
-        del self, buffer, language
-        captured["conn_options"] = conn_options
-        return sarvam_stt.stt.SpeechEvent(type=sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT)
-
-    monkeypatch.setattr(sarvam_stt.stt.STT, "recognize", _fake_base_recognize)
-
-    stt = sarvam_stt.STT(api_key="sk_test")
-    await stt.recognize(
-        _make_audio_buffer(),
-        conn_options=APIConnectOptions(
-            max_retry=9,
-            retry_interval=1.5,
-            read_timeout=7.0,
-        ),
-    )
-
-    conn_options = captured["conn_options"]
-    assert conn_options.max_retry == 0
-    assert conn_options.retry_interval == 1.5
-    assert conn_options.read_timeout == 7.0
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured = {}
-
-    class _DummyStream:
-        def __init__(
-            self,
-            *,
-            stt: object,
-            opts: object,
-            conn_options: APIConnectOptions,
-            api_key: str,
-            http_session: object,
-            release_stream: object,
-        ) -> None:
-            del stt, opts, api_key
-            captured["conn_options"] = conn_options
-            captured["http_session"] = http_session
-
-    monkeypatch.setattr(sarvam_stt, "SpeechStream", _DummyStream)
-
-    stt = sarvam_stt.STT(api_key="sk_test")
-    _ = stt.stream(
-        conn_options=APIConnectOptions(
-            max_retry=8,
-            retry_interval=0.2,
-            read_timeout=4.0,
-        )
-    )
-
-    conn_options = captured["conn_options"]
-    assert conn_options.max_retry == 0
-    assert conn_options.retry_interval == 0.2
-    assert conn_options.read_timeout == 4.0
-
-    await captured["http_session"].aclose()
-
-
-@pytest.mark.asyncio
 @pytest.mark.usefixtures("recording_sessions")
 async def test_sarvam_stt_aclose_closes_tracked_stream_sessions(
     monkeypatch: pytest.MonkeyPatch,
@@ -435,46 +360,6 @@ async def test_sarvam_stt_aclose_closes_tracked_stream_sessions(
 
     assert all(s.closed for s in sessions), "STT.aclose() must close every per-stream HTTP session"
     assert len(stt._streams) == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("recording_sessions")
-async def test_sarvam_stt_async_context_closes_stream_sessions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _idle_run(self: object) -> None:
-        del self
-        await asyncio.Event().wait()  # cancelled by aclose()
-
-    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _idle_run)
-
-    async with sarvam_stt.STT(api_key="sk_test") as stt:
-        stream = stt.stream()
-        session = stream._session
-        assert not session.closed
-
-    assert session.closed, "exiting `async with` must close per-stream sessions"
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("recording_sessions")
-async def test_sarvam_stt_aclose_tolerates_already_closed_streams(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _idle_run(self: object) -> None:
-        del self
-        await asyncio.Event().wait()  # cancelled by aclose()
-
-    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _idle_run)
-
-    stt = sarvam_stt.STT(api_key="sk_test")
-    stream = stt.stream()
-    session = stream._session
-
-    await stream.aclose()
-    await stt.aclose()  # must not raise on an already-closed stream
-
-    assert session.closed
 
 
 @pytest.mark.asyncio

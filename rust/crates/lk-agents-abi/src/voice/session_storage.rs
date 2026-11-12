@@ -19,12 +19,19 @@ pub trait SessionStorage: Send + Sync + Sized + 'static {
         env: &Self::Env,
         namespace: Option<Arc<Self::Namespace>>,
         thread_id: Option<String>,
-        lane: String,
+        partition_key: String,
         agent: String,
         initial_history: Option<Vec<ChatItem>>,
     ) -> Self;
 
-    /// Load the supplied thread's lane; its failure is the call's (no other thread replaces it).
+    /// Reuse the context activation the application hydrated before voice startup.
+    #[host(call)]
+    fn use_activation(
+        &self,
+        activation: std::sync::Arc<Self::Activation>,
+    ) -> Result<(), StorageError>;
+
+    /// Load the supplied thread's partition; its failure is the call's (no other thread replaces it).
     /// Without a thread, the call runs in memory: nothing is written anywhere.
     #[host(await)]
     async fn open(&self) -> Result<(), StorageError>;

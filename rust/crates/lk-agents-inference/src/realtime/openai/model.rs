@@ -6,33 +6,17 @@ use lk_agents_abi::llm::realtime::{
     OpenAIRealtimeModel, RealtimeConfigurationError, RealtimeProvider,
 };
 use lk_agents_abi::llm::realtime_options::{
-    AudioTranscription, InferenceGateway, NoiseReduction, Reasoning, Tracing, Truncation,
-    TurnDetection as TurnDetectionOption, Voice,
+    AudioTranscription, InferenceGateway, NoiseReduction, Reasoning, ServerVad, Tracing,
+    Truncation, TurnDetection, Voice,
 };
 use lk_agents_abi::{ApiConnectOptions, Maybe, Modalities, ToolChoice};
 use lk_agents_net::task::TokioSpawner;
-use serde_json::{Value, json};
 
 use super::session::{Auth, Connect, OpenAIRealtime};
 use super::wire::Azure;
-use crate::realtime::dialect::{DEFAULT_MAX_OUTPUT_TOKENS, Dialect, OPENAI, TurnDetection};
-use crate::realtime::machine::{OptionsPatch, SessionOptions};
+use crate::realtime::dialect::{Dialect, OPENAI};
+use crate::realtime::machine::{OptionsPatch, SessionOptions, transcription};
 use lk_agents_net::env::ProcessEnv;
-
-/// A session update: an omitted option keeps its setting, an explicit `None` clears it.
-#[derive(Clone, Default)]
-struct RealtimeOptions {
-    voice: Maybe<Voice>,
-    tool_choice: Maybe<Option<ToolChoice>>,
-    input_audio_transcription: Maybe<Option<AudioTranscription>>,
-    input_audio_noise_reduction: Maybe<Option<NoiseReduction>>,
-    turn_detection: Maybe<Option<TurnDetectionOption>>,
-    speed: Maybe<f64>,
-    tracing: Maybe<Option<Tracing>>,
-    truncation: Maybe<Option<Truncation>>,
-    reasoning: Maybe<Option<Reasoning>>,
-    max_response_output_tokens: Maybe<Option<u32>>,
-}
 
 /// The constructor's arguments.
 #[derive(Clone, Default)]
@@ -40,7 +24,8 @@ struct Config {
     model: Option<String>,
     voice: Option<Voice>,
     modalities: Option<Vec<Modalities>>,
-    options: RealtimeOptions,
+    /// The session options given; an omitted one keeps the dialect's default.
+    options: OptionsPatch,
     base_url: Option<String>,
     api_key: Option<String>,
     azure_deployment: Option<String>,
@@ -51,30 +36,6 @@ struct Config {
     dialect: Option<RealtimeProvider>,
     label: Option<String>,
     gateway: Option<InferenceGateway>,
-}
-
-/// An option record as the session field it sets.
-fn wire(option: impl serde::Serialize) -> Value {
-    serde_json::to_value(option).expect("a realtime option is plain JSON")
-}
-
-fn patch(options: RealtimeOptions) -> OptionsPatch {
-    OptionsPatch {
-        voice: options.voice.map(wire),
-        tool_choice: options.tool_choice,
-        turn_detection: options
-            .turn_detection
-            .map(|value| value.map(|td| TurnDetection::Raw(wire(td)))),
-        max_output_tokens: options
-            .max_response_output_tokens
-            .map(|tokens| tokens.map_or(json!(DEFAULT_MAX_OUTPUT_TOKENS), |n| json!(n))),
-        transcription: options.input_audio_transcription.map(|v| v.map(wire)),
-        noise_reduction: options.input_audio_noise_reduction.map(|v| v.map(wire)),
-        speed: options.speed,
-        tracing: options.tracing.map(|v| v.map(wire)),
-        truncation: options.truncation.map(|v| v.map(wire)),
-        reasoning: options.reasoning.map(|v| v.map(wire)),
-    }
 }
 
 /// The caller's key and base URL, with the environment's defaults: Azure OpenAI's when Azure is
@@ -151,12 +112,12 @@ fn build(env: &ProcessEnv, config: Config) -> Result<OpenAIRealtime, RealtimeCon
         .unwrap_or(dialect.provider);
     if is_inference && model_provider == RealtimeProvider::Xai {
         let xai = Dialect::of(RealtimeProvider::Xai);
-        opts.transcription = xai.default_transcription_model.map(|m| json!({"model": m}));
-        opts.voice = json!(xai.default_voice);
+        opts.transcription = xai.default_transcription_model.map(transcription);
+        opts.voice = Voice::Name(xai.default_voice.to_owned());
         opts.turn_detection = xai.default_turn_detection;
     }
     if let Some(voice) = config.voice {
-        opts.voice = wire(voice);
+        opts.voice = voice;
     }
     if dialect.forced_modalities.is_none() {
         opts.audio_output = config
@@ -164,14 +125,18 @@ fn build(env: &ProcessEnv, config: Config) -> Result<OpenAIRealtime, RealtimeCon
             .is_none_or(|modalities| modalities.contains(&Modalities::AudioAndText));
     }
     if azure_openai {
-        opts.transcription = Some(json!({"model": "whisper-1"}));
-        opts.turn_detection = Some(TurnDetection::Raw(json!({
-            "type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300,
-            "silence_duration_ms": 200, "create_response": true,
-        })));
+        opts.transcription = Some(transcription("whisper-1"));
+        opts.turn_detection = Some(TurnDetection::Server(ServerVad {
+            threshold: Some(0.5),
+            prefix_padding_ms: Some(300),
+            silence_duration_ms: Some(200),
+            idle_timeout_ms: None,
+            create_response: Some(true),
+            interrupt_response: None,
+        }));
     }
     let turn_detection_given = config.options.turn_detection.is_given();
-    let options = patch(config.options);
+    let options = config.options;
     super::session::warn_on_half_disabled_turn_taking(&options.turn_detection);
     opts.apply(&options);
     if let Maybe::Given(duration) = config.max_session_duration {
@@ -226,7 +191,7 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
         base_url: Option<String>,
         input_audio_transcription: Maybe<Option<AudioTranscription>>,
         input_audio_noise_reduction: Maybe<Option<NoiseReduction>>,
-        turn_detection: Maybe<Option<TurnDetectionOption>>,
+        turn_detection: Maybe<Option<TurnDetection>>,
         speed: Maybe<f64>,
         tracing: Maybe<Option<Tracing>>,
         truncation: Maybe<Option<Truncation>>,
@@ -242,17 +207,17 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
         label: Option<String>,
         gateway: Option<InferenceGateway>,
     ) -> Result<Self, RealtimeConfigurationError> {
-        let options = RealtimeOptions {
+        let options = OptionsPatch {
             voice: Maybe::NotGiven,
             tool_choice,
-            input_audio_transcription,
-            input_audio_noise_reduction,
+            transcription: input_audio_transcription,
+            noise_reduction: input_audio_noise_reduction,
             turn_detection,
             speed,
             tracing,
             truncation,
             reasoning,
-            max_response_output_tokens,
+            max_output_tokens: max_response_output_tokens,
         };
         build(
             env,
@@ -290,7 +255,7 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
     fn update_options(
         &self,
         voice: Maybe<Voice>,
-        turn_detection: Maybe<Option<TurnDetectionOption>>,
+        turn_detection: Maybe<Option<TurnDetection>>,
         tool_choice: Maybe<Option<ToolChoice>>,
         input_audio_transcription: Maybe<Option<AudioTranscription>>,
         input_audio_noise_reduction: Maybe<Option<NoiseReduction>>,
@@ -300,18 +265,18 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
         truncation: Maybe<Option<Truncation>>,
         reasoning: Maybe<Option<Reasoning>>,
     ) {
-        self.update_options(patch(RealtimeOptions {
+        self.update_options(OptionsPatch {
             voice,
             tool_choice,
-            input_audio_transcription,
-            input_audio_noise_reduction,
+            transcription: input_audio_transcription,
+            noise_reduction: input_audio_noise_reduction,
             turn_detection,
             speed,
             tracing,
             truncation,
             reasoning,
-            max_response_output_tokens,
-        }));
+            max_output_tokens: max_response_output_tokens,
+        });
     }
     fn bind_identification(&self, headers: crate::headers::Headers) {
         self.bind_identification(headers);
@@ -326,6 +291,7 @@ mod tests {
         AzureDeepNoiseSuppression, AzureVoice, NoiseReductionType, RetentionRatio, ServerVad,
         TruncationStrategy,
     };
+    use serde_json::{Value, json};
 
     fn config(api_key: Option<&str>, base_url: Option<&str>) -> Config {
         Config {
@@ -405,18 +371,11 @@ mod tests {
     // clears a setting the caller left alone or keeps one the caller cleared.
     #[test]
     fn an_omitted_option_is_left_out_of_the_update_and_an_explicit_none_clears_it() {
-        let options = RealtimeOptions {
+        let session = session_update(OptionsPatch {
             tracing: Maybe::Given(None),
             turn_detection: Maybe::Given(None),
-            ..RealtimeOptions::default()
-        };
-        let update = serde_json::to_value(super::super::encode::options_update(
-            "e",
-            patch(options),
-            &crate::realtime::OPENAI,
-        ))
-        .unwrap();
-        let session = &update["session"];
+            ..OptionsPatch::default()
+        });
         assert_eq!(session["tracing"], Value::Null);
         assert!(session.get("truncation").is_none() && session.get("reasoning").is_none());
         assert_eq!(session["audio"]["input"]["turn_detection"], Value::Null);
@@ -427,7 +386,7 @@ mod tests {
     // unset field sent as null, or an unlimited reply length sent as null.
     #[test]
     fn option_records_are_sent_as_the_session_fields_the_api_documents() {
-        let patch = patch(RealtimeOptions {
+        let session = session_update(OptionsPatch {
             voice: Maybe::Given(Voice::Azure(AzureVoice {
                 name: "en-US-AvaNeural".into(),
                 r#type: lk_agents_abi::llm::realtime_options::AzureVoiceType::AzureStandard,
@@ -435,7 +394,7 @@ mod tests {
                 endpoint_id: None,
                 temperature: None,
             })),
-            turn_detection: Maybe::Given(Some(TurnDetectionOption::Server(ServerVad {
+            turn_detection: Maybe::Given(Some(TurnDetection::Server(ServerVad {
                 threshold: Some(0.6),
                 prefix_padding_ms: None,
                 silence_duration_ms: None,
@@ -443,7 +402,7 @@ mod tests {
                 create_response: Some(false),
                 interrupt_response: None,
             }))),
-            input_audio_noise_reduction: Maybe::Given(Some(NoiseReduction::Microphone(
+            noise_reduction: Maybe::Given(Some(NoiseReduction::Microphone(
                 NoiseReductionType::FarField,
             ))),
             tracing: Maybe::Given(Some(Tracing {
@@ -455,31 +414,47 @@ mod tests {
                 retention_ratio: 0.8,
                 post_instructions_token_limit: Some(5000),
             }))),
-            max_response_output_tokens: Maybe::Given(None),
-            ..RealtimeOptions::default()
+            max_output_tokens: Maybe::Given(None),
+            ..OptionsPatch::default()
         });
         assert_eq!(
-            patch.voice.given(),
-            Some(json!({"name": "en-US-AvaNeural", "type": "azure-standard", "locale": "en-US"}))
+            session["audio"]["output"]["voice"],
+            json!({"name": "en-US-AvaNeural", "type": "azure-standard", "locale": "en-US"})
         );
         assert_eq!(
-            patch.turn_detection.given().flatten().map(|td| td.to_json()),
-            Some(json!({"type": "server_vad", "threshold": 0.6, "create_response": false}))
+            session["audio"]["input"]["turn_detection"],
+            json!({"type": "server_vad", "threshold": 0.6, "create_response": false})
         );
-        assert_eq!(patch.noise_reduction.given(), Some(Some(json!({"type": "far_field"}))));
-        assert_eq!(patch.tracing.given(), Some(Some(json!("auto"))));
+        assert_eq!(session["audio"]["input"]["noise_reduction"], json!({"type": "far_field"}));
+        assert_eq!(session["tracing"], json!("auto"));
         assert_eq!(
-            patch.truncation.given(),
-            Some(Some(json!({
+            session["truncation"],
+            json!({
                 "type": "retention_ratio", "retention_ratio": 0.8,
                 "token_limits": {"post_instructions": 5000},
-            })))
+            })
         );
-        assert_eq!(patch.max_output_tokens.given(), Some(json!("inf")));
-        assert_eq!(wire(Truncation::Strategy(TruncationStrategy::Disabled)), json!("disabled"));
+        assert_eq!(session["max_output_tokens"], json!("inf"));
+        let session = session_update(OptionsPatch {
+            truncation: Maybe::Given(Some(Truncation::Strategy(TruncationStrategy::Disabled))),
+            noise_reduction: Maybe::Given(Some(NoiseReduction::Azure(
+                AzureDeepNoiseSuppression {},
+            ))),
+            max_output_tokens: Maybe::Given(Some(4096)),
+            ..OptionsPatch::default()
+        });
+        assert_eq!(session["truncation"], json!("disabled"));
         assert_eq!(
-            wire(NoiseReduction::Azure(AzureDeepNoiseSuppression {})),
+            session["audio"]["input"]["noise_reduction"],
             json!({"type": "azure_deep_noise_suppression"})
         );
+        assert_eq!(session["max_output_tokens"], json!(4096));
+    }
+
+    /// The `session` of the update `patch` sends.
+    fn session_update(patch: OptionsPatch) -> Value {
+        let update = super::super::encode::options_update("e", patch, &OPENAI);
+        let mut update = serde_json::to_value(update).unwrap();
+        update["session"].take()
     }
 }

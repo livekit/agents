@@ -43,6 +43,9 @@ fn the_interruption_gate_names_its_reason() {
         gate(true, Some(InterruptionMode::Vad), false, true).reason.as_deref(),
         Some("asked_vad")
     );
+    // Hosted on Cloud, production keeps adaptive interruption on by default (1.x `is_hosted()`).
+    let hosted = gate(true, None, true, false);
+    assert!(hosted.build, "{:?}", hosted.reason);
     let production = gate(true, None, false, false);
     assert_eq!(production.reason.as_deref(), Some("production_default"));
     assert_eq!(production.level, Some(DiagnosticLevel::Info));
@@ -141,7 +144,7 @@ fn an_agents_turn_detection_none_is_automatic_selection() {
     session.turn.detection = Maybe::Given(Some(TurnDetection::Stt));
     let stack = ConfigStack {
         session,
-        agent: Some(crate::turn::agent_layer(Some(&kwargs), None, None)),
+        agent: Some(crate::turn::agent_layer(Some(&kwargs), None)),
         overrides: Vec::new(),
     };
     let legs = SessionLegs { stt: true, vad: true, ..SessionLegs::none() };

@@ -64,8 +64,8 @@ async def test_managed_storage_and_supplied_store_remain_open(kind, supply_store
     configured = agent()
     namespace = SQLiteStorage(directory=tmp_path)
     info = await namespace.threads.create_thread()
-    thread = Thread(namespace, info.thread_id, agent_name="agent")
-    activation = await namespace.threads._core_context_store(info.thread_id, "agent")
+    thread = Thread(namespace, info.thread_id, partition_key="backend")
+    activation = await namespace.threads._core_context_store(info.thread_id, "backend")
     supplied = ContextStore(activation=activation) if supply_store else None
     stores = []
 

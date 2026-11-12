@@ -41,7 +41,7 @@ pub fn task(row: &TaskRow, context: &str, history: Option<usize>, artifacts: boo
         status: TaskStatus {
             state: status(row.status),
             message: row.data.status_message.clone(),
-            timestamp: timestamp(row.updated_at),
+            timestamp: timestamp(row.updated_at_ms),
         },
         artifacts: artifacts.then(|| row.data.artifacts.clone()).flatten(),
         history: (!messages.is_empty()).then_some(messages),

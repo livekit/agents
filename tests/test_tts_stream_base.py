@@ -12,9 +12,6 @@ from livekit.agents.metrics import TTSMetrics
 
 pytestmark = pytest.mark.unit
 
-_CONN = APIConnectOptions()
-
-
 class _BatchTTS(tts.TTS):
     def __init__(self) -> None:
         super().__init__(
@@ -23,10 +20,10 @@ class _BatchTTS(tts.TTS):
         self.attempts = 0
         self.delivered = asyncio.Event()
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = _CONN
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        return _FailingAfterAudio(tts=self, input_text=text, conn_options=conn_options)
+        return _FailingAfterAudio(tts=self, input_text=chunk.text, conn_options=conn_options)
 
 
 class _FailingAfterAudio(tts.ChunkedStream):
@@ -49,12 +46,7 @@ class _StreamingTTS(tts.TTS):
         )
         self.sent: list[str] = []
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = _CONN
-    ) -> tts.ChunkedStream:
-        raise NotImplementedError
-
-    def stream(self, *, conn_options: APIConnectOptions = _CONN) -> tts.SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> tts.SynthesizeStream:
         return _SegmentPerFlush(tts=self, conn_options=conn_options)
 
 
@@ -66,8 +58,8 @@ class _SegmentPerFlush(tts.SynthesizeStream):
         )
         text = ""
         async for item in self.input:
-            if isinstance(item, str):
-                text += item
+            if isinstance(item, tts.SpeechChunk):
+                text += item.text
             elif text:
                 self._tts.sent.append(text)
                 output_emitter.start_segment(segment_id=str(len(self._tts.sent)))
@@ -105,12 +97,12 @@ class _FailedStreamTTS(_StreamingTTS):
         super().__init__()
         self.attempts = 0
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = _CONN
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        return self._synthesize_with_stream(text, conn_options=conn_options)
+        return self._synthesize_with_stream(chunk, conn_options=conn_options)
 
-    def stream(self, *, conn_options: APIConnectOptions = _CONN) -> tts.SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> tts.SynthesizeStream:
         return _FailedStream(tts=self, conn_options=conn_options)
 
 
@@ -154,10 +146,10 @@ class _StalledResponse(tts.ChunkedStream):
 
 
 class _StallingTTS(_BatchTTS):
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = _CONN
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        return _StalledResponse(tts=self, input_text=text, conn_options=conn_options)
+        return _StalledResponse(tts=self, input_text=chunk.text, conn_options=conn_options)
 
 
 async def test_stalled_provider_response_expires_in_the_read_phase() -> None:
@@ -184,10 +176,10 @@ class _FailedBatch(tts.ChunkedStream):
 
 
 class _FailingBatchTTS(_BatchTTS):
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = _CONN
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        return _FailedBatch(tts=self, input_text=text, conn_options=conn_options)
+        return _FailedBatch(tts=self, input_text=chunk.text, conn_options=conn_options)
 
 
 # Catches: a StreamAdapter stream retrying as a whole on top of its per-sentence retries.
@@ -209,26 +201,16 @@ async def test_a_stream_adapter_retries_each_sentence_not_the_whole_stream() -> 
         await adapter.aclose()
 
 
-async def test_a_core_opened_stream_carries_its_expressive_option() -> None:
-    provider = _StreamingTTS()
-    for expressive in (True, False):
-        stream = await provider._core_stream(expressive)
-        try:
-            assert stream._expressive is expressive
-        finally:
-            await stream.aclose()
-
-
 class _BilledTTS(tts.TTS):
     def __init__(self) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False), sample_rate=24000, num_channels=1
         )
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = _CONN
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        return _Billed(tts=self, input_text=text, conn_options=conn_options)
+        return _Billed(tts=self, input_text=chunk.text, conn_options=conn_options)
 
 
 class _Billed(tts.ChunkedStream):

@@ -16,7 +16,7 @@ pub(super) struct ModelStep {
     pub(super) purpose: Purpose,
     /// The id of the assistant message its text becomes.
     pub(super) message_id: String,
-    text: String,
+    pub(super) text: String,
     /// Calls the response made so far: each is admitted as it arrives.
     calls: usize,
 }

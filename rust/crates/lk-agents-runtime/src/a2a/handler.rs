@@ -14,6 +14,13 @@ pub const REPORT_QUEUE: usize = 64;
 enum Report {
     Checkpoint(oneshot::Sender<bool>),
     Event(TurnEvent),
+    Session(SessionWrite),
+}
+
+pub struct SessionWrite {
+    pub state: serde_json::Value,
+    pub history: Vec<lk_agents_abi::ChatItem>,
+    pub reply: oneshot::Sender<Result<(), lk_agents_abi::storage::StorageError>>,
 }
 
 /// What the handler reports through.
@@ -30,6 +37,24 @@ impl HandlerPort for HandlerTurn {
                 return true;
             }
             answered.await.unwrap_or(true)
+        })
+    }
+    fn save_session(
+        &self,
+        state: serde_json::Value,
+        history: Vec<lk_agents_abi::ChatItem>,
+    ) -> BoxFuture<'_, Result<(), lk_agents_abi::storage::StorageError>> {
+        Box::pin(async move {
+            let (reply, received) = oneshot::channel();
+            self.reports
+                .send(Report::Session(SessionWrite { state, history, reply }))
+                .await
+                .map_err(|_| {
+                    lk_agents_abi::storage::StorageError::Invalid("the turn has ended".into())
+                })?;
+            received.await.map_err(|_| {
+                lk_agents_abi::storage::StorageError::Invalid("the turn has ended".into())
+            })?
         })
     }
     fn progress(&self, text: String) -> BoxFuture<'_, ()> {
@@ -50,6 +75,13 @@ impl lk_agents_abi::a2a::turn::HandlerTurn for HandlerTurn {
     async fn checkpoint(&self) -> bool {
         HandlerPort::checkpoint(self).await
     }
+    async fn save_session(
+        &self,
+        state: serde_json::Value,
+        history: Vec<lk_agents_abi::ChatItem>,
+    ) -> Result<(), lk_agents_abi::storage::StorageError> {
+        HandlerPort::save_session(self, state, history).await
+    }
     async fn progress(&self, text: String) {
         HandlerPort::progress(self, text).await
     }
@@ -60,6 +92,7 @@ impl lk_agents_abi::a2a::turn::HandlerTurn for HandlerTurn {
 
 /// What the turn reads next from its handler.
 pub enum Read {
+    Session(SessionWrite),
     Checkpoint,
     Event(TurnEvent),
     Output(Box<Result<HandlerOutput, ProviderError>>),
@@ -123,6 +156,7 @@ impl Handler {
 
     fn read(&mut self, report: Report) -> Read {
         match report {
+            Report::Session(write) => Read::Session(write),
             Report::Checkpoint(verdict) => {
                 self.pending = Some(verdict);
                 Read::Checkpoint

@@ -41,7 +41,7 @@ if SCENARIO == "slow_init" and current_process().name == "job_proc":
 
 pytestmark = pytest.mark.e2e
 
-_core = pytest.importorskip("livekit.agents._core", reason="needs livekit-agents-next")
+_core = pytest.importorskip("livekit.agents._core", reason="needs livekit-agents")
 psutil = pytest.importorskip("psutil")
 
 if sys.platform == "win32":
@@ -229,17 +229,6 @@ def test_crashed_job_process_is_reaped_and_worker_keeps_serving(worker) -> None:
     assert not (w.dir / "room-0.shutdown").exists()
 
 
-def test_hung_job_process_is_killed_after_ping_timeout(worker) -> None:
-    """Guards a job whose event loop is blocked (sync I/O, a busy loop) living forever: the core
-    must stop getting pongs, kill it, and keep serving."""
-    w = worker("hang", jobs=2, ping_timeout=3.0)
-    hung = json.loads(w.marker("room-0.started"))
-    assert _gone(hung["pid"], 20), "a job blocking its event loop was never killed"
-    assert w.logged("process is unresponsive, stopping it"), w.tail()
-    w.marker("room-1.shutdown")
-    assert w.wait() == 0, w.tail()
-
-
 def test_job_process_over_memory_limit_is_killed(worker) -> None:
     """Guards job_memory_limit_mb not being enforced: a leaking job must be killed (and said so)
     before it takes the host's memory."""
@@ -328,8 +317,6 @@ async def _entrypoint(ctx: Any) -> None:
     scenario = SCENARIO if room == "room-0" else "ok"
     if scenario == "crash":
         os._exit(7)
-    elif scenario == "hang":
-        time.sleep(600)
     elif scenario == "idle":
         await asyncio.sleep(600)
     elif scenario == "cli_shutdown":

@@ -401,13 +401,13 @@ pub struct CoreRunResources(pub(crate) ::std::sync::Arc<CoreRunResourcesImpl>);
 #[pymethods]
 impl CoreRunResources {
     #[new]
-    #[pyo3(signature = (namespace, thread_id, activation, lane, toolsets))]
+    #[pyo3(signature = (namespace, thread_id, activation, partition_key, toolsets))]
     fn new(
         py: Python<'_>,
         namespace: Option<Bound<'_, PyAny>>,
         thread_id: ::std::option::Option<::std::string::String>,
         activation: Option<Bound<'_, PyAny>>,
-        lane: ::std::string::String,
+        partition_key: ::std::string::String,
         toolsets: Bound<'_, PyAny>,
     ) -> PyResult<CoreRunResources> {
         crate::py_calls::check_pid()?;
@@ -434,7 +434,7 @@ impl CoreRunResources {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let out = py.detach(|| <CoreRunResourcesImpl as ::lk_agents_abi::agent::resources::RunResources>::new(&env, namespace, thread_id, activation, lane, toolsets)).map_err(|e: ::lk_agents_abi::agent::resources::ResourceError| <::lk_agents_abi::agent::resources::ResourceError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreRunResourcesImpl as ::lk_agents_abi::agent::resources::RunResources>::new(&env, namespace, thread_id, activation, partition_key, toolsets)).map_err(|e: ::lk_agents_abi::agent::resources::ResourceError| <::lk_agents_abi::agent::resources::ResourceError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(CoreRunResources(::std::sync::Arc::new(out)))
     }
 
@@ -490,6 +490,15 @@ impl CoreRunResources {
         let hydration =
             crate::generated::agent::ContextHydrationProxy::from_host(hydration.as_any())?;
         py.detach(|| <CoreRunResourcesImpl as ::lk_agents_abi::agent::resources::RunResources>::retain_hydration(&self.0, hydration));
+        Ok(())
+    }
+
+    /// Releases an invocation-local binding even when its store is borrowed.
+    #[pyo3(signature = (binding))]
+    fn retain_binding(&self, py: Python<'_>, binding: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let binding = crate::generated::agent::BindingCleanupProxy::from_host(binding.as_any())?;
+        py.detach(|| <CoreRunResourcesImpl as ::lk_agents_abi::agent::resources::RunResources>::retain_binding(&self.0, binding));
         Ok(())
     }
 
@@ -1114,6 +1123,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1124,7 +1134,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::agent_run::function_tool_info_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::agent_run::function_tool_info_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -1166,6 +1176,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1179,7 +1190,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::generated::records::agent_run::prepared_arguments_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::agent_run::prepared_arguments_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(Ok(out))
             })
         })
@@ -1218,6 +1229,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1228,7 +1240,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::generated::records::agent_run::read_back_answer_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::agent_run::read_back_answer_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -1267,6 +1279,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1277,7 +1290,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::generated::records::tool_report::tool_completion_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::tool_report::tool_completion_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -1319,6 +1332,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1329,7 +1343,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::generated::records::tool_report::tool_report_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::tool_report::tool_report_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -1371,6 +1385,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1381,7 +1396,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::generated::records::agent_run::validated_output_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::agent_run::validated_output_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -1637,6 +1652,92 @@ impl ContextHydrationProxy {
 }
 
 impl ::lk_agents_abi::agent::resources::ContextHydration for ContextHydrationProxy {
+    fn release(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_release_hydration")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let () = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(())
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/agent/resources.rs.
+
+/// [`::lk_agents_abi::agent::resources::BindingCleanup`] over a host `livekit.agents.storage.context._SessionBinding`.
+#[derive(Clone)]
+pub struct BindingCleanupProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+}
+
+impl BindingCleanupProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::resources::BindingCleanup>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::agent::resources::BindingCleanup>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::resources::BindingCleanup>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::agent::resources::BindingCleanup>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::resources::BindingCleanup>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
+        let _ = context;
+        Ok(BindingCleanupProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+    }
+}
+
+impl ::lk_agents_abi::agent::resources::BindingCleanup for BindingCleanupProxy {
     fn release(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(

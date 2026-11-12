@@ -101,11 +101,11 @@ impl Fixture {
         dir.join("threads").join(format!("{}.sqlite", self.thread_id))
     }
 
-    /// Hands `lane`'s lease to `holder` under a token no handle has, for a minute, as a dead
+    /// Hands `partition_key`'s lease to `holder` under a token no handle has, for a minute, as a dead
     /// worker or a lost cleanup leaves it.
-    pub async fn orphan_lease(&self, lane: &str, holder: &str) {
+    pub async fn orphan_lease(&self, partition_key: &str, holder: &str) {
         let conn = FileConnection::open(self.file(), false, threads()).await.unwrap();
-        conn.batch(vec![OrphanLease { lane, holder }.bind()]).await.unwrap();
+        conn.batch(vec![OrphanLease { partition_key, holder }.bind()]).await.unwrap();
         conn.close().await;
     }
 
@@ -146,16 +146,17 @@ macro_rules! contract {
 }
 
 statement! {
-    /// Hands the lane's lease to a holder under a token nobody has.
-    OrphanLease<'a> { lane: &'a str, holder: &'a str } => r#"
-UPDATE lanes SET lease_holder = :holder, lease_token = 'orphan', lease_until = unixepoch() + 60
-WHERE lane = :lane
+    /// Hands the partition's lease to a holder under a token nobody has.
+    OrphanLease<'a> { partition_key: &'a str, holder: &'a str } => r#"
+UPDATE partitions SET lease_holder = :holder, lease_token = 'orphan', lease_expires_at_ms = unixepoch() + 60
+WHERE partition_key = :partition_key
 "#
 }
 
-/// The lease holding `lane` as `(token, until)`, `until` in the database's seconds.
-pub async fn lessee(conn: &dyn ThreadDbConnection, lane: &str) -> Option<(String, i64)> {
-    let rows = conn.query(crate::thread::schema::SelectFence { lane }.bind()).await.ok()?;
+/// The lease holding `partition_key` as `(token, until)`, `until` in the database's seconds.
+pub async fn lessee(conn: &dyn ThreadDbConnection, partition_key: &str) -> Option<(String, i64)> {
+    let rows =
+        conn.query(crate::thread::schema::SelectFence { partition_key }.bind()).await.ok()?;
     match rows.first()?.as_slice() {
         [_, SqlValue::Text(token), SqlValue::Int(until)] => Some((token.clone(), *until)),
         _ => None,
@@ -263,7 +264,7 @@ impl ThreadDbConnection for Faulty {
         let has = |kind| statements.iter().any(|s| s.kind() == Some(kind));
         let is_commit = has(StatementKind::Commit);
         // only a commit carrying staged writes can outgrow the database's frame: a run closed
-        // with nothing of its own writes the lane and its journal, and leaves the fault armed
+        // with nothing of its own writes the partition and its journal, and leaves the fault armed
         let staged = statements
             .iter()
             .any(|s| !matches!(s.kind(), Some(StatementKind::Commit | StatementKind::Bookkeeping)));
@@ -427,7 +428,7 @@ impl lk_agents_abi::Spawner for Dying {
 }
 
 /// The SQLite backend with each thread connection it opens decorated by `wrap`: how a test or a
-/// simulation puts faults under the production lane. Everything else is the backend's own.
+/// simulation puts faults under the production partition. Everything else is the backend's own.
 pub struct Wrapped<W> {
     pub storage: Arc<SqliteStorage>,
     pub wrap: W,

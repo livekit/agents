@@ -1,4 +1,4 @@
-use futures_util::{FutureExt, future::Shared};
+use futures_util::FutureExt;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
 use parking_lot::Mutex;
@@ -17,8 +17,72 @@ pub enum Pulled<T> {
     Cancelled,
 }
 
-type Pending<T> = Shared<BoxFuture<'static, Arc<Mutex<Read<T>>>>>;
-type Cleanup = Shared<BoxFuture<'static, Closed>>;
+type Pending<T> = Arc<Relay<Arc<Mutex<Read<T>>>>>;
+type Cleanup = Arc<Relay<Closed>>;
+
+/// Work several waiters may need finished, driven by one of them at a time: the driver awaits it
+/// in its own task, which its executor polls again after every wake, one that lands mid-poll
+/// included. A driver that goes away hands the work back and another waiter takes it; the rest
+/// wait on the slot. (`futures::Shared` drops a wake that lands while another waiter polls, which
+/// left a close waiting on a read that had already been told to stop.)
+struct Relay<O> {
+    slot: crate::signal::Shared<Slot<O>>,
+}
+
+enum Slot<O> {
+    Idle(BoxFuture<'static, O>),
+    Driven,
+    Done(O),
+}
+
+enum Turn<O> {
+    Drive(BoxFuture<'static, O>),
+    Finished(O),
+}
+
+impl<O: Clone + Send + 'static> Relay<O> {
+    fn new(work: BoxFuture<'static, O>) -> Arc<Self> {
+        Arc::new(Relay { slot: crate::signal::Shared::new(Slot::Idle(work)) })
+    }
+
+    /// The work's outcome, driven here whenever no other waiter is driving it.
+    async fn run(&self) -> O {
+        let turn = self
+            .slot
+            .wait_until(|slot| match std::mem::replace(slot, Slot::Driven) {
+                Slot::Idle(work) => Some(Turn::Drive(work)),
+                Slot::Done(out) => {
+                    *slot = Slot::Done(out.clone());
+                    Some(Turn::Finished(out))
+                }
+                Slot::Driven => None,
+            })
+            .await;
+        let work = match turn {
+            Turn::Finished(out) => return out,
+            Turn::Drive(work) => work,
+        };
+        let mut held = HandBack { slot: &self.slot, work: Some(work) };
+        let out = held.work.as_mut().expect("held until it finishes").await;
+        held.work = None;
+        self.slot.modify(|slot| *slot = Slot::Done(out.clone()));
+        out
+    }
+}
+
+/// The work a driver holds: back in the slot, for the next waiter, if the driver goes away.
+struct HandBack<'a, O> {
+    slot: &'a crate::signal::Shared<Slot<O>>,
+    work: Option<BoxFuture<'static, O>>,
+}
+
+impl<O> Drop for HandBack<'_, O> {
+    fn drop(&mut self) {
+        if let Some(work) = self.work.take() {
+            self.slot.modify(|slot| *slot = Slot::Idle(work));
+        }
+    }
+}
 
 struct Read<T> {
     source: Option<Box<dyn StreamOutput<T>>>,
@@ -93,7 +157,7 @@ impl<T: Send + 'static> SharedStream<T> {
                 return Ok(Pulled::End);
             };
             // No state lock is held while polling the source, which may enter a language runtime.
-            let completed = pending.await;
+            let completed = pending.run().await;
             self.inner.finish_read(&completed)
         })
     }
@@ -107,7 +171,7 @@ impl<T: Send + 'static> SharedStream<T> {
     pub async fn close(&self, deadline: Ts) -> Closed {
         self.inner.closing.cancel();
         let cleanup = self.inner.begin_close(deadline);
-        cleanup.await
+        cleanup.run().await
     }
 }
 
@@ -160,7 +224,7 @@ impl<T: Send + 'static> Inner<T> {
         let mut state = self.state.lock();
         let cleanup = match state.take().expect("a stream always owns its state") {
             State::Closing(cleanup) => cleanup,
-            previous => close_source(previous, self.clock.clone(), deadline).boxed().shared(),
+            previous => Relay::new(close_source(previous, self.clock.clone(), deadline).boxed()),
         };
         *state = Some(State::Closing(cleanup.clone()));
         cleanup
@@ -172,25 +236,30 @@ fn read_next<T: Send + 'static>(
     mut source: Box<dyn StreamOutput<T>>,
     closing: CancellationToken,
 ) -> Pending<T> {
-    async move {
-        let item = tokio::select! {
-            biased;
-            () = closing.cancelled() => None,
-            item = source.next() => Some(item),
-        };
-        Arc::new(Mutex::new(Read { source: Some(source), item }))
-    }
-    .boxed()
-    .shared()
+    Relay::new(
+        async move {
+            let item = tokio::select! {
+                biased;
+                () = closing.cancelled() => None,
+                item = source.next() => Some(item),
+            };
+            Arc::new(Mutex::new(Read { source: Some(source), item }))
+        }
+        .boxed(),
+    )
 }
 
 /// Closes the source once any read in flight hands it back, within the deadline.
-async fn close_source<T>(previous: State<T>, clock: Arc<dyn Clock>, deadline: Ts) -> Closed {
+async fn close_source<T: Send + 'static>(
+    previous: State<T>,
+    clock: Arc<dyn Clock>,
+    deadline: Ts,
+) -> Closed {
     let mut outcome = Closed::Clean;
     let bounded = Closed::bounded(&*clock, deadline, async {
         let source = match previous {
             State::Ready(source) => Some(source),
-            State::Reading(pending) => pending.await.lock().source.take(),
+            State::Reading(pending) => pending.run().await.lock().source.take(),
             State::Closing(_) => unreachable!("cleanup already installed"),
         };
         if let Some(source) = source {

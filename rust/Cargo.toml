@@ -6,7 +6,7 @@ members = ["crates/*", "ai_slop/*", "check"]
 # crate; linking it never adds a host feature or interpreter dependency to the sans-I/O crates.
 # Ordinary cargo build/test uses the host-neutral default members below. Runtime is also
 # excluded: it is compiled as a dependency of fuzz, but its own unit/integration targets need
-# `cargo test -p lk-agents-runtime`. See docs/internals/rust-code-map.md for the test recipes.
+# `cargo test -p lk-agents-runtime`. See docs/internals/testing.md#running-the-suites for the test recipes.
 default-members = [
     "crates/lk-agents-abi",
     "crates/lk-agents-cli",
@@ -117,12 +117,18 @@ debug = 1
 [profile.dev.package."*"]
 debug = 0
 
+# py-spy 0.4.3 builds an empty slice from a misaligned pointer when its attach check falls back
+# to scanning an empty __bss (uv's macOS Pythons). Debug assertions turn that into an abort of the
+# whole process; release builds, which ship, do not check it. Remove with the py-spy fix.
 # Rule sets compile their regexes at startup and in tests; an unoptimized regex compiler
 # makes the sentence splitter's mutation test take 20 s instead of 3.
 [profile.dev.package.regex-automata]
 opt-level = 3
 [profile.dev.package.regex-syntax]
 opt-level = 3
+
+[profile.dev.package.py-spy]
+debug-assertions = false
 
 # Generated Python adapters are the largest codegen unit. The fast path keeps
 # line tables in the runtime and decision crates; python-debug restores them here.

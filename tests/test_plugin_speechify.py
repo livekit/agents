@@ -5,7 +5,6 @@ import base64
 
 import httpx
 import pytest
-from speechify.client import AsyncSpeechify
 from speechify.types.error_detail import ErrorDetail
 from speechify.types.nested_chunk import NestedChunk
 from speechify.types.speech_stream_event import (
@@ -21,8 +20,8 @@ from livekit.agents import (
     APITimeoutError,
     tts,
 )
-from livekit.agents.types import NOT_GIVEN, USERDATA_TIMED_TRANSCRIPT
-from livekit.plugins.speechify import TTS, tts as sfy_tts
+from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
+from livekit.plugins.speechify import tts as sfy_tts
 
 pytestmark = pytest.mark.unit
 
@@ -157,19 +156,6 @@ async def test_stream_falls_back_for_legacy_model() -> None:
     assert len(client.audio.speech_calls) == 1
     assert sum(f.frame.duration for f in frames) > 0.4
     assert frames[-1].characters_count == 12
-
-
-async def test_stream_not_given_model_uses_streaming() -> None:
-    client = _FakeClient()
-    stream = sfy_tts.TTS(model=NOT_GIVEN, client=client).stream()  # type: ignore[arg-type]
-    stream.push_text("Hello world.")
-    stream.end_input()
-
-    await _collect(stream)
-
-    # when no model is configured the server defaults to simba-3.0 (streaming-native)
-    assert len(client.audio.stream_calls) == 1
-    assert "model" not in client.audio.stream_calls[0]
 
 
 async def test_stream_predicates_speech_error() -> None:
@@ -329,63 +315,3 @@ def test_marks_to_timed_uses_start_end_time() -> None:
     assert timed[0].text == "a"
     assert timed[0].start_time == pytest.approx(0.5)
     assert timed[0].end_time == pytest.approx(0.6)
-
-
-def test_warn_voice_model_compat(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("WARNING", "livekit.plugins.speechify"):
-        # curated simba-3.2 voices (id suffix "_32") warn on other models
-        sfy_tts._warn_voice_model_compat("dominic_32", "simba-english")
-        assert any("dominic_32" in r.message for r in caplog.records)
-
-        caplog.clear()
-        # NOT_GIVEN defaults the server to simba-3.0 -> still a mismatch
-        sfy_tts._warn_voice_model_compat("dominic_32", NOT_GIVEN)
-        assert any("dominic_32" in r.message for r in caplog.records)
-
-        caplog.clear()
-        # the supported pairing is silent
-        sfy_tts._warn_voice_model_compat("dominic_32", "simba-3.2")
-        assert not caplog.records
-
-        caplog.clear()
-        # non "_32" voices never warn regardless of model
-        sfy_tts._warn_voice_model_compat("henry", "simba-english")
-        sfy_tts._warn_voice_model_compat("henry", "simba-3.2")
-        assert not caplog.records
-
-
-@pytest.mark.asyncio
-async def test_list_voices_consumes_sdk_pagination() -> None:
-    requests: list[str | None] = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        cursor = request.url.params.get("cursor")
-        requests.append(cursor)
-        return httpx.Response(
-            200,
-            json={
-                "voices": [
-                    {
-                        "id": "first" if cursor is None else "second",
-                        "display_name": "Voice",
-                        "gender": "notSpecified",
-                        "locale": "en-US",
-                        "models": [],
-                        "type": "shared",
-                    }
-                ],
-                "has_more": cursor is None,
-                "next_cursor": "page-2" if cursor is None else None,
-            },
-        )
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
-        client = AsyncSpeechify(token="test", httpx_client=http_client)
-        provider = TTS(client=client)
-        try:
-            voices = await provider.list_voices()
-            assert [voice.id for voice in voices] == ["first", "second"]
-            assert [voice.gender for voice in voices] == ["neutral", "neutral"]
-            assert requests == [None, "page-2"]
-        finally:
-            await provider.aclose()

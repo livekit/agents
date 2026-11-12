@@ -16,7 +16,7 @@ from livekit.agents.voice.agent_run import RunHooks, reset_run_hooks, set_run_ho
 
 from .test_text_session import Reply, Script, call
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
@@ -35,13 +35,70 @@ def load_example(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, Script], Mod
         monkeypatch.setenv("HOTEL_TODAY", "2026-06-12")
         monkeypatch.delenv("CAL_API_KEY", raising=False)
         monkeypatch.setattr(voice_agent, "llm_from_model_string", lambda _: model)
-        dependency = {"frontdesk": "calendar_api", "hotel-receptionist": "hotel"}[name]
+        dependency = {
+            "frontdesk": "calendar_api",
+            "hotel-receptionist": "hotel",
+            "airline-support": "skyline",
+        }[name]
         source_module(dependency, directory / f"{dependency}.py")
         return source_module(
             f"example_{name.replace('-', '_')}_backend", directory / "backend_agent.py"
         )
 
     return load
+
+
+@pytest.mark.parametrize("name", ["frontdesk", "hotel-receptionist", "airline-support"])
+async def test_frontend_restores_bound_conversation_on_the_next_request(
+    name: str,
+    load_example: Callable[[str, Script], ModuleType],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.storage import DEFAULT_PARTITION_KEY
+
+    model = Script(Reply("Hello."), Reply("Welcome back."))
+    backend = load_example(name, model)
+    # This conversation never delegates; no worker listener is needed.
+    monkeypatch.setattr(backend.text, "delegation_url", lambda: "http://unused.invalid/backend")
+    monkeypatch.setitem(sys.modules, "backend_agent", backend)
+    path = Path(__file__).parents[1] / "examples" / name / "frontend_agent.py"
+    spec = importlib.util.spec_from_file_location(
+        f"example_{name.replace('-', '_')}_frontend", path
+    )
+    assert spec is not None and spec.loader is not None
+    frontend = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, frontend)
+    spec.loader.exec_module(frontend)
+
+    phone = next(
+        door
+        for door in frontend.front_desk.doors
+        if getattr(door, "entrypoint", None) is frontend.phone
+    )
+    assert phone.partition_key == DEFAULT_PARTITION_KEY
+    assert len({phone.partition_key, frontend.text.partition_key, backend.text.partition_key}) == 3
+    state = None
+    for message, expected in (("Hi.", "Hello."), ("I'm back.", "Welcome back.")):
+        store = ContextStore(state=state)
+        token = set_run_hooks(RunHooks(store=store))
+        try:
+            result = await frontend.text.handler(SimpleNamespace(message=message, store=store))
+            assert result.status == "completed" and result.output == expected
+            state = store._activation.session_state
+            assert state is not None
+        finally:
+            reset_run_hooks(token)
+            store._close()
+    assert [
+        (item.role, item.text_content)
+        for item in model.requests[1].items
+        if item.type == "message" and item.role != "system"
+    ] == [
+        ("user", "Hi."),
+        ("assistant", "Hello."),
+        ("user", "I'm back."),
+    ]
+    assert not model.replies
 
 
 async def test_frontdesk_booking_approval_and_saved_email_survive_handler_restart(
@@ -69,16 +126,15 @@ async def test_frontdesk_booking_approval_and_saved_email_survive_handler_restar
         ]
     )
     scopes = []
-    history = []
+    state = None
     for message in ("Book the first opening.", "patient@example.com", "yes", "Book another."):
-        store = ContextStore(scopes=scopes)
+        store = ContextStore(state=state, scopes=scopes)
         token = set_run_hooks(RunHooks(store=store))
         try:
-            result = await example.text.handler(
-                SimpleNamespace(message=message, message_history=history, store=store)
-            )
+            result = await example.text.handler(SimpleNamespace(message=message, store=store))
             scopes = [write.scope for write in store._scope_writes]
-            history = result.all_messages()
+            state = store._activation.session_state
+            assert state is not None
         finally:
             reset_run_hooks(token)
             store._close()
@@ -119,16 +175,15 @@ async def test_hotel_verification_and_cancellation_resume_after_handler_restart(
     booking = example.hotel.find(last_name="Smith", code="HTL-AB12")
     assert booking is not None
     scopes = []
-    history = []
+    state = None
     for message in ("My booking?", "Smith HTL-AB12", "Check it again.", "Cancel it.", "yes"):
-        store = ContextStore(scopes=scopes)
+        store = ContextStore(state=state, scopes=scopes)
         token = set_run_hooks(RunHooks(store=store))
         try:
-            result = await example.text.handler(
-                SimpleNamespace(message=message, message_history=history, store=store)
-            )
+            result = await example.text.handler(SimpleNamespace(message=message, store=store))
             scopes = [write.scope for write in store._scope_writes]
-            history = result.all_messages()
+            state = store._activation.session_state
+            assert state is not None
         finally:
             reset_run_hooks(token)
             store._close()

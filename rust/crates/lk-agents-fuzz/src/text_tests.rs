@@ -8,12 +8,12 @@ fn report(outcome: &text::Outcome) -> String {
         outcome.failures.iter().map(|f| format!("{}: {}", f.contract, f.detail)).collect();
     let r = &outcome.recording;
     format!(
-        "{:?}\n{}\n  turns: {:?}\n  tasks: {:?}\n  lane: {:?}",
+        "{:?}\n{}\n  turns: {:?}\n  tasks: {:?}\n  partition_key: {:?}",
         outcome.scenario,
         failures.join("\n"),
         r.turns,
         r.tasks,
-        r.lane
+        r.partition_key
     )
 }
 
@@ -62,7 +62,7 @@ fn a_panicking_host_callback_settles_the_run() {
 }
 
 /// A model stream whose task panicked reports the request failed: the run finishes, its driver
-/// exits, and an A2A turn releases its lane.
+/// exits, and an A2A turn releases its partition.
 #[test]
 fn a_panicking_model_stream_ends_the_run() {
     for callback in [Callback::LlmOpen, Callback::LlmChunk] {
@@ -81,7 +81,7 @@ fn a_panicking_model_stream_ends_the_run() {
     }
 }
 
-/// A queued turn whose client drops it while the lane is busy, on a healthy database.
+/// A queued turn whose client drops it while the partition is busy, on a healthy database.
 fn a_queued_turn_aborted() -> Scenario {
     let busy = text::TurnPlan { start_ms: 0, client: text::Client::Waits, after_ms: 0, worker: 0 };
     let queued =
@@ -99,9 +99,9 @@ fn a_queued_turn_aborted_settles_its_task() {
     assert!(outcome.failures.is_empty(), "{}", report(&outcome));
 }
 
-/// Two turns whose clients drop them under `interrupt`: the first while its model thinks, the
-/// second while it waits to interrupt it.
-fn two_interrupting_turns_aborted() -> Scenario {
+/// Two turns whose clients drop them under `queue`: the first while its model thinks, the
+/// second while it waits for its turn.
+fn two_queued_turns_aborted() -> Scenario {
     let first =
         text::TurnPlan { start_ms: 0, client: text::Client::Aborts, after_ms: 800, worker: 0 };
     let second =
@@ -109,7 +109,7 @@ fn two_interrupting_turns_aborted() -> Scenario {
     Scenario {
         direct: Vec::new(),
         forced: vec![(Callback::LlmOpen, Fault::Hang)],
-        policy: Policy::Interrupt,
+        policy: Policy::Queue,
         turns: vec![first, second],
         ..Scenario::direct(13)
     }
@@ -119,7 +119,7 @@ fn two_interrupting_turns_aborted() -> Scenario {
 /// `run_ended` `canceled` (`TEXT_SEED=449`).
 #[test]
 fn an_aborted_turn_ends_its_run() {
-    let outcome = text::run(two_interrupting_turns_aborted());
+    let outcome = text::run(two_queued_turns_aborted());
     assert!(outcome.failures.is_empty(), "{}", report(&outcome));
 }
 

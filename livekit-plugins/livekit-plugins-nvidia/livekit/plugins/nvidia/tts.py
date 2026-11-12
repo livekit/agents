@@ -15,11 +15,9 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APITimeoutError,
-    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from . import auth
 from .log import logger
@@ -33,7 +31,6 @@ class TTSOptions:
     sample_rate: int
     use_ssl: bool
     language_code: str
-    word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
 
 
 class TTS(tts.TTS):
@@ -70,7 +67,6 @@ class TTS(tts.TTS):
             sample_rate=16000,
             use_ssl=use_ssl,
             language_code=language_code,
-            word_tokenizer=tokenize.SentenceTokenizer(),
         )
         self._tts_service: riva.client.SpeechSynthesisService | None = None
 
@@ -108,14 +104,12 @@ class TTS(tts.TTS):
         tts_models = dict(sorted(tts_models.items()))
         return tts_models
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        return self._synthesize_with_stream(text, conn_options=conn_options)
+        return self._synthesize_with_stream(chunk, conn_options=conn_options)
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> tts.SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> tts.SynthesizeStream:
         return SynthesizeStream(
             tts=self, conn_options=conn_options, opts=self._opts, service=self._ensure_session
         )
@@ -136,8 +130,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         context_id = utils.shortuuid()
-        sent_tokenizer_stream = self._opts.word_tokenizer.stream()
-        token_q: queue.Queue[tokenize.TokenData | None] = queue.Queue()
+        text_q: queue.Queue[str | None] = queue.Queue()
         event_loop = asyncio.get_running_loop()
         read_deadline = self._core_attempts
         stopped = threading.Event()
@@ -156,16 +149,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _input_task() -> None:
             async for data in self.input:
-                if isinstance(data, self.Flush):
-                    sent_tokenizer_stream.flush()
-                    continue
-                sent_tokenizer_stream.push_text(data)
-            sent_tokenizer_stream.end_input()
-
-        async def _process_segments() -> None:
-            async for word_stream in sent_tokenizer_stream:
-                token_q.put(word_stream)
-            token_q.put(None)
+                if isinstance(data, tts.SpeechChunk):
+                    text_q.put(data.text)
+            text_q.put(None)
 
         def _finish(error: Exception | None) -> None:
             if done_fut.done():
@@ -192,12 +178,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             error: Exception | None = None
             try:
                 service = self._get_service()
-                while (token := token_q.get()) is not None:
+                while (text := text_q.get()) is not None:
                     if stopped.is_set():
                         break
                     event_loop.call_soon_threadsafe(read_deadline.expect_response)
                     responses = service.synthesize_online(
-                        token.token,
+                        text,
                         self._opts.voice,
                         self._opts.language_code,
                         sample_rate_hz=self._opts.sample_rate,
@@ -222,10 +208,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         synthesize_thread.start()
 
-        tasks = [
-            asyncio.create_task(_input_task()),
-            asyncio.create_task(_process_segments()),
-        ]
+        tasks = [asyncio.create_task(_input_task())]
 
         try:
             await asyncio.gather(*tasks, asyncio.shield(done_fut))
@@ -238,8 +221,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             stopped.set()
             if active_call is not None:
                 active_call.cancel()
-            token_q.put(None)
+            text_q.put(None)
             await utils.aio.cancel_and_wait(*tasks)
             if not done_fut.done():
                 logger.warning("NVIDIA synthesis cleanup incomplete; SDK worker retains ownership")
-            await sent_tokenizer_stream.aclose()

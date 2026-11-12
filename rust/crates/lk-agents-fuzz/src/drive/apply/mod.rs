@@ -363,6 +363,22 @@ impl Run {
         matches!(self.controls.get(&Slot { kind: Kind::Tool, nth }), Some(Control::Running))
     }
 
+    /// Whether the driver already ended this tool's call on a report of its own (a host update
+    /// answering it before its body did). A body detaching after that is over at once: its
+    /// runtime task returned with the answer, and the driver runs no call to cancel, so no
+    /// report or cancellation of it can come (survey seed 209 TaskBridge, nothing_left_live).
+    pub(super) fn tool_call_ended(&self, nth: u32) -> bool {
+        let Some(Detail::Tool { call_id, speech, .. }) =
+            self.record.resource(Kind::Tool, nth).map(|r| r.detail())
+        else {
+            return false;
+        };
+        self.record.journal().iter().any(|(_, step)| {
+            matches!(step, Step::Tool(ToolStep::CallEnded { speech: s, call_id: c, end: Some(_) })
+                if s.0 == *speech && c == call_id)
+        })
+    }
+
     fn tool_origin(
         &self,
         reference: Ref<crate::input::Tool>,
@@ -691,6 +707,12 @@ impl Run {
                 }
             }
             Input::SttFail { .. } => self.end_utterances_on(at, slot.nth),
+            Input::ToolAnswered { answer: ToolAnswer::Detached, .. }
+                if self.tool_call_ended(slot.nth) =>
+            {
+                self.controls.remove(&slot);
+                self.record.close(at, Kind::Tool, slot.nth);
+            }
             _ => {}
         }
         true

@@ -4,8 +4,8 @@ Run from the repository root against the next package and its built extension (p
 category flags, or `--<category> [NAME]` takes the path as its name):
 
 ```sh
-PYTHONPATH="$PWD/livekit-agents-next:$PWD" uv run --no-sync pytest tests/e2e --unit
-PYTHONPATH="$PWD/livekit-agents-next:$PWD" uv run --no-sync --env-file project.env pytest tests/e2e --e2e
+PYTHONPATH="$PWD/livekit-agents:$PWD" uv run --no-sync pytest tests/e2e --unit
+PYTHONPATH="$PWD/livekit-agents:$PWD" uv run --no-sync --env-file project.env pytest tests/e2e --e2e
 ```
 
 `test_endpoints.py` registers its own worker under a unique agent name and calls it through the

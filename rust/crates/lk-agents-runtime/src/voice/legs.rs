@@ -137,9 +137,7 @@ impl SessionExecutor for Executor {
 
     fn tts_adapter(&self) -> crate::voice::session::TtsAdapter {
         Arc::new(|tts, clock, budget| {
-            lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for(
-                tts, clock, budget,
-            )
+            lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted(tts, clock, budget)
         })
     }
 

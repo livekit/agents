@@ -27,6 +27,21 @@ pub enum Options {
 }
 
 impl Options {
+    /// Whether these options make the voice send its word timings.
+    pub fn aligned(&self) -> bool {
+        match self {
+            Options::Cartesia(c) => c.add_timestamps == Some(true),
+            Options::Inworld(i) => matches!(
+                i.timestamp_type,
+                Some(InworldTimestampType::Word | InworldTimestampType::Character)
+            ),
+            Options::Assemblyai(a) => a.word_timestamps != Some(false),
+            _ => false,
+        }
+    }
+
+    /// The caller's options parsed, word timings asked for unless the caller set them: the
+    /// transcript follows the voice's own timings.
     pub fn parse(model: &str, mut extra: Map<String, Value>) -> Result<Self, serde_json::Error> {
         if InferenceProvider::of_model(model) == Some(InferenceProvider::Rime) {
             for (legacy, canonical) in [
@@ -44,7 +59,7 @@ impl Options {
             }
         }
         let value = Value::Object(extra);
-        match InferenceProvider::of_model(model) {
+        let parsed = match InferenceProvider::of_model(model) {
             Some(InferenceProvider::Cartesia) => serde_json::from_value(value).map(Self::Cartesia),
             Some(InferenceProvider::Deepgram) => serde_json::from_value(value).map(Self::Deepgram),
             Some(InferenceProvider::Deepgramflux) => {
@@ -65,7 +80,21 @@ impl Options {
             Some(InferenceProvider::Google) => serde_json::from_value(value).map(Self::Google),
             Some(InferenceProvider::Gradium) => serde_json::from_value(value).map(Self::Gradium),
             _ => serde_json::from_value(value).map(Self::Other),
+        };
+        parsed.map(Self::with_timestamps)
+    }
+
+    fn with_timestamps(mut self) -> Self {
+        match &mut self {
+            Options::Cartesia(c) => {
+                c.add_timestamps.get_or_insert(true);
+            }
+            Options::Inworld(i) => {
+                i.timestamp_type.get_or_insert(InworldTimestampType::Word);
+            }
+            _ => {}
         }
+        self
     }
 }
 

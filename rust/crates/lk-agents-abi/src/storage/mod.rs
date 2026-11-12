@@ -1,8 +1,10 @@
+mod constants;
 pub mod context;
 pub mod handles;
 pub mod http;
 pub mod journal;
 mod rows;
+pub mod session;
 pub mod thread;
 pub mod voice;
 pub mod wsdb;
@@ -11,6 +13,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+pub use constants::DEFAULT_PARTITION_KEY;
 pub use rows::*;
 
 /// A storage failure. Every database failure is one of six: `Uncertain`,
@@ -26,9 +29,9 @@ pub enum StorageError {
     /// write's identity before anything is reported or retried; never proof of a rollback.
     #[error("write outcome unknown: {0}")]
     Uncertain(Unacknowledged),
-    /// The lane refused the run: another holder has it (`reject`, or a waiter whose wait ran
+    /// The partition refused the run: another holder has it (`reject`, or a waiter whose wait ran
     /// out). The running task, when the journal names it.
-    #[error("the lane is held by another run")]
+    #[error("the partition_key is held by another run")]
     #[host(kind = "livekit.agents.storage.RunRejected", kwargs)]
     Rejected { running_task_id: Option<String> },
     /// The run's lease was taken, released or could not be renewed before it could lapse.
@@ -44,11 +47,11 @@ pub enum StorageError {
     #[error("not found: {0}")]
     #[host(kind = "livekit.agents.storage.ThreadNotFound")]
     NotFound(String),
-    /// A fenced write that matched no row: the lane moved past the version the run loaded, or
-    /// the lease token is no longer the lane's.
-    #[error("version conflict on lane {lane}: expected version {expected}")]
+    /// A fenced write that matched no row: the partition moved past the version the run loaded, or
+    /// the lease token is no longer the partition's.
+    #[error("version conflict on partition_key {partition_key}: expected version {expected}")]
     #[host(kind = "livekit.agents.storage.VersionConflict")]
-    VersionConflict { lane: String, expected: i64 },
+    VersionConflict { partition_key: String, expected: i64 },
     /// A field that could not be serialized; the second string says why.
     #[error("field {0} is not serializable: {1}")]
     #[host(kind = "livekit.agents.storage.NotSerializable")]
@@ -237,7 +240,7 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn delete_thread(&self, thread_id: String) -> Result<(), StorageError>;
 
-    /// The thread's chat items, oldest first, of one agent's lane when `agent` is given.
+    /// The thread's chat items, oldest first, of one agent's partition when `agent` is given.
     #[host(await)]
     async fn get_thread_items(
         &self,
@@ -272,7 +275,7 @@ pub trait Storage: Send + Sync + Sized + 'static {
     async fn _core_context_store(
         &self,
         thread_id: String,
-        lane: String,
+        partition_key: String,
     ) -> Result<Self::ContextActivation, StorageError>;
 
     /// A managed turn's field store over the scopes and routing state its run loaded: saves
@@ -281,7 +284,7 @@ pub trait Storage: Send + Sync + Sized + 'static {
     async fn _core_turn_store(
         &self,
         thread_id: String,
-        lane: String,
+        partition_key: String,
         scopes: Vec<context::ContextScope>,
         #[host(kw, default = None)] routing_state: Option<Value>,
         #[host(default = false)] read_only: bool,
@@ -305,8 +308,6 @@ pub struct ThreadInfo {
     pub last_active: i64,
     pub expires_at: i64,
     pub idle_ttl_seconds: i64,
-    /// The thread's database: `DB_..` on agent-db, the thread id locally.
-    pub database_id: String,
 }
 
 /// One page of `list_threads`, newest first.
@@ -354,12 +355,12 @@ pub struct ThreadTask {
 #[crate::host(exceptions(module = "storage_errors", path = "livekit.agents.storage", classes(
     StorageError(base = "RuntimeError", doc = "A session storage failure."),
     ThreadNotFound(base = "StorageError", doc = "An unknown, deleted or expired thread."),
-    VersionConflict(base = "StorageError", doc = "A fenced commit matched no row: the lane moved past the loaded version."),
+    VersionConflict(base = "StorageError", doc = "A fenced commit matched no row: the partition_key moved past the loaded version."),
     NotSerializable(base = "StorageError", doc = "A field could not be serialized; the message names it."),
     TooLarge(base = "StorageError", doc = "A value exceeded its size limit; the message names what and the limit."),
     StorageUnavailable(base = "StorageError", doc = "Retryable: the database is unavailable, busy or answered with invalid data."),
-    LeaseLost(base = "StorageError", doc = "The run's lane lease was taken, released or could not be renewed in time."),
-    RunRejected(base = "StorageError", doc = "The lane refused the run while another turn runs.",
+    LeaseLost(base = "StorageError", doc = "The run's partition_key lease was taken, released or could not be renewed in time."),
+    RunRejected(base = "StorageError", doc = "The partition_key refused the run while another turn runs.",
         fields(message(ty = "str", positional, inherited), running_task_id(ty = "str | None", default = None)),
         base_args(message))
 )))]

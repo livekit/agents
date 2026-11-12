@@ -1,4 +1,4 @@
-use lk_agents_abi::agent::resources::{ContextHydration, ResourceError};
+use lk_agents_abi::agent::resources::{BindingCleanup, ContextHydration, ResourceError};
 use lk_agents_abi::llm::toolsets::{ToolsetGroup as _, ToolsetHooks};
 use lk_agents_abi::storage::Storage as _;
 use lk_agents_abi::storage::context::ContextActivation as _;
@@ -40,7 +40,7 @@ struct Inputs {
     namespace: Option<Arc<Namespace>>,
     thread_id: Option<String>,
     activation: Option<ContextStore>,
-    lane: String,
+    partition_key: String,
 }
 
 #[derive(Default)]
@@ -55,6 +55,7 @@ struct Opened {
 struct Hydration {
     closed: bool,
     views: Vec<Arc<dyn ContextHydration>>,
+    bindings: Vec<Arc<dyn BindingCleanup>>,
 }
 
 impl Inner {
@@ -68,11 +69,20 @@ impl Inner {
                 Some(activation) => activation,
                 None => match acquired.namespace.as_ref().zip(acquired.thread_id.clone()) {
                     Some((namespace, thread_id)) => {
-                        namespace._core_context_store(thread_id, inputs.lane).await?
+                        namespace._core_context_store(thread_id, inputs.partition_key).await?
                     }
                     None => ContextStore::new(Vec::new(), None, false)?,
                 },
             });
+            let bound = !self.hydration.lock().bindings.is_empty();
+            if bound {
+                acquired
+                    .activation
+                    .as_ref()
+                    .expect("activation was installed")
+                    .begin_session()
+                    .await?;
+            }
             Ok(())
         }
         .await;
@@ -83,8 +93,13 @@ impl Inner {
 
     async fn cleanup(&self) -> Outcome {
         // Toolset callbacks may still use their thread/context while closing.
-        let result = self.toolsets.aclose().await.map_err(ResourceError::Host);
+        let mut result = self.toolsets.aclose().await.map_err(ResourceError::Host);
         if let Some(opened) = self.opened.get() {
+            if let Some(activation) = &opened.activation {
+                let session =
+                    activation.finish_session(false).await.map_err(ResourceError::Storage);
+                result = result.and(session);
+            }
             if self.plan.own_activation
                 && let Some(activation) = &opened.activation
             {
@@ -105,11 +120,16 @@ impl Inner {
     }
 
     fn release_hydration(&self) {
-        let views = {
+        let (views, bindings) = {
             let mut hydration = self.hydration.lock();
             hydration.closed = true;
-            std::mem::take(&mut hydration.views)
+            (std::mem::take(&mut hydration.views), std::mem::take(&mut hydration.bindings))
         };
+        for binding in bindings {
+            if let Err(error) = binding.release() {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "the session binding could not release: {error}");
+            }
+        }
         for view in views {
             if let Err(error) = view.release() {
                 log::warn!(target: lk_agents_abi::LOG_TARGET, "the run's context hydration could not release: {error}");
@@ -189,6 +209,16 @@ impl Drop for RunResources {
     }
 }
 
+impl RunResources {
+    pub(crate) async fn settle_session(&self, success: bool) -> Outcome {
+        if let Some(activation) = self.0.opened.get().and_then(|opened| opened.activation.as_ref())
+        {
+            activation.finish_session(success).await?;
+        }
+        Ok(())
+    }
+}
+
 struct OpeningWait {
     inner: Arc<Inner>,
     armed: bool,
@@ -220,7 +250,7 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
         namespace: Option<Arc<Namespace>>,
         thread_id: Option<String>,
         activation: Option<ContextStore>,
-        lane: String,
+        partition_key: String,
         toolsets: Vec<Arc<dyn ToolsetHooks>>,
     ) -> Result<Self, ResourceError> {
         let plan = StoragePlan::new(namespace.is_some(), thread_id.is_some(), activation.is_some())
@@ -230,7 +260,7 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
             env: env.clone(),
             lifecycle: Mutex::default(),
             plan,
-            inputs: Mutex::new(Some(Inputs { namespace, thread_id, activation, lane })),
+            inputs: Mutex::new(Some(Inputs { namespace, thread_id, activation, partition_key })),
             opened: OnceLock::new(),
             toolsets: crate::toolsets::group::Group::new(env, toolsets),
             hydration: Mutex::default(),
@@ -290,9 +320,27 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
         if let Some(view) = retired
             && let Err(error) = view.release()
         {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, "the ended run's context hydration could not release: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the run's context hydration could not release: {error}");
         }
     }
+
+    fn retain_binding(&self, view: Arc<dyn BindingCleanup>) {
+        let retired = {
+            let mut hydration = self.0.hydration.lock();
+            if hydration.closed {
+                Some(view)
+            } else {
+                hydration.bindings.push(view);
+                None
+            }
+        };
+        if let Some(view) = retired
+            && let Err(error) = view.release()
+        {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the session binding could not release: {error}");
+        }
+    }
+
     fn aclose(&self) -> BoxFuture<'static, Outcome> {
         self.0.request_close();
         let inner = self.0.clone();

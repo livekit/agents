@@ -660,3 +660,67 @@ mod realtime_voiced_text_retries_told {
         assert_eq!(retried, 3, "each retry of the sentence is told");
     }
 }
+
+mod realtime_voiced_text_cut {
+    //! A text-only realtime reply is spoken by the session's TTS, and once cut it keeps only the
+    //! words heard.
+    use lk_agents_abi::{ChatItem, Role};
+    use lk_agents_core::markup::ChatMessageExt;
+    use lk_agents_fuzz::drive::{RealtimeSetup, Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AGENT_TURNS, Input, Millis};
+    use lk_agents_voice::{events::SessionEvent, trace::Step};
+
+    // Catches: `RealtimeModel(modalities=["text"])` with a TTS silent (its text never reached the
+    // synthesis), or such a reply cut while playing committed with its whole text.
+    #[test]
+    fn a_cut_text_only_reply_keeps_the_words_heard() {
+        let setup = Setup {
+            realtime: Some(RealtimeSetup {
+                text_only: true,
+                turn_detection: false,
+                tool_calls: Some(0),
+                ..RealtimeSetup::default()
+            }),
+            tts: true,
+            sync_transcription: true,
+            ..Setup::default()
+        };
+        let advance = |ms| Input::Advance { ms: Millis(ms) };
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            let reply = Input::GenerateReply { user_input: None, instructions: None, allow: None };
+            run.apply(&reply).await;
+            let playing = |run: &Run| {
+                let applied = run.record.applied();
+                applied.iter().any(|a| matches!(a.input, Input::PlayoutStarted { .. }))
+            };
+            for _ in 0..100 {
+                if playing(&run) {
+                    break;
+                }
+                crate::playout::apply_with_playout(&mut run, &advance(100)).await;
+            }
+            assert!(playing(&run), "the text-only reply is spoken by the session's TTS");
+            crate::playout::apply_with_playout(&mut run, &advance(300)).await;
+            run.apply(&Input::Interrupt { force: true, wait: false }).await;
+            crate::playout::apply_with_playout(&mut run, &advance(2_000)).await;
+            run
+        });
+        let replies: Vec<_> = run
+            .record
+            .journal()
+            .iter()
+            .filter_map(|(_, step)| match step {
+                Step::Emitted(SessionEvent::ConversationItemAdded { item, .. }) => match &**item {
+                    ChatItem::Message(msg) if msg.role == Role::Assistant => Some(msg.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let [reply] = &replies[..] else { panic!("one reply, got {replies:?}") };
+        assert!(reply.interrupted, "the reply is marked cut short");
+        let heard = reply.text_content().unwrap_or_default();
+        assert!(!AGENT_TURNS.contains(&heard.as_str()), "the whole reply was kept: {heard:?}");
+    }
+}

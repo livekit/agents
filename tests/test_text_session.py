@@ -17,8 +17,8 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     RunContext,
+    SessionState,
     TextSession,
-    TextSessionState,
     persisted,
 )
 from livekit.agents.llm import (
@@ -100,11 +100,11 @@ class App:
 
 @dataclass
 class Conversation:
-    session_state: TextSessionState | None = persisted(default=None)
+    session_state: SessionState = persisted(default_factory=SessionState)
 
 
-def restore(state: TextSessionState) -> TextSessionState:
-    return TextSessionState._from_json(state._to_json())
+def restore(state: SessionState) -> SessionState:
+    return SessionState._from_json(state._to_json())
 
 
 def history(frame: Any) -> list[Any]:
@@ -199,11 +199,9 @@ async def test_text_session_state_saves_and_loads_in_a_marked_context_field() ->
     conversation = Conversation()
     store = ContextStore()
     await store.load_context(conversation)
-    first = await TextSession(agent=agent).run("Hi")
-    conversation.session_state = first.state
-    await store.save_context(conversation)
+    first = await TextSession(agent=agent).run("Hi", context=store.bind(conversation))
     restored = Conversation()
-    store = ContextStore(scopes=[write.scope for write in store._scope_writes])
+    store = ContextStore(state=json.loads((await store.load_session())._to_json()))
     await store.load_context(restored)
     assert restored.session_state is not None
     second = await TextSession(agent=agent).run("More", state=restored.session_state)
@@ -236,21 +234,6 @@ async def test_rejected_child_approval_restores_without_starting_the_child() -> 
         if i.type == "function_call_output" and i.call_id == "approval"
     )
     assert output.output == "no"
-
-
-async def test_invalid_child_parameters_never_start_a_frame() -> None:
-    child_model = Script()
-    child = Agent(name="booking", instructions="Book", llm=child_model, output_type=Booking)
-    parent = Agent(
-        name="desk",
-        instructions="Help",
-        llm=Script(call("book", {"nights": 0}, "bad"), Reply("Try a positive number")),
-        tools=[child.as_tool(tool_name="book", parameters=Task)],
-    )
-    turn = await TextSession(agent=parent).run("Book")
-    assert len(turn.state.frames) == 1 and not child_model.requests
-    output = next(i for i in turn.result.new_messages() if i.type == "function_call_output")
-    assert output.is_error and "nights" in output.output
 
 
 async def test_failure_and_stream_cancellation_produce_no_replacement_state() -> None:

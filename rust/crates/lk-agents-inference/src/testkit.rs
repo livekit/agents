@@ -348,7 +348,7 @@ pub mod fallback {
         fn synthesize<'a>(
             &'a self,
             _cx: &crate::telemetry::Cx,
-            _text: &'a str,
+            _chunk: &'a lk_agents_abi::SpeechChunk,
         ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
             Box::pin(async move {
                 self.record();
@@ -359,7 +359,6 @@ pub mod fallback {
         fn stream(
             &self,
             _cx: &crate::telemetry::Cx,
-            _: bool,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -376,8 +375,8 @@ pub mod fallback {
     }
 
     struct DiscardText;
-    impl StreamInput<String> for DiscardText {
-        fn push(&self, _item: String) -> Result<(), ProviderError> {
+    impl StreamInput<lk_agents_abi::SpeechChunk> for DiscardText {
+        fn push(&self, _item: lk_agents_abi::SpeechChunk) -> Result<(), ProviderError> {
             Ok(())
         }
         fn flush(&self) -> Result<(), ProviderError> {

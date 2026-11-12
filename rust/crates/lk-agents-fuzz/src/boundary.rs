@@ -36,8 +36,8 @@ pub const VOICE: Boundary = Boundary {
          session or fallback logic); fakes::realtime::duplex (a duplex model's events at \
          the Realtime boundary, as its adapter's segmenter makes them)",
         "fakes::room (the LiveKit SDK room in memory, on the run's clock)",
-        "fakes::storage (the voice lane's thread database connection: storage's in-memory \
-         SQLite behind seeded latency, lost answers and outages; VoiceStore, Lane, Lease, \
+        "fakes::storage (the voice partition_key's thread database connection: storage's in-memory \
+         SQLite behind seeded latency, lost answers and outages; VoiceStore, Partition, Lease, \
          renewal and fenced commit are production)",
     ],
     scheduled: &[

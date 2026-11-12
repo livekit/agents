@@ -19,7 +19,7 @@ from typing_extensions import TypedDict
 from livekit.agents.llm import ChatContext
 from livekit.plugins.langchain import LLMAdapter
 
-pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+pytestmark = pytest.mark.unit
 
 # --- State definitions ---
 

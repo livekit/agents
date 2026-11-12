@@ -406,6 +406,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::text_session::TextSess
         match self {
             Self::Routing(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Run(inner) => crate::py_errors::HostException::to_py_err(inner),
+            Self::Storage(inner) => crate::py_errors::HostException::to_py_err(inner),
         }
     }
 }

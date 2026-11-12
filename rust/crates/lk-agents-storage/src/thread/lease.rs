@@ -17,7 +17,7 @@ use crate::sql::{Bind, SqlValue, Statement};
 use crate::telemetry::{self, StorageWrite, TeardownStage};
 use crate::thread::db::EventWrite;
 use crate::thread::schema::{
-    ExtendLease, InsertRunEnded, ReleaseLease, ReleaseLeaseIfDrained, SelectFence, WithdrawWaiter,
+    ExtendLease, InsertRunEnded, ReleaseLease, ReleaseLeaseIfDrained, SelectFence,
 };
 use crate::thread::{LeaseTiming, Resend, Thread};
 use crate::{Fence, RunOutcome, StorageError, shortuuid};
@@ -27,7 +27,7 @@ use crate::{Fence, RunOutcome, StorageError, shortuuid};
 
 /// An owner's lease identity, `<label>/<id>`. Every acquire of one owner carries it, so the
 /// owner's next acquire re-enters a lease a canceled acquire or a lost cleanup left behind.
-/// Minted once per owner, which acquires one lane at a time: two owners never share one. The
+/// Minted once per owner, which acquires one partition at a time: two owners never share one. The
 /// releases its dropped leases leave run on its set, which the owner's close awaits.
 #[derive(Clone)]
 pub struct Holder {
@@ -81,9 +81,9 @@ impl Eq for Holder {}
 
 /// The release by token, after the `run_ended` of `run_id` when given. The release is fenced on
 /// the token, so a lease since taken again is left alone; the `run_ended` also lands while
-/// `holder` re-entered the lane under another token, once.
+/// `holder` re-entered the partition under another token, once.
 fn release(
-    lane: &str,
+    partition_key: &str,
     token: &str,
     holder: &str,
     ended: Option<(&str, &EventWrite)>,
@@ -91,10 +91,12 @@ fn release(
     let mut batch = Vec::new();
     if let Some((run_id, e)) = ended {
         let payload = SqlValue::json(&e.payload);
-        let ts_ms = e.ts_ms;
-        batch.push(InsertRunEnded { lane, token, holder, ts_ms, run_id, payload }.bind());
+        let occurred_at_ms = e.occurred_at_ms;
+        batch.push(
+            InsertRunEnded { partition_key, token, holder, occurred_at_ms, run_id, payload }.bind(),
+        );
     }
-    batch.push(ReleaseLease { lane, token }.bind());
+    batch.push(ReleaseLease { partition_key, token }.bind());
     batch
 }
 
@@ -105,10 +107,10 @@ fn release_detached(
     spawner: &TokioSpawner,
     owner: &Holder,
     db: Thread,
-    lane: &str,
+    partition_key: &str,
     batch: Vec<Statement>,
 ) {
-    let lane = lane.to_owned();
+    let partition_key = partition_key.to_owned();
     let open = db.keep_open("lease release");
     owner.releases.spawn(spawner, "lease release", async move {
         let _open = open;
@@ -117,7 +119,7 @@ fn release_detached(
         let out = match tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut release).await {
             Ok(out) => out,
             Err(_) => {
-                telemetry::teardown_overrun(&db.cx, TeardownStage::LeaseRelease, &lane);
+                telemetry::teardown_overrun(&db.cx, TeardownStage::LeaseRelease, &partition_key);
                 release.await
             }
         };
@@ -127,51 +129,16 @@ fn release_detached(
     });
 }
 
-/// A canceled acquire must withdraw its mark even when its future is dropped.
-pub(crate) struct Waiter {
-    db: Thread,
-    lane: String,
-    holder: String,
-    spawner: TokioSpawner,
-}
-
-impl Waiter {
-    pub(crate) fn new(db: Thread, lane: &str, holder: &str) -> Self {
-        Self {
-            db,
-            lane: lane.to_owned(),
-            holder: holder.to_owned(),
-            spawner: TokioSpawner::current(),
-        }
-    }
-}
-
-impl Drop for Waiter {
-    fn drop(&mut self) {
-        let (db, lane, holder) = (self.db.clone(), self.lane.clone(), self.holder.clone());
-        let open = db.keep_open("waiter withdrawal");
-        // The acquire's caller may already be gone. This conditional cleanup ends on its own;
-        // an owner change also clears the mark if the worker or database is unavailable.
-        self.spawner.spawn_detached(async move {
-            let _open = open;
-            let withdraw = || WithdrawWaiter { lane: &lane, holder: &holder };
-            if let Err(error) = db.exec_idempotent(StorageWrite::Waiter, withdraw).await {
-                log::debug!(target: lk_agents_abi::LOG_TARGET, lane = lane.as_str(); "waiter cleanup failed: {error}");
-            }
-        });
-    }
-}
-
 /// A lease take in flight, under the token it mints: the only way to a [`Lease`]. Dropped
-/// while a request may have taken the lane (an abandoned future, an error, a lost
+/// while a request may have taken the partition (an abandoned future, an error, a lost
 /// acknowledgment), it releases by token and ends the run `canceled`.
 pub(crate) struct PendingLease {
     db: Thread,
-    lane: String,
+    partition_key: String,
     token: String,
     holder: Holder,
     run_id: Option<String>,
-    /// A request may have taken the lane under this token.
+    /// A request may have taken the partition under this token.
     armed: bool,
     resend: Resend,
     spawner: TokioSpawner,
@@ -181,30 +148,31 @@ impl PendingLease {
     /// A lost acknowledgment is sent again under the same token for up to `wait`.
     pub(crate) fn new(
         db: Thread,
-        lane: &str,
+        partition_key: &str,
         holder: &Holder,
         run_id: Option<&str>,
         wait: std::time::Duration,
         write: StorageWrite,
     ) -> Self {
-        let (lane, token, holder) = (lane.to_owned(), shortuuid("lease_"), holder.clone());
+        let (partition_key, token, holder) =
+            (partition_key.to_owned(), shortuuid("lease_"), holder.clone());
         let run_id = run_id.map(str::to_owned);
         let (resend, spawner) = (Resend::new(wait, &db.cx, write), TokioSpawner::current());
-        Self { db, lane, token, holder, run_id, armed: false, resend, spawner }
+        Self { db, partition_key, token, holder, run_id, armed: false, resend, spawner }
     }
 
     pub(crate) fn token(&self) -> &str {
         &self.token
     }
 
-    /// Whether an earlier request's answer was lost: it may have taken the lane.
+    /// Whether an earlier request's answer was lost: it may have taken the partition.
     pub(crate) fn lost(&self) -> bool {
         self.resend.lost()
     }
 
-    /// One request that may take the lane under this token, `version` reading from its answer
-    /// the version it took the lane at. `Continue` after a lost acknowledgment, to send it again;
-    /// `Break` once the answer is known, with the lease when it took the lane.
+    /// One request that may take the partition under this token, `version` reading from its answer
+    /// the version it took the partition at. `Continue` after a lost acknowledgment, to send it again;
+    /// `Break` once the answer is known, with the lease when it took the partition.
     pub(crate) async fn attempt<T>(
         &mut self,
         request: impl Future<Output = Result<T, StorageError>>,
@@ -219,13 +187,13 @@ impl PendingLease {
             ControlFlow::Break(Err(error)) => return ControlFlow::Break(Err(error)),
         };
         let Some(version) = version(&answer) else {
-            // after a lost answer the lane may still be held under this token
+            // after a lost answer the partition may still be held under this token
             self.armed = self.resend.lost();
             return ControlFlow::Break(Ok((answer, None)));
         };
         self.armed = false;
         let fence = Fence {
-            lane: self.lane.clone(),
+            partition_key: self.partition_key.clone(),
             holder: self.holder.clone(),
             token: self.token.clone(),
             version,
@@ -243,12 +211,12 @@ impl Drop for PendingLease {
         let event = JournalEvent::RunEnded(RunEnded { outcome: RunOutcome::Canceled, reason });
         let ended = EventWrite::new(unix_now_ms(), event);
         let ended = self.run_id.as_deref().map(|run_id| (run_id, &ended));
-        let batch = release(&self.lane, &self.token, self.holder.as_str(), ended);
-        release_detached(&self.spawner, &self.holder, self.db.clone(), &self.lane, batch);
+        let batch = release(&self.partition_key, &self.token, self.holder.as_str(), ended);
+        release_detached(&self.spawner, &self.holder, self.db.clone(), &self.partition_key, batch);
     }
 }
 
-/// A lease an acquire or a receive took: the lane at `version` under `token`. Cloned by the run
+/// A lease an acquire or a receive took: the partition at `version` under `token`. Cloned by the run
 /// and its checkpoint; [`Lease::keep_alive`] extends it while the run works.
 #[derive(Clone)]
 pub struct Lease {
@@ -270,15 +238,15 @@ impl Drop for Held {
     fn drop(&mut self) {
         if !self.released.load(Ordering::Acquire) {
             let (fence, db) = (&self.fence, self.db.clone());
-            let batch = release(&fence.lane, &fence.token, fence.holder.as_str(), None);
-            release_detached(&self.spawner, &fence.holder, db, &fence.lane, batch);
+            let batch = release(&fence.partition_key, &fence.token, fence.holder.as_str(), None);
+            release_detached(&self.spawner, &fence.holder, db, &fence.partition_key, batch);
         }
     }
 }
 
 /// Shared with renewal without keeping the lease (and its owned task) alive.
 struct Ownership {
-    lane: String,
+    partition_key: String,
     deadline: Mutex<Instant>,
     /// Why ownership was lost, set once. Held with the ownership, which every waiter borrows.
     lost: Producer<Option<String>>,
@@ -308,7 +276,7 @@ impl Ownership {
     }
 
     fn lose(&self, reason: String) {
-        let reason = format!("lease on lane {}: {reason}", self.lane);
+        let reason = format!("lease on partition_key {}: {reason}", self.partition_key);
         let first = self.lost.modify(|lost| {
             let first = lost.is_none();
             if first {
@@ -317,7 +285,7 @@ impl Ownership {
             first
         });
         if first {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "{reason}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.as_str(); "{reason}");
         }
     }
 }
@@ -326,7 +294,7 @@ impl Lease {
     fn new(db: Thread, fence: Fence, acquired_at: Instant) -> Self {
         let (lost, _) = signal::signal(None);
         let ownership = Arc::new(Ownership {
-            lane: fence.lane.clone(),
+            partition_key: fence.partition_key.clone(),
             deadline: Mutex::new(acquired_at + db.timing.ttl),
             lost,
         });
@@ -401,9 +369,9 @@ impl Lease {
     /// Releases without writing anything else but, when given, the `run_ended` event of `run_id`.
     /// Both are keyed by the token, so a lost acknowledgment is sent again.
     pub async fn release(&self, ended: Option<(&str, &EventWrite)>) -> Result<(), StorageError> {
-        let Fence { lane, token, holder, .. } = &self.inner.fence;
+        let Fence { partition_key, token, holder, .. } = &self.inner.fence;
         let (db, conn) = (&self.inner.db, self.inner.db.conn());
-        let batch = || conn.batch(release(lane, token, holder.as_str(), ended));
+        let batch = || conn.batch(release(partition_key, token, holder.as_str(), ended));
         db.resend(StorageWrite::Release).send(batch).await?;
         self.mark_released();
         Ok(())
@@ -415,25 +383,25 @@ impl Lease {
         let reason = Some(AbandonReason::RunDropped.as_str().to_owned());
         let event = JournalEvent::RunEnded(RunEnded { outcome: RunOutcome::Canceled, reason });
         let ended = EventWrite::new(unix_now_ms(), event);
-        let Fence { lane, token, holder, .. } = &self.inner.fence;
-        let batch = release(lane, token, holder.as_str(), Some((run_id, &ended)));
-        release_detached(&self.inner.spawner, holder, self.inner.db.clone(), lane, batch);
+        let Fence { partition_key, token, holder, .. } = &self.inner.fence;
+        let batch = release(partition_key, token, holder.as_str(), Some((run_id, &ended)));
+        release_detached(&self.inner.spawner, holder, self.inner.db.clone(), partition_key, batch);
         self.stop();
         self.mark_released();
     }
 
     /// Releases when no inbox row is pending past `drained_id`; `true` when released. A row
     /// pending keeps the lease, extended; a lease another holder took is `LeaseLost`. After a
-    /// lost acknowledgment a token no longer the lane's is this release's.
+    /// lost acknowledgment a token no longer the partition's is this release's.
     pub async fn release_if_drained(&self) -> Result<bool, StorageError> {
         let (db, fence) = (&self.inner.db, &self.inner.fence);
-        let (lane, token) = (&*fence.lane, &*fence.token);
+        let (partition_key, token) = (&*fence.partition_key, &*fence.token);
         let released = db.resend(StorageWrite::Release).probed(
-            || async move { Ok(db.exec(ReleaseLeaseIfDrained { lane, token }).await? > 0) },
-            // a lost release left the lane under another token, or none
+            || async move { Ok(db.exec(ReleaseLeaseIfDrained { partition_key, token }).await? > 0) },
+            // a lost release left the partition under another token, or none
             || async move {
                 let tokens =
-                    db.read(SelectFence { lane }, |row| Ok(row[1].as_str().map(str::to_owned)));
+                    db.read(SelectFence { partition_key }, |row| Ok(row[1].as_str().map(str::to_owned)));
                 let held = tokens.await?.into_iter().any(|t| t.as_deref() == Some(token));
                 Ok((!held).then_some(true))
             },
@@ -442,9 +410,13 @@ impl Lease {
             self.mark_released();
             return Ok(true);
         }
-        if db.exec_idempotent(StorageWrite::Extend, || extend(fence, db.timing.secs())).await? == 0
+        if db.exec_idempotent(StorageWrite::Extend, || extend(fence, db.timing.millis())).await?
+            == 0
         {
-            return Err(StorageError::LeaseLost(format!("lease on lane {} was taken", fence.lane)));
+            return Err(StorageError::LeaseLost(format!(
+                "lease on partition_key {} was taken",
+                fence.partition_key
+            )));
         }
         Ok(false)
     }
@@ -484,7 +456,7 @@ impl LeaseRenewal {
         ttl: std::time::Duration,
     ) -> ControlFlow<()> {
         let wait = self.ownership.deadline.lock().saturating_duration_since(started);
-        let extend = || self.db.exec(extend(&self.fence, self.db.timing.secs()));
+        let extend = || self.db.exec(extend(&self.fence, self.db.timing.millis()));
         let resend = Resend::new(wait, &self.db.cx, StorageWrite::Extend);
         let outcome = tokio::time::timeout_at(until, resend.send(extend))
             .await
@@ -503,7 +475,7 @@ impl LeaseRenewal {
                 return ControlFlow::Break(());
             }
             Err(error) if error.retryable() => {
-                log::debug!(target: lk_agents_abi::LOG_TARGET, lane = self.fence.lane.as_str(); "lease extend failed, retrying: {error}");
+                log::debug!(target: lk_agents_abi::LOG_TARGET, partition_key = self.fence.partition_key.as_str(); "lease extend failed, retrying: {error}");
             }
             Err(error) => {
                 self.ownership.lose(format!("lease renewal failed: {error}"));
@@ -514,12 +486,12 @@ impl LeaseRenewal {
     }
 }
 
-fn extend(fence: &Fence, lease_secs: i64) -> ExtendLease<'_> {
+fn extend(fence: &Fence, lease_ms: i64) -> ExtendLease<'_> {
     ExtendLease {
-        lane: &fence.lane,
+        partition_key: &fence.partition_key,
         holder: fence.holder.as_str(),
         token: &fence.token,
-        lease_secs,
+        lease_ms,
     }
 }
 

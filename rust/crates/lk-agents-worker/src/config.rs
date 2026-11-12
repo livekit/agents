@@ -13,7 +13,7 @@ pub(crate) fn new_instance_id() -> String {
 /// The wait for `JobAssignment` after the user accepts.
 pub const ASSIGNMENT_TIMEOUT: Duration = Duration::from_millis(7_500);
 /// How often a connected worker sends `UpdateWorkerStatus`. Per-connection.
-pub const UPDATE_STATUS_INTERVAL: Duration = Duration::from_millis(2_500);
+pub const UPDATE_STATUS_INTERVAL: Duration = Duration::from_millis(1_500);
 /// How often the load function is re-invoked. Lives for the whole worker, connected or not.
 pub const UPDATE_LOAD_INTERVAL: Duration = Duration::from_millis(500);
 /// Bounds connection establishment, registration, writes, and transport shutdown.

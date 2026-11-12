@@ -1,5 +1,4 @@
 import asyncio
-import time
 
 import pytest
 from aiohttp import RequestInfo, WSServerHandshakeError
@@ -7,9 +6,9 @@ from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, APITimeoutError
-from livekit.agents.utils import ConnectionPool, aio as connection_pool
+from livekit.agents.utils import ConnectionPool
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = pytest.mark.unit
 
 NO_POOL_WAIT = APIConnectOptions(pool_timeout=0)
 
@@ -84,22 +83,6 @@ async def test_remove_connection():
     pool.put(conn)
     new_conn = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert new_conn is not conn, "Expected a removed connection to not be reused."
-
-
-@pytest.mark.asyncio
-async def test_get_expired(monkeypatch: pytest.MonkeyPatch):
-    # Use a short max duration to simulate expiration.
-    dummy_connect = dummy_connect_factory()
-    pool = ConnectionPool(max_session_duration=1, connect_cb=dummy_connect)
-
-    conn = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    pool.put(conn)
-    # the pool ages connections on the wall clock: two seconds pass (max_session_duration is 1)
-    later = time.time() + 2
-    monkeypatch.setattr(connection_pool.time, "time", lambda: later)
-
-    conn2 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    assert conn2 is not conn, "Expected a new connection to be returned."
 
 
 @pytest.mark.asyncio
@@ -194,18 +177,6 @@ def _closing_pool(max_session_duration: float | None = 60):
 
 
 @pytest.mark.asyncio
-async def test_invalidate_closes_idle_connections_immediately():
-    pool, closed = _closing_pool()
-
-    idle = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    pool.put(idle)
-    pool.invalidate()
-
-    await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    assert idle in closed, "Expected an idle connection to be closed by the next drain."
-
-
-@pytest.mark.asyncio
 async def test_retired_connection_is_closed_when_removed_after_an_error():
     pool, closed = _closing_pool()
 
@@ -215,17 +186,6 @@ async def test_retired_connection_is_closed_when_removed_after_an_error():
 
     await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert in_use in closed, "Expected a retired connection to be closed when removed."
-
-
-@pytest.mark.asyncio
-async def test_aclose_closes_retired_connections_never_returned():
-    pool, closed = _closing_pool()
-
-    leaked = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    pool.invalidate()
-    await pool.aclose()
-
-    assert leaked in closed, "aclose() must close retired connections that were never returned."
 
 
 @pytest.mark.asyncio

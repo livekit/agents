@@ -169,6 +169,7 @@ struct Running {
     drained: Option<tokio::sync::oneshot::Receiver<()>>,
     /// The loop's id counter: a speech call's handle has its id before the loop creates it.
     speech_ids: Arc<AtomicU64>,
+    id_seed: u64,
     tts_adapter: TtsAdapter,
     stt_adapter: SttAdapter,
     _stalls: crate::telemetry::StallWatch,
@@ -337,6 +338,7 @@ impl VoiceSession {
                 peer,
                 ivr_detection: _,
                 speech_ids,
+                id_seed,
             } = handle;
             let mut owner = executor.own(cores);
             admission.check_open()?;
@@ -385,6 +387,7 @@ impl VoiceSession {
                 loop_tasks: Vec::new(),
                 drained: Some(drained),
                 speech_ids,
+                id_seed,
                 tts_adapter,
                 stt_adapter,
             })?;
@@ -531,7 +534,7 @@ impl VoiceSession {
         let allow = allow_interruptions
             .unwrap_or_else(|| self.stack().resolve(&self.legs()).turn.interruption.enabled());
         self.running(|r| {
-            let id = SpeechId(r.speech_ids.fetch_add(1, Ordering::Relaxed));
+            let id = SpeechId::nth(r.id_seed, r.speech_ids.fetch_add(1, Ordering::Relaxed));
             let requests = self.speeches.requests(r.api.clone());
             let (speech, signals) = SpeechHandle::pending(requests, id, allow);
             self.speeches.register(Arc::clone(&speech));
@@ -752,7 +755,6 @@ impl VoiceSession {
             vad,
             turn_handling,
             min_consecutive_speech_delay,
-            use_tts_aligned_transcript,
             expressive,
             llm_node,
             tts_node,
@@ -763,7 +765,6 @@ impl VoiceSession {
         let options = lk_agents_voice::turn::agent_layer(
             turn_handling.as_ref(),
             min_consecutive_speech_delay,
-            use_tts_aligned_transcript,
         );
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
         let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);

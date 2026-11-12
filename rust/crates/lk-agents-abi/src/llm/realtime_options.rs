@@ -222,6 +222,26 @@ pub enum TurnDetection {
     Azure(AzureSemanticVad),
 }
 
+impl TurnDetection {
+    /// Reply when speech ends; `None` is the server's default (on).
+    pub fn create_response(&self) -> Option<bool> {
+        match self {
+            TurnDetection::Server(td) => td.create_response,
+            TurnDetection::Semantic(td) => td.create_response,
+            TurnDetection::Azure(td) => td.create_response,
+        }
+    }
+
+    /// Cut the reply when speech starts; `None` is the server's default (on).
+    pub fn interrupt_response(&self) -> Option<bool> {
+        match self {
+            TurnDetection::Server(td) => td.interrupt_response,
+            TurnDetection::Semantic(td) => td.interrupt_response,
+            TurnDetection::Azure(td) => td.interrupt_response,
+        }
+    }
+}
+
 /// An OpenAI custom voice.
 #[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
 #[derive(Debug, Clone, PartialEq, Serialize)]

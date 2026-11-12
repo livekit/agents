@@ -3,8 +3,180 @@ use crate::agent_session::lifecycle::SessionStartPlans;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::SessionEvent;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_core::tts::markup::ChatMessageExt;
+use lk_agents_core::markup::ChatMessageExt;
 use std::sync::Arc;
+
+#[test]
+fn pending_voice_progress_is_coalesced_until_the_writer_acknowledges() {
+    use crate::agent_session::effects::VoiceEffect;
+    let mut driver = driver();
+    driver.take_outbox();
+    driver.session.storage.enabled = true;
+    let speech = SpeechId(10);
+    driver.storage_started(speech);
+    let partial = |text| {
+        lk_agents_abi::ChatMessage::text(
+            "reply",
+            lk_agents_abi::Role::Assistant,
+            text,
+            std::time::UNIX_EPOCH,
+        )
+    };
+    driver.storage_progress(speech, partial("first"));
+    let checkpoint = driver
+        .take_outbox()
+        .iter()
+        .find_map(|effect| match effect {
+            VoiceEffect::StorageCheckpoint { checkpoint, .. } => Some(*checkpoint),
+            _ => None,
+        })
+        .unwrap();
+    for _ in 0..100 {
+        driver.storage_progress(speech, partial("latest"));
+    }
+    assert!(
+        !driver
+            .take_outbox()
+            .iter()
+            .any(|effect| matches!(effect, VoiceEffect::StorageCheckpoint { .. }))
+    );
+    driver.storage_checkpointed(lk_agents_abi::Ts::ZERO, checkpoint, Ok(()));
+    let effects = driver.take_outbox();
+    let histories: Vec<_> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            VoiceEffect::StorageCheckpoint { history, .. } => Some(history),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(histories.len(), 1);
+    assert_eq!(
+        histories[0].last().unwrap().as_message().unwrap().raw_text_content().as_deref(),
+        Some("latest")
+    );
+}
+
+#[test]
+fn a_failed_generation_drains_accepted_progress_before_abandoning_its_run() {
+    use crate::agent_session::effects::VoiceEffect;
+    let mut driver = driver();
+    driver.take_outbox();
+    driver.session.storage.enabled = true;
+    let speech = SpeechId(9);
+    driver.storage_started(speech);
+    driver.storage_progress(
+        speech,
+        lk_agents_abi::ChatMessage::text(
+            "reply",
+            lk_agents_abi::Role::Assistant,
+            "heard",
+            std::time::UNIX_EPOCH,
+        ),
+    );
+    let checkpoint = driver
+        .take_outbox()
+        .iter()
+        .find_map(|effect| match effect {
+            VoiceEffect::StorageCheckpoint { checkpoint, .. } => Some(*checkpoint),
+            _ => None,
+        })
+        .unwrap();
+    driver.storage_abandon(speech, Box::new(crate::generation::fatal("model failed")));
+    assert!(
+        !driver.take_outbox().iter().any(|effect| matches!(effect, VoiceEffect::StorageAbort(_)))
+    );
+    driver.storage_checkpointed(lk_agents_abi::Ts::ZERO, checkpoint, Ok(()));
+    assert!(
+        driver
+            .take_outbox()
+            .iter()
+            .any(|effect| matches!(effect, VoiceEffect::StorageAbort(id) if *id == speech))
+    );
+}
+
+#[test]
+fn a_final_voice_commit_waits_for_delivered_progress_checkpoint_receipts() {
+    use crate::agent_session::effects::VoiceEffect;
+    use lk_agents_abi::{ChatMessage, Role, Ts};
+    let mut driver = driver();
+    driver.take_outbox();
+    driver.session.storage.enabled = true;
+    let speech = SpeechId(8);
+    driver.storage_started(speech);
+    let mut partial = ChatMessage::text("reply", Role::Assistant, "heard", std::time::UNIX_EPOCH);
+    partial.interrupted = true;
+    driver.storage_progress(speech, partial);
+    let effects = driver.take_outbox();
+    let checkpoint = effects
+        .iter()
+        .find_map(|effect| match effect {
+            VoiceEffect::StorageCheckpoint { checkpoint, history, .. } => {
+                assert!(history.iter().any(|item| item.id() == "reply"));
+                Some(*checkpoint)
+            }
+            _ => None,
+        })
+        .unwrap();
+    driver.storage_settle(
+        Ts::ZERO,
+        speech,
+        crate::generation::TurnOutcome {
+            forwarded_text: "heard".into(),
+            assistant_message: None,
+            cut_at: None,
+        },
+        false,
+    );
+    assert!(
+        !driver
+            .take_outbox()
+            .iter()
+            .any(|effect| matches!(effect, VoiceEffect::StorageCommit { .. }))
+    );
+    driver.storage_checkpointed(Ts::ZERO, checkpoint, Ok(()));
+    assert_eq!(
+        driver
+            .take_outbox()
+            .iter()
+            .filter(|effect| matches!(effect, VoiceEffect::StorageCommit { .. }))
+            .count(),
+        1
+    );
+    driver.storage_checkpointed(Ts::ZERO, checkpoint, Ok(()));
+    assert!(
+        !driver
+            .take_outbox()
+            .iter()
+            .any(|effect| matches!(effect, VoiceEffect::StorageCommit { .. }))
+    );
+}
+
+#[test]
+fn bound_storage_loss_and_failed_commit_close_the_call_with_a_storage_error() {
+    use lk_agents_abi::storage::StorageError;
+    use lk_agents_abi::voice::events::{CloseReason, ErrorSource};
+    for event in [
+        VoiceEvent::StorageLost(SpeechId(7)),
+        VoiceEvent::StorageFailed {
+            speech: SpeechId(7),
+            error: StorageError::Unavailable("write failed".into()),
+        },
+    ] {
+        let mut driver = driver();
+        driver.session.storage.enabled = true;
+        driver.handle(
+            Some(event),
+            crate::agent_session::time::Now {
+                at: lk_agents_abi::Ts::ZERO,
+                wall: std::time::UNIX_EPOCH,
+            },
+        );
+        let closing =
+            driver.session.closing.as_ref().expect("durability failure closes the bound call");
+        assert_eq!(closing.reason, CloseReason::Error);
+        assert_eq!(closing.error.as_ref().unwrap().source, ErrorSource::Storage);
+    }
+}
 
 #[test]
 fn conversation_updates_publish_once_per_cycle_and_include_view_only_edits() {
@@ -236,11 +408,11 @@ fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
 
 // Catches: a speech whose tasks were
 // aborted (the interruption watchdog, `cancel_tasks`) reports neither done nor failed, so its
-// lane was never released and the store renewed its lease until the call closed.
+// partition was never released and the store renewed its lease until the call closed.
 #[test]
-fn a_speech_ended_without_its_turn_releases_the_lane_within_30_s() {
+fn a_speech_ended_without_its_turn_releases_the_partition_within_30_s() {
     use crate::agent_session::effects::VoiceEffect;
-    use crate::agent_session::storage::LANE_RELEASE_BOUND;
+    use crate::agent_session::storage::PARTITION_RELEASE_BOUND;
     use crate::agent_session::time::Now;
     use lk_agents_abi::Ts;
 
@@ -252,12 +424,12 @@ fn a_speech_ended_without_its_turn_releases_the_lane_within_30_s() {
     let released = driver.settle_step();
     assert!(!released.iter().any(|e| matches!(e, VoiceEffect::StorageAbort(_))));
     let wall = std::time::UNIX_EPOCH;
-    let due = Ts::ZERO.saturating_add(LANE_RELEASE_BOUND);
+    let due = Ts::ZERO.saturating_add(PARTITION_RELEASE_BOUND);
     assert_eq!(driver.wake_at(), Some(due), "the release is bounded");
     let effects = driver.handle(None, Now { at: due, wall });
     assert!(
         effects.iter().any(|e| matches!(e, VoiceEffect::StorageAbort(s) if *s == speech)),
-        "the lane was never released: {effects:?}"
+        "the partition_key was never released: {effects:?}"
     );
 }
 
@@ -722,4 +894,268 @@ fn a_speech_refused_at_finish_is_created_viewed_released_and_answered() {
             }));
         }
     }
+}
+
+/// An agent with no instructions, tools or providers of its own.
+pub(crate) fn agent_update(agent: &str, call: Option<RequestId>) -> AgentUpdate {
+    use lk_agents_abi::Maybe;
+    AgentUpdate {
+        agent: agent.into(),
+        instructions: Default::default(),
+        dynamic_instructions: None,
+        toolset: Default::default(),
+        chat_ctx: None,
+        llm: Maybe::NotGiven,
+        tts: Maybe::NotGiven,
+        stt: Maybe::NotGiven,
+        vad: Maybe::NotGiven,
+        options: Default::default(),
+        expressive: None,
+        output_nodes: Default::default(),
+        call,
+        activation: None,
+    }
+}
+
+/// Two handoffs asked in one tool batch both land, in the order asked, each answered once.
+/// https://github.com/livekit/agents/issues/4729 https://github.com/livekit/agents/issues/5150
+/// https://github.com/livekit/agents/issues/7320 https://github.com/livekit/agents/issues/8477
+#[test]
+fn parallel_handoffs_land_in_order_and_are_each_answered_once() {
+    use crate::agent_session::effects::VoiceEffect;
+    use crate::agent_session::machine::activity::handoff::HandoffEvent;
+    let mut driver = driver();
+    driver.take_outbox();
+    for (agent, call) in [("billing", 1), ("shipping", 2)] {
+        let update = Box::new(agent_update(agent, Some(RequestId(call))));
+        driver.handoff_step(HandoffEvent::Asked { update, run: None });
+    }
+    let effects = driver.settle_step();
+    let answers: Vec<_> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            VoiceEffect::Answer(call, Answer::Handoff(result)) => Some((call.0, *result)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answers, [(1, Ok(())), (2, Ok(()))]);
+    let handoffs: Vec<_> = driver
+        .session
+        .chat_ctx
+        .items()
+        .filter_map(|item| match item {
+            lk_agents_abi::ChatItem::AgentHandoff(h) => {
+                Some((h.old_agent_id.clone(), h.new_agent_id.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        handoffs,
+        [
+            (None, "agent".to_owned()),
+            (Some("agent".into()), "billing".to_owned()),
+            (Some("billing".into()), "shipping".to_owned()),
+        ]
+    );
+    assert_eq!(driver.activity.agent_name(), "shipping");
+    assert!(!driver.activity.in_window(), "no switch is left holding new turns");
+}
+
+/// A cut realtime reply is cancelled, and truncated to what was heard only where supported.
+/// https://github.com/livekit/agents/issues/1016 https://github.com/livekit/agents/issues/1050
+/// https://github.com/livekit/agents/pull/3655 https://github.com/livekit/agents/issues/3237
+#[test]
+fn a_cut_realtime_reply_is_truncated_only_when_the_model_supports_it() {
+    use crate::agent_session::effects::VoiceEffect;
+    use crate::agent_session::machine::activity::realtime::RealtimeWake;
+    use lk_agents_abi::{RealtimeCommand, Ts, llm::realtime as rt};
+
+    for truncation in [false, true] {
+        let parts = SessionParts { agent: "agent".into(), ..Default::default() };
+        let now = Now { at: Ts::ZERO, wall: std::time::UNIX_EPOCH };
+        let mut initial = initial_session(parts, None, now);
+        initial.rt_caps.message_truncation = truncation;
+        initial.rt_session = Some(lk_agents_abi::resources::RealtimeRef {
+            id: lk_agents_abi::resources::ResourceId(1),
+            provider: lk_agents_abi::ProviderId::of_label("realtime"),
+            capabilities: initial.rt_caps,
+        });
+        let mut driver = VoiceDriver::new(initial);
+        let created = rt::GenerationCreated { response_id: "resp_1".into(), req_id: None };
+        driver.on_realtime(Ts::ZERO, RealtimeWake::Event(rt::Event::GenerationCreated(created)));
+        let speech = *driver.activity.realtime_players().next().expect("the reply plays");
+        driver.take_outbox();
+        let cut = rt::Truncate {
+            message_id: "msg_1".into(),
+            has_audio: true,
+            audio_end_ms: 400,
+            audio_transcript: None,
+        };
+        driver.on_realtime(Ts::ZERO, RealtimeWake::Heard { speech, cuts: vec![cut.clone()] });
+        let sent: Vec<_> = driver
+            .take_outbox()
+            .into_iter()
+            .filter_map(|effect| match effect {
+                VoiceEffect::Realtime { command, .. } => Some(command),
+                _ => None,
+            })
+            .collect();
+        let shape: Vec<_> = sent
+            .iter()
+            .map(|command| match command {
+                RealtimeCommand::Interrupt(i) => format!("interrupt {:?}", i.response_id),
+                RealtimeCommand::Truncate(t) => {
+                    format!("truncate {} {}", t.message_id, t.audio_end_ms)
+                }
+                other => format!("{other:?}"),
+            })
+            .collect();
+        let mut want = vec![format!("interrupt {:?}", Some("resp_1"))];
+        if truncation {
+            want.push(format!("truncate {} {}", cut.message_id, cut.audio_end_ms));
+        }
+        assert_eq!(shape, want, "message_truncation={truncation}");
+    }
+}
+
+/// A late realtime user transcript is placed where its turn began, before the reply to it.
+/// https://github.com/livekit/agents/pull/6616 https://github.com/livekit/agents/issues/2148
+#[test]
+fn delayed_realtime_transcripts_preserve_onset_order() {
+    use crate::agent_session::effects::VoiceEffect;
+    use crate::agent_session::machine::activity::realtime::RealtimeWake;
+    use lk_agents_abi::{ChatMessage, Role, Ts, llm::realtime as rt};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let driver = &mut realtime_driver();
+    let reply =
+        ChatMessage::text("reply", Role::Assistant, "Sure.", UNIX_EPOCH + Duration::from_secs(5));
+    driver.commit_item(
+        reply.into(),
+        crate::agent::Source::Remote { item_id: "reply".into() },
+        crate::agent::Visibility::Both,
+    );
+    driver.take_outbox();
+    let mut told = 0;
+    for transcript in ["book a table", "book a table for two"] {
+        let final_ = rt::InputTranscription {
+            item_id: "user_1".into(),
+            transcript: transcript.into(),
+            is_final: true,
+            confidence: None,
+            turn_started_at: Some(2.0),
+        };
+        driver.on_realtime(Ts::ZERO, RealtimeWake::Event(rt::Event::InputTranscription(final_)));
+        told += driver
+            .settle_step()
+            .iter()
+            .filter(|effect| {
+                matches!(effect, VoiceEffect::Emit(SessionEvent::UserInputTranscribed(t))
+                    if t.is_final && t.ev.alternatives.first().is_some_and(|a| a.text == transcript))
+            })
+            .count();
+    }
+    assert_eq!(told, 2, "each final is told once");
+    let order: Vec<(String, Option<String>)> = driver
+        .session
+        .chat_ctx
+        .items()
+        .filter_map(|item| item.as_message())
+        .map(|m| (m.id.clone(), m.text_content()))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            ("user_1".to_owned(), Some("book a table for two".to_owned())),
+            ("reply".to_owned(), Some("Sure.".to_owned())),
+        ]
+    );
+    let user = driver.session.chat_ctx.entry("user_1").unwrap().item.as_message().unwrap();
+    assert_eq!(user.created_at, UNIX_EPOCH + Duration::from_secs(2));
+    assert_eq!(user.metrics.started_speaking_at, Some(2.0));
+}
+
+/// Each realtime response is metered once as one request, also when its usage lands mid-handoff.
+/// https://github.com/livekit/agents/pull/2097 https://github.com/livekit/agents/pull/3168
+/// https://github.com/livekit/agents/issues/2222 https://github.com/livekit/agents/pull/1080
+#[test]
+fn realtime_usage_is_metered_once_per_response_across_handoffs() {
+    use crate::agent_session::machine::activity::handoff::HandoffEvent;
+    use crate::agent_session::machine::activity::realtime::RealtimeWake;
+    use lk_agents_abi::metrics::base::{AgentMetrics, RealtimeModelMetrics};
+    use lk_agents_abi::usage::{ModelUsage, TokenUsage};
+    use lk_agents_abi::{Ts, llm::realtime as rt};
+
+    let metrics = |response: &str| {
+        rt::Event::Metrics(rt::RealtimeMetrics {
+            metrics: Box::new(AgentMetrics::RealtimeModel(RealtimeModelMetrics {
+                label: "realtime".into(),
+                request_id: response.into(),
+                timestamp: 0.0,
+                duration: 1.0,
+                connection_duration: None,
+                ttft: None,
+                cancelled: false,
+                tokens: TokenUsage { input_tokens: 100, output_tokens: 20, ..Default::default() },
+                tokens_per_second: 20.0,
+                acquire_time: None,
+                connection_reused: false,
+                metadata: None,
+            })),
+        })
+    };
+    let created = |response: &str| {
+        rt::Event::GenerationCreated(rt::GenerationCreated {
+            response_id: response.into(),
+            req_id: None,
+        })
+    };
+    let driver = &mut realtime_driver();
+    let update = Box::new(agent_update("billing", Some(RequestId(1))));
+    driver.handoff_step(HandoffEvent::Asked { update, run: None });
+    driver.settle_step();
+    assert_eq!(driver.activity.agent_name(), "billing", "the first switch landed");
+    driver.on_realtime(Ts::ZERO, RealtimeWake::Event(created("resp_1")));
+    driver.on_realtime(Ts::ZERO, RealtimeWake::Event(metrics("resp_1")));
+    // The next switch drains behind the second reply, whose usage arrives mid-switch.
+    driver.on_realtime(Ts::ZERO, RealtimeWake::Event(created("resp_2")));
+    let update = Box::new(agent_update("shipping", Some(RequestId(2))));
+    driver.handoff_step(HandoffEvent::Asked { update, run: None });
+    driver.on_realtime(Ts::ZERO, RealtimeWake::Event(metrics("resp_2")));
+    driver.settle_step();
+
+    let usage = driver.session.usage.snapshot();
+    let [ModelUsage::Llm(llm)] = usage.models.as_slice() else { panic!("{:?}", usage.models) };
+    assert_eq!((llm.requests, llm.unmeasured_requests), (2, 0));
+    assert_eq!((llm.tokens.input_tokens, llm.tokens.output_tokens), (200, 40));
+    assert_eq!(usage.requests, 2);
+}
+
+/// A realtime transcript's `user_input_transcribed` names the item the server transcribed.
+#[test]
+fn a_realtime_transcript_names_the_servers_item() {
+    use crate::agent_session::effects::VoiceEffect;
+    use crate::agent_session::machine::activity::realtime::RealtimeWake;
+    use lk_agents_abi::{Ts, llm::realtime as rt};
+
+    let driver = &mut realtime_driver();
+    let heard = rt::InputTranscription {
+        item_id: "item_7".into(),
+        transcript: "book a table".into(),
+        is_final: true,
+        confidence: None,
+        turn_started_at: None,
+    };
+    driver.on_realtime(Ts::ZERO, RealtimeWake::Event(rt::Event::InputTranscription(heard)));
+
+    let named: Vec<Option<String>> = driver
+        .settle_step()
+        .iter()
+        .filter_map(|effect| match effect {
+            VoiceEffect::Emit(SessionEvent::UserInputTranscribed(t)) => Some(t.item_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(named, [Some("item_7".to_owned())]);
 }

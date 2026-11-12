@@ -8,7 +8,7 @@ import textwrap
 
 import pytest
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize("failure", ["startup", "drain"])

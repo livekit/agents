@@ -14,7 +14,7 @@ pub use crate::a2a::client::Message;
 #[derive(Debug, Clone)]
 pub struct TurnContext {
     pub thread_id: String,
-    pub lane: String,
+    pub partition_key: String,
     pub message: ChatItem,
     pub batch: Vec<Message>,
     /// Every message of the batch is a delegation from another agent.
@@ -91,6 +91,15 @@ pub enum TurnEvent {
 pub trait HandlerPort: std::any::Any + Send + Sync {
     /// The run reached a checkpoint; whether it yields. Waits for the turn's verdict.
     fn checkpoint(&self) -> crate::BoxFuture<'_, bool>;
+    fn save_session(
+        &self,
+        _state: Value,
+        _history: Vec<ChatItem>,
+    ) -> crate::BoxFuture<'_, Result<(), StorageError>> {
+        Box::pin(async {
+            Err(StorageError::Invalid("this handler does not support session checkpoints".into()))
+        })
+    }
     /// A progress message for the client; waits while the turn's queue is full.
     fn progress(&self, text: String) -> crate::BoxFuture<'_, ()>;
     /// One piece of the reply; waits while the turn's queue is full.
@@ -101,13 +110,15 @@ pub trait HandlerPort: std::any::Any + Send + Sync {
 /// that order, publishing progress and tokens and answering checkpoints.
 ///
 /// A report waits while the turn holds 64 unread ones, so a handler never runs ahead of the
-/// turn. `checkpoint()` returns `True` when the run should yield (a newer message waits under
-/// `interrupt`, or the client cancelled the task). Once the turn ended, or was closed, reports
+/// turn. `checkpoint()` returns `True` when the run should yield because the client
+/// cancelled the task. Once the turn ended, or was closed, reports
 /// are dropped and `checkpoint()` returns `True`.
 #[crate::host(class(name = "_core_HandlerTurn", native = HandlerPort))]
 pub trait HandlerTurn: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn checkpoint(&self) -> bool;
+    #[host(await)]
+    async fn save_session(&self, state: Value, history: Vec<ChatItem>) -> Result<(), StorageError>;
     #[host(await)]
     async fn progress(&self, text: String);
     #[host(await)]
@@ -146,12 +157,12 @@ pub trait Turn: Send + Sync + Sized + 'static {
     fn new(
         env: &Self::Env,
         thread: Arc<Self::Thread>,
-        lane: String,
+        partition_key: String,
         host: Arc<dyn crate::a2a::turn::TurnHost>,
         #[host(default = None)] options: Option<crate::a2a::options::TurnOptions>,
     ) -> Self;
     #[host(getter)]
-    fn lane(&self) -> String;
+    fn partition_key(&self) -> String;
     #[host(call)]
     fn policy_for(&self, channel: String) -> crate::a2a::options::Policy;
     #[host(await)]

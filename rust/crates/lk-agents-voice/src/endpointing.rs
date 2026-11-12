@@ -265,6 +265,31 @@ mod tests {
         Ts::from_nanos(ms * 1_000_000)
     }
 
+    /// Long and reordered pauses keep the learned delay within bounds and recoverable.
+    /// https://github.com/livekit/agents/issues/7744 https://github.com/livekit/agents/pull/6265
+    #[test]
+    fn an_outlier_cannot_raise_the_ceiling_or_poison_later_pauses() {
+        let floor = Duration::from_millis(200);
+        let ceiling = Duration::from_secs(3);
+        let mut d = Endpointing::Dynamic(Dynamic::new(floor, ceiling, 0.5));
+        d.on_start_of_speech(at(0), false);
+        d.on_end_of_speech(at(1_000), false);
+        for (start, end) in [(600_000, 601_000), (601_100, 602_000), (601_000, 603_000)] {
+            d.on_start_of_speech(at(start), false);
+            d.on_end_of_speech(at(end), false);
+            assert!((floor..=ceiling).contains(&d.min_delay()));
+            assert_eq!(d.max_delay(), ceiling);
+        }
+        let after_outlier = d.min_delay();
+        for i in 0..20 {
+            let start = 604_000 + 1_100 * i;
+            d.on_start_of_speech(at(start), false);
+            d.on_end_of_speech(at(start + 1_000), false);
+        }
+        assert!(d.min_delay() < after_outlier);
+        assert_eq!(d.min_delay(), floor);
+    }
+
     // An agent turn still open must survive the user's end of speech, or `min_delay` creeps up.
     #[test]
     fn a_pause_across_an_agent_turn_is_not_learned() {

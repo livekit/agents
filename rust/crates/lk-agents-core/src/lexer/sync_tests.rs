@@ -1,7 +1,7 @@
 use super::*;
 
-const SPOKEN: View = View::Spoken { keep_markdown: false, keep_emoji: false };
-const DISPLAY: View = View::Display { keep_emoji: true };
+const SPOKEN: View = View::Spoken;
+const DISPLAY: View = View::Display;
 
 fn units(deltas: &[&str]) -> Vec<Unit> {
     let mut lexer = Lexer::new(Rules::speech(Vocabulary::LiveKit));

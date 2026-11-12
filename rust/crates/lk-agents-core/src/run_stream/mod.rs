@@ -2,6 +2,18 @@ use lk_agents_abi::agent::stream::StreamRefused;
 
 pub mod projection;
 
+/// Only an accepted execution result permits its owned application transaction to commit.
+pub fn accepts_application_writes(outcome: &lk_agents_abi::agent::stream::StreamOutcome) -> bool {
+    matches!(
+        outcome,
+        lk_agents_abi::agent::stream::StreamOutcome::Run(
+            lk_agents_abi::agent::run::RunUpdate::Finished(_)
+        ) | lk_agents_abi::agent::stream::StreamOutcome::Session(
+            lk_agents_abi::text_session::TextSessionUpdate::Finished(_)
+        )
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     Events,

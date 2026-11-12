@@ -71,6 +71,7 @@ pub(crate) fn interruption_source(cause: InterruptCause) -> InterruptionSource {
         InterruptCause::UserTurn => InterruptionSource::UserTurn,
         InterruptCause::Host
         | InterruptCause::OutputReplaced
+        | InterruptCause::OutputFailed
         | InterruptCause::Detector
         | InterruptCause::Superseded
         | InterruptCause::Closing

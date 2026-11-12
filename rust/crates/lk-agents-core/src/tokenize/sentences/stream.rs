@@ -82,16 +82,6 @@ impl SentenceStream {
     }
 }
 
-impl lk_agents_abi::SentenceSplitter for SentenceStream {
-    fn push(&mut self, text: &str) -> Vec<String> {
-        SentenceStream::push(self, text)
-    }
-
-    fn flush(&mut self) -> Vec<String> {
-        SentenceStream::flush(self)
-    }
-}
-
 impl lk_agents_abi::tokenize::bindings::SpeechSentenceStream for SentenceStream {
     fn push(&mut self, text: String) -> Vec<String> {
         SentenceStream::push(self, &text)

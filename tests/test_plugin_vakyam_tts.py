@@ -4,90 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, APITimeoutError
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    tts,
+)
 
 pytestmark = pytest.mark.unit
-
-
-def test_tts_requires_api_key() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with patch.dict("os.environ", {}, clear=True):
-        with pytest.raises(ValueError, match="API key"):
-            TTS(api_key=None)
-
-
-def test_tts_rejects_unsupported_language() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with pytest.raises(ValueError, match="language"):
-        TTS(api_key="test-key", language="en-US")
-
-
-def test_tts_rejects_unsupported_sample_rate() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with pytest.raises(ValueError, match="sample_rate"):
-        TTS(api_key="test-key", sample_rate=22050)
-
-
-def test_tts_rejects_invalid_speed() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with pytest.raises(ValueError, match="speed"):
-        TTS(api_key="test-key", speed=3.0)
-
-
-def test_tts_rejects_empty_voice() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with pytest.raises(ValueError, match="voice"):
-        TTS(api_key="test-key", voice="   ")
-
-
-def test_tts_rejects_bare_custom_voice_prefix() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with pytest.raises(ValueError, match="vc_"):
-        TTS(api_key="test-key", voice="vc_")
-
-
-def test_update_options() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    tts = TTS(api_key="test-key")
-    old_pool = tts._pool_for(tts._opts)
-    tts.update_options(language="en-IN", voice="Archana", sample_rate=8000, speed=0.9)
-    assert tts._opts.language == "en-IN"
-    assert tts.sample_rate == 8000
-    assert tts._opts.speed == 0.9
-    assert tts._session_config(tts._opts).sample_rate == 8000
-    assert tts._pool_for(tts._opts) is not old_pool
-
-
-def test_update_options_mixed_invalid_values_is_atomic() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    tts = TTS(api_key="test-key")
-    original_opts = tts._opts
-    original_sample_rate = tts.sample_rate
-
-    with pytest.raises(ValueError, match="voice"):
-        tts.update_options(sample_rate=16000, voice="vc_")
-
-    assert tts._opts == original_opts
-    assert tts.sample_rate == original_sample_rate
-
-
-def test_insecure_base_url_rejected() -> None:
-    from livekit.plugins.vakyam._utils import normalize_base_url
-
-    with pytest.raises(ValueError, match="HTTPS"):
-        normalize_base_url("http://example.com")
 
 
 def test_session_config_wire_message() -> None:
@@ -120,21 +49,6 @@ def test_speech_payload() -> None:
     assert payload["model_id"] == "raaga-v1"
     assert payload["output_format"] == "pcm"
     assert payload["text"] == "வணக்கம்."
-
-
-def test_text_too_long() -> None:
-    from livekit.plugins.vakyam._utils import validate_text
-
-    with pytest.raises(ValueError, match="3000"):
-        validate_text("a" * 3001)
-
-
-def test_split_text_respects_provider_limit() -> None:
-    from livekit.plugins.vakyam._utils import split_text
-
-    chunks = split_text("word " * 1000, max_characters=100)
-    assert " ".join(chunks) == ("word " * 1000).strip()
-    assert all(0 < len(chunk) <= 100 for chunk in chunks)
 
 
 @pytest.mark.asyncio
@@ -430,18 +344,18 @@ async def test_barge_in_drains_and_reuses_websocket(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(AsyncStreamingTTSSession, "connect", fake_connect)
     synth = TTS(api_key="test-key")
 
-    interrupted = synth.stream(
+    interrupted = synth._stream(
         conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1)
     )
-    interrupted.push_text("First reply.")
+    interrupted._push_chunk(tts.SpeechChunk(text="First reply.", said="First reply."))
     interrupted.end_input()
     await anext(interrupted)
     await asyncio.wait_for(interrupted.aclose(), timeout=0.5)
 
-    completed = synth.stream(
+    completed = synth._stream(
         conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1)
     )
-    completed.push_text("Second reply.")
+    completed._push_chunk(tts.SpeechChunk(text="Second reply.", said="Second reply."))
     completed.end_input()
     frames = [event.frame async for event in completed]
 

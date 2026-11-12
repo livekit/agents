@@ -456,7 +456,7 @@ raised through iteration. Call `result()` for its typed final value.
 
 `RunStream[Result]` carries the type returned by `result()`. For a direct
 agent, that is `RunResult[Output]`. For a text session, it is the session's
-existing envelope containing `result: RunResult[Output]` and `state: TextSessionState`.
+existing envelope containing `result: RunResult[Output]` and `state: SessionState`.
 The stream does not put session metadata into the contained `RunResult`.
 
 | Member | Contract |

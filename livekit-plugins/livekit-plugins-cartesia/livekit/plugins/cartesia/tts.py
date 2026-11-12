@@ -31,11 +31,10 @@ from livekit.agents import (
     APIStatusError,
     LanguageCode,
     http,
-    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
@@ -99,8 +98,6 @@ class TTS(tts.TTS):
         word_timestamps: bool = True,
         pronunciation_dict_id: str | None = None,
         http_session: http.HttpSession | None = None,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        text_pacing: tts.SentenceStreamPacer | bool = False,
         base_url: str = "https://api.cartesia.ai",
         api_version: str = API_VERSION,
     ) -> None:
@@ -121,8 +118,6 @@ class TTS(tts.TTS):
             pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations. Defaults to None.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
-            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.SentenceTokenizer`.
-            text_pacing (tts.SentenceStreamPacer | bool, optional): Stream pacer for the TTS. Set to True to use the default pacer, False to disable.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
         """  # noqa: E501
 
@@ -170,14 +165,6 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
-        )
-        self._stream_pacer: tts.SentenceStreamPacer | None = None
-        if text_pacing is True:
-            self._stream_pacer = tts.SentenceStreamPacer()
-        elif isinstance(text_pacing, tts.SentenceStreamPacer):
-            self._stream_pacer = text_pacing
 
         if word_timestamps:
             if "preview" not in self._opts.model and (
@@ -289,23 +276,19 @@ class TTS(tts.TTS):
         if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             get_session=self._ensure_session,
             opts=replace(self._opts),
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
-            sentence_tokenizer=self._sentence_tokenizer,
-            stream_pacer=self._stream_pacer,
             pool=self._pool,
             opts=replace(self._opts),
             tts=self,
@@ -409,8 +392,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
         self,
         *,
-        sentence_tokenizer: tokenize.SentenceTokenizer,
-        stream_pacer: tts.SentenceStreamPacer | None,
         pool: utils.ConnectionPool[http.WebSocket],
         opts: _TTSOptions,
         tts: TTS,
@@ -419,8 +400,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = opts
-        self._sentence_tokenizer = sentence_tokenizer
-        self._stream_pacer = stream_pacer
         self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -434,29 +413,26 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         input_sent_event = asyncio.Event()
         sent_tokens = deque[str]()
+        input_done = False
 
-        sent_tokenizer_stream = self._sentence_tokenizer.stream()
-        flush_on_chunk = True
-        if self._stream_pacer:
-            sent_tokenizer_stream = self._stream_pacer.wrap(
-                sent_stream=sent_tokenizer_stream,
-                audio_emitter=output_emitter,
-            )
-
-        async def _sentence_stream_task(ws: http.WebSocket, cartesia_context_id: str) -> None:
+        async def _send_task(ws: http.WebSocket, cartesia_context_id: str) -> None:
+            nonlocal input_done
             base_pkt = _to_cartesia_options(self._opts, streaming=True)
-            if flush_on_chunk is True:
-                base_pkt["max_buffer_delay_ms"] = 0
-            async for ev in sent_tokenizer_stream:
+            base_pkt["max_buffer_delay_ms"] = 0
+            async for data in self.input:
+                if isinstance(data, self.Flush):
+                    continue
+
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = cartesia_context_id
-                token_pkt["transcript"] = ev.token + " "
-                sent_tokens.append(ev.token + " ")
+                token_pkt["transcript"] = data.text + " "
+                sent_tokens.append(data.said + " ")
                 token_pkt["continue"] = True
                 self.mark_started()
                 await ws.send_str(json.dumps(token_pkt))
                 input_sent_event.set()
 
+            input_done = True
             end_pkt = base_pkt.copy()
             end_pkt["context_id"] = cartesia_context_id
             end_pkt["transcript"] = " "
@@ -464,15 +440,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
             input_sent_event.set()
-
-        async def _input_task() -> None:
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    sent_tokenizer_stream.flush()
-                    continue
-
-                sent_tokenizer_stream.push_text(data)
-            sent_tokenizer_stream.end_input()
 
         async def _recv_task(ws: http.WebSocket, cartesia_context_id: str) -> None:
             current_segment_id: str | None = None
@@ -509,7 +476,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     b64data = base64.b64decode(data["data"])
                     output_emitter.push(b64data)
                 elif data.get("done"):
-                    if sent_tokenizer_stream.closed:
+                    if input_done:
                         # close only if the input stream is closed
                         output_emitter.end_input()
                         break
@@ -555,8 +522,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             async with self._pool.connection(conn_options=self._conn_options) as ws:
                 tasks = [
-                    asyncio.create_task(_input_task()),
-                    asyncio.create_task(_sentence_stream_task(ws, cartesia_context_id)),
+                    asyncio.create_task(_send_task(ws, cartesia_context_id)),
                     asyncio.create_task(_recv_task(ws, cartesia_context_id)),
                 ]
 
@@ -564,7 +530,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await asyncio.gather(*tasks)
                 finally:
                     input_sent_event.set()
-                    await sent_tokenizer_stream.aclose()
                     await utils.aio.cancel_and_wait(*tasks)
         except APIError:
             raise

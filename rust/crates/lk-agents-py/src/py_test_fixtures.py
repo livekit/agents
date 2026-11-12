@@ -63,10 +63,7 @@ def generated_module(name):
     with _generated_fixture_lock:
         module = sys.modules.get(module_name)
         if module is None:
-            path = (
-                Path(__file__).parents[4]
-                / f"livekit-agents-next/livekit/agents/_generated/{name}.py"
-            )
+            path = Path(__file__).parents[4] / f"livekit-agents/livekit/agents/_generated/{name}.py"
             spec = importlib.util.spec_from_file_location(module_name, path)
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
@@ -330,6 +327,35 @@ def streams():
             self.got.append(("end", var.get()))
             self.ended.set()
 
+    held_entered = threading.Event()
+    held_cancelled = threading.Event()
+
+    class AsyncDuplex(Duplex):
+        """A duplex whose input awaits, as a recognizer's does; `hold` waits until cancelled, as
+        a push behind an unread backlog of events does."""
+
+        async def _core_push(self, v):
+            await asyncio.sleep(0)
+            if v == "bad":
+                raise ValueError("refused")
+            if v == "hold":
+                held_entered.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    held_cancelled.set()
+                    raise
+            self.got.append((v, var.get()))
+
+        async def _core_flush(self):
+            await asyncio.sleep(0)
+            self.got.append(("flush", var.get()))
+
+        async def _core_end_input(self):
+            await asyncio.sleep(0)
+            self.got.append(("end", var.get()))
+            self.ended.set()
+
     return SimpleNamespace(
         var=var,
         log=log,
@@ -345,6 +371,9 @@ def streams():
         tracked_returned=tracked_returned,
         tracked_closed=tracked_closed,
         Duplex=Duplex,
+        AsyncDuplex=AsyncDuplex,
+        held_entered=held_entered,
+        held_cancelled=held_cancelled,
     )
 
 
@@ -542,6 +571,18 @@ def tick_loop(state):
     loop = state.loop
     loop.call_soon(loop.stop)
     loop.run_forever()
+
+
+def close_loop_collecting_unawaited(state):
+    """Closes the loop and collects: the "was never awaited" warnings that raised."""
+    import gc
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        state.loop.close()
+        gc.collect()
+    return [str(w.message) for w in caught if "never awaited" in str(w.message)]
 
 
 def cancellation_during_task_creation_is_applied_when_the_task_is_published(state):

@@ -29,12 +29,11 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
-    tokenize,
     tts,
     utils,
 )
 from livekit.agents import LanguageCode
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents import http
 from livekit.agents.utils import is_given
 
@@ -62,7 +61,6 @@ class _TTSOptions:
     api_key: str | None
     jwt_token: str | None
     base_url: str
-    word_tokenizer: tokenize.WordTokenizer
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -83,8 +81,6 @@ class TTS(tts.TTS):
         speed: float | None = 1.0,
         sample_rate: int = 22050,
         http_session: http.HttpSession | None = None,
-        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         base_url: str = "https://api.neuphonic.com",
     ) -> None:
         """
@@ -101,8 +97,6 @@ class TTS(tts.TTS):
             api_key (str, optional): The NeuPhonic API key. If not provided, it will be read from the NEUPHONIC_API_KEY environment variable.
             jwt_token (str, optional): The NeuPhonic JWT token.
             http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
-            word_tokenizer (tokenize.WordTokenizer, optional): The word tokenizer to use. Defaults to tokenize.WordTokenizer().
-            tokenizer (tokenize.SentenceTokenizer, optional): The sentence tokenizer to use. Defaults to tokenize.SentenceTokenizer().
             base_url (str, optional): The base URL for the NeuPhonic API. Defaults to "https://api.neuphonic.com".
         """  # noqa: E501
 
@@ -118,9 +112,6 @@ class TTS(tts.TTS):
                 " NEUPHONIC_API_KEY environment variable"
             )
 
-        if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
-
         self._opts = _TTSOptions(
             lang_code=LanguageCode(lang_code),
             encoding=encoding,
@@ -130,7 +121,6 @@ class TTS(tts.TTS):
             api_key=neuphonic_api_key,
             jwt_token=jwt_token,
             base_url=base_url,
-            word_tokenizer=word_tokenizer,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[http.WebSocket](
@@ -140,9 +130,6 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
-        )
 
     async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         url = self._opts.get_ws_url(
@@ -217,11 +204,8 @@ class TTS(tts.TTS):
             # change indefinitely.
             self._pool.invalidate()
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         if not self._opts.api_key:
             raise ValueError(
@@ -231,21 +215,18 @@ class TTS(tts.TTS):
 
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             opts=replace(self._opts),
             ensure_session=self._ensure_session,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
             opts=replace(self._opts),
             pool=self._pool,
-            sentence_tokenizer=self._sentence_tokenizer,
         )
         self._streams.add(stream)
         return stream
@@ -374,13 +355,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
         opts: _TTSOptions,
         pool: utils.ConnectionPool[http.WebSocket],
-        sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
         self._pool = pool
-        self._sentence_tokenizer = sentence_tokenizer
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -392,27 +370,29 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        async def _tokenize_input() -> None:
-            chunks_stream = None
-            async for input in self.input:
-                if isinstance(input, str):
-                    if chunks_stream is None:
-                        chunks_stream = self._sentence_tokenizer.stream()
-                        self._segments_ch.send_nowait(chunks_stream)
-                    chunks_stream.push_text(input)
-                else:
-                    if chunks_stream:
-                        chunks_stream.end_input()
-                    chunks_stream = None
+        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
 
-            self._segments_ch.close()
+        async def _split_segments() -> None:
+            segment: utils.aio.Chan[str] | None = None
+            async for item in self.input:
+                if isinstance(item, tts.SpeechChunk):
+                    if segment is None:
+                        segment = utils.aio.Chan[str]()
+                        segments_ch.send_nowait(segment)
+                    segment.send_nowait(item.text)
+                elif segment is not None:
+                    segment.close()
+                    segment = None
+            if segment is not None:
+                segment.close()
+            segments_ch.close()
 
         async def _run_segments() -> None:
-            async for chunk_stream in self._segments_ch:
-                await self._run_ws(chunk_stream, output_emitter)
+            async for segment in segments_ch:
+                await self._run_ws(segment, output_emitter)
 
         tasks = [
-            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_split_segments()),
             asyncio.create_task(_run_segments()),
         ]
         try:
@@ -424,9 +404,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             await utils.aio.cancel_and_wait(*tasks)
 
-    async def _run_ws(
-        self, chunks_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter
-    ) -> None:
+    async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
         chunks = 0
@@ -434,13 +412,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         read_deadline = self._core_attempts
 
         async def send_task(ws: http.WebSocket) -> None:
-            async for sentence in chunks_stream:
+            async for text in segment:
                 self.mark_started()
 
                 nonlocal chunks
                 chunks += 1
 
-                msg = {"text": f"{sentence.token}<STOP>", "context_id": segment_id}
+                msg = {"text": f"{text}<STOP>", "context_id": segment_id}
                 await ws.send_str(json.dumps(msg))
                 read_deadline.expect_response()
 

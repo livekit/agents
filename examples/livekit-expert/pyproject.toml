@@ -1,0 +1,28 @@
+[project]
+name = "livekit-example-homepage"
+version = "0"
+requires-python = ">=3.11"
+dependencies = [
+    "livekit-agents>=2.0.0b1",
+    "livekit-plugins-ai-coustics~=0.3",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+# In the repo this is a workspace member: the root points livekit-* at the in-repo copies and
+# shares its .venv. No [tool.uv.sources] here, so a copy of this directory (a deploy) resolves
+# on its own from PyPI.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = '-m "not evals"'
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: fast, deterministic tests with no external services",
+    "evals: live LLM-backed agent behavior evaluations",
+]

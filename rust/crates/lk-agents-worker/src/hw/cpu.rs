@@ -157,4 +157,31 @@ mod tests {
         assert!(interval >= Duration::from_secs(1));
         assert_eq!(monitor.sample(), None);
     }
+
+    /// A cgroup counter that runs backwards or disappears yields no sample, never a bogus one.
+    /// https://github.com/livekit/agents/issues/7102 https://github.com/livekit/agents/issues/1000
+    #[test]
+    fn cgroup_samples_skip_regressions_and_missing_counters() {
+        let dir = std::env::temp_dir().join(format!("lk-cpu-stat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cpu.stat");
+        let interval = Duration::from_secs(1);
+        let monitor = |previous: i128| CpuMonitor {
+            cpus: 0.5,
+            source: Source::Cgroup {
+                path: path.clone(),
+                unit_per_sec: 1e6,
+                last: Some((previous, Instant::now() - interval)),
+            },
+        };
+        std::fs::write(&path, "usage_usec 1250000\nuser_usec 1\nsystem_usec 2\n").unwrap();
+        // 0.25 CPU-seconds over about one second on a half-CPU quota: about 50 % busy.
+        let (value, measured) = monitor(1_000_000).sample().unwrap();
+        assert!(measured >= interval, "{measured:?}");
+        assert!((value - 0.5).abs() < 0.05, "{value}");
+        // A torn read of a shared counter running backwards is not idle, negative or full.
+        assert_eq!(monitor(5_000_000).sample(), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(monitor(1_000_000).sample(), None, "a missing cpu.stat yields no sample");
+    }
 }

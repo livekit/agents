@@ -6,7 +6,15 @@ use serde_json::{Map, Value};
 
 use super::{Ask, StorageError, TaskInternal, TaskState};
 
-/// One history item of a lane.
+/// Decode the persisted protobuf JSON using the same conversion as history loads.
+pub fn decode_stored_item(payload: Map<String, Value>) -> Result<crate::ChatItem, StorageError> {
+    let item: ChatItem = serde_json::from_value(Value::Object(payload))
+        .map_err(|error| StorageError::Invalid(error.to_string()))?;
+    crate::llm::chat_context::protocol::decode_chat_item(item)
+        .map_err(|error| StorageError::Invalid(error.to_string()))
+}
+
+/// One history item of a partition.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ItemRow {
@@ -65,22 +73,24 @@ impl ItemRow {
     }
 }
 
-/// One A2A task of a lane. The A2A `Task` is
-/// `id = task_id`, `contextId = the thread id`, `status = (status, data.statusMessage, updated_at)`,
+/// One A2A task of a partition. The A2A `Task` is
+/// `id = task_id`, `contextId = the thread id`, `status = (status, data.statusMessage, updated_at_ms)`,
 /// plus the fields of `data`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TaskRow {
     pub task_id: String,
-    pub lane: String,
-    /// Submission order; the lane runs its runnable tasks in it.
-    pub seq: i64,
+    pub partition_key: String,
+    /// Submission order; the partition runs its runnable tasks in it.
+    pub pos: i64,
     /// An optional application task label.
     pub name: Option<String>,
+    /// Optional initiating A2A message id, used for retry deduplication.
+    /// None for tasks initiated without an incoming message.
     pub message_id: Option<String>,
     pub status: TaskState,
     /// Unix milliseconds.
-    pub updated_at: i64,
+    pub updated_at_ms: i64,
     /// The A2A `Task` fields: `history`, `artifacts`, `metadata`.
     pub data: TaskData,
     /// The pending question and handler settlement used to resume this task.
@@ -109,20 +119,33 @@ pub struct TaskData {
     pub status_message: Option<a2a::Message>,
 }
 
-/// One message received while the lane was running, under the `inbox` policy.
+/// One message received while the partition was running, under the `inbox` policy.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InboxRow {
     pub id: i64,
-    pub lane: String,
+    pub partition_key: String,
     /// The task created for the message; also its answer stream.
     pub task_id: String,
     pub message_id: String,
     pub message: a2a::Message,
-    pub received_at: i64,
+    pub received_at_ms: i64,
 }
 
-/// One task row a write upserts: every column but `lane`, `seq` and `updated_at`, which the
+/// A queued message and the endpoint recorded when it was admitted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutedInbox {
+    pub row: InboxRow,
+    pub endpoint: Option<String>,
+}
+
+impl From<InboxRow> for RoutedInbox {
+    fn from(row: InboxRow) -> Self {
+        Self { row, endpoint: None }
+    }
+}
+
+/// One task row a write upserts: every column but `partition_key`, `pos` and `updated_at_ms`, which the
 /// statement fills.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -137,16 +160,16 @@ pub struct TaskWrite {
 }
 
 impl TaskWrite {
-    /// The row as stored, `seq` and `updated_at` unknown until written.
-    pub fn row(&self, lane: &str) -> TaskRow {
+    /// The row as stored, `pos` and `updated_at_ms` unknown until written.
+    pub fn row(&self, partition_key: &str) -> TaskRow {
         TaskRow {
             task_id: self.task_id.clone(),
-            lane: lane.to_owned(),
-            seq: 0,
+            partition_key: partition_key.to_owned(),
+            pos: 0,
             name: self.name.clone(),
             message_id: self.message_id.clone(),
             status: self.status,
-            updated_at: 0,
+            updated_at_ms: 0,
             data: self.data.clone(),
             internal: self.internal.clone(),
         }
@@ -227,7 +250,7 @@ pub enum AbandonReason {
     /// The context save lost to a concurrent writer.
     #[host(rename = "context-version-conflict")]
     ContextVersionConflict,
-    /// The acquire was dropped after its request may have taken the lane.
+    /// The acquire was dropped after its request may have taken the partition.
     #[host(rename = "acquire-canceled")]
     AcquireCanceled,
     /// The run was dropped before it committed or was abandoned.
@@ -247,24 +270,22 @@ pub enum TaskOrder {
     Inserted,
 }
 
-/// How a run takes its lane.
+/// How a run takes its partition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LaneAccess {
+pub enum PartitionAccess {
     /// The `concurrent` policy: no lease, append-only commit.
     Concurrent,
     /// Takes the lease, doing `WhenHeld` while another holder has it.
     Exclusive(WhenHeld),
 }
 
-/// What an exclusive run does while another holder has the lane.
+/// What an exclusive run does while another holder has the partition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WhenHeld {
     /// Fails with `StorageError::Rejected` at once.
     Reject,
     /// Waits for the release, up to the wait timeout.
     Wait,
-    /// Waits as the lane's `waiter`, so the holder yields.
-    Interrupt,
 }
 
 /// What an acquire does with the run's task row.
@@ -401,7 +422,7 @@ pub fn agent_message(parts: Vec<a2a::Part>, task_id: &str, message_id: String) -
     }
 }
 
-/// A retry schedule: a pause from 100 ms, doubling up to 1 s, until a deadline. How a lane
+/// A retry schedule: a pause from 100 ms, doubling up to 1 s, until a deadline. How a partition
 /// another holder has is polled and a write whose answer was lost is sent again.
 #[derive(Debug, Clone)]
 pub struct Backoff {
@@ -483,12 +504,12 @@ mod host {
         fn from(row: TaskRow) -> Self {
             host::TaskRecord {
                 task_id: row.task_id,
-                lane: row.lane,
-                seq: row.seq,
+                partition_key: row.partition_key,
+                pos: row.pos,
                 name: row.name,
                 message_id: row.message_id,
                 status: row.status,
-                updated_at: row.updated_at,
+                updated_at_ms: row.updated_at_ms,
                 data: row.data.into(),
                 internal: row.internal,
             }
@@ -500,10 +521,10 @@ mod host {
             host::InboxRow {
                 message: json(&row.message),
                 id: row.id,
-                lane: row.lane,
+                partition_key: row.partition_key,
                 task_id: row.task_id,
                 message_id: row.message_id,
-                received_at: row.received_at,
+                received_at_ms: row.received_at_ms,
             }
         }
     }

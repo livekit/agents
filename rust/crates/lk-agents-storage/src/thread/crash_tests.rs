@@ -1,6 +1,6 @@
 //! A worker killed with SIGKILL leaves its SQLite thread in a state the next worker recovers
 //! from. The test binary re-executes itself as the dying worker (`crash_child`, its role in
-//! `LK_CRASH_ROLE`); the parent kills it at a chosen point, then takes the lane as another worker.
+//! `LK_CRASH_ROLE`); the parent kills it at a chosen point, then takes the partition as another worker.
 #![cfg(unix)]
 
 use std::io::{BufRead, BufReader};
@@ -20,14 +20,14 @@ use lk_agents_storage::thread::LeaseTiming;
 use lk_agents_storage::thread::run::RunSummary;
 use lk_agents_storage::thread::schema::{ItemRow, TaskData};
 use lk_agents_storage::{
-    CommitOptions, Holder, LaneAccess, LeaseAfterCommit, RunOptions, Storage, StorageError,
+    CommitOptions, Holder, LeaseAfterCommit, PartitionAccess, RunOptions, Storage, StorageError,
     TaskPickup, TaskState, TaskWrite, Thread, WhenHeld,
 };
 
-const LANE: &str = "front-desk";
+const PARTITION_KEY: &str = "front-desk";
 const TTL: Duration = Duration::from_secs(2);
 const RENEW: Duration = Duration::from_millis(400);
-/// From the kill to the next worker holding the lane: the database counts whole seconds (a
+/// From the kill to the next worker holding the partition: the database counts whole seconds (a
 /// lease taken at `t` lapses once `floor(now) > floor(t) + ttl`), then the acquire's backoff
 /// polls at most once a second.
 const TAKEOVER: Duration = Duration::from_secs(6);
@@ -37,13 +37,13 @@ const ITEMS: [&str; 2] = ["item_user", "item_agent"];
 /// What the dying worker does before it is killed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Role {
-    /// Takes the lane, stages its items, never commits.
+    /// Takes the partition, stages its items, never commits.
     Hold,
-    /// Commits keeping the lease, then idles: the lane stays held without renewal.
+    /// Commits keeping the lease, then idles: the partition stays held without renewal.
     CommitKeep,
-    /// Takes the lane and idles while its renewal keeps it.
+    /// Takes the partition and idles while its renewal keeps it.
     Idle,
-    /// Commits releasing the lease as soon as it holds the lane; killed somewhere around it.
+    /// Commits releasing the lease as soon as it holds the partition; killed somewhere around it.
     CommitRelease,
 }
 
@@ -114,9 +114,10 @@ async fn crash_child() {
     let thread_id = std::env::var("LK_CRASH_THREAD").unwrap();
     let storage = storage(&dir).await;
     let thread = storage.open(&thread_id).await.unwrap();
-    let lane = thread.lane(LANE);
-    assert!(lane.submit(&submitted("AST_dead")).await.unwrap());
-    let mut run = lane.open(claim("run_dead", "AST_dead"), &Holder::new("dying")).await.unwrap();
+    let partition_key = thread.partition(PARTITION_KEY);
+    assert!(partition_key.submit(&submitted("AST_dead")).await.unwrap());
+    let mut run =
+        partition_key.open(claim("run_dead", "AST_dead"), &Holder::new("dying")).await.unwrap();
     assert!(run.picked_up());
     run.history_mut()
         .extend([message(ITEMS[0], ChatRole::User), message(ITEMS[1], ChatRole::Assistant)]);
@@ -207,19 +208,19 @@ struct Recovered {
     takeover: Duration,
 }
 
-/// The next worker takes the lane and checks it against the dead run: its items committed exactly
+/// The next worker takes the partition and checks it against the dead run: its items committed exactly
 /// once or not at all, its task completed by that commit or failed as an orphan, its run closed
 /// when it committed.
 async fn recover(dir: &Path, thread_id: &str, killed: Instant) -> Recovered {
     let storage = storage(dir).await;
     let thread = storage.open(thread_id).await.expect("the thread opens");
-    let lane = thread.lane(LANE);
+    let partition_key = thread.partition(PARTITION_KEY);
     let holder = Holder::new("next");
-    assert!(lane.submit(&submitted("AST_next")).await.expect("the submit"));
-    let mut run = lane
+    assert!(partition_key.submit(&submitted("AST_next")).await.expect("the submit"));
+    let mut run = partition_key
         .open(RunOptions { wait_timeout: TAKEOVER * 2, ..claim("run_next", "AST_next") }, &holder)
         .await
-        .expect("the next worker takes the lane once the dead lease lapses");
+        .expect("the next worker takes the partition_key once the dead lease lapses");
     let takeover = killed.elapsed();
     assert!(takeover < TAKEOVER, "took over {takeover:?} after the kill");
 
@@ -253,7 +254,7 @@ async fn recover(dir: &Path, thread_id: &str, killed: Instant) -> Recovered {
             "messageId": "msg_worker_lost", "role": "ROLE_AGENT", "parts": [{"text": "worker lost"}]
         }))
         .expect("a message");
-        assert!(lane.fail_orphan("AST_dead", &failed).await.expect("the orphan fails"));
+        assert!(partition_key.fail_orphan("AST_dead", &failed).await.expect("the orphan fails"));
         assert_eq!(task(&thread, "AST_dead").await, TaskState::Failed);
     }
     run.tasks()
@@ -265,10 +266,10 @@ async fn recover(dir: &Path, thread_id: &str, killed: Instant) -> Recovered {
 
     // The dead run again, as a retry of its request would: closed when it committed, writing
     // nothing either way.
-    let mut retry = lane
+    let mut retry = partition_key
         .open(claim("run_dead", "AST_dead"), &holder)
         .await
-        .expect("the retry takes the free lane");
+        .expect("the retry takes the free partition_key");
     assert_eq!(retry.closed(), committed, "a committed run id is closed");
     assert!(!retry.picked_up(), "a terminal task is never picked up again");
     let ids: Vec<String> = retry.history().iter().map(|i| i.id.clone()).collect();
@@ -284,12 +285,13 @@ async fn recover(dir: &Path, thread_id: &str, killed: Instant) -> Recovered {
             .expect("the abandon");
     }
     assert_eq!(
-        lane.history().await.expect("the history").len(),
+        partition_key.history().await.expect("the history").len(),
         ids.len(),
         "the retry wrote no items"
     );
-    let lane_row = lane.info().await.expect("the lane row").expect("the lane");
-    assert_eq!(lane_row.version, after, "the retry moved no version");
+    let partition_row =
+        partition_key.info().await.expect("the partition_key row").expect("the partition_key");
+    assert_eq!(partition_row.version, after, "the retry moved no version");
     thread.close().await;
     storage.close().await;
     Recovered { committed, takeover }
@@ -326,7 +328,7 @@ fn killed_before_commit_leaves_nothing_but_an_orphan() {
     assert!(!out.committed);
 }
 
-/// (b) Killed right after a commit that kept the lease: the commit appears once, the lane is
+/// (b) Killed right after a commit that kept the lease: the commit appears once, the partition is
 /// taken over after the lapse, and a retry of the run is closed.
 #[test]
 fn killed_after_commit_keeps_the_commit_exactly_once() {
@@ -337,10 +339,10 @@ fn killed_after_commit_keeps_the_commit_exactly_once() {
     assert!(out.committed);
 }
 
-/// (c) Killed idle while renewing: the renewal kept the lane across several TTLs, and the lane
+/// (c) Killed idle while renewing: the renewal kept the partition across several TTLs, and the partition
 /// is free once the last renewal lapses.
 #[test]
-fn killed_while_renewing_releases_the_lane_after_one_ttl() {
+fn killed_while_renewing_releases_the_partition_after_one_ttl() {
     let out = case(Role::Idle, |child, dir, thread_id| {
         child.wait_for("acquired");
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
@@ -348,19 +350,23 @@ fn killed_while_renewing_releases_the_lane_after_one_ttl() {
             let storage = storage(dir).await;
             let thread = storage.open(thread_id).await.unwrap();
             let reject = RunOptions {
-                access: LaneAccess::Exclusive(WhenHeld::Reject),
+                access: PartitionAccess::Exclusive(WhenHeld::Reject),
                 ..RunOptions::new("run_early", "")
             };
-            // past two TTLs, the lane is still the dying worker's
+            // past two TTLs, the partition is still the dying worker's
             for _ in 0..2 {
                 tokio::time::sleep(TTL).await;
-                let refused = thread.lane(LANE).open(reject.clone(), &Holder::new("early")).await;
+                let refused = thread
+                    .partition(PARTITION_KEY)
+                    .open(reject.clone(), &Holder::new("early"))
+                    .await;
                 assert!(
                     matches!(refused, Err(StorageError::Rejected { .. })),
                     "a renewed lease is not taken over"
                 );
             }
-            let row = thread.lane(LANE).info().await.unwrap().expect("the lane");
+            let row =
+                thread.partition(PARTITION_KEY).info().await.unwrap().expect("the partition_key");
             assert!(row.lease_holder.as_deref().is_some_and(|h| h.starts_with("dying/")));
             thread.close().await;
             storage.close().await;
@@ -369,7 +375,7 @@ fn killed_while_renewing_releases_the_lane_after_one_ttl() {
     assert!(!out.committed);
 }
 
-/// Killed at seeded delays around a commit that releases the lane: the commit is all or nothing.
+/// Killed at seeded delays around a commit that releases the partition: the commit is all or nothing.
 #[test]
 fn killed_around_a_commit_is_all_or_nothing() {
     let mut seed: u64 = 0x5eed_c0de;

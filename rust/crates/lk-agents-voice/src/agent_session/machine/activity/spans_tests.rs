@@ -371,14 +371,16 @@ fn a_pipeline_turn_with_a_tool_call() {
     assert_eq!(turn.context, span, "the runtime's work nests under this span");
     assert_eq!(parent(&records, turn), "agent_session");
     assert_eq!(parent(&records, one(&records, "agent_speaking")), "agent_turn");
-    assert_eq!(attr(turn, "lk.speech_id"), Some(&st("AS_test_speech_3")));
+    assert_eq!(attr(turn, "lk.speech_id"), Some(&st("AS_test_speech_000000000003")));
     assert_eq!(turn.end_unix_nanos, 1_000_000_000 + 2_300_000_000, "ends with its tool");
     let generations: Vec<_> =
         turn.events.iter().map(|e| (e.time_unix_nanos, e.attributes.clone())).collect();
     assert_eq!(generations[0].0, 1_000_000_000 + 1_500_000_000);
     assert_eq!(generations[1].0, 1_000_000_000 + 2_000_000_000, "at the step's start");
     assert!(
-        generations[1].1.contains(&("lk.parent_generation_id".into(), st("AS_test_speech_3_1")))
+        generations[1]
+            .1
+            .contains(&("lk.parent_generation_id".into(), st("AS_test_speech_000000000003_1")))
     );
     assert_eq!(attr(turn, "lk.generation_count"), Some(&Value::Int(2)));
     let Some(Value::Double(e2e)) = attr(turn, "lk.e2e_latency") else { panic!("{turn:?}") };
@@ -717,15 +719,21 @@ fn a_discarded_preemptive_generation_hands_its_turn_over() {
     let turns = named(&records, "agent_turn");
     let turn = turns
         .iter()
-        .find(|t| attr(t, "lk.speech_id") == Some(&st("AS_test_speech_2")))
+        .find(|t| attr(t, "lk.speech_id") == Some(&st("AS_test_speech_000000000002")))
         .unwrap_or_else(|| panic!("the answer's turn: {turns:?}"));
     assert_eq!(turn.start_unix_nanos, 1_000_000_000 + 100_000_000, "the discarded one's start");
     assert_eq!(attr(turn, "lk.interrupted"), Some(&Value::Bool(false)));
     let names: Vec<_> = turn.events.iter().map(|e| e.name.to_string()).collect();
     assert_eq!(names, ["generation", "preemptive_generation_discarded", "generation"]);
-    assert!(turn.events[1].attributes.contains(&("lk.speech_id".into(), st("AS_test_speech_1"))));
     assert!(
-        turn.events[2].attributes.contains(&("lk.generation_id".into(), st("AS_test_speech_2_1")))
+        turn.events[1]
+            .attributes
+            .contains(&("lk.speech_id".into(), st("AS_test_speech_000000000001")))
+    );
+    assert!(
+        turn.events[2]
+            .attributes
+            .contains(&("lk.generation_id".into(), st("AS_test_speech_000000000002_1")))
     );
     assert_eq!(turns.len(), 3, "speeches 3 and 4 have their own turns");
 }

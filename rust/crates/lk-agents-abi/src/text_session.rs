@@ -161,12 +161,14 @@ pub struct TextSessionTurn {
 }
 
 #[crate::host(error(kind = "RuntimeError"))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TextSessionError {
     #[host(delegate)]
     Routing(RoutingError),
     #[host(delegate)]
     Run(RunError),
+    #[host(delegate)]
+    Storage(crate::storage::StorageError),
 }
 
 impl std::fmt::Display for TextSessionError {
@@ -174,6 +176,7 @@ impl std::fmt::Display for TextSessionError {
         match self {
             Self::Routing(error) => error.fmt(f),
             Self::Run(error) => error.fmt(f),
+            Self::Storage(error) => error.fmt(f),
         }
     }
 }
@@ -186,6 +189,16 @@ use crate::errors::Invalid;
 use crate::utils::stream::StreamOutput;
 use crate::{ApiConnectOptions, HostRef, Llm};
 use std::sync::Arc;
+
+/// Receives accepted session transitions before dependent execution proceeds.
+#[crate::host(native(refused = "expected a native session binding"))]
+pub trait SessionStateSink: Send + Sync {
+    fn publish<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        state: TextSessionState,
+    ) -> crate::BoxFuture<'a, Result<(), crate::storage::StorageError>>;
+}
 
 /// Shared definitions and live resources; no host resource enters the saved state.
 #[crate::host(record(module = "text_session", extract))]
@@ -206,7 +219,12 @@ pub struct TextSessionAgent {
 #[crate::host(record(module = "text_session", extract))]
 #[derive(Clone)]
 pub struct TextSessionRequest {
+    #[host(default = None)]
+    pub session_sink: Option<Arc<dyn SessionStateSink>>,
     pub session_id: String,
+    /// What this request's chat item ids are drawn from; `None` draws a random one.
+    #[host(default = None)]
+    pub id_seed: Option<u64>,
     pub execution_id: String,
     #[host(default = None)]
     pub task_id: Option<String>,

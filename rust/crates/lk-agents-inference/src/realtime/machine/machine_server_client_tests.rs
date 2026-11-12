@@ -1,4 +1,5 @@
 use crate::realtime::{Incoming, Outgoing, SessionOptions, protocol::ServerError};
+use lk_agents_abi::llm::realtime_options::Voice;
 use lk_agents_abi::{ChatItem, Maybe, Ts};
 
 use super::{Breach, Hooks, Item, Response, SAMPLE_RATE, Server, later, unhandled};
@@ -222,7 +223,7 @@ impl Server {
     }
 
     /// The voice is fixed once assistant audio exists; an update naming another is refused whole.
-    fn refuses_voice(&self, voice: Option<&serde_json::Value>) -> bool {
+    fn refuses_voice(&self, voice: Option<&Voice>) -> bool {
         self.voiced && voice.is_some_and(|v| Some(v) != self.config.voice.as_ref())
     }
 

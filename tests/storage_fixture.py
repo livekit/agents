@@ -17,7 +17,7 @@ import pytest
 from livekit.agents.storage import AgentDBStorage, SQLiteStorage, Storage
 
 AGENTDB_LEASE_TTL = float(os.environ.get("LIVEKIT_AGENTDB_LEASE_TTL", "10"))
-"""The AgentDB lane lease's lifetime in seconds, as ``AgentDBStorage`` reads it."""
+"""The AgentDB partition_key lease's lifetime in seconds, as ``AgentDBStorage`` reads it."""
 LOCAL_LEASE_TTL = 2.0
 """The local lease's lifetime: short, so a test that lets a lease lapse stays fast."""
 LEASE_MARGIN = 1.0

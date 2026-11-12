@@ -275,3 +275,38 @@ fn a_textless_later_instruction_is_dropped() {
     ]);
     assert_eq!(convert(&c).len(), 1);
 }
+
+/// Sequential tool exchanges that reuse one `call_id` each keep their own call and output.
+/// https://github.com/livekit/agents/issues/3329
+#[test]
+#[ignore = "https://github.com/livekit/agents/issues/3329 reproduces: attach_outputs maps a shared call_id to the last group, dropping the first call"]
+fn sequential_exchanges_sharing_a_call_id_each_keep_their_call_and_output() {
+    let items = vec![
+        msg("u1", Role::User, &["save Ann"]),
+        call("item_1", "tool_0_save", "save", r#"{"name":"Ann"}"#),
+        out("o1", "tool_0_save", "save", "saved Ann"),
+        msg("u2", Role::User, &["save Bob"]),
+        call("item_2", "tool_0_save", "save", r#"{"name":"Bob"}"#),
+        out("o2", "tool_0_save", "save", "saved Bob"),
+    ];
+    let g = group_tool_calls(&items).unwrap();
+    let exchanges: Vec<(Vec<&str>, Vec<&str>)> = g
+        .groups
+        .iter()
+        .filter(|grp| !grp.tool_calls.is_empty() || !grp.tool_outputs.is_empty())
+        .map(|grp| {
+            (
+                grp.tool_calls.iter().map(|c| c.arguments.as_str()).collect(),
+                grp.tool_outputs.iter().map(|o| o.output.as_str()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        exchanges,
+        [
+            (vec![r#"{"name":"Ann"}"#], vec!["saved Ann"]),
+            (vec![r#"{"name":"Bob"}"#], vec!["saved Bob"]),
+        ]
+    );
+    assert!(g.dropped.is_empty(), "nothing is dropped: {:?}", g.dropped);
+}

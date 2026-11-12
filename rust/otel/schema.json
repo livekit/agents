@@ -4855,14 +4855,14 @@
       ]
     },
     {
-      "name": "lk.agents.lane.acquire_wait",
-      "brief": "Time an exclusive lane acquire waited, taken or refused.",
+      "name": "lk.agents.partition.acquire_wait",
+      "brief": "Time an exclusive partition acquire waited, taken or refused.",
       "kind": "histogram",
       "unit": "s",
       "registry": "agents",
       "labels": [
         {
-          "key": "lane_kind",
+          "key": "partition_kind",
           "type": "string",
           "required": true,
           "members": [
@@ -4892,14 +4892,14 @@
       ]
     },
     {
-      "name": "lk.agents.lane.lease_lapsed",
+      "name": "lk.agents.partition.lease_lapsed",
       "brief": "Leases taken over after they lapsed instead of being released.",
       "kind": "counter",
       "unit": "{lease}",
       "registry": "agents",
       "labels": [
         {
-          "key": "lane_kind",
+          "key": "partition_kind",
           "type": "string",
           "required": true,
           "members": [
@@ -4913,14 +4913,14 @@
       ]
     },
     {
-      "name": "lk.agents.lane.ownerless_wait",
+      "name": "lk.agents.partition.ownerless_wait",
       "brief": "Time an acquire waited on a lease whose holder stopped renewing it.",
       "kind": "histogram",
       "unit": "s",
       "registry": "agents",
       "labels": [
         {
-          "key": "lane_kind",
+          "key": "partition_kind",
           "type": "string",
           "required": true,
           "members": [
@@ -4967,7 +4967,6 @@
             "extend",
             "commit",
             "submit",
-            "waiter",
             "fail_orphan",
             "cancel",
             "schema",

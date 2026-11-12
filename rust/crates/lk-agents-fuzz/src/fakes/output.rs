@@ -143,6 +143,7 @@ pub struct Playout {
     /// A host source: a cut is reported a few scheduler hops after the clear, as the report
     /// crosses back from the host's own loop.
     lagging: Option<Arc<dyn lk_agents_abi::Spawner>>,
+    unreported: Option<UnreportedClear>,
     registry: Option<Arc<Registry>>,
 }
 
@@ -276,7 +277,7 @@ impl Playout {
     /// only resetting sink does (`DataStreamAudioOutput._clear_buffer_task._on_timeout`): a reset
     /// alone leaves a wrapper waiting on the segment forever. Returns the segments cut.
     pub(super) fn reset(&self) -> Vec<u32> {
-        let cut = self.cleared();
+        let cut = self.cleared(false);
         self.tracker.reset();
         cut
     }
@@ -330,8 +331,9 @@ impl Playout {
     }
 
     /// Reports every outstanding segment, open or flushed, interrupted where the speaker had
-    /// played it to, as a real output does on a clear.
-    fn cleared(&self) -> Vec<u32> {
+    /// played it to, as a real output does on a clear; an output that leaves a clear unreported
+    /// reports it late or never.
+    fn cleared(&self, clear: bool) -> Vec<u32> {
         let cut: Vec<(u32, lk_agents_abi::voice::io::PlaybackSegment, Duration)> = {
             let mut state = self.state.lock().unwrap();
             type OutstandingGeneration = (u32, Vec<(Option<u32>, Duration)>);
@@ -369,7 +371,19 @@ impl Playout {
                 )
             })
             .collect();
-        if let Some(world) = &self.lagging {
+        if let Some(UnreportedClear { late }) = self.unreported.filter(|_| clear) {
+            let (Some(late), Some(registry)) = (late, &self.registry) else {
+                return cut.into_iter().map(|(segment, _, _)| segment).collect();
+            };
+            let tracker = self.tracker.clone();
+            // The world's own work: the run's executor ends it with the run.
+            registry.world.spawn_detached(async move {
+                tokio::time::sleep(late).await;
+                for (key, ev) in finished {
+                    tracker.playback_finished(key, ev);
+                }
+            });
+        } else if let Some(world) = &self.lagging {
             let tracker = self.tracker.clone();
             // The world's own work: the run's executor ends it with the run.
             world.spawn_detached(async move {
@@ -395,18 +409,47 @@ pub struct FakeAudioOutput {
     playout: Arc<Playout>,
     /// A pause is only recorded: playout stays the case's to report, as a paused speaker looks.
     pausable: bool,
+    /// The frames handed to `capture` so far, and the one the output fails on.
+    captures: Mutex<u32>,
+    fault: Option<CaptureFault>,
+}
+
+/// A host audio output that does not report the segments a clear cut, as a custom output that
+/// never calls `on_playback_finished` after `clear_buffer`, or a dead remote avatar worker.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnreportedClear {
+    /// The report arrives after all, this long after the clear; `None`: never.
+    pub late: Option<Duration>,
+}
+
+/// A frame a host audio output never takes: the nth it is handed (from zero), across its life.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CaptureFault {
+    pub at: u32,
+    /// The capture never returns, as an avatar's waits for an avatar that never joins, until the
+    /// speech is cut; otherwise it raises, as a Python `capture_frame` can.
+    pub hangs: bool,
 }
 
 impl FakeAudioOutput {
-    pub fn new(registry: Arc<Registry>, pausable: bool, lagging: bool) -> Arc<Self> {
+    /// `fault`: a frame the output takes nothing of. `unreported`: how a clear goes unreported.
+    pub fn new(
+        registry: Arc<Registry>,
+        pausable: bool,
+        lagging: bool,
+        fault: Option<CaptureFault>,
+        unreported: Option<UnreportedClear>,
+    ) -> Arc<Self> {
         let playout = Arc::new(Playout {
             tracker: Arc::new(lk_agents_runtime::voice::playback::Tracker::new()),
             state: Mutex::default(),
             lagging: lagging.then(|| registry.world.clone()),
+            unreported,
             registry: Some(registry.clone()),
         });
         let id = registry.new_audio_output(playout.clone());
-        Arc::new(FakeAudioOutput { id, registry, playout, pausable })
+        let captures = Mutex::new(0);
+        Arc::new(FakeAudioOutput { id, registry, playout, pausable, captures, fault })
     }
 }
 
@@ -451,6 +494,20 @@ impl AudioOutput for FakeAudioOutput {
         frame: &'a AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, io::Result<()>> {
         Box::pin(async move {
+            let nth = {
+                let mut captures = self.captures.lock().unwrap();
+                *captures += 1;
+                *captures - 1
+            };
+            match self.fault {
+                Some(CaptureFault { at, hangs: true }) if at == nth => {
+                    std::future::pending::<()>().await;
+                }
+                Some(CaptureFault { at, hangs: false }) if at == nth => {
+                    return Err(io::IoError::Rtc("the host audio output raised".into()));
+                }
+                _ => {}
+            }
             // The case reports on a segment from its first frame, so it gets its identity now.
             let generation = frame.data.as_chunks::<2>().0.iter().find_map(|s| {
                 match Tag::decode(i16::from_le_bytes(*s)) {
@@ -484,7 +541,7 @@ impl AudioOutput for FakeAudioOutput {
     }
 
     fn clear_buffer(&self) {
-        let segments = self.playout.cleared();
+        let segments = self.playout.cleared(true);
         self.registry.record_sink(Sink::Clear { output: self.id, segments });
     }
 }

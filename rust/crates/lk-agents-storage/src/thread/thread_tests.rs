@@ -18,7 +18,7 @@ use crate::thread::{LeaseTiming, SchemaCell};
 use crate::{CommitOptions, RunOptions, TaskWrite, Thread, ThreadDbConnection};
 use crate::{RunOutcome, StorageError};
 
-pub(crate) const LANE: &str = "front-desk";
+pub(crate) const PARTITION_KEY: &str = "front-desk";
 
 pub(crate) fn message(id: &str, role: ChatRole, text: &str) -> ItemRow {
     ItemRow::new(chat_item::Item::Message(ChatMessage {
@@ -117,13 +117,13 @@ async fn initialize(reword_initial: bool, install_race: bool, version: Option<i6
         )
         .await?;
         diagnostics.reword.store(true, Ordering::Relaxed);
-        let lane = thread.lane("desk");
-        let mut run = lane
+        let partition_key = thread.partition("desk");
+        let mut run = partition_key
             .open(RunOptions::new("schema-run", "AST_schema"), &crate::Holder::new("test"))
             .await?;
         run.set_state(json!({"saved": true}));
         run.commit(CommitOptions::default()).await?;
-        let mut restored = lane
+        let mut restored = partition_key
             .open(RunOptions::new("schema-read", "AST_read"), &crate::Holder::new("test"))
             .await?;
         if restored.state() != Some(&json!({"saved": true})) {
@@ -186,7 +186,7 @@ async fn a_lost_install_race_reports_why_the_schema_could_not_be_checked() {
     .await
     .unwrap();
     let opened = thread
-        .lane("desk")
+        .partition("desk")
         .open(RunOptions::new("schema-run", "AST_schema"), &crate::Holder::new("test"))
         .await;
     assert!(matches!(opened, Err(StorageError::Unavailable(_))), "{:?}", opened.err());
@@ -194,14 +194,16 @@ async fn a_lost_install_race_reports_why_the_schema_could_not_be_checked() {
     store.close().await;
 }
 
-/// Items page by insertion position with an optional lane filter; the cursor is opaque,
+/// Items page by insertion position with an optional partition filter; the cursor is opaque,
 /// bound to its filter, and pages neither skip nor repeat.
 async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s = fx.thread().await;
-    for (lane, n) in [("lane-a", 0), ("lane-b", 1), ("lane-a", 2)] {
+    for (partition_key, n) in
+        [("partition_key-a", 0), ("partition_key-b", 1), ("partition_key-a", 2)]
+    {
         let mut run = s
-            .lane(lane)
+            .partition(partition_key)
             .open(RunOptions::new(format!("r{n}"), ""), &crate::Holder::new("test"))
             .await
             .unwrap();
@@ -209,15 +211,15 @@ async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
         run.commit(CommitOptions::default()).await.unwrap();
     }
     let ids = |p: &crate::thread::db::ItemPage| -> Vec<String> {
-        p.items.iter().map(|i| format!("{}/{}", i.lane, i.item.id)).collect()
+        p.items.iter().map(|i| format!("{}/{}", i.partition_key, i.item.id)).collect()
     };
     let first = s.list_items(None, None, 2).await.unwrap();
-    assert_eq!(ids(&first), vec!["lane-a/i0", "lane-b/i1"]);
+    assert_eq!(ids(&first), vec!["partition_key-a/i0", "partition_key-b/i1"]);
     let rest = s.list_items(None, first.next.as_deref(), 2).await.unwrap();
-    assert_eq!((ids(&rest), rest.next), (vec!["lane-a/i2".to_owned()], None));
-    let a = s.list_items(Some("lane-a"), None, 10).await.unwrap();
-    assert_eq!(ids(&a), vec!["lane-a/i0", "lane-a/i2"]);
-    let crossed = s.list_items(Some("lane-a"), first.next.as_deref(), 2).await;
+    assert_eq!((ids(&rest), rest.next), (vec!["partition_key-a/i2".to_owned()], None));
+    let a = s.list_items(Some("partition_key-a"), None, 10).await.unwrap();
+    assert_eq!(ids(&a), vec!["partition_key-a/i0", "partition_key-a/i2"]);
+    let crossed = s.list_items(Some("partition_key-a"), first.next.as_deref(), 2).await;
     assert!(matches!(crossed, Err(StorageError::Invalid(_))), "a cursor of another filter");
     fx.cleanup(&[&s]).await;
 }
@@ -227,12 +229,12 @@ async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
 async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s = fx.thread().await;
-    let lane = s.lane(LANE);
+    let partition_key = s.partition(PARTITION_KEY);
     for id in ["AST_1", "AST_2", "AST_3", "AST_4", "AST_5"] {
-        assert!(lane.submit(&submitted(id)).await.unwrap());
+        assert!(partition_key.submit(&submitted(id)).await.unwrap());
     }
     tokio::time::sleep(Duration::from_millis(5)).await;
-    lane.cancel_task("AST_2", Default::default()).await.unwrap();
+    partition_key.cancel_task("AST_2", Default::default()).await.unwrap();
     let query = |status, page_token| crate::thread::db::TaskQuery {
         status,
         page_size: 2,
@@ -243,7 +245,7 @@ async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
     loop {
         let page = s.list_tasks(&query(None, token)).await.unwrap();
         assert_eq!(page.total_size, 5);
-        seen.extend(page.tasks.iter().map(|t| (t.updated_at, t.task_id.clone())));
+        seen.extend(page.tasks.iter().map(|t| (t.updated_at_ms, t.task_id.clone())));
         if page.next_page_token.is_empty() {
             break;
         }
@@ -265,18 +267,23 @@ async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
     fx.cleanup(&[&s]).await;
 }
 
-/// A thread's tasks browse in insertion order, of one lane when asked, whatever was updated
-/// since; the token is bound to that order and lane.
+/// A thread's tasks browse in insertion order, of one partition when asked, whatever was updated
+/// since; the token is bound to that order and partition.
 async fn tasks_browse_in_insertion_order_by_lane(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s = fx.thread().await;
-    for (lane, id) in [(LANE, "AST_1"), ("expert", "AST_2"), (LANE, "AST_3"), (LANE, "AST_4")] {
-        assert!(s.lane(lane).submit(&submitted(id)).await.unwrap());
+    for (partition_key, id) in [
+        (PARTITION_KEY, "AST_1"),
+        ("expert", "AST_2"),
+        (PARTITION_KEY, "AST_3"),
+        (PARTITION_KEY, "AST_4"),
+    ] {
+        assert!(s.partition(partition_key).submit(&submitted(id)).await.unwrap());
     }
     tokio::time::sleep(Duration::from_millis(5)).await;
-    s.lane(LANE).cancel_task("AST_1", Default::default()).await.unwrap();
+    s.partition(PARTITION_KEY).cancel_task("AST_1", Default::default()).await.unwrap();
     let query = |page_token| crate::thread::db::TaskQuery {
-        lane: Some(LANE.into()),
+        partition_key: Some(PARTITION_KEY.into()),
         order: crate::thread::db::TaskOrder::Inserted,
         page_size: 2,
         page_token,
@@ -292,7 +299,7 @@ async fn tasks_browse_in_insertion_order_by_lane(backend: Backend) {
         }
         token = Some(page.next_page_token);
     }
-    assert_eq!(seen, ["AST_1", "AST_3", "AST_4"], "oldest first, the lane's only");
+    assert_eq!(seen, ["AST_1", "AST_3", "AST_4"], "oldest first, the partition_key's only");
     let first = s.list_tasks(&query(None)).await.unwrap();
     let crossed = s
         .list_tasks(&crate::thread::db::TaskQuery {

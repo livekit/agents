@@ -103,6 +103,7 @@ fn shown(text: &str, start: f64, played_ms: u64) -> Step {
         start,
         end: start + 0.1,
         played: std::time::Duration::from_millis(played_ms),
+        spoken: true,
     })
 }
 

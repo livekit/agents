@@ -27,6 +27,15 @@ pub struct TtsCapabilities {
     pub aligned_transcript: bool,
 }
 
+impl TtsCapabilities {
+    /// How a TTS is paced until its options say otherwise: one without streaming is sent one
+    /// request per batch (through `StreamAdapter`), and pacing gives each more context; a
+    /// streaming one is sent each chunk as it comes, never left idle.
+    pub fn default_pacing(&self) -> Option<crate::tts::stream_pacer::SentenceStreamPacer> {
+        (!self.streaming).then(crate::tts::stream_pacer::SentenceStreamPacer::default)
+    }
+}
+
 /// What the expressive markup pipeline can do with a given voice.
 #[crate::host(record(module = "tts", path = "livekit.agents.tts", dataclass, emit))]
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -105,6 +114,59 @@ pub struct SynthesizedAudio {
     pub connection: Option<crate::metrics::base::ConnectionAcquired>,
 }
 
+/// `tts.TTSOptions`: how the framework prepares a TTS's text.
+#[crate::host(record(
+    module = "tts",
+    path = "livekit.agents.tts",
+    name = "TTSOptions",
+    dataclass,
+    extract
+))]
+#[derive(Clone)]
+pub struct TtsOptions {
+    /// Splits the text into the chunks the TTS is sent: the built-in ``SentenceTokenizer`` by
+    /// default, with the TTS's own tags kept whole and its request limit applied on top. A TTS
+    /// that takes words is sent words whatever this is.
+    #[host(
+        default_factory = "..tokenize.SentenceTokenizer",
+        annotation = "..tokenize.SentenceTokenizer"
+    )]
+    pub sentence_tokenizer: crate::tokenize::bindings::SentenceTokenizerLeg,
+    /// A ``SentenceStreamPacer`` holds later chunks until the audio plays out, for more context
+    /// per request; ``None`` sends each as soon as it is split. A TTS without streaming is paced
+    /// by default, a streaming one is not.
+    #[host(default = None)]
+    pub pacing: Option<crate::tts::stream_pacer::SentenceStreamPacer>,
+}
+
+impl Default for TtsOptions {
+    /// `SentenceTokenizer()`, unpaced.
+    fn default() -> Self {
+        let settings = crate::tokenize::bindings::SentenceSettings::default();
+        TtsOptions {
+            sentence_tokenizer: crate::tokenize::bindings::SentenceTokenizerLeg::Native(
+                std::sync::Arc::new(settings),
+            ),
+            pacing: None,
+        }
+    }
+}
+
+/// What each chunk of a TTS stream's input holds.
+#[crate::host(string)]
+#[crate::host(wire_strs(msg = format!("unknown text unit {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextUnit {
+    /// Whole sentences, batched to a spoken length.
+    #[default]
+    Sentences,
+    /// Words, for a provider that buffers text itself; an open wrapping tag holds its words.
+    Words,
+    /// The text as pushed, for a TTS that prepares it per provider itself (a fallback chain):
+    /// each chunk's `text` is as written and its `said` empty, the words known only downstream.
+    Text,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum AudioEncoding {
     /// Interleaved 16-bit little-endian PCM.
@@ -133,8 +195,20 @@ impl SynthesizedAudio {
     }
 }
 
-/// May not drop: a dropped token silently mangles speech.
-pub type TtsSink = Box<dyn StreamInput<String>>;
+/// One chunk of a TTS's input, as the stage prepared it.
+#[crate::host(record(module = "tts", path = "livekit.agents.tts", dataclass, emit))]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SpeechChunk {
+    /// What the provider is sent: its markup in the provider's syntax.
+    pub text: String,
+    /// The words it says, without markup: what its audio is aligned to.
+    pub said: String,
+}
+
+/// A TTS's input: the chunks its stage prepared. May not drop: a lost chunk mangles speech.
+pub type TtsSink = Box<dyn StreamInput<SpeechChunk>>;
+/// A synthesis request's input: the text as written, which its stage prepares.
+pub type TextSink = Box<dyn StreamInput<String>>;
 /// Both TTS paths yield this, drained by a `TtsStream` (no sink for a one-shot `synthesize()`).
 pub type TtsSource = Box<dyn ProviderStream<SynthesizedAudio>>;
 
@@ -191,11 +265,32 @@ pub trait Tts: Send + Sync {
         String::new()
     }
 
-    // Whether the framework lowers this TTS's markup on a duplex path it owns (the gateway's
-    // stream, a `StreamAdapter`); a natively streaming plugin owns its input and does not.
-    #[host(read_once, name = "_core_lowers_markup")]
-    fn lowers_markup(&self) -> bool {
+    // What each chunk of a stream's input holds: a provider that buffers text itself takes words.
+    #[host(read_once, name = "_core_text_unit")]
+    fn text_unit(&self) -> TextUnit {
+        TextUnit::Sentences
+    }
+
+    // Whether it retries its own attempts within the connection policy it is given (a stream
+    // adapter retries each chunk, a fallback chain its members): a request over it runs once and
+    // hands it the whole policy. `_core_native_retries`, for a TTS.
+    #[host(read_once, name = "_core_retries_itself")]
+    fn retries_itself(&self) -> bool {
         false
+    }
+
+    // The most characters one request may carry; `None` takes its dialect's known limit, else
+    // the stage's default ceiling.
+    #[host(read_once, name = "_core_max_text_len")]
+    fn max_text_len(&self) -> Option<usize> {
+        None
+    }
+
+    // How its text is split and paced: `tts.options`, read when the TTS is handed to a session
+    // or a synthesis.
+    #[host(read_once, name = "_core_options")]
+    fn options(&self) -> TtsOptions {
+        TtsOptions { pacing: self.capabilities().default_pacing(), ..TtsOptions::default() }
     }
 
     // A view of this provider whose calls carry `conn`; see [`Stt::with_conn_options`](crate::Stt::with_conn_options).
@@ -222,17 +317,13 @@ pub trait Tts: Send + Sync {
         crate::telemetry::spans::inference::RequestSpan::Request
     }
 
-    /// Synthesize `text`, its attempts retried per `conn_options`.
-    ///
-    /// Args:
-    /// - text: What to say.
-    /// - conn_options: The timeout and retries of the request.
-    // Always present: `synthesize()` is the abstract method.
+    /// One provider attempt at a whole text, as the stage prepared it.
+    // Always present: `_synthesize()` is the abstract method.
     #[host(await, name = "_core_synthesize")]
     fn synthesize<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
-        text: &'a str,
+        chunk: &'a SpeechChunk,
     ) -> crate::BoxFuture<'a, Result<TtsSource, ProviderError>>;
 
     /// Open a stream synthesizing text as it is pushed. Providers with the `streaming`
@@ -243,15 +334,12 @@ pub trait Tts: Send + Sync {
     // The duplex path. An `Err` is a failed attempt the engine's retry budget handles; nothing
     // downgrades silently. A provider without one answers [`no_duplex_path`] and is wrapped in
     // Python’s `tts.StreamAdapter` where it enters the engine.
-    //
-    // `_expressive`: whether this synthesis carries expressive markup, set on the stream (a TTS
-    // tokenizing its own input batches larger chunks when it does). `_trace`: the span the
-    // request runs under; an adapter that records its own spans opens them there.
+    // Its input is the chunks its stage prepared; `cx` is the span the request runs under, where
+    // an adapter that records its own spans opens them.
     #[host(await, name = "_core_stream")]
     fn stream(
         &self,
         cx: &crate::telemetry::Cx,
-        _expressive: bool,
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<TtsSink, TtsSource>, ProviderError>>;
 }
 

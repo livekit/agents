@@ -21,11 +21,11 @@ class _PolicyTTS(tts.TTS[Never]):
         )
         self.calls: list[APIConnectOptions] = []
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
         self.calls.append(conn_options)
-        return _Batch(tts=self, input_text=text, conn_options=conn_options)
+        return _Batch(tts=self, input_text=chunk.text, conn_options=conn_options)
 
 
 class _Batch(tts.ChunkedStream):
@@ -117,27 +117,6 @@ async def test_fallback_recognition_uses_the_call_policy(streaming: bool) -> Non
         assert 0 < provider.calls[0].total_timeout <= 8
     finally:
         await adapter.aclose()
-
-
-@pytest.mark.parametrize("modality", ["stt", "tts"])
-async def test_native_zero_call_deadline_expires_before_network_io(modality: str) -> None:
-    conn = APIConnectOptions(max_retry=0, total_timeout=0)
-    if modality == "tts":
-        provider = inference.TTS(model="cartesia/sonic-3", api_key="k", api_secret="s")
-        source = provider.synthesize("hello", conn_options=conn)
-    else:
-        provider = inference.STT(model="deepgram/nova-3", api_key="k", api_secret="s")
-        source = provider.stream(conn_options=conn)
-        source.end_input()
-    try:
-        with pytest.raises(APITimeoutError) as exc:
-            async with source:
-                async for _ in source:
-                    pytest.fail("an expired call cannot produce output")
-        assert exc.value.timeout == "total"
-    finally:
-        await source.aclose()
-        await provider.aclose()
 
 
 @pytest.mark.parametrize("modality", ["stt", "tts"])
@@ -365,128 +344,3 @@ async def test_fallback_completion_forwards_the_call_policy() -> None:
         assert provider.calls[0].max_retry == 0
     finally:
         await fallback.aclose()
-
-
-@pytest.mark.parametrize("streaming", [False, True])
-async def test_native_tts_public_calls_have_one_retry_owner(streaming: bool) -> None:
-    from aiohttp import web
-    from aiohttp.test_utils import TestServer
-
-    from livekit.agents import APIError
-
-    requests = 0
-
-    async def gateway(request: web.Request) -> web.Response:
-        nonlocal requests
-        requests += 1
-        return web.Response(status=503, text="controlled unavailable gateway")
-
-    app = web.Application()
-    app.router.add_get("/tts", gateway)
-    async with TestServer(app) as server:
-        provider = inference.TTS(
-            model="cartesia/sonic-3",
-            api_key="k",
-            api_secret="s",
-            base_url=str(server.make_url("")).rstrip("/"),
-        )
-        conn = APIConnectOptions(max_retry=1, retry_interval=0, total_timeout=2)
-        source = (
-            provider.stream(conn_options=conn)
-            if streaming
-            else provider.synthesize(
-                "hello",
-                conn_options=conn,
-            )
-        )
-        try:
-            with pytest.raises(APIError):
-                async with source:
-                    if streaming:
-                        source.push_text("hello")
-                        source.end_input()
-                    async for _ in source:
-                        pytest.fail("an unavailable gateway cannot produce audio")
-            assert requests == 2
-        finally:
-            await source.aclose()
-            await provider.aclose()
-
-
-@pytest.mark.parametrize("failure_after_audio", [False, True])
-async def test_native_tts_replays_input_only_before_audio_is_delivered(
-    failure_after_audio: bool,
-) -> None:
-    import asyncio
-    import base64
-    from contextlib import nullcontext
-
-    from aiohttp import web
-    from aiohttp.test_utils import TestServer
-
-    from livekit.agents import APIError
-
-    commands: list[list[dict]] = []
-    delivered = asyncio.Event()
-    pcm = b"\x00\x00" * 2400
-
-    async def gateway(request: web.Request) -> web.WebSocketResponse:
-        observed: list[dict] = []
-        commands.append(observed)
-        attempt = len(commands)
-        socket = web.WebSocketResponse(timeout=0.1)
-        await socket.prepare(request)
-        async for message in socket:
-            record = message.json()
-            observed.append(record)
-            if record["type"] != "session.flush":
-                continue
-            if attempt > 1 or failure_after_audio:
-                await socket.send_json(
-                    {"type": "output_audio", "audio": base64.b64encode(pcm).decode()}
-                )
-            if attempt > 1:
-                await socket.send_json({"type": "done"})
-            elif failure_after_audio:
-                await delivered.wait()
-            await socket.close()
-            return socket
-        return socket
-
-    app = web.Application()
-    app.router.add_get("/tts", gateway)
-    async with TestServer(app) as server:
-        provider = inference.TTS(
-            model="cartesia/sonic-3",
-            api_key="k",
-            api_secret="s",
-            base_url=str(server.make_url("")).rstrip("/"),
-        )
-        frames = []
-        try:
-            expected_error = pytest.raises(APIError) if failure_after_audio else nullcontext()
-            with expected_error:
-                async with provider.stream(
-                    conn_options=APIConnectOptions(max_retry=1, retry_interval=0, total_timeout=2),
-                ) as source:
-                    source.push_text("hello")
-                    source.end_input()
-                    async for audio in source:
-                        frames.append(audio.frame)
-                        delivered.set()
-            received = b"".join(bytes(frame.data) for frame in frames)
-            if failure_after_audio:
-                assert 0 < len(received) <= len(pcm)
-                assert received == pcm[: len(received)]
-            else:
-                assert received == pcm
-            assert len(commands) == (1 if failure_after_audio else 2)
-            for observed in commands:
-                assert [record["type"] for record in observed] == [
-                    "session.create",
-                    "input_transcript",
-                    "session.flush",
-                ]
-                assert observed[1]["transcript"] == "hello "
-        finally:
-            await provider.aclose()

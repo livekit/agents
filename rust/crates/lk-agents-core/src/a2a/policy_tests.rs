@@ -17,7 +17,7 @@ fn channel_delegation_precedence_controls_context_and_inbox_defaults() {
             Duration::ZERO,
         ),
         (json!({CHANNEL_KEY: "sms"}), "sms", Policy::Batch, Duration::from_secs(2)),
-        (json!({}), "a2a", Policy::Interrupt, Duration::ZERO),
+        (json!({}), "a2a", Policy::Queue, Duration::ZERO),
     ] {
         let wire = serde_json::from_value::<a2a::Message>(json!({
             "messageId": "m1",

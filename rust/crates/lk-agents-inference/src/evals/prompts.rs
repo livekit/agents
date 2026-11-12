@@ -54,7 +54,7 @@ fn tool(name: &str, description: &str, json_schema: Value) -> ToolSpec {
 pub fn request_extra(model: &str) -> lk_agents_abi::Extra {
     let mut extra = lk_agents_abi::Extra::new();
     if !crate::llm::models::unsupported_params(model, false, None, None).contains(&"temperature") {
-        extra.insert("temperature".into(), json!(0.0));
+        extra.insert("temperature".into(), 0.0.into());
     }
     extra
 }

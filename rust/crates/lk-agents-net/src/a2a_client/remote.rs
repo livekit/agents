@@ -24,6 +24,10 @@ use crate::signal;
 use crate::task::Cancellation;
 use lk_agents_telemetry as telemetry;
 
+#[cfg(test)]
+#[path = "remote_tests.rs"]
+mod tests;
+
 pub struct RemoteInteraction {
     inner: Interaction,
     /// The running delegation's stop and settlement.
@@ -42,6 +46,7 @@ struct State {
     call: FunctionCall,
     livekit: bool,
     project: Project,
+    partition_chain: Vec<lk_agents_abi::a2a::remote::DelegationPartition>,
 }
 
 #[derive(Deserialize)]
@@ -75,8 +80,29 @@ impl Port for RemoteInteraction {
         };
         let policy = retained::for_call(id, &history).map_err(protocol)?;
         let project = Project { url: project_url, api_key, api_secret };
-        let state = State { policy, call: function_call, livekit: false, project };
+        let state = State {
+            policy,
+            call: function_call,
+            livekit: false,
+            project,
+            partition_chain: Vec::new(),
+        };
         Ok(Self { inner: Interaction(Arc::new(Mutex::new(state))), running: Mutex::new(None) })
+    }
+
+    fn set_partition_chain(
+        &self,
+        chain: Vec<lk_agents_abi::a2a::remote::DelegationPartition>,
+    ) -> Result<(), AgentClientError> {
+        let mut metadata = Map::new();
+        metadata.insert(
+            lk_agents_abi::a2a::metadata::PARTITION_CHAIN_KEY.into(),
+            serde_json::to_value(&chain)
+                .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?,
+        );
+        let chain = lk_agents_core::a2a::delegation::partition_chain(&metadata)?;
+        self.inner.0.lock().partition_chain = chain;
+        Ok(())
     }
 
     fn message(
@@ -340,6 +366,13 @@ impl Interaction {
         if structured {
             message.parts[0] = a2a::Part::data(arguments);
         }
+        if offers_extension && !state.partition_chain.is_empty() {
+            message.metadata.get_or_insert_default().insert(
+                lk_agents_abi::a2a::metadata::PARTITION_CHAIN_KEY.into(),
+                serde_json::to_value(&state.partition_chain)
+                    .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?,
+            );
+        }
         state.livekit = offers_extension;
         Ok(message_from_wire(message))
     }
@@ -350,10 +383,17 @@ impl Interaction {
         let mut state = self.0.lock();
         state.policy.accepts_reply(request_id).map_err(protocol)?;
         let livekit = state.livekit;
-        let message = state
+        let mut message = state
             .policy
             .message(text, crate::strings::shortuuid("msg_"), None, "", None, livekit, None)
             .map_err(protocol)?;
+        if livekit && !state.partition_chain.is_empty() {
+            message.metadata.get_or_insert_default().insert(
+                lk_agents_abi::a2a::metadata::PARTITION_CHAIN_KEY.into(),
+                serde_json::to_value(&state.partition_chain)
+                    .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?,
+            );
+        }
         Ok(message_from_wire(message))
     }
 
@@ -429,6 +469,12 @@ impl lk_agents_abi::a2a::client::MessageContent for RemoteInteraction {
 }
 
 impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
+    fn _core_delegation_chain(
+        metadata: Map<String, Value>,
+    ) -> Result<Vec<lk_agents_abi::a2a::remote::DelegationPartition>, AgentClientError> {
+        lk_agents_core::a2a::delegation::partition_chain(&metadata)
+    }
+
     fn _core_delegation_tool(
         name: String,
         description: String,

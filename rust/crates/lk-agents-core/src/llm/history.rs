@@ -182,6 +182,12 @@ fn facts(items: &[ChatItem]) -> Vec<ItemFacts<'_>> {
 }
 
 impl ChatContextPlans for ChatPlans {
+    fn _core_payload_to_item(
+        payload: lk_agents_abi::llm::chat_context::Extra,
+    ) -> Result<lk_agents_abi::ChatItem, lk_agents_abi::storage::StorageError> {
+        lk_agents_abi::storage::thread::decode_stored_item(payload)
+    }
+
     fn copy_plan(
         items: Vec<ChatItem>,
         exclude_function_call: bool,

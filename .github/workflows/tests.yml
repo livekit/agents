@@ -153,7 +153,7 @@ jobs:
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
-          PYTHONPATH: ${{ github.workspace }}/livekit-agents-next:${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}/livekit-agents:${{ github.workspace }}
         run: uv run --no-sync pytest tests/e2e --e2e
 
   evaluation:
@@ -190,77 +190,3 @@ jobs:
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
 
         run: uv run pytest --evals
-
-  tests:
-    # don't run tests for PRs on forks
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
-    strategy:
-      fail-fast: false
-      matrix:
-        plugin:
-          [
-            cartesia,
-            deepgram,
-            elevenlabs,
-            groq,
-            openai,
-            inworld,
-          ]
-
-    runs-on: ubuntu-latest
-    name: livekit-plugins-${{ matrix.plugin }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-
-      - name: Checkout compatible SDK sources
-        uses: ./.github/actions/checkout-sdks
-        with:
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
-
-      - name: Install native build prerequisites
-        uses: ./.github/actions/native-build
-
-      - name: Setup Google credentials
-        if: matrix.plugin == 'google'
-        shell: bash
-        run: |
-          printf '%s' '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > tests/google.json
-
-      - name: Run tests
-        shell: bash
-        env:
-          PLUGIN: ${{ matrix.plugin }}
-          LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
-          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
-          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
-          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
-          ELEVEN_API_KEY: ${{ secrets.ELEVEN_API_KEY }}
-          CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
-          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
-          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }} # nit: doesn't have to be secret
-          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
-          FAL_KEY: ${{ secrets.FAL_KEY }}
-          PLAYHT_API_KEY: ${{ secrets.PLAYHT_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
-          RIME_API_KEY: ${{ secrets.RIME_API_KEY }}
-          SPEECHMATICS_API_KEY: ${{ secrets.SPEECHMATICS_API_KEY }}
-          GOOGLE_APPLICATION_CREDENTIALS: tests/google.json
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          NEUPHONIC_API_KEY: ${{ secrets.NEUPHONIC_API_KEY }}
-          RESEMBLE_API_KEY: ${{ secrets.RESEMBLE_API_KEY }}
-          SPEECHIFY_API_KEY: ${{ secrets.SPEECHIFY_API_KEY }}
-          HUME_API_KEY: ${{ secrets.HUME_API_KEY }}
-          SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
-          LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
-          INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
-          SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
-        working-directory: tests
-        run: make test

@@ -25,7 +25,7 @@ async fn a_stop_waits_out_the_fade() {
 #[test]
 fn every_builtin_clip_is_shipped() {
     let resources = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../livekit-agents-next/livekit/agents/resources");
+        .join("../../../livekit-agents/livekit/agents/resources");
     use BuiltinAudioClip as C;
     for clip in [
         C::CityAmbience,

@@ -8,7 +8,7 @@ use crate::voice::io::TranscriptionOutput;
 use crate::{
     ApiConnectOptions, AudioFrame, ChatItem, ChatRequest, HostRef, Llm, LlmChunk, LlmStream,
     SpeechEvent, Stt, SttSink, SttSource, SynthesizedAudio, ToolChoice, ToolSpec, TranscriptChunk,
-    Tts, TtsSink, TtsSource, Vad,
+    Tts, TtsSource, Vad,
 };
 
 /// The host's `_SessionNodes`: the `llm_node`, `tts_node`, `stt_node` and
@@ -196,13 +196,12 @@ pub trait NodeFactory: Send + Sync {
         cx: &crate::telemetry::Cx,
         req: &'a ChatRequest,
     ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
-    /// `tts_node(text, model_settings)`: text pushed in, its frames out. `expressive`: the
-    /// synthesis carries expressive markup. It runs under `cx`, the step's `tts_node` span.
+    /// `tts_node(text, model_settings)`: the text as written pushed in, its frames out; the
+    /// node's own synthesis prepares it. It runs under `cx`, the step's `tts_node` span.
     fn tts_node(
         &self,
         cx: &crate::telemetry::Cx,
-        expressive: bool,
-    ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<TtsSink, TtsSource>, ProviderError>>;
+    ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<crate::TextSink, TtsSource>, ProviderError>>;
     /// `stt_node(audio, model_settings)`: frames pushed in, its speech events out. It runs under
     /// `cx`'s span.
     fn stt_node(

@@ -33,16 +33,14 @@ again when left empty.
 | `stt_context_options` | an `STTContextOptions`: static `keyterms` the STT is biased toward, `keyterm_detection` (`KeytermDetectionOptions`) to add terms heard in the conversation, `forward_chat_context`. `session.keyterms` reads the current terms; `update_options(keyterms=)` replaces the static ones |
 | `aec_warmup_duration` | seconds after the agent first speaks during which the person cannot interrupt, while echo cancellation adapts; 3 by default, none on an outbound SIP call the agent dialed |
 | `expressive` | `True`, or an `ExpressiveOptions` (`speech_steering`: `SpeechSteeringOptions`, whose `nonverbal_sounds` takes `NonverbalOptions`; or a custom instructions template); see [expressive speech](lexer.md#expressive-speech) |
-| `tts_text_transforms` | what the voice skips: `"filter_markdown"`, `"filter_emoji"` (both by default); the transcript keeps them either way, see [markdown and emoji](lexer.md#markdown-and-emoji) |
 | `max_tool_steps` | model requests one reply may chain through tool calls; 3 by default |
 | `min_consecutive_speech_delay` | seconds of silence between two of the agent's speeches; 0 by default |
-| `use_tts_aligned_transcript` | whether the transcript follows the TTS's word timings rather than the text sent to it; the session decides when left out |
 | `user_away_timeout` | seconds of silence after which the person's state becomes `away`; 15 by default, `None` never |
 | `transcription_timeout` | seconds to wait for a transcript after the person spoke before `user_transcription_timeout`; `None` (the default) never |
 | `session_close_transcript_timeout` | seconds the close waits for the last transcript; 2 by default |
 | `tools` | tools and toolsets every agent of the call is offered, besides its own; a name an agent's tool already has is refused (`ValueError`) when that agent runs, see [tools](tools.md#tools-on-an-agent) |
 | `context` | the application object; marked fields require explicit loading and saving |
-| `thread` | the call's durable thread, `ctx.thread`; omitted, the call runs in memory and no thread is created; one whose lane does not load fails `start()` ([the call's thread](#the-calls-thread)) |
+| `thread` | the call's durable thread, `ctx.thread`; omitted, the call runs in memory and no thread is created; one whose partition does not load fails `start()` ([the call's thread](#the-calls-thread)) |
 
 `turn_detection` is a mode (`"stt"`, `"vad"`, `"realtime_llm"`, `"manual"`) or an
 `inference.TurnDetector`, which predicts the end of the person's turn on their audio; any other
@@ -63,9 +61,9 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 
 | Member | What |
 |---|---|
-| `start(agent, room=, room_options=, chat_ctx=)` | attach the session to the room (the job's when left out) with `agent` speaking; `room_options` is a `RoomOptions` of `audio_input` (`AudioInputOptions`), `audio_output` (`AudioOutputOptions`), `video_input` (`VideoInputOptions`), `text_input` (`TextInputOptions`, whose callback receives a `TextInputEvent`) and `text_output` (`TextOutputOptions`), each `True`/`False` or its options |
+| `start(agent, room=, room_options=, chat_ctx=)` | attach the session to the room (the job's when left out) with `agent` speaking; `room_options` is a `RoomOptions` of `audio_input` (`AudioInputOptions`), `audio_output` (`AudioOutputOptions`), `video_input` (`VideoInputOptions`), `text_input` (`TextInputOptions`, whose callback receives a `TextInputEvent`) and `transcription_output` (`TranscriptionOutputOptions`, the agent's words), each `True`/`False` or its options |
 | `say(text, audio=, allow_interruptions=, add_to_chat_ctx=True)`, `generate_reply(instructions=, user_input=, tools=, tool_choice=, allow_interruptions=, chat_ctx=)` | speak fixed words, or reply through the model; each returns the speech's `SpeechHandle`. `allow_interruptions` overrides the session's for this speech; `add_to_chat_ctx=False` keeps a `say` out of the history; `tool_choice` and `chat_ctx` (the context this reply works on, refused on a realtime model) apply to this reply only. `text` is a `str` or an async iterable of `str` read to its end; with `audio` (pre-synthesized frames, then `text` must be a `str`, else `ValueError`) the frames play instead of the TTS and `text` is still added to the history. `tools=` (names) offers only those of the driving agent's tools for that reply, plus its provider-owned tools; a realtime model refuses it. A reply asked from the agent's `on_enter` is that hook's reply: tools flagged `ToolFlag.IGNORE_ON_ENTER` are withheld from it |
-| `interrupt(force=False)` | stop the current speech and the queued ones up to the first uninterruptible one; returns a future that resolves when they are done, or with the refusal |
+| `interrupt(force=False)` | stop the current speech and the queued ones up to the first uninterruptible one; returns a future that resolves when they are done, or with the refusal. A reply interrupted while its tools run is done at once and the person's next turn goes ahead: the tools finish in the background, their results join the history with no follow-up reply, and any still running 5 seconds after the interruption are cancelled |
 | `await set_participant(identity)` | listen to another room participant (their audio, transcript and keypad); `None` listens to no one. By default the session links the first participant who joins, or `RoomOptions(participant_identity=)` |
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
 | `history` | the call's conversation, a new `ChatContext` over the session's items on each read; empty on a new thread and before `start()`; see [reading the session from a callback](#reading-the-session-from-a-callback) |
@@ -93,7 +91,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `"speech_created"` | `SpeechCreatedEvent`: `speech_handle`, `source`, `user_initiated` | the agent scheduled a speech |
 | `"agent_state_changed"` | `AgentStateChangedEvent`: `old_state`, `new_state` | the agent moved between `initializing`, `idle`, `listening`, `thinking` and `speaking` |
 | `"user_state_changed"` | `UserStateChangedEvent`: `old_state`, `new_state` | the person moved between `speaking`, `listening` and `away` |
-| `"error"` | `ErrorEvent`: `error`, `source` | a provider or an input audio processor failed; `error.recoverable` says whether the call goes on |
+| `"error"` | `ErrorEvent`: `error`, `source` | a provider, an input audio processor, the avatar or the audio output failed, or the audio output did not report a cleared segment; `error.recoverable` says whether the call goes on |
 | `"user_turn_exceeded"` | `UserTurnExceededEvent`: `transcript`, `accumulated_transcript`, `accumulated_word_count`, `duration` (a `timedelta`) | the person spoke past the turn limit without a reply |
 | `"user_transcription_timeout"` | `UserTranscriptionTimeoutEvent`: `speech_duration` | the person spoke but recognition produced no transcript |
 | `"agent_false_interruption"` | `AgentFalseInterruptionEvent`: `resumed` | an interruption turned out not to be one |
@@ -263,6 +261,10 @@ async with session.override_options(turn_handling={"push_to_talk": True}):
     await dictation_step()
 ```
 
+Applications connect their buttons, RPCs or other input controls to `start_user_turn()`,
+`end()` and `cancel()`. The framework currently provides the session API; it does not register
+`lk.user_turn.start/end/cancel` room RPCs or publish an `lk.agent.input_mode` attribute.
+
 ## A job's sessions
 
 A session started on the job's room (the default room inside a job), or on
@@ -299,10 +301,29 @@ same key to `on_playback_started`, `on_playback_progressed` and
 looking up the current segment when they complete. Wrapper outputs forward the
 key to their downstream output.
 
+A synchronized transcript shows each word when the voice starts saying it. A
+voice that reports word timings (Cartesia, Inworld and ElevenLabs among them)
+places its words; otherwise each word is placed in the audio received so far:
+the silences in the audio are matched to the text's breaks (sentence ends,
+commas, list items) and the speech between two of them is shared by the words
+by their expected length. A sentence end is likelier to get a pause than a
+comma, and a pause where the text has no break is taken for a hesitation. The
+estimate is usually within about 0.1 s, but a number or an ID a voice reads
+unexpectedly can put the words after it seconds off until the next pause, so a
+voice's own timings are always preferred. Behind `StreamAdapter`, each chunk's
+audio holds its own words. The transcript follows the playback reports. From
+`on_playback_started`, words advance with elapsed time, never past the audio
+sent to the output, so a sink that reports only its start and finish still
+shows words as they are spoken. `on_playback_progressed`, when a sink reports
+it, corrects that estimate. Words stop while the output is paused and continue
+on resume. An interrupted segment keeps the words heard up to the position its
+`on_playback_finished` reports. The transcription output is flushed once per
+segment that had text, never on attach or close alone.
+
 VAD streams bound pending audio and output. Pushing audio beyond capacity or
 an oversized frame raises an API error and retains no refused audio. Close
 remains available at capacity and waits for bounded cleanup. See
-[runtime limits](internals/rust-core.md#runtime-limits-and-backpressure).
+[runtime limits](internals/runtime.md#runtime-limits-and-backpressure).
 
 The session owns input/output routing, transcript synchronization and recording.
 Replacing its playback destination changes that destination only. Recording
@@ -329,12 +350,34 @@ unprocessed for that span. Each processor's failing span is one error, ending at
 first frame it processes cleanly; a processor that fails again reports again. The
 input stream does not end and the agent keeps hearing the user.
 
+If the audio output raises from `capture_frame`, the speech it was playing
+ends there, interrupted, and its handle's `exception()` is the output's
+exception. The session emits an `"error"` event whose `error` is a recoverable
+`io.AudioOutputError` and whose `source` is the output, and logs it. The
+history keeps what was heard, as for any interruption. A failed or cancelled
+capture holds nothing the output must report, so the output, and every link of
+its chain, stays usable for the next speech.
+
 Playback completion waits are bounded by the delivered audio duration and a
 transport allowance. A missing completion report cannot hold the speech or
 session open indefinitely, and a timeout does not count unreported audio as heard.
 
-See the [I/O composition contract](internals/rust-core.md#session-io-composition)
-for ownership and the [shared primitives](internals/rust-core.md#common-runtime-primitives)
+After `clear_buffer`, the output keeps the cut segment until its sink reports
+`on_playback_finished` for it, since the old audio may still be playing. A sink
+that has not reported within 5 seconds of the clear (a custom output that never
+calls `on_playback_finished` after `clear_buffer`, or a remote avatar worker
+that died) is treated as cut where it last reported playback (the start when it
+reported none): the segment settles there, the recording keeps only what was
+reported played, the synchronized transcript stops, and the output goes to the
+next speech. The session emits one `"error"` event
+whose `error` is a recoverable `io.AudioOutputError` and whose `source` is the
+output, saying the sink did not report playback finished within 5 s of being
+cleared and that the session may have been unable to speak meanwhile, and logs
+it. A report that arrives later is ignored. A sink that reports within the 5
+seconds is unaffected.
+
+See the [I/O composition contract](internals/runtime.md#session-io-composition)
+for ownership and the [shared primitives](internals/runtime.md#common-runtime-primitives)
 for cross-language stream semantics.
 
 ### Output handover policy
@@ -437,6 +480,12 @@ await session.start(agent, room=ctx.room)
   wait, so a later call can still see the join. It raises
   `asyncio.CancelledError` once the avatar closed before it joined, and the
   room's error if the room failed first.
+- If the avatar has not joined 30 s after `start()`, the session emits one
+  `"error"` event whose `error` is a recoverable `avatar.AvatarError` (its
+  `source` is `None`). From then on the avatar's audio output stops waiting:
+  each speech fails at once with that error while the avatar is absent. The
+  join wait goes on, and once the avatar joins, speech plays normally. Before
+  the 30 s, speech waits for the avatar to join.
 - Inside a job, the job's shutdown runs the avatar's `aclose()` (a plugin's
   own), in the shutdown's span.
 - `metrics_collected` emits `AvatarMetrics`: once when the avatar joined
@@ -454,6 +503,24 @@ skipped; any other failure is logged and does not fail the close. Concurrent
 closes wait for the same close, a later one does nothing, and `start()` again
 begins a new lifecycle.
 
+`DataStreamAudioOutput` is native, and it has the `io.AudioOutput` surface a
+stage forwards to: `capture_frame`, `flush`, `clear_buffer`, `begin_segment`,
+`playback_segment`, `wait_for_playout`, `can_pause` (`False`), `pause`,
+`resume`, `on_attached` and `on_detached`. So a Python stage can wrap it
+(`MyStage(next_in_chain=output)`) as it wraps a Python sink: the stage
+forwards frames, flushes and clears to the output, and the output reports its
+playback to the stage's `on_playback_started`, `on_playback_progressed` and
+`on_playback_finished`, in order on the stage's loop, until the output
+closes. The output emits no events of its own; listen on the stage.
+
+An audio output chain reports playback upward. Building a stage with
+`next_in_chain=` makes it that output's parent. When an output reports
+playback (`on_playback_*`), it emits its own `"playback_started"`,
+`"playback_progressed"` or `"playback_finished"` event to its listeners, then
+reports the same to its parent, up to the head of the chain, so a listener on
+any Python stage hears that stage's events. An output belongs to one chain:
+building a second stage over it raises `ValueError`.
+
 On the avatar worker, an `AvatarRunner` feeds an `AudioReceiver`'s audio to a
 `VideoGenerator` and publishes what it generates. `DataStreamAudioReceiver`
 receives the agent's stream; a custom receiver iterates frames and an
@@ -463,50 +530,60 @@ it, and reports its playback to the receiver with that key.
 
 ## The call's thread
 
-The door opens the call's thread in the server's storage before the
-entrypoint runs: the job's `thread_id`, copied from the agent dispatch
-([how a call gets its thread](threads.md#calls)). It is `ctx.thread` on the
-`JobContext`, `None` when the dispatch named no thread, and
-`VoiceSession(thread=ctx.thread)` is how the call gets it. A `VoiceSession`
-without `thread=` runs in memory: no thread is created and `session.thread` is
-`None`. An unknown or deleted dispatch thread id is logged as refused and
-`ctx.thread` is `None`.
+The door resolves the job's `thread_id` in the server's storage before the entrypoint runs
+([how a call gets its thread](threads.md#calls)). `ctx.thread` names that thread; a dispatch
+without a thread runs in memory. An unknown or deleted dispatch thread is logged as refused.
 
-A call given a thread whose lane does not load does not start: no other thread
-replaces it. `await session.start(...)` raises the storage's error,
-`ThreadNotFound` for an unknown, deleted or expired thread and
-`StorageUnavailable` for a storage that cannot be reached (retryable), both
-`livekit.agents.storage.StorageError`s; the session is closed, its
-`agent_session` and `session_start` spans end with that error, and the job
-logs `the session could not start` once, with `job_id` and `thread_id`. The
-entrypoint decides what the caller hears:
+Bind the job's store to enable automatic session restoration and incremental checkpoints:
 
 ```python
-from livekit.agents.storage import StorageError, StorageUnavailable
+app = App()
+await ctx.store.load_context(app)
+binding = ctx.store.bind(app)
+session = VoiceSession(context=binding, llm=model)
+await session.start(agent, room=ctx.room)
+```
+
+With no application context, use `context=ctx.store.bind()`. Passing a plain application
+context or a `thread=` association alone does not enable automatic session persistence.
+See [session binding](context.md#session-state-and-explicit-binding) for the live view and detached snapshot APIs.
+
+A bound session restores committed history at startup unless an explicit `chat_ctx` is supplied.
+Each voice turn takes the partition lease, checkpoints accepted conversation progress, commits
+explicitly saved application fields on success, and releases ownership after settlement.
+A text request using the same partition waits for that ownership. Before a later voice turn,
+transport history is reconciled with committed changes from other requests. Application fields
+still require explicit load/save.
+
+When the person interrupts a reply while its tools run, the conversation is freed at once, as on
+a call without a thread: the reply's speech is done and the next turn is answered. Only
+persistence waits. The interrupted turn keeps its hold on the partition until its tools end, or
+the 5 second interruption bound cancels them, and its turn is committed or abandoned. Turns
+commit in order: a later turn's commit waits for the earlier one, so the thread's history keeps
+the order the turns were taken in. The interrupted turn's late tool output is placed right after
+its call, in `session.history` and in the thread, before what was said since; the thread holds
+back the later turn's items until it lands. The thread saves the call's items in the order the
+session holds them, its opening handoff first.
+
+The history matches what the person heard: what was said is kept in the order it was heard,
+with only the words heard. An item the person never heard, a tool call, its output or a
+handoff, sits with the turn it belongs to. A tool that awaited a `VoiceTask` records its output
+after the task's conversation, since the task's answers produced it.
+
+A failure to acquire, restore or persist bound state closes the session with a storage error;
+it never silently switches to in-memory execution. `start()` failures propagate to the entrypoint:
+
+```python
+from livekit.agents.storage import StorageError
 
 try:
     await session.start(agent)
-except StorageUnavailable:
-    ...  # retry the start, or end the call
 except StorageError:
-    ...  # the thread is gone: start a new session on a new thread, or end the call
+    ...  # end this call or explicitly create a new session
 ```
 
-Uncaught, the error ends the job as any entrypoint exception does.
-For phone-number routing and conversation continuity, see
-[channel routing](channels.md#channel-routing).
-
-At `start()` the call loads the agent's lane: the stored history when the
-call was handed none. Application context fields are explicitly loaded with
-`session.store.load_context(app)` before generating a reply. Each
-voice turn then takes the lane from the end of the person's turn to the
-commit of the reply, and releases it without draining, so a text that
-arrived meanwhile is answered by the worker waiting on it. When a text
-turn moved the lane during the call, transport history is reloaded before the model reads it. Application code
-reloads context fields at its turn boundary before using changes from other
-activations. A
-turn that produced no reply still releases the lane within 30 seconds.
-Storage failures are logged and never end the call.
+An uncaught error ends the job as any entrypoint exception does. For phone-number routing and
+conversation continuity, see [channel routing](channels.md#channel-routing).
 
 ## The thin voice door
 
@@ -525,7 +602,8 @@ voice = Agent(
 
 @server.rtc_session()
 async def phone(ctx: JobContext) -> None:
-    session = VoiceSession(llm=openai.realtime.RealtimeModel(), thread=ctx.thread)
+    binding = ctx.store.bind()
+    session = VoiceSession(llm=openai.realtime.RealtimeModel(), context=binding)
     await session.start(agent=voice, room=ctx.room)
 ```
 
@@ -539,9 +617,9 @@ Connection lifecycle and delegation metadata are managed internally. See
 [remote agents as tools](tools.md#remote-agents-as-tools) for routing and
 persistence ownership.
 
-One brain, two doors: voice and text share one set of tools, explicitly persisted application data
-and one history. The front desk answers a call today and a text tomorrow from
-the same memory.
+Doors selecting the same partition share transport history and explicitly saved application
+data. Fast and slow brains normally select different partition keys so each keeps its own
+conversation; see [partitions](threads.md#partitions-and-session-frames).
 
 ## Expert events and frontend presentation
 
@@ -572,8 +650,9 @@ session APIs; they do not construct or dispatch an inbox themselves.
 | Mechanism | Scope | Contents | Delivery |
 | --- | --- | --- | --- |
 | Frontend event queue | One frontend conversation | Expert progress, questions, results, and failures | In-process push and wake-up of the live session |
-| Backend request inbox | One transport lane | Incoming requests buffered by endpoint policies such as batching | Managed request scheduling and storage |
+| Backend request inbox | One transport partition | Incoming requests buffered by endpoint policies such as batching | Managed request scheduling and storage |
 
+The frontend event queue is not persisted or restored across restarts.
 The frontend event queue needs neither AgentDB nor a durable queue service.
 It is an internal in-process queue for the active frontend session. A backend
 can persist its own conversation independently without making this queue durable.
@@ -637,9 +716,10 @@ is outside this contract.
 The live session records the expert question before presenting it. Rephrasing
 changes its wording, not its identity or reply destination. An ordinary answer
 to the foreground question is forwarded to that expert without requiring the
-model to select the delegation tool again. Cancellation, a new request, or an
-ambiguous response must be handled explicitly rather than blindly forwarded.
-Only one expert question owns the foreground reply destination at a time.
+model to select the delegation tool again. The current forwarding path does not classify
+cancellations, new requests or ambiguous answers; it forwards the supplied reply. Applications
+that need that distinction must handle it before reply delivery. Only one expert question owns
+the foreground reply destination at a time.
 
 A frontend `VoiceTask` can temporarily own the live interaction. Its user
 turns answer that task; they are not also forwarded to the waiting expert.
@@ -699,8 +779,9 @@ reassign a result to an unrelated tool call. The
 [airline refund example](voice-tasks.md#example-airline-refund-and-receipt-email)
 shows updates waiting during a frontend inline task.
 
-If no eligible agent returns, the application must eventually explicitly
-settle or cancel the pending interaction. The session does not automatically
+There is currently no public application API to settle or cancel a stranded frontend
+interaction. Applications must account for that limit when permanently removing expert access.
+The session does not automatically
 switch agents, start another remote request, or deliver the result through an
 unrelated agent. Cancellation is not proof that a refund or other remote effect
 did not happen; the authoritative service must reconcile uncertain outcomes.
@@ -710,18 +791,16 @@ end with the frontend session. They are not backend routing frames or
 automatically saved application fields. Saving backend history or application
 fields does not make frontend event delivery recoverable.
 
-Persistence is optional when the application needs pending frontend events and
-reply routing to survive disconnects, worker changes, or restarts. That path
-stores serializable event records, processing positions, and delegation/reply
-references under the originating frontend conversation's identity. It never
-serializes a queue object or Python await. Applications explicitly save retained
-frontend records; durable delivery and recovery require transport reconciliation.
+Durable frontend event delivery requires an application-owned transport and recovery design.
+The framework does not currently provide automatic queue persistence or replay. Such a design
+must retain event positions and delegation/reply identities and reconcile uncertain remote
+outcomes; serializing a queue or Python await is not sufficient.
 
 Another frontend in the same thread cannot consume these events simply because
 it shares a database. Duplicate event delivery must not resolve a tool call
 twice or present the same retained occurrence twice during normal processing.
 A crash between delivery and acknowledgement can still cause uncertainty;
-optional persistence does not promise exactly-once speech or external effects.
+application-owned persistence does not promise exactly-once speech or external effects.
 
 The frontend queue coordinates expert events and presentation. It does not add
 background execution, a scheduler, or Python stack recovery. The backend request
@@ -791,8 +870,9 @@ Missing metadata is `None`; malformed metadata raises at the binding boundary.
 Times remain seconds on the owning audio stream's timeline. Native stream adapters apply source
 offsets when normalizing provider events; the recorded `start_time_offset` is not an additional
 shift to apply downstream. This record representation does not change existing timeline values.
-A Python `TextOutput` can override `capture_transcript(chunk)` to consume metadata; its default
-implementation forwards `chunk.text` to `capture_text`.
+A Python `TranscriptionOutput` (`livekit.agents.voice.io`) can override
+`capture_transcript(chunk)` to consume metadata; its default implementation forwards `chunk.text`
+to `capture_text`.
 
 ## Tool calls on a call
 
@@ -824,3 +904,33 @@ the waiting frontend tool. Neither frontend path requires `TextSession`.
 The remote backend may use plain `Agent.run()` or a backend
 [TextSession](text-session.md) to coordinate its own specialists. The endpoint
 returns its outcome through A2A; it does not select the frontend speaking agent.
+
+
+## Session persistence
+
+Use the entrypoint's store to opt into conversation persistence:
+
+```python
+await ctx.store.load_context(app)
+binding = ctx.store.bind(app)
+voice = VoiceSession(context=binding, llm=model)
+await voice.start(agent=front_desk, room=ctx.room)
+```
+
+JobContext.store is available before startup. VoiceSession and its tools reuse that activation;
+the declaration does not create another store or lease. Input/model/tool work starts only
+after binding validation. The entrypoint's partition_key selects the stored conversation.
+
+A marked SessionState field on app is optional. When present, it retains identity and follows
+accepted runtime changes; otherwise the session owns its state internally. Plain context
+does not opt into managed session persistence. Runtime services remain application-supplied.
+
+Conversation checkpoints retain turn ownership and do not commit staged application saves.
+An explicit store.flush is a conversation durability barrier. Detached load_session snapshots
+remain unchanged; they can lag accepted in-memory state. Managed storage failure ends the
+binding and surfaces an error rather than silently claiming durability in memory.
+
+Voice snapshots recover configured agent identity and conversation references. They do not
+restore the in-process expert-event queue or resume audio streams, Python coroutines or live
+VoiceTask parent stacks. A stored agent unavailable in the new configuration is an error.
+See [context binding](context.md#session-state-and-explicit-binding).

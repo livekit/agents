@@ -299,3 +299,41 @@ async fn text_captured_after_close_is_dropped_not_an_error() {
     output.flush();
     assert!(room.local_participant().text_streams().iter().all(|stream| stream.text().is_empty()));
 }
+
+/// A reply that opens with an expression tag publishes it as `lk.expression` on the agent's
+/// transcript stream, which the agents-ui avatar reads (components-js `useAgentExpression`): the
+/// framework's `<expr/>` dialect and Cartesia's `<emotion/>` alike.
+#[tokio::test(start_paused = true)]
+async fn a_leading_expression_is_published_as_lk_expression() {
+    for reply in [
+        "<expr type=\"expression\" label=\"happy\"/> Great news!",
+        "<emotion value=\"happy\"/> Great news!",
+    ] {
+        let (room, clock) = room_with_person("transcription-expression");
+        let output = ParticipantTranscriptionOutput::new(
+            room.clone(),
+            Arc::new(TokioSpawner::current()),
+            clock,
+            Arc::new(SegmentIds::counting()),
+            true,
+            false,
+            None,
+        );
+        output.set_participant(Some("person".into())).await.unwrap();
+
+        output.capture_text(&lk_agents_abi::telemetry::Cx::NONE, reply).await.unwrap();
+        output.flush();
+        within_a_second(output.aclose()).await.unwrap().unwrap();
+
+        let streams = room.local_participant().text_streams();
+        let stream = streams.iter().find(|s| s.text().contains("Great news!")).expect("the reply");
+        assert!(!stream.text().contains('<'), "markup reached the transcript: {:?}", stream.text());
+        let expression =
+            stream.close_attributes.get(lk_agents_abi::ATTRIBUTE_TRANSCRIPTION_EXPRESSION);
+        assert_eq!(
+            expression.map(String::as_str),
+            Some(r#"{"expression":"happy","mood":"happy"}"#),
+            "{reply}"
+        );
+    }
+}

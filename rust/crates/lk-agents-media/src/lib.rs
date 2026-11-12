@@ -2,6 +2,8 @@
 //! and libsoxr resampling. `images` and `ffmpeg` are optional features.
 
 pub mod audio_byte_stream;
+#[cfg(test)]
+mod audio_byte_stream_tests;
 pub mod audio_decoder;
 pub mod emitter;
 pub mod error;
@@ -13,6 +15,7 @@ pub mod images;
 pub mod media_queue;
 pub mod mime;
 pub mod mixer;
+pub mod pauses;
 pub mod pool;
 pub mod recorder;
 pub mod resample;

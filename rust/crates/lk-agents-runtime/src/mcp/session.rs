@@ -5,6 +5,7 @@ use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -62,15 +63,24 @@ async fn forward_progress(
     Ok(())
 }
 
+/// What one connection's server sends unasked: progress for its calls, and word that its tools
+/// changed.
 #[derive(Clone, Default)]
-struct Progress(ProgressDispatcher);
-impl ClientHandler for Progress {
+struct Client {
+    progress: ProgressDispatcher,
+    /// Set by `notifications/tools/list_changed`; the next listing fetches again.
+    tools_changed: Arc<AtomicBool>,
+}
+impl ClientHandler for Client {
     async fn on_progress(
         &self,
         params: ProgressNotificationParam,
         _: NotificationContext<RoleClient>,
     ) {
-        self.0.handle_notification(params).await;
+        self.progress.handle_notification(params).await;
+    }
+    async fn on_tool_list_changed(&self, _: NotificationContext<RoleClient>) {
+        self.tools_changed.store(true, Ordering::SeqCst);
     }
 }
 
@@ -112,9 +122,9 @@ impl Target {
 
 struct Connection {
     peer: Peer<RoleClient>,
-    progress: Progress,
+    client: Client,
     cancel: CancellationToken,
-    service: Mutex<Option<RunningService<RoleClient, Progress>>>,
+    service: Mutex<Option<RunningService<RoleClient, Client>>>,
     state: Shared<ConnectionSettlement>,
     receipt: Arc<TransportReceipt>,
     /// The close's settlement, which holds the connection until it ends.
@@ -261,7 +271,13 @@ impl McpSessionPort for McpSession {
             let connection = self.ensure(McpError::NotInitialized).await?;
             reached = true;
             let _call = connection.borrow()?;
-            let mut step = self.state.lock().listing.list();
+            let mut step = {
+                let mut state = self.state.lock();
+                if connection.client.tools_changed.swap(false, Ordering::SeqCst) {
+                    state.listing.refresh();
+                }
+                state.listing.list()
+            };
             loop {
                 let (pages, cursor) = match step {
                     ListStep::Done(tools) => return Ok(tools),
@@ -326,7 +342,7 @@ impl McpSessionPort for McpSession {
             result = connection.peer.send_cancellable_request(request, options(timeout)) => result.map_err(|e| connection.error(e))?,
         };
         let mut guard = CancelOnDrop { peer: connection.peer.clone(), id: Some(handle.id.clone()) };
-        let mut updates = connection.progress.0.subscribe(handle.progress_token.clone()).await;
+        let mut updates = connection.client.progress.subscribe(handle.progress_token.clone()).await;
         let response = handle.await_response();
         tokio::pin!(response);
         let result = loop {
@@ -375,6 +391,11 @@ impl McpSessionPort for McpSession {
 }
 
 impl McpSession {
+    /// Whether the live connection's server said its tools changed since they were listed.
+    pub(super) fn tools_changed(&self) -> bool {
+        self.live().is_some_and(|c| c.client.tools_changed.load(Ordering::SeqCst))
+    }
+
     pub(super) fn retry_delay(&self) -> Duration {
         self.state.lock().gate.wait(self.epoch.elapsed())
     }
@@ -441,14 +462,23 @@ impl McpSession {
         let attempt = async {
             match target {
                 Target::Http { env, url, headers, auth } => {
+                    // Connecting and each write are bounded like the handshake; a reply stream
+                    // by `read_timeout`.
+                    let options = lk_agents_abi::ApiConnectOptions {
+                        max_retry: 0,
+                        connect_timeout: Some(self.init_timeout.as_secs_f64()),
+                        write_timeout: Some(self.init_timeout.as_secs_f64()),
+                        read_timeout: self.read_timeout.map(|limit| limit.as_secs_f64()),
+                        ..Default::default()
+                    };
                     let transport = connect_http(
                         &env,
                         url,
                         headers,
                         auth,
-                        self.init_timeout,
-                        self.read_timeout,
+                        options,
                         receipt.clone(),
+                        cancel.clone(),
                     )?;
                     self.serve(transport, receipt.clone(), cancel.clone()).await
                 }
@@ -502,11 +532,11 @@ impl McpSession {
         receipt: Arc<TransportReceipt>,
         cancel: CancellationToken,
     ) -> Result<(), McpError> {
-        let progress = Progress::default();
+        let client = Client::default();
         let previous = self.state.lock().initializing.replace(receipt.clone());
         drop(previous);
         let service = match serve_client_with_ct(
-            progress.clone(),
+            client.clone(),
             Observed::new(transport, receipt.clone()),
             cancel.clone(),
         )
@@ -524,7 +554,7 @@ impl McpSession {
         let peer = service.peer().clone();
         let connection = Arc::new(Connection {
             peer,
-            progress,
+            client,
             cancel,
             service: Mutex::new(Some(service)),
             state: Shared::new(ConnectionSettlement::default()),

@@ -295,6 +295,27 @@ fn constants_and_export_signatures_share_resolved_record_and_alias_types() {
 }
 
 #[test]
+fn native_string_constants_are_read_from_the_compiled_abi() {
+    let declarations = crate::decl::tests::read(
+        r#"
+        #[host(file(module = "defaults"))] const _: () = ();
+        #[host(constant(native))]
+        pub const DEFAULT_KEY: &str = protocol::DEFAULT_KEY;
+    "#,
+    )
+    .unwrap();
+    let models = crate::python::emit(&declarations, &[]).unwrap();
+    assert!(models[0].text.contains("DEFAULT_KEY: Final[str] = _core.DEFAULT_KEY"));
+    let adapters = crate::adapter::emit(&declarations).unwrap();
+    assert!(adapters.iter().any(|out| {
+        out.text.contains("m.add(\"DEFAULT_KEY\", ::lk_agents_abi::llm::class::DEFAULT_KEY)?;")
+    }));
+    let stubs = crate::class_stub::emit(&declarations).unwrap();
+    assert!(stubs.iter().any(|stub| stub.names.contains(&"DEFAULT_KEY".to_owned())
+        && stub.out.text.contains("DEFAULT_KEY: Final[str]")));
+}
+
+#[test]
 fn marker_classes_keep_identity_semantics_and_unions_import_generated_definitions() {
     let declarations = crate::decl::tests::read(
         r#"

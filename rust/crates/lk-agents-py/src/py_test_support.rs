@@ -59,7 +59,7 @@ mod support {
                 let paths = sys.getattr("path")?;
                 crate::py_calls::call(
                     &paths.getattr("insert")?,
-                    (0, root.join("livekit-agents-next").to_string_lossy().into_owned()),
+                    (0, root.join("livekit-agents").to_string_lossy().into_owned()),
                     None,
                 )?;
                 crate::py_calls::call(
@@ -78,8 +78,7 @@ mod support {
                 let package = py.import("livekit.agents")?;
                 let package_path: String = package.getattr("__file__")?.extract()?;
                 assert!(
-                    std::path::Path::new(&package_path)
-                        .starts_with(root.join("livekit-agents-next")),
+                    std::path::Path::new(&package_path).starts_with(root.join("livekit-agents")),
                     "binding contracts must load this checkout's Python package: {package_path}"
                 );
                 package.setattr("_core", &core)?;

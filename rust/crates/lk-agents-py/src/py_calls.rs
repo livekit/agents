@@ -138,7 +138,7 @@ impl<T> GilMutex<T> {
 /// A started call's host task, shared by the call, the loop callback that publishes the task and
 /// the `_core` coroutine that started it.
 #[derive(Default)]
-struct Child {
+pub(crate) struct Child {
     /// Strong: asyncio holds a pending task only weakly, and one awaiting what only it reaches
     /// would be collected mid-call. A loop's teardown cancels it (`utils.aio.close_loop`).
     task: GilMutex<Option<Py<PyAny>>>,
@@ -147,6 +147,43 @@ struct Child {
 }
 
 impl Child {
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// On the loop thread: `task` is the call's, cancelled at once if the call already was.
+    pub(crate) fn publish(&self, py: Python<'_>, task: &Bound<'_, PyAny>) -> PyResult<()> {
+        // Under the lock a cancel takes the task by: published first, or seen cancelled here.
+        let cancel_now = {
+            let mut slot = self.task.lock(py);
+            let cancelled = self.cancelled();
+            if !cancelled {
+                *slot = Some(task.clone().unbind());
+            }
+            cancelled
+        };
+        if cancel_now {
+            access::Task::cancel(task)?.call0()?;
+        }
+        Ok(())
+    }
+
+    /// On the loop thread: the published task settled, so a later cancel has nothing to reach.
+    pub(crate) fn settled(&self, py: Python<'_>) {
+        let task = self.task.lock(py).take();
+        drop(task);
+    }
+
+    /// Cancelled from any thread: no task starts after this, and the published one is cancelled
+    /// on its loop. Off the calling thread, which may hold a lock a GIL holder waits on.
+    pub(crate) fn cancel_later(self: &Arc<Self>, event_loop: &Arc<Py<PyAny>>) {
+        if self.cancelled.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (event_loop, child) = (event_loop.clone(), self.clone());
+        off_thread("cancelling a host call", move || cancel_task(&event_loop, &child));
+    }
+
     /// On the loop thread: cancelled now, its task once published.
     fn cancel_on_loop(&self, py: Python<'_>) {
         self.cancelled.store(true, Ordering::SeqCst);
@@ -192,12 +229,9 @@ impl InFlight {
 
     /// Off the calling thread, which may hold a lock a GIL holder waits on: what a drop asks for.
     fn cancel_later(&self) {
-        if self.settled.load(Ordering::SeqCst) {
-            return;
+        if !self.settled.load(Ordering::SeqCst) {
+            self.child.cancel_later(&self.event_loop);
         }
-        self.child.cancelled.store(true, Ordering::SeqCst);
-        let (event_loop, child) = (self.event_loop.clone(), self.child.clone());
-        off_thread("cancelling a host call", move || cancel_task(&event_loop, &child));
     }
 }
 
@@ -301,6 +335,19 @@ pub(crate) fn awaiting(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
         .map(|f| f.bind(py))
 }
 
+/// `value` as the coroutine `loop.create_task` takes, when it is awaitable; `None` for a value.
+pub(crate) fn as_coroutine<'py>(value: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let py = value.py();
+    let inspect = access::InspectModule::import(py)?;
+    if !access::InspectModule::isawaitable(&inspect)?.call1((value,))?.is_truthy()? {
+        return Ok(None);
+    }
+    if access::InspectModule::iscoroutine(&inspect)?.call1((value,))?.is_truthy()? {
+        return Ok(Some(value.clone()));
+    }
+    awaiting(py)?.call1((value,)).map(Some)
+}
+
 /// Starts `call` on `event_loop` inside `ctx`, the context object itself (never a copy): the call
 /// runs in it, and an awaitable it returns runs as a task of that same context, so what the call
 /// sets before and after its awaits stays in `ctx`. Callers serialize their entries into one `ctx`.
@@ -348,17 +395,10 @@ where
                 return Ok(());
             }
         };
-        let inspect = access::InspectModule::import(py)?;
-        if !access::InspectModule::isawaitable(&inspect)?.call1((&value,))?.is_truthy()? {
+        let Some(coroutine) = as_coroutine(&value)? else {
             deliver(Ok(value.unbind()));
             return Ok(());
-        }
-        let coroutine =
-            if access::InspectModule::iscoroutine(&inspect)?.call1((&value,))?.is_truthy()? {
-                value
-            } else {
-                awaiting(py)?.call1((value,))?
-            };
+        };
         let future =
             access::EventLoop::create_task(loop_ref.bind(py), &coroutine, task_ctx.bind(py))?;
         let deliver = Mutex::new(Some(deliver.clone()));
@@ -371,19 +411,7 @@ where
             Ok(())
         })?;
         access::Task::add_done_callback(&future)?.call1((done,))?;
-        // Under the lock a cancel takes the task by: published first, or seen cancelled here.
-        let cancel_now = {
-            let mut task = task_slot.task.lock(py);
-            let cancelled = task_slot.cancelled.load(Ordering::SeqCst);
-            if !cancelled {
-                *task = Some(future.clone().unbind());
-            }
-            cancelled
-        };
-        if cancel_now {
-            access::Task::cancel(&future)?.call0()?;
-        }
-        Ok(())
+        task_slot.publish(py, &future)
     })?;
     access::EventLoop::call_soon_threadsafe(event_loop)?
         .call1((access::Context::run(ctx)?, start))?;
@@ -402,10 +430,29 @@ pub fn capture_context(py: Python<'_>) -> PyResult<HostRef> {
     Ok(crate::py_objects::retain(pair.into_any().unbind()))
 }
 
-/// What a proxy taken from the host calls in: the running loop's context, else (no running loop)
-/// none, so each call takes the context of the operation driving it.
+/// What a proxy taken from the host calls in: the context of the host call whose returned value
+/// is being read ([`returning`]), else the running loop's context, else (no running loop) none,
+/// so each call takes the context of the operation driving it.
 pub fn proxy_context(py: Python<'_>) -> Option<HostRef> {
-    capture_context(py).ok()
+    RETURNING.with_borrow(Clone::clone).or_else(|| capture_context(py).ok())
+}
+
+thread_local! {
+    static RETURNING: std::cell::RefCell<Option<HostRef>> = const { std::cell::RefCell::new(None) };
+}
+
+/// `read` a host call's returned value with `context` the one its proxies are taken in: a
+/// capability inside a returned record calls in the context its call ran in, as a returned
+/// capability does.
+pub fn returning<T>(context: Option<HostRef>, read: impl FnOnce() -> T) -> T {
+    struct Restore(Option<HostRef>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RETURNING.set(self.0.take());
+        }
+    }
+    let _restore = Restore(RETURNING.replace(context));
+    read()
 }
 
 /// The context a proxy's call runs in: the one it captured, else its driving operation's.

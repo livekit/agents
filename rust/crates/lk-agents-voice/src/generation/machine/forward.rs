@@ -166,7 +166,6 @@ impl SegmentPlan {
         kind: VoiceKind,
         audio_output: bool,
         transcription_output: bool,
-        aligned_requested: bool,
         aligned_provider: bool,
     ) -> Self {
         let route = SegmentRoute::of(kind, audio_output);
@@ -175,7 +174,7 @@ impl SegmentPlan {
             route,
             transcript: (synthesis || transcription_output).then_some(TranscriptPlan {
                 deferred: synthesis,
-                aligned: synthesis && aligned_requested && aligned_provider,
+                aligned: synthesis && aligned_provider,
             }),
             audio_output,
             transcription_output,
@@ -295,7 +294,7 @@ mod tests {
     // next speech's words joined it and were shown whole before their audio (seed 24984).
     #[test]
     fn only_delivered_words_end_the_audio_leg_unvoiced() {
-        let plan = SegmentPlan::new(VoiceKind::Synthesis, true, true, false, false);
+        let plan = SegmentPlan::new(VoiceKind::Synthesis, true, true, false);
         let mut leg = TextLegState::default();
         leg.record_forwarded();
         let silent = Heard::complete(String::from("Hello."), Duration::ZERO, 0);

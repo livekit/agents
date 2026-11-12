@@ -13,7 +13,7 @@ use lk_agents_runtime::storage::thread::LeaseTiming;
 use lk_agents_runtime::storage::{Storage, Thread, ThreadDbConnection};
 
 // The text DST's thread database: the production SQLite backend in a directory of the run's own, its workers tasks on the run's
-// runtime and its `unixepoch()` the run's clock, as the voice lane runs it. Each turn's
+// runtime and its `unixepoch()` the run's clock, as the voice partition runs it. Each turn's
 // connection is wrapped: it answers late, loses writes and answers, goes down, and kills its
 // database worker with requests queued.
 
@@ -92,10 +92,10 @@ impl Store {
         self.faults.faulted.load(Ordering::Acquire)
     }
 
-    /// Whether a lease holds `lane` now, by the database's clock.
-    pub async fn held(&self, lane: &str) -> bool {
+    /// Whether a lease holds `partition_key` now, by the database's clock.
+    pub async fn held(&self, partition_key: &str) -> bool {
         let now = self.clock.wall().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-        lessee(&self.observer, lane).await.is_some_and(|(_, until)| until >= now as i64)
+        lessee(&self.observer, partition_key).await.is_some_and(|(_, until)| until >= now as i64)
     }
 
     pub async fn close(&self) {

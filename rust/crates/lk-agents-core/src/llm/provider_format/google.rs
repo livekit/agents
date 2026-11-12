@@ -662,6 +662,72 @@ mod tests {
         assert!(to_fnc_ctx(&[empty], None, false).unwrap()[0].parameters.is_none());
     }
 
+    /// Gemini tool declarations keep each argument's default and type every enum.
+    /// https://github.com/livekit/agents/issues/7189 https://github.com/livekit/agents/issues/5044
+    /// https://github.com/livekit/agents/issues/4334 https://github.com/livekit/agents/issues/2193
+    #[test]
+    #[ignore = "https://github.com/livekit/agents/issues/7189 reproduces: simplify strips every default"]
+    fn live_tool_defaults_survive_simplification() {
+        let raw = ToolSchema::Raw {
+            name: "run".into(),
+            raw_schema: serde_json::json!({"parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "$defs": {"Target": {
+                    "type": "object",
+                    "properties": {"version": {"type": "integer", "default": 3}},
+                }},
+                "properties": {
+                    "automation_id": {"type": "string", "default": "auto-7"},
+                    "target": {"$ref": "#/$defs/Target"},
+                    "task_ids": {"type": "array", "items": {"enum": ["name", "dob"]}},
+                    "mode": {"const": "fast"},
+                },
+            }}),
+        };
+        let tools = serde_json::to_value(to_fnc_ctx(&[raw], None, false).unwrap()).unwrap();
+        let params = &tools[0]["parameters"];
+        assert!(params.get("$schema").is_none(), "{params}");
+        assert_eq!(
+            params["properties"]["task_ids"]["items"],
+            json!({"enum": ["name", "dob"], "type": "STRING"})
+        );
+        assert_eq!(params["properties"]["mode"], json!({"enum": ["fast"], "type": "STRING"}));
+        assert_eq!(params["properties"]["target"]["properties"]["version"]["type"], "INTEGER");
+        assert_eq!(params["properties"]["automation_id"]["default"], "auto-7", "{params}");
+        assert_eq!(params["properties"]["target"]["properties"]["version"]["default"], 3);
+    }
+
+    /// An unsigned call from another provider is sent with Gemini's skip-validator signature.
+    /// https://github.com/livekit/agents/issues/6135 https://github.com/livekit/agents/issues/4767
+    #[test]
+    #[ignore = "https://github.com/livekit/agents/issues/6135 reproduces: an unsigned foreign call is sent with no thought_signature"]
+    fn foreign_tool_calls_receive_skip_signatures() {
+        let items = vec![
+            call("a", "call_openai_abc", "manage_pain", "{}"),
+            out("o", "call_openai_abc", "manage_pain", "ok"),
+            call("b", "gemini_c1", "lookup", "{}"),
+            out("p", "gemini_c1", "lookup", "ok"),
+        ];
+        let sigs: ThoughtSignatures =
+            [("gemini_c1".to_string(), vec![1u8, 2])].into_iter().collect();
+        let f = to_chat_ctx(&ctx(items), &no_images(), true, Some(&sigs)).unwrap();
+        let calls: Vec<_> = f
+            .messages
+            .iter()
+            .flat_map(|content| content.parts.iter())
+            .filter(|part| matches!(part.data, PartData::FunctionCall(_)))
+            .map(|part| serde_json::to_value(&part.thought_signature).unwrap())
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                json!({"$lk_bytes_b64": "c2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3I="}),
+                json!({"$lk_bytes_b64": "AQI="}),
+            ]
+        );
+    }
+
     // Catches: a recursive model looping instead of failing.
     #[test]
     fn a_recursive_ref_is_refused() {

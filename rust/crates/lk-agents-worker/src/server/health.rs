@@ -14,6 +14,9 @@ pub trait HealthProbe: Send + Sync {
 
 /// How long the host may go without answering before the worker reads as stuck.
 pub const STUCK_AFTER: Duration = Duration::from_secs(5);
+/// How long a registered worker may stay disconnected before `/` fails: a short reconnect is
+/// expected, a longer one is what a restart fixes.
+pub const RECONNECT_GRACE: Duration = Duration::from_secs(30);
 
 /// The server state the listener and `/worker` read, written by the lifecycle as it happens.
 pub struct ServerStatus {
@@ -21,8 +24,8 @@ pub struct ServerStatus {
     pub started: AtomicBool,
     /// Registered at least once, or running unregistered (the console).
     pub registered: AtomicBool,
-    /// Registered on the current connection.
-    pub connected: AtomicBool,
+    /// Since when the worker has not been registered on a connection; `None` while it is.
+    disconnected_since: parking_lot::Mutex<Option<tokio::time::Instant>>,
     pub draining: AtomicBool,
     pub failed: AtomicBool,
     /// The host's last answer, refreshed on every load update.
@@ -45,7 +48,7 @@ impl ServerStatus {
         Self {
             started: AtomicBool::new(false),
             registered: AtomicBool::new(false),
-            connected: AtomicBool::new(false),
+            disconnected_since: parking_lot::Mutex::new(Some(tokio::time::Instant::now())),
             draining: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             heartbeat: parking_lot::Mutex::new(tokio::time::Instant::now()),
@@ -63,6 +66,16 @@ impl ServerStatus {
         self.instruments.set::<telemetry::WorkerLoad>(f64::from(load));
     }
 
+    /// Registered on the current connection, or not; a disconnection keeps its first instant.
+    pub fn set_connected(&self, connected: bool) {
+        let mut since = self.disconnected_since.lock();
+        match (connected, *since) {
+            (true, _) => *since = None,
+            (false, None) => *since = Some(tokio::time::Instant::now()),
+            (false, Some(_)) => {}
+        }
+    }
+
     pub fn heartbeat(&self) {
         *self.heartbeat.lock() = tokio::time::Instant::now();
     }
@@ -77,12 +90,28 @@ impl ServerStatus {
             HealthState::Stuck
         } else if flag(&self.draining) {
             HealthState::Draining
-        } else if !flag(&self.connected) {
-            HealthState::Reconnecting
+        } else if let Some(since) = *self.disconnected_since.lock() {
+            if since.elapsed() > RECONNECT_GRACE {
+                HealthState::Disconnected
+            } else {
+                HealthState::Reconnecting
+            }
         } else {
             HealthState::Ready
         }
     }
+}
+
+/// `livekit.WorkerInfo` under its proto field names: the LiveKit Cloud watcher decodes `/worker`
+/// with Go's `encoding/json`, which reads only those, not pbjson's camelCase.
+#[derive(serde::Serialize)]
+struct WorkerInfo<'a> {
+    worker_type: &'static str,
+    agent_name: &'a str,
+    active_jobs: f32,
+    sdk_version: &'a str,
+    worker_load: f32,
+    protocol_version: i32,
 }
 
 fn state_response(ok: bool, state: HealthState) -> Response {
@@ -112,11 +141,11 @@ pub(super) async fn health_route(
         "/ready" => return state_response(state.ready(), state),
         _ => {}
     }
-    let info = proto::WorkerInfo {
-        worker_type: "JT_ROOM".into(),
-        agent_name: settings.agent_name.clone(),
+    let info = WorkerInfo {
+        worker_type: proto::JobType::JtRoom.as_str_name(),
+        agent_name: &settings.agent_name,
         active_jobs: probe.health().await as f32,
-        sdk_version: settings.version.clone(),
+        sdk_version: &settings.version,
         worker_load: status.load(),
         protocol_version: WORKER_PROTOCOL_VERSION as i32,
     };

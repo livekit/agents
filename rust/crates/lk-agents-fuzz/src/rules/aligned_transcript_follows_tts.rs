@@ -1,7 +1,8 @@
-use lk_agents_core::tts::markup::strip_all_markup;
+use lk_agents_core::markup::strip_all_markup;
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::SpeechId,
     trace::{GenerationStep, PlayoutStep, Step},
+    transcription::continues_word,
 };
 
 use crate::{
@@ -17,6 +18,29 @@ use crate::{
 // voice gave, and a piece with a word shows the word the voice said there (case, punctuation and
 // blanks ignored); silent pieces show at the next word's stamp.
 
+/// A forwarded piece: its text, its stamp, and whether the voice says it.
+type Forwarded = (String, Option<f64>, bool);
+
+/// The forwarded pieces as words, each its whole text and what of it is said: a word the reply's
+/// deltas split, and the markdown glued to it, come as consecutive pieces at one stamp with no
+/// blank between them.
+fn words(forwarded: &[Forwarded]) -> Vec<(String, String, Option<f64>)> {
+    let mut out: Vec<(String, String, Option<f64>)> = Vec::new();
+    for (text, start, spoken) in forwarded {
+        let said = if *spoken { text.as_str() } else { "" };
+        match out.last_mut() {
+            Some((word, words, at))
+                if at.is_some() && at == start && continues_word(word, text) =>
+            {
+                word.push_str(text);
+                words.push_str(said);
+            }
+            _ => out.push((text.clone(), said.to_owned(), *start)),
+        }
+    }
+    out
+}
+
 /// What float arithmetic may leave between a stamp and the pacer's start, in seconds.
 const EPSILON: f64 = 1e-6;
 
@@ -25,7 +49,7 @@ pub struct AlignedTranscriptFollowsTts;
 impl Rule for AlignedTranscriptFollowsTts {
     const CONTRACT: Contract = Contract {
         id: "aligned_transcript_follows_tts",
-        guarantee: "With use_tts_aligned_transcript on, the transcript is shown on the voice's stamps: each piece at a stamp the voice gave, each word at the stamp of the word the voice said.",
+        guarantee: "With a voice that aligns its words, the transcript is shown on the voice's stamps: each piece at a stamp the voice gave, each word at the stamp of the word the voice said.",
         examples: &[aligned_and_shown_at_stamps, off_forwards_the_model_text],
         counterexamples: &[
             stamped_while_off,
@@ -42,16 +66,16 @@ impl Rule for AlignedTranscriptFollowsTts {
         let stamped = r.stamped();
         for speech in host.speeches() {
             let trace = internal.speech(speech.id);
-            let forwarded: Vec<(String, Option<f64>)> = trace
+            let forwarded: Vec<Forwarded> = trace
                 .steps()
                 .filter_map(|(_, step)| match step {
                     Step::Playout(PlayoutStep::TranscriptForwarded {
-                        text, start_time, ..
-                    }) => Some((strip_all_markup(text), *start_time)),
+                        text, start_time, spoken, ..
+                    }) => Some((strip_all_markup(text), *start_time, *spoken)),
                     _ => None,
                 })
                 .collect();
-            for (text, start) in &forwarded {
+            for (text, said, start) in &words(&forwarded) {
                 check.expect(
                     speech,
                     setup.aligned || start.is_none(),
@@ -59,7 +83,7 @@ impl Rule for AlignedTranscriptFollowsTts {
                 );
                 // An adapted voice's stamps are the adapter's, one per sentence.
                 let Some(start) = start.filter(|_| !setup.adapted) else { continue };
-                let word = normalized(text);
+                let word = normalized(said);
                 check.expect(
                     speech,
                     stamped.iter().any(|(_, w, t)| {
@@ -80,10 +104,11 @@ impl Rule for AlignedTranscriptFollowsTts {
                 && !inputs.voice_failed()
                 && !inputs.outputs_touched_by(until)
             {
+                // a blank the end released has no word to be stamped for
                 let unstamped: Vec<&str> = forwarded
                     .iter()
-                    .filter(|(_, s)| s.is_none())
-                    .map(|(t, _)| t.as_str())
+                    .filter(|(t, s, _)| s.is_none() && !t.trim().is_empty())
+                    .map(|(t, _, _)| t.as_str())
                     .collect();
                 check.expect(
                     speech,
@@ -92,7 +117,7 @@ impl Rule for AlignedTranscriptFollowsTts {
                 );
             }
 
-            if setup.synchronized && forwarded.iter().all(|(_, s)| s.is_some()) {
+            if setup.synchronized && forwarded.iter().all(|(_, s, _)| s.is_some()) {
                 // Segment by segment: each synthesis is stamped from its own start.
                 type Segment<'a> = (Vec<(String, Option<f64>)>, Vec<Shown<'a>>);
                 let mut segments: Vec<Segment<'_>> = Vec::new();
@@ -193,6 +218,7 @@ fn forwarded(text: &str, start_time: Option<f64>) -> Step {
         speech: SpeechId(1),
         text: text.into(),
         start_time,
+        spoken: true,
     })
 }
 
@@ -203,6 +229,7 @@ fn shown(text: &str, start: f64) -> Step {
         start,
         end: start + 0.005,
         played: std::time::Duration::from_secs_f64(start),
+        spoken: true,
     })
 }
 

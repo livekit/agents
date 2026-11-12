@@ -1,4 +1,4 @@
-//! Production health: lanes held by a dead owner, stuck lane waits, teardown past its bound and
+//! Production health: partitions held by a dead owner, stuck partition waits, teardown past its bound and
 //! writes whose outcome stayed unknown. Each one is also a warn log.
 
 use std::time::Duration;
@@ -7,7 +7,7 @@ use super::decl::{Attrs, SpanValue, metric};
 use super::instruments::DURATION_BOUNDS;
 
 /// An acquire that waited at least this long is logged as stuck.
-pub const STUCK_LANE_WAIT: Duration = Duration::from_secs(15);
+pub const STUCK_PARTITION_WAIT: Duration = Duration::from_secs(15);
 
 /// A holder that has not renewed within its renew interval plus this slack is presumed dead:
 /// the database counts whole seconds and a renewal takes a round trip.
@@ -16,9 +16,9 @@ pub const RENEW_SLACK: Duration = Duration::from_secs(2);
 /// At most one warn log per event kind in this window; the others are counted into the next.
 pub const HEALTH_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
-/// The run that took, or waited for, a lane.
+/// The run that took, or waited for, a partition.
 #[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LaneKind {
+pub enum PartitionKind {
     /// A voice session's turn.
     Voice,
     /// A text run opened through a thread handle.
@@ -32,7 +32,7 @@ pub enum LaneKind {
 /// A storage write sent again after its acknowledgment was lost.
 #[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageWrite {
-    /// A lane acquire.
+    /// A partition acquire.
     Acquire,
     /// An A2A inbox receive.
     Receive,
@@ -44,8 +44,6 @@ pub enum StorageWrite {
     Commit,
     /// A task's `submitted` row.
     Submit,
-    /// A waiter's mark, set or withdrawn.
-    Waiter,
     /// A dead holder's task failed.
     FailOrphan,
     /// A task cancel.
@@ -67,29 +65,29 @@ pub enum TeardownStage {
     LeaseRelease,
 }
 
-/// Time an exclusive lane acquire waited, taken or refused.
-#[metric(name = "lk.agents.lane.acquire_wait", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
+/// Time an exclusive partition acquire waited, taken or refused.
+#[metric(name = "lk.agents.partition.acquire_wait", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
 #[derive(Attrs)]
-pub struct LaneAcquireWait {
-    /// The run that took, or waited for, the lane.
-    #[attr("lane_kind")]
-    pub kind: LaneKind,
+pub struct PartitionAcquireWait {
+    /// The run that took, or waited for, the partition.
+    #[attr("partition_kind")]
+    pub kind: PartitionKind,
 }
 
 /// Time an acquire waited on a lease whose holder stopped renewing it.
-#[metric(name = "lk.agents.lane.ownerless_wait", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
+#[metric(name = "lk.agents.partition.ownerless_wait", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
 #[derive(Attrs)]
-pub struct LaneOwnerlessWait {
-    #[attr("lane_kind")]
-    pub kind: LaneKind,
+pub struct PartitionOwnerlessWait {
+    #[attr("partition_kind")]
+    pub kind: PartitionKind,
 }
 
 /// Leases taken over after they lapsed instead of being released.
-#[metric(name = "lk.agents.lane.lease_lapsed", kind = Counter, unit = "{lease}")]
+#[metric(name = "lk.agents.partition.lease_lapsed", kind = Counter, unit = "{lease}")]
 #[derive(Attrs)]
-pub struct LaneLeaseLapsed {
-    #[attr("lane_kind")]
-    pub kind: LaneKind,
+pub struct PartitionLeaseLapsed {
+    #[attr("partition_kind")]
+    pub kind: PartitionKind,
 }
 
 /// Teardowns that ran past their bound.

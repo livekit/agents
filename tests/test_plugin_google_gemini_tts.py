@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from livekit.agents import tts
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, tts
 from livekit.plugins.google.beta.gemini_tts import TTS
 
 pytestmark = pytest.mark.plugin("google")
@@ -54,8 +54,10 @@ async def test_gemini_tts_success(mock_genai_client_class) -> None:
     # Create output emitter mock
     mock_emitter = MagicMock(spec=tts.AudioEmitter)
 
-    # Run ChunkedStream
-    stream = google_tts.synthesize("Hello world")
+    stream = google_tts._synthesize(
+        tts.SpeechChunk(text="Hello world", said="Hello world"),
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+    )
     try:
         await stream._run(mock_emitter)
     finally:
@@ -104,6 +106,13 @@ def _request_body(mock_stream) -> dict:
     return body
 
 
+async def _speak(google_tts: TTS, text: str) -> None:
+    """Synthesize ``text`` through the framework, which lowers it for Gemini."""
+    async with google_tts.synthesize(text) as stream:
+        async for _ in stream:
+            pass
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"])
 @patch("livekit.plugins.google.beta.gemini_tts.Client")
@@ -113,20 +122,12 @@ async def test_expressive_markup_becomes_speech_metadata(mock_genai_client_class
     mock_stream = AsyncMock()
     mock_client.aio.models.generate_content_stream = mock_stream
 
-    async def mock_generator(*args, **kwargs):
-        return
-        yield  # pragma: no cover - never reached, keeps this an async generator
-
-    mock_stream.side_effect = mock_generator
+    mock_stream.side_effect = _audio_response()
 
     google_tts = TTS(api_key="test-api-key", model=model)
-    stream = google_tts.synthesize(
-        '<expr type="expression" label="Thoughtful, Quiet, American accent"/> Sienna?'
+    await _speak(
+        google_tts, '<expr type="expression" label="Thoughtful, Quiet, American accent"/> Sienna?'
     )
-    try:
-        await stream._run(MagicMock(spec=tts.AudioEmitter))
-    finally:
-        await stream.aclose()
 
     assert _request_body(mock_stream)["contents"] == [
         {
@@ -148,18 +149,10 @@ async def test_unmarked_text_keeps_the_plain_prompt(mock_genai_client_class) -> 
     mock_stream = AsyncMock()
     mock_client.aio.models.generate_content_stream = mock_stream
 
-    async def mock_generator(*args, **kwargs):
-        return
-        yield  # pragma: no cover - never reached, keeps this an async generator
-
-    mock_stream.side_effect = mock_generator
+    mock_stream.side_effect = _audio_response()
 
     google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
-    stream = google_tts.synthesize("Hello world")
-    try:
-        await stream._run(MagicMock(spec=tts.AudioEmitter))
-    finally:
-        await stream.aclose()
+    await _speak(google_tts, "Hello world")
 
     config = mock_stream.call_args.kwargs["config"]
     # nothing to style, so contents is left alone and the words go as they are
@@ -174,8 +167,7 @@ async def test_markers_reach_the_plugin_through_the_stream_adapter(
 ) -> None:
     """End to end for the seam that makes any of this reachable.
 
-    Gemini TTS isn't streaming, so the agent drives it through ``tts.StreamAdapter``,
-    which is where the framework lowers markup for a plugin.
+    Gemini TTS isn't streaming, so the agent drives it through ``tts.StreamAdapter``.
     """
     mock_client = MagicMock()
     mock_genai_client_class.return_value = mock_client
@@ -190,7 +182,6 @@ async def test_markers_reach_the_plugin_through_the_stream_adapter(
 
     try:
         async with adapter.stream() as stream:
-            stream._expressive = True  # the pipeline opens the synthesis with it
             # split mid-marker, the way tokens actually arrive from an LLM
             for chunk in ['<expr type="expression" label="Warm, ', 'Welcoming"/> Hey there.']:
                 stream.push_text(chunk)
@@ -226,11 +217,7 @@ async def test_instructions_ride_the_style_not_the_spoken_text(mock_genai_client
     google_tts = TTS(
         api_key="test-api-key", model="gemini-3.8-flash-tts", instructions="Speak slowly"
     )
-    stream = google_tts.synthesize('<expr type="expression" label="Wistful"/> Sienna?')
-    try:
-        await stream._run(MagicMock(spec=tts.AudioEmitter))
-    finally:
-        await stream.aclose()
+    await _speak(google_tts, '<expr type="expression" label="Wistful"/> Sienna?')
 
     assert _request_body(mock_stream)["contents"] == [
         {"parts": [{"text": '"Sienna?"', "speech_metadata": {"style": "Speak slowly, Wistful"}}]}
@@ -252,16 +239,11 @@ async def test_inline_events_stay_in_the_words(mock_genai_client_class) -> None:
     mock_stream.side_effect = _audio_response()
 
     google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
-    # raw expr markers, as a direct synthesize() call gets them: the plugin lowers the
-    # sound itself rather than relying on the stream adapter having done it
-    stream = google_tts.synthesize(
+    await _speak(
+        google_tts,
         '<expr type="expression" label="Easygoing, Warm"/> Yeah, '
-        '<expr type="sound" label="chuckle"/> I get that a lot.'
+        '<expr type="sound" label="chuckle"/> I get that a lot.',
     )
-    try:
-        await stream._run(MagicMock(spec=tts.AudioEmitter))
-    finally:
-        await stream.aclose()
 
     assert _request_body(mock_stream)["contents"] == [
         {
@@ -287,11 +269,7 @@ async def test_headerless_pcm_is_asked_for_explicitly(mock_genai_client_class) -
     mock_stream.side_effect = _audio_response()
 
     google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
-    stream = google_tts.synthesize("Hello world")
-    try:
-        await stream._run(MagicMock(spec=tts.AudioEmitter))
-    finally:
-        await stream.aclose()
+    await _speak(google_tts, "Hello world")
 
     extra = mock_stream.call_args.kwargs["config"].http_options.extra_body
     assert extra["generationConfig"] == {"response_format": {"audio": {"mime_type": "AUDIO_L16"}}}
@@ -349,11 +327,7 @@ async def test_every_multi_speaker_turn_names_its_speaker(mock_genai_client_clas
         speaker="Sienna",
     )
     # plain words, no markers: the part is still sent, because the speaker has to travel
-    stream = google_tts.synthesize("Sienna?")
-    try:
-        await stream._run(MagicMock(spec=tts.AudioEmitter))
-    finally:
-        await stream.aclose()
+    await _speak(google_tts, "Sienna?")
 
     assert _request_body(mock_stream)["contents"] == [
         {"parts": [{"text": '"Sienna?"', "speech_metadata": {"speaker": "Sienna"}}]}
@@ -382,11 +356,7 @@ async def test_speaker_and_style_travel_together(mock_genai_client_class) -> Non
         speakers={"Sienna": "Kore", "Comanchero": "Puck"},
         speaker="Sienna",
     )
-    stream = google_tts.synthesize('<expr type="expression" label="Wistful"/> Sienna?')
-    try:
-        await stream._run(MagicMock(spec=tts.AudioEmitter))
-    finally:
-        await stream.aclose()
+    await _speak(google_tts, '<expr type="expression" label="Wistful"/> Sienna?')
 
     assert _request_body(mock_stream)["contents"] == [
         {
@@ -405,9 +375,8 @@ async def test_speaker_and_style_travel_together(mock_genai_client_class) -> Non
 async def test_each_styled_sentence_gets_its_own_part(mock_genai_client_class) -> None:
     """Gemini takes a style per part, so a style change has to open a new one.
 
-    The stream adapter normally hands over one sentence at a time, but `synthesize()` is
-    public and takes whatever it is given -- folding several styled sentences into one
-    part would speak the later ones with the first one's delivery.
+    A text can carry several styled sentences; folding them into one part would speak
+    the later ones with the first one's delivery.
     """
     mock_client = MagicMock()
     mock_genai_client_class.return_value = mock_client
@@ -416,14 +385,11 @@ async def test_each_styled_sentence_gets_its_own_part(mock_genai_client_class) -
     mock_stream.side_effect = _audio_response()
 
     google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
-    stream = google_tts.synthesize(
+    await _speak(
+        google_tts,
         '<expr type="expression" label="Warm"/> Hello. '
-        '<expr type="expression" label="Sad"/> <expr type="sound" label="sigh"/> Goodbye.'
+        '<expr type="expression" label="Sad"/> <expr type="sound" label="sigh"/> Goodbye.',
     )
-    try:
-        await stream._run(MagicMock(spec=tts.AudioEmitter))
-    finally:
-        await stream.aclose()
 
     assert _request_body(mock_stream)["contents"] == [
         {
@@ -451,11 +417,7 @@ async def test_an_unstyled_span_does_not_sink_the_request(mock_genai_client_clas
     mock_stream.side_effect = _audio_response()
 
     google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
-    stream = google_tts.synthesize('Hello. <expr type="expression" label="Sad"/> Goodbye.')
-    try:
-        await stream._run(MagicMock(spec=tts.AudioEmitter))
-    finally:
-        await stream.aclose()
+    await _speak(google_tts, 'Hello. <expr type="expression" label="Sad"/> Goodbye.')
 
     assert _request_body(mock_stream)["contents"] == [
         {
@@ -471,20 +433,17 @@ async def test_an_unstyled_span_does_not_sink_the_request(mock_genai_client_clas
 @pytest.mark.parametrize(
     ("written", "spoken"),
     [
-        ('Hello <expr type="sound" label="laugh"/> there.', '"Hello <laugh> there."'),
-        ('Hello <expr type="break" label="300ms"/> there.', '"Hello <short pause> there."'),
-        ('Say <expr type="prosody" label="emphasis">this</expr> now.', '"Say THIS now."'),
+        ('Hello <expr type="sound" label="laugh"/> there.', "Hello <laugh> there."),
+        ('Hello <expr type="break" label="300ms"/> there.', "Hello <short pause> there."),
+        ('Say <expr type="prosody" label="emphasis">this</expr> now.', "Say THIS now."),
     ],
 )
 @patch("livekit.plugins.google.beta.gemini_tts.Client")
-async def test_lowered_markup_travels_even_without_a_style(
+async def test_lowered_markup_without_a_style_keeps_the_plain_prompt(
     mock_genai_client_class, written, spoken
 ) -> None:
-    """Conversion happens here, so these parts are the only copy of its result.
-
-    A direct `synthesize()` gets text the stream adapter never lowered. Falling back to
-    the plain prompt would send the raw input and let Gemini read the markup out loud.
-    """
+    """The framework lowers the markup before the plugin, so with no style to carry the
+    lowered words go as the plain prompt."""
     mock_client = MagicMock()
     mock_genai_client_class.return_value = mock_client
     mock_stream = AsyncMock()
@@ -492,11 +451,7 @@ async def test_lowered_markup_travels_even_without_a_style(
     mock_stream.side_effect = _audio_response()
 
     google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
-    stream = google_tts.synthesize(written)
-    try:
-        await stream._run(MagicMock(spec=tts.AudioEmitter))
-    finally:
-        await stream.aclose()
+    await _speak(google_tts, written)
 
-    # no style to carry, so no speech_metadata -- but the lowered words still travel
-    assert _request_body(mock_stream)["contents"] == [{"parts": [{"text": spoken}]}]
+    assert "contents" not in (mock_stream.call_args.kwargs["config"].http_options.extra_body)
+    assert mock_stream.call_args.kwargs["contents"] == spoken

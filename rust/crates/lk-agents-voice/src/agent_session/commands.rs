@@ -29,6 +29,9 @@ pub enum Command {
     /// Plugin-measured only (VAD, realtime usage, EOT/interruption); LLM/TTS/STT/EOU never come
     /// from here.
     HostMetrics(Box<lk_agents_abi::metrics::base::AgentMetrics>),
+    /// The avatar session failed while the call goes on (it did not join in time): one
+    /// recoverable `avatar_error`.
+    AvatarError(lk_agents_abi::errors::ProviderError),
     /// What an agent tool's child, run in process for a tool call, consumed.
     DelegateUsage(lk_agents_abi::usage::Usage),
     #[vocabulary(kind = IvrCommandKind)]
@@ -641,6 +644,7 @@ impl Command {
             | Command::Close(_)
             | Command::HookDone { .. }
             | Command::HostMetrics(_)
+            | Command::AvatarError(_)
             | Command::DelegateUsage(_)
             | Command::Ivr(_)
             | Command::SetStaticKeyterms(_)

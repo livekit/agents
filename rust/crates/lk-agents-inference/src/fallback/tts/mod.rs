@@ -5,20 +5,21 @@ use crate::fallback::channel::{ServeAttempt, drain_probe, next_or_stop};
 use crate::fallback::traced::{self, Traced};
 use crate::fallback::{ChainPolicy, resampling_plan};
 use crate::telemetry;
-use crate::tts::fed::{Fed, TextLog};
+use crate::tts::fed::{Fed, FixedLog, TextLog};
 use crate::tts::sentence_adapter::StreamAdapter;
-use crate::tts::stream::TtsStream;
+use crate::tts::stage::{Stage, one_shot};
 use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::fallback as port;
-use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::utils::stream::{Entry, ProviderStream};
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
-use lk_agents_abi::{StreamInput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
+use lk_agents_abi::{
+    SpeechChunk, StreamInput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
+};
 use lk_agents_media::{AudioFormat, AudioResampler, Quality};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::signal;
@@ -124,13 +125,14 @@ impl Drop for FinishOnDrop {
 
 struct LoggingSink(Arc<TokenLog>);
 
-impl StreamInput<String> for LoggingSink {
-    fn push(&self, item: String) -> Result<(), ProviderError> {
+/// The text as written ([`TextUnit::Text`]): each member prepares it for itself.
+impl StreamInput<SpeechChunk> for LoggingSink {
+    fn push(&self, item: SpeechChunk) -> Result<(), ProviderError> {
         // `tts:409-410` records only non-empty strings.
-        if item.is_empty() {
+        if item.text.is_empty() {
             return Ok(());
         }
-        self.0.push(Token::Text(item))
+        self.0.push(Token::Text(item.text))
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
@@ -146,7 +148,7 @@ impl StreamInput<String> for LoggingSink {
 #[derive(Clone)]
 pub enum TtsReq {
     OneShot { text: Arc<str>, cx: telemetry::Cx },
-    Stream { log: Arc<TokenLog>, expressive: bool, cx: telemetry::Cx },
+    Stream { log: Arc<TokenLog>, cx: telemetry::Cx },
 }
 
 impl TtsReq {
@@ -173,8 +175,6 @@ impl TtsReq {
 pub struct TtsBackend {
     label: String,
     inner: Arc<dyn Tts>,
-    splitter: SplitterFactory,
-    text_processor: TextProcessorFactory,
     clock: Arc<dyn Clock>,
 }
 
@@ -184,25 +184,13 @@ impl TtsBackend {
     }
 
     pub fn new(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>) -> Arc<Self> {
-        Arc::new(TtsBackend {
-            label: tts.label(),
-            inner: tts.clone(),
-            splitter: crate::tts::sentence_adapter::splitter_for(tts.as_ref()),
-            text_processor: Arc::new(lk_agents_core::tts::markup::text_processor),
-            clock,
-        })
+        Arc::new(TtsBackend { label: tts.label(), inner: tts.clone(), clock })
     }
 
     fn provider(&self, conn: &ApiConnectOptions) -> Arc<dyn Tts> {
         let tts = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
         // The chain owns retries; the sentence adapter only segments this attempt's text.
-        StreamAdapter::adapted(
-            tts,
-            self.splitter.clone(),
-            self.text_processor.clone(),
-            self.clock.clone(),
-            *conn,
-        )
+        StreamAdapter::adapted(tts, self.clock.clone(), *conn)
     }
 }
 
@@ -233,12 +221,17 @@ impl Backend for TtsBackend {
         let run = request.as_mut().and_then(telemetry::TtsTrace::attempt);
         let inner = run.as_ref().map_or(cx, |run| run.cx());
         let opened = match req {
-            TtsReq::OneShot { text, .. } => tts.synthesize(inner, text).await,
-            TtsReq::Stream { log, expressive, .. } => {
-                tts.stream(inner, *expressive).await.map(|s| {
+            TtsReq::OneShot { text, .. } => {
+                one_shot_member(&tts, inner, text, conn, &self.clock).await
+            }
+            TtsReq::Stream { log, .. } => {
+                tts.stream(inner).await.map(|s| {
                     let (sink, source) = s.split();
                     let log: Arc<dyn TextLog> = log.clone();
-                    Box::new(Fed::new(log, sink, source)) as TtsSource
+                    // each member's text prepared for it: its dialect, its unit, its options
+                    let clock = self.clock.clone();
+                    let stage = Stage::new(&*tts, log, true, inner, clock);
+                    Box::new(Fed::new(stage, sink, source)) as TtsSource
                 })
             }
         };
@@ -270,8 +263,10 @@ impl Backend for TtsBackend {
         // span.
         let cx = req.cx().clone().continuing(None);
         let source = match req {
-            TtsReq::OneShot { text, .. } => tts.synthesize(&cx, text).await?,
-            TtsReq::Stream { log, expressive, .. } => {
+            TtsReq::OneShot { text, .. } => {
+                one_shot_member(&tts, &cx, text, conn, &self.clock).await?
+            }
+            TtsReq::Stream { log, .. } => {
                 let tokens = tokio::select! {
                     biased;
                     () = stop.cancelled() => return Ok(false),
@@ -281,26 +276,34 @@ impl Backend for TtsBackend {
                     // `tts:504-506`: a probe needs text, and the request pushed none.
                     return Ok(false);
                 }
-                let (sink, source) = tts.stream(&cx, *expressive).await?.split();
-                // A private replay channel; unlike STT, the probe does not join the live leg.
-                // Each entry is awaited: a slow input holds the replay instead of refusing it.
+                let (sink, source) = tts.stream(&cx).await?.split();
+                // A private replay through the member's stage; unlike STT, the probe does not
+                // join the live leg. Each entry is awaited: a slow input holds the replay.
                 let entries = tokens.into_iter().map(Entry::from).chain([Entry::EndInput]);
-                let replay = async {
-                    for entry in entries {
-                        sink.send(entry).await?;
-                    }
-                    Ok::<_, ProviderError>(())
-                };
-                tokio::select! {
-                    biased;
-                    () = stop.cancelled() => return Ok(false),
-                    replayed = replay => replayed?,
-                }
-                source
+                let log: Arc<dyn TextLog> = Arc::new(FixedLog(entries.collect()));
+                let stage = Stage::new(&*tts, log, false, &cx, self.clock.clone());
+                Box::new(Fed::new(stage, sink, source)) as TtsSource
             }
         };
         drain_probe(source, self.clock.as_ref(), stop).await
     }
+}
+
+/// A member's whole text: one request, or one per chunk when it passes the member's limit. The
+/// chain owns the retries.
+async fn one_shot_member(
+    tts: &Arc<dyn Tts>,
+    cx: &telemetry::Cx,
+    text: &str,
+    conn: &ApiConnectOptions,
+    clock: &Arc<dyn Clock>,
+) -> Result<TtsSource, ProviderError> {
+    let mut chunks = one_shot(tts.as_ref(), text);
+    if chunks.len() > 1 {
+        let once = ApiConnectOptions { max_retry: 0, ..*conn };
+        return crate::tts::request::in_chunks(tts.clone(), cx, chunks, once, clock.clone());
+    }
+    tts.synthesize(cx, &chunks.pop().unwrap_or_default()).await
 }
 
 /// `tts:92-95`: `streaming` is `any`, `aligned_transcript` is `all`, over the members as given.
@@ -543,6 +546,16 @@ impl FallbackTts {
 }
 
 impl Tts for FallbackTts {
+    /// Each member's text is prepared for it, by the stage of the attempt that member runs.
+    fn text_unit(&self) -> lk_agents_abi::tts::types::TextUnit {
+        lk_agents_abi::tts::types::TextUnit::Text
+    }
+
+    /// The chain retries and falls back on its own.
+    fn retries_itself(&self) -> bool {
+        true
+    }
+
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }
@@ -581,12 +594,12 @@ impl Tts for FallbackTts {
     fn synthesize<'a>(
         &'a self,
         cx: &telemetry::Cx,
-        text: &'a str,
+        chunk: &'a SpeechChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         let cx = cx.clone();
         Box::pin(async move {
             Ok(self.spawn_pump(
-                TtsReq::OneShot { text: Arc::from(text), cx },
+                TtsReq::OneShot { text: Arc::from(chunk.text.as_str()), cx },
                 RecoveryMode::OneShot,
                 None,
             ))
@@ -596,7 +609,6 @@ impl Tts for FallbackTts {
     fn stream(
         &self,
         cx: &telemetry::Cx,
-        expressive: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -605,7 +617,7 @@ impl Tts for FallbackTts {
         Box::pin(async move {
             let log = TokenLog::new();
             let source = self.spawn_pump(
-                TtsReq::Stream { log: Arc::clone(&log), expressive, cx },
+                TtsReq::Stream { log: Arc::clone(&log), cx },
                 RecoveryMode::Streaming,
                 Some(Arc::clone(&log)),
             );
@@ -615,7 +627,6 @@ impl Tts for FallbackTts {
 }
 
 impl port::FallbackTts for FallbackTts {
-    type Stream = TtsStream;
     type Env = ProcessEnv;
 
     fn new(
@@ -651,27 +662,6 @@ impl port::FallbackTts for FallbackTts {
     /// Every recovery probe in flight closes its stream, awaited (bounded).
     async fn aclose(&self) {
         self.chain.close().await;
-    }
-    async fn synthesize(
-        &self,
-        text: String,
-        conn_options: Option<ApiConnectOptions>,
-    ) -> Result<Self::Stream, ProviderError> {
-        Tts::synthesize(&self.configured(conn_options), &telemetry::Cx::NONE, &text)
-            .await
-            .map(|source| TtsStream::new(None, source, self.chain.clock()))
-    }
-    async fn stream(
-        &self,
-        conn_options: Option<ApiConnectOptions>,
-        expressive: bool,
-    ) -> Result<Self::Stream, ProviderError> {
-        Tts::stream(&self.configured(conn_options), &telemetry::Cx::NONE, expressive).await.map(
-            |stream| {
-                let (sink, source) = stream.split();
-                TtsStream::new(Some(sink), source, self.chain.clock())
-            },
-        )
     }
 }
 

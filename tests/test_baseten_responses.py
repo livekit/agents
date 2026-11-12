@@ -11,6 +11,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, http, stt
+from livekit.agents.tts import SpeechChunk
 from livekit.plugins.baseten import STT, TTS
 from livekit.plugins.baseten.models import STTModels
 
@@ -114,14 +115,14 @@ async def test_qwen_voice_changes_apply_to_new_streams_without_changing_an_open_
             http_session=session,
         )
         try:
-            async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as first:
+            async with provider._stream(conn_options=APIConnectOptions(max_retry=0)) as first:
                 provider.update_options(voice="second")
-                first.push_text("First voice.")
+                first._push_chunk(SpeechChunk(text="First voice.", said="First voice."))
                 first.end_input()
                 heard = b"".join([event.frame.data.tobytes() async for event in first])
                 assert heard == b"\x01\x00" * 2400
-            async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as second:
-                second.push_text("Second voice.")
+            async with provider._stream(conn_options=APIConnectOptions(max_retry=0)) as second:
+                second._push_chunk(SpeechChunk(text="Second voice.", said="Second voice."))
                 second.end_input()
                 heard = b"".join([event.frame.data.tobytes() async for event in second])
                 assert heard == b"\x02\x00" * 2400

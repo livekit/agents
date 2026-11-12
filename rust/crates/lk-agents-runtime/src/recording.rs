@@ -129,7 +129,7 @@ impl SessionRecorder {
     }
 
     #[cfg(test)]
-    async fn open_with<E, W>(
+    pub(crate) async fn open_with<E, W>(
         media_pool: &MediaPool,
         sample_rate: u32,
         t0: Option<f64>,
@@ -240,6 +240,11 @@ impl SessionRecorder {
         };
         recorder.tasks.spawn_settling(&spawner, "recording worker", terminal_tx, supervise);
         Ok(recorder)
+    }
+
+    /// The recording failed: its file, if any, is not a complete recording.
+    pub fn failed(&self) -> bool {
+        self.shared.failure.get().is_some()
     }
 
     pub async fn ready(&self) -> Result<(), RecordingFailure> {
@@ -714,7 +719,7 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
             Ok(_) => Ok(()),
             Err(RecordingFailure::IncompleteCleanup) => {
                 if !self.shared.cleanup_reported.swap(true, Ordering::AcqRel) {
-                    log::error!(target: lk_agents_abi::LOG_TARGET, "recording cleanup incomplete; runtime retains the native worker");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "the session recording did not finish closing in time: it is uploaded as it is and may be incomplete");
                 }
                 Ok(())
             }

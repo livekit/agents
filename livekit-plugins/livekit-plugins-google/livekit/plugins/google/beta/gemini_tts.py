@@ -10,7 +10,6 @@ from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, tts, utils
 from livekit.agents.tts import split_expr_markup
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
@@ -235,12 +234,12 @@ class TTS(tts.TTS):
         else:
             return "Gemini"
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             options=replace(self._opts),
             client=self._client,
@@ -319,8 +318,7 @@ class ChunkedStream(tts.ChunkedStream):
     def _styled_parts(self) -> list[dict[str, Any]] | None:
         """Build one request part per delivery style, or ``None`` if none is carried.
 
-        Discrete events are already inline Gemini tags here (``convert`` lowered them) and
-        belong in the words; the ``expression`` marker is the other channel and comes out,
+        Discrete events are already inline Gemini tags here and belong in the words; the ``expression`` marker is the other channel and comes out,
         splitting the text wherever the delivery changes::
 
             {"parts": [{"text": "\"<chuckle> Sienna?\"",
@@ -328,22 +326,15 @@ class ChunkedStream(tts.ChunkedStream):
                        {"text": "\"What's on your mind?\"",
                         "speech_metadata": {"style": "Wistful"}}]}
 
-        The agent's stream adapter hands over one sentence at a time, so a turn usually
-        makes one part; a direct ``synthesize()`` call may carry several sentences, and
-        each keeps the style that governs it -- including a leading one with no style of
-        its own, which travels as a plain part. ``split_expr_markup`` keeps the inline
+        A text may carry several sentences, and each keeps the style that governs it --
+        including a leading one with no style of its own, which travels as a plain part. ``split_expr_markup`` keeps the inline
         tags in the text.
         """
         opts = self._options
         if not _styles_per_part(opts.model):
             return None
 
-        markup = self._tts.markup
-        # the stream adapter has already lowered; a direct synthesize() call has not
-        text = markup.convert(markup.normalize(self._input_text))
-        # whatever `convert` lowered only exists here, so these parts are the only copy
-        # of it -- handing back None would send the raw input, markers and all
-        lowered = text != self._input_text
+        text = self._input_text
         # slice at each marker, keeping it at the head of its span so the shared splitter
         # reads the label off it
         bounds = [0, *(m.start() for m in _EXPRESSION_MARKER_RE.finditer(text)), len(text)]
@@ -371,10 +362,9 @@ class ChunkedStream(tts.ChunkedStream):
             parts.append(part)
 
         # a span with no direction is still a part: dropping the whole request over it
-        # would send the raw text for Gemini to read out. Only hand back None when the
-        # input carried no markup at all, where the plain prompt says the same thing.
-        carries_markup = lowered or stripped_a_marker
-        if not parts or not (carries_markup or any("speech_metadata" in p for p in parts)):
+        # would send the markers for Gemini to read out. Only hand back None when the
+        # input carried no marker, where the plain prompt says the same thing.
+        if not parts or not (stripped_a_marker or any("speech_metadata" in p for p in parts)):
             return None
         return parts
 

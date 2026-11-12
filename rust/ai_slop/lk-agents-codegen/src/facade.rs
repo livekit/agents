@@ -131,6 +131,12 @@ impl Module<'_> {
 
     /// A host callable `module.fn` written relative to `_generated` (`.._bindings.core_legs`).
     fn callable(&mut self, dotted: &str) -> Result<String, String> {
+        if let Some(public) = dotted.strip_prefix("..") {
+            let (source, name) = self.placed_source(public);
+            if source.trim_start_matches('.') == self.module {
+                return Ok(name);
+            }
+        }
         let (module, name) =
             dotted.rsplit_once('.').ok_or_else(|| format!("`{dotted}` names module.item"))?;
         if module != "builtins" {
@@ -299,6 +305,23 @@ impl Module<'_> {
         if let Some(availability) = &facade.availability {
             members.extend(self.availability(facade, native, availability, declared)?);
         }
+        // A provider's close also closes what its native holds (pooled sockets); a chain holding
+        // nothing native closes its members.
+        let native_closes = native.methods.iter().any(|m| m.name == "aclose");
+        let declares_close = facade.methods.iter().any(|m| m.method.name == "aclose");
+        if facade.base.is_some()
+            && !declares_close
+            && (native_closes || facade.availability.is_some())
+        {
+            let mut close = "        await super().aclose()\n".to_owned();
+            close.push_str(match native_closes {
+                true => "        await self._native.aclose()\n",
+                false => {
+                    "        for member in self._members:\n            await member.aclose()\n"
+                }
+            });
+            members.push(format!("    async def aclose(self) -> None:\n{close}"));
+        }
         Ok(members)
     }
 
@@ -373,18 +396,6 @@ impl Module<'_> {
                 "    @property\n    def {property}(self) -> {ty}:\n        return self._active.{property}\n"
             ));
         }
-        let mut close = match facade.base {
-            Some(_) => "        await super().aclose()\n".to_owned(),
-            None => String::new(),
-        };
-        // A chain holding no native resources closes its members.
-        match native.methods.iter().any(|m| m.name == "aclose") {
-            true => close.push_str("        await self._native.aclose()\n"),
-            false => close.push_str(
-                "        for member in self._members:\n            await member.aclose()\n",
-            ),
-        }
-        members.push(format!("    async def aclose(self) -> None:\n{close}"));
         Ok(members)
     }
 
@@ -487,7 +498,11 @@ impl Module<'_> {
     fn parameters(&mut self, native: &Class, method: &FacadeMethod) -> Result<Parameters, String> {
         let adapt = &method.adapt;
         let shown = crate::class_stub::parameters(native, &method.method, &mut self.typing);
-        let mut signature = vec!["self".to_owned()];
+        let mut signature = if method.method.kind == MethodKind::StaticCall {
+            Vec::new()
+        } else {
+            vec!["self".to_owned()]
+        };
         let mut values = Vec::new();
         let mut star = false;
         let visible = method.method.params.iter().filter(|p| !p.ty.hidden());
@@ -577,7 +592,12 @@ impl Module<'_> {
                 let called = native.methods.iter().find(wanted).cloned().ok_or_else(|| {
                     format!("_core.{} has no method {}", native.name, method.native)
                 })?;
-                ("self._native".to_owned(), Some(called))
+                let target = if m.kind == MethodKind::StaticCall {
+                    format!("_core.{}", native.name)
+                } else {
+                    "self._native".to_owned()
+                };
+                (target, Some(called))
             }
         };
         let origin = adapt.origin.as_deref().map(|o| self.callable(o)).transpose()?;
@@ -717,8 +737,29 @@ impl Module<'_> {
         let mut text = def(&m.name, asynchronous, &signature, &ret);
         if m.kind == MethodKind::Getter {
             text = format!("    @property\n{text}");
+        } else if m.kind == MethodKind::StaticCall {
+            text = format!("    @staticmethod\n{text}");
         }
-        Ok(with_doc(text, &m.doc, &body))
+        let implementation = with_doc(text, &m.doc, &body);
+        let mut overloads = String::new();
+        for annotations in &adapt.overloads {
+            self.runtime.add("typing", "overload");
+            let mut form = method.clone();
+            form.adapt.annotations = annotations.clone();
+            form.method.params.retain(|p| annotations.iter().any(|(name, _)| name == &p.name));
+            for parameter in &mut form.method.params {
+                parameter.default = None;
+            }
+            let (signature, _) = self.parameters(native, &form)?;
+            let returned = self.returned(&form);
+            overloads.push_str("    @overload\n");
+            if m.kind == MethodKind::StaticCall {
+                overloads.push_str("    @staticmethod\n");
+            }
+            overloads.push_str(&def(&m.name, asynchronous, &signature, &returned));
+            overloads.push_str("        ...\n\n");
+        }
+        Ok(overloads + &implementation)
     }
 
     /// A method's return annotation: `annotation(ret = "..")`, else its declared type's.

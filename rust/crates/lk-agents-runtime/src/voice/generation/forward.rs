@@ -92,10 +92,9 @@ pub(super) async fn voice_leg(
         handle,
         nodes: &ctx.resources.output_nodes,
         voice,
-        aligned_transcript: ctx.plan.speech.use_tts_aligned_transcript == Some(true),
-        expressive: ctx.plan.request.expressive,
         gate: &mut gate,
         acc: &mut acc,
+        message_id: &ctx.plan.message_id,
         rx,
         node: &mut node,
     };
@@ -155,12 +154,9 @@ struct Pump<'a> {
     /// The reply's agent's `transcription_node`, opened over each segment's transcript leg.
     nodes: &'a OutputNodes,
     voice: Voice,
-    /// `use_tts_aligned_transcript` is `True` (not-given is off).
-    aligned_transcript: bool,
-    /// The reply carries expressive markup; each synthesis is opened with it.
-    expressive: bool,
     gate: &'a mut PlaybackGate,
     acc: &'a mut TurnAccumulator,
+    message_id: &'a str,
     rx: mpsc::UnboundedReceiver<SpeechSegmentEvent>,
     /// The step's `tts_node`.
     node: &'a mut super::tts::TtsNodeTrace,
@@ -193,6 +189,12 @@ impl Pump<'_> {
                 TurnAccumulatorEffect::End { interrupted } => return Ok(interrupted),
             };
             effect = self.acc.on_segment(input);
+            if let Some(item) = self.acc.take_progress(self.message_id) {
+                self.shared.report(GenEvent::DeliveredProgress {
+                    speech: self.handle.id(),
+                    item: Box::new(item),
+                });
+            }
         }
     }
 
@@ -219,10 +221,9 @@ impl Pump<'_> {
         {
             return Ok(unheard());
         }
-        let aligned_requested = self.aligned_transcript;
         let plan = |binding: &super::output::OutputBinding| {
             let (audio, text) = (binding.audio().is_some(), binding.text().is_some());
-            SegmentPlan::new(kind, audio, text, aligned_requested, aligned_provider)
+            SegmentPlan::new(kind, audio, text, aligned_provider)
         };
         let opened = plan(&binding);
         let synthesis = matches!(opened.route, SegmentRoute::Synthesis);
@@ -260,7 +261,6 @@ impl Pump<'_> {
                     handle: self.handle,
                     acc: self.acc,
                     tts: &tts,
-                    expressive: self.expressive,
                     segment: *idx,
                     rx: &mut self.rx,
                     text_out: deltas,
@@ -442,21 +442,21 @@ impl<'a> TextLeg<'a> {
             return;
         }
         let Some(out) = self.out.as_deref() else { return };
-        let (text, start_time) = match event {
+        let (text, start_time, spoken) = match event {
             // a piece of the transcript, spoken or not, with no timing of its own
             SynthesisEvent::Text(chunk) => {
                 let _ = out.capture_timed(&telemetry::Cx::NONE, &chunk).await;
-                (chunk.text, None)
+                (chunk.text, None, chunk.spoken)
             }
             SynthesisEvent::TimedText(word) => {
                 let _ = out.capture_timed(&telemetry::Cx::NONE, &word).await;
-                (word.text, word.start_time)
+                (word.text, word.start_time, word.spoken)
             }
             SynthesisEvent::FlushText => return out.flush(),
             SynthesisEvent::Audio(..) => return,
         };
         let speech = self.speech;
-        self.shared.trace(PlayoutStep::TranscriptForwarded { speech, text, start_time });
+        self.shared.trace(PlayoutStep::TranscriptForwarded { speech, text, start_time, spoken });
     }
 
     pub(super) fn flush(&self) {

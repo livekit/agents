@@ -20,6 +20,7 @@ pub struct ContextActivation {
     base_revisions: BTreeMap<String, i64>,
     writes: BTreeMap<String, ContextScopeWrite>,
     routing_state: Option<Value>,
+    committed_routing: Option<Value>,
     read_only: bool,
     closed: bool,
 }
@@ -48,6 +49,7 @@ impl ContextActivation {
             scopes: by_id,
             base_revisions,
             writes: BTreeMap::new(),
+            committed_routing: routing_state.clone(),
             routing_state,
             read_only,
             closed: false,
@@ -107,7 +109,7 @@ impl ContextActivation {
         })?;
         if scope.revision != revision {
             return Err(StorageError::VersionConflict {
-                lane: scope_id.into(),
+                partition_key: scope_id.into(),
                 expected: revision,
             });
         }
@@ -122,7 +124,7 @@ impl ContextActivation {
             StorageError::Invalid(format!("context scope {scope_id} exhausted its revision"))
         })?;
         check_state_size(
-            self.routing_state.as_ref(),
+            self.routing_state.as_ref().map(crate::session_snapshot::routing_budget).as_ref(),
             self.scopes.values().filter(|other| other.scope_id != scope_id).chain([&scope]),
         )?;
         let values = ContextValues { revision: scope.revision, fields: scope.fields.clone() };
@@ -135,11 +137,37 @@ impl ContextActivation {
         Ok(values)
     }
 
+    pub fn session_state(&self) -> Option<Value> {
+        self.routing_state.clone()
+    }
+
+    pub fn committed_session(&self) -> Option<Value> {
+        self.committed_routing.clone()
+    }
+
+    pub fn stage_session(&mut self, state: Value) -> Result<(), StorageError> {
+        self.ensure_open()?;
+        if self.read_only {
+            return Err(StorageError::Invalid("session writes require an exclusive turn".into()));
+        }
+        check_state_size(
+            Some(&crate::session_snapshot::routing_budget(&state)),
+            self.scopes.values(),
+        )?;
+        self.routing_state = Some(state);
+        Ok(())
+    }
+
     pub fn writes(&self) -> Vec<ContextScopeWrite> {
         self.writes.values().cloned().collect()
     }
 
+    pub fn acknowledge_session(&mut self) {
+        self.committed_routing = self.routing_state.clone();
+    }
+
     pub fn acknowledge(&mut self) {
+        self.committed_routing = self.routing_state.clone();
         for (id, write) in &self.writes {
             self.base_revisions.insert(id.clone(), write.scope.revision);
             self.committed_scopes.insert(id.clone(), write.scope.clone());
@@ -158,6 +186,7 @@ impl ContextActivation {
         }
         let incoming = Self::new(scopes, routing_state, self.read_only)?;
         if incoming.scopes == self.committed_scopes {
+            self.committed_routing = incoming.routing_state.clone();
             self.routing_state = incoming.routing_state;
         } else {
             *self = incoming;
@@ -167,6 +196,7 @@ impl ContextActivation {
 
     /// Discard staged fields after an abandoned activation without claiming a durable save.
     pub fn abandon(&mut self) {
+        self.routing_state = self.committed_routing.clone();
         self.scopes = self.committed_scopes.clone();
         self.base_revisions =
             self.committed_scopes.iter().map(|(id, scope)| (id.clone(), scope.revision)).collect();
@@ -291,9 +321,9 @@ fn decode(error: serde_json::Error) -> StorageError {
 }
 
 /// A revision mismatch fails a NOT NULL constraint, rolling back the enclosing batch. A
-/// mismatched lane fence writes nothing, so the commit reports VersionConflict.
+/// mismatched partition fence writes nothing, so the commit reports VersionConflict.
 pub fn scope_write(
-    lane: &str,
+    partition_key: &str,
     write: &ContextScopeWrite,
     fence: Option<&Fence>,
 ) -> Result<Statement, StorageError> {
@@ -305,7 +335,7 @@ pub fn scope_write(
     }
     Ok(crate::thread::schema::UpsertScope {
         scope_id: &write.scope.scope_id,
-        lane,
+        partition_key,
         expected_revision: write.expected_revision,
         revision: write.scope.revision,
         fields: SqlValue::json(&write.scope.fields),
@@ -414,14 +444,18 @@ mod tests {
         let first = activation.writes().remove(0);
         batch(&mut conn, &[scope_write("desk", &first, None).unwrap()]).unwrap();
         let saved = scopes_from_rows(
-            &query(&conn, &crate::thread::schema::SelectScopes { lane: "desk" }.bind()).unwrap(),
+            &query(&conn, &crate::thread::schema::SelectScopes { partition_key: "desk" }.bind())
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(saved, vec![first.scope.clone()]);
         assert!(
             scopes_from_rows(
-                &query(&conn, &crate::thread::schema::SelectScopes { lane: "other" }.bind())
-                    .unwrap()
+                &query(
+                    &conn,
+                    &crate::thread::schema::SelectScopes { partition_key: "other" }.bind()
+                )
+                .unwrap()
             )
             .unwrap()
             .is_empty()
@@ -437,8 +471,11 @@ mod tests {
         );
         assert_eq!(
             scopes_from_rows(
-                &query(&conn, &crate::thread::schema::SelectScopes { lane: "desk" }.bind())
-                    .unwrap()
+                &query(
+                    &conn,
+                    &crate::thread::schema::SelectScopes { partition_key: "desk" }.bind()
+                )
+                .unwrap()
             )
             .unwrap(),
             saved

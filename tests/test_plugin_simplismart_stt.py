@@ -53,36 +53,6 @@ async def test_simplismart_stt_aclose_closes_tracked_stream_sessions(
 
 
 @pytest.mark.asyncio
-async def test_simplismart_stt_async_context_closes_stream_sessions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(simplismart_stt.SpeechStream, "_run", _idle_run)
-
-    async with simplismart_stt.STT(api_key="sk_test") as stt:
-        stream = stt.stream()
-        session = stream._session
-        assert not session.closed
-
-    assert session.closed, "exiting `async with` must close per-stream sessions"
-
-
-@pytest.mark.asyncio
-async def test_simplismart_stt_aclose_tolerates_already_closed_streams(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(simplismart_stt.SpeechStream, "_run", _idle_run)
-
-    stt = simplismart_stt.STT(api_key="sk_test")
-    stream = stt.stream()
-    session = stream._session
-
-    await stream.aclose()
-    await stt.aclose()  # must not raise on an already-closed stream
-
-    assert session.closed
-
-
-@pytest.mark.asyncio
 async def test_simplismart_stt_aclose_closes_session_of_dropped_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

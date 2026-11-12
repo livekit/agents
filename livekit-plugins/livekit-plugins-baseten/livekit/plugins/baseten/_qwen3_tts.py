@@ -529,7 +529,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
                         buffered = False
                         continue
                     self.mark_started()
-                    await ws.send_str(json.dumps({"type": "input.text", "text": data}))
+                    await ws.send_str(json.dumps({"type": "input.text", "text": data.text + " "}))
                     buffered = True
                 if buffered:
                     await ws.send_str(json.dumps({"type": "input.done"}))

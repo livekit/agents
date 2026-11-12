@@ -349,3 +349,39 @@ fn restoring_a_pending_question_preserves_the_sequence_and_rejects_previous_roun
     restored.accepts_reply(&second).unwrap();
     assert_eq!(restored.snapshot().question_sequence, remote.snapshot().question_sequence + 1);
 }
+
+#[test]
+fn delegation_rejects_an_owned_partition_including_default_keys_and_ancestors() {
+    use lk_agents_abi::a2a::metadata::PARTITION_CHAIN_KEY;
+    use lk_agents_abi::a2a::remote::DelegationPartition;
+    let caller = DelegationPartition {
+        storage_location: "https://project.example".into(),
+        storage_project: String::new(),
+        thread_id: "AT_shared".into(),
+        partition_key: lk_agents_abi::storage::DEFAULT_PARTITION_KEY.into(),
+    };
+    let ancestor = DelegationPartition { partition_key: "front".into(), ..caller.clone() };
+    let metadata = Map::from_iter([(PARTITION_CHAIN_KEY.into(), json!([ancestor, caller]))]);
+    assert!(validate_partition_delegation(&metadata, &caller).is_err());
+    assert!(
+        validate_partition_delegation(
+            &metadata,
+            &DelegationPartition { partition_key: "front".into(), ..caller.clone() }
+        )
+        .is_err()
+    );
+    for independent in [
+        DelegationPartition { partition_key: "backend".into(), ..caller.clone() },
+        DelegationPartition { thread_id: "AT_other".into(), ..caller.clone() },
+        DelegationPartition {
+            storage_location: "https://another-project.example".into(),
+            ..caller.clone()
+        },
+    ] {
+        assert!(validate_partition_delegation(&metadata, &independent).is_ok());
+    }
+    assert!(
+        validate_partition_delegation(&Map::new(), &caller).is_ok(),
+        "ordinary independent requests are legal"
+    );
+}

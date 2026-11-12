@@ -167,6 +167,28 @@ async fn option_and_keyterm_changes_reach_an_open_stream() {
     assert_eq!(updates[1]["settings"]["extra"]["keyterm"], json!(["LiveKit"]), "{updates:?}");
 }
 
+/// Re-applying the settings an open stream already has neither reconnects nor sends a
+/// `session.update`. https://github.com/livekit/agents/issues/4641
+#[tokio::test]
+async fn unchanged_settings_at_startup_neither_reconnect_nor_update() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let stt = stt(ws.clone());
+    let (_sink, _source) =
+        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
+    for _ in 0..32 {
+        tokio::task::yield_now().await;
+    }
+    stt.update_keyterms(&[]);
+    stt.update_options(None, None, None);
+    for _ in 0..32 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(ws.connect_count(), 1);
+    let updates: Vec<_> =
+        ws.sent_json().into_iter().filter(|f| f["type"] == json!("session.update")).collect();
+    assert!(updates.is_empty(), "{updates:?}");
+}
+
 // Catches: a user turn forwarded, a model without context carry-over sent one, or the
 // context not cut to its tail.
 #[tokio::test]

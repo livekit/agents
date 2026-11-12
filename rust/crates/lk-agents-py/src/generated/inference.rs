@@ -769,28 +769,18 @@ impl InferenceTts {
         Ok(())
     }
 
-    /// A synthesis of the text pushed; its connection carries this view's job.
-    #[pyo3(signature = (*, conn_options = None, expressive = false))]
-    fn stream<'py>(
-        &self,
-        py: Python<'py>,
-        conn_options: Option<Bound<'_, PyAny>>,
-        expressive: bool,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    /// Closes the pooled sockets every session's view shares; a synthesis still running
+    /// finishes, its socket closed instead of pooled.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let conn_options = conn_options
-            .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
-            .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::stream(&this, conn_options, expressive)
-                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    super::tts::TtsStream(::std::sync::Arc::new(out)),
-                    py,
+            let () =
+                <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::aclose(
+                    &this,
                 )
-            })
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 }
@@ -814,6 +804,9 @@ impl crate::py_errors::HostException for ::lk_agents_abi::inference::avatar_sess
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
             }
             Self::CatalogIdAndImage(..) => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::InvalidOption(..) => {
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
             }
             Self::MissingUrl => {

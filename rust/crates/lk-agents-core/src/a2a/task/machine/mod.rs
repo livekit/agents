@@ -40,9 +40,9 @@ pub enum A2aTaskEvent {
 /// `CloseRun` end it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operation {
-    /// The task an earlier send of this `messageId` created on the lane.
+    /// The task an earlier send of this `messageId` created on the partition.
     FindReceipt(String),
-    /// The task a continuation names, on any lane of the thread.
+    /// The task a continuation names, on any partition of the thread.
     FindTarget(String),
     /// The early `submitted` row, inserted unless its id or `messageId` exists.
     Submit(TaskWrite),
@@ -73,7 +73,7 @@ pub enum Operation {
         failed: Vec<(String, a2a::Message)>,
     },
     /// The pending question a turn answers, in the open run: the task `named` while it still
-    /// waits, else the lane's newest one.
+    /// waits, else the partition's newest one.
     ReadPending(Option<String>),
     /// Applies history edits, task rows, journal entries and, once the turn settled, how it
     /// ended to the open run; nothing is committed.
@@ -84,7 +84,7 @@ pub enum Operation {
     /// reads its next checkpoint or its output.
     Next(Option<bool>),
     /// What a checkpoint reads for each of the message's tasks (the answer, the receipt): the
-    /// lane's waiter mark and the task's status.
+    /// tasks' cancellation statuses.
     Checkpoint(Vec<String>),
     /// Commits the open run, reading `answer_task` back with the write.
     Commit {
@@ -107,11 +107,11 @@ pub enum Operation {
     CloseRun,
     /// Releases the receive's or the drain's kept lease when nothing is pending past it.
     ReleaseDrained,
-    /// The lane's last runs, newest first: what names the task of the run holding the lane.
+    /// The partition's last runs, newest first: what names the task of the run holding the partition.
     ReadRuns(usize),
 }
 
-/// How a run takes the lane.
+/// How a run takes the partition.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Access {
     /// The `concurrent` policy: no lease, append-only.
@@ -149,7 +149,8 @@ pub struct RunEnd {
 /// What the handler is opened on, besides what the open run loaded.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handle {
-    pub lane: String,
+    pub endpoint: Option<String>,
+    pub partition_key: String,
     pub context_scope_id: String,
     /// The batch as one user chat message.
     pub message: ItemRow,
@@ -158,9 +159,9 @@ pub struct Handle {
     pub task_id: String,
     /// The tool the message is handed to before the model runs.
     pub answer_tool: Option<String>,
-    /// Without the lane's lease (`concurrent`) context fields are not written.
+    /// Without the partition's lease (`concurrent`) context fields are not written.
     pub read_only: bool,
-    /// How many of the lane's newest task rows the handler's context carries.
+    /// How many of the partition's newest task rows the handler's context carries.
     pub recent_tasks: i64,
 }
 
@@ -190,14 +191,12 @@ pub enum Completion {
         picked_up: bool,
         history_end: f64,
     },
-    Inbox(Vec<InboxRow>),
+    Inbox(Vec<lk_agents_abi::storage::thread::RoutedInbox>),
     Picked(Option<TaskState>),
     Event(HandlerEvent),
-    /// `holder` is this worker's lane holder; `rows` the waiter mark and task status read per
-    /// task.
+    /// The current status of each task checked for explicit cancellation.
     Checkpoint {
-        holder: String,
-        rows: Vec<(Option<String>, Option<TaskState>)>,
+        statuses: Vec<Option<TaskState>>,
     },
     Committed {
         task: Option<TaskRow>,
@@ -205,15 +204,15 @@ pub enum Completion {
     },
     Released(bool),
     /// Newest first.
-    Runs(Vec<LaneRun>),
+    Runs(Vec<PartitionRun>),
     Done,
 }
 
-/// One of the lane's runs, as its journal tells it.
+/// One of the partition's runs, as its journal tells it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LaneRun {
+pub struct PartitionRun {
     pub task_id: Option<String>,
-    /// Started and never ended: the run holding the lane, or one whose worker died.
+    /// Started and never ended: the run holding the partition, or one whose worker died.
     pub interrupted: bool,
 }
 
@@ -313,13 +312,13 @@ enum Path {
 /// What a recovery run fails besides a dead holder's `working` rows.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Recovery {
-    /// First this message's own `submitted` row: its waiter died before taking the lane.
+    /// First this message's own `submitted` row: its waiter died before taking the partition.
     StaleSubmitted,
     /// Only the dead holder's rows.
     Orphans,
 }
 
-/// What a lane poll does when it wakes.
+/// What a partition poll does when it wakes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum PollWake {
     /// Reads the task again.
@@ -337,8 +336,8 @@ enum AfterAbandon {
     RaiseError,
 }
 
-/// How long a lane poll pauses between tries.
-const LANE_POLL_PAUSE: Duration = Duration::from_secs(1);
+/// How long a partition poll pauses between tries.
+const PARTITION_POLL_PAUSE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum RunStep {
@@ -355,7 +354,9 @@ enum RunStep {
 /// id with a private counter. All live resources belong to the executor.
 #[derive(Debug)]
 pub struct TaskMachine {
-    lane: String,
+    endpoint: Option<String>,
+    drain_endpoint: Option<String>,
+    partition_key: String,
     message: Message,
     task_id: String,
     /// What the ids this machine mints are made from: its first task id, never reassigned.
@@ -376,7 +377,7 @@ pub struct TaskMachine {
     poll: Option<Backoff>,
     /// How the turn that raised ended its run, until its tasks failed and it is abandoned.
     ended: Option<(RunOutcome, String)>,
-    /// When the watched `submitted` row's own waiter has surely given up the lane: its wait
+    /// When the watched `submitted` row's own waiter has surely given up the partition: its wait
     /// started at most a debounce after this machine first saw the row.
     waiter_gone_at: Option<Duration>,
     /// The receive or the drain holds the lease between runs.
@@ -407,9 +408,14 @@ enum FailTarget {
 }
 
 impl TaskMachine {
+    pub fn with_endpoint(mut self, endpoint: Option<String>) -> Self {
+        self.endpoint = endpoint;
+        self
+    }
+
     /// `epoch` is the Unix time, in seconds, at `now` zero.
     pub fn new(
-        lane: String,
+        partition_key: String,
         message: Message,
         task_id: String,
         options: &TurnOptions,
@@ -417,7 +423,9 @@ impl TaskMachine {
     ) -> Self {
         let policy = resolve_policy(&options.policy, &message.channel);
         Self {
-            lane,
+            endpoint: None,
+            drain_endpoint: None,
+            partition_key,
             debounce: resolve_debounce(&options.debounce, &message.channel, policy),
             message,
             ids: task_id.trim_start_matches("AST_").to_owned(),
@@ -465,7 +473,7 @@ impl TaskMachine {
         let task = answer.task.unwrap_or_else(|| match answer.reason {
             Some(reason) => unpersisted_failed(
                 &answer.task_id,
-                &self.lane,
+                &self.partition_key,
                 Some(&self.message),
                 reason,
                 now_ms,
@@ -476,7 +484,7 @@ impl TaskMachine {
                 status: TaskState::Working,
                 ..self.submitted()
             }
-            .row(&self.lane),
+            .row(&self.partition_key),
         });
         let mut result = result_for(task, thread_id, answer.run_id.as_deref());
         if let Some(answered_by) = answer.answered_by {
@@ -559,9 +567,6 @@ impl TaskMachine {
                 let (access, pickup) = match self.policy {
                     Policy::Concurrent => (Access::Concurrent, TaskPickup::Claim),
                     Policy::Reject => (Access::Exclusive(WhenHeld::Reject), TaskPickup::Leave),
-                    Policy::Interrupt => {
-                        (Access::Exclusive(WhenHeld::Interrupt), TaskPickup::Claim)
-                    }
                     Policy::Queue | Policy::Batch => {
                         (Access::Exclusive(WhenHeld::Wait), TaskPickup::Claim)
                     }
@@ -592,8 +597,8 @@ impl TaskMachine {
     }
 
     /// Waits for the task. A `batch` receipt is never abandoned: the inbox drains it. A
-    /// `concurrent` task has no lane to tell a live run from a dead one: once the wait ran out the
-    /// request answers the task as it stands. Any other task still unanswered once the lane could
+    /// `concurrent` task has no partition to tell a live run from a dead one: once the wait ran out the
+    /// request answers the task as it stands. Any other task still unanswered once the partition could
     /// have taken it is a dead waiter's (`stale`).
     fn poll(&mut self, now: Duration) -> Option<Operation> {
         let poll = self.poll.get_or_insert_with(|| Backoff::new(now, self.wait_timeout));
@@ -607,14 +612,14 @@ impl TaskMachine {
                 let waiting = self.waiter_gone_at.is_some_and(|gone| now < gone);
                 let stale = self.policy != Policy::Batch && !waiting;
                 let wake = if stale { PollWake::RecoverStale } else { PollWake::Observe };
-                (now + LANE_POLL_PAUSE, wake)
+                (now + PARTITION_POLL_PAUSE, wake)
             }
         };
         self.phase = Phase::Poll { at, wake };
         None
     }
 
-    /// Takes the lane without waiting, to fail what a dead holder left.
+    /// Takes the partition without waiting, to fail what a dead holder left.
     fn recovery_open(&mut self, recovery: Recovery) -> Operation {
         self.phase = Phase::Run { path: Path::Recovery(recovery), step: RunStep::Open };
         Operation::Open {
@@ -659,7 +664,7 @@ impl TaskMachine {
 
     /// A run whose save could not be written: the inbox rows its drain picked up fail, then the
     /// message's own task, `storage-unavailable`; nobody else would fail them but `worker-lost`.
-    /// They fail while the run still holds the lane: a holder taking it would find them `working`.
+    /// They fail while the run still holds the partition: a holder taking it would find them `working`.
     fn fail_run(&mut self) -> Operation {
         self.answer = None;
         let own = self.task_id.clone();
@@ -790,10 +795,10 @@ impl TaskMachine {
         }
     }
 
-    /// The task a continuation names must be an open task of this lane.
+    /// The task a continuation names must be an open task of this partition.
     fn on_target(&mut self, completion: Completion) -> Result<Option<Operation>, Finish> {
         match completion {
-            Completion::Task(Some(row)) if row.lane == self.lane => {
+            Completion::Task(Some(row)) if row.partition_key == self.partition_key => {
                 if row.terminal() {
                     return Err(Finish::Error(StorageError::Invalid(
                         "a follow-up to a terminal task must start a new task".into(),
@@ -802,7 +807,7 @@ impl TaskMachine {
                 Ok(Some(self.arrive()))
             }
             Completion::Task(_) => Err(Finish::Error(StorageError::NotFound(
-                "the addressed task is not in this lane".into(),
+                "the addressed task is not in this partition_key".into(),
             ))),
             other => Err(self.unexpected(other)),
         }
@@ -940,7 +945,7 @@ impl TaskMachine {
                 self.leased = true;
                 self.drain_pickup()
             }
-            // still `submitted` with the lane free: its waiter died before the lane
+            // still `submitted` with the partition free: its waiter died before the partition
             Path::Recovery(Recovery::StaleSubmitted) => {
                 let then = Phase::Run { path, step: RunStep::Orphan };
                 self.fail_task(self.task_id.clone(), TaskReason::WorkerLost, then)
@@ -1003,7 +1008,7 @@ impl TaskMachine {
             (Phase::Resolve, Completion::Done) => Ok(Some(self.answer_task(None))),
             (Phase::Answer { reason }, Completion::Done) => Ok(Some(self.answer_task(reason))),
             (Phase::Answer { .. }, Completion::Task(None)) if self.error.is_some() => {
-                // the failed run's message has no row (a `reject` lane writes it with `Submit`
+                // the failed run's message has no row (a `reject` partition writes it with `Submit`
                 // under the lease, before the turn): a failure would name a task no row holds,
                 // so the client hears the error
                 Err(Finish::Error(self.error.take().expect("the run's error")))
@@ -1035,9 +1040,9 @@ impl TaskMachine {
             other => return Err(self.unexpected(other)),
         };
         // timed on this machine's clock, not the row's: the database's may disagree.
-        // The waiter's last try may come one lane-poll pause after its wait ran out.
+        // The waiter's last try may come one partition-poll pause after its wait ran out.
         let submitted = row.as_ref().is_some_and(|r| r.status == TaskState::Submitted);
-        let gone = now + self.debounce + self.wait_timeout + LANE_POLL_PAUSE;
+        let gone = now + self.debounce + self.wait_timeout + PARTITION_POLL_PAUSE;
         self.waiter_gone_at = submitted.then(|| self.waiter_gone_at.unwrap_or(gone));
         if self.policy == Policy::Batch {
             return Ok(Some(self.read_inbox()));
@@ -1045,7 +1050,7 @@ impl TaskMachine {
         if row.as_ref().is_some_and(|r| r.status == TaskState::Working)
             && self.policy != Policy::Concurrent
         {
-            // the row's holder may have died: whoever takes the lane fails it
+            // the row's holder may have died: whoever takes the partition fails it
             return Ok(Some(self.recovery_open(Recovery::Orphans)));
         }
         Ok(self.poll(now))
@@ -1079,7 +1084,10 @@ impl TaskMachine {
         match self.policy {
             Policy::Batch => {
                 self.phase = Phase::Receive;
-                Operation::Receive { message: self.message.to_a2a(), task: self.submitted() }
+                Operation::Receive {
+                    message: self.message.received_message(),
+                    task: self.submitted(),
+                }
             }
             // the row is written under the lease: a refused message leaves none
             Policy::Reject => self.next(Next::Open),
@@ -1113,12 +1121,12 @@ impl TaskMachine {
                 Phase::Run { path: Path::Main, step: RunStep::Open },
                 StorageError::Rejected { .. },
             ) => {
-                // the lane was not released within the wait
+                // the partition was not released within the wait
                 let then = Phase::Answer { reason: Some(TaskReason::LeaseTimeout) };
                 self.fail_task(self.task_id.clone(), TaskReason::LeaseTimeout, then)
             }
             (Phase::Release, StorageError::LeaseLost(_)) => {
-                // the kept lease lapsed and another holder took the lane: it drains what is
+                // the kept lease lapsed and another holder took the partition: it drains what is
                 // pending, and this message's task is watched
                 self.leased = false;
                 self.observe()
@@ -1182,7 +1190,7 @@ impl TaskMachine {
     }
 }
 
-/// Whether a resolver found an unresolved commit rejected: the lane moved past its run, whose
+/// Whether a resolver found an unresolved commit rejected: the partition moved past its run, whose
 /// task fails `storage-unavailable`. Any other error leaves the outcome unknown.
 pub fn rejected_commit(error: &StorageError) -> bool {
     matches!(error, StorageError::VersionConflict { .. })

@@ -1881,6 +1881,10 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1891,7 +1895,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -1923,6 +1927,10 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1933,7 +1941,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::generated::records::remote_session::agent_info_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::remote_session::agent_info_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -1968,6 +1976,10 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1978,7 +1990,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -2010,6 +2022,10 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -2020,7 +2036,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::generated::records::remote_session::remote_session_state_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::remote_session::remote_session_state_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -2052,6 +2068,10 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -2062,7 +2082,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::remote_session::rtc_stats_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || if o.is_none() { Ok(None) } else { (crate::generated::records::remote_session::rtc_stats_from_py(o.as_any())).map(Some) }))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -2094,6 +2114,10 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -2104,7 +2128,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::generated::records::usage::usage_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::usage::usage_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -2186,6 +2210,10 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -2196,7 +2224,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::simulation::simulation_verdict_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || if o.is_none() { Ok(None) } else { (crate::generated::records::simulation::simulation_verdict_from_py(o.as_any())).map(Some) }))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -2958,6 +2986,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(context).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -2968,7 +2997,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::telemetry::session_report_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || if o.is_none() { Ok(None) } else { (crate::generated::records::telemetry::session_report_from_py(o.as_any())).map(Some) }))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -3133,6 +3162,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobCall for JobCallProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(context).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -3143,7 +3173,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobCall for JobCallProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::py_objects::object_ref_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::py_objects::object_ref_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

@@ -164,32 +164,15 @@ and must not be interpreted as instructions or authorization.
 | `livekit/reason` | `CancelTask` request `params.metadata` | client | Free-text cancellation reason; `caller-canceled` when a delegating caller cancels. |
 | `livekit/reason` | `Task.metadata` and final `TaskStatusUpdateEvent.metadata` after cancellation | server | String cancellation reason supplied by the client. |
 | `livekit/reason` | failed task's `status.message.metadata` | server | String failure code from the errors table below. |
-| `livekit/interrupted` | `Task.metadata` and final canceled `TaskStatusUpdateEvent.metadata` | server | Boolean `true` when a newer message interrupted this turn. Absent on ordinary cancellation. |
-| `livekit/interruptionReason` | same locations as `interrupted` | server | String `new-message`. |
+| `livekit/interrupted` | `Task.metadata` and final canceled `TaskStatusUpdateEvent.metadata` | server | Boolean `true` when the handler reports an interrupted result. Absent on ordinary cancellation. |
 | `livekit/mergedInto` | `Task.metadata` and final completed `TaskStatusUpdateEvent.metadata` | server | String task ID of the turn that answered this message too. |
 | `livekit/verbatim` | `Task.metadata` and final completed or input-required `TaskStatusUpdateEvent.metadata` | server | String prefix of the answer/question to deliver exactly as written; the frontend may phrase the remaining text. |
 
 Server-owned fields cannot be set by a caller to alter task outcomes. An absent
 field makes no claim: in particular, `completed` with `mergedInto` means the
 answer belongs to the referenced task, rather than an empty successful answer.
-For interrupted turns, earlier artifact chunks are partial; the replacement
-answer belongs to the newer task. Terminal task records do not change.
-
-A turn ended because the person sent a second message while it ran:
-
-```json
-{
-  "statusUpdate": {
-    "taskId": "AST_1",
-    "contextId": "AT_x",
-    "status": { "state": "TASK_STATE_CANCELED" },
-    "metadata": {
-      "https://livekit.io/a2a/ext/agents/v1/interrupted": true,
-      "https://livekit.io/a2a/ext/agents/v1/interruptionReason": "new-message"
-    }
-  }
-}
-```
+For interrupted turns, earlier artifact chunks are partial. A newer request does not
+interrupt an active turn; it follows the endpoint’s queue or batch policy.
 
 A text answered together with the one that followed it:
 
@@ -247,14 +230,16 @@ permission to invoke an endpoint; it does not grant access to thread data.
 | `write`  | a message, `tasks/cancel` |
 | `read`   | `tasks/get`, `tasks/list`, and the thread's history and tasks from the platform's threads API ([browser thread access](../clients.md#from-the-browser)) |
 | `list`, `delete` | the threads service's listing of the scope and deletion, for a browser ([browser thread access](../clients.md#from-the-browser)) |
+| `sql`    | the thread's database on the data plane, for the worker running it; never in a browser's grant |
 
 A thread of another scope is refused.
 
-Through LiveKit Cloud, the node admits a token carrying the `agentEndpoint`
-call grant, passes its verdict to the worker and forwards the token as sent.
-The worker verifies the token itself, from an `Authorization: Bearer` or an
-`X-LiveKit-Thread-Grant` header, so a thread grant's scope and flags reach it. A browser streams with `fetch`, a
-JSON-RPC `POST` carrying the bearer header.
+Through a LiveKit node, the node verifies the token, admits one carrying the
+`agentEndpoint` call grant, passes its verdict to the worker and forwards the
+token as sent. The worker reads that token's claims, from `Authorization: Bearer`
+or else the `access_token` query parameter, so a thread grant's scope and flags
+reach it; it never verifies a signature ([auth](../auth.md#verification)). A
+browser streams with `fetch`, a JSON-RPC `POST` carrying the bearer header.
 
 A refusal is an HTTP status with `{"error": "..."}`, not a JSON-RPC error:
 401 for no token or a token the project did not sign; 403 for a grant that
@@ -265,7 +250,7 @@ does not cover the call.
 A caller shares its thread with an endpoint only under explicit authority: a
 same-project grant token the endpoint verifies as covering that thread, or trust
 configured on the caller and verified locally. The destination uses its
-own lane and application context. A metadata key, an agent card or its
+own partition and application context. A metadata key, an agent card or its
 `capabilities.extensions` entry alone does not establish project membership or
 grant access to history.
 
@@ -336,7 +321,6 @@ model history. This contract does not define an audio/image transfer format.
 | --- | --- | --- |
 | `contextId` | `GetTask`, `CancelTask`, `ListTasks`, `SubscribeToTask` JSON-RPC `params` | Required string thread ID, alongside the standard `id`. This is a LiveKit addition to these requests: a stock client that omits it gets `TaskNotFoundError`. |
 | `A2A-Version` | HTTP request header | Standard A2A version selection; LiveKit clients send `1.0`. |
-| `X-LiveKit-Thread-Grant` | direct-worker HTTP request header | Alternative bearer JWT carrier for the thread grant described above. |
 | `attributes` | LiveKit threads service, not an A2A message/task field | Application-defined string-to-string map for titles, previews, and flags. Read and updated through the thread API; never grants authorization. |
 
 `contextId`, `taskId`, `messageId`, `referenceTaskIds`, `historyLength`, and
@@ -371,7 +355,7 @@ JSON-RPC errors are for malformed requests. Everything else ends the task
 | --------------------- | ---- |
 | `thread-not-found`   | a `contextId` the threads service does not know |
 | `worker-lost`         | the worker holding the turn died; resend the message |
-| `lease-timeout`       | on an `interrupt` or `queue` endpoint, the thread's lane was not free within 60 seconds |
+| `lease-timeout`       | on a `queue` endpoint, the thread's partition was not free within 60 seconds |
 | `storage-unavailable` | the turn's save could not be written; resend the message |
 
 A failure no task row can carry (a message on a `reject` endpoint whose row

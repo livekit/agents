@@ -12,7 +12,7 @@ from a2a.types import a2a_pb2 as pb
 from livekit.agents import Agent, InputRequired, RunContext, RunResult
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import FunctionToolCall
-from livekit.agents.storage import Storage
+from livekit.agents.storage import DEFAULT_PARTITION_KEY, Storage
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .test_a2a_server import http_client, make_server, payloads, send, stock_client, user_message
@@ -81,7 +81,7 @@ async def test_the_answer_goes_to_the_tool_that_asked(thread_storage: Storage) -
 
     db = await thread_storage._open(ctx_id)
     try:
-        history = [row.payload for row in await db.history("front-desk")]
+        history = [row.payload for row in await db.history(DEFAULT_PARTITION_KEY)]
     finally:
         db.close()
     calls = [i for i in history if i.type == "function_call" and i.name == "ask"]

@@ -8,7 +8,7 @@ use lk_agents_abi::a2a::turn::Turn as TurnContract;
 use lk_agents_abi::storage::thread::{Backoff, TaskReason, TaskWrite};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, Spawner};
 use lk_agents_core::a2a::task::{
-    A2aTaskEffect, A2aTaskEvent, Access, Completion, Handle, HandlerEvent, LaneRun, Operation,
+    A2aTaskEffect, A2aTaskEvent, Access, Completion, Handle, HandlerEvent, Operation, PartitionRun,
     RunEnd, Stage, TaskMachine, rejected_commit,
 };
 use lk_agents_core::a2a::{
@@ -21,25 +21,23 @@ use lk_agents_storage::thread::RESOLVE_LATER;
 use lk_agents_storage::thread::db::{Receive, ReceiveInput};
 use lk_agents_storage::thread::run::ItemRow;
 use lk_agents_storage::{
-    CommitOptions, Lane, LaneAccess, Lease, LeaseAfterCommit, Run, RunOptions, Thread, WhenHeld,
-    shortuuid,
+    CommitOptions, Lease, LeaseAfterCommit, Partition, PartitionAccess, Run, RunOptions, Thread,
+    WhenHeld, shortuuid,
 };
 use lk_agents_storage::{Holder, StorageError};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// One message's live resources while its machine runs: the lane, the open run, a kept lease,
+/// One message's live resources while its machine runs: the partition, the open run, a kept lease,
 /// the open handler, the task it submitted.
 struct Call {
-    lane: Lane,
+    partition_key: Partition,
     /// The request's lease owner: its receive, runs and drain carry it.
     holder: Holder,
     run: Option<Run>,
     lease: Option<Lease>,
     handler: Option<Handler>,
-    /// A delegating caller's conversation, when the message carried one.
-    caller_history: Option<Value>,
     submitted: Option<Submitted>,
     /// Where the turn's background work (a cancel, a commit resolver) runs.
     spawner: Arc<dyn Spawner>,
@@ -49,7 +47,7 @@ struct Call {
 /// Dropped unanswered (the client dropped the turn, or an error ended it) it is canceled in the
 /// background, through outages: no task is left submitted with nobody to run it.
 struct Submitted {
-    lane: Lane,
+    partition_key: Partition,
     task_id: String,
     /// Keeps the thread's connection open for the cancel.
     open: Option<Leave>,
@@ -64,24 +62,25 @@ impl Drop for Submitted {
         if self.answered {
             return;
         }
-        let (lane, task_id, clock) = (self.lane.clone(), self.task_id.clone(), self.clock.clone());
+        let (partition_key, task_id, clock) =
+            (self.partition_key.clone(), self.task_id.clone(), self.clock.clone());
         let open = self.open.take();
         self.resolvers.spawn(&*self.spawner, "a2a task cancel", async move {
             let _open = open;
-            cancel_unanswered(lane, task_id, clock).await;
+            cancel_unanswered(partition_key, task_id, clock).await;
         });
     }
 }
 
 /// Cancels a task its turn left unanswered, `caller-canceled`; a terminal row stays as it is. A
 /// database that cannot be reached is tried again for up to [`RESOLVE_LATER`].
-async fn cancel_unanswered(lane: Lane, task_id: String, clock: Arc<dyn Clock>) {
+async fn cancel_unanswered(partition_key: Partition, task_id: String, clock: Arc<dyn Clock>) {
     let reason = Value::String(TaskReason::CallerCanceled.as_str().to_owned());
     let metadata = serde_json::Map::from_iter([(REASON_KEY.to_owned(), reason)]);
     let epoch = clock.now();
     let mut backoff = Backoff::new(Duration::ZERO, RESOLVE_LATER);
     loop {
-        let error = match lane.cancel_task(&task_id, metadata.clone()).await {
+        let error = match partition_key.cancel_task(&task_id, metadata.clone()).await {
             Ok(_) => return,
             Err(error) => error,
         };
@@ -100,21 +99,21 @@ impl Call {
         self.run.as_mut().ok_or_else(|| StorageError::Invalid("no A2A run is open".into()))
     }
 
-    /// Opens the run as `access` takes the lane; a kept lease resumes it.
+    /// Opens the run as `access` takes the partition; a kept lease resumes it.
     async fn open_run(
         &mut self,
         access: Access,
         options: RunOptions,
     ) -> Result<Completion, StorageError> {
-        let lane_access = match access {
-            Access::Concurrent => LaneAccess::Concurrent,
-            Access::Exclusive(when_held) => LaneAccess::Exclusive(when_held),
-            Access::Kept => LaneAccess::Exclusive(WhenHeld::Reject),
+        let partition_access = match access {
+            Access::Concurrent => PartitionAccess::Concurrent,
+            Access::Exclusive(when_held) => PartitionAccess::Exclusive(when_held),
+            Access::Kept => PartitionAccess::Exclusive(WhenHeld::Reject),
         };
-        let options = RunOptions { access: lane_access, ..options };
+        let options = RunOptions { access: partition_access, ..options };
         let run = match (access, self.lease.take()) {
-            (Access::Kept, Some(lease)) => self.lane.resume(options, lease).await?,
-            _ => self.lane.open(options, &self.holder).await?,
+            (Access::Kept, Some(lease)) => self.partition_key.resume(options, lease).await?,
+            _ => self.partition_key.open(options, &self.holder).await?,
         };
         let history_end = run.history().iter().map(ItemRow::created_at).fold(0.0, f64::max);
         let opened =
@@ -142,12 +141,11 @@ impl Call {
     }
 
     async fn checkpoint(&mut self, task_ids: &[String]) -> Result<Completion, StorageError> {
-        let holder = self.run()?.holder().to_owned();
         let mut rows = Vec::with_capacity(task_ids.len());
         for task_id in task_ids {
-            rows.push(self.lane.checkpoint(task_id).await?);
+            rows.push(self.partition_key.checkpoint(task_id).await?);
         }
-        Ok(Completion::Checkpoint { holder, rows })
+        Ok(Completion::Checkpoint { statuses: rows })
     }
 
     /// Commits the open run; a kept lease stays on the call.
@@ -186,13 +184,16 @@ fn end_run(run: &mut Run, end: RunEnd) {
     run.end_as(end.outcome, end.reason);
 }
 
-/// One text door's turns: its lane, its options, its host.
+/// One text door's turns: its partition, its options, its host.
 #[derive(Clone)]
 pub struct Turn {
+    server: Option<std::sync::Weak<dyn lk_agents_abi::worker::server_host::ServerConfiguration>>,
+    namespace: Option<Arc<lk_agents_storage::storage::Namespace>>,
+    endpoint: Option<String>,
     thread: Thread,
     /// The label of each request's lease owner: this process's lease holder id.
     holder: String,
-    lane: String,
+    partition_key: String,
     host: Arc<dyn TurnHost>,
     /// The turn's clock: the machine's waits and the bound on closing the host stream.
     clock: Arc<dyn Clock>,
@@ -213,16 +214,19 @@ impl Turn {
     pub fn new(
         thread: Thread,
         holder: &str,
-        lane: &str,
+        partition_key: &str,
         host: Arc<dyn TurnHost>,
         clock: Arc<dyn Clock>,
         spawner: fn() -> Result<Arc<dyn Spawner>, ProcessError>,
         options: TurnOptions,
     ) -> Self {
         Self {
+            server: None,
+            namespace: None,
+            endpoint: None,
             thread,
             holder: holder.to_owned(),
-            lane: lane.to_owned(),
+            partition_key: partition_key.to_owned(),
             host,
             clock,
             opts: options,
@@ -240,8 +244,8 @@ impl Turn {
         self
     }
 
-    pub fn lane(&self) -> &str {
-        &self.lane
+    pub fn partition_key(&self) -> &str {
+        &self.partition_key
     }
 
     pub fn policy_for(&self, channel: &str) -> Policy {
@@ -267,7 +271,7 @@ impl Turn {
         task_id: Option<String>,
     ) -> Result<TurnResult, StorageError> {
         // the delegation's `chat_ctx` part, which `Message::from_a2a` strips
-        let caller_history = caller_history_of(&message)?;
+        let _ = caller_history_of(&message)?;
         let epoch = self.clock.now();
         let elapsed = || self.clock.now().saturating_duration_since(epoch);
         // the run's clock, as every time the machine reads: the DST's is virtual
@@ -275,18 +279,19 @@ impl Turn {
         let wall = wall.as_secs_f64();
         let msg = Message::from_a2a(&message, wall, None)?;
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
-        let mut machine = TaskMachine::new(self.lane.clone(), msg, task_id, &self.opts, wall);
-        let lane = self.thread.lane(&self.lane);
+        let mut machine =
+            TaskMachine::new(self.partition_key.clone(), msg, task_id, &self.opts, wall)
+                .with_endpoint(self.endpoint.clone());
+        let partition_key = self.thread.partition(&self.partition_key);
         let holder = Holder::new(&self.holder);
         let spawner = (self.spawner)()
             .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
         let mut call = Call {
-            lane,
+            partition_key,
             holder,
             run: None,
             lease: None,
             handler: None,
-            caller_history,
             submitted: None,
             spawner,
         };
@@ -311,7 +316,7 @@ impl Turn {
                     }
                     drop((run, lease, submitted));
                     if !holder.wait_released().await {
-                        log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "an A2A turn ended with its lease release in flight");
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.as_str(); "an A2A turn ended with its lease release in flight");
                     }
                     return answer.map(|answer| machine.result(answer, self.thread.id(), now));
                 }
@@ -334,13 +339,15 @@ impl Turn {
     ) -> Result<Completion, StorageError> {
         Ok(match operation {
             Operation::FindReceipt(message_id) => {
-                Completion::Task(call.lane.task_for_message(&message_id).await?)
+                Completion::Task(call.partition_key.task_for_message(&message_id).await?)
             }
             Operation::FindTarget(task_id) => Completion::Task(self.thread.task(&task_id).await?),
-            Operation::ReadTask(task_id) => Completion::Task(call.lane.task(&task_id).await?),
+            Operation::ReadTask(task_id) => {
+                Completion::Task(call.partition_key.task(&task_id).await?)
+            }
             Operation::Submit(task) => {
                 call.submitted = Some(Submitted {
-                    lane: call.lane.clone(),
+                    partition_key: call.partition_key.clone(),
                     task_id: task.task_id.clone(),
                     open: Some(self.thread.keep_open("a2a task cancel")),
                     clock: self.clock.clone(),
@@ -348,7 +355,8 @@ impl Turn {
                     spawner: call.spawner.clone(),
                     answered: false,
                 });
-                let inserted = call.lane.submit(&task).await?;
+                let inserted =
+                    call.partition_key.submit_at(&task, self.endpoint.as_deref()).await?;
                 if let (false, Some(submitted)) = (inserted, call.submitted.as_mut()) {
                     // another send of the message owns its row
                     submitted.answered = true;
@@ -356,7 +364,9 @@ impl Turn {
                 Completion::Submitted(inserted)
             }
             Operation::Receive { message, task } => self.receive(call, &message, task).await?,
-            Operation::Accepted(task_id) => self.announce_accepted(&call.lane, &task_id).await?,
+            Operation::Accepted(task_id) => {
+                self.announce_accepted(&call.partition_key, &task_id).await?
+            }
             Operation::Open { run_id, task_id, channel, access, pickup } => {
                 let options = RunOptions {
                     channel,
@@ -366,11 +376,13 @@ impl Turn {
                 };
                 call.open_run(access, options).await?
             }
-            Operation::ReadInbox => Completion::Inbox(call.lane.inbox(true).await?),
-            Operation::Pickup(task_id) => Completion::Picked(call.lane.pickup(&task_id).await?),
+            Operation::ReadInbox => Completion::Inbox(call.partition_key.routed_inbox().await?),
+            Operation::Pickup(task_id) => {
+                Completion::Picked(call.partition_key.pickup(&task_id).await?)
+            }
             Operation::ReadWorking => Completion::Tasks(call.run()?.tasks().working().await?),
             Operation::FailOrphans { reason, failed } => {
-                self.fail_orphans(&call.lane, reason, failed).await?
+                self.fail_orphans(&call.partition_key, reason, failed).await?
             }
             Operation::ReadPending(named) => {
                 Completion::Task(call.run()?.tasks().pending_ask(named.as_deref()).await?)
@@ -412,17 +424,17 @@ impl Turn {
             }
             Operation::ReleaseDrained => call.release_drained().await?,
             Operation::ReadRuns(limit) => Completion::Runs(
-                call.lane
+                call.partition_key
                     .runs(limit)
                     .await?
                     .into_iter()
-                    .map(|r| LaneRun { interrupted: r.interrupted(), task_id: r.task_id })
+                    .map(|r| PartitionRun { interrupted: r.interrupted(), task_id: r.task_id })
                     .collect(),
             ),
         })
     }
 
-    /// The `batch` policy's receipt; a free lane's lease is kept on the call.
+    /// The `batch` policy's receipt; a free partition's lease is kept on the call.
     async fn receive(
         &self,
         call: &mut Call,
@@ -435,7 +447,8 @@ impl Turn {
             data: &task.data,
             internal: task.internal.as_ref(),
         };
-        let (received, lease) = call.lane.receive(&call.holder, input).await?;
+        let (received, lease) =
+            call.partition_key.receive_at(&call.holder, input, self.endpoint.as_deref()).await?;
         call.lease = lease;
         Ok(match received {
             Receive::Duplicate(existing) => Completion::Received {
@@ -451,11 +464,11 @@ impl Turn {
     /// Announces a durable receipt on the response stream, when one watches the turn.
     async fn announce_accepted(
         &self,
-        lane: &Lane,
+        partition_key: &Partition,
         task_id: &str,
     ) -> Result<Completion, StorageError> {
         let Some(publisher) = &self.publisher else { return Ok(Completion::Done) };
-        let task = lane
+        let task = partition_key
             .task(task_id)
             .await?
             .ok_or_else(|| StorageError::Unavailable("an accepted task was not durable".into()))?;
@@ -465,13 +478,13 @@ impl Turn {
 
     async fn fail_orphans(
         &self,
-        lane: &Lane,
+        partition_key: &Partition,
         reason: lk_agents_abi::storage::thread::TaskReason,
         failed: Vec<(String, a2a::Message)>,
     ) -> Result<Completion, StorageError> {
         for (task_id, message) in failed {
-            lane.fail_orphan(&task_id, &message).await?;
-            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(), taskId = task_id.as_str(); "the task fails {reason}");
+            partition_key.fail_orphan(&task_id, &message).await?;
+            log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.as_str(), taskId = task_id.as_str(); "the task fails {reason}");
         }
         Ok(Completion::Done)
     }
@@ -483,13 +496,45 @@ impl Turn {
         call: &mut Call,
         handle: Handle,
     ) -> Result<Completion, StorageError> {
-        let caller_history = call.caller_history.clone();
+        let host = if handle.endpoint == self.endpoint {
+            self.host.clone()
+        } else {
+            use lk_agents_abi::storage::Storage as _;
+            let endpoint = handle.endpoint.as_deref().ok_or_else(|| {
+                StorageError::Invalid("queued request has no configured endpoint".into())
+            })?;
+            let namespace = self.namespace.as_ref().ok_or_else(|| {
+                StorageError::Invalid("endpoint recovery requires a server registry".into())
+            })?;
+            self.server
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .and_then(|server| server.text_endpoint(endpoint))
+                .and_then(|door| {
+                    door.recovery_handler(
+                        &namespace.location(),
+                        &namespace.project_id(),
+                        &self.partition_key,
+                    )
+                })
+                .ok_or_else(|| {
+                    StorageError::Invalid(format!(
+                        "queued endpoint {endpoint:?} is unavailable for this storage partition"
+                    ))
+                })?
+        };
+        let caller_history = handle
+            .batch
+            .last()
+            .map(|message| caller_history_of(&message.raw))
+            .transpose()?
+            .flatten();
         let run = call.run()?;
         let lease = run.lease().cloned();
         let ctx = TurnContext {
             thread_id: self.thread.id().to_owned(),
             context_scope_id: handle.context_scope_id,
-            lane: handle.lane,
+            partition_key: handle.partition_key,
             message: handle.message.payload,
             batch: handle.batch,
             history: run.history().to_vec(),
@@ -507,7 +552,7 @@ impl Turn {
             lease.check()?;
         }
         let cx = telemetry::Cx::NONE.continuing(self.span);
-        call.handler = Some(Handler::open(self.host.clone(), cx, host_ctx));
+        call.handler = Some(Handler::open(host, cx, host_ctx));
         Ok(Completion::Done)
     }
 
@@ -515,12 +560,12 @@ impl Turn {
     /// with `failed` when the commit was rejected.
     fn resolve_later(&self, call: &Call, run: Run, answer: String, failed: a2a::Message) {
         let open = self.thread.keep_open("a2a commit resolver");
-        let lane = call.lane.clone();
+        let partition_key = call.partition_key.clone();
         self.resolvers.spawn(&*call.spawner, "a2a commit resolver", async move {
             let _open = open;
             match run.resolve_later().await {
                 Some(Err(e)) if rejected_commit(&e) => {
-                    if let Err(e) = lane.fail_orphan(&answer, &failed).await {
+                    if let Err(e) = partition_key.fail_orphan(&answer, &failed).await {
                         log::warn!(target: lk_agents_abi::LOG_TARGET, taskId = answer.as_str(); "a rejected commit's task could not be failed: {e}");
                     }
                 }
@@ -544,15 +589,7 @@ impl Turn {
             .handler
             .as_mut()
             .ok_or_else(|| StorageError::Invalid("no A2A handler is open".into()))?;
-        let read = self.read_handler_event(handler, lease.as_ref(), should_yield);
-        match &lease {
-            Some(lease) => tokio::select! {
-                biased;
-                e = lease.lost() => Err(e),
-                event = read => event,
-            },
-            None => read.await,
-        }
+        self.read_handler_event(handler, &mut call.run, lease.as_ref(), should_yield).await
     }
 
     /// Answers the checkpoint, then publishes the handler's progress until its next checkpoint
@@ -560,6 +597,7 @@ impl Turn {
     async fn read_handler_event(
         &self,
         handler: &mut Handler,
+        run: &mut Option<Run>,
         lease: Option<&Lease>,
         should_yield: Option<bool>,
     ) -> Result<HandlerEvent, StorageError> {
@@ -570,11 +608,39 @@ impl Turn {
             handler.answer(should_yield);
         }
         loop {
-            let read = handler.next().await;
+            // Race only the retained handler read. Once a checkpoint write starts, retain
+            // its retry identity and await its outcome instead of dropping it on lease loss.
+            let read = match lease {
+                Some(lease) => tokio::select! {
+                    biased;
+                    read = handler.next() => read,
+                    error = lease.lost() => return Err(error),
+                },
+                None => handler.next().await,
+            };
             if let Some(lease) = lease {
                 lease.check()?;
             }
             match read {
+                Some(Read::Session(write)) => {
+                    let result = match run.as_mut() {
+                        Some(run) => {
+                            let history = write
+                                .history
+                                .into_iter()
+                                .map(|item| {
+                                    lk_agents_abi::llm::chat_context::protocol::encode_chat_item(
+                                        &item,
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            run.checkpoint_session(write.state, history).await
+                        }
+                        None => Err(StorageError::Invalid("no session run is active".into())),
+                    };
+                    let _ = write.reply.send(result.clone());
+                    result?;
+                }
                 Some(Read::Checkpoint) => return Ok(HandlerEvent::Checkpoint),
                 Some(Read::Event(event)) => {
                     if let Some(publisher) = &self.publisher {
@@ -597,7 +663,7 @@ impl Turn {
     ) -> Result<HandlerEvent, StorageError> {
         let out = HandlerOutput::try_from(output)?;
         if let Some(err) = &out.error {
-            log::error!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "the a2a_session handler raised; the task fails: {err}");
+            log::error!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.as_str(); "the a2a_session handler raised; the task fails: {err}");
         }
         Ok(HandlerEvent::Output(Box::new(out)))
     }
@@ -608,7 +674,7 @@ impl Turn {
         let Some(handler) = call.handler.take() else { return };
         let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         if !handler.close(self.clock.as_ref(), deadline).await {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "the handler did not settle within its deadline; its host task is still running");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.as_str(); "the handler did not settle within its deadline; its host task is still running");
         }
     }
 }
@@ -620,7 +686,7 @@ impl TurnContract for Turn {
     fn new(
         env: &ProcessEnv,
         thread: Arc<Thread>,
-        lane: String,
+        partition_key: String,
         host: Arc<dyn TurnHost>,
         options: Option<TurnOptions>,
     ) -> Self {
@@ -628,15 +694,15 @@ impl TurnContract for Turn {
         Self::new(
             thread.as_ref().clone(),
             &holder,
-            &lane,
+            &partition_key,
             host,
             env.clock.clone(),
             env.spawner,
             options.unwrap_or_default(),
         )
     }
-    fn lane(&self) -> String {
-        self.lane().to_owned()
+    fn partition_key(&self) -> String {
+        self.partition_key().to_owned()
     }
     fn policy_for(&self, channel: String) -> Policy {
         self.policy_for(&channel)
@@ -691,7 +757,7 @@ mod lease_tests {
     fn context() -> lk_agents_abi::a2a::turn::TurnContext {
         lk_agents_abi::a2a::turn::TurnContext {
             thread_id: "AT_loss".into(),
-            lane: "desk".into(),
+            partition_key: "desk".into(),
             message: lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::text(
                 "message",
                 lk_agents_abi::Role::User,
@@ -721,9 +787,9 @@ mod lease_tests {
         let thread = Thread::new(connection, "AT_loss", Default::default(), Default::default())
             .await
             .unwrap();
-        let lane = thread.lane("desk");
+        let partition_key = thread.partition("desk");
         let holder = Holder::new("worker");
-        let run = lane.open(RunOptions::new("run", "task"), &holder).await.unwrap();
+        let run = partition_key.open(RunOptions::new("run", "task"), &holder).await.unwrap();
         run.lease().unwrap().stop();
         tokio::time::advance(Duration::from_secs(10)).await;
         let probe = Probe(Arc::default());
@@ -733,12 +799,11 @@ mod lease_tests {
             Turn::new(thread, "worker", "desk", host.clone(), clock, spawner, Default::default());
         let handler = Handler::open(host, telemetry::Cx::NONE, context());
         let mut call = Call {
-            lane,
+            partition_key,
             holder,
             run: Some(run),
             lease: None,
             handler: Some(handler),
-            caller_history: None,
             submitted: None,
             spawner: spawner().unwrap(),
         };

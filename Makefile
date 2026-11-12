@@ -1,14 +1,15 @@
 .PHONY: help install format format-check lint lint-fix fix type-check check unit-tests \
-        bench-sentences link-rtc link-rtc-local unlink-rtc status doctor build build-debug \
-        rust-check
+        link-rtc link-rtc-local unlink-rtc status doctor build build-debug rust-check \
+        test bench bench-startup bench-host bench-sentences bench-sync
 
 ROOT := $(CURDIR)
-AGENTS_PROJECT := $(ROOT)/livekit-agents-next
+AGENTS_PROJECT := $(ROOT)/livekit-agents
 PYTHON_SDKS := $(abspath $(ROOT)/../python-sdks)
 RUST_SDKS := $(abspath $(ROOT)/../rust-sdks)
 PYTHON_RTC := $(PYTHON_SDKS)/livekit-rtc
 # The FFI crate livekit-rtc is built against: its own rust-sdks submodule.
 RTC_RUST_SDK := $(PYTHON_RTC)/rust-sdks
+TEST_ARGS ?= --unit --audio_eot
 
 ifeq ($(OS),Windows_NT)
 HOST_OS := windows
@@ -52,28 +53,46 @@ lint-fix: ## Run ruff linter and fix issues
 
 fix: format lint-fix ## Format and fix lint issues
 
-type-check: ## Run strict mypy and pyright (scripts/check_types.py)
-	uv run python scripts/check_types.py
+type-check: ## Run strict mypy and pyright
+	uv run python .github/check_types.py $(TYPE_CHECK_ARGS)
 
 check: format-check lint type-check ## Run all checks (format-check, lint, type-check)
 
-unit-tests: ## Run the unit and audio_eot test categories (no cloud accounts)
-	PYTHONPATH="$(ROOT)" uv run pytest --unit --audio_eot $(PYTEST_ARGS)
+unit-tests: test ## Run the default hermetic test suite
+
+test: ## Run tests; select paths and categories with TEST_ARGS
+	PYTHONPATH="$(ROOT)" uv run pytest $(PYTEST_ARGS) $(TEST_ARGS)
+
+bench: ## Run the IPC benchmark; pass BENCH_ARGS (--help lists them)
+	uv run python -m bench.ipc $(BENCH_ARGS)
+
+bench-startup: ## Time start, dev and console from launch to ready, cold caches; pass BENCH_ARGS
+	uv run --no-sync python -m bench.startup $(BENCH_ARGS)
+
+bench-host: ## Time the Rust-to-Python host boundary (calls, context, streams, cancellation)
+	uv run --no-sync cargo test --release --manifest-path rust/Cargo.toml -p lk-agents-py \
+		--features ffmpeg --test host_bench -- --ignored --nocapture
 
 bench-sentences: ## Time the sentence splitter's pushes on the experiment corpus and adversarial replies
 	cargo test --release --manifest-path rust/Cargo.toml -p lk-agents-runtime --test sentence_bench \
 		-- --ignored --nocapture --test-threads=1
 
+LK_SYNC_CORPUS ?= $(HOME)/livekit/sync-corpus
+bench-sync: ## Transcript sync accuracy over a recorded corpus (LK_SYNC_CORPUS); appends to its history.tsv
+	LK_SYNC_CORPUS=$(LK_SYNC_CORPUS) LK_SYNC_COMMIT=$$(git describe --always --dirty) \
+		cargo test --release --manifest-path rust/Cargo.toml -p lk-agents-voice --lib \
+		transcript_sync_accuracy -- --ignored --nocapture
+
 link-rtc: ## Link ../python-sdks/livekit-rtc with downloaded FFI artifacts
 	cd $(PYTHON_RTC) && python3 rust-sdks/download_ffi.py --platform $(FFI_OS) --arch $(FFI_ARCH) \
 		--output livekit/rtc/resources
-	uv add --package livekit-agents-next --editable $(PYTHON_RTC)
+	uv add --package livekit-agents --editable $(PYTHON_RTC)
 	uv sync --all-extras --dev
 
 link-rtc-local: ## Build the FFI from livekit-rtc's rust-sdks and link ../python-sdks/livekit-rtc
 	cd $(RTC_RUST_SDK) && cargo build --release -p livekit-ffi
 	cd $(PYTHON_RTC) && ./generate_proto.sh
-	uv add --package livekit-agents-next --editable $(PYTHON_RTC)
+	uv add --package livekit-agents --editable $(PYTHON_RTC)
 	uv sync --all-extras --dev
 	@echo "Use the local FFI with: export LIVEKIT_LIB_PATH=$(RTC_RUST_SDK)/target/release/$(FFI_LIB)"
 

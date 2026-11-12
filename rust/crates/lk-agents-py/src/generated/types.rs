@@ -411,6 +411,7 @@ impl ::lk_agents_abi::types::provider::AttemptHost for AttemptHostProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(context).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -421,7 +422,7 @@ impl ::lk_agents_abi::types::provider::AttemptHost for AttemptHostProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::py_objects::object_ref_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || if o.is_none() { Ok(None) } else { (crate::py_objects::object_ref_from_py(o.as_any())).map(Some) }))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

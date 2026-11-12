@@ -25,7 +25,7 @@ mod host_loop;
 mod sdk_queue;
 mod track;
 
-pub use audio_source::FakeAudioSource;
+pub use audio_source::{FakeAudioSource, HeardFrame, Speaker};
 pub use host_loop::{BindObserver, HostLoop, Thread};
 pub use sdk_queue::{SdkRx, SdkTx, sdk_queue};
 pub use track::{FailingProcessors, FakeTrackPublication, Faults};
@@ -1094,6 +1094,32 @@ mod tests {
         assert_eq!((info.played, info.discarded), (ms(30), ms(70)));
         assert_eq!(tags(&source.played()), vec![1], "only whole frames reach the speaker");
         assert_eq!(tags(&source.discarded()), vec![2, 3, 4, 5]);
+    }
+
+    // Catches: a fake whose `clear_queue` silences a capture longer than the queue. The SDK's
+    // feeds it in queue-sized pieces and its clear cuts only the one buffered, even once the
+    // capture is dropped: 500 ms into the 200 ms queue, cleared at 25 ms, plays until 325 ms
+    // (`livekit-rtc` 1.1.20 measured 310 ms).
+    #[tokio::test(start_paused = true)]
+    async fn clear_queue_leaves_the_rest_of_a_capture_longer_than_the_queue() {
+        let (rtc, source) = published().await;
+        let long = AudioFrame::new(vec![1u8; 12_000 * 2], 24_000, 1, 12_000);
+        let capturing = source.clone();
+        let capture = tokio::spawn(async move {
+            capturing.capture(&lk_agents_abi::telemetry::Cx::NONE, &long).await
+        });
+        tokio::task::yield_now().await;
+        rtc.advance(ms(25));
+        source.clear_queue().unwrap();
+        capture.abort();
+        rtc.advance(ms(600));
+        timeout(NEVER, source.wait_for_playout(&lk_agents_abi::telemetry::Cx::NONE))
+            .await
+            .unwrap()
+            .unwrap();
+        let speaker = source.speaker();
+        let last = speaker.heard.iter().map(|h| h.until).max().unwrap();
+        assert_eq!(last.saturating_duration_since(speaker.clears[0]), ms(300));
     }
 
     // Catches: a `wait_for_playout` that resolves before the clock played the queue, or counters

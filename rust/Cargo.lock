@@ -1585,6 +1585,7 @@ dependencies = [
  "log",
  "parking_lot",
  "prost",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-util",
@@ -1798,6 +1799,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite 0.30.0",
  "tokio-util",
+ "url",
  "web-transport-quinn",
 ]
 

@@ -96,6 +96,7 @@ fn shown(text: &str, start: f64) -> Step {
         start,
         end: start + 0.1,
         played: std::time::Duration::from_secs_f64(start + 0.05),
+        spoken: true,
     })
 }
 

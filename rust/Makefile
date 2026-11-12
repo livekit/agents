@@ -51,14 +51,14 @@ check: format-check clippy
 	python3 ai_slop/lk-agents-codegen/thread_api.py --check
 
 python:
-	cd "$(ROOT)/livekit-agents-next" && "$(MATURIN)" develop --skip-install --locked $(BUILD_ARGS)
+	cd "$(ROOT)/livekit-agents" && "$(MATURIN)" develop --skip-install --locked $(BUILD_ARGS)
 
 # Keep Maturin's configured ABI/media features; --features would replace them.
 # RUSTFLAGS restores the platform debug format but must retain the simulation cfg.
 python-debug: export RUSTFLAGS = --cfg tokio_unstable
 python-debug: export LK_AGENTS_NATIVE_DEBUG = 1
 python-debug:
-	cd "$(ROOT)/livekit-agents-next" && "$(MATURIN)" develop --skip-install --locked \
+	cd "$(ROOT)/livekit-agents" && "$(MATURIN)" develop --skip-install --locked \
 		--config 'profile.dev.package.lk-agents-py.debug=1' $(BUILD_ARGS)
 
 format:

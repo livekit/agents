@@ -141,6 +141,18 @@ impl SpeechSentenceTokenizer {
     }
 }
 
+// Wherever the host passes a `::lk_agents_abi::tokenize::bindings::NativeSentences`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::tokenize::bindings::NativeSentences>(),
+        read: |obj| {
+            let this = obj.cast::<SpeechSentenceTokenizer>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::tokenize::bindings::NativeSentences> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
 type SpeechSentenceStreamImpl =
     <crate::generated::implementations::Selected as super::Implementations>::SpeechSentenceStream;

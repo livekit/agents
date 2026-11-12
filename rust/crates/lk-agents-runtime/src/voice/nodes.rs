@@ -5,13 +5,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::telemetry;
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::metrics::base::{AgentMetrics, ConnectionAcquired};
-use lk_agents_abi::utils::stream::{CallLedger, RetryReport};
+use lk_agents_abi::utils::stream::{CallLedger, Entry, RetryReport};
 use lk_agents_abi::voice::io::{IoError, TranscriptionOutput};
 use lk_agents_abi::voice::nodes::{NodeChunk, NodeFactory, ProviderCalls, SessionNodes, TextNode};
 use lk_agents_abi::{
     AudioFrame, ChatRequest, ChoiceDelta, Clock, Closed, HOST_TEARDOWN_TIMEOUT, LanguageCode, Llm,
-    LlmChunk, LlmStream, Role, Spawner, SpeechEvent, StreamInput, StreamOutput, Stt,
-    SttCapabilities, SttSink, SttSource, SynthesizedAudio, TranscriptChunk, Ts, Tts,
+    LlmChunk, LlmStream, Role, Spawner, SpeechChunk, SpeechEvent, StreamInput, StreamOutput, Stt,
+    SttCapabilities, SttSink, SttSource, SynthesizedAudio, TextSink, TranscriptChunk, Ts, Tts,
     TtsCapabilities, TtsSink, TtsSource,
 };
 use lk_agents_media::media_queue::{self, Item, Policy};
@@ -80,16 +80,14 @@ impl NodeFactory for AgentNodes {
     fn tts_node(
         &self,
         cx: &telemetry::Cx,
-        expressive: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
+        Result<lk_agents_abi::DuplexStream<TextSink, TtsSource>, ProviderError>,
     > {
         let cx = cx.clone();
         Box::pin(async move {
             let (sink, input) = channel();
-            let calls =
-                Arc::new(NodeCalls { expressive, step: Some(cx.clone()), ..NodeCalls::default() });
+            let calls = Arc::new(NodeCalls { step: Some(cx.clone()), ..NodeCalls::default() });
             let out = self.host.tts(&cx, Box::new(input), calls.clone()).await?;
             let request_id = node_id("tts_node_");
             let relay = calls.clone();
@@ -100,7 +98,7 @@ impl NodeFactory for AgentNodes {
             };
             let out = Mapped { source: out, map, calls: Some(calls) };
             Ok(lk_agents_abi::DuplexStream::new(
-                Box::new(sink) as TtsSink,
+                Box::new(sink) as TextSink,
                 Box::new(out) as TtsSource,
             ))
         })
@@ -365,7 +363,7 @@ fn channel<I>() -> (ChannelSink<I>, ChannelSource<I>) {
     (ChannelSink(Mutex::new(Some(tx))), ChannelSource(rx))
 }
 
-impl<I: Send> StreamInput<I> for ChannelSink<I> {
+impl<I: Send + 'static> StreamInput<I> for ChannelSink<I> {
     fn push(&self, item: I) -> Result<(), ProviderError> {
         let input = self.0.lock();
         let tx = input
@@ -386,6 +384,27 @@ impl<I: Send> StreamInput<I> for ChannelSink<I> {
 
     fn end_input(&self) {
         self.0.lock().take();
+    }
+
+    /// Waits for room: a node behind holds the feed, it never refuses what was said.
+    fn send(
+        &self,
+        entry: Entry<I>,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
+        let closed = || lk_agents_abi::errors::ApiError::new("stream input is closed").into();
+        let tx = self.0.lock().clone();
+        match entry {
+            Entry::Item(item) => {
+                Box::pin(
+                    async move { tx.ok_or_else(closed)?.send(item).await.map_err(|_| closed()) },
+                )
+            }
+            Entry::Flush => Box::pin(std::future::ready(self.flush())),
+            Entry::EndInput => {
+                self.end_input();
+                Box::pin(std::future::ready(Ok(())))
+            }
+        }
     }
 }
 
@@ -539,8 +558,6 @@ impl<A: Send + 'static, T, M: FnMut(A) -> T + Send> lk_agents_abi::utils::stream
 #[derive(Default)]
 pub struct NodeCalls {
     state: Mutex<NodeCallState>,
-    /// The synthesis carries expressive markup; the default node opens its provider with it.
-    pub(super) expressive: bool,
     connection: Mutex<Option<ConnectionAcquired>>,
     /// The step's node span, job and conversation; `None` outside a step.
     pub(super) step: Option<telemetry::Cx>,
@@ -756,20 +773,21 @@ impl Tts for Node<dyn Tts> {
         self.below.markup_provider()
     }
 
-    fn lowers_markup(&self) -> bool {
-        self.below.lowers_markup()
+    /// The node takes the text as written: its own synthesis prepares it for its provider.
+    fn text_unit(&self) -> lk_agents_abi::tts::types::TextUnit {
+        lk_agents_abi::tts::types::TextUnit::Text
     }
 
     /// One text, through the node all the same.
     fn synthesize<'a>(
         &'a self,
         cx: &telemetry::Cx,
-        text: &'a str,
+        chunk: &'a SpeechChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         let cx = cx.clone();
         Box::pin(async move {
-            let (sink, source) = self.stream(&cx, false).await?.split();
-            sink.push(text.to_owned()).map_err(final_error)?;
+            let (sink, source) = duplex(self.host.tts_node(&cx).await)?.split();
+            sink.push(chunk.text.clone()).map_err(final_error)?;
             sink.end_input();
             Ok(source)
         })
@@ -778,13 +796,41 @@ impl Tts for Node<dyn Tts> {
     fn stream(
         &self,
         cx: &telemetry::Cx,
-        expressive: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
     > {
         let cx = cx.clone();
-        Box::pin(async move { duplex(self.host.tts_node(&cx, expressive).await) })
+        Box::pin(async move {
+            let (sink, source) = duplex(self.host.tts_node(&cx).await)?.split();
+            Ok(lk_agents_abi::DuplexStream::new(Box::new(AsWritten(sink)) as TtsSink, source))
+        })
+    }
+}
+
+/// A text input as a [`TextUnit::Text`](lk_agents_abi::tts::types::TextUnit::Text) TTS's: each
+/// chunk is the text as written.
+struct AsWritten(TextSink);
+
+impl StreamInput<SpeechChunk> for AsWritten {
+    fn push(&self, chunk: SpeechChunk) -> Result<(), ProviderError> {
+        self.0.push(chunk.text)
+    }
+    fn flush(&self) -> Result<(), ProviderError> {
+        self.0.flush()
+    }
+    fn end_input(&self) {
+        self.0.end_input();
+    }
+    fn send(
+        &self,
+        entry: Entry<SpeechChunk>,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
+        self.0.send(match entry {
+            Entry::Item(chunk) => Entry::Item(chunk.text),
+            Entry::Flush => Entry::Flush,
+            Entry::EndInput => Entry::EndInput,
+        })
     }
 }
 

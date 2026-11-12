@@ -37,8 +37,6 @@ pub(super) struct TtsInference<'a, 'b, 'p> {
     pub(super) handle: &'a Arc<SpeechHandle>,
     pub(super) acc: &'a mut TurnAccumulator,
     pub(super) tts: &'a Arc<dyn Tts>,
-    /// The reply carries expressive markup; each synthesis is opened with it.
-    pub(super) expressive: bool,
     /// The segment's index in the step.
     pub(super) segment: usize,
     pub(super) rx: &'a mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
@@ -100,7 +98,6 @@ impl TtsInference<'_, '_, '_> {
         let open = lk_agents_inference::tts::stream(
             self.tts.clone(),
             &context,
-            self.expressive,
             shared.conn.tts.unwrap_or_default(),
             shared.time.clock(),
             Some(give_up_observer(shared, handle, ProviderKind::Tts)),
@@ -282,7 +279,7 @@ async fn synthesize(
 }
 
 /// What the voice says of one piece. Empty is normal: a piece that was markup or held text.
-pub(super) fn push_text(sink: &lk_agents_abi::TtsSink, said: &str) -> Result<(), ProviderError> {
+pub(super) fn push_text(sink: &lk_agents_abi::TextSink, said: &str) -> Result<(), ProviderError> {
     if said.is_empty() {
         return Ok(());
     }
@@ -295,7 +292,7 @@ struct Streaming<'a, 'b> {
     shared: &'a Arc<SessionShared>,
     handle: &'a SpeechHandle,
     acc: &'a mut TurnAccumulator,
-    sink: &'a lk_agents_abi::TtsSink,
+    sink: &'a lk_agents_abi::TextSink,
     source: lk_agents_net::owned::Owned<lk_agents_abi::TtsSource>,
     rx: &'a mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
     text_out: Option<&'a TextLeg<'a>>,
@@ -408,7 +405,7 @@ impl Streaming<'_, '_> {
 async fn feed_text(
     event: Option<SpeechSegmentEvent>,
     state: &mut StreamingTts,
-    sink: &lk_agents_abi::TtsSink,
+    sink: &lk_agents_abi::TextSink,
     text_out: Option<&TextLeg<'_>>,
     text_buffer: &SynthesisText,
 ) {

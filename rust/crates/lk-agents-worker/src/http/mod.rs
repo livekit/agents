@@ -168,8 +168,6 @@ impl TextDoors {
         let door = self.doors.iter().find(|door| door.name() == name)?;
         let serving = self.serving.lock().clone();
         let settings = self.settings.lock();
-        let credentials = (!settings.api_key.is_empty() && !settings.api_secret.is_empty())
-            .then(|| (settings.api_key.clone(), settings.api_secret.clone()));
         Some((
             door,
             TextServing {
@@ -177,7 +175,6 @@ impl TextDoors {
                 endpoint_url: settings.endpoint_url(&serving, name),
                 agent_name: settings.agent_name.clone(),
                 deployment: settings.deployment.clone(),
-                credentials,
                 host_context: self.host_context.clone(),
             },
         ))

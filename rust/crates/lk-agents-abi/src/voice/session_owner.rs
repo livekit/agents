@@ -117,7 +117,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// console's) claims the job's primary session and sets the job's recording from its plan;
     /// the start time is set; the job's session opens its audio recording and the job's shutdown
     /// is made to close it; the recording is ready; the toolsets set up and the voice loop starts.
-    /// A failure closes the owner and ends the session's spans with it; a thread whose lane does
+    /// A failure closes the owner and ends the session's spans with it; a thread whose partition does
     /// not load fails it with its storage error.
     #[host(await)]
     fn start(
@@ -172,7 +172,6 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         vad: crate::Maybe<Option<crate::HostRef>>,
         turn_handling: crate::Maybe<super::session_options::TurnHandlingKwargs>,
         min_consecutive_speech_delay: crate::Maybe<f64>,
-        tts_text_transforms: crate::Maybe<Option<super::session_options::TextTransformSet>>,
         expressive: crate::Maybe<super::session_options::Expressive>,
         keyterms: crate::Maybe<Vec<String>>,
     ) -> Result<(), OptionsRefused>;
@@ -188,7 +187,6 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         vad: crate::Maybe<Option<crate::HostRef>>,
         turn_handling: crate::Maybe<super::session_options::TurnHandlingKwargs>,
         min_consecutive_speech_delay: crate::Maybe<f64>,
-        tts_text_transforms: crate::Maybe<Option<super::session_options::TextTransformSet>>,
     ) -> Result<u64, OptionsRefused>;
     /// The `override_options` block ended, however it ended: its settings are released and the
     /// providers it changed restored. On a closed session the settings still release and the
@@ -327,7 +325,6 @@ pub trait VoiceSessionFacade {
             stt = "..stt.STT | str | None",
             tts = "..tts.TTS | str | None",
             vad = ".vad.VAD | None",
-            tts_text_transforms = "collections.abc.Sequence[.session_options.TextTransforms] | None",
             expressive = "bool | .expressive.ExpressiveOptions"
         ),
         resolve(
@@ -343,7 +340,6 @@ pub trait VoiceSessionFacade {
         vad: crate::Maybe<Option<crate::HostRef>>,
         turn_handling: crate::Maybe<super::session_options::TurnHandlingKwargs>,
         min_consecutive_speech_delay: crate::Maybe<f64>,
-        tts_text_transforms: crate::Maybe<Option<super::session_options::TextTransformSet>>,
         expressive: crate::Maybe<super::session_options::Expressive>,
         keyterms: crate::Maybe<Vec<String>>,
     ) -> Result<(), OptionsRefused>;

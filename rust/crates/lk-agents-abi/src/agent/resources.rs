@@ -29,6 +29,13 @@ pub trait ContextHydration: Send + Sync {
     fn release(&self) -> Result<(), HostError>;
 }
 
+/// Release the host's invocation-local binding after native execution cleanup.
+#[crate::host(proxy(host = "livekit.agents.storage.context._SessionBinding"))]
+pub trait BindingCleanup: Send + Sync {
+    #[host(call, name = "_core_release_hydration")]
+    fn release(&self) -> Result<(), HostError>;
+}
+
 #[crate::host(class(name = "_core_RunResources"))]
 pub trait RunResources: Send + Sync + Sized + 'static {
     #[host(env)]
@@ -44,7 +51,7 @@ pub trait RunResources: Send + Sync + Sized + 'static {
         namespace: Option<Arc<Self::Namespace>>,
         thread_id: Option<String>,
         activation: Option<Self::Activation>,
-        lane: String,
+        partition_key: String,
         toolsets: Vec<Arc<dyn ToolsetHooks>>,
     ) -> Result<Self, ResourceError>;
 
@@ -62,6 +69,9 @@ pub trait RunResources: Send + Sync + Sized + 'static {
     fn closed(&self) -> bool;
     #[host(call)]
     fn retain_hydration(&self, hydration: Arc<dyn ContextHydration>);
+    /// Releases an invocation-local binding even when its store is borrowed.
+    #[host(call)]
+    fn retain_binding(&self, binding: Arc<dyn BindingCleanup>);
     /// One owned cleanup; cancelled or repeated waiters can rejoin it.
     #[host(await)]
     fn aclose(&self) -> BoxFuture<'static, Result<(), ResourceError>>;

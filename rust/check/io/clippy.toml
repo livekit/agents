@@ -14,6 +14,8 @@ disallowed-types = [
   { path = "tokio::fs::DirBuilder", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },
   { path = "tokio::fs::ReadDir", reason = "Tokio's files run on its blocking pool: use std::fs on lk_agents_net::blocking_io." },
   { path = "tokio::sync::Notify", reason = "A waiter on a Notify is woken only if someone remembers to: wait on lk_agents_net::signal, whose producer's drop resolves every waiter." },
+  { path = "futures_util::future::Shared", reason = "A wake that lands while another waiter polls is lost: share work through lk_agents_net::signal::Shared, its driver a task its executor polls again." },
+  { path = "futures::future::Shared", reason = "A wake that lands while another waiter polls is lost: share work through lk_agents_net::signal::Shared, its driver a task its executor polls again." },
 ]
 
 # No Tokio blocking pool: blocking work runs on our pools (lk_agents_media::pool::media_pool,

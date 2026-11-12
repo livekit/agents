@@ -1,9 +1,8 @@
 pub mod effects;
+mod estimate;
 pub mod machine;
 
 use lk_agents_abi::TranscriptChunk;
-use lk_agents_abi::tts::markup::Markup;
-use lk_agents_abi::voice::session_options::TextTransform;
 use lk_agents_core::lexer::{Lexer, Projector, Rules, Unit, Units, View, Vocabulary};
 use std::time::Duration;
 
@@ -56,12 +55,68 @@ pub fn plain(shown: &str) -> String {
     Projector::new(View::Plain).text(&Lexer::all(rules, shown))
 }
 
+/// Whether `next` continues the word `text` ends: no blank between them. A word the reply's
+/// deltas split (`Tuesda` + `y`) and markup glued to it (`**` + `Upgrade`) are one word to every
+/// reader of transcript pieces.
+pub fn continues_word(text: &str, next: &str) -> bool {
+    let word = |c: char| !c.is_whitespace();
+    text.ends_with(word) && next.starts_with(word)
+}
+
+/// The transcript's pieces as words, each with where its audio ends: what a cut keeps as heard.
+/// Silent text (`- `, `**`) leads the word after it and is heard with that word; the words are
+/// one voice, so a word's audio was over when the next one's began.
+#[derive(Debug, Default)]
+pub struct HeardWords {
+    words: Vec<HeardWord>,
+}
+
+#[derive(Debug)]
+struct HeardWord {
+    text: String,
+    end: f64,
+    /// Whether it has a spoken word yet: silent text alone waits for the word it leads.
+    spoken: bool,
+}
+
+impl HeardWords {
+    /// A piece shown from `start` to `end` seconds into the segment.
+    pub fn push(&mut self, text: &str, spoken: bool, start: f64, end: f64) {
+        match self.words.last_mut() {
+            Some(last) if !last.spoken => {
+                last.text.push_str(text);
+                (last.end, last.spoken) = (end, spoken);
+            }
+            Some(last) if continues_word(&last.text, text) => {
+                last.text.push_str(text);
+                last.end = last.end.max(end);
+            }
+            last => {
+                if let Some(last) = last {
+                    last.end = last.end.min(start);
+                }
+                self.words.push(HeardWord { text: text.to_owned(), end, spoken });
+            }
+        }
+    }
+
+    /// The words whose audio ended by `at` seconds, as shown.
+    pub fn heard(&self, at: f64) -> String {
+        self.words.iter().take_while(|w| w.end <= at && w.spoken).map(|w| w.text.as_str()).collect()
+    }
+
+    /// Every word, as shown.
+    pub fn all(&self) -> String {
+        self.words.iter().map(|w| w.text.as_str()).collect()
+    }
+}
+
 /// A plain string a host hands the transcript chain (a `transcription_node` yielding strings, a
 /// custom output): it never went through a voice's reading, so its markup (any provider's, the
 /// voice unknown here) is taken out and its delivery lifted onto the chunk. Per segment.
 #[derive(Debug, Default)]
 pub struct HostText {
-    stripper: lk_agents_core::tts::markup::TranscriptMarkupStripper,
+    stripper: lk_agents_core::markup::TranscriptMarkupStripper,
     seen: usize,
 }
 
@@ -83,39 +138,6 @@ impl HostText {
     }
 }
 
-/// How a voice reads its replies: the markup its TTS speaks, and which `text_transforms` are on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpeechViews {
-    pub vocab: Vocabulary,
-    pub filter_markdown: bool,
-    pub filter_emoji: bool,
-}
-
-impl Default for SpeechViews {
-    /// No TTS dialect, both transforms on: the session's defaults.
-    fn default() -> Self {
-        SpeechViews { vocab: Vocabulary::LiveKit, filter_markdown: true, filter_emoji: true }
-    }
-}
-
-impl SpeechViews {
-    pub fn new(markup: Markup, transforms: &[TextTransform]) -> SpeechViews {
-        SpeechViews {
-            vocab: Vocabulary::of(markup.0),
-            filter_markdown: transforms.contains(&TextTransform::FilterMarkdown),
-            filter_emoji: transforms.contains(&TextTransform::FilterEmoji),
-        }
-    }
-
-    fn said(&self) -> View {
-        View::Synthesis { keep_markdown: !self.filter_markdown, keep_emoji: !self.filter_emoji }
-    }
-
-    fn spoken(&self) -> View {
-        View::Spoken { keep_markdown: !self.filter_markdown, keep_emoji: !self.filter_emoji }
-    }
-}
-
 /// One piece of agent text, read once by its segment's lexer.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Visible {
@@ -128,9 +150,9 @@ pub struct Visible {
 }
 
 impl Visible {
-    /// A whole piece of text; for deltas use [`SegmentText`].
-    pub fn of(text: &str, views: &SpeechViews) -> Visible {
-        let mut segment = SegmentText::new(views.clone());
+    /// A whole piece of text, under the voice's tags `vocab`; for deltas use [`SegmentText`].
+    pub fn of(text: &str, vocab: &Vocabulary) -> Visible {
+        let mut segment = SegmentText::new(vocab.clone());
         let mut visible = segment.push(text);
         visible.extend(segment.finish());
         visible
@@ -171,12 +193,13 @@ pub struct SegmentText {
 }
 
 impl SegmentText {
-    pub fn new(views: SpeechViews) -> SegmentText {
+    /// A segment of a voice whose TTS speaks the tags `vocab`.
+    pub fn new(vocab: Vocabulary) -> SegmentText {
         SegmentText {
-            lexer: Lexer::new(Rules::speech(views.vocab.clone())),
-            said: Projector::new(views.said()),
+            lexer: Lexer::new(Rules::speech(vocab)),
+            said: Projector::new(View::Synthesis),
             plain: Projector::new(View::Plain),
-            units: Units::new(views.spoken(), View::Display { keep_emoji: true }),
+            units: Units::new(View::Spoken, View::Display),
             expression: None,
         }
     }
@@ -212,7 +235,7 @@ impl SegmentText {
                 Unit::Said(said) => (said, true),
                 Unit::Silent { shown, tags } => {
                     if let Some(delivery) =
-                        tags.iter().rev().find_map(lk_agents_core::tts::markup::delivery)
+                        tags.iter().rev().find_map(lk_agents_core::markup::delivery)
                     {
                         self.expression = Some(delivery);
                     }

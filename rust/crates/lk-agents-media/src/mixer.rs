@@ -201,6 +201,41 @@ mod tests {
         assert_eq!(m.mix(), Some(vec![32_767, -32_768]));
     }
 
+    /// Background and speech mixes conserve every sample across packet boundaries. https://github.com/livekit/agents/issues/2277
+    #[test]
+    fn speech_and_background_keep_their_timeline_across_chunk_partitions() {
+        let speech = [30_000i16, -30_000, 100, -100, 123, 456, 700, -700];
+        let background = [10_000i16, -10_000, 20, -20, 456, 123, -700, 700];
+        let expected: Vec<_> = speech
+            .iter()
+            .zip(background)
+            .map(|(&a, b)| {
+                (i32::from(a) + i32::from(b)).clamp(i16::MIN as i32, i16::MAX as i32) as i16
+            })
+            .collect();
+        for first in 1..=speech.len() {
+            for second in 1..=background.len() {
+                let mut mix = mixer(2);
+                let a = mix.add_stream();
+                let b = mix.add_stream();
+                for chunk in speech.chunks(first) {
+                    mix.push(a, chunk);
+                }
+                for chunk in background.chunks(second) {
+                    mix.push(b, chunk);
+                }
+                mix.mark_exhausted(a);
+                mix.mark_exhausted(b);
+                let mut actual = Vec::new();
+                while let Some(block) = mix.mix() {
+                    actual.extend(block);
+                }
+                assert_eq!(actual, expected, "partitions {first}, {second}");
+                assert!(mix.is_empty());
+            }
+        }
+    }
+
     // A short buffer retained for the next round would run that stream a fixed offset behind
     // the block clock for the rest of the call.
     #[test]

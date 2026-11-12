@@ -91,15 +91,18 @@ impl Inner {
             }
             let cleanup = match inner.resources.get() {
                 Some(resources) => {
+                    let success = outcome.as_ref().is_ok_and(lk_agents_core::run_stream::accepts_application_writes);
+                    let session = resources.settle_session(success).await.map_err(StreamError::Resources);
                     let clock = &inner.env.clock;
                     let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-                    tokio::select! {
+                    let closed = tokio::select! {
                         biased;
                         closed = resources.aclose() => closed.map_err(StreamError::Resources),
                         () = clock.wait_until(deadline) => Err(StreamError::Resources(
                             HostError::new("the run's resources missed their close deadline").into(),
                         )),
-                    }
+                    };
+                    session.and(closed)
                 }
                 None => Ok(()),
             };

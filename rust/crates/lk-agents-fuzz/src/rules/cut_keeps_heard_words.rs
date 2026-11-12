@@ -1,5 +1,6 @@
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::SpeechId,
+    transcription::HeardWords,
     trace::{
         GenerationStep, InterruptCause, InterruptStep, PlayoutStep, SpeechStep, Step, ToolStep,
     },
@@ -59,7 +60,7 @@ impl Rule for CutKeepsHeardWords {
                 continue;
             }
             let (mut heard, mut remembered) = (String::new(), None::<String>);
-            let mut segment: Vec<(&str, f64)> = Vec::new();
+            let mut segment = HeardWords::default();
             // A segment started and not yet reported finished; whether any started at all.
             let (mut open, mut played) = (false, false);
             for (_, step) in trace.steps() {
@@ -67,25 +68,19 @@ impl Rule for CutKeepsHeardWords {
                     Step::Playout(PlayoutStep::PlaybackStarted { .. }) => {
                         (open, played) = (true, true)
                     }
-                    Step::Playout(PlayoutStep::TranscriptShown { text, start, end, .. }) => {
+                    Step::Playout(PlayoutStep::TranscriptShown {
+                        text, start, end, spoken, ..
+                    }) => {
                         (open, played) = (true, true);
-                        // One voice: the word before was over when this one began.
-                        if let Some((_, before)) = segment.last_mut() {
-                            *before = before.min(*start);
-                        }
-                        segment.push((text, *end))
+                        segment.push(text, *spoken, *start, *end);
                     }
                     Step::Playout(PlayoutStep::PlaybackFinished {
                         position, interrupted, ..
                     }) => {
                         open = false;
                         let cut = position.as_secs_f64() + EPSILON;
-                        heard.extend(
-                            segment
-                                .drain(..)
-                                .filter(|(_, end)| !interrupted || *end <= cut)
-                                .map(|(text, _)| text),
-                        );
+                        let segment = std::mem::take(&mut segment);
+                        heard.push_str(&if *interrupted { segment.heard(cut) } else { segment.all() });
                     }
                     // A tool follow-up: the steps before it committed their own text.
                     Step::Tool(ToolStep::StepStarted { .. }) => heard.clear(),
@@ -99,6 +94,8 @@ impl Rule for CutKeepsHeardWords {
             // whose sink never reported its end is read at the playout's own count.
             // A reply cut before any of its audio started playing is no synchroniser's to tell.
             let Some(remembered) = remembered.filter(|_| !open && played) else { continue };
+            // the transcript shows markdown as written; the history keeps the words
+            let heard = lk_agents_voice::transcription::plain(&heard);
             let (remembered, heard) = (squash(&remembered), squash(&heard));
             check.expect(
                 speech,
@@ -120,6 +117,7 @@ fn shown(text: &str, start: f64) -> Step {
         start,
         end: start + 0.1,
         played: std::time::Duration::from_secs_f64(start + 0.05),
+        spoken: true,
     })
 }
 

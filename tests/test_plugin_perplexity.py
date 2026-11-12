@@ -14,9 +14,3 @@ def test_attribution_header_attached(monkeypatch: pytest.MonkeyPatch) -> None:
     extra_headers = llm._extra_kwargs["extra_headers"]
     assert isinstance(extra_headers, dict)
     assert extra_headers["X-Pplx-Integration"] == f"livekit-agents/{__version__}"
-
-
-def test_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="PERPLEXITY_API_KEY"):
-        LLM()

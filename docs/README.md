@@ -28,11 +28,12 @@ To expose and call your application, read [server entrypoints](server.md) and
 | [context.md](context.md) | Runtime dependencies, persisted fields, explicit load/save, scope, concurrency, and schema evolution |
 | [text-session.md](text-session.md) | Session rehydration, backend agent frames, delegation, private histories, and continuation across requests |
 | [voice-session.md](voice-session.md) | Audio and turn configuration, agent replacement, frontend expert events, and reply routing |
-| [voice-tasks.md](voice-tasks.md) | Constructing and running bounded voice interactions, typed completion, suspension, and cleanup |
 | [lexer.md](lexer.md) | A model reply's text on its way to the voice, the transcript and the history: hidden reasoning and template leaks, expressive markup, markdown and emoji, transcript sync, and how long text is held |
-| [threads.md](threads.md) | Conversation identity, lifecycle, public history/task access, and the relationship between lanes and session frames |
+| [voice-tasks.md](voice-tasks.md) | Constructing and running bounded voice interactions, typed completion, suspension, and cleanup |
+| [threads.md](threads.md) | Conversation identity, lifecycle, public history/task access, and the relationship between partitions and session frames |
 | [server.md](server.md) | AgentServer/AgentHandler, text and voice entrypoints, handler outcomes, and request policies |
 | [clients.md](clients.md) | Thread service and handles, endpoint clients, grants, browser access, and call dispatch |
+| [auth.md](auth.md) | Principals, grants, how a thread id travels with its token, agent-db access, and endpoint verification |
 | [channels.md](channels.md) | Platform ingress/egress, SMS/WhatsApp/email, attachments, and cross-channel continuation |
 | [testing.md](testing.md) | Run event assertions, conversation judges, simulations, and SimulationContext verdicts and callbacks |
 
@@ -48,17 +49,9 @@ and storage mechanics have separate references below.
 
 ## Internals
 
-| Document | Contract |
-| --- | --- |
-| [Storage](internals/storage.md) | Database layout, managed commits, lanes, leases/fences, transport inboxes, and the journal |
-| [Rust code map](internals/rust-code-map.md) | Start here for Python-to-Rust execution paths, component entry points and focused test commands |
-| [Rust core](internals/rust-core.md) | Crate ownership, deterministic cores, runtime I/O, generated bindings, and verification |
-| [Telemetry](internals/telemetry.md) | Data flows, destinations, the span API, user turns, the session report, the naming registry, and how to add telemetry |
-| [Telemetry reference](internals/telemetry-reference.md) | Standard conventions, span trees, the complete emitted inventory, consumers, and the Cloud ingest and redaction contract |
-| [Python ownership inventory](internals/python-ownership.md) | Complete handwritten framework file coverage, ownership targets, migrated responsibilities, and remaining work |
-| [Python legacy API inventory](internals/python-legacy-api-inventory.md) | Deprecated arguments, no-op settings, compatibility aliases, concrete replacements, and protocol/data retirement prerequisites |
-| [Rust fuzz crate audit](internals/rust-fuzz-inventory.md) | Simulation structure, contributor navigation, scheduling, contracts, reproduction, and improvement inventory |
-| [TODO](TODO.md) | Designed behavior not built yet, and public API the owner will revisit |
+The [contributor index](internals/README.md) organizes the implementation guides by topic.
+Start with the [execution paths](internals/architecture.md#execution-paths) to follow an execution path, or
+[development](internals/development.md) to build and check the framework.
 
 ## Principles
 
@@ -84,10 +77,6 @@ and storage mechanics have separate references below.
 - [`examples/`](../examples/README.md): three fast brain and slow brain
   pairs, each one worker: a dental practice's front desk, a hotel
   receptionist, an airline's customer care, with simulation scenarios.
-- [`console/`](../console/README.md): a developer tool, not a customer
-  frontend. A chat with a front desk, a call over the voice door, and the
-  thread's database beside it, read through the admin-only
-  [admin API](clients.md#admin-reads).
 - [`tests/e2e/`](../tests/e2e/README.md) contains pytest journeys selected with
   `uv run pytest tests/e2e --e2e`: a thread across two workers, interrupt, an
   inbox burst, a worker killed mid-turn, input-required and approvals
@@ -100,9 +89,9 @@ and storage mechanics have separate references below.
 | --- | --- |
 | Agent | Shared behavior configuration; not a conversation or mutable application state |
 | Run | One input to a completed result or input-required outcome, including model/tool execution |
-| Text session | A logical conversation continued by reconstructing request-scoped execution from explicitly saved state |
+| Text session | Request-scoped conversation execution continued through an explicit snapshot or store binding |
 | Voice session | A running frontend conversation with audio resources, turn handling, and in-process interaction state |
 | Voice task | A temporary voice interaction that returns a typed result and restores its caller |
 | Thread | A durable conversation identity (`AT_...`), also used as A2A `contextId` |
-| Lane | A configured handler's transport-history/task and concurrency boundary within a thread |
-| Frame | One backend agent conversation inside TextSessionState, with its own history and parent-call relationship |
+| Partition | History, routing, inbox and write ownership selected by a partition_key within a thread |
+| Frame | One backend conversation inside a text SessionState, with its own history and parent-call relationship |

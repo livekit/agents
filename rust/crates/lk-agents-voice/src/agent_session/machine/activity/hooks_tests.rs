@@ -206,3 +206,30 @@ fn no_host_filler_source_refuses_once_instead_of_rescheduling_a_decline() {
         .collect();
     assert_eq!(stops, [FillerEnd::Refused]);
 }
+
+/// Context `on_user_turn_completed` adds is sent before the user's message it was stamped after.
+/// https://github.com/livekit/agents/issues/5053 https://github.com/livekit/agents/pull/2108
+#[test]
+#[ignore = "https://github.com/livekit/agents/issues/5053 reproduces: the onset-stamped user message is inserted ahead of hook-added context"]
+fn context_injection_during_turn_callback_preserves_order() {
+    use lk_agents_abi::{ChatContext, ChatMessage, Role};
+    let at = |secs| std::time::UNIX_EPOCH + Duration::from_secs(secs);
+    let greeting = ChatMessage::text("greeting", Role::Assistant, "Hi, how can I help?", at(1));
+    // The person started speaking at 5 s; the hook ran its lookup and added the result at 9 s.
+    let user = ChatMessage::text("user", Role::User, "What is my favorite fruit?", at(5));
+    let rag = ChatMessage::text("rag", Role::Assistant, "Favorite fruit: mango.", at(9));
+    let plan = crate::generation::PlanSpec {
+        record: Some(ChatContext::new(vec![greeting.into(), rag.into()])),
+        new_message: Some(user),
+        ..Default::default()
+    };
+    let request = plan.plan(&ChatContext::default(), "Be helpful.", at(10));
+    let order: Vec<&str> = request
+        .chat_ctx
+        .items
+        .iter()
+        .map(|item| item.id())
+        .filter(|id| ["greeting", "rag", "user"].contains(id))
+        .collect();
+    assert_eq!(order, ["greeting", "rag", "user"], "the question comes after its context");
+}

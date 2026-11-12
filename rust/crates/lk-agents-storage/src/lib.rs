@@ -4,6 +4,9 @@ pub mod backends;
 pub mod context;
 mod cursor;
 pub mod http;
+pub mod session_binding;
+mod session_snapshot;
+pub mod session_state;
 pub mod sql;
 pub mod storage;
 mod telemetry;
@@ -16,10 +19,10 @@ pub mod voice;
 pub use backends::{Storage, ThreadDbConnection};
 pub use lk_agents_abi::storage::StorageError;
 pub use lk_agents_abi::storage::thread::{
-    LaneAccess, LeaseAfterCommit, TaskPickup, TaskWrite, WhenHeld, timestamp,
+    LeaseAfterCommit, PartitionAccess, TaskPickup, TaskWrite, WhenHeld, timestamp,
 };
 pub use lk_agents_net::strings::shortuuid;
 pub use thread::db::{Commit, Committed, EventWrite, Fence, TaskQuery};
 pub use thread::lease::{Holder, Lease};
-pub use thread::run::{ItemRow, LaneKind, RunOutcome, TaskState};
-pub use thread::{CommitOptions, Lane, Run, RunOptions, Tasks, Thread};
+pub use thread::run::{ItemRow, PartitionKind, RunOutcome, TaskState};
+pub use thread::{CommitOptions, Partition, Run, RunOptions, Tasks, Thread};

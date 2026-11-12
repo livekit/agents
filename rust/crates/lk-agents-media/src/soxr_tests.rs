@@ -20,6 +20,45 @@ fn dominant_hz(pcm: &[i16], rate: u32) -> f64 {
     crossings as f64 / 2.0 * f64::from(rate) / pcm.len() as f64
 }
 
+/// Rate conversion preserves duration, pitch and channel framing. https://github.com/livekit/agents/issues/4244 https://github.com/livekit/agents/pull/1643
+#[test]
+fn realtime_rate_pairs_preserve_tone_duration_and_stereo_headers() {
+    for (source, target) in [(22_050, 24_000), (24_000, 48_000), (48_000, 24_000)] {
+        let mut resampler =
+            crate::AudioResampler::new(target, Quality::Medium, crate::OnChange::Drain);
+        let input = sine(440.0, source, 1000, 2);
+        let mut frames = Vec::new();
+        for chunk in input.chunks(source as usize / 50 * 2) {
+            frames.extend(
+                resampler
+                    .push_frame(&lk_agents_abi::AudioFrame::new(
+                        crate::pcm_bytes(chunk),
+                        source,
+                        2,
+                        (chunk.len() / 2) as u32,
+                    ))
+                    .unwrap(),
+            );
+        }
+        frames.extend(resampler.flush().unwrap());
+        assert!(frames.iter().all(|f| f.sample_rate == target
+            && f.num_channels == 2
+            && f.data.len() == f.samples_per_channel as usize * 4));
+        let samples: Vec<_> = frames.iter().flat_map(|f| crate::pcm_samples(&f.data)).collect();
+        assert!(samples.len().abs_diff(target as usize * 2) <= 2);
+        let left: Vec<_> = samples
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| {
+                assert_eq!(pair[0], pair[1]);
+                pair[0]
+            })
+            .collect();
+        assert!((dominant_hz(&left, target) - 440.0).abs() < 2.0);
+    }
+}
+
 #[test]
 fn zero_rates_and_channels_are_rejected() {
     for (input, output, channels) in [(0, 16_000, 1), (48_000, 0, 1), (48_000, 16_000, 0)] {

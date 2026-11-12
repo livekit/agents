@@ -4,13 +4,13 @@ use lk_agents_abi::voice::io::{
     PlaybackObserver, PlaybackSegment, PlaybackTracker, Result, TranscriptionOutput,
 };
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TranscriptChunk};
+use lk_agents_media::pauses::PauseDetector;
 use lk_agents_net::signal;
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::effects::TranscriptSyncEffect;
-use lk_agents_voice::transcription::machine::lifecycle::{
+use lk_agents_voice::transcription::machine::synchronizer::{
     TranscriptOutput, TranscriptPacerOptions, TranscriptSync, TranscriptSyncEvent,
 };
-use lk_agents_voice::transcription::machine::synchronizer::Hyphenator;
 use parking_lot::Mutex;
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
@@ -154,6 +154,9 @@ pub struct SyncedAudioOutput {
     tracker: Arc<dyn PlaybackTracker>,
     next: Arc<dyn AudioOutput>,
     observer: Mutex<Option<Arc<dyn PlaybackObserver>>>,
+    /// The silences in the current segment's audio, found as it is captured: what places its
+    /// untimed words.
+    pauses: Mutex<Option<PauseDetector>>,
 }
 
 /// [`Weak`] so the tracker doesn't keep the chain alive.
@@ -181,6 +184,7 @@ impl SyncedAudioOutput {
             sync,
             next: next.clone(),
             observer: Mutex::new(None),
+            pauses: Mutex::new(None),
         });
         let observer: Arc<dyn PlaybackObserver> = Arc::new(AudioEvents(Arc::downgrade(&node)));
         next.tracker().observe(observer.clone());
@@ -261,16 +265,30 @@ impl AudioOutput for SyncedAudioOutput {
             let secs = lk_agents_abi::voice::rtc::frame_duration(frame).as_secs_f64();
             let segment = self.tracker.current_segment();
             self.sync.apply(TranscriptSyncEvent::AudioCaptureStarted { secs, segment }, None);
+            let found = self
+                .pauses
+                .lock()
+                .get_or_insert_with(|| PauseDetector::new(frame.sample_rate, frame.num_channels))
+                .push(frame.data.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)));
+            for p in found {
+                self.sync
+                    .apply(TranscriptSyncEvent::AudioPause { start: p.start, end: p.end }, None);
+            }
             self.next.capture_frame(frame).await
         })
     }
 
     fn flush_segment(&self) {
         self.next.flush();
+        // the silence after the last speech bounds it, before the audio ends
+        if let Some(p) = self.pauses.lock().take().and_then(|mut d| d.finish()) {
+            self.sync.apply(TranscriptSyncEvent::AudioPause { start: p.start, end: p.end }, None);
+        }
         self.sync.apply(TranscriptSyncEvent::AudioEnded, None);
     }
 
     fn clear_buffer(&self) {
+        self.pauses.lock().take();
         self.next.clear_buffer();
         // Words the clear still shows are the playback's that was moving.
         let (playing, at) = (*self.sync.playing.lock(), self.sync.clock.now());
@@ -280,6 +298,7 @@ impl AudioOutput for SyncedAudioOutput {
     /// The refused frame was counted as its segment's audio, and none of it will play: the
     /// segment ends cut, with nothing heard, so the next speech's audio opens its own.
     fn withdraw_capture(&self) -> Result<()> {
+        self.pauses.lock().take();
         let below = self.next.withdraw_capture();
         if let Some(segment) = self.tracker.withdraw_capture() {
             self.sync.apply(TranscriptSyncEvent::AudioEnded, None);
@@ -426,7 +445,6 @@ pub struct TranscriptSyncConfig {
     /// The transcript sink below this node. `None` for the console path, which prints locally.
     pub text_next: Option<Arc<dyn TranscriptionOutput>>,
     pub speed: f64,
-    pub hyphenator: Arc<dyn Hyphenator>,
     pub clock: Arc<dyn Clock>,
     pub spawner: Arc<dyn Spawner>,
 }
@@ -445,8 +463,7 @@ impl TranscriptSynchronizer {
     }
 
     fn build(config: TranscriptSyncConfig) -> Self {
-        let TranscriptSyncConfig { audio_next, text_next, speed, hyphenator, clock, spawner } =
-            config;
+        let TranscriptSyncConfig { audio_next, text_next, speed, clock, spawner } = config;
 
         // Wrapped so an avatar hand-off can replace the leaf later.
         let audio_next = if audio_next.next_in_chain().is_none() {
@@ -455,7 +472,7 @@ impl TranscriptSynchronizer {
             audio_next
         };
 
-        let opts = TranscriptPacerOptions { speed, hyphenator };
+        let opts = TranscriptPacerOptions { speed };
         let (tx, rx) = mpsc::unbounded_channel();
         let (done, forwarder_done) = signal::signal(false);
         let forwarder_spawner = Arc::clone(&spawner);

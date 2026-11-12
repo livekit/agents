@@ -23,8 +23,8 @@ impl lk_agents_abi::cli::Cli for Commands {
         level.host_level()
     }
 
-    fn format_log_record(record: LogRecord) -> String {
-        format_log_record(record)
+    fn format_log_record(record: LogRecord, style: lk_agents_abi::cli::LogStyle) -> String {
+        format_log_record(record, style)
     }
 
     async fn dev_channel(

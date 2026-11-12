@@ -71,6 +71,17 @@ impl Rule for InterruptionHasCause {
                             )
                     })
                 }
+                // The speech's audio output raised, which the session reported as its error first:
+                // judged on the session's own journal, the clock the interruption is on, not on
+                // when the host's loop got to the event.
+                InterruptCause::OutputFailed => internal.steps().iter().any(|(e, step)| {
+                    *e <= at
+                        && matches!(
+                            step,
+                            Step::Emitted(lk_agents_voice::events::SessionEvent::Error(err))
+                                if err.source == lk_agents_voice::events::ErrorSource::AudioOutput
+                        )
+                }),
                 // A task's entry or end stops what the agent losing the floor still had to say.
                 InterruptCause::VoiceTask => internal.steps().iter().any(|(moved, step)| {
                     use lk_agents_voice::trace::HandoffStep::{TaskEnded, TaskEntered};

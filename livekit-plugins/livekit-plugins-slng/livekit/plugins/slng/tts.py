@@ -33,7 +33,6 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
-    tokenize,
     tts,
     utils,
 )
@@ -211,7 +210,6 @@ class _TTSOptions:
     sample_rate: int
     encoding: Literal["linear16"]
     speed: float
-    word_tokenizer: tokenize.WordTokenizer
     api_key: str
     model_options: dict[str, JsonValue]
     extra_headers: dict[str, str]
@@ -264,7 +262,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         language: str = "en",
         sample_rate: int = 24000,
         speed: float = 1.0,
-        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: http.HttpSession | None = None,
         extra_headers: dict[str, str] | None = None,
         # Advanced / optional. Used by integrations that drive the session
@@ -300,7 +297,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
             voice: Required voice identifier.
             language (str): Language code. Defaults to "en".
             sample_rate (int): Sample rate of audio. Defaults to 24000.
-            word_tokenizer: Optional tokenizer for processing text.
             http_session (http.HttpSession): Optional HttpSession to use for requests.
         """
         if {"first_audio_timeout_s", "fallback_recovery_cooldown_s"} & model_options.keys():
@@ -373,9 +369,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
             num_channels=NUM_CHANNELS,
         )
 
-        if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
-
         self._opts = _TTSOptions(
             model_endpoint=resolved_model_endpoint,
             model=model,
@@ -385,7 +378,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
             # LiveKit expects raw PCM. Some SLNG models default to MP3 unless explicitly requested.
             encoding="linear16",
             speed=speed,
-            word_tokenizer=word_tokenizer,
             api_key=resolved_key,
             model_options=dict(model_options),
             extra_headers=headers,
@@ -447,7 +439,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
                     language=language,
                     sample_rate=sample_rate,
                     speed=speed,
-                    word_tokenizer=word_tokenizer,
                     http_session=http_session,
                     extra_headers=extra_headers,
                     runtime_init=runtime_init,
@@ -480,6 +471,9 @@ class TTS(tts.TTS[Literal["slng_event"]]):
     @property
     def provider(self) -> str:
         return "SLNG"
+
+    def _core_text_unit(self) -> str:
+        return "words"
 
     @property
     def warm_standby_enabled(self) -> bool:
@@ -687,28 +681,23 @@ class TTS(tts.TTS[Literal["slng_event"]]):
                     speed=speed,
                 )
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _core_leg(self) -> object:
+        # a connection chain is served by its fallback adapter
+        return self._fallback._core_leg() if self._fallback is not None else self
+
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        if self._fallback is not None:
-            return self._fallback.synthesize(text, conn_options=conn_options)
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             options=self._opts,
             connect=self._connect_ws,
             connection_timings=self._ws_connection_timings,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> tts.SynthesizeStream:
-        if self._fallback is not None:
-            return self._fallback.stream(conn_options=conn_options)
+    def _stream(self, *, conn_options: APIConnectOptions) -> tts.SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -915,7 +904,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Create segments_ch per run so base-class retries after an error get a
         # fresh channel (matching the Deepgram plugin pattern).
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        self._segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
         request_id = utils.shortuuid()
         logger.debug(f"[TTS] _run starting: request_id={request_id}")
         output_emitter.initialize(
@@ -926,41 +915,40 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        async def _tokenize_input() -> None:
-            # Converts incoming text into WordStreams and sends them into _segments_ch
-            logger.debug("[TTS] _tokenize_input starting, waiting for input...")
-            word_stream = None
+        async def _segment_input() -> None:
+            segment: utils.aio.Chan[str] | None = None
             text_count = 0
             async for the_input in self.input:
-                if isinstance(the_input, str):
+                if isinstance(the_input, tts.SpeechChunk):
                     text_count += 1
                     if text_count == 1:
-                        logger.debug("[TTS] First text received", extra={"lk.pii.text": the_input})
-                    if word_stream is None:
-                        word_stream = self._opts.word_tokenizer.stream()
-                        self._segments_ch.send_nowait(word_stream)
-                        logger.debug("[TTS] New word_stream created")
-                    word_stream.push_text(the_input)
+                        logger.debug(
+                            "[TTS] First text received", extra={"lk.pii.text": the_input.text}
+                        )
+                    if segment is None:
+                        segment = utils.aio.Chan[str]()
+                        self._segments_ch.send_nowait(segment)
+                    segment.send_nowait(the_input.text)
                 else:
                     logger.debug(f"[TTS] Flush sentinel received after {text_count} texts")
-                    if word_stream:
-                        word_stream.end_input()
-                    word_stream = None
-
-            logger.debug(f"[TTS] _tokenize_input done: {text_count} total texts")
+                    if segment is not None:
+                        segment.close()
+                    segment = None
+            if segment is not None:
+                segment.close()
+            logger.debug(f"[TTS] _segment_input done: {text_count} total texts")
             self._segments_ch.close()
 
         async def _run_segments() -> None:
-            logger.debug("[TTS] _run_segments starting, waiting for word_streams...")
             segment_count = 0
-            async for word_stream in self._segments_ch:
+            async for segment in self._segments_ch:
                 segment_count += 1
                 logger.debug(f"[TTS] Processing segment {segment_count}")
-                await self._run_ws(word_stream, output_emitter)
+                await self._run_ws(segment, output_emitter)
             logger.debug(f"[TTS] _run_segments done: {segment_count} segments")
 
         tasks = [
-            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_segment_input()),
             asyncio.create_task(_run_segments()),
         ]
         try:
@@ -974,9 +962,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             await utils.aio.cancel_and_wait(*tasks)
 
-    async def _run_ws(
-        self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
-    ) -> None:
+    async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
         logger.debug(f"[TTS] _run_ws starting: segment_id={segment_id}")
         segment_started_at = time.perf_counter()
@@ -1078,14 +1064,14 @@ class SynthesizeStream(tts.SynthesizeStream):
             text_buffer = ""
             buffer_has_letter = False
 
-            async for word in word_stream:
+            async for chunk in segment:
                 word_count += 1
                 if word_count == 1:
-                    logger.debug("[TTS] send_task: first word", extra={"lk.pii.text": word.token})
-                piece = f"{word.token} "
+                    logger.debug("[TTS] send_task: first word", extra={"lk.pii.text": chunk})
+                piece = f"{chunk} "
                 if phrase_batching:
                     text_buffer += piece
-                    buffer_has_letter = buffer_has_letter or _contains_letter(word.token)
+                    buffer_has_letter = buffer_has_letter or _contains_letter(chunk)
                     stripped = text_buffer.rstrip()
                     at_boundary = stripped and (
                         stripped.endswith(_PHRASE_FLUSH_SUFFIXES)
@@ -1102,8 +1088,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 if not text_buffer:
                     text_buffer = piece
-                    buffer_has_letter = _contains_letter(word.token)
-                elif _contains_letter(word.token):
+                    buffer_has_letter = _contains_letter(chunk)
+                elif _contains_letter(chunk):
                     # A new spoken word arrived. Flush the buffered word (with any
                     # letterless tokens that trailed it); if the buffer so far is
                     # only leading punctuation, prepend it to this word instead.

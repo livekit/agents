@@ -20,6 +20,9 @@ use lk_agents_abi::worker::http::{
 use lk_agents_storage::testing::{Backend, Store};
 use serde_json::{Value, json};
 
+#[path = "routing_tests.rs"]
+mod routing;
+
 /// A scripted handler: `run` reports through the turn and returns the output.
 macro_rules! host {
     ($name:ident, |$ctx:ident, $turn:ident| $body:expr) => {
@@ -88,12 +91,12 @@ fn principal(write: bool) -> AuthPrincipal {
 
 fn door(store: &Store, host: Arc<dyn TurnHost>) -> Door {
     let env = lk_agents_net::env::ProcessEnv::current_runtime();
-    Door::new(&env, store.namespace.clone(), config(), host).unwrap()
+    Door::new(&env, store.namespace.clone(), config(), host, None).unwrap()
 }
 
 fn config() -> DoorConfig {
     DoorConfig {
-        lane: "desk".into(),
+        partition_key: "desk".into(),
         holder: "door-worker".into(),
         endpoint: EndpointDescriptor {
             name: "desk".into(),
@@ -186,7 +189,7 @@ async fn live_streams_have_no_replay_cursor_and_subscriptions_are_unsupported(ba
     store.close().await;
 }
 
-async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
+async fn streaming_acceptance_precedes_the_partition_wait(backend: Backend) {
     let store = backend.store(Default::default()).await;
     let created = store
         .storage
@@ -198,7 +201,7 @@ async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
         .unwrap();
     let thread = store.storage.open(&created.thread_id).await.unwrap();
     let mut held = thread
-        .lane("desk")
+        .partition("desk")
         .open(
             lk_agents_storage::RunOptions::new("hold", "held-task"),
             &lk_agents_storage::Holder::new("test"),
@@ -273,7 +276,7 @@ async fn a_continuation_keeps_one_wire_identity(backend: Backend) {
     assert_eq!(saved.data.history.len(), 2);
     assert!(saved.internal.is_none());
     let mut questions = thread
-        .lane("desk")
+        .partition("desk")
         .open(
             lk_agents_storage::RunOptions::new("questions", "question-batch"),
             &lk_agents_storage::Holder::new("test"),
@@ -376,12 +379,11 @@ fn credentials() -> lk_agents_net::a2a_auth::Credentials {
     <lk_agents_net::a2a_auth::Credentials as Credentials>::new(KEY.into(), SECRET.into())
 }
 
-/// A worker holding the project's credentials, reached directly.
+/// A worker reached directly.
 fn serving() -> TextServing {
     TextServing {
         request: EndpointRequest { route: "/desk/{path:path}".into(), ..Default::default() },
         agent_name: "front".into(),
-        credentials: Some((KEY.into(), SECRET.into())),
         ..Default::default()
     }
 }
@@ -399,11 +401,13 @@ async fn exchange(
     events.push_back(ExchangeEvent::Body { data: Vec::new(), more: false });
     let mut fields = vec![(b"host".to_vec(), b"agents.test".to_vec())];
     fields.extend(headers.iter().map(|(k, v)| (k.as_bytes().to_vec(), v.as_bytes().to_vec())));
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
     let exchange = Exchange {
         head: RequestHead {
             method: method.into(),
             path: path.into(),
             raw_path: path.as_bytes().to_vec(),
+            query_string: query.as_bytes().to_vec(),
             headers: fields,
             ..Default::default()
         },
@@ -437,34 +441,37 @@ async fn exchange(
 
 const CARD: &str = "/desk/.well-known/agent-card.json";
 
-// Catches: a caller admitted out of order: the console vouches for everyone, a worker holding
-// credentials verifies the bearer (the node's verdict standing for a stripped project
-// credential), and without credentials only the node's verdict admits.
+// Catches: a caller admitted out of order (the console vouches for everyone; otherwise the
+// claims of the node-verified token, read and never re-verified, so any project key's token
+// passes), or a token read from a carrier the node does not verify.
 async fn the_caller_is_authenticated_in_order(backend: Backend) {
     let store = backend.store(Default::default()).await;
     let door = door(&store, Arc::new(Host));
-    let get = |serving, headers: Vec<(&'static str, String)>| {
+    let get = |serving, path: String, headers: Vec<(&'static str, String)>| {
         let door = &door;
         async move {
             let headers: Vec<_> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-            exchange(door, serving, "GET", CARD, &headers, Vec::new()).await
+            exchange(door, serving, "GET", &path, &headers, Vec::new()).await
         }
     };
-    let bearer = |token: String| vec![("Authorization", format!("Bearer {token}"))];
+    let card = || CARD.to_owned();
+    let bearer = |token: &str| vec![("Authorization", format!("Bearer {token}"))];
     let project = credentials().project_token("caller".into(), 60).unwrap();
+
+    let refused = get(serving(), card(), Vec::new()).await;
+    assert_eq!(refused.status, 401);
+    assert_eq!(refused.json(), json!({"error": "a LiveKit bearer token is required"}));
+    assert_eq!(refused.header("content-type"), Some("application/json"));
+    assert_eq!(get(serving(), card(), bearer(&project)).await.status, 200);
+    let mixed = vec![("AUTHORIZATION", format!("Bearer {project}"))];
+    assert_eq!(get(serving(), card(), mixed).await.status, 200);
+    assert_eq!(get(serving(), format!("{CARD}?access_token={project}"), Vec::new()).await.status, 200);
     let other = <lk_agents_net::a2a_auth::Credentials as Credentials>::new(
         "APIother".into(),
         SECRET.into(),
     );
-
-    let refused = get(serving(), Vec::new()).await;
-    assert_eq!(refused.status, 401);
-    assert_eq!(refused.json(), json!({"error": "a LiveKit bearer token is required"}));
-    assert_eq!(refused.header("content-type"), Some("application/json"));
-    assert_eq!(get(serving(), bearer(project.clone())).await.status, 200);
-    // header names match case-insensitively; the grant header is a carrier of its own
-    let mixed = vec![("AUTHORIZATION", format!("Bearer {project}"))];
-    assert_eq!(get(serving(), mixed).await.status, 200);
+    let another_key = other.project_token("caller".into(), 60).unwrap();
+    assert_eq!(get(serving(), card(), bearer(&another_key)).await.status, 200);
     let grant = credentials()
         .thread_grant_token(
             AuthGrant { all: true, read: true, ..Default::default() },
@@ -472,31 +479,22 @@ async fn the_caller_is_authenticated_in_order(backend: Backend) {
             60,
         )
         .unwrap();
-    assert_eq!(get(serving(), vec![("X-LiveKit-Thread-Grant", grant)]).await.status, 200);
-    let forged = other.project_token("caller".into(), 60).unwrap();
-    assert_eq!(get(serving(), bearer(forged)).await.status, 401);
-    // signed by the project, with neither an endpoint call nor a thread grant
+    let unverified_carrier = vec![("X-LiveKit-Thread-Grant", grant)];
+    assert_eq!(get(serving(), card(), unverified_carrier).await.status, 401);
+    assert_eq!(get(serving(), card(), bearer("not-a-token")).await.status, 401);
     let neither =
         livekit_token::AccessToken::with_api_key(KEY, SECRET).with_identity("nobody").to_jwt();
-    let neither = neither.unwrap();
-    let forbidden = get(serving(), bearer(neither)).await;
+    let forbidden = get(serving(), card(), bearer(&neither.unwrap())).await;
     assert_eq!(forbidden.status, 403);
     assert!(forbidden.json()["error"].as_str().unwrap().contains("neither"));
 
-    let node = |authorized| {
+    assert_eq!(get(node_authorized(), card(), Vec::new()).await.status, 200, "the node's verdict");
+    let console = || {
         let mut serving = serving();
-        serving.request.authorized = authorized;
-        serving
-    };
-    assert_eq!(get(node(true), Vec::new()).await.status, 200, "the node's verdict");
-    let bare = |authorized| TextServing { credentials: None, ..node(authorized) };
-    assert_eq!(get(bare(false), Vec::new()).await.status, 401);
-    assert_eq!(get(bare(true), Vec::new()).await.status, 200);
-    let console = |mut serving: TextServing| {
         serving.request.unauthenticated = true;
         serving
     };
-    assert_eq!(get(console(bare(false)), Vec::new()).await.status, 200, "the console's listener");
+    assert_eq!(get(console(), card(), Vec::new()).await.status, 200, "the console's listener");
     door.aclose().await;
     store.close().await;
 }
@@ -504,7 +502,7 @@ async fn the_caller_is_authenticated_in_order(backend: Backend) {
 async fn the_card_and_the_methods_are_the_only_routes(backend: Backend) {
     let store = backend.store(Default::default()).await;
     let door = door(&store, Arc::new(Host));
-    let open = || TextServing { credentials: None, ..node_authorized() };
+    let open = node_authorized;
     for path in ["/desk", "/desk/content", "/desk/tasks", "/other/v1", "/deskv1"] {
         let answer = exchange(&door, open(), "GET", path, &[], Vec::new()).await;
         assert_eq!((answer.status, answer.json()), (404, json!({"error": "Not Found"})), "{path}");
@@ -719,7 +717,7 @@ async fn thread_authority_is_checked_on_every_request(backend: Backend) {
 lk_agents_storage::contract!(
     create_requires_write_before_allocating_a_thread,
     live_streams_have_no_replay_cursor_and_subscriptions_are_unsupported,
-    streaming_acceptance_precedes_the_lane_wait,
+    streaming_acceptance_precedes_the_partition_wait,
     a_continuation_keeps_one_wire_identity,
     a_slow_observer_detaches_without_canceling_the_task,
     the_caller_is_authenticated_in_order,

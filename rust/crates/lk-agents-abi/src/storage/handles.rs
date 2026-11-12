@@ -1,6 +1,6 @@
 use super::context::{ContextScope, ContextScopeWrite};
 use super::{
-    EventRow, InboxRow, ItemRow, LaneRow, StorageError, TaskPage, TaskRecord, TaskState,
+    EventRow, InboxRow, ItemRow, PartitionRow, StorageError, TaskPage, TaskRecord, TaskState,
     ThreadItemPage,
 };
 use serde_json::{Map, Value};
@@ -15,7 +15,7 @@ pub trait Thread: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn id(&self) -> String;
     #[host(await)]
-    async fn lanes(&self) -> Result<Vec<LaneRow>, StorageError>;
+    async fn partitions(&self) -> Result<Vec<PartitionRow>, StorageError>;
     #[host(await)]
     async fn journal(
         &self,
@@ -23,11 +23,11 @@ pub trait Thread: Send + Sync + Sized + 'static {
         #[host(default = 100)] limit: i64,
     ) -> Result<Vec<EventRow>, StorageError>;
     #[host(await)]
-    async fn history(&self, lane: String) -> Result<Vec<ItemRow>, StorageError>;
+    async fn history(&self, partition_key: String) -> Result<Vec<ItemRow>, StorageError>;
     #[host(await)]
     async fn tasks(
         &self,
-        lane: String,
+        partition_key: String,
         #[host(default = 50)] limit: i64,
     ) -> Result<Vec<TaskRecord>, StorageError>;
     #[host(await)]
@@ -35,7 +35,7 @@ pub trait Thread: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn list_tasks(
         &self,
-        #[host(default = None)] lane: Option<String>,
+        #[host(default = None)] partition_key: Option<String>,
         #[host(default = None)] status: Option<TaskState>,
         #[host(default = "updated")] order: crate::storage::thread::TaskOrder,
         #[host(default = 50)] page_size: i64,
@@ -44,29 +44,32 @@ pub trait Thread: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn list_items(
         &self,
-        #[host(default = None)] lane: Option<String>,
+        #[host(default = None)] partition_key: Option<String>,
         #[host(default = None)] after: Option<String>,
         #[host(default = 100)] limit: i64,
     ) -> Result<ThreadItemPage, StorageError>;
     #[host(await)]
-    async fn lane_info(&self, lane: String) -> Result<Option<LaneRow>, StorageError>;
+    async fn partition_info(
+        &self,
+        partition_key: String,
+    ) -> Result<Option<PartitionRow>, StorageError>;
     #[host(await)]
     async fn inbox(
         &self,
-        lane: String,
+        partition_key: String,
         #[host(default = false)] pending: bool,
     ) -> Result<Vec<InboxRow>, StorageError>;
     #[host(await)]
     async fn cancel_task(
         &self,
-        lane: String,
+        partition_key: String,
         task_id: String,
         metadata: Map<String, Value>,
     ) -> Result<Option<TaskRecord>, StorageError>;
     #[host(await)]
     async fn open_run(
         &self,
-        lane: String,
+        partition_key: String,
         run_id: String,
         #[host(kw, default = None)] channel: Option<String>,
         #[host(default = None)] wait_timeout: Option<std::time::Duration>,
@@ -103,7 +106,7 @@ pub trait Run: Send + Sync + Sized + 'static {
     ) -> Result<(), StorageError>;
 }
 
-/// `ctx.thread` (docs/threads.md): one thread of a storage namespace, as the agent `agent` reads
+/// `ctx.thread` (docs/threads.md): one thread of a storage namespace, as the partition_key `partition_key` reads
 /// it. Each read opens the thread's database for the call and releases it after; there is
 /// nothing to open or close.
 #[crate::host(class(name = "_core_ThreadHandle"))]
@@ -113,14 +116,18 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
 
     /// Reads take no lease.
     #[host(new)]
-    fn new(namespace: std::sync::Arc<Self::Namespace>, thread_id: String, agent: String) -> Self;
+    fn new(
+        namespace: std::sync::Arc<Self::Namespace>,
+        thread_id: String,
+        partition_key: String,
+    ) -> Self;
 
     /// The thread id.
     #[host(getter)]
     fn id(&self) -> String;
-    /// The agent whose history `chat_history()` reads by default.
+    /// The partition_key whose history `chat_history()` reads by default.
     #[host(getter)]
-    fn agent(&self) -> String;
+    fn partition_key(&self) -> String;
     /// The namespace the thread lives in.
     #[host(getter)]
     fn namespace(&self) -> std::sync::Arc<Self::Namespace>;
@@ -135,24 +142,24 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
         #[host(kw, default = None)] attributes: Option<std::collections::BTreeMap<String, String>>,
         #[host(default = None)] idle_ttl_seconds: Option<i64>,
     ) -> Result<super::ThreadInfo, StorageError>;
-    /// One page of the thread's committed chat items in insertion order, every lane's or
-    /// `agent`'s; pass the page's `after` to read the next (empty on the last page). The same
+    /// One page of the thread's committed chat items in insertion order, every partition's or
+    /// `partition_key`'s; pass the page's `after` to read the next (empty on the last page). The same
     /// records Cloud's threads API answers, for an application's own read routes.
     #[host(await)]
     async fn list_items(
         &self,
-        #[host(kw, default = None)] agent: Option<String>,
+        #[host(kw, default = None)] partition_key: Option<String>,
         #[host(default = None)] after: Option<String>,
         #[host(default = 100)] limit: i64,
     ) -> Result<ThreadItemPage, StorageError>;
     /// One page of the thread's A2A task records: in insertion order (`order="inserted"`), or
-    /// last updated first (`"updated"`) as A2A `tasks/list` lists them; of `agent`'s lane and
+    /// last updated first (`"updated"`) as A2A `tasks/list` lists them; of `partition_key`'s partition and
     /// `status` when given. Pass the page's `next_page_token` to read the next; a token is bound
     /// to its listing.
     #[host(await)]
     async fn list_tasks(
         &self,
-        #[host(kw, default = None)] agent: Option<String>,
+        #[host(kw, default = None)] partition_key: Option<String>,
         #[host(default = None)] status: Option<TaskState>,
         #[host(default = "inserted")] order: crate::storage::thread::TaskOrder,
         #[host(default = None)] page_token: Option<String>,
@@ -161,7 +168,7 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
     /// One task record, `None` when this thread has none of that id.
     #[host(await)]
     async fn task(&self, task_id: String) -> Result<Option<TaskRecord>, StorageError>;
-    /// One page of the journal (docs/internals/storage.md#journal), every lane, in order; pass
+    /// One page of the journal (docs/internals/storage.md#journal), every partition, in order; pass
     /// the last `id` to read the next.
     #[host(await)]
     async fn journal(
@@ -169,14 +176,14 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
         #[host(default = 0)] after_id: i64,
         #[host(default = 100)] limit: i64,
     ) -> Result<Vec<EventRow>, StorageError>;
-    /// `agent`'s lane history, in order.
+    /// `partition_key`'s partition history, in order.
     #[host(await)]
-    async fn history(&self, agent: String) -> Result<Vec<ItemRow>, StorageError>;
-    /// `agent`'s lane task records, most recent first; only those in `status` when given.
+    async fn history(&self, partition_key: String) -> Result<Vec<ItemRow>, StorageError>;
+    /// `partition_key`'s partition task records, most recent first; only those in `status` when given.
     #[host(await)]
     async fn tasks(
         &self,
-        agent: String,
+        partition_key: String,
         #[host(kw, default = None)] status: Option<TaskState>,
         #[host(default = 50)] limit: i64,
     ) -> Result<Vec<TaskRecord>, StorageError>;
@@ -201,22 +208,22 @@ pub trait ThreadFacade {
         #[host(kw, default = None)] attributes: Option<std::collections::BTreeMap<String, String>>,
         #[host(default = None)] idle_ttl_seconds: Option<i64>,
     ) -> Result<super::ThreadInfo, StorageError>;
-    /// One page of the thread's committed chat items in insertion order, every lane's or
-    /// `agent`'s; pass the page's `after` to read the next (empty on the last page). The same
+    /// One page of the thread's committed chat items in insertion order, every partition's or
+    /// `partition_key`'s; pass the page's `after` to read the next (empty on the last page). The same
     /// records Cloud's threads API answers, for an application's own read routes.
     async fn list_items(
         &self,
-        #[host(kw, default = None)] agent: Option<String>,
+        #[host(kw, default = None)] partition_key: Option<String>,
         #[host(default = None)] after: Option<String>,
         #[host(default = 100)] limit: i64,
     ) -> Result<ThreadItemPage, StorageError>;
     /// One page of the thread's A2A task records: in insertion order (`order="inserted"`), or
-    /// last updated first (`"updated"`) as A2A `tasks/list` lists them; of `agent`'s lane and
+    /// last updated first (`"updated"`) as A2A `tasks/list` lists them; of `partition_key`'s partition and
     /// `status` when given. Pass the page's `next_page_token` to read the next; a token is bound
     /// to its listing.
     async fn list_tasks(
         &self,
-        #[host(kw, default = None)] agent: Option<String>,
+        #[host(kw, default = None)] partition_key: Option<String>,
         #[host(default = None)] status: Option<TaskState>,
         #[host(default = "inserted")] order: crate::storage::thread::TaskOrder,
         #[host(default = None)] page_token: Option<String>,
@@ -224,7 +231,7 @@ pub trait ThreadFacade {
     ) -> Result<TaskPage, StorageError>;
     /// One task record, `None` when this thread has none of that id.
     async fn task(&self, task_id: String) -> Result<Option<TaskRecord>, StorageError>;
-    /// One page of the journal (docs/internals/storage.md#journal), every lane, in order; pass
+    /// One page of the journal (docs/internals/storage.md#journal), every partition, in order; pass
     /// the last `id` to read the next.
     async fn journal(
         &self,
@@ -233,17 +240,17 @@ pub trait ThreadFacade {
     ) -> Result<Vec<EventRow>, StorageError>;
 }
 
-/// `thread.lane(agent)`: one agent's lane of a thread (docs/threads.md), its history and its
+/// `thread.partition(partition_key)`: one partition_key's partition of a thread (docs/threads.md), its history and its
 /// tasks.
 #[crate::host(facade(path = "livekit.agents.storage", native = ThreadHandle, from_native))]
-pub trait Lane {
+pub trait Partition {
     #[host(new)]
-    fn new(agent: String) -> Self;
-    /// The lane's whole history, in order.
-    #[host(bind(agent = "_agent"), returns = "..llm.ChatContext", each = ItemRow::payload)]
+    fn new(partition_key: String) -> Self;
+    /// The partition's whole history, in order.
+    #[host(bind(partition_key = "_partition_key"), returns = "..llm.ChatContext", each = ItemRow::payload)]
     async fn history(&self) -> Result<Vec<ItemRow>, StorageError>;
-    /// The lane's A2A task records, most recent first; only those in `status` when given.
-    #[host(bind(agent = "_agent"))]
+    /// The partition's A2A task records, most recent first; only those in `status` when given.
+    #[host(bind(partition_key = "_partition_key"))]
     async fn tasks(
         &self,
         #[host(kw, default = None)] status: Option<TaskState>,

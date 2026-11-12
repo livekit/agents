@@ -51,8 +51,10 @@ const EMPTY_RESPONSE_PROMPT: &str = "Please return text or call a tool.";
 /// What the caller supplies to one invocation.
 #[derive(Debug, Clone)]
 pub struct RunInput {
-    /// Prefixes every id the invocation mints.
+    /// Names the invocation in its events and spans.
     pub invocation_id: String,
+    /// The random value its caller drew for the chat items it mints (`types::ids::short`).
+    pub id_seed: u64,
     pub opening: Opening,
     /// The conversation so far.
     pub history: Vec<ChatItem>,
@@ -304,6 +306,33 @@ impl Phase {
 }
 
 impl AgentRun {
+    /// Accepted history plus a stable-id, explicitly partial message for a streaming response.
+    pub fn progress_history(&self) -> Vec<ChatItem> {
+        let mut history = self.history.clone();
+        if let Phase::Requesting(step, _) = &self.phase
+            && !step.text.is_empty()
+        {
+            let mut message = ChatMessage::text(
+                step.message_id.clone(),
+                Role::Assistant,
+                &step.text,
+                self.stamp(self.input.wall.at),
+            );
+            message.interrupted = true;
+            history.push(ChatItem::Message(message));
+        }
+        if let Phase::Requesting(_, acting) | Phase::Acting(acting) = &self.phase {
+            for item in
+                acting.calls.checkpoint_items(self.input.mode, self.stamp(self.input.wall.at))
+            {
+                if !history.iter().any(|existing| existing.id() == item.id()) {
+                    history.push(item);
+                }
+            }
+        }
+        history
+    }
+
     pub fn new(agent: AgentDefinition, mut input: RunInput) -> Result<AgentRun, AgentError> {
         agent::validate(&agent)?;
         if let Opening::Message(message) = &mut input.opening {
@@ -547,9 +576,11 @@ impl AgentRun {
         self.next_id
     }
 
+    /// `item_<12 hex>`, as v1: each step's message is its own provider group, and its calls,
+    /// `{message}/fnc_i`, join it there.
     fn item_id(&mut self) -> String {
         let n = self.mint();
-        format!("{}/item_{n}", self.input.invocation_id)
+        lk_agents_abi::types::ids::short("item", self.input.id_seed, n)
     }
 
     fn stamp(&self, now: Ts) -> SystemTime {

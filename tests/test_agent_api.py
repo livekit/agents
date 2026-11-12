@@ -22,6 +22,7 @@ from livekit.agents import (
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import ChatContext, FunctionToolCall, Tool, Toolset
 from livekit.agents.storage import Storage, Thread
+from livekit.agents.storage.session import ContextStore
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.voice.agent_session import ExpressiveOptions
 from livekit.agents.voice.run_result import _mock_session_tools
@@ -452,19 +453,21 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     deps = Deps(greeting="hey")
     storage = thread_storage
     sid = await new_session(storage, agent.name)
-    thread = Thread(storage, sid, agent_name=agent.name)
+    thread = Thread(storage, sid, partition_key=agent.name)
     app = AppContext(settings=deps, patient=state)
-    async with VoiceSession(llm=llm, context=app, thread=thread) as session:
+    activation = await storage.threads._core_context_store(sid, agent.name)
+    store = ContextStore(scope_id=f"root:{agent.name}", activation=activation, thread=thread)
+    await store.load_context(app)
+    async with VoiceSession(llm=llm, context=store.bind(app)) as session:
         assert session.context is app
         await session.start(agent)
-        await session.store.load_context(app)
         result = await session._run(user_input="go")
         result.expect.contains_function_call(name="note")
         assert result.output == "ok"
 
     assert seen[0][0] is deps and seen[0][1] is state and seen[0][2] == sid
     assert state.looked_up == 1
-    # the call's turn was committed to the agent's lane: history and state
+    # the call's turn was committed to the agent's partition: history and state
     history = await thread.chat_history()
     items = [i for i in history.items if i.type != "agent_handoff"]
     assert [i.type for i in items] == [
@@ -474,11 +477,9 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
         "message",
     ]
     db = await storage._open(sid)
-    row = await db.lane_info(agent.name)
+    row = await db.partition_info(agent.name)
     db.close()
     assert row is not None
-    from livekit.agents.storage.session import ContextStore
-
     restored = AppContext(settings=deps)
     activation = await storage.threads._core_context_store(sid, agent.name)
     await ContextStore(scope_id=f"root:{agent.name}", activation=activation).load_context(restored)

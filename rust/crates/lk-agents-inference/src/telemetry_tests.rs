@@ -158,6 +158,7 @@ fn a_request_records_its_attempt_metrics_and_messages() {
             panic!("{request:?}")
         };
         assert!(start.starts_with('"') && start.ends_with('"'), "{start}");
+        assert_eq!(attr(request, "gen_ai.operation.name"), Some(&Value::String("chat".into())));
         assert_eq!(
             attr(request, "gen_ai.response.finish_reasons"),
             Some(&Value::Array(vec![Value::String("stop".into())]))
@@ -257,6 +258,8 @@ async fn a_fallback_adapter_records_one_request_per_entry_under_its_span() {
     assert_eq!(adapter.parent, Some(8));
     assert_eq!(attr(adapter, "lk.fallback.index"), Some(&Value::Int(1)));
     assert_eq!(attr(adapter, "lk.fallback.label"), Some(&Value::String("backup".into())));
+    // The adapter is not itself a chat request: https://github.com/livekit/agents/pull/7373
+    assert_ne!(attr(adapter, "gen_ai.operation.name"), Some(&Value::String("chat".into())));
     let models: Vec<_> =
         adapter.attributes.iter().filter(|(k, _)| *k == "gen_ai.provider.name").collect();
     assert_eq!(models.len(), 1, "an end attribute replaces its start value: {adapter:?}");
@@ -277,8 +280,8 @@ struct Speaker {
 
 struct Discard;
 
-impl lk_agents_abi::StreamInput<String> for Discard {
-    fn push(&self, _: String) -> Result<(), ProviderError> {
+impl lk_agents_abi::StreamInput<lk_agents_abi::SpeechChunk> for Discard {
+    fn push(&self, _: lk_agents_abi::SpeechChunk) -> Result<(), ProviderError> {
         Ok(())
     }
     fn flush(&self) -> Result<(), ProviderError> {
@@ -303,14 +306,13 @@ impl lk_agents_abi::Tts for Speaker {
     fn synthesize<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a str,
+        _: &'a lk_agents_abi::SpeechChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::TtsSource, ProviderError>> {
         Box::pin(async move { Err(boom("one-shot")) })
     }
     fn stream(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        _: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
@@ -355,8 +357,10 @@ async fn a_tts_fallback_adapter_records_each_instance_under_its_attempt() {
     let mut trace = super::TtsTrace::start(&cx, &chain, true);
     let attempt = trace.attempt();
     let attempt_cx = attempt.as_ref().expect("a request").cx();
-    let (sink, mut source) = chain.stream(attempt_cx, false).await.expect("opens").split();
-    sink.push("hello".into()).expect("pushed");
+    let (sink, mut source) = chain.stream(attempt_cx).await.expect("opens").split();
+    // a fallback chain takes the text as written
+    let hello = lk_agents_abi::SpeechChunk { text: "hello".into(), said: String::new() };
+    sink.push(hello).expect("pushed");
     sink.end_input();
     while source.next().await.expect("serves").is_some() {}
     source.close(Ts::ZERO).await;
@@ -384,4 +388,65 @@ async fn a_tts_fallback_adapter_records_each_instance_under_its_attempt() {
     assert!(matches!(requests[0].status, Status::Error(_)), "{:?}", requests[0]);
     assert_eq!(label(requests[1]), Some(Value::String("backup".into())));
     assert_eq!(attr(requests[1], "lk.pii.input_text"), Some(&Value::String("hello".into())));
+}
+
+/// With capture on, a request span's input messages include `developer` messages.
+/// https://github.com/livekit/agents/issues/5398
+#[test]
+fn captured_input_messages_include_developer_messages() {
+    let (records, cx) = traced(true);
+    let mut req = request();
+    let at = std::time::SystemTime::UNIX_EPOCH;
+    req.chat_ctx.items.push(ChatMessage::text("d", Role::Developer, "no prices", at).into());
+    let llm = Script { label: "openai.LLM", serves: true };
+
+    let mut trace = LlmTrace::start(&cx, &llm, &req);
+    let attempt = trace.attempt();
+    trace.observe(&chunk("hi"));
+    trace.end_attempt(attempt, None);
+    trace.end(Default::default());
+
+    let spans = records.spans();
+    let request = named(&spans, "llm_request")[0];
+    let Some(Value::String(input)) = attr(request, "gen_ai.input.messages") else {
+        panic!("{request:?}")
+    };
+    assert!(input.contains("no prices"), "{input}");
+}
+
+/// Every usage field a provider reports reaches the request span under its GenAI key.
+/// https://github.com/livekit/agents/issues/8405
+#[test]
+fn all_supported_usage_fields_reach_spans() {
+    let (records, cx) = traced(false);
+    let llm = Script { label: "openai.LLM", serves: true };
+    let req = request();
+    let mut trace = LlmTrace::start(&cx, &llm, &req);
+    let attempt = trace.attempt();
+    trace.observe(&chunk("hi"));
+    trace.observe(&LlmChunk {
+        id: "resp_1".into(),
+        usage: Some(Box::new(lk_agents_abi::usage::TokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_read_tokens: Some(40),
+            cache_write_tokens: Some(5),
+            output_reasoning_tokens: Some(7),
+            ..Default::default()
+        })),
+        ..Default::default()
+    });
+    trace.end_attempt(attempt, None);
+    trace.end(Default::default());
+    let spans = records.spans();
+    let request = named(&spans, "llm_request")[0];
+    for (key, want) in [
+        ("gen_ai.usage.input_tokens", 100),
+        ("gen_ai.usage.output_tokens", 20),
+        ("gen_ai.usage.cache_read.input_tokens", 40),
+        ("gen_ai.usage.cache_write.input_tokens", 5),
+        ("gen_ai.usage.reasoning.output_tokens", 7),
+    ] {
+        assert_eq!(attr(request, key), Some(&Value::Int(want)), "{key}: {request:?}");
+    }
 }

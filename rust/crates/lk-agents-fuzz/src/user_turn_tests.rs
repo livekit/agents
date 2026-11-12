@@ -273,3 +273,25 @@ fn a_turn_from_code_hears_nothing_said_before_it() {
     let run = played(&setup, inputs);
     assert_eq!(ends(&run).first().and_then(ok_message).as_deref(), Some("book it"));
 }
+
+/// A cancelled push-to-talk turn's words do not count toward the next turn's word limit.
+/// https://github.com/livekit/agents/issues/5851
+#[test]
+fn a_cancelled_turns_words_leave_the_next_turn_its_full_limit() {
+    let setup = Setup { user_turn_max_words: Some(4), ..push_to_talk() };
+    let mut inputs = vec![Input::StartUserTurn {}, mic(30)];
+    inputs.extend(said(0, 0, "one two three"));
+    inputs.extend([
+        wait(50),
+        Input::CancelUserTurn {},
+        wait(100),
+        Input::StartUserTurn {},
+        mic(30),
+    ]);
+    inputs.extend(said(1, 1, "fresh words"));
+    inputs.push(wait(100));
+
+    let run = played(&setup, inputs);
+
+    assert_eq!(ended_events(&run), [false], "the second turn stays open below its own limit");
+}

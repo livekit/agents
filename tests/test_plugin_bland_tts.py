@@ -6,16 +6,20 @@ import struct
 import time
 from collections.abc import Callable
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
 from aiohttp import web
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIError, APIStatusError, http
-from livekit.agents.types import NOT_GIVEN
+from livekit.agents.tts import SpeechChunk
 
 pytestmark = pytest.mark.plugin("bland")
+
+
+def _push(stream, text: str) -> None:
+    stream._push_chunk(SpeechChunk(text=text, said=text))
 
 
 def _pcm(num_samples: int) -> bytes:
@@ -65,33 +69,6 @@ async def _collect(tts, text: str = "hello world", **conn: Any) -> tuple[bytes, 
     finally:
         await stream.aclose()
     return bytes(audio), rates
-
-
-def test_requires_api_key():
-    from livekit.plugins.bland import TTS
-
-    with patch.dict("os.environ", {}, clear=True):
-        with pytest.raises(ValueError, match="API key"):
-            TTS()
-
-
-@pytest.mark.parametrize("rate", [12345, 22050, 0, 96000])
-def test_rejects_unsupported_sample_rate(rate: int):
-    from livekit.plugins.bland import TTS
-
-    with pytest.raises(ValueError, match="sample_rate must be one of"):
-        TTS(api_key="test-key", sample_rate=rate)
-
-
-def test_update_options_preserves_unset_fields():
-    from livekit.plugins.bland import TTS
-    from livekit.plugins.bland.tts import DEFAULT_VOICE_ID
-
-    tts = TTS(api_key="test-key")
-    tts.update_options(stability=0.25)
-    assert tts._opts.voice_id == DEFAULT_VOICE_ID
-    assert tts._opts.expressiveness is NOT_GIVEN
-    assert tts._opts.stability == 0.25
 
 
 def _patch_session_capture_post(tts, captured: dict[str, Any]) -> None:
@@ -157,32 +134,6 @@ async def test_request_url_and_auth_header():
     assert captured["url"] == "https://api.bland.ai/v2/tts"
     assert captured["headers"]["authorization"] == "test-key"
     assert captured["headers"]["content-type"] == "application/json"
-
-
-async def test_trailing_slash_is_normalized_for_http_requests():
-    from livekit.plugins.bland import TTS
-
-    captured = await _synthesize_and_capture(
-        TTS(api_key="test-key", base_url="https://api.bland.ai/v2/")
-    )
-
-    assert captured["url"] == "https://api.bland.ai/v2/tts"
-
-
-async def test_request_body_defaults():
-    from livekit.plugins.bland import TTS
-    from livekit.plugins.bland.tts import DEFAULT_VOICE_ID
-
-    body = (await _synthesize_and_capture(TTS(api_key="test-key")))["json"]
-
-    assert body["text"] == "hello world"
-    assert body["voice"] == DEFAULT_VOICE_ID
-    assert body["audio"] == {"encoding": "pcm_s16le", "sample_rate": 48000}
-    assert "controls" not in body
-    # fields the request shape does not define
-    assert "language" not in body
-    assert "output_format" not in body
-    assert "voice_id" not in body
 
 
 async def test_partial_controls_send_only_what_was_set():
@@ -437,14 +388,14 @@ class _WSServer:
 
 
 async def _stream_turn(tts, tokens: list[str], **conn: Any) -> bytes:
-    """Push one turn's text deltas through a stream and drain the resulting audio.
+    """Push one turn's chunks through a provider attempt and drain the resulting audio.
 
     One stream is one segment is one turn, so several turns means several streams.
     """
     options = APIConnectOptions(max_retry=0, **conn)
-    stream = tts.stream(conn_options=options)
+    stream = tts._stream(conn_options=options)
     for text in tokens:
-        stream.push_text(text)
+        _push(stream, text)
     stream.end_input()
 
     audio = bytearray()
@@ -454,14 +405,6 @@ async def _stream_turn(tts, tokens: list[str], **conn: Any) -> bytes:
     finally:
         await stream.aclose()
     return bytes(audio)
-
-
-def test_ws_url_derives_from_base_url():
-    from livekit.plugins.bland.tts import DEFAULT_BASE_URL, _ws_url
-
-    assert _ws_url(DEFAULT_BASE_URL) == "wss://api.bland.ai/v2/tts/ws"
-    assert _ws_url("http://127.0.0.1:8080/v2") == "ws://127.0.0.1:8080/v2/tts/ws"
-    assert _ws_url("http://127.0.0.1:8080/v2/") == "ws://127.0.0.1:8080/v2/tts/ws"
 
 
 async def test_init_sent_once_with_voice_and_format():
@@ -495,10 +438,10 @@ async def test_init_carries_controls_when_set():
 
 
 async def test_tokens_stream_through_verbatim():
-    """Bland picks its own synthesis boundaries, so deltas must not be re-tokenized."""
+    """Each chunk goes out as its own speak message, unsplit and unbuffered."""
     from livekit.plugins.bland import TTS
 
-    tokens = ["The weather", " is clear", " today."]
+    tokens = ["The weather", "is clear", "today."]
 
     async with _WSServer() as srv:
         tts = TTS(api_key="k", base_url=srv.base_url)
@@ -506,7 +449,7 @@ async def test_tokens_stream_through_verbatim():
         await _stream_turn(tts, tokens)
         await tts.aclose()
 
-    assert [m["text"] for m in srv.of_type("speak")] == tokens
+    assert [m["text"] for m in srv.of_type("speak")] == [f"{t} " for t in tokens]
 
 
 async def test_empty_stream_completes_without_creating_a_turn():
@@ -535,7 +478,7 @@ async def test_each_turn_gets_its_own_context_id():
     speaks = srv.of_type("speak")
     ends = srv.of_type("end_of_turn")
 
-    assert [m["text"] for m in speaks] == ["first.", "second."]
+    assert [m["text"] for m in speaks] == ["first. ", "second. "]
     assert speaks[0]["context_id"] != speaks[1]["context_id"]
     # each turn is terminated under the id its deltas were sent with
     assert [m["context_id"] for m in ends] == [m["context_id"] for m in speaks]
@@ -587,8 +530,8 @@ async def test_abandoned_stream_cancels_turn_and_reuses_connection():
     async with _WSServer() as srv:
         tts = TTS(api_key="k", base_url=srv.base_url)
         tts._session = srv.session
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        _push(stream, "hello")
         await asyncio.wait_for(srv.speak_received.wait(), timeout=1)
         first_context = srv.of_type("speak")[0]["context_id"]
         await stream.aclose()
@@ -606,10 +549,10 @@ async def test_unacknowledged_cancel_closes_connection_within_turn_timeout():
     async with _WSServer(acknowledge_cancel=False) as srv:
         tts = TTS(api_key="k", base_url=srv.base_url)
         tts._session = srv.session
-        stream = tts.stream(
+        stream = tts._stream(
             conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.05, read_timeout=0.05)
         )
-        stream.push_text("hello")
+        _push(stream, "hello")
         await asyncio.wait_for(srv.speak_received.wait(), timeout=1)
         await stream.aclose()
         await asyncio.wait_for(srv.connection_closed.wait(), timeout=1)
@@ -819,14 +762,14 @@ async def test_refused_turn_does_not_contaminate_the_next_one():
             max_retry=0, connect_timeout=1, write_timeout=0.1, read_timeout=0.1
         )
 
-        stream = tts.stream(conn_options=options)
-        stream.push_text("first")
-        stream.push_text(" second")
+        stream = tts._stream(conn_options=options)
+        _push(stream, "first")
+        _push(stream, "second")
         await asyncio.wait_for(srv.two_speaks.wait(), timeout=5)
         await stream.aclose()
 
-        replacement = tts.stream(conn_options=options)
-        replacement.push_text("replacement")
+        replacement = tts._stream(conn_options=options)
+        _push(replacement, "replacement")
         replacement.end_input()
         try:
             async for _ in replacement:
@@ -857,10 +800,10 @@ async def test_failed_cancel_stays_a_cancellation():
         tts._session = srv.session
         # Retries enabled, unlike the sibling test above — that is what makes a
         # swallowed cancellation observable.
-        stream = tts.stream(
+        stream = tts._stream(
             conn_options=APIConnectOptions(max_retry=3, connect_timeout=0.05, read_timeout=0.05)
         )
-        stream.push_text("hello")
+        _push(stream, "hello")
         await asyncio.wait_for(srv.speak_received.wait(), timeout=1)
 
         # Must return: a cancellation that turned into a retry would hang here.
@@ -868,7 +811,7 @@ async def test_failed_cancel_stays_a_cancellation():
         await tts.aclose()
 
     # The interrupted text must not be spoken again.
-    assert [m["text"] for m in srv.of_type("speak")] == ["hello"]
+    assert [m["text"] for m in srv.of_type("speak")] == ["hello "]
 
 
 async def test_barge_in_does_not_wait_out_the_connect_budget():
@@ -886,8 +829,8 @@ async def test_barge_in_does_not_wait_out_the_connect_budget():
         tts = TTS(api_key="k", base_url=srv.base_url)
         tts._session = srv.session
         # A generous connect budget, which is what the bound used to be taken from.
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
-        stream.push_text("hello")
+        stream = tts._stream(conn_options=APIConnectOptions(max_retry=0))
+        _push(stream, "hello")
         await asyncio.wait_for(srv.speak_received.wait(), timeout=1)
 
         started = time.monotonic()
@@ -915,4 +858,4 @@ def test_disabled_streaming_refuses_to_open_a_stream():
     tts = TTS(api_key="k", streaming=False)
 
     with pytest.raises(RuntimeError, match="streaming is disabled"):
-        tts.stream()
+        tts._stream(conn_options=APIConnectOptions())

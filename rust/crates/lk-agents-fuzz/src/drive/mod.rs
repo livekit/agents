@@ -75,7 +75,7 @@ use crate::{
         TranscriptSetup, hook_of,
     },
 };
-use lk_agents_abi::voice::session_options::{EndpointingMode, InterruptionMode, TextTransformSet};
+use lk_agents_abi::voice::session_options::{EndpointingMode, InterruptionMode};
 
 mod apply;
 mod background;
@@ -184,9 +184,11 @@ pub struct Setup {
     pub transcription_output_raises: bool,
     /// An audio output that reports a cut a few scheduler hops late, as a host source does.
     pub lagging_output: bool,
-    /// `tts_text_transforms`: `None` is not given (markdown and emoji filtered), `Some` the set
-    /// written, `Some(None)` none.
-    pub text_transforms: Option<Option<TextTransformSet>>,
+    /// A frame each host audio output never takes: it raises, or its capture never returns. The
+    /// first frame of a segment fails before the output took any of its audio, a later one after.
+    pub output_fault: Option<crate::fakes::CaptureFault>,
+    /// Each host audio output leaves a clear unreported: it reports it late, or never.
+    pub unreported_clear: Option<crate::fakes::UnreportedClear>,
     /// The room's own audio and transcription legs, which a host that hands none of its own
     /// runs on (`agent_session.py`'s default): the person is in the room from the start and
     /// speaks into a microphone track, and the agent's voice plays out on the room's clock.
@@ -230,18 +232,16 @@ pub struct Setup {
     /// The model opens each reply with reasoning and a delivery marker, as an expressive model
     /// does: what every leg must read once and never show.
     pub expressive_model: bool,
-    /// `VoiceSession(use_tts_aligned_transcript=)`; `None` is not given.
-    pub aligned_transcript: Option<bool>,
-    /// `Agent(use_tts_aligned_transcript=)` on the first agent and on every agent a handoff
-    /// installs; `None` defers to the session's.
-    pub agent_aligned_transcript: Option<bool>,
+    /// `tts.options.pacing`: later chunks held while the audio already synthesized plays out.
+    /// Off in a scripted case, whose timeline assumes each chunk goes as it is split.
+    pub tts_pacing: bool,
     /// Every tool body catches its cancellation and runs on (`except CancelledError:` in a
     /// Python tool): the host's cancel is refused, and the body still waits for its answer.
     pub tools_refuse_cancel: bool,
     /// The share of provider delays that stray from the measured ones to a deadline or a stall
     /// (`fakes::delay`): the search's randomness, so a pure conversation keeps real timings.
     pub stray: f64,
-    /// The voice lane is stored, by storage's own code over its SQLite backend; `None` runs
+    /// The voice partition is stored, by storage's own code over its SQLite backend; `None` runs
     /// the session without storage.
     pub storage: Option<StorageSetup>,
     /// Panic and never-answer faults at the fakes (`fakes::hazard`), drawn from this seed, and
@@ -249,7 +249,7 @@ pub struct Setup {
     pub stress: Option<u64>,
 }
 
-/// The thread database behind the voice lane. Every answer takes a seeded latency.
+/// The thread database behind the voice partition. Every answer takes a seeded latency.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StorageSetup {
     /// Seeded faults on top: answers lost after the write applied, writes lost before it, lease
@@ -346,9 +346,16 @@ pub struct ProcessorFaults {
 /// session waits out its timeout), or sends one the session cannot read.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PreConnect {
+    /// Headerless PCM16 declared `audio/pcm`.
     Sent,
+    /// What the Swift, Android and Flutter SDKs send: headerless PCM16 declared
+    /// `application/octet-stream`.
+    Mobile,
     Never,
     Malformed,
+    /// The app opens the stream and sends part of it, then stalls: the stream never ends while
+    /// the case runs.
+    Stalled,
 }
 
 /// The agent the session opens with; a handoff names another.
@@ -495,6 +502,8 @@ impl Default for Setup {
             sync_transcription: false,
             transcription_output_raises: false,
             lagging_output: false,
+            output_fault: None,
+            unreported_clear: None,
             ivr: None,
             amd: None,
             stt_model: 0,
@@ -502,13 +511,11 @@ impl Default for Setup {
             tts_alignment: TtsAlignment::None,
             tts_markup: "",
             expressive_model: false,
-            aligned_transcript: None,
-            agent_aligned_transcript: None,
+            tts_pacing: false,
             keyterms: Vec::new(),
             keyterm_detection: None,
             nodes: None,
             room: None,
-            text_transforms: None,
             room_legs: None,
             console: false,
             video_sampler: false,
@@ -706,7 +713,7 @@ pub struct Run {
     tasks: Arc<Tasks>,
     stamps: Stamps,
     pub registry: Arc<Registry>,
-    /// The voice lane's store and database, closed as the host closes it after the session.
+    /// The voice partition's store and database, closed as the host closes it after the session.
     store: Option<fakes::FakeStore>,
     /// What the fakes have done and not yet been read. Drained after every input; see [`Record`]
     /// for why reading it later still yields the order things happened in.
@@ -752,6 +759,8 @@ pub struct Run {
     host_mic: bool,
     /// How many times the person joined the room, which names their microphone track.
     joins: u32,
+    /// Pre-connect streams a stalled app holds open: dropping one would end its stream.
+    stalled: Vec<tokio::sync::mpsc::Sender<Vec<u8>>>,
     /// The CLI on the other end of the console's socket.
     console: Option<fakes::FakeCli>,
     /// The next console request's id.

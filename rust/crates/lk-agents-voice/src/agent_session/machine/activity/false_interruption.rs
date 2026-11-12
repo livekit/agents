@@ -309,8 +309,8 @@ impl VoiceDriver {
     }
 
     /// The only writer of a speech's interruption. `Err` when forbidden and not forced; an ended
-    /// speech is `Ok(Already)`. A cut playout cancels its tools, a speech in its tools lets them
-    /// finish and commit, and no follow-up is spoken.
+    /// speech is `Ok(Already)`. A cut playout cancels its tools; a speech in its tools is done at
+    /// once and gives the floor back while they finish and commit; no follow-up is spoken.
     pub(crate) fn interrupt_speech(
         &mut self,
         now: Ts,
@@ -379,6 +379,14 @@ impl VoiceDriver {
         // A realtime server keeps generating (into its own mirror) until told not to.
         if realtime {
             self.realtime_interrupt(cause);
+        } else if !closing
+            && matches!(
+                cause,
+                InterruptCause::ByAudioActivity | InterruptCause::Host | InterruptCause::UserTurn
+            )
+        {
+            self.activity.cut_by_person.insert(speech);
+            self.release_to_running_tools(now, speech);
         }
         InterruptOutcome::Now
     }
@@ -879,5 +887,75 @@ mod tests {
         paused.false_interruption_timer_armed();
         assert!(!paused.false_interruption_timed_out(true), "the open turn owns the verdict");
         assert!(paused.turn_settled(TurnSettled::TornDown), "a torn-down turn resolves it");
+    }
+
+    /// A false interruption pauses the speech, then resumes it once, saying so in its event.
+    /// https://github.com/livekit/agents/pull/3406 https://github.com/livekit/agents/pull/7087
+    /// https://github.com/livekit/agents/pull/6636 https://github.com/livekit/agents/pull/6938
+    #[test]
+    fn a_false_interruption_pauses_then_resumes_the_speech_once() {
+        use crate::agent_session::effects::VoiceEffect;
+        use crate::agent_session::{Now, SayText, SpeechCommand};
+        use crate::generation::GenEvent;
+        use lk_agents_abi::resources::{AudioOutputRef, ResourceId};
+        let at = |secs| Ts::ZERO.saturating_add(Duration::from_secs(secs));
+        let mut driver = crate::agent_session::tests::driver();
+        // A local VAD owns the turn, so the person's speech can barge in.
+        driver.activity.audio_recognition.set_legs(false, true);
+        let eff = driver
+            .activity
+            .audio_recognition
+            .set_turn_detection_mode(Ts::ZERO, TurnDetectionMode::Vad);
+        driver.apply_recognition_effects(eff);
+        driver.set_outputs(|outputs| {
+            outputs.audio = Some(AudioOutputRef {
+                id: ResourceId(5),
+                label: "room".into(),
+                capabilities: AudioOutputCapabilities { pause: true },
+            });
+        });
+        driver.on_speech(
+            Ts::ZERO,
+            SpeechCommand::Say {
+                text: SayText::Audio { text: "A long answer.".into() },
+                allow_interruptions: None,
+                add_to_chat_ctx: true,
+                call: None,
+            },
+        );
+        driver.settle_step();
+        let speech = driver.activity.speeches().next().expect("the say");
+        driver.on_generation(Ts::ZERO, GenEvent::FirstFrame { speech });
+        driver.settle_step();
+        assert_eq!(driver.session.states.agent_state(), AgentState::Speaking);
+        // Past the echo canceller's warm-up, so the person can interrupt.
+        driver.handle(None, Now { at: at(5), wall: std::time::UNIX_EPOCH });
+        driver.take_outbox();
+
+        let trigger = AudioInterruptTrigger::VadThreshold {
+            duration: Duration::from_secs(1),
+            raw_silence: Duration::ZERO,
+        };
+        driver.interrupt_by_audio_activity(at(5), trigger);
+        driver.settle_step();
+        assert_eq!(driver.activity.paused_speech.paused_handle(), Some(speech));
+        assert_eq!(driver.session.states.agent_state(), AgentState::Listening, "paused is silent");
+
+        let effects = driver.handle(None, Now { at: at(30), wall: std::time::UNIX_EPOCH });
+        let events: Vec<_> = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                VoiceEffect::Emit(SessionEvent::AgentFalseInterruption { resumed }) => {
+                    Some(format!("false_interruption resumed={resumed}"))
+                }
+                VoiceEffect::Emit(SessionEvent::AgentStateChanged { new, .. }) => {
+                    Some(format!("{new:?}"))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(events, ["Speaking", "false_interruption resumed=true"]);
+        assert_eq!(driver.session.states.agent_state(), AgentState::Speaking);
+        assert!(driver.activity.speech_scheduler.speech(speech).is_some_and(|s| !s.done()));
     }
 }

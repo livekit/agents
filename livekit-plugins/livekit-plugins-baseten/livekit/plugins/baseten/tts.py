@@ -31,7 +31,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from ._qwen3_tts import NUM_CHANNELS, SAMPLE_RATE, Qwen3Backend
@@ -231,16 +231,16 @@ class TTS(tts.TTS):
         if is_given(buffer_size):
             self._opts.buffer_size = buffer_size
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
         if self._qwen3 is not None:
             # Qwen3-TTS is streaming-only; the framework helper disables retries
             # on the inner stream and forwards timed transcripts.
-            return self._synthesize_with_stream(text, conn_options=conn_options)
+            return self._synthesize_with_stream(chunk, conn_options=conn_options)
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             opts=replace(self._opts),
             ensure_session=self._ensure_session,
@@ -248,9 +248,7 @@ class TTS(tts.TTS):
             api_key=self._api_key,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> tts.SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> tts.SynthesizeStream:
         stream: tts.SynthesizeStream
         if self._qwen3 is not None:
             stream = self._qwen3.make_stream(self, conn_options=conn_options)
@@ -367,7 +365,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(data, self.Flush):
                     continue
                 self.mark_started()
-                await ws.send_str(data)
+                await ws.send_str(data.text + " ")
                 read_deadline.expect_response()
             await ws.send_str(_END_SENTINEL)
             read_deadline.expect_response(final=True)

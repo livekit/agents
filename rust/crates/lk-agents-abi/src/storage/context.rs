@@ -92,6 +92,44 @@ pub trait ContextActivation: Send + Sync + Sized + 'static {
         fields: Vec<ContextField>,
     ) -> Result<ContextValues, StorageError>;
 
+    /// A detached read of committed routing state; never starts an execution.
+    #[host(await)]
+    async fn load_session(&self) -> Result<Option<Value>, StorageError>;
+
+    #[host(await)]
+    async fn load_session_snapshot(&self) -> Result<String, StorageError>;
+
+    #[host(call)]
+    fn declare_binding(
+        &self,
+        context: crate::HostRef,
+        store: crate::HostRef,
+    ) -> super::session::BoundContext;
+
+    #[host(await)]
+    async fn flush_bound_session(
+        &self,
+        history: Option<Vec<crate::ChatItem>>,
+    ) -> Result<(), StorageError>;
+
+    /// The managed turn's checkpoint channel, owned by the run holding the lease.
+    #[host(call)]
+    fn set_session_sink(
+        &self,
+        sink: std::sync::Arc<dyn crate::a2a::turn::HandlerPort>,
+    ) -> Result<(), StorageError>;
+
+    /// Persist the previously accepted session state, without saving application fields.
+    #[host(await)]
+    async fn flush_session(&self, history: Vec<crate::ChatItem>) -> Result<(), StorageError>;
+
+    /// Stage framework-owned session state without saving ordinary application fields.
+    #[host(call)]
+    fn stage_session(&self, state: Value) -> Result<(), StorageError>;
+
+    #[host(getter)]
+    fn session_state(&self) -> Option<Value>;
+
     #[host(getter)]
     fn writes(&self) -> Vec<ContextScopeWrite>;
 
@@ -203,6 +241,24 @@ pub trait ContextStoreFacade {
     /// The store's activation, which the store sets.
     #[host(delegate = "_activation")]
     type Activation: ContextActivation;
+
+    /// Declare live updates without performing I/O. Execution activates the binding and
+    /// tools receive the original context. Ordinary application fields still require saves.
+    /// Omit context when the session has no application data.
+    #[host(via = Activation, native = declare_binding, bind(store = "self"),
+        annotation(context = ".storage_session.Context_T | None", ret = ".storage_session.BoundContext[Context_T] | .storage_session.BoundContext[None]"),
+        overloads(with_context(context = ".storage_session.Context_T", ret = ".storage_session.BoundContext[Context_T]"),
+        without_context(ret = ".storage_session.BoundContext[None]")))]
+    fn bind(&self, #[host(default = None)] context: crate::HostRef)
+    -> super::session::BoundContext;
+
+    /// Return a detached snapshot of committed conversation state.
+    #[host(via = Activation, native = load_session_snapshot, returns = "..storage.session_state.SessionState")]
+    async fn load_session(&self) -> Result<String, StorageError>;
+
+    /// Flush accepted conversation state without committing staged application fields or SQL.
+    #[host(via = Activation, native = flush_bound_session, bind(history = "_session_history()"))]
+    async fn flush(&self) -> Result<(), StorageError>;
 
     /// A transaction, committed as the block ends and rolled back when it raises.
     #[host(

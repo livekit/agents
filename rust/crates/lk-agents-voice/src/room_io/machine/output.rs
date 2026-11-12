@@ -191,6 +191,11 @@ pub enum CaptureAdmission {
     Wait,
 }
 
+/// How much of a reply the room output takes ahead of what it has sent: a voice synthesizes faster
+/// than it plays, so the audio (and the pauses the transcript is placed by) is in hand long before
+/// it is heard. The first frame is never held; a clear drops what is ahead.
+pub const TAKEN_AHEAD_MS: u32 = 60_000;
+
 /// The room output data plane. Resource handles and waits live in its performer.
 pub struct Playback {
     segment: Option<PlaybackSegment>,

@@ -189,9 +189,9 @@ pub enum SpeechStep {
     Authorized {
         speech: SpeechId,
     },
-    /// The voice lane's lease was lost under this speech: it is cancelled, and no later turn of
+    /// The voice partition's lease was lost under this speech: it is cancelled, and no later turn of
     /// the session commits.
-    LaneLost {
+    PartitionLost {
         speech: SpeechId,
     },
     /// A reply step was spoken and marked done. The floor is released here, before its tools run,
@@ -242,6 +242,16 @@ pub enum SpeechStep {
         at: Ts,
     },
     WatchdogCleared {
+        speech: SpeechId,
+    },
+    /// The person cut the speech while its tools ran: it is done now, and its turn reports when
+    /// they end.
+    ReleasedToTools {
+        speech: SpeechId,
+    },
+    /// The speech's turn commits after an earlier one still outliving its interruption: the
+    /// speech is done now, and its commit follows.
+    CommitWaits {
         speech: SpeechId,
     },
 }
@@ -492,8 +502,10 @@ pub enum PlayoutStep {
     TranscriptForwarded {
         speech: SpeechId,
         text: String,
-        /// The TTS's stamp for it, on the aligned path (`use_tts_aligned_transcript`).
+        /// The TTS's stamp for it, when the TTS aligns its words.
         start_time: Option<f64>,
+        /// Whether the voice says it (markdown and markup do not).
+        spoken: bool,
     },
     /// A synchroniser released `text` to the transcript once the segment had played `played`;
     /// `start` and `end` are where its audio starts and ends in the segment, in seconds.
@@ -503,6 +515,8 @@ pub enum PlayoutStep {
         start: f64,
         end: f64,
         played: std::time::Duration,
+        /// Whether the voice says it (markdown and markup do not).
+        spoken: bool,
     },
     /// The recorder was detached after one last flush.
     RecorderDetached,
@@ -780,6 +794,9 @@ pub enum InterruptCause {
     OutputReplaced,
     /// A detector's verdict (AMD: a machine answered), forced past `allow_interruptions`.
     Detector,
+    /// The speech's audio output raised on a frame: cut where the output stopped taking it,
+    /// whatever its `allow_interruptions`.
+    OutputFailed,
     Superseded,
     Closing,
     ScheduleRejected,
@@ -911,13 +928,15 @@ impl Step {
                 | SpeechStep::ReplyFailed { speech, .. }
                 | SpeechStep::ScheduleRejected { speech, .. }
                 | SpeechStep::Authorized { speech }
-                | SpeechStep::LaneLost { speech }
+                | SpeechStep::PartitionLost { speech }
                 | SpeechStep::StepSpoken { speech, .. }
                 | SpeechStep::AgentStartedSpeaking { speech }
                 | SpeechStep::ItemsRecorded { speech, .. }
                 | SpeechStep::IdleAskWithdrawn { speech, .. }
                 | SpeechStep::WatchdogArmed { speech, .. }
-                | SpeechStep::WatchdogCleared { speech } => Some(*speech),
+                | SpeechStep::WatchdogCleared { speech }
+                | SpeechStep::ReleasedToTools { speech }
+                | SpeechStep::CommitWaits { speech } => Some(*speech),
                 SpeechStep::SayRefused { .. }
                 | SpeechStep::FloorArmed { .. }
                 | SpeechStep::FloorReleased

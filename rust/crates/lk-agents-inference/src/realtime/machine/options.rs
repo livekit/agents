@@ -1,32 +1,38 @@
-use crate::realtime::dialect::{DEFAULT_MAX_OUTPUT_TOKENS, Dialect, TurnDetection};
+use crate::realtime::dialect::Dialect;
+use lk_agents_abi::llm::realtime_options::{
+    AudioTranscription, NoiseReduction, Reasoning, Tracing, Truncation, TurnDetection, Voice,
+};
 use lk_agents_abi::{Maybe, ToolChoice};
-use serde_json::{Value, json};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct SessionOptions {
     pub model: String,
-    /// A voice name, or the provider's voice object.
-    pub voice: Value,
+    pub voice: Voice,
     pub instructions: Option<String>,
     pub tool_choice: Option<ToolChoice>,
     pub turn_detection: Option<TurnDetection>,
-    /// The `AudioTranscription` object as given. `None` is off (`null` on the wire), which also
-    /// makes `capabilities.user_transcription` false.
-    pub transcription: Option<Value>,
-    /// The `NoiseReduction` object; `None` is off.
-    pub noise_reduction: Option<Value>,
+    /// `None` is off (`null` on the wire), which also makes `capabilities.user_transcription`
+    /// false.
+    pub transcription: Option<AudioTranscription>,
+    /// `None` is off.
+    pub noise_reduction: Option<NoiseReduction>,
     pub audio_output: bool,
     pub speed: f64,
-    /// `max_response_output_tokens`: `"inf"`, a count, or `null`.
-    pub max_output_tokens: Value,
+    /// The reply's token cap; `None` is the model's limit (`"inf"` on the wire).
+    pub max_output_tokens: Option<u32>,
     /// Always on the wire, `null` when `None`.
-    pub tracing: Option<Value>,
+    pub tracing: Option<Tracing>,
     /// On the wire only when set.
-    pub truncation: Option<Value>,
+    pub truncation: Option<Truncation>,
     /// On the wire only when set.
-    pub reasoning: Option<Value>,
+    pub reasoning: Option<Reasoning>,
     pub max_session_duration: Option<Duration>,
+}
+
+/// Transcription by `model`, with the server's other defaults.
+pub fn transcription(model: &str) -> AudioTranscription {
+    AudioTranscription { model: Some(model.to_owned()), language: None, prompt: None }
 }
 
 impl SessionOptions {
@@ -35,16 +41,16 @@ impl SessionOptions {
         let disable = turn_detection_disabled && d.supports_turn_detection_disabled;
         SessionOptions {
             model: d.default_model.to_owned(),
-            voice: json!(d.default_voice),
+            voice: Voice::Name(d.default_voice.to_owned()),
             instructions: None,
             tool_choice: None,
             turn_detection: if disable { None } else { d.default_turn_detection.clone() },
-            transcription: d.default_transcription_model.map(|m| json!({"model": m})),
+            transcription: d.default_transcription_model.map(transcription),
             noise_reduction: None,
             // `"audio" in modalities`, and the dialect may not let the caller choose.
             audio_output: d.forced_modalities.is_none_or(|m| m.contains(&"audio")),
             speed: 1.0,
-            max_output_tokens: json!(DEFAULT_MAX_OUTPUT_TOKENS),
+            max_output_tokens: None,
             tracing: None,
             truncation: None,
             reasoning: None,
@@ -64,7 +70,7 @@ impl SessionOptions {
             self.turn_detection = v.clone();
         }
         if let Maybe::Given(v) = &p.max_output_tokens {
-            self.max_output_tokens = v.clone();
+            self.max_output_tokens = *v;
         }
         if let Maybe::Given(v) = &p.transcription {
             self.transcription = v.clone();
@@ -92,15 +98,15 @@ impl SessionOptions {
 #[derive(Clone, Default)]
 pub struct OptionsPatch {
     pub tool_choice: Maybe<Option<ToolChoice>>,
-    pub voice: Maybe<Value>,
+    pub voice: Maybe<Voice>,
     pub turn_detection: Maybe<Option<TurnDetection>>,
-    pub max_output_tokens: Maybe<Value>,
-    pub transcription: Maybe<Option<Value>>,
-    pub noise_reduction: Maybe<Option<Value>>,
+    pub max_output_tokens: Maybe<Option<u32>>,
+    pub transcription: Maybe<Option<AudioTranscription>>,
+    pub noise_reduction: Maybe<Option<NoiseReduction>>,
     pub speed: Maybe<f64>,
-    pub tracing: Maybe<Option<Value>>,
-    pub truncation: Maybe<Option<Value>>,
-    pub reasoning: Maybe<Option<Value>>,
+    pub tracing: Maybe<Option<Tracing>>,
+    pub truncation: Maybe<Option<Truncation>>,
+    pub reasoning: Maybe<Option<Reasoning>>,
 }
 
 impl OptionsPatch {

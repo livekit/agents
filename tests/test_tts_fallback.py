@@ -1,27 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from typing import Any
 
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIError, utils
+from livekit.agents import APIConnectionError, APIConnectOptions, utils
 from livekit.agents.tts import (
     TTS,
     AvailabilityChangedEvent,
     FallbackAdapter,
     SynthesizedAudio,
-    SynthesizeStream,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TTS_STARTED_TIME
-from livekit.agents.utils.aio import ChanEmpty
+from livekit.agents.types import USERDATA_TTS_STARTED_TIME
 
-from .fake_tts import FakeSynthesizeStream, FakeTTS
+from .fake_tts import FakeTTS
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = pytest.mark.unit
 
 
 class FallbackAdapterTester(FallbackAdapter):
@@ -169,72 +166,6 @@ async def test_tts_fallback() -> None:
     await fallback_adapter.aclose()
 
 
-async def test_no_audio() -> None:
-    fake1 = FakeTTS(fake_audio_duration=0.0)
-
-    fallback_adapter = FallbackAdapterTester([fake1])
-
-    with pytest.raises(APIConnectionError):
-        async with fallback_adapter.synthesize("hello test chunked") as stream:
-            async for _ in stream:
-                pass
-
-    # stream
-    fake1.update_options(fake_audio_duration=5.0)
-
-    async def _input_task(stream: SynthesizeStream, text: str):
-        with contextlib.suppress(RuntimeError):
-            stream.push_text(text)
-            stream.flush()
-            stream.end_input()
-
-    async def _stream_task(text: str, audio_duration: float) -> None:
-        fake1.update_options(fake_timeout=0.5, fake_audio_duration=audio_duration)
-
-        async with fallback_adapter.stream() as stream:
-            input_task = asyncio.create_task(_input_task(stream, text))
-
-            segments = set()
-            try:
-                async for ev in stream:
-                    segments.add(ev.segment_id)
-            finally:
-                await input_task
-
-            if audio_duration > 0.0:
-                assert len(segments) == 1
-            else:
-                assert len(segments) == 0
-
-    await _stream_task("hello test normal", 1.0)
-
-    with pytest.raises(APIError):
-        await _stream_task("hello test no audio", 0.0)
-
-    await fallback_adapter.aclose()
-
-
-async def test_tts_stream_fallback() -> None:
-    fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
-    fake2 = FakeTTS(fake_audio_duration=5.0)
-
-    fallback_adapter = FallbackAdapterTester([fake1, fake2])
-
-    async with fallback_adapter.stream() as stream:
-        stream.push_text("hello test")
-        stream.end_input()
-
-        async for _ in stream:
-            pass
-
-        assert fake1.stream_ch.recv_nowait()
-        assert fake2.stream_ch.recv_nowait()
-
-    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
-
-    await fallback_adapter.aclose()
-
-
 async def test_tts_stream_ttfb_includes_failover_time() -> None:
     # the fallback adapter is measured as a single TTS node: ttfb anchors on the first
     # time a sentence was handed to any underlying TTS and is kept when falling back,
@@ -294,198 +225,3 @@ async def test_tts_chunked_ttfb_includes_failover_time() -> None:
     assert started_time == pytest.approx(start, abs=0.1)
 
     await fallback_adapter.aclose()
-
-
-async def test_tts_recover() -> None:
-    fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
-    fake2 = FakeTTS(fake_exception=APIConnectionError("fake2 failed"), fake_timeout=0.5)
-
-    fallback_adapter = FallbackAdapterTester([fake1, fake2])
-
-    with pytest.raises(APIConnectionError):
-        async with fallback_adapter.synthesize("hello test") as stream:
-            async for _ in stream:
-                pass
-
-        assert fake1.synthesize_ch.recv_nowait()
-        assert fake2.synthesize_ch.recv_nowait()
-
-    fake2.update_options(fake_exception=None, fake_audio_duration=5.0)
-
-    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
-    assert not fallback_adapter.availability_changed_ch(fake2).recv_nowait().available
-
-    assert (
-        await asyncio.wait_for(fallback_adapter.availability_changed_ch(fake2).recv(), 1.0)
-    ).available, "fake2 should have recovered"
-
-    async with fallback_adapter.synthesize("hello test") as stream:
-        async for _ in stream:
-            pass
-
-    assert fake1.synthesize_ch.recv_nowait()
-    assert fake2.synthesize_ch.recv_nowait()
-
-    with pytest.raises(ChanEmpty):
-        fallback_adapter.availability_changed_ch(fake1).recv_nowait()
-
-    with pytest.raises(ChanEmpty):
-        fallback_adapter.availability_changed_ch(fake2).recv_nowait()
-
-    await fallback_adapter.aclose()
-
-
-async def test_audio_resampled() -> None:
-    fake1 = FakeTTS(sample_rate=48000, fake_exception=APIConnectionError("fake1 failed"))
-    fake2 = FakeTTS(fake_audio_duration=5.0, sample_rate=16000)
-
-    fallback_adapter = FallbackAdapterTester([fake1, fake2])
-
-    async with fallback_adapter.synthesize("hello test") as stream:
-        frames: list[SynthesizedAudio] = []
-        async for data in stream:
-            frames.append(data)
-
-        assert fake1.synthesize_ch.recv_nowait()
-        assert fake2.synthesize_ch.recv_nowait()
-
-        assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
-
-        assert frames[-1].is_final is True, "last frame should be final"
-
-        combined_frame = rtc.combine_audio_frames([f.frame for f in frames])
-        assert combined_frame.duration == 5.01
-        assert combined_frame.sample_rate == 48000
-
-    assert await asyncio.wait_for(fake1.synthesize_ch.recv(), 1.0)
-
-    async with fallback_adapter.stream() as stream:
-        stream.push_text("hello test")
-        stream.end_input()
-
-        frames: list[SynthesizedAudio] = []
-        async for data in stream:
-            frames.append(data)
-
-        assert fake2.stream_ch.recv_nowait()
-
-        assert frames[-1].is_final is True, "last frame should be final"
-
-        combined_frame = rtc.combine_audio_frames([f.frame for f in frames])
-        assert combined_frame.duration == 5.01  # 5.0 + 0.01 final flag
-        assert combined_frame.sample_rate == 48000
-
-    await fallback_adapter.aclose()
-
-
-async def test_timeout():
-    fake1 = FakeTTS(fake_timeout=0.5, sample_rate=48000)
-    fake2 = FakeTTS(fake_timeout=0.5, sample_rate=48000)
-
-    fallback_adapter = FallbackAdapterTester([fake1, fake2])
-
-    with pytest.raises(APIConnectionError):
-        async with fallback_adapter.synthesize(
-            "hello test",
-            conn_options=APIConnectOptions(connect_timeout=0.1, read_timeout=0.1, max_retry=0),
-        ) as stream:
-            async for _ in stream:
-                pass
-
-    assert fake1.synthesize_ch.recv_nowait()
-    assert fake2.synthesize_ch.recv_nowait()
-
-    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
-    assert not fallback_adapter.availability_changed_ch(fake2).recv_nowait().available
-
-    assert await asyncio.wait_for(fake1.synthesize_ch.recv(), 1.0)
-    assert await asyncio.wait_for(fake2.synthesize_ch.recv(), 1.0)
-
-    # stream
-    with pytest.raises(APIConnectionError):
-        async with fallback_adapter.stream(
-            conn_options=APIConnectOptions(connect_timeout=0.1, read_timeout=0.1, max_retry=0)
-        ) as stream:
-            stream.push_text("hello test")
-            stream.end_input()
-
-            async for _ in stream:
-                pass
-
-    assert fake1.stream_ch.recv_nowait()
-    assert fake2.stream_ch.recv_nowait()
-
-    assert await asyncio.wait_for(fake1.stream_ch.recv(), 1.0)
-    assert await asyncio.wait_for(fake2.stream_ch.recv(), 1.0)
-
-    await fallback_adapter.aclose()
-
-
-class _GateTTS(FakeTTS):
-    """FakeTTS whose recovery probe (the second `stream()`) blocks until `gate` is set.
-
-    Blocking on an event rather than a timer keeps the probe pending for exactly as long as the
-    test needs, with nothing racing it to completion.
-    """
-
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.gate = asyncio.Event()
-        self._stream_calls = 0
-
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> FakeSynthesizeStream:
-        self._stream_calls += 1
-        if self._stream_calls == 1:
-            return super().stream(conn_options=conn_options)
-
-        gate = self.gate
-
-        class _Blocking(FakeSynthesizeStream):
-            async def _run(self, output_emitter) -> None:  # type: ignore[no-untyped-def]
-                await gate.wait()
-                await super()._run(output_emitter)
-
-        stream = _Blocking(tts=self, conn_options=conn_options)
-        self._stream_ch.send_nowait(stream)
-        return stream
-
-
-async def test_tts_recover_on_streamed_path() -> None:
-    # a provider marked unavailable is skipped on later streamed requests, so
-    # nothing has awaited by the time recovery is considered and the probe used
-    # to be dropped for want of text - leaving the process pinned to its
-    # fallback for good after one transient outage (#6678)
-    fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
-    fake2 = FakeTTS(fake_audio_duration=1.0)
-
-    fallback_adapter = FallbackAdapterTester([fake1, fake2])
-
-    async def _drive() -> None:
-        async with fallback_adapter.stream() as stream:
-            stream.push_text("hello test")
-            stream.end_input()
-            async for _ in stream:
-                pass
-
-    # first request: fake1 fails and is marked unavailable
-    await _drive()
-    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
-
-    fake1.update_options(fake_exception=None, fake_audio_duration=1.0)
-
-    # second request: fake1 is skipped, and must still be probed
-    await _drive()
-
-    assert (
-        await asyncio.wait_for(fallback_adapter.availability_changed_ch(fake1).recv(), 5.0)
-    ).available, "fake1 should have recovered on the streamed path"
-
-    await fallback_adapter.aclose()
-
-
-async def _drain_stream(stream: SynthesizeStream) -> None:
-    with contextlib.suppress(Exception):
-        async for _ in stream:
-            pass

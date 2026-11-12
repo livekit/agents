@@ -23,8 +23,8 @@ pub const EXIT_BOUND_MS: u64 = 15_000;
 pub struct TextRecording {
     pub runs: Vec<RunRecord>,
     pub turns: Vec<TurnRecord>,
-    /// The lane once every turn ended; `None` when the scenario sent no message.
-    pub lane: Option<LaneRecord>,
+    /// The partition once every turn ended; `None` when the scenario sent no message.
+    pub partition_key: Option<PartitionRecord>,
     pub messages: Vec<MessageRecord>,
     pub tasks: Vec<TaskRecord>,
 }
@@ -82,7 +82,7 @@ pub struct TurnRecord {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct LaneRecord {
+pub struct PartitionRecord {
     /// Runs started and never ended.
     pub unended: u32,
     /// A lease still held once every turn ended and the lease's TTL passed.

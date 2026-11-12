@@ -73,7 +73,7 @@ pub enum CommandRefused {
 #[error("This generation handle does not allow interruptions")]
 pub struct NotInterruptible;
 
-/// `start()`'s awaited half failed: the loop, the call's thread (its lane did not load, raised
+/// `start()`'s awaited half failed: the loop, the call's thread (its partition did not load, raised
 /// as its storage error: `ThreadNotFound`, `StorageUnavailable`, ...), or what the host does
 /// beside it (the room's connection, the remote session's transport), which raises as itself.
 #[crate::host(error(kind = "RuntimeError"))]
@@ -87,6 +87,10 @@ pub enum StartFailed {
     #[error(transparent)]
     #[host(delegate)]
     Host(#[from] HostError),
+    /// The session's recording did not open.
+    #[error(transparent)]
+    #[host(delegate)]
+    Recording(#[from] crate::recorder::RecordingFailure),
 }
 
 /// `aclose(reason=..)` with a reason that is no `CloseReason`.
@@ -262,9 +266,6 @@ pub struct UpdateAgentArgs {
     /// The agent's `min_consecutive_speech_delay` in seconds; `None` defers to the session's.
     #[host(default = None)]
     pub min_consecutive_speech_delay: Option<f64>,
-    /// The agent's `use_tts_aligned_transcript`; `None` defers to the session's.
-    #[host(default = None)]
-    pub use_tts_aligned_transcript: Option<bool>,
     /// The agent's `expressive`; `NOT_GIVEN` defers to the session's.
     pub expressive: Maybe<Expressive>,
     #[host(default = None)]
@@ -329,14 +330,12 @@ pub struct VoiceSessionArgs {
     pub on_event: Option<Arc<dyn crate::voice::session_effects::SessionEvents>>,
     #[host(default = None)]
     pub hooks: Option<Arc<dyn crate::voice::session_effects::SessionHooks>>,
-    /// The first agent's own `turn_handling`, `min_consecutive_speech_delay` in seconds and
-    /// `use_tts_aligned_transcript`: the agent layer of the stack.
+    /// The first agent's own `turn_handling` and `min_consecutive_speech_delay` in seconds: the
+    /// agent layer of the stack.
     #[host(default = None)]
     pub agent_turn_handling: Option<TurnHandlingKwargs>,
     #[host(default = None)]
     pub agent_min_consecutive_speech_delay: Option<f64>,
-    #[host(default = None)]
-    pub agent_use_tts_aligned_transcript: Option<bool>,
     /// The turn detector over the user's audio (`turn_detection`).
     #[host(default = None)]
     pub turn_detector: Option<Arc<dyn crate::EotDetector>>,
@@ -398,6 +397,9 @@ pub struct VoiceSessionArgs {
     /// Prefixes the ids the session mints for chat items; `None` mints a random one.
     #[host(default = None)]
     pub session_id: Option<String>,
+    /// What the session's ids (speeches, chat items) are drawn from; `None` draws a random one.
+    #[host(default = None)]
+    pub id_seed: Option<u64>,
     /// Serve the remote session protocol (`lk agent simulate`, the dashboard, `lk agent
     /// console`) on the room's byte streams, or on `console`.
     #[host(default = None)]

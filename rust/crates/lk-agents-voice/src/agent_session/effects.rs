@@ -12,9 +12,9 @@ use std::sync::Arc;
 /// Where a starting speech's history lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeechHistory {
-    /// The speech takes the voice lane: the store reloads the history before the model reads it
+    /// The speech takes the voice partition: the store reloads the history before the model reads it
     /// and watches the lease.
-    VoiceLane,
+    VoicePartition,
     /// The session's history in memory, with no store.
     InMemory,
 }
@@ -45,6 +45,12 @@ pub enum VoiceEffect {
     Answer(RequestId, Answer),
     Host(VoiceHostEvent),
     ChatContext(Arc<lk_agents_abi::ChatContext>),
+    StorageCheckpoint {
+        checkpoint: u64,
+        speech: SpeechId,
+        agent: String,
+        history: Vec<lk_agents_abi::ChatItem>,
+    },
     StorageAbort(SpeechId),
     StorageCommit {
         speech: SpeechId,
@@ -216,12 +222,14 @@ pub enum Timer {
     DtmfDebounce,
     /// An ended call's realtime reply to the tool result has not started yet.
     EndCallReply,
+    /// A cut segment's sink has not reported playback finished: past it, the binding is released.
+    OutputSettlement(crate::agent_session::RequestId),
     /// An interrupted speech that never reported its end is released (`SpeechHandle._cancel`).
     InterruptionTimeout(SpeechId),
     /// `min_consecutive_speech_delay` ran out.
     ConsecutiveSpeechDelay,
-    /// A speech that ended without reporting its turn: past it, its lane is released.
-    LaneRelease(SpeechId),
+    /// A speech that ended without reporting its turn: past it, its partition is released.
+    PartitionRelease(SpeechId),
 }
 
 /// The journal's record of a call on a provider (`InputStep::ProviderCalled`).
@@ -289,6 +297,12 @@ pub enum AudioOp {
         previous: Option<ResourceId>,
         next: Option<ResourceId>,
         enabled: bool,
+    },
+    /// The sink never reported this cut segment: it is settled interrupted where the sink last
+    /// reported it played, at every link of the output's chain.
+    SettleUnreported {
+        output: ResourceId,
+        segment: lk_agents_abi::voice::io::PlaybackSegment,
     },
     /// The output stays installed; its chain is told.
     SetOutputEnabled {

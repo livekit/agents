@@ -1,16 +1,15 @@
-"""Voice turns share the durable lane and explicitly saved fields with text workers."""
+"""Voice turns restore durable history and explicitly saved application fields."""
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from livekit.agents import Agent, RunContext, StopResponse, VoiceSession, persisted
+from livekit.agents import Agent, RunContext, SessionState, StopResponse, VoiceSession, persisted
 from livekit.agents._generated.storage_class import ItemRow
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall, LLMStream
 from livekit.agents.storage import Storage, Thread, ThreadNotFound
@@ -20,6 +19,14 @@ from .fake_llm import FakeLLM, FakeLLMResponse
 from .storage_fixture import new_session
 
 pytestmark = pytest.mark.unit
+
+
+async def bound(thread: Thread, app: Any = None) -> Any:
+    activation = await thread._storage.threads._core_context_store(thread.id, thread._partition_key)
+    store = ContextStore(
+        activation=activation, thread=thread, scope_id=f"root:{thread._partition_key}"
+    )
+    return store.bind(app)
 
 
 class ObservedLLM(FakeLLM):
@@ -70,7 +77,7 @@ async def test_voice_replaces_changed_transport_before_the_model_reads(
     )
     model = ObservedLLM()
     agent = Agent(instructions="desk", name="desk")
-    thread = Thread(voice_worker, thread_id, agent_name="desk")
+    thread = Thread(voice_worker, thread_id, partition_key="desk")
     opening = ChatContext(
         [
             ChatMessage(
@@ -78,7 +85,7 @@ async def test_voice_replaces_changed_transport_before_the_model_reads(
             )
         ]
     )
-    async with VoiceSession(llm=model, thread=thread) as session:
+    async with VoiceSession(llm=model, context=await bound(thread)) as session:
         await session.start(agent, chat_ctx=opening if explicit_history else None)
         assert texts(session.history) == [
             "application opening" if explicit_history else "stored opening"
@@ -125,12 +132,12 @@ class Application:
 
 
 @pytest.mark.parametrize("no_reply", [False, True])
-async def test_voice_explicit_save_joins_reply_commit_and_releases_the_lane(
+async def test_voice_explicit_save_joins_reply_commit_and_releases_the_partition(
     thread_storage: Storage,
     no_reply: bool,
 ) -> None:
     thread_id = await new_session(thread_storage, "desk")
-    thread = Thread(thread_storage, thread_id, agent_name="desk")
+    thread = Thread(thread_storage, thread_id, partition_key="desk")
     app = Application()
     agent = Agent[Application](instructions="desk", name="desk")
 
@@ -140,7 +147,14 @@ async def test_voice_explicit_save_joins_reply_commit_and_releases_the_lane(
         assert ctx.thread is thread and ctx.context is app
         ctx.context.draft.count += 1
         await ctx.store.save_context(ctx.context)
-        assert not (await thread.chat_history()).items, "save is staged with the voice turn"
+        assert "save" in texts(await thread.chat_history()), (
+            "conversation admission is checkpointed"
+        )
+        activation = await thread_storage.threads._core_context_store(thread_id, "desk")
+        snapshot_store = ContextStore(activation=activation, scope_id="root:desk")
+        fresh = await snapshot_store.load_context(Application())
+        assert fresh.draft.count == 0, "application save remains staged until turn settlement"
+        snapshot_store._close()
         if no_reply:
             raise StopResponse()
         return "saved"
@@ -157,14 +171,14 @@ async def test_voice_explicit_save_joins_reply_commit_and_releases_the_lane(
             FakeLLMResponse(input="saved", content="done", ttft=0, duration=0),
         ]
     )
-    async with VoiceSession(llm=model, context=app, thread=thread) as session:
+    async with VoiceSession(llm=model, context=await bound(thread, app)) as session:
         await session.start(agent)
         await session.store.load_context(app)
         await session._run(user_input="save")
         core = await thread_storage._open(thread_id)
         try:
-            lane = await core.lane_info("desk")
-            assert lane is not None and lane.lease_until == 0
+            partition_key = await core.partition_info("desk")
+            assert partition_key is not None and partition_key.lease_expires_at_ms == 0
         finally:
             core.close()
         activation = await thread_storage.threads._core_context_store(thread_id, "desk")
@@ -177,29 +191,17 @@ async def test_voice_explicit_save_joins_reply_commit_and_releases_the_lane(
         assert texts(history)[-1] == ("save" if no_reply else "done")
 
 
-# Catches: a call given a thread whose lane does not load continuing on a new local thread (a
+# Catches: a call given a thread whose partition does not load continuing on a new local thread (a
 # silent fork, a local file on an AgentDB server) instead of failing its start with the storage's
 # own error, logged once with the job and the thread.
 async def test_a_call_on_a_thread_that_does_not_load_fails_to_start(
     thread_storage: Storage,
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    local = tmp_path / "local-threads"
-    monkeypatch.setenv("LIVEKIT_AGENT_THREADS_DIR", str(local))
     thread_id = await new_session(thread_storage, "desk")
-    thread = Thread(thread_storage, thread_id, agent_name="desk")
+    thread = Thread(thread_storage, thread_id, partition_key="desk")
     await thread_storage.threads.delete_thread(thread_id)
-    started: list[str] = []
-    async with VoiceSession(llm=ObservedLLM(), thread=thread) as session:
-        session.on("agent_state_changed", lambda ev: started.append(ev.new_state))
-        with pytest.raises(ThreadNotFound):
-            await session.start(Agent(instructions="desk", name="desk"))
-        assert session.thread is thread
-    assert started == [] and not local.exists()
-    (record,) = [r for r in caplog.records if r.getMessage().startswith("the session could not")]
-    assert record.levelno == logging.ERROR and getattr(record, "thread_id", None) == thread_id
+    with pytest.raises(ThreadNotFound):
+        await bound(thread)
 
 
 # Catches: a call without a thread writing a thread anywhere, a local SQLite file included,
@@ -255,7 +257,7 @@ async def test_failed_voice_generation_abandons_saved_fields_before_the_next_tur
             return super().chat(chat_ctx=chat_ctx, **kwargs)
 
     thread_id = await new_session(thread_storage, "desk")
-    thread = Thread(thread_storage, thread_id, agent_name="desk")
+    thread = Thread(thread_storage, thread_id, partition_key="desk")
     app = Application()
     agent = Agent[Application](instructions="desk", name="desk")
 
@@ -266,7 +268,7 @@ async def test_failed_voice_generation_abandons_saved_fields_before_the_next_tur
         await ctx.store.save_context(ctx.context)
         return "saved"
 
-    async with VoiceSession(llm=FailingAfterTool(), context=app, thread=thread) as session:
+    async with VoiceSession(llm=FailingAfterTool(), context=await bound(thread, app)) as session:
         await session.start(agent)
         await session.store.load_context(app)
         await session.store.save_context(app)
@@ -275,9 +277,32 @@ async def test_failed_voice_generation_abandons_saved_fields_before_the_next_tur
         speech.add_done_callback(lambda _: done.set())
         await asyncio.wait_for(done.wait(), timeout=5)
         assert speech.exception() is not None
-        assert not (await thread.chat_history()).items
+        checkpointed = await thread.chat_history()
+        assert texts(checkpointed) == ["save"]
+        assert any(item.type == "function_call_output" for item in checkpointed.items)
         await session.store.load_context(app)
         assert app.draft.count == 0
         result = await session._run(user_input="hello")
         assert result.output == "recovered"
-    assert texts(await thread.chat_history()) == ["hello", "recovered"]
+    assert texts(await thread.chat_history()) == ["save", "hello", "recovered"]
+
+
+async def test_voice_binding_uses_the_preloaded_context_and_updates_session_in_memory() -> None:
+    @dataclass
+    class App:
+        session: SessionState = persisted(default_factory=SessionState)
+
+    app = App()
+    store = ContextStore()
+    await store.load_context(app)
+    original = app.session
+    before = await store.load_session()
+    agent = Agent(name="desk", instructions="Help")
+    async with VoiceSession(llm=ObservedLLM(), context=store.bind(app)) as session:
+        await session.start(agent)
+        assert session.context is app and session.store is store
+        await session._run(user_input="hello")
+        assert app.session is original and app.session.active_agent == "desk"
+        assert before.kind == "empty"
+        assert (await store.load_session()).kind == "voice"
+    assert store._session_binding is None

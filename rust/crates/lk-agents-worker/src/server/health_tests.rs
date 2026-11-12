@@ -16,7 +16,7 @@ fn health_states_answer_liveness_and_readiness() {
     assert_eq!(status.state(), HealthState::Starting, "the pool has not filled");
     status.started.store(true, Release);
     assert_eq!(status.state(), HealthState::Reconnecting, "registered, then disconnected");
-    status.connected.store(true, Release);
+    status.set_connected(true);
     assert_eq!(status.state(), HealthState::Ready);
     status.draining.store(true, Release);
     assert_eq!(status.state(), HealthState::Draining);
@@ -26,6 +26,7 @@ fn health_states_answer_liveness_and_readiness() {
         (HealthState::Starting, false, false),
         (HealthState::Ready, true, true),
         (HealthState::Reconnecting, true, false),
+        (HealthState::Disconnected, false, false),
         (HealthState::Draining, true, false),
         (HealthState::Failed, false, false),
         (HealthState::Stuck, false, false),
@@ -39,9 +40,10 @@ fn health_states_answer_liveness_and_readiness() {
 async fn a_host_that_stops_answering_reads_as_stuck() {
     use std::sync::atomic::Ordering::Release;
     let status = ServerStatus::default();
-    for flag in [&status.registered, &status.started, &status.connected] {
+    for flag in [&status.registered, &status.started] {
         flag.store(true, Release);
     }
+    status.set_connected(true);
     status.heartbeat();
     tokio::time::advance(Duration::from_secs(4)).await;
     assert_eq!(status.state(), HealthState::Ready);
@@ -51,6 +53,36 @@ async fn a_host_that_stops_answering_reads_as_stuck() {
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(body, "stuck");
+}
+
+// Catches: a pod stuck reconnecting reported live forever (kubelet never restarts it), or a short
+// reconnect failing liveness; a drain keeps the pod live so its calls finish.
+#[tokio::test(start_paused = true)]
+async fn a_disconnection_fails_liveness_only_past_the_reconnect_grace() {
+    use std::sync::atomic::Ordering::Release;
+    let status = ServerStatus::default();
+    for flag in [&status.registered, &status.started] {
+        flag.store(true, Release);
+    }
+    status.set_connected(true);
+    status.set_connected(false);
+    for _ in 0..RECONNECT_GRACE.as_secs() {
+        tokio::time::advance(Duration::from_secs(1)).await;
+        status.heartbeat();
+        status.set_connected(false);
+    }
+    assert_eq!(status.state(), HealthState::Reconnecting, "the grace counts from the drop");
+    tokio::time::advance(Duration::from_millis(1)).await;
+    status.heartbeat();
+    assert_eq!(status.state(), HealthState::Disconnected);
+    let response = health_route(&Method::GET, "/", &settings(), &status, &Probe).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.into_body().collect().await.unwrap().to_bytes(), "disconnected");
+    status.draining.store(true, Release);
+    assert_eq!(status.state(), HealthState::Draining);
+    status.draining.store(false, Release);
+    status.set_connected(true);
+    assert_eq!(status.state(), HealthState::Ready);
 }
 
 struct Probe;
@@ -139,9 +171,10 @@ async fn the_metrics_listener_serves_the_worker_load_over_http() {
     assert!(other.starts_with("HTTP/1.1 404"));
 }
 
-// The endpoint uses livekit-protocol's pbjson-generated Serialize implementation directly.
+// Catches: pbjson's camelCase keys, which the Cloud watcher's `encoding/json` drops: it then reads
+// no agent, no deployment support and no active jobs.
 #[tokio::test]
-async fn the_worker_endpoint_uses_generated_protobuf_json() {
+async fn the_worker_endpoint_uses_proto_field_names() {
     let response =
         health_route(&Method::GET, "/worker", &settings(), &ServerStatus::default(), &Probe).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -150,9 +183,12 @@ async fn the_worker_endpoint_uses_generated_protobuf_json() {
     assert_eq!(
         body,
         r#"{
-  "workerType": "JT_ROOM",
-  "sdkVersion": "2.0.0",
-  "protocolVersion": 1
+  "worker_type": "JT_ROOM",
+  "agent_name": "",
+  "active_jobs": 0.0,
+  "sdk_version": "2.0.0",
+  "worker_load": 0.0,
+  "protocol_version": 1
 }"#
     );
 }

@@ -15,11 +15,10 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     http,
-    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -96,7 +95,6 @@ class TTS(tts.TTS):
         min_chunk_length: NotGivenOr[int] = NOT_GIVEN,
         condition_on_previous_chunks: NotGivenOr[bool] = NOT_GIVEN,
         early_stop_threshold: NotGivenOr[float] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: http.HttpSession | None = None,
     ) -> None:
         """
@@ -148,8 +146,6 @@ class TTS(tts.TTS):
                 server default (True).
             early_stop_threshold (NotGivenOr[float]): Early stopping threshold for batch
                 processing (0-1). Unset uses Fish's server default (1.0).
-            tokenizer (tokenize.SentenceTokenizer): Sentence tokenizer used to detect
-                sentence boundaries. Defaults to ``tokenize.SentenceTokenizer()``.
             http_session (http.HttpSession | None): Optional HTTP session.
         """
         if is_given(sample_rate):
@@ -220,14 +216,6 @@ class TTS(tts.TTS):
             close_cb=self._close_ws,
             max_session_duration=300,
             mark_refreshed_on_get=True,
-        )
-        # min_words=1 emits each sentence as soon as its end is certain,
-        # rather than batching short sentences together — minimizes TTFB on the
-        # first sentence and keeps Fish synthesizing continuously.
-        self._sentence_tokenizer = (
-            tokenizer
-            if is_given(tokenizer)
-            else tokenize.SentenceTokenizer(min_words=1)
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
@@ -350,28 +338,20 @@ class TTS(tts.TTS):
                 raise ValueError("early_stop_threshold must be between 0 and 1")
             self._opts.early_stop_threshold = early_stop_threshold
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             get_session=self._ensure_session,
             opts=replace(self._opts),
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             pool=self._pool,
-            sentence_tokenizer=self._sentence_tokenizer,
             opts=replace(self._opts),
             tts=self,
             conn_options=conn_options,
@@ -493,7 +473,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         *,
         pool: utils.ConnectionPool[http.WebSocket],
-        sentence_tokenizer: tokenize.SentenceTokenizer,
         opts: _TTSOptions,
         tts: TTS,
         conn_options: APIConnectOptions,
@@ -502,7 +481,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
         self._opts = opts
         self._pool = pool
-        self._sentence_tokenizer = sentence_tokenizer
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -531,41 +509,20 @@ class SynthesizeStream(tts.SynthesizeStream):
         ws: http.WebSocket,
         output_emitter: tts.AudioEmitter,
     ) -> None:
-        # Tokenize incoming text by sentence and flush after each sentence so
-        # Fish synthesizes immediately at sentence boundaries instead of waiting
-        # for `chunk_length` characters to accumulate. The result is much smoother
-        # audio: gaps line up with sentence breaks (where pauses are natural)
-        # rather than mid-clause.
-        sent_stream = self._sentence_tokenizer.stream()
-
         read_deadline = self._core_attempts
-
-        async def input_task() -> None:
-            try:
-                first_token = True
-                async for data in self.input:
-                    if isinstance(data, self.Flush):
-                        sent_stream.flush()
-                        continue
-                    if not data:
-                        continue
-                    if first_token:
-                        self.mark_started()
-                        first_token = False
-                    sent_stream.push_text(data)
-            finally:
-                sent_stream.end_input()
 
         async def send_task() -> None:
             start_msg = {"event": "start", "request": _build_tts_request(self._opts)}
             await ws.send_bytes(msgpack.packb(start_msg, use_bin_type=True))
 
-            async for ev in sent_stream:
-                sentence = ev.token
-                if not sentence:
+            # flush after each chunk so Fish synthesizes at chunk boundaries instead of
+            # waiting for `chunk_length` characters to accumulate
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     continue
+                self.mark_started()
                 await ws.send_bytes(
-                    msgpack.packb({"event": "text", "text": sentence + " "}, use_bin_type=True)
+                    msgpack.packb({"event": "text", "text": data.text + " "}, use_bin_type=True)
                 )
                 await ws.send_bytes(msgpack.packb({"event": "flush"}, use_bin_type=True))
                 read_deadline.expect_response()
@@ -609,12 +566,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.debug("unknown Fish Audio event", extra={"lk.pii.data": data})
 
         tasks = [
-            asyncio.create_task(input_task()),
             asyncio.create_task(send_task()),
             asyncio.create_task(recv_task()),
         ]
         try:
             await asyncio.gather(*tasks)
         finally:
-            await sent_stream.aclose()
             await utils.aio.cancel_and_wait(*tasks)

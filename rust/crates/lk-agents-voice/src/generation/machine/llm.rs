@@ -1,8 +1,9 @@
 use crate::generation::SpeechSegmentEvent;
-use crate::transcription::{SegmentText, SpeechViews};
+use crate::transcription::SegmentText;
 use lk_agents_abi::metrics::base::LlmMetrics;
 use lk_agents_abi::metrics::base::Metadata;
 use lk_agents_abi::{Extra, LlmChunk};
+use lk_agents_core::lexer::Vocabulary;
 use lk_agents_core::metrics::provider::LlmMetricState;
 
 pub enum LlmRead {
@@ -33,17 +34,17 @@ pub struct LlmGenerationData {
     open: bool,
     output_tokens: Option<u64>,
     window: Option<(f64, f64)>,
-    views: SpeechViews,
+    vocab: Vocabulary,
     segment: SegmentText,
 }
 
 impl LlmGenerationData {
-    /// `label` and `metadata`: the LLM's, stamped on the record. `views`: how the voice reads it.
+    /// `label` and `metadata`: the LLM's, stamped on the record. `vocab`: the tags its voice keeps.
     pub fn new(
         started_at: f64,
         label: String,
         metadata: Option<Metadata>,
-        views: SpeechViews,
+        vocab: Vocabulary,
     ) -> Self {
         Self {
             tps: None,
@@ -55,8 +56,8 @@ impl LlmGenerationData {
             open: false,
             output_tokens: None,
             window: None,
-            segment: SegmentText::new(views.clone()),
-            views,
+            segment: SegmentText::new(vocab.clone()),
+            vocab,
         }
     }
 
@@ -112,7 +113,7 @@ impl LlmGenerationData {
         if !std::mem::replace(&mut self.open, false) {
             return;
         }
-        let fresh = SegmentText::new(self.views.clone());
+        let fresh = SegmentText::new(self.vocab.clone());
         let tail = std::mem::replace(&mut self.segment, fresh).finish();
         if !tail.is_blank() {
             effects.push(SpeechSegmentEvent::Chunk(tail));

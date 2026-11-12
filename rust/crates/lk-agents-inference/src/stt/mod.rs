@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod connection_tests;
 mod executor;
 pub(crate) mod gaps;
 pub(crate) mod input;

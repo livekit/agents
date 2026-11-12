@@ -29,12 +29,10 @@ from livekit.agents import (
     APIStatusError,
     http,
     redacted_cause,
-    tokenize,
     tts,
     utils,
 )
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
@@ -185,7 +183,6 @@ class TTS(tts.TTS):
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: http.HttpSession | None = None,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         allow_custom_endpoint: bool = False,
     ) -> None: ...
 
@@ -211,7 +208,6 @@ class TTS(tts.TTS):
         http_session: http.HttpSession | None = None,
         use_websocket: bool = False,
         segment: NotGivenOr[str] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         allow_custom_endpoint: bool = False,
     ) -> None: ...
 
@@ -243,7 +239,6 @@ class TTS(tts.TTS):
         http_session: http.HttpSession | None = None,
         use_websocket: bool = False,
         segment: NotGivenOr[str] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         allow_custom_endpoint: bool = False,
     ) -> None:
         websocket_v1_url = websocket_url if is_given(websocket_url) else None
@@ -353,18 +348,12 @@ class TTS(tts.TTS):
         self._base_url = resolved_base_url
         self._use_websocket = use_websocket
         self._segment = segment if is_given(segment) else "bySentence"
-        self._sentence_tokenizer: tokenize.SentenceTokenizer | None = None
-        if websocket_v1_url is None:
-            self._sentence_tokenizer = (
-                tokenizer if is_given(tokenizer) else tokenize.SentenceTokenizer()
-            )
         self._websocket_v1_adapter = (
             WebSocketV1Adapter(
                 websocket_v1_url=websocket_v1_url,
                 websocket_protocol=websocket_protocol,
                 api_key=self._api_key,
                 ensure_session=self._ensure_session,
-                sentence_tokenizer=tokenizer if is_given(tokenizer) else None,
                 allow_custom_endpoint=allow_custom_endpoint,
             )
             if websocket_v1_url is not None
@@ -374,12 +363,10 @@ class TTS(tts.TTS):
         self._streams: weakref.WeakSet[tts.SynthesizeStream] = weakref.WeakSet()
         self._legacy_websocket_adapter: LegacyWebSocketAdapter | None = None
         if self._use_websocket and self._websocket_v1_adapter is None:
-            assert self._sentence_tokenizer is not None
             self._legacy_websocket_adapter = LegacyWebSocketAdapter(
                 websocket_url=self._ws_url(),
                 api_key=self._api_key,
                 ensure_session=self._ensure_session,
-                sentence_tokenizer=self._sentence_tokenizer,
             )
 
     @property
@@ -416,9 +403,7 @@ class TTS(tts.TTS):
         elif self._legacy_websocket_adapter is not None:
             self._legacy_websocket_adapter.prewarm()
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> tts.SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> tts.SynthesizeStream:
         if not self._use_websocket:
             raise RuntimeError(
                 "Rime TTS streaming requires use_websocket=True at construction time"
@@ -475,8 +460,8 @@ class TTS(tts.TTS):
         elif self._legacy_websocket_adapter is not None:
             await self._legacy_websocket_adapter.aclose()
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         if self._use_websocket:
             raise RuntimeError(
@@ -484,7 +469,7 @@ class TTS(tts.TTS):
             )
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             opts=copy.deepcopy(self._opts),
             base_url=self._base_url,

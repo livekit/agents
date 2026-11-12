@@ -633,9 +633,19 @@ mod speech_scheduler {
     }
 }
 
-/// Not the host-visible speech id string, which the core cannot mint.
+/// 48 bits, `speech_<12 hex>` on the wire as in v1 (`types::ids`), so two sessions
+/// writing one thread never mint the same speech. Not ordered by creation: what needs creation
+/// order keeps its own sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpeechId(pub u64);
+
+impl SpeechId {
+    /// The session's `n`th speech under `seed`, the random value its runtime drew (the core draws
+    /// none). An odd step makes `n -> id` one-to-one over 48 bits: a session's ids never repeat.
+    pub fn nth(seed: u64, n: u64) -> SpeechId {
+        SpeechId(lk_agents_abi::types::ids::nth(seed, n))
+    }
+}
 
 /// Priority and `user_initiated` derive from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
@@ -886,6 +896,16 @@ impl VoiceDriver {
                     self.end_live_tools(now, speech);
                 }
                 self.release_speech(now, speech);
+            } else if self.activity.outliving_tools.contains(&speech) {
+                // Released at its interruption, its tools still running: cancelled as above.
+                self.record_effect(crate::agent_session::effects::VoiceEffect::CancelSpeech(
+                    speech,
+                ));
+                self.record_trace(InterruptStep::InterruptionTimedOut { speech });
+                self.end_live_tools(now, speech);
+                self.outliving_reply_ended(speech);
+                // Its tasks are cancelled: a turn they never report releases the partition.
+                self.storage_speech_released(now, speech);
             }
         }
         if self.session.closing_past_edge() {

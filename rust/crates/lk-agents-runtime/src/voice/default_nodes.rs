@@ -120,13 +120,12 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         let conn_options = policy(conn_options, tts.conn_options())?;
         let tts = tts.with_conn_options(&conn_options).unwrap_or(tts);
         let clock = Arc::clone(&env.clock);
-        let tts = lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for(
+        let tts = lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted(
             tts,
             Arc::clone(&clock),
             conn_options,
         );
         let calls = node_calls(calls);
-        let expressive = calls.as_ref().is_some_and(|calls| calls.expressive);
         let cx = request_cx(env, calls.as_deref(), &cx);
         Ok(pumped(env, text, async move {
             // One `tts_request`: the provider's own retries are its attempts, below it.
@@ -134,7 +133,6 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
             let opened = lk_agents_inference::tts::stream(
                 tts.clone(),
                 synthesis.attempt_cx(),
-                expressive,
                 conn_options,
                 clock.clone(),
                 None,

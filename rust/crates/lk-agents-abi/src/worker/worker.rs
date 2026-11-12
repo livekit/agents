@@ -159,7 +159,7 @@ pub struct ServerOptions {
     pub api_key: crate::Maybe<String>,
     /// Default `LIVEKIT_API_SECRET`.
     pub api_secret: crate::Maybe<String>,
-    /// The agent's name, its lane in a thread and the first segment of its endpoints; default
+    /// The agent's name, its partition in a thread and the first segment of its endpoints; default
     /// `LIVEKIT_AGENT_NAME`. `LIVEKIT_AGENT_NAME_OVERRIDE` wins over it.
     pub agent_name: crate::Maybe<String>,
     /// The worker's `public`, `health` and `prometheus` listeners (docs/server.md "Listeners").

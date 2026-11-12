@@ -1,15 +1,13 @@
 # TextSession
 
-`TextSession` coordinates text conversations across requests: agent selection,
-private histories, pending expert calls, and human input. It can be reconstructed
-for each request; pass the previously saved `TextSessionState` to continue the
-same logical conversation. Agent definitions remain shared configuration.
+`TextSession` coordinates agent selection, private histories, pending expert calls and human
+input. Agent definitions and TextSession configuration are reusable; execution state belongs
+to each invocation and its selected conversation.
 
-Each `run()` builds request-scoped execution from the supplied state. A text
-request has a bounded lifetime; its conversation state can outlive the request.
-The application explicitly loads and saves that state.
-The `TextSession` object, runtime services, and Python execution stack are not
-serialized.
+Use `context=ctx.store.bind(app)` to restore, update and incrementally save the selected
+conversation. A persisted SessionState field on app is optional; when present, the runtime
+keeps that same object current. Plain context or explicit `state=` executes from a detached
+snapshot and returns the next one without advancing the supplied object.
 
 The text session invokes `Agent.run()`, tracks agents called as tools, and
 delivers each child's accepted output to its caller.
@@ -65,7 +63,7 @@ for the load/save contract and scope ownership.
 ## Session results
 
 `TextSession.run()` returns `TextSessionTurn[Output]`, an envelope with
-`result: RunResult[Output]` and `state: TextSessionState`. These types are
+`result: RunResult[Output]` and `state: SessionState`. These types are
 exported from `livekit.agents`. The contained result uses the shared
 [agent result contract](agents.md#running-a-turn): a completed typed output or
 an input-required question. The envelope retains session frames and pending
@@ -128,7 +126,7 @@ application context. It returns an envelope with two members:
 | Member | Responsibility |
 | --- | --- |
 | `turn.result` | `RunResult[Output]`: invocation status, output/question, history, and usage |
-| `turn.state` | `TextSessionState`: frames, active conversation, and parent tool-call relationships |
+| `turn.state` | Detached `SessionState`: frames, active conversation, and parent tool-call relationships |
 
 `turn.result.usage` is an immutable snapshot of this turn's consumption across
 its local agent frames, counted once. The next reconstructed turn starts fresh
@@ -163,62 +161,48 @@ raises and does not manufacture a successful result/state envelope. See
 
 ## Loading and saving session state
 
-The application loads routing state and passes it explicitly through `state=`.
-The session starts at its root agent when state is `None`; supplied state
-identifies the active frame and its history.
-
-Store routing state in an application-defined record with a persisted field:
+The store is selected by the entrypoint's thread and partition_key. Load application fields,
+then explicitly bind the context for managed conversation execution:
 
 ```python
 from dataclasses import dataclass
-
-from livekit.agents import TextSessionState, persisted
-
+from livekit.agents import SessionState, TextSession, persisted
 
 @dataclass
-class Conversation:
-    session_state: TextSessionState | None = persisted(default=None)
+class App:
+    services: Services
+    session: SessionState = persisted(default_factory=SessionState)
+
+app = App(services=services)
+await ctx.store.load_context(app)
+binding = ctx.store.bind(app)
+turn = await TextSession(agent=front_desk).run(ctx.message, context=binding)
+result = turn.result
 ```
 
-For each incoming request:
+The runtime discovers the marked session field, updates its object as accepted execution
+progresses and checkpoints it. No assignment of turn.state or save_context call is required
+for session state, including input-required transitions. Ordinary marked application fields
+still require explicit saves and join the managed turn's final transaction.
+
+For explicit snapshot execution:
 
 ```python
-session = TextSession(agent=front_desk)
-conversation = Conversation()
-await ctx.store.load_context(conversation)
-await ctx.store.load_context(app)
-
-turn = await session.run(
-    ctx.message,
-    state=conversation.session_state,
-    context=app,
-)
-
-conversation.session_state = turn.state
-await ctx.store.save_context(app)
-await ctx.store.save_context(conversation)
-
-result = turn.result
-if result.status == "input_required":
-    await send_question(result.question)
-elif result.status == "completed":
-    await show_result(result.output)
+before = await ctx.store.load_session()
+turn = await TextSession(agent=front_desk).run(message, state=before, context=dependencies)
+after = turn.state
 ```
 
-The runtime resolves the thread from the incoming request and supplies its
-scoped `ctx.store`. Loading restores that thread's saved routing field;
-a new conversation starts with the declared `None` default. `Conversation`
-is an application-defined storage record, while `app` is the freshly
-constructed application context supplied to agents.
+`dependencies` in this example has no session-state field. Explicit state cannot be combined
+with a bound context or a second session field. Detached snapshots do not follow live updates.
+Reading a snapshot never starts a binding or advances a stored conversation.
 
-`session.run()` reads the supplied state and returns its envelope. The
-application assigns `turn.state` and saves explicitly after each retained turn,
-including `status="input_required"`. Runtime service objects remain outside routing
-state. Load and save any marked application-context fields explicitly as
-well; see [context persistence](context.md#persisting-text-session-state).
+TextSession does not cache a conversation between calls. Two plain-context invocations start
+from the same supplied snapshot if that context is unchanged. Two bound invocations continue
+the selected stored conversation. Bindings end after stream consumption and cleanup, including
+cancellation; retained snapshots remain unchanged. See [context binding](context.md#session-state-and-explicit-binding).
 
-Agent-tool names, typed parameters, approvals, and history selection are
-configured through [the tool API](tools.md#configuring-an-agent-tool).
+Agent-tool names, typed parameters, approvals and history selection use [the tool API](tools.md#configuring-an-agent-tool).
 
 ## Approval before starting a child
 
@@ -230,8 +214,8 @@ binds the decision to the invocation and its validated arguments. See
 With `needs_approval=True`, the session returns an input-required result asking
 permission to start the requested specialist. The child has not run yet.
 Session state retains the pending call's identity, validated arguments, and
-parent frame. Save this state and any changed application fields using the
-same [load/save flow](#loading-and-saving-session-state) as other human turns.
+parent frame. Bound sessions checkpoint this transition automatically. Explicitly save changed application
+fields; unbound callers retain the returned state for their next run.
 
 The next request loads that state and passes the person's reply to
 `session.run(...)`. The shared approval mechanism resolves the saved request using the same

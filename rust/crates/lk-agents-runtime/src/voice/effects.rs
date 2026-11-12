@@ -175,6 +175,30 @@ impl VoiceRuntime {
                 None => {}
             },
             E::Host(event) => self.deliver_host_event(event),
+            E::StorageCheckpoint { checkpoint, speech, agent, history } => {
+                let storage = self.storage.clone();
+                let queue = self.reports.clone();
+                let lost = queue.clone();
+                self.speeches.spawn_feeding(
+                    speech,
+                    "voice conversation checkpoint",
+                    move || {
+                        let _ = lost.send(VoiceEvent::StorageCheckpointed {
+                            checkpoint,
+                            result: Err(lk_agents_abi::storage::StorageError::Unavailable(
+                                "checkpoint task ended".into(),
+                            )),
+                        });
+                    },
+                    async move {
+                        let result = match storage {
+                            Some(storage) => storage.checkpoint(checkpoint, agent, history).await,
+                            None => Ok(()),
+                        };
+                        let _ = queue.send(VoiceEvent::StorageCheckpointed { checkpoint, result });
+                    },
+                );
+            }
             E::StorageAbort(speech) => {
                 self.storage_command(VoiceStorageCommand::Abort { speech: speech.0 })
             }
@@ -252,6 +276,9 @@ impl VoiceRuntime {
             }
             E::Audio(AudioOp::SetTranscriptionOutput { previous, next, enabled }) => {
                 self.set_transcription_output(previous, next, enabled)
+            }
+            E::Audio(AudioOp::SettleUnreported { output, segment }) => {
+                self.settle_unreported(output, segment)
             }
             E::Audio(AudioOp::SetOutputEnabled { output, sink, enabled }) => {
                 self.set_output_enabled(output, sink, enabled)
@@ -390,8 +417,8 @@ impl VoiceRuntime {
     }
 
     /// Binds the speech's reply to its providers and spawns it. A stored speech first reloads its
-    /// history from the voice lane; a realtime one plays what the socket sends at once while its
-    /// lane reloads beside it.
+    /// history from the voice partition; a realtime one plays what the socket sends at once while its
+    /// partition reloads beside it.
     fn start_speech(
         &mut self,
         speech: SpeechId,
@@ -420,7 +447,7 @@ impl VoiceRuntime {
         };
         let shared = Arc::clone(&self.shared);
         let task = Arc::clone(&handle);
-        let mut storage = self.storage.clone().filter(|_| history == SpeechHistory::VoiceLane);
+        let mut storage = self.storage.clone().filter(|_| history == SpeechHistory::VoicePartition);
         let queue = self.reports.clone();
         if player.is_some()
             && let Some(storage) = storage.take()
@@ -429,9 +456,9 @@ impl VoiceRuntime {
             let queue = queue.clone();
             let speech = Arc::clone(&handle);
             let reload = async move {
-                reload_history(&speech, storage, local, &queue).await;
+                let _ = reload_history(&speech, storage, local, &queue).await;
             };
-            self.speeches.spawn(handle.id(), "speech lane reload", reload);
+            self.speeches.spawn(handle.id(), "speech partition_key reload", reload);
         }
         let speeches = self.speeches.clone();
         // A speech task that panics never reports `Done` or `Failed`: its death is the input.
@@ -443,8 +470,10 @@ impl VoiceRuntime {
         self.speeches.spawn_feeding(handle.id(), "speech", lost, async move {
             if let Some(storage) = storage {
                 let local = context.plan.request.chat_ctx.items.clone();
-                if let Some(history) = reload_history(&task, storage, local, &queue).await {
-                    context.plan.request.chat_ctx.items = history;
+                match reload_history(&task, storage, local, &queue).await {
+                    Ok(Some(history)) => context.plan.request.chat_ctx.items = history,
+                    Ok(None) => {} // An interrupted speech settles through the normal core path.
+                    Err(_) => return, // StorageFailed owns the call's error/cleanup path.
                 }
             }
             crate::voice::generation::pipeline_reply::pipeline_reply_task(
@@ -508,6 +537,31 @@ impl VoiceRuntime {
             // A bare clear: the cut speech's playout closes its own segment. A flush would end a
             // synchronised segment whose audio never reached the sink as if it had been said.
             GateOp::ClearBuffer => sink.clear_buffer(),
+        }
+    }
+
+    /// A cut segment its sink never reported, settled interrupted where the output last reported
+    /// it played, leaf first so each link's report reaches the one above it as a real report would.
+    fn settle_unreported(
+        &self,
+        output: ResourceId,
+        segment: lk_agents_abi::voice::io::PlaybackSegment,
+    ) {
+        let Some(top) = self.shared.resources.audio_output(output) else { return };
+        let tracker = top.tracker();
+        let playback_position =
+            if tracker.accepts_report(segment) { tracker.position() } else { Default::default() };
+        let finished = lk_agents_abi::voice::io::PlaybackFinished {
+            playback_position,
+            interrupted: true,
+            ..Default::default()
+        };
+        let mut links = vec![top];
+        while let Some(next) = links.last().and_then(|link| link.next_in_chain()) {
+            links.push(next);
+        }
+        for link in links.iter().rev() {
+            link.tracker().playback_finished(segment, finished.clone());
         }
     }
 
@@ -686,20 +740,20 @@ impl VoiceRuntime {
     }
 }
 
-/// The speech takes the voice lane: the lane's history, which replaces the speech's `local` one,
-/// is reported and returned, and the lane's loss is watched. An interrupted speech stops waiting
-/// for a lane another holder has: an abandoned acquire releases whatever it may have taken.
+/// The speech takes the voice partition: the partition's history, which replaces the speech's `local` one,
+/// is reported and returned, and the partition's loss is watched. An interrupted speech stops waiting
+/// for a partition another holder has: an abandoned acquire releases whatever it may have taken.
 async fn reload_history(
     handle: &super::SpeechHandle,
     storage: Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>,
     local: Vec<lk_agents_abi::ChatItem>,
     queue: &crate::voice::session::Tx,
-) -> Option<Vec<lk_agents_abi::ChatItem>> {
+) -> Result<Option<Vec<lk_agents_abi::ChatItem>>, lk_agents_abi::storage::StorageError> {
     let speech = handle.id();
     let acquired = tokio::select! {
         biased;
         acquired = storage.acquire(speech.0, local.clone()) => acquired,
-        () = handle.wait_for_interrupted() => return None,
+        () = handle.wait_for_interrupted() => return Ok(None),
     };
     match acquired {
         Ok(history) => {
@@ -711,14 +765,11 @@ async fn reload_history(
                 },
                 Arc::new(super::session::storage::StorageReporter(queue.clone())),
             );
-            Some(history)
+            Ok(Some(history))
         }
         Err(error) => {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice lane could not be acquired: {error}");
-            if storage.lease_lost() {
-                let _ = queue.send(VoiceEvent::StorageLost(speech));
-            }
-            None
+            let _ = queue.send(VoiceEvent::StorageFailed { speech, error: error.clone() });
+            Err(error)
         }
     }
 }

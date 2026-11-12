@@ -626,6 +626,35 @@ async fn a_user_load_function_wins_and_is_asked_exactly_once() {
     assert_eq!(h.snapshot().worker_load, c.snapshot_now().worker_load);
 }
 
+/// A job the host rejects is refused under its own id and leaves nothing held for it.
+/// https://github.com/livekit/agents/pull/226 https://github.com/livekit/agents/pull/4172
+#[tokio::test(start_paused = true)]
+async fn a_rejected_job_is_refused_by_id_and_holds_nothing() {
+    let cfg = WorkerConfig {
+        ws_url: "wss://gw".into(),
+        devmode: true,
+        load_threshold: EnvOption::Fixed(f32::INFINITY),
+        ..Default::default()
+    };
+    let steps = vec![Step::Serves(vec![register_message("W-1"), Ok(offer("rejected"))])];
+    let (mut c, wire, h) = conn_with(steps, 0, cfg, LoadHost::default());
+    let _ = tokio::time::timeout(Duration::from_millis(50), c.run()).await;
+    let replies: Vec<_> = wire
+        .lock()
+        .sent
+        .iter()
+        .filter_map(|m| match &m.message {
+            Some(livekit_protocol::worker_message::Message::Availability(reply)) => {
+                Some((reply.job_id.clone(), reply.available))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replies, vec![("rejected".to_owned(), false)]);
+    let snapshot = h.snapshot();
+    assert_eq!((snapshot.reserved_slots, snapshot.active_jobs), (0, 0));
+}
+
 #[tokio::test]
 async fn acceptance_delivers_the_job_and_participant_fields_to_the_peer() {
     let RuntimeRig { mut runtime, handle, peer, mut sent, decisions, started: _started, .. } =

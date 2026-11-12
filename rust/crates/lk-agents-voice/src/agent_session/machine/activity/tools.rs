@@ -357,12 +357,16 @@ impl VoiceDriver {
             }
             pairs.push((r.step, execution.call, execution.output));
         }
-        for (step, call, output) in pairs {
+        for (step, call, mut output) in pairs {
             self.commit_item(
                 ChatItem::FunctionCall(call),
                 Source::ToolCall { speech, step },
                 Visibility::Both,
             );
+            // Right after its call's group, before what was said since the call.
+            if let Some(end) = self.session.chat_ctx.call_group_end(&output.call_id) {
+                output.created_at = end;
+            }
             self.commit_item(
                 ChatItem::FunctionCallOutput(output),
                 Source::ToolOutput { speech, step },

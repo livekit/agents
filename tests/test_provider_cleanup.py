@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from livekit.agents.llm import LLM, ChatContext, LLMStream
+from livekit.agents.llm import LLM, ChatChunk, ChatContext, ChoiceDelta, LLMStream
 from livekit.agents.llm.tool_context import Tool
 
 pytestmark = pytest.mark.unit
@@ -19,6 +19,7 @@ class _WaitingLLM(LLM):
         super().__init__()
         self.started = asyncio.Event()
         self.stopped = asyncio.Event()
+        self.chunks = 0
 
     def chat(
         self,
@@ -34,6 +35,8 @@ class _WaitingLLM(LLM):
 class _WaitingStream(LLMStream):
     async def _run(self) -> None:
         assert isinstance(self._llm, _WaitingLLM)
+        for n in range(self._llm.chunks):
+            self.send(ChatChunk(id=str(n), delta=ChoiceDelta(role="assistant", content=str(n))))
         self._llm.started.set()
         try:
             await asyncio.Event().wait()
@@ -56,3 +59,20 @@ async def test_closing_host_stream_settles_provider_and_unblocks_reader() -> Non
         await stream.aclose()
         reader.cancel()
         await asyncio.gather(reader, return_exceptions=True)
+
+
+# Catches: a stream closed by its reader still handing out the chunks it had buffered.
+async def test_a_closed_stream_returns_nothing_it_had_buffered() -> None:
+    model = _WaitingLLM()
+    model.chunks = 3
+    stream = model.chat(chat_ctx=ChatContext.empty(), conn_options=APIConnectOptions(max_retry=0))
+    try:
+        async with asyncio.timeout(5):
+            await model.started.wait()
+            first = await anext(stream)
+            assert first.delta is not None and first.delta.content == "0"
+            await stream.aclose()
+            with pytest.raises(StopAsyncIteration):
+                await anext(stream)
+    finally:
+        await stream.aclose()

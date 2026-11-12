@@ -28,11 +28,10 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
-    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -49,7 +48,6 @@ DEFAULT_VOICE = "ara"
 class _TTSOptions:
     voice: GrokVoices | str
     language: TTSLanguages | str
-    tokenizer: tokenize.WordTokenizer
     optimize_streaming_latency: NotGivenOr[int]
     speed: NotGivenOr[float]
     text_normalization: NotGivenOr[bool]
@@ -65,7 +63,6 @@ class TTS(tts.TTS):
         optimize_streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
-        tokenizer: tokenize.WordTokenizer | None = None,
         http_session: http.HttpSession | None = None,
     ) -> None:
         """
@@ -95,12 +92,9 @@ class TTS(tts.TTS):
                 " environment variable"
             )
         self._api_key = resolved_key
-        if tokenizer is None:
-            tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
         self._opts = _TTSOptions(
             voice=voice,
             language=language,
-            tokenizer=tokenizer,
             optimize_streaming_latency=optimize_streaming_latency,
             speed=speed,
             text_normalization=text_normalization,
@@ -129,6 +123,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "xAI"
+
+    def _core_text_unit(self) -> str:
+        return "words"
 
     async def _connect_ws(
         self, conn_options: APIConnectOptions, opts: _TTSOptions
@@ -216,17 +213,12 @@ class TTS(tts.TTS):
     def prewarm(self) -> None:
         self._pool.prewarm()
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        return self._synthesize_with_stream(text, conn_options=conn_options)
+        return self._synthesize_with_stream(chunk, conn_options=conn_options)
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self, conn_options=conn_options, opts=replace(self._opts), pool=self._pool
         )
@@ -270,29 +262,30 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
 
-        async def _tokenize_input() -> None:
-            input_stream = None
+        async def _segment_input() -> None:
+            segment: utils.aio.Chan[str] | None = None
             async for input in self.input:
-                if isinstance(input, str):
-                    if input_stream is None:
-                        input_stream = self._opts.tokenizer.stream()
-                        segments_ch.send_nowait(input_stream)
-                    input_stream.push_text(input)
-                else:
-                    if input_stream:
-                        input_stream.end_input()
-                    input_stream = None
-
+                if isinstance(input, tts.SpeechChunk):
+                    if segment is None:
+                        segment = utils.aio.Chan[str]()
+                        segments_ch.send_nowait(segment)
+                    # the deltas are concatenated, so each ends with a space
+                    segment.send_nowait(input.text + " ")
+                elif segment is not None:
+                    segment.close()
+                    segment = None
+            if segment is not None:
+                segment.close()
             segments_ch.close()
 
         async def _run_segments() -> None:
-            async for input_stream in segments_ch:
-                await self._run_ws(input_stream, output_emitter)
+            async for segment in segments_ch:
+                await self._run_ws(segment, output_emitter)
 
         tasks = [
-            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_segment_input()),
             asyncio.create_task(_run_segments()),
         ]
         try:
@@ -306,9 +299,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             await utils.aio.cancel_and_wait(*tasks)
 
-    async def _run_ws(
-        self, input_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
-    ) -> None:
+    async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
         input_ended = False
@@ -318,9 +309,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _send_task(ws: http.WebSocket) -> None:
             nonlocal input_ended
 
-            async for word in input_stream:
+            async for chunk in segment:
                 self.mark_started()
-                await ws.send_str(json.dumps({"type": "text.delta", "delta": word.token}))
+                await ws.send_str(json.dumps({"type": "text.delta", "delta": chunk}))
                 read_deadline.expect_response()
             await ws.send_str(json.dumps({"type": "text.done"}))
             input_ended = True

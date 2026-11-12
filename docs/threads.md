@@ -14,7 +14,7 @@ history, the state, the tasks, the A2A context.
 - Not a person. One person may have several threads, one per chat in a
   sidebar for instance, and the application decides which.
 - Not an agent's. Any agent of the project can continue a thread; each
-  writes its own lane.
+  writes its own partition.
 
 ## What it holds
 
@@ -23,23 +23,26 @@ history, the state, the tasks, the A2A context.
 | an id       | `AT_...`, minted by the platform. A client learns it as the `contextId` of the first reply and sends it from then on; the handler reads it as `ctx.thread.id`  |
 | scope       | an optional opaque identifier the application sets for the person or account the thread is about; the one dimension threads are listed by, and a grant's scope |
 | attributes  | a small string map the application sets and reads back; a title, a preview, flags                                                                              |
-| lanes       | one per configured handler lane: transport history, saved application data and tasks; see [lane concepts](#lanes-and-session-frames)                           |
-| the journal | the framework's append-only record of what happened, shared by every lane; see [journal](internals/storage.md#journal)                                         |
+| partitions       | one per configured handler partition: transport history, saved application data and tasks; see [partition concepts](#partitions-and-session-frames)                           |
+| the journal | the framework's append-only record of what happened, shared by every partition; see [journal](internals/storage.md#journal)                                         |
 
-Several endpoints can take part in one thread, each in its configured lane.
+Several endpoints can take part in one thread, each in its configured partition.
 Local agents coordinated by a session have separate frames within saved session
-state; those frames do not each create a transport lane. A tool reads another agent's history
-with `ctx.thread.lane(agent).history()`.
+state; those frames do not each create a transport partition. A tool reads another agent's history
+with `ctx.thread.partition(partition_key).history()`.
 
-## Lanes and session frames
+## Partitions and session frames
 
-`AgentHandler(lane=...)` names a text door's transport history, tasks and
-concurrency boundary inside a thread. The voice door, `rtc_session`, is the
-call's fast brain and takes no lane: a call writes the worker's own lane, which
-the worker's text doors share, and `AgentHandler(lane=...).rtc_session()`
-raises. A lane is not allocated for every local agent invocation.
+`a2a_session(partition_key=...)` and `rtc_session(partition_key=...)` select saved
+history, tasks and write ownership inside a thread. Both resolve omitted keys to
+the protocol's `DEFAULT_PARTITION_KEY` (`"default"`) before accessing storage,
+independently of agent, handler and endpoint names. Phone and chat
+continue the same history when their thread and partition key match. A remote
+expert selects a separate key when it needs independent conversation state.
+`AgentHandler` only groups entry points; it has no persistence identity.
+A partition is not allocated for every local agent invocation.
 `TextSessionState` keeps its own agent frames, private histories, and pending
-calls; those frames do not each create a lane.
+calls; those frames do not each create a partition.
 
 The journal is the framework's append-only event record, separate from editable
 model history and explicitly saved context fields. Public thread methods read
@@ -73,17 +76,19 @@ Every route below is signed with the project's key, so the agent trusts the id w
 | an agent joins a room that exists             | `CreateAgentDispatch(thread_id=)`                                                       | the backend                                                                                                         |
 | an outbound phone call                        | the dispatch of the agent that places or answers it (`CreateAgentDispatch(thread_id=)`) | the backend, from the thread it stored against the lead                                                             |
 | an inbound phone call                         | the dispatch the SIP dispatch rule creates                                              | LiveKit Cloud, by the caller's `phone:+E164` key (get-or-create), so a call continues the texts and calls before it |
-| the web console and `lk agent console`        | the console's token or simulated job                                                    | the console, which creates the thread first                                                                         |
 
 | The job's `thread_id`            | `ctx.thread` and the call                                                               |
 | -------------------------------- | --------------------------------------------------------------------------------------- |
-| a known thread     | that thread, open before the entrypoint runs; a lane that does not load fails `start()` |
+| a known thread     | that thread, open before the entrypoint runs; a partition that does not load fails `start()` |
 | empty              | `None`: the call runs in memory and no thread is created                                 |
 | unknown or deleted | `None`: the refusal is logged; the call runs in memory                                   |
 
 Whoever dispatches the call already has its thread id and hands it to its frontend;
 the room does not publish it. A tool with the project's key reads it from the
 dispatch (`ListDispatch`).
+
+A terminal call follows the same rule: a simulated job without `thread_id` runs without a
+durable thread. A launcher that needs persistence must create a thread and supply its id.
 
 A backend that wants to find a conversation again stores the thread id in its own tables,
 against its user, lead or order, and passes it on as `contextId` or in the dispatch; see
@@ -110,12 +115,12 @@ For SMS, WhatsApp and email routing, see [channels.md](channels.md).
 ## Runs
 
 A run is one input to one result, tools included: a text message, a voice
-turn. The framework loads the agent's lane before a run and commits it
+turn. The framework loads the agent's partition before a run and commits it
 after, so a run can execute on any worker. Application fields require explicit
 load/save; returning from a handler does not save them.
 Runs of one agent in a thread execute one at a time, in the order their
 messages arrived, unless the endpoint chose otherwise; see
-[lane mechanics](internals/storage.md#lanes) and [server.md](server.md).
+[partition mechanics](internals/storage.md#partitions) and [server.md](server.md).
 
 ## `ctx.thread`
 
@@ -135,10 +140,10 @@ An `AgentServer` always has storage: its `storage=`, else the local
 | `id`                                                                               | `str`                | the thread id                                                                          |
 | `info()`                                                                           | `ThreadInfo`         | the platform's record: scope, attributes, `created_at`, `last_active`, `expires_at`    |
 | `update(attributes=, idle_ttl_seconds=)`                                           | `ThreadInfo`         | change the attributes a listing returns, or the idle period                            |
-| `lane(agent)`                                                                      | `Lane`               | one agent's lane of this thread                                                        |
-| `lane(agent).history()`                                                            | `ChatContext`        | another agent's history in this thread                                                 |
-| `chat_history(agent=None)`                                                         | `ChatContext`        | this agent's history, or another agent's                                               |
-| `lane(agent).tasks(status=, limit=)`                                               | `list[TaskRecord]`   | A2A task records for the selected lane                                                 |
+| `partition(partition_key)`                                                                      | `Partition`               | one persistence partition of this thread                                                        |
+| `partition(partition_key).history()`                                                            | `ChatContext`        | another agent's history in this thread                                                 |
+| `chat_history(partition_key=None)`                                                         | `ChatContext`        | this agent's history, or another agent's                                               |
+| `partition(partition_key).tasks(status=, limit=)`                                               | `list[TaskRecord]`   | A2A task records for the selected partition                                                 |
 | `list_items(agent=None, after=None, limit=100)`                                    | `ThreadItemPage`     | one page of committed chat items in insertion order; the page's `after` reads the next |
 | `list_tasks(agent=None, status=None, order="inserted", page_token=None, limit=50)` | `TaskPage`           | one page of task records, in insertion order or last updated first (`order="updated"`) |
 | `task(task_id)`                                                                    | `TaskRecord \| None` | one task record, `None` when the thread has none of that id                            |
@@ -155,3 +160,20 @@ There is nothing to open or close.
 
 `livekit/mergedInto` on a task is unrelated to threads: messages answered
 in one turn; see [server.md](server.md).
+
+
+## Session binding and snapshots
+
+The entrypoint's store selects the thread and partition. `ctx.store.bind(app)` explicitly
+authorizes TextSession or VoiceSession to advance that conversation. A persisted session
+field is discovered only within this explicit binding; passing ordinary context does not
+implicitly restore or update a conversation.
+
+`await ctx.store.load_session()` reads a detached committed snapshot without executing an
+agent. `ctx.thread.chat_history()` reads the selected partition's messages. Separate reads
+are not one atomic historical snapshot. During execution, a bound app.session reflects
+accepted in-memory state, which can lead committed storage until the next checkpoint.
+
+Delegation into an active caller/ancestor's same store/thread/partition is rejected before
+task admission, including the default key. Different threads or stores remain independent;
+ordinary requests to endpoints sharing a key remain valid and queue under that partition.

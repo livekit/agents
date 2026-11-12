@@ -5,31 +5,30 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ChatContext, ToolSpec};
 use lk_agents_net::transport::HttpRequest;
-use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
+use serde_json::{Map, Value};
 
 /// `ToolContext.parse_function_tools("openai", strict=strict)`. Chat completions take client
 /// functions only: a provider's server-side tools belong to its own APIs.
-pub fn tool_schemas(tools: &[ToolSpec], strict: bool) -> Result<Vec<Value>, ApiError> {
+pub fn tool_schemas(tools: &[ToolSpec], strict: bool) -> Result<Vec<Map<String, Value>>, ApiError> {
     tools
         .iter()
         .filter(|tool| tool.provider_tool.is_none())
         .map(|tool| {
             if !strict {
-                return Ok(Value::Object(lk_agents_core::llm::schema::build_legacy_openai_schema(
+                return Ok(lk_agents_core::llm::schema::build_legacy_openai_schema(
                     &tool.name,
                     Some(&tool.description),
                     tool.json_schema.clone(),
                     false,
-                )));
+                ));
             }
             lk_agents_core::llm::schema::build_strict_openai_schema(
                 &tool.name,
                 Some(&tool.description),
                 &tool.json_schema,
             )
-            .map(Value::Object)
             .map_err(|e| ApiError::new(format!("tool {:?} has an unusable schema: {e}", tool.name)))
         })
         .collect()
@@ -55,20 +54,14 @@ pub fn build_request(
     let extra_headers = extra.remove("extra_headers");
     let extra_body = extra.remove("extra_body");
     let extra_query = extra.remove("extra_query");
+    if let Some(Value::Object(fields)) = extra_body {
+        extra.extend(fields);
+    }
 
     let formatted = lk_agents_core::llm::provider_format::openai::to_chat_ctx(chat_ctx, images)
         .map_err(|e| ApiError::new(format!("failed to format chat context: {e}")))?;
     let schemas = tool_schemas(tools, opts.strict_tools)?;
-    let messages = formatted
-        .messages
-        .into_iter()
-        .map(serde_json::to_value)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| ApiError::new(format!("failed to serialize chat context: {e}")))?;
-    let mut body = request::build_body(&opts.model, messages, &schemas, extra);
-    if let Some(Value::Object(fields)) = extra_body {
-        body.extend(fields);
-    }
+    let body = request::build_body(&opts.model, formatted.messages, schemas, &args, extra);
 
     // `extra_headers` (the composed kwarg, so the instance's replaces the call's), overlaid
     // with the gateway's identification and provider pin, and the bearer.
@@ -90,7 +83,7 @@ pub fn build_request(
         headers.remove(crate::headers::HEADER_SESSION_ID);
     }
     headers.insert("Authorization", format!("Bearer {bearer}"));
-    let body = encode_body(&Value::Object(body), opts.body, &mut headers)?;
+    let body = encode_body(&body, opts.body, &mut headers)?;
 
     let mut url = url::Url::parse(&request::completions_url(&opts.base_url))
         .map_err(|e| ApiError::new(format!("invalid base_url {:?}: {e}", opts.base_url)))?;
@@ -102,7 +95,7 @@ pub fn build_request(
 
 /// The body's bytes as `encoding` asks, with the headers that name it.
 fn encode_body(
-    body: &Value,
+    body: &request::ChatBody,
     encoding: BodyEncoding,
     headers: &mut Headers,
 ) -> Result<Vec<u8>, ApiError> {

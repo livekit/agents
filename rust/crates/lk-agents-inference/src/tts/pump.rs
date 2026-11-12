@@ -62,10 +62,13 @@ impl Checkout {
         &mut self.held.1
     }
 
-    /// Back to the pool for the next synthesis.
-    fn give_back(self) {
+    /// Back to the pool for the next synthesis, or closed once the client is.
+    async fn give_back(self) {
         let (id, connection) = self.held.into_inner();
-        self.connections.lock().give_back(id, connection);
+        let refused = self.connections.lock().give_back(id, connection);
+        if let Some(connection) = refused {
+            connection.sender.close().await;
+        }
     }
 
     async fn close(self) {
@@ -377,7 +380,7 @@ impl Pump {
             && !self.stopped.is_cancelled()
             && !self.audio_tx.is_closed()
         {
-            checkout.give_back();
+            checkout.give_back().await;
             return;
         }
         checkout.close().await;
@@ -438,7 +441,7 @@ impl Pump {
             }
             Event::Received(Incoming::OutputAlignment { session_id, tokens }) => {
                 let segment_id = synthesis.aligned(session_id, now)?;
-                self.transcript.push_alignment(segment_id, tokens);
+                self.transcript.entry(segment_id).or_default().extend(tokens);
                 Ok(None)
             }
             Event::Received(Incoming::Done { session_id }) => {
@@ -523,8 +526,13 @@ impl Pump {
         synthesis: &mut Synthesis,
         mut audio: SynthesizedAudio,
     ) -> Result<Option<SynthesisEnd>, ApiError> {
-        audio.timed_transcript =
-            self.transcript.take_audio_transcript(&audio.segment_id, audio.is_final);
+        // the words aligned so far ride on the segment's next frame
+        audio.timed_transcript = match audio.is_final {
+            true => self.transcript.remove(&audio.segment_id).unwrap_or_default(),
+            false => {
+                self.transcript.get_mut(&audio.segment_id).map(std::mem::take).unwrap_or_default()
+            }
+        };
         let clock = self.clock.as_ref();
         let blocked_at = clock.now();
         let total_timer = async {
@@ -635,13 +643,10 @@ impl Pump {
 }
 
 /// The caller's text command as an event.
-fn command_event(command: Option<TextCmd>) -> Event {
+fn command_event(command: Option<String>) -> Event {
     match command {
-        Some(TextCmd::Push(text)) => Event::Text(text),
-        Some(TextCmd::Failed) => {
-            Event::Failed(ApiError::new("TTS input queue overflowed at EOF").with_retryable(false))
-        }
-        Some(TextCmd::End) | None => Event::InputEnded,
+        Some(text) => Event::Text(text),
+        None => Event::InputEnded,
     }
 }
 

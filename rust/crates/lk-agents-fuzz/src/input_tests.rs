@@ -228,7 +228,7 @@ mod late_mic_released {
 mod manual_turn_closed_empty {
     //! A close commits a manual user turn even when it holds no words.
     use lk_agents_abi::{ChatItem, Role};
-    use lk_agents_core::tts::markup::ChatMessageExt;
+    use lk_agents_core::markup::ChatMessageExt;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{Input, Millis, TurnMode};
     use lk_agents_voice::events::SessionEvent;

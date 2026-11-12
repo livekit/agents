@@ -512,3 +512,205 @@ mod metrics_stamped_on_the_session_wall {
         }
     }
 }
+
+mod implicit_user_onset {
+    //! A user turn with no voice activity detector: its onset is the recogniser's, the same on
+    //! the message and on its span, and its delays are measured within the turn.
+    use lk_agents_abi::Role;
+    use lk_agents_abi::telemetry::record::Record;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{Input, Millis, Ref, TurnMode, UserText};
+    use lk_agents_voice::events::SessionEvent;
+
+    /// The user_turn span starts where the user message says speech started, and the turn's
+    /// latencies lie within the turn. https://github.com/livekit/agents/pull/5699 https://github.com/livekit/agents/issues/2361 https://github.com/livekit/agents/issues/3396 https://github.com/livekit/agents/issues/7307
+    #[test]
+    fn the_message_and_the_span_share_one_bounded_onset() {
+        let setup = Setup { stt: true, turn: TurnMode::Stt, ..Setup::default() };
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::Advance { ms: Millis(5_000) },
+                Input::SttStart { stt: Ref::new(0) },
+                Input::Advance { ms: Millis(800) },
+                Input::SttFinal {
+                    utterance: Ref::new(0),
+                    text: UserText("what time is it".into()),
+                    speaker: None,
+                },
+                Input::SttEnd { utterance: Ref::new(0) },
+                Input::Advance { ms: Millis(2_000) },
+            ] {
+                run.apply(&input).await;
+            }
+            run
+        });
+        let events = run.record.host_view().events();
+        let metrics: Vec<_> = events
+            .iter()
+            .filter_map(|(_, event)| match event {
+                SessionEvent::ConversationItemAdded { item, .. } => {
+                    item.as_message().filter(|m| m.role == Role::User).map(|m| m.metrics.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let [m] = metrics.as_slice() else { panic!("one user message: {metrics:?}") };
+        let started = m.started_speaking_at.expect("an implicit onset");
+        let stopped = m.stopped_speaking_at.expect("an end of speech");
+        assert!(started <= stopped && stopped - started <= 0.85, "{m:?}");
+        let delay = m.transcription_delay.expect("a transcription delay");
+        assert!((0.0..=0.85).contains(&delay), "unbounded transcription delay: {m:?}");
+        let turns: Vec<_> = events
+            .iter()
+            .filter_map(|(_, event)| match event {
+                SessionEvent::Telemetry(records) => Some(records.iter()),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|record| match record {
+                Record::Span(span) if span.name == "user_turn" => Some(span),
+                _ => None,
+            })
+            .collect();
+        let [turn] = turns.as_slice() else { panic!("one user_turn span: {turns:?}") };
+        let span_start = turn.start_unix_nanos as f64 / 1e9;
+        assert!(
+            (span_start - started).abs() < 0.001,
+            "the span starts at {span_start}, the message at {started}"
+        );
+        let span_secs = (turn.end_unix_nanos - turn.start_unix_nanos) as f64 / 1e9;
+        assert!(span_secs <= 3.0, "user_turn lasted {span_secs} s in a 2.8 s turn");
+    }
+}
+
+mod reply_latency_follows_the_user_turn {
+    //! The reply that answers a user turn measures its end-to-end latency, whoever answers it.
+    use lk_agents_abi::Role;
+    use lk_agents_fuzz::drive::{RealtimeSetup, Run, Setup, simulate};
+    use lk_agents_fuzz::input::{
+        AgentText, Count, Input, Millis, Ref, RtEvent, ToolAnswer, ToolArgs, TurnMode, UserText,
+    };
+    use lk_agents_voice::events::SessionEvent;
+
+    /// The new agent's reply to a turn a tool handed off carries that turn's e2e latency.
+    /// https://github.com/livekit/agents/issues/7157
+    #[test]
+    fn the_agent_handed_off_to_answers_with_the_turns_latency() {
+        let setup = Setup { stt: true, turn: TurnMode::Stt, ..Setup::default() };
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmText { chat: Ref::new(0), text: AgentText("Hello.".into()) },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+                Input::PlayoutStarted { segment: Ref::new(0) },
+                Input::Advance { ms: Millis(1_000) },
+                Input::PlayoutFinished { segment: Ref::new(0) },
+                Input::Advance { ms: Millis(1_000) },
+                Input::SttStart { stt: Ref::new(0) },
+                Input::Advance { ms: Millis(500) },
+                Input::SttFinal {
+                    utterance: Ref::new(0),
+                    text: UserText("I want billing".into()),
+                    speaker: None,
+                },
+                Input::SttEnd { utterance: Ref::new(0) },
+                Input::Advance { ms: Millis(1_000) },
+                Input::LlmToolCall {
+                    chat: Ref::new(1),
+                    name: "transfer".into(),
+                    args: ToolArgs("{}".into()),
+                },
+                Input::LlmEnd { chat: Ref::new(1) },
+                Input::Advance { ms: Millis(100) },
+                Input::Handoff {
+                    agent: "billing".into(),
+                    instructions: AgentText("Help with billing.".into()),
+                    tools: Vec::new(),
+                    turn: None,
+                },
+                Input::ToolAnswered {
+                    tool: Ref::new(0),
+                    answer: ToolAnswer::Recorded,
+                    text: AgentText("transferred".into()),
+                },
+                Input::Advance { ms: Millis(100) },
+                // The new agent's `on_enter`.
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmText { chat: Ref::new(2), text: AgentText("Billing here.".into()) },
+                Input::LlmEnd { chat: Ref::new(2) },
+            ] {
+                run.apply(&input).await;
+            }
+            crate::playout::apply_with_playout(&mut run, &Input::Advance { ms: Millis(5_000) })
+                .await;
+            run
+        });
+        let replies: Vec<_> = run
+            .record
+            .host_view()
+            .events()
+            .into_iter()
+            .filter_map(|(_, event)| match event {
+                SessionEvent::ConversationItemAdded { item, .. } => item
+                    .as_message()
+                    .filter(|m| m.role == Role::Assistant)
+                    .map(|m| (m.raw_text_content().unwrap_or_default(), m.metrics.clone())),
+                _ => None,
+            })
+            .collect();
+        let [(hello, greeting), (billing, answer)] = replies.as_slice() else {
+            panic!("{replies:#?}")
+        };
+        assert_eq!((hello.as_str(), billing.as_str()), ("Hello.", "Billing here."));
+        assert!(greeting.e2e_latency.is_none(), "an unprompted greeting: {greeting:?}");
+        assert!(answer.e2e_latency.is_some(), "the handed-off reply lost the turn: {answer:?}");
+    }
+
+    /// A realtime model's reply to a turn its server heard carries the turn's e2e latency.
+    /// https://github.com/livekit/agents/pull/7719
+    #[test]
+    #[ignore = "https://github.com/livekit/agents/pull/7719 reproduces: a realtime turn's user message has no stopped_speaking_at and its reply no e2e_latency"]
+    fn a_realtime_reply_has_the_turns_latency() {
+        let setup = Setup {
+            realtime: Some(RealtimeSetup { turn_detection: true, ..RealtimeSetup::default() }),
+            ..Setup::default()
+        };
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::Advance { ms: Millis(4_000) },
+                Input::MicFrames { mic: Ref::new(0), chunks: Count(20) },
+                Input::Advance { ms: Millis(100) },
+                Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::SpeechStarted },
+                Input::Advance { ms: Millis(500) },
+                Input::MicFrames { mic: Ref::new(0), chunks: Count(20) },
+                Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::SpeechStopped },
+            ] {
+                run.apply(&input).await;
+            }
+            crate::playout::apply_with_playout(&mut run, &Input::Advance { ms: Millis(10_000) })
+                .await;
+            run
+        });
+        let replies: Vec<_> = run
+            .record
+            .host_view()
+            .events()
+            .into_iter()
+            .filter_map(|(_, event)| match event {
+                SessionEvent::ConversationItemAdded { item, .. } => item
+                    .as_message()
+                    .filter(|m| m.role == Role::Assistant)
+                    .map(|m| (m.raw_text_content().unwrap_or_default(), m.metrics.clone())),
+                _ => None,
+            })
+            .collect();
+        let [(_, answer)] = replies.as_slice() else { panic!("one reply: {replies:?}") };
+        assert!(answer.e2e_latency.is_some(), "the realtime reply has no latency: {answer:?}");
+    }
+}

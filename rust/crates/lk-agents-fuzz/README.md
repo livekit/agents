@@ -102,5 +102,5 @@ It needs the repository environment and cargo-nextest.
 
 For design detail, read [TEST_STRATEGY.md](../lk-agents-voice/TEST_STRATEGY.md).
 [COVERAGE.md](COVERAGE.md) contains dated measurements, not a live capability inventory.
-The [fuzz crate audit](../../../docs/internals/rust-fuzz-inventory.md) inventories simplification
-and onboarding improvements.
+The [contribution guide](CONTRIBUTING.md) explains regression authoring, fake ports and diagnosis;
+the [testing reference](../../../docs/internals/testing.md) defines the framework's test boundaries.

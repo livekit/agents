@@ -10,10 +10,14 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions, APIStatusError, http
+from livekit.agents import APIConnectOptions, APIStatusError, http, tts
 from livekit.plugins.soniox import TTS
 
 pytestmark = pytest.mark.unit
+
+
+def _chunk(text: str) -> tts.SpeechChunk:
+    return tts.SpeechChunk(text=text, said=text)
 
 
 async def test_a_failure_after_audio_is_not_replayed() -> None:
@@ -130,17 +134,15 @@ async def test_batch_failure_preserves_audio_and_continues_only_transient_errors
         tts = TTS(api_key="test", websocket_url=str(server.make_url("/tts")), http_session=session)
         try:
             options = APIConnectOptions(max_retry=1, retry_interval=0)
-            async with tts.stream(conn_options=options) as stream:
-                stream.push_text(
-                    "First sentence is long enough to start synthesis. Second sentence "
-                )
+            async with tts._stream(conn_options=options) as stream:
+                stream._push_chunk(_chunk("First sentence is long enough to start synthesis."))
                 async with asyncio.timeout(2):
                     first = await anext(stream)
                     audio = bytearray(first.frame.data.tobytes())
-                    stream.push_text("encounters the transient provider failure. Third sentence ")
+                    stream._push_chunk(_chunk("Second sentence encounters the provider failure."))
                     await failed.wait()
                     # This text was never submitted to the failed provider stream.
-                    stream.push_text("still needs its own synthesized audio. ")
+                    stream._push_chunk(_chunk("Third sentence still needs its own audio."))
                     stream.end_input()
                     with pytest.raises(APIStatusError, match="mid-reply"):
                         async for event in stream:

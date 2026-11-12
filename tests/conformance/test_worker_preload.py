@@ -27,7 +27,7 @@ from tests.conformance.ipc_processes import (
     running_job,
 )
 
-pytestmark = [pytest.mark.e2e, pytest.mark.no_concurrent]
+pytestmark = pytest.mark.e2e
 
 
 def _record(*observation: object) -> None:
@@ -249,7 +249,7 @@ async def _run_forkserver_probe(
         "PYTHONPATH": os.pathsep.join(
             [
                 str(preload_events.parent),
-                str(repository / "livekit-agents-next"),
+                str(repository / "livekit-agents"),
                 str(repository),
                 os.environ.get("PYTHONPATH", ""),
             ]

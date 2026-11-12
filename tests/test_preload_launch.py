@@ -13,7 +13,7 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-_IPC = Path(__file__).resolve().parents[1] / "livekit-agents-next" / "livekit" / "agents" / "ipc"
+_IPC = Path(__file__).resolve().parents[1] / "livekit-agents" / "livekit" / "agents" / "ipc"
 
 
 @pytest.fixture

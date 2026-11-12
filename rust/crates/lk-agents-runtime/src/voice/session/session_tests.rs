@@ -733,8 +733,6 @@ pub(super) fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionK
     SessionKwargs {
         turn_handling: Some(TurnHandlingKwargs::default()),
         max_tool_steps: 3,
-        use_tts_aligned_transcript: Maybe::NotGiven,
-        tts_text_transforms: Maybe::NotGiven,
         min_consecutive_speech_delay: 0.0,
         expressive: Default::default(),
         aec_warmup_duration: Maybe::NotGiven,
@@ -1109,11 +1107,10 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
     fn tts_node(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        _: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
-            lk_agents_abi::DuplexStream<lk_agents_abi::TtsSink, lk_agents_abi::TtsSource>,
+            lk_agents_abi::DuplexStream<lk_agents_abi::TextSink, lk_agents_abi::TtsSource>,
             ProviderError,
         >,
     > {

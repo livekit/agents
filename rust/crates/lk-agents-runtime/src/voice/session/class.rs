@@ -145,7 +145,6 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             agent: Some(lk_agents_voice::turn::agent_layer(
                 args.agent_turn_handling.as_ref(),
                 args.agent_min_consecutive_speech_delay,
-                args.agent_use_tts_aligned_transcript,
             )),
         };
         let mut builder = DriverBuilder::new(
@@ -159,6 +158,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let tool_bodies = builder.tool_bodies.clone();
         let speeches = Arc::clone(&builder.speeches);
         builder.session_id = args.session_id;
+        builder.id_seed = args.id_seed;
         builder.tracer = env.tracer.clone();
         builder.video_sampler = args.video_sampler.map(|sampler| {
             lk_agents_voice::agent_session::video_sampler::VideoSampler::new(

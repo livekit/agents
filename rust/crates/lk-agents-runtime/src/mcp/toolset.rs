@@ -104,12 +104,14 @@ impl Port for McpToolsetLifecycle {
 
     async fn setup(&self, host: Arc<dyn McpToolsetHost>, context: CallContext, cx: telemetry::Cx) {
         let _one = self.setting_up.lock().await;
+        // A server that said its tools changed is listed again by the next run.
+        let changed = self.session.tools_changed();
         {
             let mut state = self.state.lock();
             if let Some((_, idle)) = state.idle.take() {
                 idle.abort();
             }
-            if state.listed || state.recovery.is_some() {
+            if (state.listed && !changed) || state.recovery.is_some() {
                 return;
             }
         }

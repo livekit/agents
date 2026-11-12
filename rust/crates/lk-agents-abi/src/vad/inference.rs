@@ -88,7 +88,7 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     path = "livekit.agents.inference",
     extended,
     name = "VAD",
-    base = "VAD",
+    base = "vad.VAD",
     native = InferenceVad,
     legs(stream),
     base_args(capabilities),
@@ -139,7 +139,7 @@ pub trait InferenceVadFacade {
 #[crate::host(facade(
     path = "livekit.agents.inference",
     name = "_VADStream",
-    base = "VADStream",
+    base = "vad.VADStream",
     native = InferenceVad,
     stream(op = stream, owner = "_vad", method = "stream")
 ))]

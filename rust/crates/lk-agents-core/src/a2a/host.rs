@@ -33,7 +33,7 @@ impl TryFrom<TurnContext> for host::TurnContext {
             .transpose()?;
         Ok(Self {
             thread_id: ctx.thread_id,
-            lane: ctx.lane,
+            partition_key: ctx.partition_key,
             message,
             delegated: !ctx.batch.is_empty()
                 && ctx.batch.iter().all(|m| m.channel == super::policy::DELEGATION_CHANNEL),

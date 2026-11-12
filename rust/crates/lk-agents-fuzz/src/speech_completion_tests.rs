@@ -105,7 +105,7 @@ mod step_cut_text_conserved {
 mod unheard_reply_not_committed {
     //! A reply interrupted before any of its audio was heard leaves no words behind.
     use lk_agents_abi::{ChatItem, Role};
-    use lk_agents_core::tts::markup::ChatMessageExt;
+    use lk_agents_core::markup::ChatMessageExt;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
     use lk_agents_voice::events::SessionEvent;
@@ -213,7 +213,7 @@ mod uninterruptible_drops_turn {
 mod unvoiced_synthesis_no_item {
     //! A speech whose voice failed before any of its audio played commits no assistant item.
     use lk_agents_abi::{ChatItem, Role};
-    use lk_agents_core::tts::markup::ChatMessageExt;
+    use lk_agents_core::markup::ChatMessageExt;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, SayInput};
     use lk_agents_voice::{events::SessionEvent, trace::Step};

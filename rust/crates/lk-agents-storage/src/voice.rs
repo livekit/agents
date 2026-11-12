@@ -25,7 +25,7 @@ use crate::{CommitOptions, Holder, Lease, Run, RunOptions, Storage, Thread, shor
 pub struct VoiceStore {
     backend: Arc<dyn Storage>,
     thread_id: String,
-    lane: String,
+    partition_key: String,
     /// Every turn's lease owner, so a turn whose acquire was canceled leaves the next one
     /// nothing to wait for.
     holder: Holder,
@@ -44,7 +44,7 @@ pub struct VoiceStore {
 }
 
 struct State {
-    /// Each conversational item as this store last read it from the lane or committed it.
+    /// Each conversational item as this store last read it from the partition or committed it.
     known: BTreeMap<String, ChatItem>,
     version: i64,
     active: Option<Active>,
@@ -56,6 +56,7 @@ struct Active {
     thread: Thread,
     run: Run,
     speeches: BTreeSet<u64>,
+    checkpoint_sequence: Option<u64>,
 }
 
 fn conversational(item: &ChatItem) -> bool {
@@ -66,15 +67,38 @@ impl VoiceStore {
     pub async fn bound(
         backend: Arc<dyn Storage>,
         thread_id: String,
-        lane: String,
+        partition_key: String,
         explicit_history: Option<Vec<ChatItem>>,
         cx: Cx,
     ) -> Result<Self, StorageError> {
+        Self::bound_with_activation(backend, thread_id, partition_key, explicit_history, cx, None)
+            .await
+    }
+
+    pub(crate) async fn bound_with_activation(
+        backend: Arc<dyn Storage>,
+        thread_id: String,
+        partition_key: String,
+        explicit_history: Option<Vec<ChatItem>>,
+        cx: Cx,
+        activation: Option<ContextStore>,
+    ) -> Result<Self, StorageError> {
+        if let Some(activation) = &activation
+            && (activation.closed() || !activation.matches_partition(&thread_id, &partition_key))
+        {
+            return Err(StorageError::Invalid(
+                "voice context belongs to a different or closed partition".into(),
+            ));
+        }
         let (history, version) = with_thread(&*backend, &thread_id, async |thread| {
-            let lane = thread.lane(&lane);
-            let history =
-                if explicit_history.is_none() { lane.history().await? } else { Vec::new() };
-            let version = lane.info().await?.map_or(0, |lane| lane.version);
+            let partition_key = thread.partition(&partition_key);
+            let history = if explicit_history.is_none() {
+                partition_key.history().await?
+            } else {
+                Vec::new()
+            };
+            let version =
+                partition_key.info().await?.map_or(0, |partition_key| partition_key.version);
             Ok::<_, StorageError>((history, version))
         })
         .await?;
@@ -82,19 +106,45 @@ impl VoiceStore {
             .iter()
             .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
             .collect::<Result<Vec<_>, _>>()?;
+        if explicit_history.is_none() {
+            let answered: BTreeSet<_> = items
+                .iter()
+                .filter_map(|item| match item {
+                    ChatItem::FunctionCallOutput(output) => Some(output.call_id.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if items.iter().any(|item| {
+                matches!(item,
+                ChatItem::FunctionCall(call) if !answered.contains(call.call_id.as_str()))
+            }) {
+                return Err(StorageError::Invalid(
+                    "a stored tool has no recorded result; reconcile its outcome before resuming the voice session".into(),
+                ));
+            }
+        }
         let known = explicit_history
             .as_ref()
             .unwrap_or(&items)
             .iter()
             .map(|item| (item.id().to_owned(), item.clone()))
             .collect();
-        let activation =
-            ContextStore::bound(backend.clone(), thread_id.clone(), lane.clone(), cx.clone())
-                .await?;
+        let activation = match activation {
+            Some(activation) => activation,
+            None => {
+                ContextStore::bound(
+                    backend.clone(),
+                    thread_id.clone(),
+                    partition_key.clone(),
+                    cx.clone(),
+                )
+                .await?
+            }
+        };
         Ok(Self {
             backend,
             thread_id,
-            lane,
+            partition_key,
             holder: Holder::new("voice"),
             activation,
             initial: explicit_history.is_none().then_some(items),
@@ -113,6 +163,10 @@ impl VoiceStore {
         })
     }
 
+    pub fn session_sink(self: &Arc<Self>) -> Arc<dyn lk_agents_abi::a2a::turn::HandlerPort> {
+        Arc::new(VoiceSessionSink(Arc::downgrade(self)))
+    }
+
     fn released(&self) {
         *self.lease.lock() = None;
         self.generation.modify(|generation| *generation += 1);
@@ -128,19 +182,20 @@ impl VoiceStore {
             return Err(StorageError::Invalid("the voice store has closed".into()));
         }
         if self.lease_lost() {
-            return Err(StorageError::LeaseLost("the voice lane lease was lost".into()));
+            return Err(StorageError::LeaseLost("the voice partition_key lease was lost".into()));
         }
         if let Some(active) = &mut state.active {
             active.speeches.insert(speech);
             return Ok(local);
         }
-        // Exclude direct saves before taking the lane, avoiding the inverse lock/lease order.
+        // Exclude direct saves before taking the partition, avoiding the inverse lock/lease order.
         let fields = self.activation.lock_managed().await;
         let thread = self.backend.open(&self.thread_id).await?.with_telemetry(self.cx.clone());
         let mut options = RunOptions::new(shortuuid("voice_"), "");
         options.channel = Some("voice".into());
-        options.kind = crate::thread::run::LaneKind::Voice;
-        let mut run = match thread.lane(&self.lane).open(options, &self.holder).await {
+        options.kind = crate::thread::run::PartitionKind::Voice;
+        let mut run = match thread.partition(&self.partition_key).open(options, &self.holder).await
+        {
             Ok(run) => run,
             Err(error) => {
                 thread.close().await;
@@ -148,15 +203,29 @@ impl VoiceStore {
             }
         };
         let prepared = (|| {
-            // The lane as this store last saw it: the turn's own reading, edits included, is
+            // The partition as this store last saw it: the turn's own reading, edits included, is
             // the newest.
-            let merged = if run.version() == state.version {
+            let (merged, written) = if run.version() == state.version {
                 // The turn's new items are known from now on: if it is abandoned, a later reload
                 // drops them rather than committing them as another turn's.
                 for item in local.iter().filter(|item| conversational(item)) {
                     state.known.entry(item.id().to_owned()).or_insert_with(|| item.clone());
                 }
-                local
+                // `local` is the turn's view (the model's), not the partition's history: the
+                // partition keeps its rows (history-only items, other agents' items), with the
+                // turn's edits. Its new items are the session's to write, in the session's order.
+                let stored = run
+                    .history()
+                    .iter()
+                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mine: BTreeMap<&str, &ChatItem> =
+                    local.iter().map(|item| (item.id(), item)).collect();
+                let written: Vec<ChatItem> = stored
+                    .into_iter()
+                    .map(|row| mine.get(row.id()).map_or(row, |item| (*item).clone()))
+                    .collect();
+                (local, written)
             } else {
                 let stored = run
                     .history()
@@ -188,17 +257,22 @@ impl VoiceStore {
                 state.known.extend(added.iter().map(|item| (item.id().to_owned(), item.clone())));
                 merged.extend(added);
                 instructions.extend(merged);
-                instructions
+                let written = instructions.clone();
+                (instructions, written)
             };
+            let session = self.activation.session_state();
             self.activation.begin_managed(
                 run.context_scopes().to_vec(),
                 run.state().cloned(),
                 &fields,
             )?;
-            Ok::<_, StorageError>(merged)
+            if let Some(session) = session {
+                self.activation.stage_session(session)?;
+            }
+            Ok::<_, StorageError>((merged, written))
         })();
-        let merged = match prepared {
-            Ok(merged) => merged,
+        let (merged, written) = match prepared {
+            Ok(prepared) => prepared,
             Err(error) => {
                 let _ = run.abandon(RunOutcome::Failed, AbandonReason::VoiceLoad.as_str()).await;
                 thread.close().await;
@@ -206,7 +280,21 @@ impl VoiceStore {
             }
         };
         *self.lease.lock() = run.lease().cloned();
-        state.active = Some(Active { thread, run, speeches: BTreeSet::from([speech]) });
+        state.active = Some(Active {
+            thread,
+            run,
+            speeches: BTreeSet::from([speech]),
+            checkpoint_sequence: None,
+        });
+        if let Some(routing) = self.activation.session_state() {
+            state
+                .active
+                .as_mut()
+                .expect("turn was installed")
+                .run
+                .checkpoint_session(routing, written.iter().map(encode_chat_item).collect())
+                .await?;
+        }
         Ok(merged)
     }
 
@@ -249,6 +337,9 @@ impl VoiceStore {
         let result = match history {
             Ok(history) => {
                 *active.run.history_mut() = history;
+                if let Some(routing) = self.activation.session_state() {
+                    active.run.set_state(routing);
+                }
                 active.run.stage_scopes(self.activation.writes());
                 active.run.stage_statements(self.activation.statements());
                 active.run.commit(CommitOptions::default()).await.map(|committed| committed.version)
@@ -380,6 +471,40 @@ impl VoiceStorage for VoiceStore {
     fn acquire(&self, speech: u64, local: Vec<ChatItem>) -> StorageWork<'_, Vec<ChatItem>> {
         Box::pin(self.begin(speech, local))
     }
+    fn checkpoint(
+        &self,
+        sequence: u64,
+        agent: String,
+        history: Vec<ChatItem>,
+    ) -> StorageWork<'_, ()> {
+        Box::pin(async move {
+            let mut state = self.state.lock().await;
+            let active = state
+                .active
+                .as_mut()
+                .ok_or_else(|| StorageError::Invalid("no voice turn owns the partition".into()))?;
+            if active.checkpoint_sequence.is_some_and(|accepted| sequence <= accepted) {
+                return Ok(());
+            }
+            let routing = crate::session_state::voice_value(
+                agent,
+                history
+                    .iter()
+                    .filter(|item| conversational(item))
+                    .map(|item| item.id().to_owned())
+                    .collect(),
+            )?;
+            active
+                .run
+                .checkpoint_session(routing.clone(), history.iter().map(encode_chat_item).collect())
+                .await?;
+            active.checkpoint_sequence = Some(sequence);
+            self.activation.stage_session(routing)?;
+            self.activation.acknowledge_session_state();
+            Ok(())
+        })
+    }
+
     fn lease_lost(&self) -> bool {
         if self.lease.lock().as_ref().is_some_and(Lease::is_lost) {
             self.lost.store(true, Ordering::Release);
@@ -428,7 +553,7 @@ impl HostVoiceStore for VoiceStore {
         let (voice, context) =
             tokio::join!(self.holder.wait_released(), self.activation.wait_released());
         if !(voice && context) {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "the voice store closed with a lease release in flight");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.as_str(); "the voice store closed with a lease release in flight");
         }
         result
     }
@@ -437,3 +562,71 @@ impl HostVoiceStore for VoiceStore {
 #[cfg(test)]
 #[path = "voice_tests.rs"]
 mod tests;
+
+/// The activation can outlive a turn without keeping the call's storage alive.
+struct VoiceSessionSink(std::sync::Weak<VoiceStore>);
+
+impl lk_agents_abi::a2a::turn::HandlerPort for VoiceSessionSink {
+    fn checkpoint(&self) -> lk_agents_abi::BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+    fn progress(&self, _text: String) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+    fn token(&self, _delta: String) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+    fn save_session(
+        &self,
+        mut routing: serde_json::Value,
+        history: Vec<ChatItem>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), StorageError>> {
+        Box::pin(async move {
+            let store = self
+                .0
+                .upgrade()
+                .ok_or_else(|| StorageError::Invalid("the voice session has ended".into()))?;
+            let mut state = store.state.lock().await;
+            let active = state
+                .active
+                .as_mut()
+                .ok_or_else(|| StorageError::Invalid("no voice turn owns the partition".into()))?;
+            // A host ledger may not yet contain a delivered partial item. A durability barrier
+            // must retain that accepted prefix; final turn settlement owns deletions/truncation.
+            let mut merged = active
+                .run
+                .history()
+                .iter()
+                .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
+                .collect::<Result<Vec<_>, _>>()?;
+            for item in history {
+                if let Some(existing) =
+                    merged.iter_mut().find(|existing| existing.id() == item.id())
+                {
+                    *existing = item;
+                } else {
+                    merged.push(item);
+                }
+            }
+            routing
+                .as_object_mut()
+                .ok_or_else(|| StorageError::Invalid("voice routing must be an object".into()))?
+                .insert(
+                    "history_ids".into(),
+                    serde_json::json!(
+                        merged
+                            .iter()
+                            .filter(|item| conversational(item))
+                            .map(|item| item.id())
+                            .collect::<Vec<_>>()
+                    ),
+                );
+            active
+                .run
+                .checkpoint_session(routing.clone(), merged.iter().map(encode_chat_item).collect())
+                .await?;
+            store.activation.stage_session(routing)?;
+            Ok(())
+        })
+    }
+}

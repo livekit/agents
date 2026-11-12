@@ -238,3 +238,108 @@ async fn a_dropped_input_ends_the_stream() {
     decoder.close().await.unwrap();
     assert!(media_pool.try_admit(JobClass::Decoder).is_ok(), "the admission is released");
 }
+
+/// A compressed stream that got no data, only its header, or was cut mid-sample delivers every
+/// whole sample it had, then ends or fails as truncated, and releases its admission.
+/// https://github.com/livekit/agents/issues/1850
+#[tokio::test]
+async fn empty_header_only_and_truncated_streams_deliver_their_whole_samples_and_settle() {
+    let media_pool = media_pool();
+    let encoded = wav(1, &[9; 480]);
+    let cut = encoded.len() - 1;
+    for (bytes, expected, truncated) in [
+        (&encoded[..0], vec![], true),
+        (&encoded[..44], vec![], false),
+        (&encoded[..cut], vec![9; 479], true),
+    ] {
+        let (mut decoder, input) =
+            AudioDecoder::open_stream(&media_pool, Some(Container::Wav), Some(24_000), 1, limits())
+                .unwrap();
+        for chunk in bytes.chunks(29) {
+            input.push(chunk).unwrap();
+        }
+        input.end_input();
+
+        let mut samples = Vec::new();
+        let end = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match decoder.next().await {
+                    Ok(Some(frame)) => samples.extend(
+                        frame
+                            .data
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|b| i16::from_le_bytes([b[0], b[1]])),
+                    ),
+                    Ok(None) => return None,
+                    Err(error) => return Some(error),
+                }
+            }
+        })
+        .await
+        .expect("the reader is not stranded");
+        decoder.close().await.unwrap();
+
+        assert_eq!(samples, expected, "{} bytes", bytes.len());
+        assert_eq!(
+            matches!(end, Some(DecoderError::Codec(_))),
+            truncated,
+            "{} bytes: {end:?}",
+            bytes.len()
+        );
+        assert!(media_pool.try_admit(JobClass::Decoder).is_ok(), "the admission is released");
+    }
+}
+
+/// Two compressed streams fed interleaved each decode only their own audio, in full.
+/// https://github.com/livekit/agents/pull/1584
+#[tokio::test]
+async fn interleaved_compressed_streams_decode_independently() {
+    let media_pool = MediaPool::new(MediaPoolLimits {
+        total: 4,
+        decoders: 2,
+        recordings: 1,
+        images: 1,
+        formatting: 1,
+        eot_models: 1,
+        vad_models: 1,
+    })
+    .unwrap();
+    let open =
+        || AudioDecoder::open_stream(&media_pool, Some(Container::Wav), Some(24_000), 1, limits());
+    let (mut a, a_in) = open().unwrap();
+    let (mut b, b_in) = open().unwrap();
+    let (a_bytes, b_bytes) = (wav(1, &[11; 4800]), wav(1, &[-22; 2400]));
+    let (mut a_chunks, mut b_chunks) = (a_bytes.chunks(53), b_bytes.chunks(31));
+    loop {
+        let (x, y) = (a_chunks.next(), b_chunks.next());
+        if x.is_none() && y.is_none() {
+            break;
+        }
+        if let Some(chunk) = x {
+            a_in.push(chunk).unwrap();
+        }
+        if let Some(chunk) = y {
+            b_in.push(chunk).unwrap();
+        }
+        tokio::task::yield_now().await;
+    }
+    a_in.end_input();
+    b_in.end_input();
+
+    let mut decoded = Vec::new();
+    for decoder in [&mut a, &mut b] {
+        let mut samples = Vec::new();
+        while let Some(frame) = decoder.next().await.unwrap() {
+            samples.extend(
+                frame.data.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])),
+            );
+        }
+        decoded.push(samples);
+    }
+
+    assert_eq!(decoded, [vec![11; 4800], vec![-22; 2400]]);
+    a.close().await.unwrap();
+    b.close().await.unwrap();
+}

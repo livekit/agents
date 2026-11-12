@@ -10,7 +10,7 @@ use crate::events::SessionEvent;
 use crate::trace::{CoreStep, InputStep, InterruptStep, RealtimeStep, Step, ToolStep, TurnStep};
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::UserState;
-use lk_agents_core::tts::markup::ChatMessageExt;
+use lk_agents_core::markup::ChatMessageExt;
 use std::sync::Arc;
 
 use crate::agent_session::effects::*;
@@ -43,6 +43,7 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
             | AudioOp::SetAudioInput(_)
             | AudioOp::SetAudioOutput { .. }
             | AudioOp::SetTranscriptionOutput { .. }
+            | AudioOp::SettleUnreported { .. }
             | AudioOp::SetOutputEnabled { .. },
         ) => return None,
         VoiceEffect::Journal(_)
@@ -81,7 +82,8 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
         VoiceEffect::CancelTool { call_id, .. } => {
             Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() })
         }
-        VoiceEffect::ValidateOutput { .. }
+        VoiceEffect::StorageCheckpoint { .. }
+        | VoiceEffect::ValidateOutput { .. }
         | VoiceEffect::CancelOutputValidation { .. }
         | VoiceEffect::RenderToolHandlingTemplate { .. }
         | VoiceEffect::CancelToolRefusal { .. }

@@ -761,6 +761,10 @@ pub struct MergeInsertion {
 
 #[crate::host(functions(pid = false))]
 pub trait ChatContextPlans {
+    /// Decode a persisted protobuf ChatItem with the shared history codec.
+    #[host(function)]
+    fn _core_payload_to_item(payload: Extra) -> Result<ChatItem, crate::storage::StorageError>;
+
     /// `ChatContext.copy` as an index plan over the host's own items.
     #[host(function, name = "chat_ctx_copy_plan")]
     fn copy_plan(

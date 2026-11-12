@@ -121,3 +121,59 @@ fn reloaded_jobs_have_no_dispatch_timestamps() {
     .unwrap();
     assert_eq!((job.received_at, job.accepted_at, job.assigned_at), (None, None, None));
 }
+
+/// A job kept across a dev reload comes back over the dev channel with every field it left with.
+/// https://github.com/livekit/agents/pull/5345
+#[tokio::test]
+async fn a_kept_job_survives_the_dev_channel_round_trip() {
+    let job = livekit_protocol::Job {
+        id: "AJ_kept".into(),
+        dispatch_id: "AD_1".into(),
+        r#type: livekit_protocol::JobType::JtRoom as i32,
+        room: Some(livekit_protocol::Room {
+            sid: "RM_1".into(),
+            name: "call".into(),
+            ..Default::default()
+        }),
+        metadata: "{\"k\":1}".into(),
+        agent_name: "front-desk".into(),
+        ..Default::default()
+    };
+    let info = RunningJobInfo {
+        accept_arguments: AcceptArguments {
+            name: "Agent".into(),
+            identity: "agent-AJ_kept".into(),
+            metadata: "meta".into(),
+            attributes: Default::default(),
+        },
+        job: job.clone(),
+        url: "wss://sfu".into(),
+        token: "token".into(),
+        worker_id: "AW_1".into(),
+        fake_job: true,
+        received_at: Some(1.0),
+        accepted_at: Some(2.0),
+        assigned_at: Some(3.0),
+        launched_at: 4.0,
+    };
+    let mut wire = Vec::new();
+    let jobs = vec![to_proto(info)];
+    let response = livekit_protocol::agent::GetRunningAgentJobsResponse { jobs };
+    send(&mut wire, Message::GetRunningJobsResponse(response)).await.unwrap();
+    let received = recv(&mut wire.as_slice()).await.unwrap().unwrap();
+    let Some(Message::GetRunningJobsResponse(response)) = received.message else {
+        panic!("the frame decoded to another message: {:?}", received.message)
+    };
+    let [kept] = <[_; 1]>::try_from(response.jobs).unwrap();
+    let back = from_proto(kept).unwrap();
+    assert_eq!(back.job, job);
+    let accept = &back.accept_arguments;
+    assert_eq!(
+        (accept.name.as_str(), accept.identity.as_str(), accept.metadata.as_str()),
+        ("Agent", "agent-AJ_kept", "meta")
+    );
+    assert_eq!(
+        (back.url.as_str(), back.token.as_str(), back.worker_id.as_str(), back.fake_job),
+        ("wss://sfu", "token", "AW_1", true)
+    );
+}

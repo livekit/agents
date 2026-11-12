@@ -23,9 +23,7 @@ use lk_agents_net::env::{ProcessEnv, ProcessError};
 use lk_agents_storage::TaskWrite;
 use lk_agents_storage::testing::Backend;
 use lk_agents_storage::thread::db::Receive;
-use lk_agents_storage::thread::run::{
-    INTERRUPTED_KEY, INTERRUPTION_REASON_KEY, ItemRow, MERGED_INTO_KEY, RunOutcome, TaskState,
-};
+use lk_agents_storage::thread::run::{ItemRow, MERGED_INTO_KEY, RunOutcome, TaskState};
 use lk_agents_storage::thread::schema::{Ask, TaskData};
 use lk_agents_storage::timestamp;
 use lk_agents_storage::{RunOptions, Thread, shortuuid};
@@ -35,7 +33,7 @@ use lk_agents_storage::StorageError;
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
-const LANE: &str = "front-desk";
+const PARTITION_KEY: &str = "front-desk";
 
 /// A user's A2A v1 message, as protobuf JSON.
 fn a2a(text: &str, message_id: &str, channel: Option<&str>, task_id: Option<&str>) -> Value {
@@ -106,10 +104,6 @@ fn user_item(text: &str, created_at: f64) -> ChatItem {
     message(ChatRole::User, text, created_at)
 }
 
-fn assistant_item(text: &str, created_at: f64) -> ChatItem {
-    message(ChatRole::Assistant, text, created_at)
-}
-
 fn call_item(name: &str, call_id: &str, created_at: f64) -> ChatItem {
     ChatItem {
         item: Some(chat_item::Item::FunctionCall(FunctionCall {
@@ -119,19 +113,6 @@ fn call_item(name: &str, call_id: &str, created_at: f64) -> ChatItem {
             name: name.into(),
             created_at: Some(timestamp(created_at)),
             ..Default::default()
-        })),
-    }
-}
-
-fn output_item(name: &str, call_id: &str, output: &str, created_at: f64) -> ChatItem {
-    ChatItem {
-        item: Some(chat_item::Item::FunctionCallOutput(FunctionCallOutput {
-            id: shortuuid("item_"),
-            name: name.into(),
-            call_id: call_id.into(),
-            output: output.into(),
-            is_error: false,
-            created_at: Some(timestamp(created_at)),
         })),
     }
 }
@@ -180,11 +161,6 @@ enum Behavior {
         gate: Gate,
         output: &'static str,
     },
-    /// A tool call that waits for `gate`, then the boundary: yields with what ran, or answers.
-    Tool {
-        entered: Gate,
-        gate: Gate,
-    },
     /// `InputRequired("Could you send a photo?")` from `request_photo`, call `p1`.
     Ask,
 }
@@ -225,33 +201,23 @@ fn text(output: &str) -> HandlerOutput {
     HandlerOutput { output: Some(json!(output)), ..HandlerOutput::default() }
 }
 
-/// A checkpoint of the fake's run: `true` when the turn answered `yield`.
-struct Checkpoints(Arc<dyn HandlerPort>);
-
-impl Checkpoints {
-    async fn check(&mut self) -> bool {
-        self.0.checkpoint().await
-    }
-}
-
 impl TurnHost for Fake {
     fn handle<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         ctx: &'a TurnContext,
-        turn: Arc<dyn HandlerPort>,
+        _turn: Arc<dyn HandlerPort>,
         cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::a2a::turn::HandlerOutput, ProviderError>>
     {
         Box::pin(async move {
-            let mut checkpoints = Checkpoints(turn);
             // cancelled as the host cancels its task: the run stops where it waits
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
                     Err(HostError { kind: HostErrorKind::Cancelled, ..HostError::new("") }.into())
                 }
-                out = self.run(ctx.clone(), &mut checkpoints) => out.map(host_output),
+                out = self.run(ctx.clone()) => out.map(host_output),
             }
         })
     }
@@ -293,11 +259,7 @@ fn batch_message_text(message: &lk_agents_abi::a2a::turn::Message) -> String {
 }
 
 impl Fake {
-    async fn run(
-        &self,
-        ctx: TurnContext,
-        checkpoints: &mut Checkpoints,
-    ) -> Result<HandlerOutput, ProviderError> {
+    async fn run(&self, ctx: TurnContext) -> Result<HandlerOutput, ProviderError> {
         let message_text = ctx.batch.last().map(batch_message_text).unwrap_or_default();
         self.calls.lock().push(Call {
             batch: ctx.batch.iter().map(batch_message_text).collect(),
@@ -342,27 +304,6 @@ impl Fake {
                 gate.set();
                 Ok(text(output))
             }
-            Behavior::Tool { entered, gate } => {
-                let t = lk_agents_net::clock::unix_now();
-                let mut items =
-                    vec![user_item(&message_text, t), call_item("lookup", "c1", t + 1e-6)];
-                entered.set();
-                gate.wait().await;
-                items.push(output_item("lookup", "c1", "found", t + 2e-6));
-                if checkpoints.check().await {
-                    return Ok(HandlerOutput {
-                        new_items: items,
-                        interrupted: true,
-                        ..HandlerOutput::default()
-                    });
-                }
-                items.push(assistant_item("never sent", t + 3e-6));
-                Ok(HandlerOutput {
-                    output: Some(json!("never sent")),
-                    new_items: items,
-                    ..HandlerOutput::default()
-                })
-            }
             Behavior::Ask => {
                 let t = lk_agents_net::clock::unix_now();
                 Ok(HandlerOutput {
@@ -400,10 +341,10 @@ fn options(policy: Option<Policy>) -> TurnOptions {
 }
 
 fn turn(s: &Thread, host: Arc<Fake>, policy: Option<Policy>) -> Turn {
-    Turn::new(s.clone(), "worker", LANE, host, clock(), spawner(), options(policy))
+    Turn::new(s.clone(), "worker", PARTITION_KEY, host, clock(), spawner(), options(policy))
 }
 
-/// `run_turn(storage, thread, LANE, message, policy, handler)` of the Python tests.
+/// `run_turn(storage, thread, PARTITION_KEY, message, policy, handler)` of the Python tests.
 async fn run_turn(
     s: &Thread,
     message: Value,
@@ -414,7 +355,13 @@ async fn run_turn(
 }
 
 async fn history_texts(s: &Thread) -> Vec<String> {
-    s.lane(LANE).history().await.unwrap().iter().map(|i| text_of(&i.payload)).collect()
+    s.partition(PARTITION_KEY)
+        .history()
+        .await
+        .unwrap()
+        .iter()
+        .map(|i| text_of(&i.payload))
+        .collect()
 }
 
 fn placeholder_id(v: &mut Value, key: &str, prefix: &str) {
@@ -428,16 +375,24 @@ async fn two_workers_share_one_session(backend: Backend) {
     let a = fx.thread().await;
     let opts = TurnOptions { policy: PolicySpec::All(Policy::Queue), ..TurnOptions::default() };
     let host = Fake::new(Behavior::Counter);
-    let first =
-        Turn::new(a.clone(), "worker", LANE, host.clone(), clock(), spawner(), opts.clone())
-            .run(a2a("hello", "m1", None, None), None)
+    let first = Turn::new(
+        a.clone(),
+        "worker",
+        PARTITION_KEY,
+        host.clone(),
+        clock(),
+        spawner(),
+        opts.clone(),
+    )
+    .run(a2a("hello", "m1", None, None), None)
+    .await
+    .unwrap();
+    let b = fx.thread().await;
+    let second =
+        Turn::new(b.clone(), "worker", PARTITION_KEY, host.clone(), clock(), spawner(), opts)
+            .run(a2a("again", "m2", None, None), None)
             .await
             .unwrap();
-    let b = fx.thread().await;
-    let second = Turn::new(b.clone(), "worker", LANE, host.clone(), clock(), spawner(), opts)
-        .run(a2a("again", "m2", None, None), None)
-        .await
-        .unwrap();
 
     assert_eq!(first.output, Some(json!("seen 1")));
     assert_eq!(second.output, Some(json!("seen 2")));
@@ -446,16 +401,16 @@ async fn two_workers_share_one_session(backend: Backend) {
     assert_eq!(first.task.status, TaskState::Completed);
     assert!(first.task.data.artifacts.as_ref().is_some_and(|a| !a.is_empty()));
     assert_eq!(history_texts(&b).await, vec!["hello", "seen 1", "again", "seen 2"]);
-    let runs = b.lane(LANE).runs(10).await.unwrap();
+    let runs = b.partition(PARTITION_KEY).runs(10).await.unwrap();
     assert_eq!(
         runs.iter().map(|r| r.outcome).collect::<Vec<_>>(),
         vec![Some(RunOutcome::Completed), Some(RunOutcome::Completed)]
     );
     assert_eq!(runs[0].task_id.as_deref(), Some(second.task.task_id.as_str()));
-    assert_eq!(b.lane(LANE).info().await.unwrap().unwrap().version, 2);
+    assert_eq!(b.partition(PARTITION_KEY).info().await.unwrap().unwrap().version, 2);
     // The state was written at the first commit and loaded by the second worker.
     let run = b
-        .lane(LANE)
+        .partition(PARTITION_KEY)
         .open(RunOptions::new("peek", "AST_peek"), &lk_agents_storage::Holder::new("test"))
         .await
         .unwrap();
@@ -478,8 +433,8 @@ async fn a_failed_storage_run_preserves_its_original_task(backend: Backend) {
     .await
     .expect("the accepted task reports its durable failure");
     assert_eq!(failed.task.status, TaskState::Failed);
-    let lane = s.lane(LANE);
-    assert!(lane.history().await.unwrap().is_empty());
+    let partition_key = s.partition(PARTITION_KEY);
+    assert!(partition_key.history().await.unwrap().is_empty());
     let events = s.journal(0, 100).await.unwrap();
     assert_eq!(
         events.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(),
@@ -489,10 +444,10 @@ async fn a_failed_storage_run_preserves_its_original_task(backend: Backend) {
         events[1].payload,
         json!({"outcome": "failed", "reason": "StorageUnavailable: the model is down"})
     );
-    let rows = lane.tasks(None, 10).await.unwrap();
+    let rows = partition_key.tasks(None, 10).await.unwrap();
     assert_eq!((rows.len(), rows[0].status.as_str()), (1, "failed"));
-    let info = lane.info().await.unwrap().unwrap();
-    assert_eq!((info.version, info.lease_until), (0, 0), "released, not bumped");
+    let info = partition_key.info().await.unwrap().unwrap();
+    assert_eq!((info.version, info.lease_expires_at_ms), (0, 0), "released, not bumped");
 
     // An application error fails its own task; the prior terminal task stays immutable.
     let host = Fake::new(Behavior::Raise);
@@ -509,80 +464,16 @@ async fn a_failed_storage_run_preserves_its_original_task(backend: Backend) {
     );
     assert_eq!(r.output, None);
     assert_eq!(host.batches(), vec![vec!["boom".to_owned()]], "the orphan was not run again");
-    let orphan = lane.task(&rows[0].task_id).await.unwrap().unwrap();
+    let orphan = partition_key.task(&rows[0].task_id).await.unwrap().unwrap();
     assert_eq!(orphan.status, TaskState::Failed);
     assert_eq!(
         json_of(&orphan.data.status_message)["metadata"]["https://livekit.io/a2a/ext/agents/v1/reason"],
         json!("storage-unavailable")
     );
-    let runs = lane.runs(10).await.unwrap();
+    let runs = partition_key.runs(10).await.unwrap();
     assert_eq!(runs[0].reason.as_deref(), Some("RuntimeError: boom"));
     assert_eq!(history_texts(&s).await, vec!["boom"], "the message, no reply, nothing re-run");
     fx.cleanup(&[&s]).await;
-}
-
-async fn interrupt_yields_and_the_newer_task_answers_both(backend: Backend) {
-    let fx = backend.fixture(None).await;
-    let a = fx.thread().await;
-    let b = fx.thread().await;
-    let tool_entered = Gate::new();
-    let waiter_set = Gate::new();
-    let host_a =
-        Fake::new(Behavior::Tool { entered: tool_entered.clone(), gate: waiter_set.clone() });
-    let host_b = Fake::new(Behavior::Text("both answered"));
-
-    let first = {
-        let (a, host_a) = (a.clone(), host_a.clone());
-        tokio::spawn(async move {
-            run_turn(&a, a2a("first", "m1", None, None), Some(Policy::Interrupt), host_a).await
-        })
-    };
-    tool_entered.wait().await;
-    let second = {
-        let (b, host_b) = (b.clone(), host_b.clone());
-        tokio::spawn(async move {
-            run_turn(&b, a2a("second", "m2", None, None), Some(Policy::Interrupt), host_b).await
-        })
-    };
-    // B fails the lease and records itself as waiting; A sees it at its next boundary
-    let mut found = false;
-    for _ in 0..200 {
-        let info = b.lane(LANE).info().await.unwrap();
-        if info.is_some_and(|i| i.waiter.is_some()) {
-            found = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(found, "the waiter was never set");
-    waiter_set.set();
-
-    let r1 = first.await.unwrap().unwrap();
-    let r2 = second.await.unwrap().unwrap();
-    assert_eq!(r1.task.status, TaskState::Canceled);
-    assert_eq!(r1.task.data.metadata.get(INTERRUPTED_KEY), Some(&json!(true)));
-    assert_eq!(r1.task.data.metadata.get(INTERRUPTION_REASON_KEY), Some(&json!("new-message")));
-    assert_eq!(
-        serde_json::to_string(&r1.task.data.metadata).unwrap(),
-        r#"{"https://livekit.io/a2a/ext/agents/v1/interrupted":true,"https://livekit.io/a2a/ext/agents/v1/interruptionReason":"new-message"}"#
-    );
-    assert!(r1.task.data.artifacts.is_none() && r1.output.is_none());
-    assert_eq!(r1.task.data.history, vec![user_message("first", "m1", None, None)]);
-    assert_eq!(r2.task.status, TaskState::Completed);
-    assert_eq!(r2.output, Some(json!("both answered")));
-    // what ran is in the history, with no reply from the first turn
-    let items = a.lane(LANE).history().await.unwrap();
-    assert_eq!(
-        items.iter().map(kind_of).collect::<Vec<_>>(),
-        vec!["message", "function_call", "function_call_output", "message", "message"]
-    );
-    assert_eq!(text_of(&items[4].payload), "both answered");
-    assert_eq!(host_b.calls()[0].history.len(), 3, "B loaded what A committed");
-    let runs = a.lane(LANE).runs(10).await.unwrap();
-    let outcomes: Vec<_> = runs.iter().filter_map(|r| r.outcome).collect();
-    assert_eq!(outcomes.len(), 2);
-    assert!(outcomes.contains(&RunOutcome::Canceled) && outcomes.contains(&RunOutcome::Completed));
-    fx.cleanup(&[&a, &b]).await;
 }
 
 async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
@@ -597,7 +488,7 @@ async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
     let first = {
         let (a, host, opts) = (a.clone(), host.clone(), opts.clone());
         tokio::spawn(async move {
-            Turn::new(a, "worker", LANE, host, clock(), spawner(), opts)
+            Turn::new(a, "worker", PARTITION_KEY, host, clock(), spawner(), opts)
                 .run(a2a("where", "m1", Some("sms"), None), None)
                 .await
         })
@@ -606,7 +497,7 @@ async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
     let second = {
         let (b, host, opts) = (b.clone(), host.clone(), opts);
         tokio::spawn(async move {
-            Turn::new(b, "worker", LANE, host, clock(), spawner(), opts)
+            Turn::new(b, "worker", PARTITION_KEY, host, clock(), spawner(), opts)
                 .run(a2a("are you", "m2", Some("sms"), None), None)
                 .await
         })
@@ -622,7 +513,7 @@ async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
     assert_eq!(r1.answered_by, r2.task.task_id);
     assert_eq!(r2.task.status, TaskState::Completed);
     assert_eq!(r2.output, Some(json!("one reply")));
-    let items = a.lane(LANE).history().await.unwrap();
+    let items = a.partition(PARTITION_KEY).history().await.unwrap();
     let roles: Vec<ChatRole> = items
         .iter()
         .filter_map(|i| match i.kind() {
@@ -632,8 +523,8 @@ async fn the_inbox_batches_a_burst_into_one_reply(backend: Backend) {
         .collect();
     assert_eq!(roles, vec![ChatRole::User, ChatRole::Assistant]);
     assert_eq!(text_of(&items[0].payload), "where\nare you");
-    let info = a.lane(LANE).info().await.unwrap().unwrap();
-    assert_eq!((info.drained_id, info.lease_until), (2, 0));
+    let info = a.partition(PARTITION_KEY).info().await.unwrap().unwrap();
+    assert_eq!((info.drained_id, info.lease_expires_at_ms), (2, 0));
     fx.cleanup(&[&a, &b]).await;
 }
 
@@ -646,16 +537,14 @@ async fn a_message_id_resend_returns_the_existing_task(backend: Backend) {
     assert_eq!(again.task.task_id, first.task.task_id);
     assert_eq!(again.output, first.output);
     assert_eq!(again.output, Some(json!("reply to: hi")));
-    // under interrupt the task row holds the message id
-    let first = run_turn(&s, a2a("yo", "m2", None, None), Some(Policy::Interrupt), echo.clone())
-        .await
-        .unwrap();
-    let again = run_turn(&s, a2a("yo", "m2", None, None), Some(Policy::Interrupt), echo.clone())
-        .await
-        .unwrap();
+    // under queue the task row holds the message id
+    let first =
+        run_turn(&s, a2a("yo", "m2", None, None), Some(Policy::Queue), echo.clone()).await.unwrap();
+    let again =
+        run_turn(&s, a2a("yo", "m2", None, None), Some(Policy::Queue), echo.clone()).await.unwrap();
     assert_eq!(again.task.task_id, first.task.task_id);
     assert_eq!(again.run_id, None, "nothing ran");
-    assert_eq!(s.lane(LANE).history().await.unwrap().len(), 4);
+    assert_eq!(s.partition(PARTITION_KEY).history().await.unwrap().len(), 4);
     assert_eq!(echo.calls().len(), 2);
     fx.cleanup(&[&s]).await;
 }
@@ -664,8 +553,8 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
     let lease = Some((Duration::from_secs(1), Duration::from_millis(300)));
     let fx = backend.fixture(lease).await;
     let a = fx.thread().await;
-    let lane_a = a.lane(LANE);
-    let db = &lane_a;
+    let partition_a = a.partition(PARTITION_KEY);
+    let db = &partition_a;
     let message = user_message("first", "m1", Some("sms"), None);
     let data = TaskData { history: vec![message.clone()], ..TaskData::default() };
 
@@ -685,10 +574,10 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
     assert_eq!(received, Receive::Received(Some(0)));
     assert_eq!(db.pickup("AST_1").await.unwrap(), Some(TaskState::Submitted));
     drop(lease); // A dead worker also drops its renewal task.
-    // the lease is one second here; it lapses once unixepoch() moves past lease_until
+    // the lease is one second here; it lapses once unixepoch() moves past lease_expires_at_ms
     tokio::time::sleep(Duration::from_millis(2100)).await;
 
-    // worker B takes the lane for the next message: the orphan fails worker-lost, not run again
+    // worker B takes the partition for the next message: the orphan fails worker-lost, not run again
     let b = fx.thread().await;
     let host = Fake::new(Behavior::Text("answered"));
     let r2 = tokio::time::timeout(
@@ -702,7 +591,7 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
     assert_eq!(r2.task.status, TaskState::Completed);
 
     // the inbox drain picked the row up once more and found it working: a dead holder had it
-    let lost = b.lane(LANE).task("AST_1").await.unwrap().unwrap();
+    let lost = b.partition(PARTITION_KEY).task("AST_1").await.unwrap().unwrap();
     assert_eq!(lost.status, TaskState::Failed);
     let mut sm = json_of(&lost.data.status_message);
     placeholder_id(&mut sm, "messageId", "msg_");
@@ -722,7 +611,7 @@ async fn input_required_pending_call_is_the_next_messages_output(backend: Backen
     let first = run_turn(
         &s,
         a2a("my car is damaged", "m1", None, None),
-        Some(Policy::Interrupt),
+        Some(Policy::Queue),
         Fake::new(Behavior::Ask),
     )
     .await
@@ -745,11 +634,11 @@ async fn input_required_pending_call_is_the_next_messages_output(backend: Backen
 
     let host = Fake::new(Behavior::Text("thanks"));
     let second =
-        run_turn(&s, a2a("here it is", "m2", None, None), Some(Policy::Interrupt), host.clone())
+        run_turn(&s, a2a("here it is", "m2", None, None), Some(Policy::Queue), host.clone())
             .await
             .unwrap();
     assert_eq!(second.output, Some(json!("thanks")));
-    let items = s.lane(LANE).history().await.unwrap();
+    let items = s.partition(PARTITION_KEY).history().await.unwrap();
     let outputs: Vec<&FunctionCallOutput> = items
         .iter()
         .filter_map(|i| match i.kind() {
@@ -771,7 +660,7 @@ async fn input_required_pending_call_is_the_next_messages_output(backend: Backen
         3,
         "the handler sees the question, the call and the answer"
     );
-    let answered = s.lane(LANE).task(&first.task.task_id).await.unwrap().unwrap();
+    let answered = s.partition(PARTITION_KEY).task(&first.task.task_id).await.unwrap().unwrap();
     assert_eq!(answered.status, TaskState::Completed);
     assert_eq!(answered.data.metadata.get(MERGED_INTO_KEY), Some(&json!(second.task.task_id)));
     assert!(answered.internal.is_none(), "a completed row holds no pending transition");
@@ -802,8 +691,8 @@ async fn concurrent_runs_append_without_a_lease(backend: Backend) {
     let mut texts = history_texts(&a).await;
     texts.sort();
     assert_eq!(texts, vec!["fast", "one", "slow", "two"]);
-    let info = a.lane(LANE).info().await.unwrap().unwrap();
-    assert_eq!(info.lease_until, 0, "no lease was taken");
+    let info = a.partition(PARTITION_KEY).info().await.unwrap().unwrap();
+    assert_eq!(info.lease_expires_at_ms, 0, "no lease was taken");
     fx.cleanup(&[&a, &b]).await;
 }
 
@@ -848,7 +737,7 @@ async fn reject_refuses_while_a_turn_runs(backend: Backend) {
 }
 
 async fn a_submitted_row_exists_while_the_turn_runs(backend: Backend) {
-    for policy in [Policy::Interrupt, Policy::Queue, Policy::Concurrent, Policy::Reject] {
+    for policy in [Policy::Queue, Policy::Concurrent, Policy::Reject] {
         let fx = backend.fixture(None).await;
         let a = fx.thread().await;
         let b = fx.thread().await;
@@ -869,21 +758,21 @@ async fn a_submitted_row_exists_while_the_turn_runs(backend: Backend) {
         };
         entered.wait().await;
         // another worker, before the commit: the row is there, with the message
-        let lane = b.lane(LANE);
-        let during = lane.task("AST_early").await.unwrap().expect("the early row");
+        let partition_key = b.partition(PARTITION_KEY);
+        let during = partition_key.task("AST_early").await.unwrap().expect("the early row");
         let status =
             if policy == Policy::Concurrent { TaskState::Submitted } else { TaskState::Working };
         assert_eq!(during.status, status, "{policy}");
         assert_eq!(during.message_id.as_deref(), Some("m1"));
         assert_eq!(during.data.history, vec![user_message("hello", "m1", None, None)]);
-        assert_eq!(during.seq, 1);
+        assert_eq!(during.pos, 1);
         assert_eq!((during.name.as_ref(), during.internal.as_ref()), (None, None));
         assert!(during.data.metadata.is_empty());
 
         gate.set();
         let result = running.await.unwrap().unwrap();
-        let after = lane.task("AST_early").await.unwrap().unwrap();
-        assert_eq!((after.status, after.seq), (TaskState::Completed, 1), "{policy}");
+        let after = partition_key.task("AST_early").await.unwrap().unwrap();
+        assert_eq!((after.status, after.pos), (TaskState::Completed, 1), "{policy}");
         assert_eq!(result.task.task_id, "AST_early");
         assert_eq!(result.output, Some(json!("done")));
         let mut artifacts = json_of(&after.data.artifacts);
@@ -896,10 +785,14 @@ async fn a_submitted_row_exists_while_the_turn_runs(backend: Backend) {
             json!({"messageId": "msg_X", "role": "ROLE_AGENT", "parts": [{"text": "done"}],
                 "taskId": "AST_early"})
         );
-        assert_eq!(lane.tasks(None, 50).await.unwrap().len(), 1, "the commit moved the early row");
+        assert_eq!(
+            partition_key.tasks(None, 50).await.unwrap().len(),
+            1,
+            "the commit moved the early row"
+        );
         // a resend of the message inserts no second row
         let inserted = b
-            .lane(LANE)
+            .partition(PARTITION_KEY)
             .submit(&TaskWrite {
                 task_id: "AST_other".into(),
                 status: TaskState::Submitted,
@@ -933,7 +826,7 @@ async fn a_lease_timeout_fails_the_early_row(backend: Backend) {
     let short = Turn::new(
         b.clone(),
         "worker",
-        LANE,
+        PARTITION_KEY,
         Fake::new(Behavior::Echo),
         clock(),
         spawner(),
@@ -950,14 +843,24 @@ async fn a_lease_timeout_fails_the_early_row(backend: Backend) {
         json!("lease-timeout")
     );
     assert_eq!(second.run_id, None);
-    let row =
-        b.lane(LANE).task("AST_2").await.unwrap().expect("persisted, not the unwritten stand-in");
-    assert_eq!((row.status, row.seq), (TaskState::Failed, 2));
+    let row = b
+        .partition(PARTITION_KEY)
+        .task("AST_2")
+        .await
+        .unwrap()
+        .expect("persisted, not the unwritten stand-in");
+    assert_eq!((row.status, row.pos), (TaskState::Failed, 2));
     assert_eq!(row.data.history, vec![user_message("two", "m2", None, None)]);
     gate.set();
     first.await.unwrap().unwrap();
-    let mut statuses: Vec<&str> =
-        b.lane(LANE).tasks(None, 50).await.unwrap().iter().map(|t| t.status.as_str()).collect();
+    let mut statuses: Vec<&str> = b
+        .partition(PARTITION_KEY)
+        .tasks(None, 50)
+        .await
+        .unwrap()
+        .iter()
+        .map(|t| t.status.as_str())
+        .collect();
     statuses.sort();
     assert_eq!(statuses, vec!["completed", "failed"]);
     fx.cleanup(&[&a, &b]).await;
@@ -978,17 +881,23 @@ async fn a_rejected_message_leaves_no_submitted_row(backend: Backend) {
         })
     };
     entered.wait().await;
-    // the lane reads as leased, so the second is refused before any row is written
+    // the partition reads as leased, so the second is refused before any row is written
     let err = turn(&b, Fake::new(Behavior::Echo), Some(Policy::Reject))
         .run(a2a("two", "m2", None, None), Some("AST_2".into()))
         .await
         .expect_err("rejected");
     assert!(matches!(err, StorageError::Rejected { .. }), "{err}");
-    assert!(b.lane(LANE).task("AST_2").await.unwrap().is_none());
+    assert!(b.partition(PARTITION_KEY).task("AST_2").await.unwrap().is_none());
     gate.set();
     first.await.unwrap().unwrap();
-    let statuses: Vec<TaskState> =
-        b.lane(LANE).tasks(None, 50).await.unwrap().into_iter().map(|t| t.status).collect();
+    let statuses: Vec<TaskState> = b
+        .partition(PARTITION_KEY)
+        .tasks(None, 50)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.status)
+        .collect();
     assert_eq!(statuses, vec![TaskState::Completed]);
     fx.cleanup(&[&a, &b]).await;
 }
@@ -996,7 +905,6 @@ async fn a_rejected_message_leaves_no_submitted_row(backend: Backend) {
 lk_agents_storage::contract!(
     two_workers_share_one_session,
     a_failed_storage_run_preserves_its_original_task,
-    interrupt_yields_and_the_newer_task_answers_both,
     the_inbox_batches_a_burst_into_one_reply,
     a_message_id_resend_returns_the_existing_task,
     a_lapsed_lease_fails_the_orphan_worker_lost,
@@ -1029,7 +937,11 @@ async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
             json!("storage-unavailable")
         );
         assert!(history_texts(&s).await.is_empty(), "the staged turn was not committed");
-        assert_eq!(s.lane(LANE).tasks(None, 10).await.unwrap().len(), 1, "no second task");
+        assert_eq!(
+            s.partition(PARTITION_KEY).tasks(None, 10).await.unwrap().len(),
+            1,
+            "no second task"
+        );
         fx.cleanup(&[&s]).await;
     }
 }
@@ -1053,7 +965,7 @@ async fn an_unresolved_commit_answers_working_and_resolves_to_the_original_run()
     let reader = fx.thread().await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let row = loop {
-        let row = reader.lane(LANE).task("AST_1").await.unwrap().unwrap();
+        let row = reader.partition(PARTITION_KEY).task("AST_1").await.unwrap().unwrap();
         if row.status != TaskState::Working || tokio::time::Instant::now() > deadline {
             break row;
         }
@@ -1061,7 +973,11 @@ async fn an_unresolved_commit_answers_working_and_resolves_to_the_original_run()
     };
     assert_eq!(row.status, TaskState::Completed, "the original run's commit");
     assert_eq!(history_texts(&reader).await, vec!["hello", "reply to: hello"]);
-    assert_eq!(reader.lane(LANE).tasks(None, 10).await.unwrap().len(), 1, "no second task");
+    assert_eq!(
+        reader.partition(PARTITION_KEY).tasks(None, 10).await.unwrap().len(),
+        1,
+        "no second task"
+    );
     fx.cleanup(&[&s, &reader]).await;
 }
 
@@ -1075,13 +991,25 @@ async fn the_submitted_row_is_durable_before_the_debounce() {
         debounce: DebounceSpec::All(Duration::from_secs(1)),
         ..TurnOptions::default()
     };
-    let turn =
-        Turn::new(s.clone(), "worker", LANE, Fake::new(Behavior::Echo), clock(), spawner(), opts);
+    let turn = Turn::new(
+        s.clone(),
+        "worker",
+        PARTITION_KEY,
+        Fake::new(Behavior::Echo),
+        clock(),
+        spawner(),
+        opts,
+    );
     let running = tokio::spawn(async move {
         turn.run(a2a("hello", "m1", Some("sms"), None), Some("AST_1".into())).await
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let row = s.lane(LANE).task("AST_1").await.unwrap().expect("durable before the debounce");
+    let row = s
+        .partition(PARTITION_KEY)
+        .task("AST_1")
+        .await
+        .unwrap()
+        .expect("durable before the debounce");
     assert_eq!(row.status, TaskState::Submitted);
     let done = running.await.unwrap().unwrap();
     assert_eq!(done.task.status, TaskState::Completed);
@@ -1155,8 +1083,8 @@ mod attachments {
             let result = turn.run(json!({"messageId": "inline", "role": "ROLE_USER", "parts": [{"raw": "dXBsb2FkZWQgYnl0ZXM=", "mediaType": mime}]}), None).await;
             assert!(matches!(result, Err(StorageError::Invalid(_))));
         }
-        assert!(thread.lane("desk").tasks(None, 10).await.unwrap().is_empty());
-        assert!(thread.lane("desk").inbox(false).await.unwrap().is_empty());
+        assert!(thread.partition("desk").tasks(None, 10).await.unwrap().is_empty());
+        assert!(thread.partition("desk").inbox(false).await.unwrap().is_empty());
         let parts = json!([
             {"text": "review"},
             {"url": "private photo reference", "mediaType": "image/png", "filename": "photo.png"},
@@ -1179,7 +1107,7 @@ mod attachments {
         let thread = reopened.open(&created.thread_id).await.unwrap();
         let task = thread.task(&task_id).await.unwrap().unwrap();
         assert_eq!(serde_json::to_value(&task.data.history[0]).unwrap()["parts"], parts);
-        let inbox = thread.lane("desk").inbox(false).await.unwrap();
+        let inbox = thread.partition("desk").inbox(false).await.unwrap();
         assert!(inbox.is_empty(), "the successful turn drained its inbox rows");
         let durable =
             serde_json::to_string(&task).unwrap() + &serde_json::to_string(&inbox).unwrap();

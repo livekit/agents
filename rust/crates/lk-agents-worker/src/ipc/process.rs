@@ -1008,4 +1008,24 @@ mod tests {
         }
         panic!("the cancelled launch left its child alive");
     }
+
+    /// A process is charged its proportional share of the pages it shares with others (PSS),
+    /// not their full size (RSS). https://github.com/livekit/agents/pull/6082
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn memory_charges_shared_pages_proportionally() {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        // `sleep` maps the C library, which every other process here shares.
+        let child = OwnedChild(Command::new("sleep").arg("30").spawn().unwrap());
+        let pid = Pid::from_u32(child.0.id());
+        let charged = sample_memory(child.0.id()).unwrap();
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().with_memory(),
+        );
+        let resident = system.process(pid).unwrap().memory() as f64 / (1024.0 * 1024.0);
+        assert!(charged > 0.0 && charged < resident, "charged {charged} MB of {resident} MB");
+    }
 }

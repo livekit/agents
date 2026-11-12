@@ -15,6 +15,7 @@ const METHOD_KEYS: &[&str] = &[
     "origin",
     "returns",
     "annotation",
+    "overloads",
     "resolve",
     "each",
     "bind",
@@ -244,6 +245,8 @@ impl Resolver<'_> {
             MethodKind::Getter
         } else if f.sig.asyncness.is_some() {
             MethodKind::Await
+        } else if f.sig.receiver().is_none() {
+            MethodKind::StaticCall
         } else {
             MethodKind::Call
         };
@@ -333,6 +336,16 @@ impl Resolver<'_> {
             returns: voc::text(&at, &entries, "returns")?,
             each: self.each(&at, &entries)?,
             annotations: pairs("annotation")?,
+            overloads: voc::find(&entries, "overloads")
+                .map(|forms| {
+                    forms
+                        .nested
+                        .iter()
+                        .map(|form| per_parameter(&at, std::slice::from_ref(form), &form.key))
+                        .collect::<Result<_, _>>()
+                })
+                .transpose()?
+                .unwrap_or_default(),
             resolve: pairs("resolve")?,
             bind: pairs("bind")?,
             chain: flag("chain"),
@@ -341,6 +354,19 @@ impl Resolver<'_> {
         for (name, _) in adapt.annotations.iter().chain(&adapt.resolve) {
             if name != "ret" && !method.params.iter().any(|p| &p.name == name) {
                 return Err(format!("{at}: names no parameter {name}"));
+            }
+        }
+        if adapt.overloads.len() == 1 {
+            return Err(format!("{at}: overload requires at least two call forms"));
+        }
+        for overload in &adapt.overloads {
+            if !overload.iter().any(|(name, _)| name == "ret") {
+                return Err(format!("{at}: overload requires a ret annotation"));
+            }
+            for (name, _) in overload {
+                if name != "ret" && !method.params.iter().any(|p| &p.name == name) {
+                    return Err(format!("{at}: overload names no parameter {name}"));
+                }
             }
         }
         if let Some((name, _)) =

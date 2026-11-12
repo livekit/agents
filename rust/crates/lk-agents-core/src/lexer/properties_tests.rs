@@ -2,10 +2,10 @@
 //! must get from it, checked against every view under every chunking and every cut.
 
 use super::*;
-use crate::tts::markup::{Provider, ProviderExt};
+use crate::markup::{Provider, ProviderExt};
 
-const SPOKEN: View = View::Spoken { keep_markdown: false, keep_emoji: false };
-const DISPLAY: View = View::Display { keep_emoji: true };
+const SPOKEN: View = View::Spoken;
+const DISPLAY: View = View::Display;
 const VIEWS: [View; 3] = [SPOKEN, DISPLAY, View::Plain];
 
 const PROVIDERS: [Option<Provider>; 7] = [
@@ -71,8 +71,8 @@ impl Doc {
 
     fn view(&self, view: View) -> &str {
         match view {
-            View::Spoken { .. } => &self.spoken,
-            View::Display { .. } => &self.shown,
+            View::Spoken => &self.spoken,
+            View::Display => &self.shown,
             _ => &self.plain,
         }
     }

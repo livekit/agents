@@ -1,5 +1,4 @@
-"""An ``AgentHandler`` a module defines with no server, served by ``server.add()``; one with
-``lane=`` writes its own lane of the thread (docs/internals/storage.md#lanes)."""
+"""Door configuration selects persistence independently of handler grouping and routing."""
 
 from __future__ import annotations
 
@@ -7,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import AgentHandler, AgentServer
+from livekit.agents import AgentHandler, AgentServer, JobContext
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.storage import Storage
 
@@ -23,10 +22,22 @@ from .test_a2a_server import (
 pytestmark = [pytest.mark.unit]
 
 
-async def lanes_of(storage: Storage, thread_id: str) -> set[str]:
+async def call(ctx: JobContext) -> None:
+    pass
+
+
+def test_empty_partition_keys_fail_at_definition() -> None:
+    handler = AgentHandler()
+    with pytest.raises(ValueError, match="partition_key"):
+        handler.a2a_session(endpoint="text", description="text", partition_key="")(echo)
+    with pytest.raises(ValueError, match="partition_key"):
+        handler.rtc_session(partition_key="")(call)
+
+
+async def partitions_of(storage: Storage, thread_id: str) -> set[str]:
     core = await storage._open(thread_id)
     try:
-        return {lane.lane for lane in await core.lanes()}
+        return {partition_key.partition_key for partition_key in await core.partitions()}
     finally:
         core.close()
 
@@ -45,11 +56,13 @@ async def stream(http: Any, path: str, message: dict[str, Any]) -> list[dict[str
     return [r["result"] for r in sse_results(await http.post(path, json=body))]
 
 
-async def test_a_handler_with_a_lane_of_its_own(thread_storage: Storage) -> None:
+async def test_a_handler_with_a_partition_of_its_own(thread_storage: Storage) -> None:
     front_desk = AgentHandler()
     front_desk.a2a_session(endpoint="frontend", description="the front desk")(echo)
-    back_office = AgentHandler(lane="back-office")
-    back_office.a2a_session(endpoint="backend", description="the back office")(echo)
+    back_office = AgentHandler()
+    back_office.a2a_session(
+        partition_key="back-office", endpoint="backend", description="the back office"
+    )(echo)
     front = AgentServer(
         storage=thread_storage, agent_name=AGENT, api_key=API_KEY, api_secret=API_SECRET
     )
@@ -62,5 +75,5 @@ async def test_a_handler_with_a_lane_of_its_own(thread_storage: Storage) -> None
         thread_id = first[0]["task"]["contextId"]
         second = await stream(http, "/backend/v1", wire("hello", "m2", context_id=thread_id))
     assert second[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
-    # the same thread, two lanes: the worker's for one door, the other door's own
-    assert await lanes_of(thread_storage, thread_id) == {AGENT, "back-office"}
+    # the same thread, two partitions: the worker's for one door, the other door's own
+    assert await partitions_of(thread_storage, thread_id) == {"default", "back-office"}

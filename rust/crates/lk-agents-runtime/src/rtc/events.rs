@@ -451,7 +451,8 @@ pub struct RoomRpcRouter(Mutex<Routes>);
 #[derive(Default)]
 struct Routes {
     next: u64,
-    callers: std::collections::BTreeMap<String, (u64, Arc<dyn RpcCallback>)>,
+    /// By method, then caller.
+    callers: std::collections::BTreeMap<(String, String), (u64, Arc<dyn RpcCallback>)>,
 }
 
 impl lk_agents_abi::voice::rtc::ports::RoomRpcRouter for RoomRpcRouter {
@@ -461,29 +462,32 @@ impl lk_agents_abi::voice::rtc::ports::RoomRpcRouter for RoomRpcRouter {
 }
 
 impl lk_agents_abi::voice::rtc::ports::RpcRoutes for RoomRpcRouter {
-    fn insert(&self, caller: String, callback: Arc<dyn RpcCallback>) -> u64 {
+    fn insert(&self, method: &str, caller: String, callback: Arc<dyn RpcCallback>) -> u64 {
         let (registration, retired) = {
             let mut state = self.0.lock();
             state.next += 1;
             let registration = state.next;
-            (registration, state.callers.insert(caller, (registration, callback)))
+            let key = (method.to_owned(), caller);
+            (registration, state.callers.insert(key, (registration, callback)))
         };
         drop(retired);
         registration
     }
-    fn remove(&self, caller: &str, registration: u64) {
+    fn remove(&self, method: &str, caller: &str, registration: u64) {
+        let key = (method.to_owned(), caller.to_owned());
         let retired = {
             let mut state = self.0.lock();
-            if state.callers.get(caller).is_some_and(|(id, _)| *id == registration) {
-                state.callers.remove(caller)
+            if state.callers.get(&key).is_some_and(|(id, _)| *id == registration) {
+                state.callers.remove(&key)
             } else {
                 None
             }
         };
         drop(retired);
     }
-    fn call(&self, caller: &str, payload: &str) -> String {
-        let callback = self.0.lock().callers.get(caller).map(|(_, callback)| callback.clone());
+    fn call(&self, method: &str, caller: &str, payload: &str) -> String {
+        let key = (method.to_owned(), caller.to_owned());
+        let callback = self.0.lock().callers.get(&key).map(|(_, callback)| callback.clone());
         callback.map_or_else(|| "reject".to_owned(), |callback| callback.call(caller, payload))
     }
 }
@@ -497,15 +501,25 @@ mod router_tests {
     fn independent_rooms_and_stale_registration_cleanup_do_not_cross_route() {
         let first = RoomRpcRouter::default();
         let second = RoomRpcRouter::default();
-        let old = first.insert("agent".into(), RpcHandler::new(|_, _| "first".into()));
-        second.insert("agent".into(), RpcHandler::new(|_, _| "second".into()));
-        assert_eq!(first.call("agent", ""), "first");
-        assert_eq!(second.call("agent", ""), "second");
-        let current = first.insert("agent".into(), RpcHandler::new(|_, _| "replacement".into()));
-        first.remove("agent", old);
-        assert_eq!(first.call("agent", ""), "replacement");
-        first.remove("agent", current);
-        assert_eq!(first.call("agent", ""), "reject");
-        assert_eq!(second.call("agent", ""), "second");
+        let old = first.insert("m", "agent".into(), RpcHandler::new(|_, _| "first".into()));
+        second.insert("m", "agent".into(), RpcHandler::new(|_, _| "second".into()));
+        assert_eq!(first.call("m", "agent", ""), "first");
+        assert_eq!(second.call("m", "agent", ""), "second");
+        let current =
+            first.insert("m", "agent".into(), RpcHandler::new(|_, _| "replacement".into()));
+        first.remove("m", "agent", old);
+        assert_eq!(first.call("m", "agent", ""), "replacement");
+        first.remove("m", "agent", current);
+        assert_eq!(first.call("m", "agent", ""), "reject");
+        assert_eq!(second.call("m", "agent", ""), "second");
+    }
+
+    #[test]
+    fn one_caller_has_a_route_per_method() {
+        let router = RoomRpcRouter::default();
+        router.insert("started", "avatar".into(), RpcHandler::new(|_, _| "started".into()));
+        router.insert("finished", "avatar".into(), RpcHandler::new(|_, _| "finished".into()));
+        assert_eq!(router.call("started", "avatar", ""), "started");
+        assert_eq!(router.call("finished", "avatar", ""), "finished");
     }
 }

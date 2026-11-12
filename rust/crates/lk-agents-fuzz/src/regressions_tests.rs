@@ -66,10 +66,18 @@ mod avatar;
 mod avatar_lifecycle;
 #[path = "conversation_tests.rs"]
 mod conversation;
+#[path = "end_of_turn_tests.rs"]
+mod end_of_turn;
 #[path = "input_tests.rs"]
 mod input;
+#[path = "interruption_tests.rs"]
+mod interruption;
+#[path = "legacy_transcription_tests.rs"]
+mod legacy_transcription;
 #[path = "metrics_tests.rs"]
 mod metrics;
+#[path = "output_failure_tests.rs"]
+mod output_failure;
 #[path = "realtime_lifecycle_tests.rs"]
 mod realtime_lifecycle;
 #[path = "realtime_tools_tests.rs"]
@@ -78,8 +86,12 @@ mod realtime_tools;
 mod realtime_turns;
 #[path = "recording_tests.rs"]
 mod recording;
+#[path = "remote_session_tests.rs"]
+mod remote_session;
 #[path = "room_io_tests.rs"]
 mod room_io;
+#[path = "room_registration_tests.rs"]
+mod room_registration;
 #[path = "session_resources_tests.rs"]
 mod session_resources;
 #[path = "session_state_tests.rs"]
@@ -98,5 +110,7 @@ mod tool_call_segments;
 mod tools;
 #[path = "transcript_text_tests.rs"]
 mod transcript_text;
+#[path = "user_away_tests.rs"]
+mod user_away;
 #[path = "user_turn_tests.rs"]
 mod user_turn;

@@ -9,14 +9,12 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
     APITimeoutError,
     http,
-    tokenize,
     tts,
     utils,
 )
@@ -183,8 +181,6 @@ class TTS(tts.TTS):
         language_boost: TTSLanguageBoost | None = None,
         sample_rate: TTSSampleRate = 24000,
         bitrate: TTSBitRate = 128000,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        text_pacing: tts.SentenceStreamPacer | bool = False,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: http.HttpSession | None = None,
@@ -212,8 +208,6 @@ class TTS(tts.TTS):
             timbre (int | None, optional): Corresponds to the "Nasal/Crisp" slider on the official page. Range: [-100, 100].
             sample_rate (TTSSampleRate, optional): The audio sample rate in Hz. Defaults to 24000.
             bitrate (TTSBitRate, optional): The audio bitrate in kbps. Defaults to 128000.
-            tokenizer (NotGivenOr[tokenize.SentenceTokenizer], optional): The sentence tokenizer to use. Defaults to `livekit.agents.tokenize.SentenceTokenizer`.
-            text_pacing (tts.SentenceStreamPacer | bool, optional): Enable text pacing for sentence-level timing control. Defaults to False.
             api_key (str | None, optional): The Minimax API key. Defaults to None.
             base_url (NotGivenOr[str], optional): The base URL for the Minimax API. Defaults to NOT_GIVEN.
             http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
@@ -250,16 +244,6 @@ class TTS(tts.TTS):
                 f'"fluent" emotion is only supported by speech-2.6-* models, '
                 f'but got model "{model}". Please use speech-2.6-hd or speech-2.6-turbo.'
             )
-
-        self._sentence_tokenizer = (
-            tokenizer if utils.is_given(tokenizer) else tokenize.SentenceTokenizer()
-        )
-
-        self._stream_pacer: tts.SentenceStreamPacer | None = None
-        if text_pacing is True:
-            self._stream_pacer = tts.SentenceStreamPacer()
-        elif isinstance(text_pacing, tts.SentenceStreamPacer):
-            self._stream_pacer = text_pacing
 
         self._opts = _TTSOptions(
             model=model,
@@ -368,23 +352,19 @@ class TTS(tts.TTS):
     async def _close_ws(self, ws: http.WebSocket) -> None:
         await ws.close()
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             get_session=self._ensure_session,
             opts=replace(self._opts),
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
-            sentence_tokenizer=self._sentence_tokenizer,
-            stream_pacer=self._stream_pacer,
             connect_ws=self._connect_ws,
             close_ws=self._close_ws,
             opts=replace(self._opts),
@@ -405,8 +385,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
         self,
         *,
-        sentence_tokenizer: tokenize.SentenceTokenizer,
-        stream_pacer: tts.SentenceStreamPacer | None,
         connect_ws: Callable[[APIConnectOptions], Awaitable[http.WebSocket]],
         close_ws: Callable[[http.WebSocket], Awaitable[None]],
         opts: _TTSOptions,
@@ -416,8 +394,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = opts
-        self._sentence_tokenizer = sentence_tokenizer
-        self._stream_pacer = stream_pacer
         self._connect_ws = connect_ws
         self._close_ws = close_ws
 
@@ -434,27 +410,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        sentence_stream = self._sentence_tokenizer.stream()
-        if self._stream_pacer:
-            sentence_stream = self._stream_pacer.wrap(
-                sent_stream=sentence_stream,
-                audio_emitter=output_emitter,
-            )
-
         task_started = asyncio.Future[None]()
 
         read_deadline = self._core_attempts
 
-        async def _input_task() -> None:
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    sentence_stream.flush()
-                    continue
-
-                sentence_stream.push_text(data)
-            sentence_stream.end_input()
-
-        async def _sentence_stream_task(ws: http.WebSocket) -> None:
+        async def _send_task(ws: http.WebSocket) -> None:
             start_msg = _to_minimax_options(self._opts)
             start_msg["event"] = "task_start"
             await ws.send_str(json.dumps(start_msg))
@@ -462,9 +422,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             read_deadline.expect_response()
             await task_started
 
-            async for sentence in sentence_stream:
+            async for data in self.input:
+                if isinstance(data, self.Flush):
+                    continue
                 self.mark_started()
-                await ws.send_str(json.dumps({"event": "task_continue", "text": sentence.token}))
+                await ws.send_str(json.dumps({"event": "task_continue", "text": data.text}))
                 read_deadline.expect_response()
 
             await ws.send_str(json.dumps({"event": "task_finish"}))
@@ -555,8 +517,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             ws = await self._connect_ws(self._conn_options)
             tasks = [
-                asyncio.create_task(_input_task()),
-                asyncio.create_task(_sentence_stream_task(ws)),
+                asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),
             ]
 
@@ -564,7 +525,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await self._close_ws(ws)
-                await sentence_stream.aclose()
                 await utils.aio.cancel_and_wait(*tasks)
 
         except APIError:

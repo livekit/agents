@@ -1,11 +1,3 @@
-/// Returned because the sentence tokenizer lives outside this crate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SentenceTokenizerConfig {
-    pub max_token_len: Option<usize>,
-    /// Under expressive, sentences batch up to `max_token_len` rather than a spoken minimum.
-    pub batch_to_max: bool,
-}
-
 /// The selected provider dialect, retained in resource descriptions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Markup(pub Option<Provider>);
@@ -257,10 +249,4 @@ pub trait MarkupClass: Send + Sized + 'static {
         &self,
         #[host(kw, default = None)] speech_steering: Option<SpeechSteering>,
     ) -> Option<String>;
-    /// Fix common LLM markup mistakes (e.g. unclosed self-closing tags).
-    #[host(call)]
-    fn normalize(&self, text: String) -> String;
-    /// Lower the framework's markup to the provider's native syntax.
-    #[host(call)]
-    fn convert(&self, text: String) -> String;
 }

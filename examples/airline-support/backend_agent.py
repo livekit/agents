@@ -21,6 +21,8 @@ from livekit.agents import (
     InputRequired,
     RunContext,
     RunResult,
+    SessionState,
+    TextSession,
     ToolError,
     persisted,
 )
@@ -167,6 +169,7 @@ skyline = Skyline.seeded()
 
 @dataclass
 class SupportContext:
+    session: SessionState = persisted(default_factory=SessionState)
     ticket: Ticket = persisted(default_factory=Ticket)
 
 
@@ -325,10 +328,11 @@ async def continue_request(
     return outcome
 
 
-back_office = AgentHandler(lane="backend")
+back_office = AgentHandler()
 
 
 @back_office.a2a_session(
+    partition_key="backend",
     endpoint="backend",
     description="Skyline Air's back office: bookings, claims, baggage, refunds and payments.",
     inbox="queue",
@@ -336,6 +340,7 @@ back_office = AgentHandler(lane="backend")
 async def text(ctx: A2ASessionContext) -> RunResult[str]:
     app = SupportContext()
     await ctx.store.load_context(app)
-    result = await backend.run(ctx.message, message_history=ctx.message_history, context=app)
-    await ctx.store.save_context(app)
-    return result
+    binding = ctx.store.bind(app)
+    turn = await TextSession(agent=backend).run(ctx.message, context=binding)
+    await ctx.store.save_context(app)  # Business fields are saved explicitly.
+    return turn.result

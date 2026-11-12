@@ -157,7 +157,16 @@ impl VoiceDriver {
             }
         }
         let committed = items.len();
-        for item in items {
+        for mut item in items {
+            // A cut turn's output that lands late goes right after its call's group, its call
+            // committed just before it: before what was said since, as a provider reads a tool's
+            // result right after its call.
+            if let ChatItem::FunctionCallOutput(output) = &mut item
+                && interrupted
+                && let Some(end) = self.session.chat_ctx.call_group_end(&output.call_id)
+            {
+                output.created_at = end;
+            }
             let source = if matches!(item, ChatItem::FunctionCall(_)) {
                 Source::ToolCall { speech, step }
             } else {

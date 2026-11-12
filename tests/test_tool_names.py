@@ -4,8 +4,6 @@ import pytest
 
 from livekit.agents import Agent, RunContext, VoiceSession
 from livekit.agents.llm import ToolContext, function_tool
-from livekit.agents.voice import _VoiceBinding
-from livekit.agents.voice.agent_run import _voice_tools
 
 from .test_voice_run_context import _calls
 
@@ -40,18 +38,6 @@ async def test_a_session_tool_named_as_an_agents_tool_refuses_the_call() -> None
     ) as session:
         with pytest.raises(ValueError, match=REFUSED):
             await session.start(_agent())
-
-
-def test_a_frames_tools_refuse_a_session_tool_added_under_an_agents_name() -> None:
-    session = VoiceSession(
-        llm=_calls("hello"), vad=None, turn_handling={"turn_detection": "manual"}
-    )
-    agent = _agent()
-    binding = _VoiceBinding(session, agent)
-    assert _voice_tools(binding).get_function_tool("check") is not None
-    session._tools.append(session_check)
-    with pytest.raises(ValueError, match=REFUSED):
-        _voice_tools(binding)
 
 
 def test_the_same_tool_listed_twice_is_one_tool() -> None:

@@ -194,7 +194,7 @@ pub fn constants(krate: &Crate, index: usize, module: &Module) -> Result<Vec<Con
         }
     }
     let mut out = Vec::new();
-    for item in &module.items {
+    for (item_index, item) in module.items.iter().enumerate() {
         let syn::Item::Const(item) = item else {
             continue;
         };
@@ -202,7 +202,27 @@ pub fn constants(krate: &Crate, index: usize, module: &Module) -> Result<Vec<Con
         let Some(constant) = voc::find(&entries, "constant") else {
             continue;
         };
-        voc::only(&module.file, &constant.nested, &["name", "path", "proto_enum"])?;
+        voc::only(&module.file, &constant.nested, &["name", "path", "proto_enum", "native"])?;
+        if voc::find(&constant.nested, "native").is_some() {
+            if !matches!(item.ty.as_ref(), syn::Type::Reference(reference)
+                if matches!(reference.elem.as_ref(), syn::Type::Path(path) if path.path.is_ident("str")))
+                || voc::find(&constant.nested, "proto_enum").is_some()
+            {
+                return Err("a native constant must be a string constant".into());
+            }
+            out.push(Constant {
+                name: voc::text(&module.file, &constant.nested, "name")?
+                    .unwrap_or_else(|| item.ident.to_string()),
+                module: target
+                    .clone()
+                    .ok_or_else(|| format!("{}: constant needs file(module = ..)", module.file))?,
+                path: voc::text(&module.file, &constant.nested, "path")?,
+                source: module.file.clone(),
+                doc: lk_agents_bindgen::doc(&item.attrs),
+                value: ConstValue::NativeString { rust: krate.extern_path(index, item_index)? },
+            });
+            continue;
+        }
         let resolved = krate.constant(index, &item.expr)?;
         let proto_enum = voc::text(&module.file, &constant.nested, "proto_enum")?;
         let value = match (&resolved, proto_enum) {

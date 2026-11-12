@@ -16,9 +16,6 @@ what was markup.
 | a link `[text](url)` | the text | the link | `text (url)` |
 | an emoji | nothing | it | it |
 
-Markdown and emoji are spoken as written when their `tts_text_transforms` are off (see
-[Markdown and emoji](#markdown-and-emoji)).
-
 ## What the model writes that is not for the person
 
 Models write things a person must never hear: their reasoning, their chat template's tokens, the
@@ -59,10 +56,15 @@ on and removed when it is off.
 
 Each voice lowers the markers to what it supports (Cartesia's `<emotion>`, `<speed>` and `<spell>`,
 Inworld's and Fish Audio's bracket cues, xAI's wrapping tags, Gemini's inline sounds and its part
-style) and drops what it does not, keeping the words. A bracket cue a voice echoes in its
-word timestamps is dropped from the transcript there, since it reaches the transcript as audio
-alignment, not as text the lexer read. The voice's own native tags, written by the
-model or by you in `say()` text, are markup too and reach that voice as its own.
+style) and drops what it does not, keeping the words. The voice's own native tags, written by the
+model or by you in `say()` text, are markup too and reach that voice as its own; a voice with no
+dialect is sent the words alone.
+
+Lowering writes two things for each chunk: the text the provider is sent and the words it says.
+The words are what its audio is aligned to, so a cue such as `[laugh]` is never shown as a spoken
+word, and a bracketed phrase that is prose (`see [the docs]`) is never taken for a cue. A cue a
+voice echoes in its own word timestamps matches no word the transcript holds, so the transcript
+skips it.
 
 Only these are markup: `<expr>`, which is reserved, and the active TTS's native tags. Anything
 else stays as written: `a<b`, `<3`, `x > y`, your own `<b>bold</b>`. A marker the model botched
@@ -76,16 +78,15 @@ whatever expressive mode later turns into.
 
 ## Markdown and emoji
 
-`tts_text_transforms` chooses what the voice says of them; it never changes the transcript.
+The voice never says markdown syntax or emoji; the transcript keeps both as written.
 
-- `"filter_markdown"` (on by default): markdown syntax is not spoken, struck text and fenced
-  code are not spoken, inline code is spoken without its backticks, a link is spoken as its text.
-  Headings, list items, quotes, rules and fences count only at the start of a line; emphasis needs
-  its closer on the same line and is not read inside a word (`2*3*4`, `snake_case`) or with
-  blanks inside its delimiters (`5 * 3`).
-- `"filter_emoji"` (on by default): emoji are not spoken.
+- Markdown syntax is not spoken, struck text and fenced code are not spoken, inline code is spoken
+  without its backticks, a link is spoken as its text. Headings, list items, quotes, rules and
+  fences count only at the start of a line; emphasis needs its closer on the same line and is not
+  read inside a word (`2*3*4`, `snake_case`) or with blanks inside its delimiters (`5 * 3`).
+- Emoji are not spoken.
 
-Off, they are spoken as written. Code is literal: markup quoted inside backticks is not markup.
+Code is literal: markup quoted inside backticks is not markup.
 
 ## The transcript
 
@@ -104,8 +105,9 @@ records or plain strings; a `TranscriptionOutput` reads them through `capture_tr
 A plain string handed to the chain (by a node or a custom output) never went through the reply's
 reading, so its markup, any provider's tags, is taken out where it enters and its delivery kept.
 
-With `use_tts_aligned_transcript`, the voice's own word timings pace the transcript, and the
-transcript keeps its own text: each timed word is matched to the next spoken word, silent text
+A voice that times its words (Cartesia, Inworld and ElevenLabs send their word timings, and
+LiveKit Inference asks for them by default; a voice behind `StreamAdapter` is timed sentence by
+sentence) paces the transcript by those timings, and the transcript keeps its own text: each timed word is matched to the next spoken word, silent text
 shows at the timing of the word after it, and a word the voice rewrote keeps its place. A voice
 that reads `$5` as "five dollars" times `$5` across both of its words; one that matches nothing
 nearby is mapped by position after four words, so the transcript never drifts far.
@@ -115,11 +117,21 @@ what was heard: no markdown, no markup, the code and links kept, struck text gon
 
 ## Sentences for the voice
 
-The TTS is fed the spoken text sentence by sentence, batched so short sentences are not spoken
-alone and, with `text_pacing`, held back while audio is still playing so each synthesis gets more
-context and sounds more natural; see [Sentences and pacing](models.md#sentences-and-pacing). A
-sentence never ends inside a tag or inside a wrapping marker's span: it waits for the rest. That
-holds for the default splitter and for a `sentence_tokenizer` of your own on `tts.StreamAdapter`.
+Every TTS is fed through the same stage: the session's voice, a `tts.stream()` or `synthesize()`
+of your own, a plugin, a `StreamAdapter`, each member of a `FallbackAdapter`. The stage splits the
+text into chunks, paces them, and lowers each chunk to the provider's syntax; the provider only
+sends what it receives. See [Sentences and pacing](models.md#sentences-and-pacing).
+
+- Chunks are sentences, batched so short ones are not spoken alone; a provider that buffers text
+  itself is sent words. `tts.options.sentence_tokenizer` decides the sentences: the built-in
+  `tokenize.SentenceTokenizer()` by default, configurable, or a subclass of your own.
+- A chunk never ends inside a tag or inside a wrapping marker's span: it waits for the rest, at
+  most 600 characters.
+- No chunk passes the provider's request limit: a longer sentence is cut at its last clause mark
+  or word boundary before it, never inside a tag (1000 characters for a provider that declares no
+  limit), and pacing never joins chunks past it.
+- `tts.options.pacing` holds later chunks back while audio is still playing, so each request
+  carries more context and sounds more natural; the first goes at once.
 
 ## How long text is held
 
@@ -134,6 +146,7 @@ out to be markup. The holds are bounded, so the voice never waits on the reader:
 | inline markdown (emphasis, code, link, strike) | its closer, on the same line, at most 160 bytes |
 | a line marker (heading, list, rule, fence) | its line shows which, at most 160 bytes |
 | a wrapping marker with no closer | the sentence splitter waits at most 600 characters |
+| a sentence that does not end | the provider's request limit, else 1000 characters |
 | reasoning | hidden as it arrives; only a delimiter's first characters are held |
 
 ## Design

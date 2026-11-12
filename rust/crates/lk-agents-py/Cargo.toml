@@ -61,5 +61,10 @@ path = "src/py_bindings_tests.rs"
 name = "py_adapters"
 path = "src/py_adapter_tests.rs"
 
+# The host-boundary benchmark, kept with the other benchmarks: `make bench-host`.
+[[test]]
+name = "host_bench"
+path = "../../../bench/host.rs"
+
 [lints]
 workspace = true

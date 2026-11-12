@@ -220,6 +220,32 @@ async fn keeps_the_idle_processes_warm_and_replaces_the_one_a_job_takes() {
     assert!(pool.processes().is_empty());
 }
 
+/// With no idle processes configured, a job starts one process on demand and runs on it.
+/// https://github.com/livekit/agents/pull/763
+#[tokio::test]
+async fn a_pool_without_idle_processes_starts_one_for_a_job() {
+    let host = Arc::new(Host::default());
+    let pool = pool(&host, 0);
+    pool.start().await.unwrap();
+    assert_eq!(count(&host, ProcessEvent::Ready), 0, "nothing is prewarmed");
+    let launch = pool.launch_job(job("j1"), telemetry::Cx::NONE);
+    tokio::time::timeout(Duration::from_secs(1), launch)
+        .await
+        .expect("the job waited for a warm process that is never started")
+        .unwrap();
+    let launched: Vec<usize> = host
+        .events
+        .lock()
+        .iter()
+        .filter(|(event, _)| *event == ProcessEvent::JobLaunched)
+        .map(|(_, process)| *process)
+        .collect();
+    assert_eq!(launched, vec![0], "the job runs on the process started for it");
+    tokio::time::sleep(REFILL_INTERVAL * 3).await;
+    assert_eq!(count(&host, ProcessEvent::Ready), 1, "no process is kept warm afterwards");
+    pool.aclose().await;
+}
+
 #[tokio::test]
 async fn exited_warm_process_is_never_assigned_to_a_job() {
     let host = Arc::new(Host::default());

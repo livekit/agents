@@ -20,18 +20,22 @@ pub enum StorageStep {
         result: Result<(), StorageError>,
         delivered: bool,
     },
-    /// A lease take found the lane held by a lease whose owner last sent a request (a renewal,
+    /// A lease take found the partition held by a lease whose owner last sent a request (a renewal,
     /// commit or release) or took it this long ago.
-    LaneHeld {
+    PartitionHeld {
         idle_ms: u64,
     },
-    /// What the lane held once the store closed: runs started and never ended, whether a lease
+    /// What the partition held once the store closed: runs started and never ended, whether a lease
     /// is still held, and whether a fault that can cost ownership (an outage, a write never
     /// applied) was injected.
-    LaneSettled {
+    PartitionSettled {
         unended: u32,
         held: bool,
         faulted: bool,
+    },
+    /// What the partition saved once the store closed: its items' ids, in the thread's order.
+    Saved {
+        items: Vec<String>,
     },
     /// The fake database holds a request's answer this long on purpose (a slow lease take).
     Slowed {
@@ -41,8 +45,8 @@ pub enum StorageStep {
     Fault {
         fault: StorageFault,
     },
-    /// A write carrying a lease token another worker stole, while that worker held the lane:
-    /// whether it changed the lane (its version moved).
+    /// A write carrying a lease token another worker stole, while that worker held the partition:
+    /// whether it changed the partition (its version moved).
     StaleWrite {
         applied: bool,
     },
@@ -58,9 +62,9 @@ pub enum StorageFault {
     /// The database's worker crashed with a write applied and unanswered; the next request
     /// reopens the file (WAL recovery).
     Crash,
-    /// Another worker's connection took the free lane and held it, renewing.
+    /// Another worker's connection took the free partition and held it, renewing.
     Held,
-    /// Another worker's connection overwrote the lane's lease while the call held it.
+    /// Another worker's connection overwrote the partition's lease while the call held it.
     Stolen,
 }
 

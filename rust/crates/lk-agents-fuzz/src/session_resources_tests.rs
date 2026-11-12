@@ -733,11 +733,13 @@ mod sink_reset_reports_cut {
         let inputs = [
             Input::GenerateReply { user_input: None, instructions: None, allow: None },
             Input::Advance { ms: Millis(20) },
-            Input::LlmText { chat: Ref::new(0), text: text("Sure, I can") },
+            // the next text decides the first sentence, which goes to the voice on its own
+            Input::LlmText { chat: Ref::new(0), text: text("Sure, I can help with that.") },
+            Input::LlmText { chat: Ref::new(0), text: text(" Let me") },
             Input::Advance { ms: Millis(20) },
             Input::PlayoutStarted { segment: Ref::new(0) },
             Input::SinkReset { output: Ref::new(0) },
-            Input::LlmText { chat: Ref::new(0), text: text(" help with that.") },
+            Input::LlmText { chat: Ref::new(0), text: text(" look it up.") },
             Input::LlmEnd { chat: Ref::new(0) },
             Input::Advance { ms: Millis(20) },
             Input::PlayoutStarted { segment: Ref::new(1) },
@@ -959,13 +961,13 @@ mod hung_voice_held_to_the_close {
     }
 }
 
-mod lane_wait_ends_with_the_speech {
-    //! A speech waiting on the voice lane stops waiting once interrupted: the session's close is
+mod partition_wait_ends_with_the_speech {
+    //! A speech waiting on the voice partition stops waiting once interrupted: the session's close is
     //! not held to its cleanup bound by a lease take that has not answered.
     use lk_agents_fuzz::drive::{Ending, Outcome, Run, Setup, StorageSetup, finish, simulate};
     use lk_agents_fuzz::input::{Input, Millis};
 
-    // Catches: the speech's `acquire` awaited unraced, so a lane another holder kept (or a take
+    // Catches: the speech's `acquire` awaited unraced, so a partition another holder kept (or a take
     // answered late) kept the interrupted speech's task waiting past the close's cleanup bound
     // (`every_task_finishes`, survey seeds 1605, 1995, 4927).
     #[test]
@@ -982,7 +984,7 @@ mod lane_wait_ends_with_the_speech {
                 }
                 run.apply(&Input::Advance { ms: Millis(1) }).await;
             }
-            assert!(run.lease_take_unanswered(), "the turn never took the lane");
+            assert!(run.lease_take_unanswered(), "the turn never took the partition_key");
             run.apply(&Input::Close { drain: false }).await;
             run.apply(&Input::Advance { ms: Millis(40_000) }).await;
             finish(run, Outcome::default()).await
@@ -1022,5 +1024,46 @@ mod hung_voice_read_is_waited_on {
             finish(run, Outcome::default()).await
         });
         assert_eq!(outcome.ending, Ending::Completed, "{:#?}", outcome.failures);
+    }
+}
+
+mod recording_is_what_played {
+    //! The recorder writes the session's recording on the real timeline: the agent channel holds
+    //! the reply wherever the speaker reported it played.
+    use lk_agents_fuzz::drive::{Case, Setup, run};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
+
+    // Catches: the 24 kHz voice's resampled tail written over as silence when the writer passed
+    // the resampler's output on a stall, then dropped as late (~20 ms hole near each reply's end).
+    #[test]
+    fn a_resampled_reply_has_no_hole_in_the_recording() {
+        let say = |text: &str| Input::Say {
+            text: AgentText(text.into()),
+            input: SayInput::Words,
+            allow: None,
+            to_ctx: true,
+        };
+        let outcome = run(Case {
+            setup: Setup::default(),
+            inputs: vec![
+                Input::Recorder { attach: true },
+                say("Hello there, how can I help you today?"),
+                Input::Advance { ms: Millis(100) },
+                Input::PlayoutStarted { segment: Ref::new(0) },
+                Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(700) },
+                Input::Advance { ms: Millis(700) },
+                Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(10_000) },
+                Input::PlayoutFinished { segment: Ref::new(0) },
+                Input::Advance { ms: Millis(3_000) },
+                say("Anything else?"),
+                Input::Advance { ms: Millis(100) },
+                Input::PlayoutStarted { segment: Ref::new(1) },
+                Input::PlayoutFinished { segment: Ref::new(1) },
+                Input::Advance { ms: Millis(3_000) },
+            ],
+            ..Case::default()
+        });
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
+        assert!(outcome.expectations.get("recording_is_what_played").is_some_and(|n| *n > 0));
     }
 }

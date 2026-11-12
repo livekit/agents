@@ -23,6 +23,8 @@ from livekit.agents import (
     InputRequired,
     RunContext,
     RunResult,
+    SessionState,
+    TextSession,
     ToolError,
     persisted,
 )
@@ -30,7 +32,7 @@ from livekit.agents.a2a import A2ASessionContext
 
 
 class Caller(BaseModel):
-    """What the back office keeps about the caller across turns, on its lane."""
+    """What the back office keeps about the caller across turns, in its persistence partition."""
 
     verification_attempts: int = 0
     booking_active: bool = False
@@ -56,6 +58,7 @@ class RoomDraft(BaseModel):
 @dataclass
 class HotelContext:
     hotel: Hotel
+    session: SessionState = persisted(default_factory=SessionState)
     caller: Caller = persisted(default_factory=Caller)
     draft: RoomDraft = persisted(default_factory=RoomDraft)
 
@@ -301,7 +304,7 @@ def known(ctx: RunContext[HotelContext]) -> str:
 
 
 def verified(ctx: RunContext[HotelContext]) -> Booking | None:
-    """The guest's booking from the lane's state, verified earlier in the conversation."""
+    """The guest's booking from the partition's state, verified earlier in the conversation."""
     code = ctx.context.caller.verified_code
     booking = (
         next((b for b in ctx.context.hotel.bookings if b.code == code), None) if code else None
@@ -398,10 +401,11 @@ async def cancel_room_booking(ctx: RunContext[HotelContext]) -> str:
 
 
 hotel = Hotel.seeded()
-back_office = AgentHandler(lane="backend")
+back_office = AgentHandler()
 
 
 @back_office.a2a_session(
+    partition_key="backend",
     endpoint="backend",
     description="The LiveKit Hotel's back office: rooms and bookings.",
     inbox="queue",
@@ -409,6 +413,7 @@ back_office = AgentHandler(lane="backend")
 async def text(ctx: A2ASessionContext) -> RunResult[str]:
     app = HotelContext(hotel=hotel)
     await ctx.store.load_context(app)
-    result = await backend.run(ctx.message, message_history=ctx.message_history, context=app)
-    await ctx.store.save_context(app)
-    return result
+    binding = ctx.store.bind(app)
+    turn = await TextSession(agent=backend).run(ctx.message, context=binding)
+    await ctx.store.save_context(app)  # Business fields are saved explicitly.
+    return turn.result

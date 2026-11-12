@@ -6,6 +6,7 @@ use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
+use lk_agents_core::lexer::Vocabulary;
 use lk_agents_core::usage::ModelKind;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::events::SessionEvent;
@@ -14,7 +15,7 @@ pub(super) use lk_agents_voice::generation::machine::llm::LlmGenerationData;
 use lk_agents_voice::generation::machine::llm::{LlmRead, before_read};
 use lk_agents_voice::generation::{GenEvent, ReplySource};
 use lk_agents_voice::trace::{FailureClass, GenerationStep, ProviderKind};
-use lk_agents_voice::transcription::{SpeechViews, Visible};
+use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -35,20 +36,20 @@ pub(super) async fn produce_segments(
         }
         ReplySource::Text(text) => {
             if !text.is_empty() {
-                send_segment(&tx, text, &ctx.views(shared));
+                send_segment(&tx, text, &ctx.vocab(shared));
             }
         }
         // The caller's frames are the segment, with words or without.
-        ReplySource::Audio { text, .. } => send_segment(&tx, text, &ctx.views(shared)),
-        ReplySource::TextStream => forward_text_stream(handle, &tx, &ctx.views(shared)).await,
+        ReplySource::Audio { text, .. } => send_segment(&tx, text, &ctx.vocab(shared)),
+        ReplySource::TextStream => forward_text_stream(handle, &tx, &ctx.vocab(shared)).await,
     }
-    let views = ctx.views(shared);
-    (Ok(LlmGenerationData::new(shared.time.wall_secs(), String::new(), None, views)), tools)
+    let vocab = ctx.vocab(shared);
+    (Ok(LlmGenerationData::new(shared.time.wall_secs(), String::new(), None, vocab)), tools)
 }
 
 /// One whole segment. A closed receiver means the voice gave up; dropping the chunk is right.
-fn send_segment(tx: &mpsc::UnboundedSender<SpeechSegmentEvent>, text: &str, views: &SpeechViews) {
-    let _ = tx.send(SpeechSegmentEvent::Chunk(Visible::of(text, views)));
+fn send_segment(tx: &mpsc::UnboundedSender<SpeechSegmentEvent>, text: &str, vocab: &Vocabulary) {
+    let _ = tx.send(SpeechSegmentEvent::Chunk(Visible::of(text, vocab)));
     let _ = tx.send(SpeechSegmentEvent::End);
 }
 
@@ -58,7 +59,7 @@ fn send_segment(tx: &mpsc::UnboundedSender<SpeechSegmentEvent>, text: &str, view
 async fn forward_text_stream(
     handle: &SpeechHandle,
     tx: &mpsc::UnboundedSender<SpeechSegmentEvent>,
-    views: &SpeechViews,
+    vocab: &Vocabulary,
 ) {
     let Some(mut rx) = handle.take_text_stream() else { return };
     loop {
@@ -73,7 +74,7 @@ async fn forward_text_stream(
             break;
         };
         if !chunk.is_empty() {
-            send_segment(tx, &chunk, views);
+            send_segment(tx, &chunk, vocab);
         }
     }
 }
@@ -203,7 +204,7 @@ impl LlmInference<'_> {
             provider: id.provider,
             model: id.model,
         });
-        LlmGenerationData::new(started_at, label, metadata, self.ctx.views(shared))
+        LlmGenerationData::new(started_at, label, metadata, self.ctx.vocab(shared))
     }
 
     fn request_finished(&self, error: Option<&ProviderError>) {
@@ -235,6 +236,7 @@ impl LlmInference<'_> {
         trace: &mut telemetry::LlmTrace,
     ) -> Result<(), ProviderError> {
         let (shared, handle, tx) = (self.shared, self.handle, self.tx);
+        let mut calls = 0;
         let ended = loop {
             let read = before_read(handle.interrupted(), tx.is_closed(), stream.cancel_safe());
             let next = match read {
@@ -254,7 +256,9 @@ impl LlmInference<'_> {
             };
             trace.observe(&chunk);
             for raw in chunk.delta.iter().flat_map(|delta| &delta.tool_calls) {
-                self.tools.dispatch(shared, handle, self.ctx, mint_call(shared, raw));
+                let call = mint_call(shared, &self.ctx.plan.message_id, calls, raw);
+                calls += 1;
+                self.tools.dispatch(shared, handle, self.ctx, call);
             }
             let at = shared.time.now().as_secs_f64();
             for effect in data.chunk(&chunk, at, || shared.time.wall_secs()) {
@@ -280,10 +284,16 @@ fn report_llm_metrics(
     }
 }
 
-/// Minted here, because the pure tier has no ids.
-fn mint_call(shared: &Arc<SessionShared>, raw: &lk_agents_abi::FunctionToolCall) -> FunctionCall {
+/// The reply's `index`th call, `{message}/fnc_{index}` as `AgentRun` and v1 name it: the shared
+/// prefix keeps a reply's words and calls in one assistant message.
+fn mint_call(
+    shared: &Arc<SessionShared>,
+    message_id: &str,
+    index: usize,
+    raw: &lk_agents_abi::FunctionToolCall,
+) -> FunctionCall {
     FunctionCall {
-        id: shared.mint_item_id(),
+        id: format!("{message_id}/fnc_{index}"),
         call_id: raw.call_id.clone(),
         arguments: raw.arguments.clone(),
         name: raw.name.clone(),

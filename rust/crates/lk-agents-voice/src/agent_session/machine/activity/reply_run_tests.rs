@@ -115,6 +115,7 @@ fn shared_run_cleanup_deadline_wakes_voice_without_a_domain_timer() {
         },
         RunInput {
             invocation_id: "cleanup-bound".into(),
+            id_seed: 0,
             opening: Opening::Coordinated { approval_answers: Default::default() },
             history: Vec::new(),
             answer_tool: None,
@@ -213,6 +214,7 @@ fn failed_reply_keeps_correlated_input_requirements_in_the_voice_run_failure() {
         },
         RunInput {
             invocation_id: "failed-reply".into(),
+            id_seed: 0,
             opening: Opening::Coordinated { approval_answers: Default::default() },
             history: Vec::new(),
             answer_tool: None,
@@ -294,6 +296,7 @@ fn tool_reply(
         },
         RunInput {
             invocation_id: "lost-call".into(),
+            id_seed: 0,
             opening: Opening::Coordinated { approval_answers: Default::default() },
             history: Vec::new(),
             answer_tool: None,
@@ -443,4 +446,99 @@ fn step_results_hand_on_both_halves_in_either_order() {
     assert_eq!((s.step, e.step), (super::StepId(2), 2));
     assert_eq!(results.verdict(), Some(super::StepId(2)));
     assert!(results.verdict().is_none(), "one verdict per step");
+}
+
+/// One reply's `instructions=` and `tool_choice=` stay with that reply and never reach the next.
+/// https://github.com/livekit/agents/issues/4671 https://github.com/livekit/agents/issues/4242
+/// https://github.com/livekit/agents/issues/1917 https://github.com/livekit/agents/issues/3834
+#[test]
+fn temporary_reply_configuration_does_not_leak() {
+    use super::VoiceEffect;
+    use crate::agent_session::ActivityCommand;
+    use crate::generation::{GenEvent, Instructions, ReplyContext, TurnOutcome};
+    use lk_agents_abi::{ToolChoice, Ts};
+    let started = |effects: Vec<VoiceEffect>| -> Box<ReplyContext> {
+        effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                VoiceEffect::StartSpeech { context, .. } => Some(context),
+                _ => None,
+            })
+            .expect("the reply starts")
+    };
+    let texts = |context: &ReplyContext| -> String {
+        let items = context.request.chat_ctx.items.iter();
+        items.filter_map(|i| i.as_message()?.raw_text_content()).collect::<Vec<_>>().join("\n")
+    };
+    let mut driver = crate::agent_session::tests::driver();
+    driver.on_frame(
+        Ts::ZERO,
+        ActivityCommand::UpdateInstructions(Instructions::plain("Speak English.")),
+    );
+    driver.take_outbox();
+
+    let first = driver.generate_reply_speech(
+        Ts::ZERO,
+        None,
+        Some("Only say goodbye.".into()),
+        None,
+        Some(ToolChoice::Forbidden),
+        None,
+        None,
+        false,
+        None,
+    );
+    let context = started(driver.settle_step());
+    assert_eq!(context.tool_choice, Some(ToolChoice::Forbidden));
+    assert!(texts(&context).contains("Only say goodbye."), "{}", texts(&context));
+
+    // The persistent instructions change while that reply is out (as a tool of it would).
+    driver.on_frame(
+        Ts::ZERO,
+        ActivityCommand::UpdateInstructions(Instructions::plain("Speak French.")),
+    );
+    let outcome =
+        TurnOutcome { forwarded_text: "Goodbye.".into(), assistant_message: None, cut_at: None };
+    driver.on_generation(
+        Ts::ZERO,
+        GenEvent::Done { speech: first, outcome: Box::new(outcome), interrupted: false },
+    );
+    driver.settle_step();
+
+    driver.generate_reply_speech(Ts::ZERO, None, None, None, None, None, None, false, None);
+    let context = started(driver.settle_step());
+    let sent = texts(&context);
+    assert_eq!(context.tool_choice, None, "the forced tool choice did not persist");
+    assert!(!sent.contains("Only say goodbye."), "the one-off instructions leaked: {sent}");
+    assert!(sent.contains("Speak French.") && !sent.contains("Speak English."), "{sent}");
+}
+
+/// Two sessions on one thread never mint the same assistant item id: each runs on the seed its
+/// runtime drew, so its speeches, and the `{speech}/item_n` items of their replies, are its own.
+#[test]
+fn two_sessions_mint_distinct_reply_item_ids() {
+    use super::VoiceEffect;
+    use crate::agent_session::SessionParts;
+    use crate::agent_session::tests::driver_with;
+    use crate::agent_session::time::Now;
+    use lk_agents_abi::Ts;
+    let reply_item = |session_id: &str, id_seed: u64| -> String {
+        let parts = SessionParts {
+            agent: "agent".into(),
+            session_id: session_id.into(),
+            id_seed,
+            max_unrecoverable_errors: 3,
+            ..Default::default()
+        };
+        let mut driver =
+            driver_with(parts, None, Now { at: Ts::ZERO, wall: std::time::UNIX_EPOCH });
+        driver.generate_reply_speech(Ts::ZERO, None, None, None, None, None, None, false, None);
+        let context = driver.settle_step().into_iter().find_map(|effect| match effect {
+            VoiceEffect::StartSpeech { context, .. } => Some(context),
+            _ => None,
+        });
+        context.expect("the reply starts").message_id
+    };
+
+    assert_ne!(reply_item("AS_first", 0x1111), reply_item("AS_second", 0x2222));
 }

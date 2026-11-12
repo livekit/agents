@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 TTSModels = Literal[
     "eleven_monolingual_v1",
@@ -109,11 +109,18 @@ class TTSAlignment(BaseModel):
 class TTSFrame(BaseModel):
     model_config = ConfigDict(strict=True)
 
-    context_id: str | None = None
-    camel_context_id: str | None = Field(default=None, alias="contextId")
+    # the multi-stream API spells its keys in camelCase, text-to-dialogue in snake_case
+    context_id: str | None = Field(
+        default=None, validation_alias=AliasChoices("contextId", "context_id")
+    )
     audio: str | None = None
     error: str | None = None
-    is_final: bool = False
-    is_final_legacy: bool = Field(default=False, alias="isFinal")
+    is_final: bool = Field(default=False, validation_alias=AliasChoices("isFinal", "is_final"))
     alignment: TTSAlignment | None = None
     normalized_alignment: TTSAlignment | None = Field(default=None, alias="normalizedAlignment")
+
+    @field_validator("is_final", mode="before")
+    @classmethod
+    def _null_is_not_final(cls, value: object) -> object:
+        # ElevenLabs sends `"isFinal": null` on every frame but the last
+        return False if value is None else value

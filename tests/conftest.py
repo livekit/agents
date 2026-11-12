@@ -1,5 +1,4 @@
 import asyncio
-import dataclasses
 import logging
 import re
 import sys
@@ -10,20 +9,16 @@ from typing import Literal, NamedTuple
 
 import pytest
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, _core
+from livekit.agents import _core
 from livekit.agents.cli import NOISY_LOGGERS
 from livekit.agents.http import client as http_client
 
-from . import concurrency
 from .a2a_peer import peer  # noqa: F401  (re-exported so pytest discovers the fixture)
 from .storage_fixture import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
     thread_storage,
     thread_storage_worker,
     thread_storages,
 )
-from .toxic_proxy import Toxiproxy
-
-TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
 
 # highest fd soft limit the room tests survive on macOS
 _MAX_OPEN_FILES = 8192
@@ -364,14 +359,6 @@ async def own_executor(
         raise ExceptionGroup("IPC fixture cleanup failures", failures)
 
 
-@pytest.fixture
-def toxiproxy():
-    toxiproxy = Toxiproxy()
-    yield toxiproxy
-    if toxiproxy.running():
-        toxiproxy.destroy_all()
-
-
 @pytest.fixture()
 def logger():
     logger = logging.getLogger("livekit.tests")
@@ -420,21 +407,6 @@ def format_task(task) -> str:
 
 @pytest.fixture(autouse=True)
 async def fail_on_leaked_tasks(request):
-    if concurrency.is_concurrent_member(request.node):
-        # Concurrent group members share one event loop, so we can't diff asyncio.all_tasks()
-        # (it would flag other still-running tests). Instead ask which still-pending tasks were
-        # created by *this* test -- tagged via contextvars, see tests/concurrency.py.
-        yield
-        leaked_tasks = [
-            task
-            for task in concurrency.owned_pending_tasks(request.node.nodeid)
-            if not _is_ignorable_task(task)
-        ]
-        if leaked_tasks:
-            tasks_msg = "\n\n".join(format_task(task) for task in leaked_tasks)
-            pytest.fail("Test leaked tasks:\n\n" + tasks_msg)
-        return
-
     tasks_before = set(asyncio.all_tasks())
 
     yield

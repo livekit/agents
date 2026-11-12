@@ -1,9 +1,18 @@
-use crate::agent_session::effects::{AudioOp, VoiceEffect};
+use crate::agent_session::effects::{AudioOp, Timer, VoiceEffect};
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{Answer, Outputs, RequestId, VoiceDriver};
+use lk_agents_abi::Ts;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::PlaybackSegment;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
+
+/// How long a cut segment's sink has to report playback finished before its binding is released.
+pub const UNREPORTED_CUT_GRACE: Duration = Duration::from_secs(5);
+/// Told when [`UNREPORTED_CUT_GRACE`] ran out.
+const UNREPORTED_CUT: &str = "the audio output did not report playback finished within 5 s of \
+                              being cleared; the session may have been stuck (unable to speak) \
+                              during that time";
 
 // A binding goes reserve -> activate -> settle/release; pending cleanup retains the same binding.
 // A segment takes the session's current outputs at activation and keeps them until it settles.
@@ -54,7 +63,8 @@ pub enum OutputBindingEvent {
         binding: RequestId,
         speech: SpeechId,
     },
-    /// Physical cleanup is still outstanding. Retain the lease until matched settlement.
+    /// Physical cleanup is still outstanding. Retain the lease until matched settlement, or
+    /// [`UNREPORTED_CUT_GRACE`] at most.
     CleanupPending {
         binding: RequestId,
         speech: SpeechId,
@@ -228,7 +238,7 @@ impl OutputBindings {
 }
 
 impl VoiceDriver {
-    pub(crate) fn on_output_binding(&mut self, event: OutputBindingEvent) {
+    pub(crate) fn on_output_binding(&mut self, now: Ts, event: OutputBindingEvent) {
         match event {
             OutputBindingEvent::BindRequested { call, speech } => self.bind_output(call, speech),
             OutputBindingEvent::ActivationRequested { call, binding, speech } => {
@@ -238,7 +248,7 @@ impl VoiceDriver {
                 self.release_output(binding, speech)
             }
             OutputBindingEvent::CleanupPending { binding, speech } => {
-                self.output_unsettled(binding, speech)
+                self.output_unsettled(now, binding, speech)
             }
         }
     }
@@ -294,11 +304,12 @@ impl VoiceDriver {
         if self.session.output_bindings.bound.get(&request).is_some_and(|b| b.speech == speech) {
             self.release_paused_speech(speech);
             self.session.output_bindings.bound.remove(&request);
+            self.clear_deadline_if_set(Timer::OutputSettlement(request));
             self.retire_outputs();
         }
     }
 
-    fn output_unsettled(&mut self, request: RequestId, speech: SpeechId) {
+    fn output_unsettled(&mut self, now: Ts, request: RequestId, speech: SpeechId) {
         let Some(bound) =
             self.session.output_bindings.bound.get(&request).filter(|b| b.speech == speech)
         else {
@@ -311,6 +322,34 @@ impl VoiceDriver {
         .with("attachment", bound.binding.segment.attachment.to_string())
         .with("segment", bound.binding.segment.segment.to_string());
         self.publish_event(crate::events::SessionEvent::Diagnostic(diagnostic));
+        let timer = Timer::OutputSettlement(request);
+        if self.deadline(timer).is_none() {
+            self.set_deadline(timer, now.saturating_add(UNREPORTED_CUT_GRACE));
+        }
+    }
+
+    /// The sink never reported the cut segment: it is settled where the sink last reported, the
+    /// session is told, and the output goes to the next speech. A report after this is stale.
+    pub(crate) fn output_settlement_overdue(&mut self, now: Ts, request: RequestId) {
+        let Some(bound) = self.session.output_bindings.bound.get(&request) else { return };
+        let (speech, segment) = (bound.speech, bound.binding.segment);
+        let outputs = &bound.binding.outputs;
+        let output = outputs.audio.as_ref().filter(|_| outputs.audio_enabled);
+        let label = output.map_or_else(String::new, |output| output.label.clone());
+        if let Some(output) = output.map(|output| output.id) {
+            self.record_effect(VoiceEffect::Audio(AudioOp::SettleUnreported { output, segment }));
+        }
+        let diagnostic = crate::events::DiagnosticEvent::error(UNREPORTED_CUT)
+            .with("audio_output", label)
+            .with("attachment", segment.attachment.to_string())
+            .with("segment", segment.segment.to_string());
+        self.publish_event(crate::events::SessionEvent::Diagnostic(diagnostic));
+        let error = lk_agents_abi::errors::ProviderError::Local(
+            lk_agents_abi::errors::ApiError::new(UNREPORTED_CUT),
+        );
+        let source = crate::events::ErrorSource::AudioOutput;
+        self.report_error(now, source, true, error, Some(speech));
+        self.release_output(request, speech);
     }
 
     pub(crate) fn retire_outputs(&mut self) {
@@ -341,6 +380,102 @@ mod tests {
         )
     }
 
+    /// A cut segment bound and activated on output 1, its cleanup pending from `Ts::ZERO`.
+    fn unsettled_cut() -> (VoiceDriver, RequestId, SpeechId) {
+        let mut driver = crate::agent_session::tests::driver();
+        driver.journalled = true;
+        let (speech, request) = (SpeechId(7), RequestId(3));
+        let original = outputs(1, true);
+        driver.session.output_bindings.bind(request, speech, &original).unwrap();
+        driver.session.output_bindings.activate(request, speech, &original).unwrap();
+        driver.session.outputs = outputs(2, false);
+        driver.on_output_binding(
+            Ts::ZERO,
+            OutputBindingEvent::CleanupPending { binding: request, speech },
+        );
+        driver.settle_step();
+        (driver, request, speech)
+    }
+
+    fn at(after: Duration) -> crate::agent_session::Now {
+        crate::agent_session::Now {
+            at: Ts::ZERO.saturating_add(after),
+            wall: std::time::UNIX_EPOCH,
+        }
+    }
+
+    fn told(effects: &[VoiceEffect]) -> Vec<&crate::events::ErrorEvent> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                VoiceEffect::Emit(crate::events::SessionEvent::Error(error)) => Some(&**error),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_unreported_cut_is_settled_and_released_at_its_grace() {
+        let (mut driver, request, speech) = unsettled_cut();
+        let timer = Timer::OutputSettlement(request);
+        assert_eq!(driver.deadline(timer), Some(Ts::ZERO.saturating_add(UNREPORTED_CUT_GRACE)));
+        let early = driver.handle(None, at(UNREPORTED_CUT_GRACE - Duration::from_millis(1)));
+        assert!(told(&early).is_empty());
+        assert!(driver.session.output_bindings.speech_outputs(speech).is_some(), "still held");
+
+        let effects = driver.handle(None, at(UNREPORTED_CUT_GRACE));
+        let segment = PlaybackSegment { attachment: 1, segment: 1 };
+        let settled = effects.iter().position(|effect| {
+            matches!(effect, VoiceEffect::Audio(AudioOp::SettleUnreported { output: ResourceId(1), segment: s }) if *s == segment)
+        });
+        let retired = effects.iter().position(|effect| {
+            matches!(
+                effect,
+                VoiceEffect::Audio(AudioOp::SetAudioOutput {
+                    previous: Some(ResourceId(1)),
+                    next: None,
+                    ..
+                })
+            )
+        });
+        assert!(settled.expect("settled") < retired.expect("the output is released"));
+        let errors = told(&effects);
+        let [error] = errors.as_slice() else { panic!("one error: {effects:?}") };
+        assert_eq!(error.source, crate::events::ErrorSource::AudioOutput);
+        assert!(error.recoverable);
+        assert_eq!(error.speech, Some(speech));
+        assert!(error.error.to_string().contains("within 5 s of being cleared"), "{}", error.error);
+        assert_eq!(driver.session.output_bindings.held().count(), 0);
+        assert_eq!(driver.deadline(timer), None);
+
+        // The sink's report, after all: its binding is gone, nothing is told or settled again.
+        driver.on_output_binding(
+            Ts::ZERO,
+            OutputBindingEvent::ReleaseRequested { binding: request, speech },
+        );
+        let late = driver.handle(None, at(UNREPORTED_CUT_GRACE * 2));
+        assert!(told(&late).is_empty());
+        assert!(!late.iter().any(|effect| matches!(effect, VoiceEffect::Audio(_))), "{late:?}");
+    }
+
+    #[test]
+    fn a_report_within_the_grace_cancels_it() {
+        let (mut driver, request, speech) = unsettled_cut();
+        driver.on_output_binding(
+            Ts::ZERO,
+            OutputBindingEvent::ReleaseRequested { binding: request, speech },
+        );
+        assert_eq!(driver.deadline(Timer::OutputSettlement(request)), None);
+        let effects = driver.handle(None, at(UNREPORTED_CUT_GRACE));
+        assert!(told(&effects).is_empty());
+        assert!(
+            !effects.iter().any(|effect| matches!(
+                effect,
+                VoiceEffect::Audio(AudioOp::SettleUnreported { .. })
+            ))
+        );
+    }
+
     #[test]
     fn cleanup_retains_the_lease_until_its_correlated_release() {
         let mut driver = crate::agent_session::tests::driver();
@@ -351,7 +486,10 @@ mod tests {
         driver.session.output_bindings.activate(request, speech, &original).unwrap();
         driver.session.outputs = outputs(2, false);
         driver.take_outbox();
-        driver.on_output_binding(OutputBindingEvent::CleanupPending { binding: request, speech });
+        driver.on_output_binding(
+            Ts::ZERO,
+            OutputBindingEvent::CleanupPending { binding: request, speech },
+        );
         driver.retire_outputs();
         assert_eq!(driver.session.output_bindings.speech_outputs(speech), Some(&original));
         assert_eq!(driver.session.output_bindings.held().collect::<Vec<_>>(), [ResourceId(1)]);
@@ -359,12 +497,15 @@ mod tests {
             item,
             VoiceEffect::Audio(AudioOp::SetAudioOutput { previous: Some(_), .. })
         )));
-        driver.on_output_binding(OutputBindingEvent::ReleaseRequested {
-            binding: request,
-            speech: SpeechId(8),
-        });
+        driver.on_output_binding(
+            Ts::ZERO,
+            OutputBindingEvent::ReleaseRequested { binding: request, speech: SpeechId(8) },
+        );
         assert!(driver.session.output_bindings.speech_outputs(speech).is_some());
-        driver.on_output_binding(OutputBindingEvent::ReleaseRequested { binding: request, speech });
+        driver.on_output_binding(
+            Ts::ZERO,
+            OutputBindingEvent::ReleaseRequested { binding: request, speech },
+        );
         assert_eq!(driver.session.output_bindings.held().count(), 0);
         assert!(matches!(
             driver.take_outbox().as_slice(),
@@ -374,7 +515,10 @@ mod tests {
                 ..
             })]
         ));
-        driver.on_output_binding(OutputBindingEvent::ReleaseRequested { binding: request, speech });
+        driver.on_output_binding(
+            Ts::ZERO,
+            OutputBindingEvent::ReleaseRequested { binding: request, speech },
+        );
         assert!(driver.take_outbox().is_empty(), "duplicate release cannot repeat retirement");
     }
 

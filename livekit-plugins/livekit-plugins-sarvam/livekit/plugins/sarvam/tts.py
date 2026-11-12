@@ -28,7 +28,7 @@ import os
 import platform
 import re
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -36,7 +36,6 @@ import numpy.typing as npt
 from pydantic import ValidationError
 
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
@@ -44,7 +43,6 @@ from livekit.agents import (
     LanguageCode,
     __version__ as livekit_version,
     http,
-    tokenize,
     tts,
     utils,
 )
@@ -269,7 +267,6 @@ class SarvamTTSOptions:
         model: The Sarvam TTS model to use
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
-        word_tokenizer: Tokenizer for processing text
     """
 
     target_language_code: SarvamTTSLanguages | str  # BCP-47 for supported Indian languages
@@ -290,7 +287,6 @@ class SarvamTTSOptions:
     model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2
     base_url: str = SARVAM_TTS_BASE_URL
     ws_url: str = SARVAM_TTS_WS_URL
-    word_tokenizer: tokenize.SentenceTokenizer | None = None
     send_completion_event: bool = True
     output_audio_codec: str = "mp3"
 
@@ -475,9 +471,6 @@ class TTS(tts.TTS):
                 f"Please choose a compatible speaker from: {', '.join(compatible_speakers)}"
             )
 
-        # Initialize word tokenizer for streaming
-        word_tokenizer = tokenize.SentenceTokenizer()
-
         self._opts = SarvamTTSOptions(
             target_language_code=LanguageCode(target_language_code),
             model=model,
@@ -496,7 +489,6 @@ class TTS(tts.TTS):
             api_key=self._api_key,
             base_url=base_url,
             ws_url=ws_url,
-            word_tokenizer=word_tokenizer,
             send_completion_event=send_completion_event,
             output_audio_codec=output_audio_codec,
         )
@@ -790,25 +782,18 @@ class TTS(tts.TTS):
             self._retired_ws.update(self._open_ws_ids)
             self._pool.invalidate()
 
-    # Implement the abstract synthesize method
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions | None = None
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
-        """Synthesize text to audio using Sarvam.ai TTS API."""
-        if conn_options is None:
-            conn_options = DEFAULT_API_CONNECT_OPTIONS
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             opts=replace(self._opts),
             get_session=self._ensure_session,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
-        """Create a streaming TTS session."""
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -939,7 +924,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._options_for_connection = options_for_connection
         self._stop_keepalive = stop_keepalive
         self._return_ws = return_ws
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
         # Connection state management
         self._connection_state = ConnectionState.DISCONNECTED
@@ -953,7 +937,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._ws_conn: http.WebSocket | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
         request_id = utils.shortuuid()
         self._client_request_id = request_id
         self._server_request_id = None
@@ -967,37 +951,29 @@ class SynthesizeStream(tts.SynthesizeStream):
             frame_size_ms=50,
         )
 
-        async def _tokenize_input() -> None:
-            """tokenize text from the input_ch to sentences"""
-            word_stream = None
-            async for input in self.input:
-                if isinstance(input, str):
-                    if word_stream is None:
-                        tokenizer_instance: tokenize.SentenceTokenizer
-                        if self._opts.word_tokenizer is None:
-                            # Fallback to the built-in tokenizer if none provided
-                            tokenizer_instance = tokenize.SentenceTokenizer()
-                        else:
-                            tokenizer_instance = self._opts.word_tokenizer
-                        word_stream = tokenizer_instance.stream()
-                        self._segments_ch.send_nowait(word_stream)
-                    word_stream.push_text(input)
-                else:
-                    if word_stream:
-                        word_stream.end_input()
-                    word_stream = None
+        async def _split_segments() -> None:
+            segment: utils.aio.Chan[str] | None = None
+            async for item in self.input:
+                if isinstance(item, tts.SpeechChunk):
+                    if segment is None:
+                        segment = utils.aio.Chan[str]()
+                        segments_ch.send_nowait(segment)
+                    segment.send_nowait(item.text + " ")
+                elif segment is not None:
+                    segment.close()
+                    segment = None
 
-            if word_stream is not None:
-                word_stream.end_input()
+            if segment is not None:
+                segment.close()
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _process_segments() -> None:
-            async for word_stream in self._segments_ch:
-                await self._run_ws(word_stream, output_emitter)
+            async for segment in segments_ch:
+                await self._run_ws(segment, output_emitter)
 
         tasks = [
-            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_split_segments()),
             asyncio.create_task(_process_segments()),
         ]
         try:
@@ -1010,9 +986,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.cancel_and_wait(*tasks)
             output_emitter.end_input()
 
-    async def _run_ws(
-        self, word_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter
-    ) -> None:
+    async def _run_ws(self, segment: AsyncIterable[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
@@ -1049,11 +1023,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 started = False
                 text_chunks_sent = 0
-                async for word in word_stream:
+                async for text in segment:
                     if not started:
                         self.mark_started()
                         started = True
-                    text_msg = {"type": "text", "data": {"text": word.token}}
+                    text_msg = {"type": "text", "data": {"text": text}}
                     await ws.send_str(json.dumps(text_msg))
                     text_chunks_sent += 1
 
@@ -1343,14 +1317,3 @@ class SynthesizeStream(tts.SynthesizeStream):
         """Capture server-assigned request_id once it is available."""
         if self._server_request_id is None and request_id:
             self._server_request_id = str(request_id)
-
-    async def aclose(self) -> None:
-        """Close the stream and cleanup resources.
-
-        The base class cancels ``_run`` (and therefore all child tasks
-        spawned inside ``_run_ws``).  The ``ConnectionPool`` context manager
-        handles WebSocket cleanup on cancellation.  We only need to close
-        the segments channel so that ``_process_segments`` unblocks.
-        """
-        self._segments_ch.close()
-        await super().aclose()

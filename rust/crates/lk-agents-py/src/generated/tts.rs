@@ -136,70 +136,29 @@ impl Markup {
         });
         ::pyo3::PyResult::Ok(out)
     }
-
-    /// Fix common LLM markup mistakes (e.g. unclosed self-closing tags).
-    #[pyo3(signature = (text))]
-    fn normalize(
-        &self,
-        py: Python<'_>,
-        text: ::std::string::String,
-    ) -> PyResult<::std::string::String> {
-        let out = py.detach(|| {
-            <MarkupImpl as ::lk_agents_abi::tts::markup::MarkupClass>::normalize(&self.0, text)
-        });
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    /// Lower the framework's markup to the provider's native syntax.
-    #[pyo3(signature = (text))]
-    fn convert(
-        &self,
-        py: Python<'_>,
-        text: ::std::string::String,
-    ) -> PyResult<::std::string::String> {
-        let out = py.detach(|| {
-            <MarkupImpl as ::lk_agents_abi::tts::markup::MarkupClass>::convert(&self.0, text)
-        });
-        ::pyo3::PyResult::Ok(out)
-    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tts/stream_adapter.rs.
 type TtsStreamAdapterImpl =
     <crate::generated::implementations::Selected as super::Implementations>::TtsStreamAdapter;
 
-/// `tts.StreamAdapter`'s engine: a non-streaming TTS as a streaming one, the text split into
-/// sentences each synthesized on its own.
+/// `tts.StreamAdapter`'s engine: a non-streaming TTS as a streaming one, each chunk of its input
+/// synthesized on its own.
 #[pyclass(frozen, name = "TtsStreamAdapter", module = "livekit.agents._core")]
 pub struct TtsStreamAdapter(pub(crate) ::std::sync::Arc<TtsStreamAdapterImpl>);
 
 #[pymethods]
 impl TtsStreamAdapter {
-    /// `tts` synthesizes each sentence of the text pushed; `sentence_tokenizer` splits it
-    /// (`tokenize.SentenceTokenizer`'s by default); `text_pacing` releases sentences as the audio plays out.
+    /// `tts` synthesizes each chunk of the text pushed.
     #[new]
-    #[pyo3(signature = (*, tts, sentence_tokenizer = None, text_pacing = None))]
-    fn new(
-        py: Python<'_>,
-        tts: Bound<'_, PyAny>,
-        sentence_tokenizer: Option<Bound<'_, PyAny>>,
-        text_pacing: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<TtsStreamAdapter> {
+    #[pyo3(signature = (*, tts))]
+    fn new(py: Python<'_>, tts: Bound<'_, PyAny>) -> PyResult<TtsStreamAdapter> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
         let tts = crate::generated::tts::TtsProxy::from_host(tts.as_any())?;
-        let sentence_tokenizer = sentence_tokenizer
-            .map(|v| crate::generated::tts::HostSentenceTokenizerProxy::from_host(v.as_any()))
-            .transpose()?;
-        let text_pacing = text_pacing
-            .map(|v| crate::generated::records::stream_pacer::text_pacing_from_py(v.as_any()))
-            .transpose()?;
         let out = py.detach(|| {
             <TtsStreamAdapterImpl as ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter>::new(
-                &env,
-                tts,
-                sentence_tokenizer,
-                text_pacing,
+                &env, tts,
             )
         });
         ::pyo3::PyResult::Ok(TtsStreamAdapter(::std::sync::Arc::new(out)))
@@ -226,33 +185,6 @@ impl TtsStreamAdapter {
         let out = py.detach(|| <TtsStreamAdapterImpl as ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter>::num_channels(&self.0));
         ::pyo3::PyResult::Ok(out)
     }
-
-    /// One segment of the text pushed, each sentence retried within `conn_options`. Under
-    /// `expressive` the wrapped TTS's markup is lowered before each sentence.
-    #[pyo3(signature = (*, conn_options = None, expressive = false))]
-    fn stream<'py>(
-        &self,
-        py: Python<'py>,
-        conn_options: Option<Bound<'_, PyAny>>,
-        expressive: bool,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let cx = crate::py_calls::entry_cx();
-        let conn_options = conn_options
-            .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
-            .transpose()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let out = <TtsStreamAdapterImpl as ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter>::stream(&this, cx, conn_options, expressive)
-                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    super::tts::TtsStream(::std::sync::Arc::new(out)),
-                    py,
-                )
-            })
-        })
-    }
 }
 
 // Wherever the host passes a `::lk_agents_abi::Tts`, an instance of this class is itself.
@@ -267,77 +199,6 @@ inventory::submit! {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/tts/stream_pacer.rs.
-type CorePacedSentencesImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::PacedSentences;
-
-/// `SentenceStreamPacer.wrap()`: a host sentence stream's sentences, paced by the audio its
-/// emitter pushed.
-#[pyclass(frozen, name = "_core_PacedSentences", module = "livekit.agents._core")]
-pub struct CorePacedSentences(pub(crate) ::std::sync::Arc<CorePacedSentencesImpl>);
-
-#[pymethods]
-impl CorePacedSentences {
-    #[new]
-    #[pyo3(signature = (sent_stream, audio_emitter, *, pacer))]
-    fn new(
-        py: Python<'_>,
-        sent_stream: Bound<'_, PyAny>,
-        audio_emitter: Bound<'_, PyAny>,
-        pacer: Bound<'_, PyAny>,
-    ) -> PyResult<CorePacedSentences> {
-        crate::py_calls::check_pid()?;
-        let env = crate::process::env();
-        let sent_stream =
-            crate::generated::tts::HostSentenceStreamProxy::from_host(sent_stream.as_any())?;
-        let audio_emitter = crate::py_objects::native::<
-            dyn ::lk_agents_abi::tts::stream_pacer::PushedAudio,
-        >(audio_emitter.as_any())
-        .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "audio_emitter",
-                ": expected a tts.AudioEmitter"
-            ))
-        })?;
-        let pacer =
-            crate::generated::records::stream_pacer::sentence_stream_pacer_from_py(pacer.as_any())?;
-        let out = py.detach(|| {
-            <CorePacedSentencesImpl as ::lk_agents_abi::tts::stream_pacer::PacedSentences>::new(
-                &env,
-                sent_stream,
-                audio_emitter,
-                pacer,
-            )
-        });
-        ::pyo3::PyResult::Ok(CorePacedSentences(::std::sync::Arc::new(out)))
-    }
-
-    /// The next batch, `None` once the input ended and every sentence went; the host stream's
-    /// failure is raised as it was.
-    fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let cx = crate::py_calls::entry_cx();
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let out = <CorePacedSentencesImpl as ::lk_agents_abi::tts::stream_pacer::PacedSentences>::next(&this, cx)
-                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
-        })
-    }
-
-    /// Stop reading and close the host stream.
-    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let cx = crate::py_calls::entry_cx();
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let () = <CorePacedSentencesImpl as ::lk_agents_abi::tts::stream_pacer::PacedSentences>::aclose(&this, cx)
-                .await;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
-        })
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/tts/streams.rs.
 type TtsStreamImpl =
     <crate::generated::implementations::Selected as super::Implementations>::TtsStream;
@@ -349,6 +210,34 @@ pub struct TtsStream(pub(crate) ::std::sync::Arc<TtsStreamImpl>);
 
 #[pymethods]
 impl TtsStream {
+    /// A synthesis by `tts` of `text`, or, without it, of the text pushed. Its text goes through
+    /// the TTS's stage (split, paced, lowered to its syntax) and its attempts are retried within
+    /// `conn_options`; the first opens when its audio is first read.
+    #[new]
+    #[pyo3(signature = (*, tts, text = None, conn_options = None))]
+    fn new(
+        py: Python<'_>,
+        tts: Bound<'_, PyAny>,
+        text: ::std::option::Option<::std::string::String>,
+        conn_options: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<TtsStream> {
+        crate::py_calls::check_pid()?;
+        let env = crate::process::env();
+        let tts = crate::generated::tts::TtsProxy::from_host(tts.as_any())?;
+        let conn_options = conn_options
+            .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
+            .transpose()?;
+        let out = py.detach(|| {
+            <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::new(
+                &env,
+                tts,
+                text,
+                conn_options,
+            )
+        });
+        ::pyo3::PyResult::Ok(TtsStream(::std::sync::Arc::new(out)))
+    }
+
     #[pyo3(signature = (text))]
     fn push_text(&self, py: Python<'_>, text: ::std::string::String) -> PyResult<()> {
         crate::py_calls::check_pid()?;
@@ -454,6 +343,25 @@ fn _extract_synthesis_checks_validate_synthesis_duration(
     crate::py_values::number_from_py::<f64>(obj.as_any(), "duration")
 }
 type SynthesisChecksValidateSynthesisDurationInput = f64;
+
+/// ``TTSOptions.pacing`` until it is set: a ``SentenceStreamPacer`` for a TTS without
+/// streaming, ``None`` for a streaming one.
+#[pyfunction]
+#[pyo3(signature = (capabilities))]
+pub fn default_tts_pacing<'py>(
+    py: Python<'py>,
+    capabilities: Bound<'_, PyAny>,
+) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+    let capabilities =
+        crate::generated::records::tts::tts_capabilities_from_py(capabilities.as_any())?;
+    let out = py.detach(|| {
+        <SynthesisChecksImpl as ::lk_agents_abi::tts::streams::SynthesisChecks>::default_tts_pacing(
+            capabilities,
+        )
+    });
+    out.map(|value| crate::generated::records::stream_pacer::sentence_stream_pacer_to_py(py, value))
+        .transpose()
+}
 
 /// Why a synthesis of ``text`` that pushed ``duration`` seconds of audio (and, streamed,
 /// ``segments``) failed, or ``None``.
@@ -755,6 +663,10 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -765,7 +677,7 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::tokenizer::token_data_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || if o.is_none() { Ok(None) } else { (crate::generated::records::tokenizer::token_data_from_py(o.as_any())).map(Some) }))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -823,7 +735,10 @@ pub struct TtsProxy {
     sample_rate: u32,
     num_channels: u16,
     markup_provider: ::std::string::String,
-    lowers_markup: bool,
+    text_unit: ::lk_agents_abi::tts::types::TextUnit,
+    retries_itself: bool,
+    max_text_len: ::std::option::Option<usize>,
+    options: ::lk_agents_abi::tts::types::TtsOptions,
     conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
     /// Appended to every awaited call once bound.
     conn: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
@@ -897,9 +812,26 @@ impl TtsProxy {
             let v = crate::py_calls::read(obj, "_core_markup_provider")?;
             v.extract::<::std::string::String>()?
         };
-        let lowers_markup = {
-            let v = crate::py_calls::read(obj, "_core_lowers_markup")?;
+        let text_unit = {
+            let v = crate::py_calls::read(obj, "_core_text_unit")?;
+            crate::py_values::str_from_py(v.as_any())?
+        };
+        let retries_itself = {
+            let v = crate::py_calls::read(obj, "_core_retries_itself")?;
             v.extract::<bool>()?
+        };
+        let max_text_len = {
+            let v = crate::py_calls::read(obj, "_core_max_text_len")?;
+            if v.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_values::number_from_py::<usize>(v.as_any(), "Tts._core_max_text_len"))
+                    .map(Some)
+            }?
+        };
+        let options = {
+            let v = crate::py_calls::read(obj, "_core_options")?;
+            crate::generated::records::tts::tts_options_from_py(v.as_any())?
         };
         let conn_options = {
             let v = crate::py_calls::read(obj, "_core_conn_options")?;
@@ -921,7 +853,10 @@ impl TtsProxy {
             sample_rate,
             num_channels,
             markup_provider,
-            lowers_markup,
+            text_unit,
+            retries_itself,
+            max_text_len,
+            options,
             conn_options,
             conn: None,
         })
@@ -976,8 +911,20 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         ::std::clone::Clone::clone(&self.markup_provider)
     }
 
-    fn lowers_markup(&self) -> bool {
-        ::std::clone::Clone::clone(&self.lowers_markup)
+    fn text_unit(&self) -> ::lk_agents_abi::tts::types::TextUnit {
+        ::std::clone::Clone::clone(&self.text_unit)
+    }
+
+    fn retries_itself(&self) -> bool {
+        ::std::clone::Clone::clone(&self.retries_itself)
+    }
+
+    fn max_text_len(&self) -> ::std::option::Option<usize> {
+        ::std::clone::Clone::clone(&self.max_text_len)
+    }
+
+    fn options(&self) -> ::lk_agents_abi::tts::types::TtsOptions {
+        ::std::clone::Clone::clone(&self.options)
     }
 
     fn with_conn_options(
@@ -1032,7 +979,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
     fn synthesize<'a>(
         &'a self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        text: &str,
+        chunk: &::lk_agents_abi::SpeechChunk,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
         ::std::result::Result<
@@ -1043,7 +990,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         >,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
-        let text_arg = text.to_owned();
+        let chunk_arg = ::std::clone::Clone::clone(chunk);
         let bound = ::std::clone::Clone::clone(&self.conn);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_streams::StreamCall,
@@ -1053,7 +1000,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
+                    [crate::generated::records::tts::speech_chunk_to_py(py, chunk_arg)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
                     args.push(crate::generated::records::connect::api_connect_options_to_py(
@@ -1094,12 +1041,11 @@ impl ::lk_agents_abi::Tts for TtsProxy {
     fn stream(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        expressive: bool,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
             ::lk_agents_abi::DuplexStream<
-                ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::std::string::String>>,
+                ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::SpeechChunk>>,
                 ::std::boxed::Box<
                     dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::SynthesizedAudio>,
                 >,
@@ -1108,7 +1054,6 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         >,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
-        let expressive_arg = expressive;
         let bound = ::std::clone::Clone::clone(&self.conn);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_streams::StreamCall,
@@ -1117,8 +1062,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(expressive_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
                     args.push(crate::generated::records::connect::api_connect_options_to_py(
@@ -1150,7 +1094,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                 };
                 let context = &out.returned_context(py, context).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.value.bind(py);
-                let out = (crate::py_streams::HostStream::duplex(py, o, context, |py, v| ::pyo3::IntoPyObjectExt::into_bound_py_any(v, py), |o| crate::generated::records::tts::synthesized_audio_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|stream| { let (sink, source) = stream.split(); ::lk_agents_abi::DuplexStream::new(::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::std::string::String>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::SynthesizedAudio>>) })).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::py_streams::HostStream::duplex(py, o, context, crate::generated::records::tts::speech_chunk_to_py, |o| crate::generated::records::tts::synthesized_audio_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|stream| { let (sink, source) = stream.split(); ::lk_agents_abi::DuplexStream::new(::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::SpeechChunk>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::SynthesizedAudio>>) })).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

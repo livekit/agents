@@ -169,3 +169,34 @@ fn an_empty_configured_language_falls_back_to_english() {
     let out = m.process(msg(json!({"type": "final_transcript", "transcript": "x"})));
     assert_eq!(final_of(&out).best_alternative().unwrap().language.as_str(), "fr");
 }
+
+/// A diarized final transcript keeps the utterance's and each word's speaker id and timing.
+/// https://github.com/livekit/agents/pull/5438
+#[test]
+fn diarized_transcripts_preserve_speaker_ids() {
+    let mut m = TranscriptMachine::new("r", None);
+    let out = m.process(msg(json!({
+        "type": "final_transcript",
+        "transcript": "hi there",
+        "start": 1.0,
+        "duration": 1.0,
+        "speaker_id": "S1",
+        "words": [
+            {"word": "hi", "start": 1.0, "end": 1.4, "speaker_id": "S1"},
+            {"word": "there", "start": 1.5, "end": 2.0, "speaker_id": "S2"},
+        ]
+    })));
+    let alt = final_of(&out).best_alternative().unwrap();
+    assert_eq!(alt.speaker_id.as_deref(), Some("S1"));
+    let words: Vec<_> = alt
+        .words
+        .as_ref()
+        .expect("timed words")
+        .iter()
+        .map(|w| (w.text.as_str(), w.speaker_id.as_deref(), w.start_time, w.end_time))
+        .collect();
+    assert_eq!(
+        words,
+        [("hi", Some("S1"), Some(1.0), Some(1.4)), ("there", Some("S2"), Some(1.5), Some(2.0))]
+    );
+}

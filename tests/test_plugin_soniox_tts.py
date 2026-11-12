@@ -1,8 +1,8 @@
-"""Unit tests for Soniox TTS sentence buffering and stream rotation.
+"""Unit tests for Soniox TTS chunk forwarding and stream rotation.
 
-The plugin buffers LLM chunks into complete sentences, feeds them into one
-shared Soniox stream, and rotates to a fresh ``stream_id`` when input goes
-idle for ``stream_idle_timeout`` or after a transient failure (batch replay).
+The plugin feeds each prepared chunk, space-separated, into one shared Soniox stream, and
+rotates to a fresh ``stream_id`` when input goes idle for ``stream_idle_timeout``
+or after a transient failure (batch replay).
 These tests drive the real ``SynthesizeStream`` against a fake ``_Connection``.
 """
 
@@ -19,7 +19,14 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions, APIStatusError, ProviderAttempts, http
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
+    APIStatusError,
+    ProviderAttempts,
+    http,
+    tts as tts_module,
+)
 from livekit.agents.tts import AudioEmitter
 from livekit.plugins import soniox
 from livekit.plugins.soniox.tts import _Connection
@@ -27,15 +34,14 @@ from tests.utils.attempts import observed_attempts
 
 pytestmark = [
     pytest.mark.plugin("soniox"),
-    pytest.mark.no_concurrent,
 ]
 
 # 10 ms of mono s16le silence at 24 kHz
 _SILENCE_PCM = b"\x00\x00" * 240
 
 SENTENCES = [
-    "Hello there, this is the first sentence. ",
-    "And here comes a second sentence! ",
+    "Hello there, this is the first sentence.",
+    "And here comes a second sentence!",
     "Finally a third one?",
 ]
 
@@ -239,12 +245,12 @@ async def _synthesize(
 
     tts._current_connection = _fake_current_connection  # type: ignore[method-assign]
 
-    stream = tts.stream()
+    stream = tts._stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     delays = chunk_delays or [0.01] * len(SENTENCES)
 
     async def _push() -> None:
         for chunk, delay in zip(SENTENCES, delays, strict=True):
-            stream.push_text(chunk)
+            stream._push_chunk(tts_module.SpeechChunk(text=chunk, said=chunk))
             await asyncio.sleep(delay)
         stream.end_input()
 
@@ -263,9 +269,9 @@ async def test_steady_flow_uses_single_stream() -> None:
 
     assert frames > 0
     assert len(fake.registered_ids) == 1
-    text_sends = [c for c in fake.send_calls if not c[2]]
+    text_sends = [text for _, text, end in fake.send_calls if not end]
     end_sends = [c for c in fake.send_calls if c[2]]
-    assert len(text_sends) == len(SENTENCES)
+    assert text_sends == [sentence + " " for sentence in SENTENCES]
     assert len(end_sends) == 1
 
 
@@ -292,7 +298,7 @@ async def test_transient_failure_replays_batch() -> None:
     assert len(fake.registered_ids) == 2
     failed_id, replacement_id = fake.registered_ids
     replayed = [text for sid, text, end in fake.send_calls if sid == replacement_id and not end]
-    assert replayed[0].strip() == SENTENCES[0].strip()
+    assert replayed[0] == SENTENCES[0] + " "
     assert fake.max_open_streams == 1
 
 

@@ -215,4 +215,32 @@ mod tests {
         p.remove(3);
         assert_eq!(drain(&mut p), vec![3]);
     }
+
+    /// A checked-out connection is never handed to a second request.
+    /// https://github.com/livekit/agents/issues/6513 https://github.com/livekit/agents/pull/3705
+    #[test]
+    fn a_connection_has_one_holder_at_a_time() {
+        let mut p = ConnectionPool::new(None, false);
+        assert!(p.connected(1, 0.0, p.generation(), Some(0.1)));
+        p.put(1);
+
+        let first = p.get(1.0);
+        let second = p.get(1.0);
+
+        assert_eq!((first, second), (Some(1), None));
+    }
+
+    /// A handshake in flight when the pool closes is closed, never pooled.
+    /// https://github.com/livekit/agents/issues/8496 https://github.com/livekit/agents/pull/2027
+    #[test]
+    fn closing_during_a_handshake_closes_it() {
+        let mut p = ConnectionPool::new(None, false);
+        let in_flight = p.generation();
+
+        p.close_all();
+
+        assert!(!p.connected(2, 2.0, in_flight, Some(0.5)), "a closed pool adopted a connection");
+        assert_eq!(p.get(3.0), None);
+        assert_eq!(drain(&mut p), vec![2]);
+    }
 }

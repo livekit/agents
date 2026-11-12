@@ -324,7 +324,10 @@ mod teardown {
     use pyo3::prelude::*;
     use pyo3::types::PyTuple;
     use std::sync::Arc;
+    use std::task::{Context, Poll, Waker};
     use std::time::Duration;
+
+    use lk_agents_abi::invoke::HostEntry as _;
 
     use super::cancellation::ManualLoop;
     use lk_agents_abi::invoke::HostNotices as _;
@@ -396,6 +399,36 @@ mod teardown {
         holder.join().unwrap();
         dropper.join().unwrap();
         assert!(in_time, "dropping a pending call waited for the GIL under a lock");
+    }
+
+    // Catches: an async host call whose coroutine is built before its loop runs it, so a loop that
+    // stopped and closes first leaves "coroutine ... was never awaited" (the worker's periodic
+    // host calls scheduled as its loop closed at shutdown).
+    #[test]
+    fn an_async_call_queued_as_its_loop_closes_leaves_no_coroutine_unawaited() {
+        let host = ManualLoop::new();
+        let context = pair(&host);
+        let mut call = super::Entry.enter(
+            &context,
+            None,
+            Box::new(|py| {
+                let forever = crate::py_test_support::fixture(py, "pending_forever");
+                Ok((forever, PyTuple::empty(py), None))
+            }),
+        );
+        let mut poll = || call.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+        assert!(poll().is_pending());
+
+        let unawaited: Vec<String> = Python::attach(|py| {
+            let globals = host.0.bind(py);
+            crate::py_test_support::call(py, "close_loop_collecting_unawaited", (globals,))
+                .unwrap()
+                .extract()
+                .unwrap()
+        });
+
+        assert_eq!(unawaited, Vec::<String>::new());
+        assert!(matches!(poll(), Poll::Ready(Err(_))), "the call outlived its closed loop");
     }
 
     // Catches: a drain the loop dropped unrun (it closed) leaving the queue marked scheduled, so

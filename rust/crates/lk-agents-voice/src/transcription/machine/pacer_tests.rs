@@ -17,11 +17,11 @@ fn paced(text: &str, audio_secs: f64) -> TranscriptPacer {
     p
 }
 
-fn warned(effects: &[TranscriptPacerEffect]) -> Vec<TranscriptPacerWarning> {
+fn warned(effects: &[TranscriptSyncEffect]) -> Vec<TranscriptPacerWarning> {
     effects
         .iter()
         .filter_map(|e| match e {
-            TranscriptPacerEffect::Warn(w) => Some(*w),
+            TranscriptSyncEffect::Warn(w) => Some(*w),
             _ => None,
         })
         .collect()
@@ -70,7 +70,10 @@ fn events_out_of_order_are_warned_and_change_nothing() {
     };
     let (early, effects) = early.step(finish.clone());
     assert_eq!(warned(&effects), [TranscriptPacerWarning::PlaybackFinishedTooEarly]);
-    assert_eq!(effects.iter().filter(|e| matches!(e, TranscriptPacerEffect::Heard(_))).count(), 1);
+    assert_eq!(
+        effects.iter().filter(|e| matches!(e, TranscriptSyncEffect::ReportHeard(_))).count(),
+        1
+    );
     let (early, effects) = early.step(TranscriptPacerEvent::Position(Duration::from_millis(60)));
     assert_eq!(warned(&effects), [TranscriptPacerWarning::AfterFinished]);
     let (early, effects) = early.step(TranscriptPacerEvent::Close);
@@ -108,11 +111,11 @@ fn an_aligned_delta_starts_where_the_voice_says() {
     assert_eq!(shown(&effects), " two");
 }
 
-fn shown(effects: &[TranscriptPacerEffect]) -> String {
+fn shown(effects: &[TranscriptSyncEffect]) -> String {
     effects
         .iter()
         .filter_map(|e| match e {
-            TranscriptPacerEffect::Forward { chunk, .. } => Some(chunk.text.as_str()),
+            TranscriptSyncEffect::PublishWord { chunk, .. } => Some(chunk.text.as_str()),
             _ => None,
         })
         .collect()
@@ -131,7 +134,7 @@ fn a_cut_keeps_the_words_whose_audio_ended() {
         interrupted: true,
     });
     let heard = effects.iter().find_map(|e| match e {
-        TranscriptPacerEffect::Heard(h) => Some(h.text.clone()),
+        TranscriptSyncEffect::ReportHeard(h) => Some(h.text.clone()),
         _ => None,
     });
     assert_eq!(heard.as_deref(), Some("one"), "\"two\" was shown but still playing");
@@ -149,27 +152,27 @@ fn a_cut_without_progress_hears_up_to_the_reported_playhead() {
     });
     assert_eq!(shown(&effects), "one two three");
     let heard = effects.iter().find_map(|e| match e {
-        TranscriptPacerEffect::Heard(h) => Some(h.text.clone()),
+        TranscriptSyncEffect::ReportHeard(h) => Some(h.text.clone()),
         _ => None,
     });
     assert_eq!(heard.as_deref(), Some("one two"));
 }
 
-// A pause still shows (not hears) the word whose delay began before it; only the next word waits.
+// A word shows when its audio starts: at a pause, every word that started is already out and the
+// pause adds none; a cut there hears only the words that ended.
 #[test]
-fn a_pause_shows_the_word_in_its_delay() {
+fn a_pause_shows_no_word_ahead_of_the_playhead() {
     let p = paced("one two three four", 0.4);
-    // "one" is out; "two" started at 0.1 and shows at 0.15.
     let (p, effects) = p.step(TranscriptPacerEvent::Position(Duration::from_millis(120)));
-    assert_eq!(shown(&effects), "one");
+    assert_eq!(shown(&effects).trim_end(), "one two");
     let (p, effects) = p.step(TranscriptPacerEvent::Paused);
-    assert_eq!(shown(&effects), " two");
+    assert_eq!(shown(&effects), "", "nothing more than what started");
     let (_, effects) = p.step(TranscriptPacerEvent::PlaybackFinished {
         position: Duration::from_millis(120),
         interrupted: true,
     });
     let heard = effects.iter().find_map(|e| match e {
-        TranscriptPacerEffect::Heard(h) => Some(h.text.clone()),
+        TranscriptSyncEffect::ReportHeard(h) => Some(h.text.clone()),
         _ => None,
     });
     assert_eq!(heard.as_deref(), Some("one"), "\"two\" was shown but still playing");
@@ -216,7 +219,7 @@ fn an_aligned_word_ends_at_its_stamp() {
         interrupted: true,
     });
     let heard = effects.iter().find_map(|e| match e {
-        TranscriptPacerEffect::Heard(h) => Some(h.text.clone()),
+        TranscriptSyncEffect::ReportHeard(h) => Some(h.text.clone()),
         _ => None,
     });
     assert_eq!(heard.as_deref(), Some("Okay. I've"));
@@ -264,30 +267,86 @@ fn a_word_ends_where_the_next_starts() {
         interrupted: true,
     });
     let heard = effects.iter().find_map(|e| match e {
-        TranscriptPacerEffect::Heard(h) => Some(h.text.clone()),
+        TranscriptSyncEffect::ReportHeard(h) => Some(h.text.clone()),
         _ => None,
     });
     assert_eq!(heard.as_deref(), Some("one two"));
 }
 
-// Each word lasts its hyphens at the speed known when it starts: a re-estimate moves the words
-// after it, not before.
+// Catches: words placed at the prior rate before the audio was complete left waiting past its end,
+// or shown before the playhead reached them, once its length was known.
 #[test]
-fn a_word_keeps_the_speed_it_started_at() {
+fn the_words_fill_the_audio_once_it_is_complete() {
     let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
-    p = p
-        .step(TranscriptPacerEvent::Text {
+    for event in [
+        TranscriptPacerEvent::Text {
             chunk: lk_agents_abi::TranscriptChunk::new("one two three"),
             start_time: None,
             end_time: None,
-        })
-        .0;
-    p = p.step(TranscriptPacerEvent::TextEnd).0;
-    p = p.step(TranscriptPacerEvent::Audio { secs: 0.3 }).0;
-    // The first word starts with the playback, at the standard rate (1 / 3.83 s).
-    p = p.step(TranscriptPacerEvent::Position(Duration::ZERO)).0;
-    p = p.step(TranscriptPacerEvent::AudioEnd).0;
-    let (_, effects) = p.step(TranscriptPacerEvent::Position(Duration::from_millis(200)));
-    // "one" ends at 0.261 s; "two" (0.1 s at the re-estimated 10 hyphens/s) is shown at 0.311.
-    assert_eq!(shown(&effects), "one");
+        },
+        TranscriptPacerEvent::TextEnd,
+        TranscriptPacerEvent::Audio { secs: 0.3 },
+        TranscriptPacerEvent::AudioEnd,
+    ] {
+        p = p.step(event).0;
+    }
+    let (p, effects) = p.step(TranscriptPacerEvent::Position(Duration::ZERO));
+    assert_eq!(shown(&effects).trim_end(), "one");
+    let (_, effects) = p.step(TranscriptPacerEvent::Position(Duration::from_millis(290)));
+    assert_eq!(shown(&effects).trim_end(), " two three", "every word starts inside the audio");
+}
+
+// Catches: a word the reply's deltas split (`Tuesda` + `y`, forwarded at one stamp) counted as two,
+// the first heard the moment the second began, so a cut mid-word kept `Tuesda` in the history;
+// and the list marker leading it (`- `, silent) heard on its own, kept as a stray `-` (survey
+// seed 152).
+#[test]
+fn a_cut_mid_word_keeps_no_part_of_it() {
+    let mut p = TranscriptPacer::new(TranscriptPacerOptions::default());
+    let pieces = [
+        ("Monday.\n", 0.0, 0.2, true),
+        ("- ", 0.2, 0.2, false),
+        ("Tuesda", 0.2, 0.5, true),
+        ("y ", 0.2, 0.5, true),
+    ];
+    for (raw, at, end, spoken) in pieces {
+        let ev = TranscriptPacerEvent::Text {
+            chunk: lk_agents_abi::TranscriptChunk {
+                spoken,
+                ..lk_agents_abi::TranscriptChunk::new(raw)
+            },
+            start_time: Some(at),
+            end_time: Some(end),
+        };
+        p = p.step(ev).0;
+    }
+    p = p.step(TranscriptPacerEvent::Audio { secs: 0.6 }).0;
+    let (p, effects) = p.step(TranscriptPacerEvent::Position(Duration::from_millis(300)));
+    assert_eq!(shown(&effects).trim_end(), "Monday.\n- Tuesday");
+    let (_, effects) = p.step(TranscriptPacerEvent::PlaybackFinished {
+        position: Duration::from_millis(300),
+        interrupted: true,
+    });
+    let heard = effects.iter().find_map(|e| match e {
+        TranscriptSyncEffect::ReportHeard(h) => Some(h.text.clone()),
+        _ => None,
+    });
+    assert_eq!(heard.as_deref(), Some("Monday."), "\"Tuesday\" was still playing");
+}
+
+// Catches: a line break that arrives inside spoken text (`"\n\nOnce"`) lost, so the word before
+// it ends no break and its list item's pause anchors nothing.
+#[test]
+fn a_line_break_inside_spoken_text_breaks_the_word_before_it() {
+    let pacer = TranscriptPacer::new(TranscriptPacerOptions::default());
+    let ev = TranscriptPacerEvent::Text {
+        chunk: TranscriptChunk::new("run it\n\nOnce done, a lone — dash"),
+        start_time: None,
+        end_time: None,
+    };
+    let (pacer, _) = pacer.step(ev);
+    let (pacer, _) = pacer.step(TranscriptPacerEvent::TextEnd);
+    let at = |text: &str| pacer.untimed.iter().find(|w| w.text.trim() == text).expect(text);
+    assert!(at("it").line_break);
+    assert_eq!(at("lone").mark, Some(crate::transcription::estimate::Break::Clause));
 }

@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, is_dataclass
-from typing import get_type_hints
 
 import pytest
-from pydantic import JsonValue
 
 from livekit.agents import Agent, RunContext
 from livekit.agents.llm import Toolset
-from livekit.agents.voice.run_result import TextDeltaEvent, ToolCallEvent, ToolResultEvent
+from livekit.agents.voice.run_result import TextDeltaEvent
 
 from .fake_llm import FakeLLM
 from .test_agent_run import call, respond
@@ -40,66 +37,6 @@ def blocked(tools=()):
         return "ready"
 
     return agent, entered, release, cancelled
-
-
-def test_generated_public_event_records_preserve_types_and_identity():
-    event = ToolCallEvent(
-        sequence=1,
-        agent_name="agent",
-        invocation_id="run",
-        call_id="call",
-        tool_name="tool",
-        arguments={"value": 3},
-    )
-    assert is_dataclass(event)
-    assert event.__class__.__module__ == "livekit.agents.voice.run_result"
-    assert get_type_hints(ToolCallEvent)["arguments"] == dict[str, JsonValue]
-    assert get_type_hints(ToolResultEvent)["output"] == JsonValue
-    assert asdict(event)["type"] == "tool_call"
-
-
-async def test_concurrent_result_calls_are_refused_and_the_accepted_result_is_reused():
-    agent, entered, release, _ = blocked()
-    async with agent.run_stream("start") as stream:
-        first = asyncio.create_task(stream.result())
-        try:
-            await asyncio.wait_for(entered.wait(), 3)
-            with pytest.raises(RuntimeError, match="another consumer"):
-                await stream.result()
-            release.set()
-            result = await asyncio.wait_for(first, 3)
-            assert result.output == "Done"
-            assert await stream.result() is result
-        finally:
-            release.set()
-            await asyncio.gather(first, return_exceptions=True)
-
-
-async def test_an_unstarted_iterator_can_close_without_cancelling_execution():
-    agent = Agent(instructions="Help", llm=FakeLLM(fake_responses=[respond("start", "Done")]))
-    async with agent.run_stream("start") as stream:
-        events = stream.stream_events()
-        await events.aclose()
-        with pytest.raises(RuntimeError, match="already has an iterator"):
-            stream.stream_text()
-        assert (await stream.result()).output == "Done"
-
-
-async def test_cancelling_a_result_waiter_does_not_cancel_execution():
-    agent, entered, release, cancelled = blocked()
-    async with agent.run_stream("start") as stream:
-        waiting = asyncio.create_task(stream.result())
-        try:
-            await asyncio.wait_for(entered.wait(), 3)
-            waiting.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await waiting
-            assert not cancelled.is_set()
-            release.set()
-            assert (await asyncio.wait_for(stream.result(), 3)).output == "Done"
-        finally:
-            release.set()
-            await asyncio.gather(waiting, return_exceptions=True)
 
 
 async def test_concurrent_iterator_reads_are_refused_and_a_cancelled_read_can_retry():

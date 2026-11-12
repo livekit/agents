@@ -94,7 +94,6 @@ fn output_method(f: &Fixture, base: &str, index: usize) -> String {
             stream_id: Some(stream.id.clone()),
         },
     )
-    .unwrap()
 }
 
 const PLAYED_10MS: &str = r#"{"playback_position": 0.01, "interrupted": false}"#;
@@ -171,6 +170,28 @@ async fn the_avatars_playback_finished_rpc_ends_the_segment_and_a_stranger_is_re
     assert_eq!(f.rpc(&method, "mallory", "{}").as_deref(), Some("reject: unexpected participant"));
     assert_eq!(f.rpc(&method, "avatar", PLAYED_10MS).as_deref(), Some("ok"));
     assert_eq!(f.events(), ["started", "finished 0.01 false"]);
+}
+
+// Catches: a v1 avatar worker (every provider's cloud worker, v1 `AvatarRunner`) reporting on
+// the plain `lk.playback_finished` going unanswered, so a reply never finishes; or its report
+// landing on a later segment than the one it played.
+#[tokio::test]
+async fn a_v1_avatars_plain_playback_finished_ends_the_oldest_segment() {
+    let f = fixture("v1_worker", None);
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    f.out.capture_frame(&frame()).await.unwrap();
+    f.out.flush();
+    settle().await;
+    assert_eq!(f.rpc(RPC_PLAYBACK_FINISHED, "mallory", PLAYED_10MS).as_deref(), Some("reject"));
+    assert_eq!(f.rpc(RPC_PLAYBACK_FINISHED, "avatar", PLAYED_10MS).as_deref(), Some("ok"));
+    assert_eq!(f.events(), ["started", "finished 0.01 false"]);
+
+    f.out.capture_frame(&frame()).await.unwrap();
+    f.out.flush();
+    settle().await;
+    let interrupted = r#"{"playback_position": 0.005, "interrupted": true}"#;
+    assert_eq!(f.rpc(RPC_PLAYBACK_FINISHED, "avatar", interrupted).as_deref(), Some("ok"));
+    assert_eq!(f.events()[2..], ["started", "finished 0.01 true"]);
 }
 
 // Catches: the avatar's idle timeout (no chunk for 10 s: a paused `say(audio=)` stream, a slow
@@ -286,7 +307,8 @@ async fn closing_output_cancels_a_blocked_write_and_retires_its_playback_route()
     assert!(f.room.local_participant().byte_streams()[0].closed);
     assert_eq!(f.out.aclose().await, Closed::Clean);
     assert!(f.out.wait_for_playout().await.interrupted);
-    assert_eq!(f.rpc(RPC_PLAYBACK_FINISHED, "avatar", "{}"), None);
+    // The plain v1 method stays on the room; the closed output's route behind it is retired.
+    assert_eq!(f.rpc(RPC_PLAYBACK_FINISHED, "avatar", "{}").as_deref(), Some("reject"));
     assert_eq!(f.events(), ["started"]);
 }
 
@@ -530,11 +552,11 @@ async fn playback_reports_go_to_the_agent_and_a_failing_one_ends_the_receiver() 
         calls[0],
         (
             ParticipantIdentity("agent-1".into()),
-            playback_method(RPC_PLAYBACK_STARTED, &receipt_segment("S1")).unwrap(),
+            playback_method(RPC_PLAYBACK_STARTED, &receipt_segment("S1")),
             String::new()
         )
     );
-    assert_eq!(calls[1].1, playback_method(RPC_PLAYBACK_FINISHED, &receipt_segment("S1")).unwrap());
+    assert_eq!(calls[1].1, playback_method(RPC_PLAYBACK_FINISHED, &receipt_segment("S1")));
     let payload: serde_json::Value = serde_json::from_str(&calls[1].2).unwrap();
     assert_eq!(payload["playback_position"], 1.5);
     assert_eq!(payload["interrupted"], true);
@@ -554,6 +576,36 @@ async fn playback_reports_go_to_the_agent_and_a_failing_one_ends_the_receiver() 
 }
 
 // Catches: a stream with no format read as some default, which would play garbage.
+// Catches: a v1 agent that streams as soon as the avatar worker is in the room (one not waiting
+// for its video) losing its first segment: the receiver took the room's streams only once it had
+// chosen its sender, and the SDK drops a stream nobody handles.
+#[tokio::test]
+async fn a_v1_stream_sent_while_the_receiver_waits_for_its_agent_is_played() {
+    let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
+    let room = rtc.room("rx-early");
+    std::mem::forget(rtc);
+    let rx = Arc::new(DataStreamAudioReceiver::new(
+        room.clone(),
+        None,
+        std::num::NonZeroU32::new(100).unwrap(),
+        3,
+        None,
+        clock.clone(),
+        Arc::new(TokioSpawner::current()),
+    ));
+    let start = {
+        let rx = rx.clone();
+        tokio::spawn(async move { rx.start().await })
+    };
+    settle().await;
+    room.add_participant("agent-1", ParticipantKind::Agent);
+    let v1 = StreamInfo { name: Some("AUDIO_hT3kW9mQx2Lp".into()), ..audio_info("S1") };
+    room.send_byte_stream("agent-1", v1, [vec![0u8; 2000]]).unwrap();
+
+    start.await.unwrap().unwrap();
+    assert_eq!(take(&rx, 2).await, ["frame 1000", "end"]);
+}
+
 #[tokio::test]
 async fn a_stream_without_its_format_fails_the_receiver() {
     let f = receiver("rx5").await;
@@ -628,7 +680,7 @@ async fn a_closed_receiver_cannot_restart_or_steal_a_replacement_route() {
     assert_eq!(first.rx.start().await, Err(ReceiverEnd::Closed));
     first.rx.aclose();
     use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
-    assert_eq!(first.room.rpc_router().call("agent-1", ""), "ok");
+    assert_eq!(first.room.rpc_router().call(RPC_CLEAR_BUFFER, "agent-1", ""), "ok");
     assert_eq!(first.cleared.load(Ordering::Relaxed), 0);
     replacement.aclose();
 }
@@ -674,7 +726,7 @@ async fn failed_receiver_startup_does_not_retire_the_running_receivers_route() {
     assert!(competing.start().await.is_err(), "one SDK topic admits one receiver");
     competing.aclose();
     use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
-    assert_eq!(first.room.rpc_router().call("agent-1", ""), "ok");
+    assert_eq!(first.room.rpc_router().call(RPC_CLEAR_BUFFER, "agent-1", ""), "ok");
     assert_eq!(first.cleared.load(Ordering::Relaxed), 1);
     first.rx.aclose();
 }
@@ -684,7 +736,33 @@ async fn duplicate_receiver_start_does_not_close_its_existing_registration() {
     let first = receiver("receiver-duplicate-start").await;
     assert!(first.rx.start().await.is_err());
     use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
-    assert_eq!(first.room.rpc_router().call("agent-1", ""), "ok");
+    assert_eq!(first.room.rpc_router().call(RPC_CLEAR_BUFFER, "agent-1", ""), "ok");
     assert_eq!(first.cleared.load(Ordering::Relaxed), 1);
     first.rx.aclose();
+}
+
+/// A segment the avatar can no longer play finishes, interrupted, when the avatar leaves the room
+/// before reporting `lk.playback_finished`. https://github.com/livekit/agents/issues/6427
+#[tokio::test]
+#[ignore = "https://github.com/livekit/agents/issues/6427 reproduces: the avatar output ignores its avatar leaving and waits forever for lk.playback_finished"]
+async fn an_avatar_that_leaves_mid_segment_finishes_it() {
+    let f = fixture("left", None);
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    f.out.capture_frame(&frame()).await.unwrap();
+    f.out.capture_frame(&frame()).await.unwrap();
+    f.out.flush();
+    settle().await;
+    assert_eq!(f.events(), ["started"]);
+    f.room.remove_participant(
+        &ParticipantIdentity("avatar".into()),
+        lk_agents_abi::voice::rtc::DisconnectReason::ParticipantRemoved,
+    );
+    settle().await;
+    f.clock.advance(Duration::from_secs(30));
+    settle().await;
+    let events = f.events();
+    assert!(
+        events.last().is_some_and(|e| e.starts_with("finished") && e.ends_with("true")),
+        "the segment is still waiting on an avatar that left: {events:?}"
+    );
 }

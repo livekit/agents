@@ -14,10 +14,11 @@ lk-agents-worker = { path = "../lk-agents-worker" }
 lk-agents-net = { path = "../lk-agents-net" }
 livekit-protocol.workspace = true
 prost.workspace = true
+serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 log.workspace = true
 parking_lot.workspace = true
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+chrono = { version = "0.4", default-features = false, features = ["alloc", "clock"] }
 tokio = { workspace = true, features = ["net", "io-util"] }
 tokio-util = "0.7"
 

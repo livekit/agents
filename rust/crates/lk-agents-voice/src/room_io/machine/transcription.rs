@@ -7,7 +7,7 @@ use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TranscriptChunk,
 };
-use lk_agents_core::tts::markup::delivery_attribute;
+use lk_agents_core::markup::delivery_attribute;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// The microphone view observed by the performer when a transcript's subject changes.

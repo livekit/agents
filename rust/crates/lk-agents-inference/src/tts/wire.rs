@@ -29,24 +29,10 @@ pub fn normalize_fallback_str(model: &str) -> lk_agents_abi::inference::fallback
 }
 
 /// `_has_aligned_transcript`: whether this model and these options produce timings (recomputed
-/// on `update_options`).
+/// on `update_options`). Options the gateway would refuse produce none.
 pub fn has_aligned_transcript(model: &str, extra_kwargs: &Map<String, Value>) -> bool {
-    match InferenceProvider::of_model(model) {
-        // `bool(extra_kwargs.get("add_timestamps"))` -- `false`, `0` and `""` are all "no".
-        Some(InferenceProvider::Cartesia) => truthy(extra_kwargs.get("add_timestamps")),
-        Some(InferenceProvider::Inworld) => matches!(
-            extra_kwargs.get("timestamp_type").and_then(Value::as_str),
-            Some("WORD") | Some("CHARACTER")
-        ),
-        Some(InferenceProvider::Assemblyai) => {
-            extra_kwargs.get("word_timestamps") != Some(&Value::Bool(false))
-        }
-        _ => false,
-    }
-}
-
-fn truthy(value: Option<&Value>) -> bool {
-    value.is_some_and(lk_agents_core::llm::provider_format::is_truthy)
+    super::provider_options::Options::parse(model, extra_kwargs.clone())
+        .is_ok_and(|options| options.aligned())
 }
 
 /// `TTS.Markup._provider_key()`: the markup dialect, `None` for a model with no markup.
@@ -390,16 +376,25 @@ mod tests {
         assert!(input_transcript("hi", &opts)["generation_config"].get("model").is_none());
     }
 
-    // Catches: the object and array arms of Python truthiness in the alignment flag.
+    // Catches: a flag the gateway would refuse (not a boolean) taken as asking for timings.
     #[test]
-    fn an_empty_container_is_a_falsy_alignment_flag() {
-        let mut extra = Map::new();
-        for empty in [json!({}), json!([]), json!(0), json!("")] {
-            extra.insert("add_timestamps".into(), empty.clone());
-            assert!(!has_aligned_transcript("cartesia/sonic-3", &extra), "{empty} must be falsy");
-        }
-        extra.insert("add_timestamps".into(), json!({"a": 1}));
-        assert!(has_aligned_transcript("cartesia/sonic-3", &extra));
+    fn an_invalid_alignment_flag_produces_no_timings() {
+        let extra: Map<String, Value> =
+            [("add_timestamps".to_owned(), Value::from("yes"))].into_iter().collect();
+        assert!(!has_aligned_transcript("cartesia/sonic-3", &extra));
+    }
+
+    // Catches: a voice that can time its words sent without asking for it, so the transcript
+    // estimated what the voice would have told; or a caller's explicit choice overridden.
+    #[test]
+    fn word_timestamps_are_asked_for_unless_the_caller_set_them() {
+        let none = Map::new();
+        assert!(has_aligned_transcript("cartesia/sonic-3", &none));
+        assert!(has_aligned_transcript("inworld/inworld-tts-1", &none));
+        assert!(!has_aligned_transcript("deepgram/aura-2", &none));
+        let off: Map<String, Value> =
+            [("add_timestamps".to_owned(), Value::Bool(false))].into_iter().collect();
+        assert!(!has_aligned_transcript("cartesia/sonic-3", &off));
     }
 
     // Catches: normalising the fallback extra to `null` like STT.
@@ -408,15 +403,15 @@ mod tests {
         let opts = TtsOptions {
             model: "cartesia/sonic-3".into(),
             fallback: vec![FallbackModel {
-                model: "inworld/inworld-tts-1".into(),
-                voice: "ashley".into(),
+                model: "deepgram/aura-2".into(),
+                voice: "thalia".into(),
                 extra_kwargs: None,
             }],
             ..Default::default()
         };
         assert_eq!(
             session_create(&opts)["fallback"],
-            json!({"models": [{"model": "inworld/inworld-tts-1", "voice": "ashley", "extra": {}}]})
+            json!({"models": [{"model": "deepgram/aura-2", "voice": "thalia", "extra": {}}]})
         );
     }
 

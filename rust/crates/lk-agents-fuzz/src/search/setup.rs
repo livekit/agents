@@ -1,11 +1,12 @@
 use fastrand::Rng;
-use lk_agents_abi::voice::session_options::TextTransformSet;
+use std::time::Duration;
 
 use crate::{
     drive::{
         AmdAnswer, AmdSetup, ConnSetup, Faults, KeytermDetectionSetup, NodeSetup, PreConnect,
         ProcessorFaults, RealtimeSetup, RoomLegs, RoomSetup, Setup, StorageSetup, TtsAlignment,
     },
+    fakes::{CaptureFault, UnreportedClear},
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
 
@@ -66,6 +67,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         sync_transcription: rng.bool(),
         transcription_output_raises: false,
         lagging_output: false,
+        output_fault: None,
+        unreported_clear: None,
         pausable_output: rng.bool(),
         speech_gap_ms: rng.bool().then(|| ms(rng)),
         user_turn_max_words: rng.bool().then(|| rng.u32(1..12)),
@@ -73,14 +76,6 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         // A niche setting: a few cases, most keep automatic turns.
         push_to_talk: rng.u8(0..100) < 3,
         transcription_timeout_ms: rng.bool().then(|| ms(rng)),
-        text_transforms: match rng.usize(0..4) {
-            0 | 1 => None,
-            2 => Some(None),
-            _ => Some(Some(TextTransformSet {
-                filter_markdown: rng.bool(),
-                filter_emoji: rng.bool(),
-            })),
-        },
         room_legs: rng.bool().then(|| RoomLegs {
             pre_connect: match rng.usize(0..4) {
                 0 => None,
@@ -103,8 +98,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         tts_alignment: TtsAlignment::None,
         tts_markup: "",
         expressive_model: false,
-        aligned_transcript: None,
-        agent_aligned_transcript: None,
+        tts_pacing: false,
         tools_refuse_cancel: false,
         stray: 0.0,
         storage: None,
@@ -187,10 +181,11 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         1 => Some(false),
         _ => Some(true),
     };
-    setup.aligned_transcript = said(rng);
-    setup.agent_aligned_transcript = said(rng);
+    // Retired (the session's and an agent's aligned-transcript option), still drawn so every
+    // seed keeps its setup.
+    let _ = (said(rng), said(rng));
     setup.tools_refuse_cancel = rng.u8(0..100) < 10;
-    // Most calls store their lane; half of those over a faulty database.
+    // Most calls store their partition; half of those over a faulty database.
     setup.storage = (rng.u8(0..100) < 80)
         .then(|| StorageSetup { faults: rng.bool(), ..StorageSetup::default() });
     // A broken model, license or connection fails a span; a glitch fails a rare frame; a
@@ -216,5 +211,26 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     setup.tts_markup =
         ["", "", "cartesia", "inworld", "xai", "fishaudio", "gemini"][rng.usize(0..7)];
     setup.expressive_model = !setup.tts_markup.is_empty();
+    // pacing, as production runs it by default, drawn after the dialect for the same reason
+    setup.tts_pacing = rng.bool();
+    if let Some(seed) = setup.stress {
+        misbehaving_sink(&mut setup, &mut Rng::with_seed(seed ^ 0x7369_6e6b));
+    }
     setup
+}
+
+/// One stressed call in eight has an audio output that misbehaves the way custom and remote ones
+/// do: a frame it never takes, or a clear it never reports (late, or not at all). Never both, and
+/// never outside a stressed call, so the calls that model a well-behaved room stay the norm. Drawn
+/// from the stress seed, so it leaves every other switch of a seed as it was.
+fn misbehaving_sink(setup: &mut Setup, rng: &mut Rng) {
+    if rng.u8(0..8) != 0 {
+        return;
+    }
+    if rng.bool() {
+        setup.output_fault = Some(CaptureFault { at: rng.u32(0..200), hangs: rng.bool() });
+    } else {
+        let late = rng.bool().then(|| Duration::from_millis(rng.u64(500..9_000)));
+        setup.unreported_clear = Some(UnreportedClear { late });
+    }
 }

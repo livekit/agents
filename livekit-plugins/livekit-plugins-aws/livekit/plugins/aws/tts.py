@@ -122,12 +122,15 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Amazon Polly"
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _core_max_text_len(self) -> int | None:
+        return 3000
+
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
-            text=text,
+            text=chunk.text,
             options=self._opts,
             session=self._session,
             conn_options=conn_options,

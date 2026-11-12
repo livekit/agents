@@ -1,4 +1,3 @@
-use self::stream::TtsStream;
 use crate::abi::{
     StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
@@ -13,11 +12,10 @@ use lk_agents_abi::inference::fallback::{TtsFallbackEntry, TtsFallbacks};
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::inference::tts_client::InferenceTts;
 use lk_agents_abi::tokenize::language::LanguageCode;
-use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
-use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
-use lk_agents_core::tts::AudioTranscriptNormalizer;
+use lk_agents_abi::utils::stream::Entry;
+use lk_agents_abi::{ApiConnectOptions, BoxFuture, Clock, SpeechChunk, Ts};
 use lk_agents_net::connection_pool::ConnectionPool;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
@@ -41,10 +39,10 @@ pub(crate) mod fed;
 pub mod pacing;
 mod provider_options;
 mod pump;
-mod request;
+pub(crate) mod request;
 pub mod sentence_adapter;
 pub use request::{stream, synthesize};
-mod sentences;
+pub(crate) mod stage;
 pub mod stream;
 pub mod wire;
 
@@ -127,6 +125,8 @@ struct Connections {
     pool: ConnectionPool,
     idle: HashMap<u64, Connection>,
     next_id: u64,
+    /// The client was closed: no socket is pooled any more.
+    closed: bool,
 }
 
 impl Default for Connections {
@@ -135,6 +135,7 @@ impl Default for Connections {
             pool: ConnectionPool::new(Some(300.0), true),
             idle: HashMap::new(),
             next_id: 0,
+            closed: false,
         }
     }
 }
@@ -156,9 +157,27 @@ impl Connections {
         self.next_id
     }
 
-    fn give_back(&mut self, id: u64, connection: Connection) {
+    /// Back to the pool, or handed back to be closed once the client is.
+    fn give_back(&mut self, id: u64, connection: Connection) -> Option<Connection> {
+        if self.closed {
+            self.forget(id);
+            return Some(connection);
+        }
         self.idle.insert(id, connection);
         self.pool.put(id);
+        None
+    }
+
+    /// Pools nothing more; the idle sockets, to close.
+    fn close(&mut self) -> Vec<Connection> {
+        self.closed = true;
+        let ids: Vec<u64> = self.idle.keys().copied().collect();
+        ids.into_iter()
+            .filter_map(|id| {
+                self.pool.remove(id);
+                self.idle.remove(&id)
+            })
+            .collect()
     }
 
     fn forget(&mut self, id: u64) {
@@ -245,23 +264,25 @@ impl GatewayTts {
                 &create_frame,
             );
             if let Ok((sender, receiver)) = opened.await {
-                let mut connections = connections.lock();
-                let id = connections.opened(clock.now().as_secs_f64());
-                connections.give_back(id, Connection { sender, receiver, configuration });
+                let refused = {
+                    let mut connections = connections.lock();
+                    let id = connections.opened(clock.now().as_secs_f64());
+                    connections.give_back(id, Connection { sender, receiver, configuration })
+                };
+                if let Some(connection) = refused {
+                    connection.sender.close().await;
+                }
             }
         });
     }
 
     /// Identification is supplied per stream.
     /// `None`: the identity a session bound, else no job, the native headers.
-    /// `expressive`: this synthesis batches sentences for markup and drops bracket cues from the
-    /// alignment.
     pub fn stream_identified(
         &self,
         identification: Option<Headers>,
-        expressive: bool,
     ) -> Result<(SynthesisInput, SynthesisOutput), ProviderError> {
-        self.open(identification.as_ref(), expressive)
+        self.open(identification.as_ref())
     }
 }
 
@@ -311,7 +332,6 @@ impl GatewayTts {
     fn open(
         &self,
         identification: Option<&Headers>,
-        expressive: bool,
     ) -> Result<(SynthesisInput, SynthesisOutput), ProviderError> {
         let mut opts = self.opts.lock().clone();
         if let Some(conn) = self.conn_options {
@@ -325,7 +345,7 @@ impl GatewayTts {
         let identification = identification.as_ref();
 
         opts.conn_options.validate().map_err(|error| ApiError::new(error.to_string()))?;
-        let (text_tx, text_rx) = mpsc::channel::<TextCmd>(TEXT_QUEUE_CAPACITY);
+        let (text_tx, text_rx) = mpsc::channel::<String>(TEXT_QUEUE_CAPACITY);
         let (audio_tx, audio_rx) =
             mpsc::channel::<Result<SynthesizedAudio, ApiError>>(AUDIO_QUEUE_CAPACITY);
         let stop = CancellationToken::new();
@@ -358,25 +378,14 @@ impl GatewayTts {
             sample_rate: opts.sample_rate,
             opts,
             provider,
-            transcript: AudioTranscriptNormalizer::new(expressive),
+            transcript: std::collections::BTreeMap::new(),
             text_rx,
             audio_tx,
-        };
-        let prep = TextPrep {
-            pending_bytes: 0,
-            markup: wire::markup_provider(&pump.opts.model).and_then(|provider| {
-                lk_agents_core::tts::markup::text_processor(provider.as_str())
-            }),
-            sentences: {
-                let key = pump.provider.map_or("", InferenceProvider::as_str);
-                let markup = lk_agents_core::tts::markup::markup_vocabulary(key, expressive);
-                Box::new(lk_agents_core::tokenize::sentences::sentence_splitter(Some(key), markup))
-            },
         };
         self.tasks.spawn(self.spawner.as_ref(), "tts stream", pump.run());
 
         Ok((
-            SynthesisInput { text: text_tx, prep: Mutex::new(prep) },
+            SynthesisInput { text: Mutex::new(Some(text_tx)) },
             SynthesisOutput {
                 audio: audio_rx,
                 done: false,
@@ -434,9 +443,9 @@ impl Tts for GatewayTts {
         wire::markup_provider(&self.model()).map_or("", |p| p.as_str()).to_owned()
     }
 
-    /// The gateway stream lowers the markup itself.
-    fn lowers_markup(&self) -> bool {
-        true
+    /// The host `inference.TTS`'s `options`, which this view reports for.
+    fn options(&self) -> lk_agents_abi::tts::types::TtsOptions {
+        self.reporter.as_ref().map(|host| host.options()).unwrap_or_default()
     }
 
     fn prewarm(&self) {
@@ -447,11 +456,13 @@ impl Tts for GatewayTts {
     fn synthesize<'a>(
         &'a self,
         _cx: &telemetry::Cx,
-        text: &'a str,
+        chunk: &'a SpeechChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            let (sink, source) = self.open(None, false)?;
-            sink.push(text.to_owned())?;
+            let (sink, source) = self.open(None)?;
+            if !chunk.text.trim().is_empty() {
+                sink.queue(chunk.text.clone())?;
+            }
             sink.end_input();
             Ok(Box::new(source) as TtsSource)
         })
@@ -460,13 +471,12 @@ impl Tts for GatewayTts {
     fn stream(
         &self,
         _cx: &telemetry::Cx,
-        expressive: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
     > {
         Box::pin(async move {
-            self.open(None, expressive).map(|(sink, source)| {
+            self.open(None).map(|(sink, source)| {
                 lk_agents_abi::DuplexStream::new(
                     Box::new(sink) as TtsSink,
                     Box::new(source) as TtsSource,
@@ -476,88 +486,56 @@ impl Tts for GatewayTts {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum TextCmd {
-    Push(String),
-    End,
-    Failed,
-}
-
+/// `SynthesizeStream`'s input side: each chunk its stage prepared, sent to the gateway as is. The
+/// input ends when the sender goes: the pump reads what was queued, then the end.
 pub struct SynthesisInput {
-    text: mpsc::Sender<TextCmd>,
-    prep: Mutex<TextPrep>,
-}
-
-/// `SynthesizeStream`'s input side: the markup normalised, the text split into the provider's
-/// sentences, each converted to its markup.
-struct TextPrep {
-    pending_bytes: usize,
-    markup: Option<Box<dyn SentenceTextProcessor>>,
-    sentences: Box<dyn SentenceSplitter>,
+    text: Mutex<Option<mpsc::Sender<String>>>,
 }
 
 impl SynthesisInput {
-    fn send(&self, sentences: Vec<String>) -> Result<(), ProviderError> {
-        let prep = self.prep.lock();
-        for sentence in sentences {
-            let converted = match &prep.markup {
-                Some(markup) => markup.convert(&markup.normalize(&sentence)),
-                None => sentence,
-            };
-            let permit = self.text.try_reserve().map_err(|_| stream_closed(WHAT))?;
-            if self.text.capacity() == 0 {
-                return Err(ApiError::new("TTS pending text queue is full").into());
+    fn sender(&self) -> Result<mpsc::Sender<String>, ProviderError> {
+        self.text.lock().clone().ok_or_else(|| stream_closed(WHAT))
+    }
+
+    /// Queues `text` without waiting: refused when the queue is full.
+    fn queue(&self, text: String) -> Result<(), ProviderError> {
+        self.sender()?.try_send(text).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => {
+                ApiError::new("TTS pending text queue is full").into()
             }
-            permit.send(TextCmd::Push(converted));
-        }
-        Ok(())
+            mpsc::error::TrySendError::Closed(_) => stream_closed(WHAT),
+        })
     }
 }
 
-impl StreamInput<String> for SynthesisInput {
-    fn push(&self, item: String) -> Result<(), ProviderError> {
-        if item.len() > MAX_PENDING_TEXT_BYTES {
-            return Err(ApiError::new("TTS text exceeds the pending text limit").into());
-        }
-        let sentences = {
-            let mut prep = self.prep.lock();
-            if prep.pending_bytes.saturating_add(item.len()) > MAX_PENDING_TEXT_BYTES {
-                return Err(ApiError::new("TTS pending text exceeds its limit").into());
-            }
-            prep.pending_bytes += item.len();
-            let normalized = match &prep.markup {
-                Some(markup) => markup.normalize(&item),
-                None => item,
-            };
-            let sentences = prep.sentences.push(&normalized);
-            prep.pending_bytes =
-                prep.pending_bytes.saturating_sub(sentences.iter().map(String::len).sum());
-            sentences
-        };
-        self.send(sentences)
+impl StreamInput<SpeechChunk> for SynthesisInput {
+    fn push(&self, chunk: SpeechChunk) -> Result<(), ProviderError> {
+        self.queue(chunk.text)
     }
 
-    /// The `_FlushSentinel`: whatever the tokenizer holds goes out as a sentence.
+    /// Each chunk is a whole request already: a segment's end sends nothing more.
     fn flush(&self) -> Result<(), ProviderError> {
-        let sentences = {
-            let mut prep = self.prep.lock();
-            prep.pending_bytes = 0;
-            prep.sentences.flush()
-        };
-        self.send(sentences)
+        Ok(())
     }
 
     fn end_input(&self) {
-        let sentences = {
-            let mut prep = self.prep.lock();
-            prep.pending_bytes = 0;
-            prep.sentences.flush()
+        drop(self.text.lock().take());
+    }
+
+    /// Waits for room in the queue: a provider behind holds the feed, it never refuses text.
+    fn send(&self, entry: Entry<SpeechChunk>) -> BoxFuture<'static, Result<(), ProviderError>> {
+        let sender = match entry {
+            Entry::Item(_) => self.sender(),
+            Entry::Flush => return Box::pin(std::future::ready(Ok(()))),
+            Entry::EndInput => {
+                self.end_input();
+                return Box::pin(std::future::ready(Ok(())));
+            }
         };
-        let command = match self.send(sentences) {
-            Ok(()) => TextCmd::End,
-            Err(_) => TextCmd::Failed,
-        };
-        let _ = self.text.try_send(command);
+        Box::pin(async move {
+            let Entry::Item(chunk) = entry else { unreachable!("only an item is sent") };
+            sender?.send(chunk.text).await.map_err(|_| stream_closed(WHAT))
+        })
     }
 }
 
@@ -650,7 +628,6 @@ impl Drop for SynthesisOutput {
 
 pub const TEXT_QUEUE_CAPACITY: usize = 64;
 pub const AUDIO_QUEUE_CAPACITY: usize = 8;
-const MAX_PENDING_TEXT_BYTES: usize = 64 * 1024;
 
 struct Pump {
     connections: Arc<Mutex<Connections>>,
@@ -670,8 +647,9 @@ struct Pump {
     opts: TtsOptions,
     provider: Option<InferenceProvider>,
     sample_rate: u32,
-    transcript: AudioTranscriptNormalizer,
-    text_rx: mpsc::Receiver<TextCmd>,
+    /// Each segment's aligned words, waiting for the frame that carries them.
+    transcript: std::collections::BTreeMap<String, Vec<lk_agents_abi::TranscriptChunk>>,
+    text_rx: mpsc::Receiver<String>,
     audio_tx: mpsc::Sender<Result<SynthesizedAudio, ApiError>>,
 }
 
@@ -682,7 +660,6 @@ fn connection_configuration(frame: &serde_json::Value, headers: &Headers) -> Str
 }
 
 impl InferenceTts for GatewayTts {
-    type Stream = TtsStream;
     type Env = ProcessEnv;
 
     #[allow(clippy::too_many_arguments, reason = "Preserve the public host operation signature")]
@@ -753,6 +730,12 @@ impl InferenceTts for GatewayTts {
     fn identified(&self, headers: Headers, reporter: Option<Arc<dyn Tts>>) -> Self {
         self.identified(headers, reporter)
     }
+    async fn aclose(&self) {
+        let idle = self.connections.lock().close();
+        for connection in idle {
+            connection.sender.close().await;
+        }
+    }
     fn update_options(
         &self,
         voice: Option<String>,
@@ -766,16 +749,6 @@ impl InferenceTts for GatewayTts {
             language.as_deref(),
             extra_kwargs.as_ref(),
         );
-    }
-    /// Open a duplex synthesis. The gateway has no one-shot endpoint, so `synthesize` is this plus
-    /// one push and `end_input`; each sentence pushed goes out as it arrives.
-    async fn stream(
-        &self,
-        conn_options: Option<ApiConnectOptions>,
-        expressive: bool,
-    ) -> Result<Self::Stream, ProviderError> {
-        let (sink, source) = self.configured(conn_options).stream_identified(None, expressive)?;
-        Ok(TtsStream::new(Some(Box::new(sink)), Box::new(source), self.clock.clone()))
     }
 }
 

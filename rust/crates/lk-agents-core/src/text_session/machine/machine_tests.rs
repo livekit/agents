@@ -83,6 +83,42 @@ fn message(id: &str, role: Role, text: &str) -> ChatMessage {
     ChatMessage::text(id, role, text, std::time::UNIX_EPOCH)
 }
 
+#[test]
+fn streaming_checkpoints_are_bounded_by_time_and_bytes_and_mark_incomplete_text() {
+    let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "hello");
+    driver.session.recording = true;
+    let (request, _) = driver.request();
+    let chunk = |text: String| LlmChunk {
+        id: "partial".into(),
+        delta: Some(ChoiceDelta {
+            role: Some(Role::Assistant),
+            content: Some(text),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let effects =
+        driver.run(agent_run::AgentRunEvent::LlmChunk { request, chunk: chunk("first".into()) });
+    assert!(!effects.iter().any(|effect| matches!(effect, TextSessionEffect::Checkpoint(_))));
+    let effects = driver
+        .session
+        .handle(TextSessionEvent::Wake, Ts::ZERO.saturating_add(Duration::from_millis(250)));
+    let snapshot = effects
+        .iter()
+        .find_map(|effect| match effect {
+            TextSessionEffect::Checkpoint(state) => Some(state),
+            _ => None,
+        })
+        .unwrap();
+    let item =
+        snapshot.frames[&snapshot.active_frame_id].history.last().unwrap().as_message().unwrap();
+    assert!(item.interrupted);
+    assert_eq!(item.raw_text_content().as_deref(), Some("first"));
+    let effects = driver
+        .run(agent_run::AgentRunEvent::LlmChunk { request, chunk: chunk("x".repeat(64 * 1024)) });
+    assert!(effects.iter().any(|effect| matches!(effect, TextSessionEffect::Checkpoint(_))));
+}
+
 fn config(approval: bool, mode: ChatHistory, merge: bool) -> TextSessionConfig {
     let tool = FunctionToolInfo {
         spec: ToolSpec {
@@ -137,6 +173,7 @@ fn config(approval: bool, mode: ChatHistory, merge: bool) -> TextSessionConfig {
 fn input(state: Option<TextSessionState>) -> TextSessionInput {
     TextSessionInput {
         session_id: "conversation".into(),
+        id_seed: 0,
         execution_id: "task-42".into(),
         task_id: None,
         state,

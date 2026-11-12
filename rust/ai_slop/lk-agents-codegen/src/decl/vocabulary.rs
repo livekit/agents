@@ -80,6 +80,7 @@ use super::Literal;
 // | trait method | `name = "x"` | the host name, when the Rust one cannot be it |
 // | function | `function, path = "livekit.agents.x"` | re-exported from that public module |
 // | const | `constant(name = "..", path = "livekit.agents.x")` | a module constant of the file's `file(module = ..)`, re-exported from that public module |
+// | const | `constant(native, ..)` | a string constant loaded from the compiled ABI, allowing a dependency-owned value |
 // | class/function trait | `class(.., pid = false)`, `functions(pid = false)` | retain the pure export opt-out from the fork guard; defaults to true |
 // | trait method | `pid = true/false` | override its class or function group fork guard |
 // | parameter | `kw` | keyword-only from this parameter on |

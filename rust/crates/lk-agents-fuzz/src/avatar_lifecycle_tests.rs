@@ -1,15 +1,17 @@
 use lk_agents_abi::errors::{HostError, RefRegistry};
 use lk_agents_abi::metrics::base::AvatarMetrics;
 use lk_agents_abi::voice::avatar::{AvatarHost, AvatarJoinError, AvatarLifecycle as _};
-use lk_agents_abi::voice::rtc::{ConnectionState, ParticipantKind, TrackSource};
+use lk_agents_abi::voice::io::{AudioOutputExt, IoError};
+use lk_agents_abi::voice::rtc::{ConnectionState, ParticipantKind, TRACK_KIND_VIDEO, TrackSource};
 use lk_agents_abi::voice::session::SessionOptions as _;
 use lk_agents_abi::voice::session_options::{SessionKwargs, TurnHandlingKwargs};
 use lk_agents_abi::voice::session_owner::SessionOwner as _;
 use lk_agents_abi::worker::ipc_host::{FrameworkShutdown, JobExecution};
 use lk_agents_abi::worker::job::SessionJob;
-use lk_agents_abi::{ChatItem, ChatMessage, HostRef, Maybe, Role};
+use lk_agents_abi::{AudioFrame, ChatItem, ChatMessage, HostRef, Maybe, Role};
 use lk_agents_fuzz::fakes::room::{FakeRoom, FakeRtc};
 use lk_agents_runtime::avatar::lifecycle::{AvatarLifecycle, item_added};
+use lk_agents_runtime::avatar::output::DataStreamAudioOutput;
 use lk_agents_runtime::net::env::ProcessEnv;
 use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::rtc::events::RoomEventBus;
@@ -91,8 +93,6 @@ fn owner() -> Arc<SessionOwner> {
     let kwargs = SessionKwargs {
         turn_handling: Some(TurnHandlingKwargs::default()),
         max_tool_steps: 3,
-        use_tts_aligned_transcript: Maybe::NotGiven,
-        tts_text_transforms: Maybe::NotGiven,
         min_consecutive_speech_delay: 0.0,
         expressive: Default::default(),
         aec_warmup_duration: Maybe::NotGiven,
@@ -284,4 +284,143 @@ async fn a_disconnected_room_removes_nobody() {
     s.room.set_connection_state(ConnectionState::Disconnected);
     s.lifecycle.aclose().await;
     assert!(paths.lock().unwrap().is_empty());
+}
+
+/// The avatar's audio output on the lifecycle's room, as a plugin attaches it.
+fn attached_output(s: &Started) -> Arc<DataStreamAudioOutput> {
+    let output = Arc::new(DataStreamAudioOutput::new(
+        s.room.clone(),
+        "avatar".into(),
+        None,
+        Some(TRACK_KIND_VIDEO),
+        Some(Duration::from_secs(2)),
+        false,
+        s.clock.clone(),
+        Arc::new(TokioSpawner::current()),
+    ));
+    s.lifecycle.attach_output(output.clone());
+    output
+}
+
+/// 10 ms at 24 kHz mono.
+fn frame() -> AudioFrame {
+    AudioFrame::new(vec![1u8; 480], 24_000, 1, 240)
+}
+
+// Catches: an avatar that never joins holding the agent's speech forever (`say()` never
+// finishes): the audio waited on the avatar with no limit. Before the join timeout the audio waits;
+// past it, it fails at once with the timeout, and it streams again once the avatar joins late.
+#[tokio::test]
+async fn audio_for_an_avatar_that_never_joined_fails_at_the_join_timeout_until_it_joins() {
+    let s = start("never-joins", None);
+    let output = attached_output(&s);
+    let waiting = {
+        let output = output.clone();
+        tokio::spawn(async move { output.capture_frame(&frame()).await })
+    };
+    settle().await;
+    s.clock.advance(Duration::from_secs(29));
+    settle().await;
+    assert!(!waiting.is_finished(), "before the join timeout the audio waits for the avatar");
+    s.clock.advance(Duration::from_secs(1));
+    let failed = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the audio is still waiting for an avatar past its join timeout")
+        .unwrap();
+    let overdue = IoError::Rtc(AvatarJoinError::Timeout(30.0).to_string());
+    assert_eq!(failed, Err(overdue.clone()));
+    let again = tokio::time::timeout(Duration::from_secs(5), output.capture_frame(&frame())).await;
+    assert_eq!(again.expect("an overdue avatar fails audio at once"), Err(overdue));
+    assert_eq!(
+        s.lifecycle.wait_for_join(Some(0.0)).await,
+        Err(AvatarJoinError::Timeout(0.0)),
+        "the join wait goes on"
+    );
+
+    let avatar = s.room.add_participant("avatar", ParticipantKind::Agent);
+    avatar.publish_track("TR_cam", TrackSource::Camera);
+    tokio::time::timeout(Duration::from_secs(5), s.lifecycle.wait_for_join(None))
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), output.capture_frame(&frame()))
+        .await
+        .expect("an avatar that joined late takes the audio")
+        .unwrap();
+    output.flush();
+    settle().await;
+    let streams = s.room.local_participant().byte_streams();
+    assert_eq!(streams.len(), 1, "only the audio after the join reaches the avatar");
+    assert_eq!(streams[0].chunks.len(), 1);
+    output.aclose().await;
+    s.lifecycle.aclose().await;
+}
+
+// Catches: an avatar that joins in time still failing audio, or the join timeout counted from the
+// first audio instead of from the start.
+#[tokio::test]
+async fn audio_waits_for_an_avatar_that_joins_before_its_timeout() {
+    let s = start("joins-late", None);
+    let output = attached_output(&s);
+    s.clock.advance(Duration::from_secs(20));
+    settle().await;
+    let waiting = {
+        let output = output.clone();
+        tokio::spawn(async move { output.capture_frame(&frame()).await })
+    };
+    settle().await;
+    s.clock.advance(Duration::from_secs(9));
+    settle().await;
+    assert!(!waiting.is_finished());
+    s.room
+        .add_participant("avatar", ParticipantKind::Agent)
+        .publish_track("TR_cam", TrackSource::Camera);
+    tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap().unwrap();
+    s.clock.advance(Duration::from_secs(5));
+    settle().await;
+    tokio::time::timeout(Duration::from_secs(5), output.capture_frame(&frame()))
+        .await
+        .unwrap()
+        .unwrap();
+    output.aclose().await;
+    s.lifecycle.aclose().await;
+}
+
+mod overdue_avatar_error {
+    //! The lifecycle's report that the avatar did not join: one recoverable session error.
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, SayInput};
+    use lk_agents_voice::events::{ErrorSource, SessionEvent};
+
+    // Catches: an overdue avatar closing the call or counted against its unrecoverable errors,
+    // instead of one recoverable `avatar_error` the agent keeps speaking through.
+    #[test]
+    fn an_overdue_avatar_is_one_recoverable_error_and_the_session_goes_on() {
+        let say = Input::Say {
+            text: AgentText("Still here.".into()),
+            input: SayInput::Words,
+            allow: None,
+            to_ctx: true,
+        };
+        let inputs = [Input::AvatarError {}, Input::Advance { ms: Millis(100) }, say];
+        let run = simulate(async {
+            let mut run = Run::start(&Setup::default(), 0, Default::default()).await;
+            for input in inputs.iter().chain([&Input::Advance { ms: Millis(2_000) }]) {
+                run.apply(input).await;
+            }
+            run
+        });
+        let events = run.record.host_view().events();
+        let errors: Vec<_> = events
+            .iter()
+            .filter_map(|(_, ev)| match ev {
+                SessionEvent::Error(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!((errors[0].source, errors[0].recoverable), (ErrorSource::Avatar, true));
+        assert!(!events.iter().any(|(_, ev)| matches!(ev, SessionEvent::Close { .. })));
+        assert!(!run.record.host_view().audio_pushed().is_empty(), "the agent kept speaking");
+    }
 }

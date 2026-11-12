@@ -215,8 +215,7 @@ impl Worker {
         );
         // Report running jobs after registration so the server can migrate their ownership.
         if !self.active.is_empty() {
-            let ids = self.active.iter().map(|j| j.job.id.clone()).collect();
-            self.queue(migrate_jobs(ids), outbox);
+            self.queue(migrate_jobs(&self.active), outbox);
         }
         self.update_idle_target();
         self.send_worker_status(outbox);
@@ -485,7 +484,7 @@ impl Worker {
                 if let PendingState::Launching(info) = p.state {
                     let job_id = info.job.id.clone();
                     if info.worker_id != self.worker_id && self.conn == ConnState::Registered {
-                        self.queue(migrate_jobs(vec![job_id.clone()]), outbox);
+                        self.queue(migrate_jobs([&*info]), outbox);
                     }
                     self.starting_jobs.insert(job_id.clone(), self.clock.now());
                     self.active.push(*info);
@@ -703,12 +702,22 @@ pub(super) fn update_job(job_id: &str, status: JobStatus) -> WorkerMessage {
     }))
 }
 
-/// Sent once after registration: the jobs this worker already holds.
-pub(super) fn migrate_jobs(job_ids: Vec<String>) -> WorkerMessage {
-    wrap(pb::worker_message::Message::MigrateJob(pb::MigrateJobRequest {
-        job_ids,
-        ..Default::default()
-    }))
+/// Sent once after registration: the jobs this worker already holds, as they were assigned and
+/// with the identity each was accepted under, so the server tracks them again.
+pub(super) fn migrate_jobs<'a>(
+    running: impl IntoIterator<Item = &'a crate::RunningJobInfo>,
+) -> WorkerMessage {
+    let jobs: Vec<pb::Job> = running
+        .into_iter()
+        .map(|info| {
+            let mut job = info.job.clone();
+            job.state.get_or_insert_with(Default::default).participant_identity =
+                info.accept_arguments.identity.clone();
+            job
+        })
+        .collect();
+    let job_ids = jobs.iter().map(|job| job.id.clone()).collect();
+    wrap(pb::worker_message::Message::MigrateJob(pb::MigrateJobRequest { job_ids, jobs }))
 }
 
 #[cfg(test)]

@@ -232,6 +232,7 @@ impl VoiceDriver {
         let approval_answers = self.activity.tools.approval_answers.clone();
         let input = RunInput {
             invocation_id,
+            id_seed: self.session.ids.run_seed(),
             opening: Opening::Coordinated { approval_answers },
             history,
             answer_tool: None,
@@ -316,7 +317,26 @@ impl VoiceDriver {
         self.reply_effects(speech, fx);
     }
 
+    pub(crate) fn checkpoint_reply_history(&self, speech: SpeechId) -> Option<Vec<ChatItem>> {
+        self.activity.tools.replies.get(&speech).map(|reply| reply.run.progress_history())
+    }
+
     fn reply_effects(&mut self, speech: SpeechId, fx: Vec<AgentRunEffect>) {
+        for effect in fx {
+            if self.session.storage.enabled
+                && matches!(
+                    effect,
+                    AgentRunEffect::PlanRequest { .. } | AgentRunEffect::ToolExecute { .. }
+                )
+            {
+                self.checkpoint_reply_effect(speech, effect);
+            } else {
+                self.reply_effects_ready(speech, vec![effect]);
+            }
+        }
+    }
+
+    pub(crate) fn reply_effects_ready(&mut self, speech: SpeechId, fx: Vec<AgentRunEffect>) {
         for effect in fx {
             match effect {
                 AgentRunEffect::PlanRequest {

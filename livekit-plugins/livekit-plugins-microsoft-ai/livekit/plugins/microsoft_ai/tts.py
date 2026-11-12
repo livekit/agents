@@ -35,7 +35,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from ._http import Configuration, HTTPClient, status_error
 
@@ -143,7 +142,7 @@ class TTS(tts.TTS):
         http_session: Optional caller-owned HttpSession.
         env_file: Explicit dotenv file, or MICROSOFT_AI_ENV_FILE. Constructor
             arguments override environment variables, which override this file.
-        max_text_length: Client-side character limit, not a claimed provider limit.
+        max_text_length: The most characters sent in one request; longer text is split.
         max_audio_bytes: Maximum complete WAV response size in bytes.
 
     VoiceSession wraps this nonstreaming provider in its existing sentence
@@ -231,15 +230,17 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Microsoft AI"
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _core_max_text_len(self) -> int | None:
+        return self._max_text_length
+
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
+        text = chunk.text
         if self._closed:
             raise RuntimeError("Microsoft AI TTS is closed")
-        if not text.strip():
+        if not text:
             raise ValueError("Microsoft AI TTS requires nonempty text")
-        if len(text) > self._max_text_length:
-            raise ValueError("Microsoft AI TTS text exceeds max_text_length")
         if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]", text):
             raise ValueError("Microsoft AI TTS text contains characters invalid in XML")
         stream = ChunkedStream(

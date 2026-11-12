@@ -2,7 +2,7 @@
 
 How every telemetry signal is produced and where it travels. The public API is
 in [telemetry.md](../telemetry.md); crate placement follows
-[rust-core.md](rust-core.md#telemetry). What is emitted, in full, and what each
+[runtime contracts](runtime.md#telemetry). What is emitted, in full, and what each
 consumer reads is in the [telemetry reference](telemetry-reference.md).
 
 Rust owns telemetry end to end: the framework's spans and metrics, the session
@@ -165,8 +165,10 @@ Rust; Python only proves its loop is alive.
 
 ### Job profiles
 
-Every job records a wall-clock profile of its Python threads, which Cloud shows beside the
-session's audio recording.
+Every job samples a wall-clock profile of its Python threads. Jobs with an audio recording
+write the profile beside it for local inspection. Cloud profile upload is disabled by
+`UPLOAD_PROFILES` in `lk-agents-net/src/export/session_report/mod.rs`; enabling it requires
+compatible Cloud ingest and viewer support.
 
 - **Sampling.** The stall detector's thread samples every 100 ms (10 Hz) with the same py-spy
   sampler: the job's loop thread always (its waiting is what a slow turn is made of) and, when
@@ -182,9 +184,9 @@ session's audio recording.
   `time_nanos` is the profile's start. A viewer places a sample on the audio timeline at `end_timestamp_ns` minus the
   recording header's `start_time`; standard tools (`go tool pprof`, Pyroscope, speedscope) show
   the aggregate.
-- **Output.** `profile.pb.gz` beside the job's audio recording, and the recording upload's
-  `profile` part ([reference](telemetry-reference.md)). A sampler that cannot run leaves the
-  profile empty; nothing is written or sent.
+- **Output.** `profile.pb.gz` beside the job's audio recording. The recording format defines a
+  `profile` part ([reference](telemetry-reference.md)), omitted while upload is disabled. A
+  sampler that cannot run leaves the profile empty; nothing is written or sent.
 
 ### Metrics
 
@@ -712,16 +714,16 @@ pub struct LlmInputTokens {
 
 ### Health metrics
 
-A hang or a stuck lane shows up in these within minutes. Each event is also a warn log on
+A hang or a stuck partition shows up in these within minutes. Each event is also a warn log on
 the `livekit.agents` target with the same labels, at most one per event kind every 10 s
 (`suppressed` counts the rest). They belong to no job, so they reach the application's OTLP
 endpoint, not Cloud.
 
 | Metric | Labels | Means | Suggested alert |
 | --- | --- | --- | --- |
-| `lk.agents.lane.acquire_wait` (s) | `lane_kind`: `voice`, `text`, `a2a`, `context` | how long a lane acquire waited, taken or refused | p95 above 15 s for 5 min (voice: above 2 s) |
-| `lk.agents.lane.ownerless_wait` (s) | `lane_kind` | an acquire waited on, or was refused by, a lease its holder stopped renewing (no renewal for one renew interval plus 2 s) | any, sustained 5 min |
-| `lk.agents.lane.lease_lapsed` | `lane_kind` | a lease taken over after it expired instead of being released: its worker died or stalled | more than 3 in 10 min |
+| `lk.agents.partition.acquire_wait` (s) | `lane_kind`: `voice`, `text`, `a2a`, `context` | how long a partition acquire waited, taken or refused | p95 above 15 s for 5 min (voice: above 2 s) |
+| `lk.agents.partition.ownerless_wait` (s) | `lane_kind` | an acquire waited on, or was refused by, a lease its holder stopped renewing (no renewal for one renew interval plus 2 s) | any, sustained 5 min |
+| `lk.agents.partition.lease_lapsed` | `lane_kind` | a lease taken over after it expired instead of being released: its worker died or stalled | more than 3 in 10 min |
 | `lk.agents.teardown.overrun` | `stage`: `session_close`, `lease_release` | a teardown ran past its bound | any |
 | `lk.agents.storage.write_uncertain` | `write`: `acquire`, `commit`, `release`, ... | a write's outcome was still unknown when its resends ran out | more than 5 in 10 min |
 

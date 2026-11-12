@@ -521,7 +521,7 @@ impl ServerRuntime {
         host.start(settings.clone(), start.devmode, start.has_rtc, launch).await?;
         if start.unregistered {
             status.registered.store(true, Ordering::Release);
-            status.connected.store(true, Ordering::Release);
+            status.set_connected(true);
         } else {
             let (worker, handle) = new_worker(&settings, start, host, &blocking_io);
             resources.worker = Some(handle.clone());
@@ -629,7 +629,7 @@ impl ServerRuntime {
     }
 
     /// The worker's own endpoints: the console's, unauthenticated and on loopback only, or a
-    /// self-hosted server's, where the endpoint verifies each caller's token.
+    /// self-hosted server's, where the endpoint reads each caller's token without verifying it.
     async fn open_public(
         &self,
         settings: &ServerSettings,
@@ -650,7 +650,7 @@ impl ServerRuntime {
         if unauthenticated {
             log::warn!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}{prefix}"); "public listener is UNAUTHENTICATED: anything on this machine can call the agent's endpoints (console only, loopback)");
         } else {
-            log::info!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}{prefix}"), auth = "bearer token"; "public listener");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}{prefix}"); "public listener is in INSECURE mode: callers' tokens are read but their signatures are not verified; reach the agent through a LiveKit server to authenticate them");
         }
         let routes = Arc::new(PublicRoutes {
             prefix,
@@ -873,7 +873,7 @@ impl Registration {
         }
         self.snapshots.modify(|snapshot| snapshot.worker_id = info.worker_id);
         self.status.registered.store(true, Ordering::Release);
-        self.status.connected.store(true, Ordering::Release);
+        self.status.set_connected(true);
     }
 }
 
@@ -916,7 +916,7 @@ impl LoadReporter {
         if let Some(worker) = &self.worker {
             let snapshot = worker.snapshot();
             status.set_load(snapshot.worker_load);
-            status.connected.store(snapshot.registered, Ordering::Release);
+            status.set_connected(snapshot.registered);
             if let Some(target) = snapshot.target_idle_processes {
                 host.set_target_idle(target);
             }

@@ -12,7 +12,7 @@ use lk_agents_abi::a2a::door::{
 };
 use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::storage::{StorageError, StorageNamespace};
+use lk_agents_abi::storage::{Storage as _, StorageError, StorageNamespace};
 use lk_agents_abi::worker::http::EndpointExchange;
 use lk_agents_core::a2a::auth::{authorize, first_message_scope};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
@@ -54,9 +54,11 @@ pub struct Door {
 }
 
 struct Inner {
+    server: Option<std::sync::Weak<dyn lk_agents_abi::worker::server_host::ServerConfiguration>>,
     /// The host's namespace, whose backend opens on first use.
     namespace: Arc<Namespace>,
-    lane: String,
+    endpoint_name: String,
+    partition_key: String,
     holder: String,
     host: Arc<dyn TurnHost>,
     options: lk_agents_core::a2a::TurnOptions,
@@ -75,6 +77,7 @@ impl A2ADoor for Door {
         storage: Arc<dyn StorageNamespace>,
         config: DoorConfig,
         host: Arc<dyn TurnHost>,
+        server: Option<Arc<dyn lk_agents_abi::worker::server_host::ServerConfiguration>>,
     ) -> Result<Self, StorageError> {
         let storage: Arc<dyn Any + Send + Sync> = storage;
         let namespace = storage.downcast::<Namespace>().map_err(|_| {
@@ -84,14 +87,16 @@ impl A2ADoor for Door {
             .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
         lk_agents_core::a2a::card::agent_card(config.endpoint.clone())
             .map_err(|e| StorageError::Invalid(e.to_string()))?;
-        if config.lane.is_empty() {
-            return Err(StorageError::Invalid("an A2A door requires a lane".into()));
+        if config.partition_key.is_empty() {
+            return Err(StorageError::Invalid("an A2A door requires a partition_key".into()));
         }
         Ok(Self {
             inner: Arc::new(Inner {
+                server: server.as_ref().map(Arc::downgrade),
                 owner: namespace.a2a_tasks(),
                 namespace,
-                lane: config.lane,
+                endpoint_name: config.endpoint.name.clone(),
+                partition_key: config.partition_key,
                 holder: config.holder,
                 host,
                 options: config.options,
@@ -122,6 +127,17 @@ impl A2ADoor for Door {
 impl TextEndpoint for Door {
     fn name(&self) -> &str {
         &self.endpoint.name
+    }
+    fn recovery_handler(
+        &self,
+        location: &str,
+        project: &str,
+        partition_key: &str,
+    ) -> Option<Arc<dyn TurnHost>> {
+        (self.inner.namespace.location() == location
+            && self.inner.namespace.project_id() == project
+            && self.inner.partition_key == partition_key)
+            .then(|| self.inner.host.clone())
     }
 
     fn serve(
@@ -254,7 +270,7 @@ impl Inner {
                     &parent,
                     telemetry::A2aRequest {
                         operation: telemetry::GenAiOperation::InvokeAgent,
-                        agent_name: self.lane.clone(),
+                        agent_name: self.endpoint_name.clone(),
                         task_id: message.task_id.clone().unwrap_or_default(),
                     },
                 );
@@ -314,7 +330,9 @@ impl Inner {
     ) -> Result<Option<TaskRow>, StorageError> {
         let Some(row) = thread.task(&task.id).await? else { return Ok(None) };
         match rpc::cancellation(&row, reason) {
-            Some(metadata) => thread.lane(&row.lane).cancel_task(&task.id, metadata).await,
+            Some(metadata) => {
+                thread.partition(&row.partition_key).cancel_task(&task.id, metadata).await
+            }
             None => Ok(Some(row)),
         }
     }
@@ -362,13 +380,27 @@ impl Inner {
                 let unknown = message.context_id.unwrap_or_default();
                 let row = rpc::unknown_thread_task(
                     &shortuuid("AST_"),
-                    &self.lane,
+                    &self.partition_key,
                     unix_now_ms(),
                     shortuuid("msg_"),
                 );
                 return Ok(rpc::unpersisted(id, &row, &unknown, streaming, history));
             }
         };
+        let target = lk_agents_abi::a2a::remote::DelegationPartition {
+            storage_location: lk_agents_abi::storage::Storage::location(&*self.namespace),
+            storage_project: lk_agents_abi::storage::Storage::project_id(&*self.namespace),
+            thread_id: context.clone(),
+            partition_key: self.partition_key.clone(),
+        };
+        let metadata = message
+            .metadata
+            .as_ref()
+            .map(|metadata| {
+                metadata.iter().map(|(key, value)| (key.clone(), value.clone())).collect()
+            })
+            .unwrap_or_default();
+        lk_agents_core::a2a::delegation::validate_partition_delegation(&metadata, &target)?;
         message.context_id = Some(context.clone());
         let thread = self.namespace.storage().await?.open(&context).await?;
         let continuing = match message.task_id.clone() {
@@ -376,7 +408,7 @@ impl Inner {
             Some(task_id) => {
                 let task = TaskRef { id: task_id, context_id: context.clone() };
                 let row = thread.task(&task.id).await;
-                match rpc::follow_up(id.clone(), &task, row?.as_ref(), &self.lane) {
+                match rpc::follow_up(id.clone(), &task, row?.as_ref(), &self.partition_key) {
                     Ok(continuing) => continuing,
                     Err(refused) => {
                         thread.close().await;
@@ -392,6 +424,9 @@ impl Inner {
             streaming.then_some(sender.clone()),
         ));
         let turn = Turn {
+            server: self.server.clone(),
+            namespace: Some(self.namespace.clone()),
+            endpoint: Some(self.endpoint_name.clone()),
             publisher: Some(publisher.clone()),
             host_context: call.host_context,
             span: call.span,
@@ -399,7 +434,7 @@ impl Inner {
             ..Turn::new(
                 thread.clone(),
                 &self.holder,
-                &self.lane,
+                &self.partition_key,
                 self.host.clone(),
                 self.clock.clone(),
                 self.spawner,

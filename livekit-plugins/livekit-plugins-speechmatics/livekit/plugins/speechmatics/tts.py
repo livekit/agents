@@ -9,12 +9,10 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     http,
-    tokenize,
     tts,
     utils,
 )
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
@@ -31,7 +29,6 @@ DEFAULT_VOICE = "sarah"
 class _TTSOptions:
     voice: str
     sample_rate: int
-    word_tokenizer: tokenize.WordTokenizer
     base_url: str
     api_key: str
 
@@ -44,7 +41,6 @@ class TTS(tts.TTS):
         sample_rate: int = 16000,
         api_key: str | None = None,
         base_url: str = BASE_URL,
-        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: http.HttpSession | None = None,
     ) -> None:
         """
@@ -55,7 +51,6 @@ class TTS(tts.TTS):
             sample_rate (int): Sample rate of audio. Defaults to 16000.
             api_key (str): Speechmatics API key. If not provided, will look for SPEECHMATICS_API_KEY in environment.
             base_url (str): Base URL for Speechmatics TTS API. Defaults to "https://preview.tts.speechmatics.com"
-            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to `livekit.agents.tokenize.WordTokenizer`.
             http_session (http.HttpSession): Optional HTTP session to use for requests.
         """
         super().__init__(
@@ -70,13 +65,9 @@ class TTS(tts.TTS):
                 "Speechmatics API key required. Set SPEECHMATICS_API_KEY or provide api_key."
             )
 
-        if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.WordTokenizer(ignore_punctuation=False)
-
         self._opts = _TTSOptions(
             voice=voice,
             sample_rate=sample_rate,
-            word_tokenizer=word_tokenizer,
             base_url=base_url,
             api_key=api_key,
         )
@@ -107,12 +98,12 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
             options=self._opts,
             http_session=self._ensure_session,

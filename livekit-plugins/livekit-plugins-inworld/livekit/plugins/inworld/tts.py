@@ -29,10 +29,9 @@ from urllib.parse import urljoin
 
 from pydantic import TypeAdapter
 
-from livekit.agents import ProviderAttempts, http, tokenize, tts, utils
+from livekit.agents import ProviderAttempts, http, tts, utils
 from livekit.agents._bindings import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
@@ -872,8 +871,6 @@ class TTS(tts.TTS):
         base_url: str = DEFAULT_URL,
         ws_url: str = DEFAULT_WS_URL,
         http_session: http.HttpSession | None = None,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        retain_format: NotGivenOr[bool] = NOT_GIVEN,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
         idle_connection_timeout: float = DEFAULT_IDLE_CONNECTION_TIMEOUT,
     ) -> None:
@@ -919,10 +916,6 @@ class TTS(tts.TTS):
             ws_url (str, optional): The WebSocket URL for streaming TTS.
                 Defaults to "wss://api.inworld.ai/".
             http_session (http.HttpSession, optional): The HTTP session to use.
-            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use for streaming.
-                Defaults to `livekit.agents.tokenize.SentenceTokenizer`.
-            retain_format (bool, optional): Whether to retain the format of the text when tokenizing.
-                Defaults to True.
             max_connections (int, optional): Maximum number of concurrent WebSocket connections.
                 Each connection supports up to 5 concurrent synthesis streams. Defaults to 20.
             idle_connection_timeout (float, optional): Time in seconds after which idle connections
@@ -996,13 +989,6 @@ class TTS(tts.TTS):
         self._pool_lock = asyncio.Lock()
         self._prewarm_task: asyncio.Task[None] | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._sentence_tokenizer = (
-            tokenizer
-            if is_given(tokenizer)
-            else tokenize.SentenceTokenizer(
-                retain_format=retain_format if is_given(retain_format) else True
-            )
-        )
 
     class Markup(tts.TTS.Markup):
         # markup delegation lives in the base class, keyed on _provider_key()
@@ -1130,11 +1116,8 @@ class TTS(tts.TTS):
         # Just ensure the pool is created - first acquire will establish a connection
         await self._get_pool()
 
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    def _synthesize(
+        self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -1142,17 +1125,14 @@ class TTS(tts.TTS):
             get_session=self._ensure_session,
             base_url=self._base_url,
             authorization=self._authorization,
-            input_text=text,
+            input_text=chunk.text,
             conn_options=conn_options,
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             opts=replace(self._opts),
-            sentence_tokenizer=self._sentence_tokenizer,
             get_pool=self._get_pool,
             conn_options=conn_options,
         )
@@ -1326,20 +1306,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         tts: TTS,
         opts: _TTSOptions,
-        sentence_tokenizer: tokenize.SentenceTokenizer,
         get_pool: Callable[[], Awaitable[_ConnectionPool]],
         conn_options: APIConnectOptions,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = opts
-        self._sentence_tokenizer = sentence_tokenizer
         self._get_pool = get_pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
-        sent_tokenizer_stream = self._sentence_tokenizer.stream()
-
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.sample_rate,
@@ -1357,28 +1333,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             read_deadline=self._core_attempts,
         )
 
-        async def _input_task() -> None:
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    sent_tokenizer_stream.flush()
-                    continue
-                sent_tokenizer_stream.push_text(data)
-            sent_tokenizer_stream.end_input()
-
         async def _send_task() -> None:
-            async for ev in sent_tokenizer_stream:
-                text = ev.token
-                # Chunk to stay within Inworld's 1000 char limit
-                for i in range(0, len(text), 1000):
-                    connection.send_text(context_id, text[i : i + 1000])
-                    self.mark_started()
+            async for chunk in self.input:
+                if isinstance(chunk, self.Flush):
+                    continue
+                connection.send_text(context_id, chunk.text + " ")
+                self.mark_started()
             connection.flush_context(context_id)
             connection.close_context(context_id)
 
-        tasks = [
-            asyncio.create_task(_input_task()),
-            asyncio.create_task(_send_task()),
-        ]
+        tasks = [asyncio.create_task(_send_task())]
 
         try:
             await waiter
@@ -1397,7 +1361,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
         finally:
             await utils.aio.cancel_and_wait(*tasks)
-            await sent_tokenizer_stream.aclose()
             output_emitter.end_input()
 
 

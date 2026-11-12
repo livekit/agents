@@ -23,22 +23,22 @@ use lk_agents_runtime::storage::thread::LeaseTiming;
 use lk_agents_runtime::storage::thread::lease::Holder;
 use lk_agents_runtime::storage::voice::VoiceStore;
 use lk_agents_runtime::storage::{
-    CommitOptions, ItemRow, LaneAccess, RunOptions, Storage as _, Thread, ThreadDbConnection,
+    CommitOptions, ItemRow, PartitionAccess, RunOptions, Storage as _, Thread, ThreadDbConnection,
     WhenHeld,
 };
 
-// The voice lane runs on storage's own code (`VoiceStore`, `Lane`, `Lease`, renewal, fenced
+// The voice partition runs on storage's own code (`VoiceStore`, `Partition`, `Lease`, renewal, fenced
 // commit) over the production SQLite backend in a directory of the run's own: its workers are
 // tasks on the run's scheduler, its `unixepoch()` the run's clock. Each thread connection is
 // wrapped: it answers late, loses answers, refuses and goes down, and observes which lease holds
-// the lane. A worker can also die with requests queued, at the scheduler. `layer` adds SQLite
-// refusals, clock jumps, crashes and another worker on the lane.
+// the partition. A worker can also die with requests queued, at the scheduler. `layer` adds SQLite
+// refusals, clock jumps, crashes and another worker on the partition.
 
 mod layer;
 pub(crate) mod text;
 pub use layer::storage_faults;
 
-const LANE: &str = "voice";
+const PARTITION_KEY: &str = "voice";
 
 /// Database workers that died in this process's runs: the survey's evidence the fault is reached.
 static WORKER_DEATHS: AtomicU64 = AtomicU64::new(0);
@@ -56,7 +56,7 @@ pub fn death_resends() -> (u64, u64) {
     (DEATHS_UNCERTAIN.load(Ordering::Relaxed), DEATHS_RESENT.load(Ordering::Relaxed))
 }
 
-/// The call's lane: the production store, the recording port the session is handed, and the
+/// The call's partition: the production store, the recording port the session is handed, and the
 /// database under both.
 pub struct FakeStore {
     voice: Arc<VoiceStore>,
@@ -66,7 +66,7 @@ pub struct FakeStore {
 }
 
 impl FakeStore {
-    /// `VoiceStore::bound` over a fresh lane, as `Namespace::voice_store` builds it.
+    /// `VoiceStore::bound` over a fresh partition, as `Namespace::voice_store` builds it.
     pub async fn open(
         setup: StorageSetup,
         seed: u64,
@@ -95,9 +95,19 @@ impl FakeStore {
             Arc::new(FakeConnection { inner, db: calls.clone() }) as Arc<dyn ThreadDbConnection>
         };
         let backend = Arc::new(Wrapped { storage, wrap });
-        let voice = VoiceStore::bound(backend, thread.thread_id, LANE.into(), None, Cx::NONE)
-            .await
-            .expect("a fresh lane loads");
+        let voice =
+            VoiceStore::bound(backend, thread.thread_id, PARTITION_KEY.into(), None, Cx::NONE)
+                .await
+                .expect("a fresh partition_key loads");
+        // A bound call (`store.bind(app)`): its store carries the call's session state from the
+        // start, so each turn's start writes the partition too.
+        let initial =
+            serde_json::json!({"version": 1, "kind": "voice", "agent": "", "history_ids": []});
+        lk_agents_abi::storage::context::ContextActivation::stage_session(
+            &voice.activation(),
+            initial,
+        )
+        .expect("an empty voice session state stages");
         let voice = Arc::new(voice);
         database.state.lock().armed = true;
         let port = Arc::new(RecordedStore { store: voice.clone(), registry });
@@ -114,7 +124,7 @@ impl FakeStore {
     }
 
     /// An acquire's lease take applied and its answer still owed: the instant a dropped caller
-    /// leaves the lane taken with no `Lease` to release it.
+    /// leaves the partition taken with no `Lease` to release it.
     pub fn take_unanswered(&self) -> bool {
         self.database.state.lock().taking > 0
     }
@@ -146,13 +156,13 @@ struct State {
     /// When each lease's owner last sent a request carrying its token, or took it.
     touched: BTreeMap<String, Ts>,
     takes: u32,
-    /// Every this many lease takes, a text turn moved the lane first.
+    /// Every this many lease takes, a text turn moved the partition first.
     text_turn_every: u32,
     /// Lease takes applied whose answers are still owed.
     taking: u32,
     /// `layer`'s own draws.
     layer: fastrand::Rng,
-    /// Another worker's connection is on the lane, and how many came.
+    /// Another worker's connection is on the partition, and how many came.
     intruding: bool,
     intruders: u32,
     /// The call's lease tokens another worker overwrote.
@@ -301,9 +311,9 @@ impl FakeDatabase {
         self.clock.wait_until(until).await;
     }
 
-    /// The lease holding the lane now, as `(token, until)` in the database's seconds.
+    /// The lease holding the partition now, as `(token, until)` in database milliseconds.
     async fn lessee(&self) -> Option<(String, i64)> {
-        lessee(&self.observer, LANE).await
+        lessee(&self.observer, PARTITION_KEY).await
     }
 
     /// Another worker's handle on the same database, beside the call's.
@@ -311,11 +321,11 @@ impl FakeDatabase {
         self.storage.open(&self.thread_id).await.ok()
     }
 
-    fn unix_secs(&self) -> i64 {
-        self.clock.wall().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    fn unix_millis(&self) -> i64 {
+        self.clock.wall().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64
     }
 
-    /// After a lease take applied: the taker's lease is touched, or the lane was held, and by an
+    /// After a lease take applied: the taker's lease is touched, or the partition was held, and by an
     /// owner that last spoke this long ago.
     async fn observe_take(&self, takes: &[Statement]) {
         let Some((token, until)) = self.lessee().await else { return };
@@ -325,21 +335,23 @@ impl FakeDatabase {
         let mut state = self.state.lock();
         if ours {
             state.touched.insert(token, now);
-        } else if until >= self.unix_secs() {
+        } else if until >= self.unix_millis() {
             let spoke = state.touched.get(&token).copied().unwrap_or(Ts::ZERO);
             let idle_ms = now.saturating_duration_since(spoke).as_millis() as u64;
             drop(state);
-            self.registry.record_storage(StorageStep::LaneHeld { idle_ms });
+            self.registry.record_storage(StorageStep::PartitionHeld { idle_ms });
         }
     }
 
     /// A text turn between voice turns, by another worker over the same database: it takes the
-    /// lane only if free, edits the history and commits.
+    /// partition only if free, edits the history and commits.
     async fn text_turn(&self, turn: u32, what: u32) {
         let Some(thread) = self.thread().await else { return };
         let mut options = RunOptions::new(format!("text_{turn}"), "");
-        options.access = LaneAccess::Exclusive(WhenHeld::Reject);
-        if let Ok(mut run) = thread.lane(LANE).open(options, &Holder::new("text")).await {
+        options.access = PartitionAccess::Exclusive(WhenHeld::Reject);
+        if let Ok(mut run) =
+            thread.partition(PARTITION_KEY).open(options, &Holder::new("text")).await
+        {
             let rows = run.history().to_vec();
             let mut items: Vec<ChatItem> =
                 rows.iter().filter_map(|row| decode_chat_item(row.payload.clone()).ok()).collect();
@@ -362,15 +374,19 @@ impl FakeDatabase {
     /// Once the store closed: runs started and never ended, and a lease still held.
     async fn settle(&self) {
         let Some(thread) = self.thread().await else { return };
-        let lane = thread.lane(LANE);
-        let runs = lane.runs(usize::MAX).await.unwrap_or_default();
+        let partition_key = thread.partition(PARTITION_KEY);
+        let runs = partition_key.runs(usize::MAX).await.unwrap_or_default();
         let unended = runs.iter().filter(|run| run.interrupted()).count() as u32;
         // Another worker's lease is its own to release.
         let held = self.lessee().await.is_some_and(|(token, until)| {
-            until >= self.unix_secs() && !token.starts_with(layer::INTRUDER)
+            until >= self.unix_millis() && !token.starts_with(layer::INTRUDER)
         });
         let faulted = self.state.lock().faulted;
-        self.registry.record_storage(StorageStep::LaneSettled { unended, held, faulted });
+        self.registry.record_storage(StorageStep::PartitionSettled { unended, held, faulted });
+        // The thread keeps its rows in the order they were first written.
+        let items = partition_key.history().await.unwrap_or_default();
+        let items = items.into_iter().map(|row| row.id).collect();
+        self.registry.record_storage(StorageStep::Saved { items });
     }
 }
 
@@ -515,6 +531,15 @@ impl VoiceStorage for RecordedStore {
         })
     }
 
+    fn checkpoint(
+        &self,
+        sequence: u64,
+        agent: String,
+        history: Vec<ChatItem>,
+    ) -> StorageWork<'_, ()> {
+        self.store.checkpoint(sequence, agent, history)
+    }
+
     fn lease_lost(&self) -> bool {
         self.store.lease_lost()
     }
@@ -560,7 +585,7 @@ impl StreamInput<VoiceStorageEvent> for RecordedEvents {
 
 /// A text turn's edit: an agent answer rewritten (`what` 0), the two oldest plain messages
 /// compacted into a summary (1), or an exchange appended. Tool items are never rewritten.
-fn edit(lane: &mut Vec<ChatItem>, turn: u32, what: u32) {
+fn edit(partition_key: &mut Vec<ChatItem>, turn: u32, what: u32) {
     let plain = |item: &ChatItem| {
         item.as_message().is_some_and(|m| matches!(m.role, Role::User | Role::Assistant))
     };
@@ -568,7 +593,7 @@ fn edit(lane: &mut Vec<ChatItem>, turn: u32, what: u32) {
         |id: String, role, text: &str, at| ChatItem::Message(ChatMessage::text(id, role, text, at));
     match what {
         0 => {
-            let answer = lane
+            let answer = partition_key
                 .iter_mut()
                 .find(|item| item.as_message().is_some_and(|m| m.role == Role::Assistant));
             if let Some(answer) = answer {
@@ -582,7 +607,7 @@ fn edit(lane: &mut Vec<ChatItem>, turn: u32, what: u32) {
             }
         }
         1 => {
-            let oldest: Vec<usize> = lane
+            let oldest: Vec<usize> = partition_key
                 .iter()
                 .enumerate()
                 .filter(|(_, item)| plain(item))
@@ -590,10 +615,10 @@ fn edit(lane: &mut Vec<ChatItem>, turn: u32, what: u32) {
                 .take(2)
                 .collect();
             if let [first, second] = oldest[..] {
-                let at = lane[first].created_at();
-                lane.remove(second);
-                lane[first] = said(
-                    format!("lane_summary_{turn}"),
+                let at = partition_key[first].created_at();
+                partition_key.remove(second);
+                partition_key[first] = said(
+                    format!("partition_summary_{turn}"),
                     Role::Assistant,
                     "Summary of the start.",
                     at,
@@ -603,12 +628,17 @@ fn edit(lane: &mut Vec<ChatItem>, turn: u32, what: u32) {
         }
         _ => {}
     }
-    let at = lane.iter().map(ChatItem::created_at).max().unwrap_or(UNIX_EPOCH);
-    lane.push(said(
-        format!("lane_text_{turn}_user"),
+    let at = partition_key.iter().map(ChatItem::created_at).max().unwrap_or(UNIX_EPOCH);
+    partition_key.push(said(
+        format!("partition_text_{turn}_user"),
         Role::User,
         "can you also text me the address?",
         at,
     ));
-    lane.push(said(format!("lane_text_{turn}_agent"), Role::Assistant, "Sure, I've sent it.", at));
+    partition_key.push(said(
+        format!("partition_text_{turn}_agent"),
+        Role::Assistant,
+        "Sure, I've sent it.",
+        at,
+    ));
 }

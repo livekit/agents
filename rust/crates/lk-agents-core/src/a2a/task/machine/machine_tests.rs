@@ -14,7 +14,7 @@ fn continuing(policy: Policy, target: Option<&str>) -> TaskMachine {
     wire.message_id = "m".into();
     wire.task_id = target.map(str::to_owned);
     TaskMachine::new(
-        "lane".into(),
+        "partition_key".into(),
         Message::from_a2a(&wire, 0.0, None).unwrap(),
         "receipt".into(),
         &TurnOptions {
@@ -55,8 +55,8 @@ fn answered(text: &str) -> HandlerOutput {
 
 /// `waiting`, asking a question of a conversation tool's call.
 fn question() -> TaskRow {
-    let mut row =
-        TaskWrite { task_id: "waiting".into(), ..row(TaskState::InputRequired).into() }.row("lane");
+    let mut row = TaskWrite { task_id: "waiting".into(), ..row(TaskState::InputRequired).into() }
+        .row("partition_key");
     row.message_id = Some("asked".into());
     row.internal = Some(TaskInternal {
         ask: Some(lk_agents_abi::storage::Ask {
@@ -90,7 +90,7 @@ fn step(m: &mut TaskMachine, result: Completion) -> Operation {
 }
 
 fn row(status: TaskState) -> TaskRow {
-    TaskWrite { status, ..machine(Policy::Queue).submitted() }.row("lane")
+    TaskWrite { status, ..machine(Policy::Queue).submitted() }.row("partition_key")
 }
 
 #[test]
@@ -131,9 +131,9 @@ fn batch_preserves_the_callers_continuation_target() {
         id: 1,
         task_id: "receipt".into(),
         message: wire,
-        received_at: 10,
+        received_at_ms: 10000,
         message_id: "m".into(),
-        lane: "lane".into(),
+        partition_key: "partition_key".into(),
     }];
     assert!(matches!(
         step(&mut m, Completion::Picked(Some(TaskState::Submitted))),
@@ -144,7 +144,7 @@ fn batch_preserves_the_callers_continuation_target() {
 }
 
 /// A2A_SEED=310 (worker_lost_only_when_it_died, Task): a turn that lost the database abandoned
-/// its run, releasing the lane, before failing its task; a waiting holder took the lane, found the
+/// its run, releasing the partition, before failing its task; a waiting holder took the partition, found the
 /// task `working` and failed it `worker-lost`. The task fails first, under the lease.
 #[test]
 fn storage_failure_in_the_turn_fails_the_receipt_before_releasing_the_lane() {
@@ -271,7 +271,7 @@ fn a_lost_commit_acknowledgment_is_resolved_and_never_answered_failed() {
 }
 
 #[test]
-fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
+fn every_typed_storage_error_on_the_partition_claim_has_its_outcome() {
     // reject: the holder's task is named
     let mut m = machine(Policy::Reject);
     m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
@@ -282,8 +282,8 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
         Operation::ReadRuns(_)
     ));
     let runs = vec![
-        LaneRun { task_id: Some("AST_ended".into()), interrupted: false },
-        LaneRun { task_id: Some("AST_r".into()), interrupted: true },
+        PartitionRun { task_id: Some("AST_ended".into()), interrupted: false },
+        PartitionRun { task_id: Some("AST_r".into()), interrupted: true },
     ];
     let effects = at(&mut m, Duration::ZERO, Ok(Completion::Runs(runs)));
     assert!(matches!(&effects[..], [A2aTaskEffect::Finished(Err(StorageError::Rejected {
@@ -302,7 +302,7 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
         StorageError::Unavailable("down".into()),
         StorageError::NotFound("AT_x".into()),
         StorageError::LeaseLost("taken".into()),
-        StorageError::VersionConflict { lane: "lane".into(), expected: 1 },
+        StorageError::VersionConflict { partition_key: "partition_key".into(), expected: 1 },
         StorageError::Uncertain(lk_agents_abi::storage::Unacknowledged::sent("lost")),
     ] {
         let mut m = machine(Policy::Queue);
@@ -317,7 +317,7 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
 }
 
 /// Review of cf6a3c721: a resend that finds its task `submitted` must not watch it forever when
-/// the waiter that wrote it died before taking the lane.
+/// the waiter that wrote it died before taking the partition.
 #[test]
 fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
     let mut m = machine(Policy::Queue);
@@ -355,9 +355,9 @@ fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
 }
 
 /// A2A_SEED=794 (worker_lost_only_when_it_died, Task): a resend's watcher, its own wait run out,
-/// took the free lane and failed the first send's `submitted` row `worker-lost` while that send,
-/// debounced, still waited for the lane within its wait. The row is a dead waiter's only once a
-/// debounce, the wait and one lane-poll pause passed since the watcher first saw it.
+/// took the free partition and failed the first send's `submitted` row `worker-lost` while that send,
+/// debounced, still waited for the partition within its wait. The row is a dead waiter's only once a
+/// debounce, the wait and one partition-poll pause passed since the watcher first saw it.
 #[test]
 fn a_waiter_still_within_its_wait_is_not_failed_worker_lost() {
     let mut m = TaskMachine { debounce: Duration::from_secs(1), ..machine(Policy::Queue) };
@@ -414,8 +414,8 @@ fn a_watcher_keeps_watching_through_a_transient_read_failure() {
 }
 
 /// The runtime door's known finding (answer_is_an_outcome/received_message_is_drained, Inbox): a
-/// drain whose lane another holder took is not answered `Rejected` and does not give up its
-/// pending receipt; it waits and drains it once the lane frees.
+/// drain whose partition another holder took is not answered `Rejected` and does not give up its
+/// pending receipt; it waits and drains it once the partition frees.
 #[test]
 fn a_refused_drain_waits_and_drains_later() {
     let mut m = machine(Policy::Batch);
@@ -423,13 +423,16 @@ fn a_refused_drain_waits_and_drains_later() {
     m.pending = Some(1);
     let row = InboxRow {
         id: 1,
-        lane: "lane".into(),
+        partition_key: "partition_key".into(),
         task_id: "receipt".into(),
         message_id: "m".into(),
         message: m.message.to_a2a(),
-        received_at: 0,
+        received_at_ms: 0,
     };
-    assert!(matches!(step(&mut m, Completion::Inbox(vec![row.clone()])), Operation::Open { .. }));
+    assert!(matches!(
+        step(&mut m, Completion::Inbox(vec![row.clone().into()])),
+        Operation::Open { .. }
+    ));
     let refused = at(&mut m, Duration::ZERO, Err(StorageError::Rejected { running_task_id: None }));
     assert!(refused.is_empty(), "never answered Rejected: {refused:?}");
     let wake = m.wake_at().expect("waits");
@@ -438,7 +441,7 @@ fn a_refused_drain_waits_and_drains_later() {
         step(&mut m, Completion::Task(Some(row_of(TaskState::Submitted)))),
         Operation::ReadInbox
     ));
-    assert!(matches!(step(&mut m, Completion::Inbox(vec![row])), Operation::Open { .. }));
+    assert!(matches!(step(&mut m, Completion::Inbox(vec![row.into()])), Operation::Open { .. }));
 }
 
 /// The runtime door's known finding (message_executes_once, Concurrent): a concurrent message
@@ -481,9 +484,9 @@ fn row_of(status: TaskState) -> TaskRow {
 #[test]
 fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() {
     for error in [
-        StorageError::VersionConflict { lane: "lane".into(), expected: 1 },
+        StorageError::VersionConflict { partition_key: "partition_key".into(), expected: 1 },
         StorageError::Unavailable("sqlite: disk I/O error".into()),
-        StorageError::TooLarge { what: "the lane state".into(), limit: 1 },
+        StorageError::TooLarge { what: "the partition_key state".into(), limit: 1 },
         StorageError::Invalid("sqlite: constraint failed".into()),
         StorageError::Unauthorized("token expired".into()),
     ] {
@@ -546,7 +549,7 @@ fn a_refused_close_fails_the_task_storage_unavailable() {
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(t) if t == "receipt"));
 }
 
-/// A2A_SEED=14313 (one_task_per_message, Refusable): on a `reject` lane the message's row is
+/// A2A_SEED=14313 (one_task_per_message, Refusable): on a `reject` partition the message's row is
 /// written with `Submit` under the lease, before the turn; a run closed before it whose commit was
 /// refused was answered `failed storage-unavailable` with a task no row holds, and the resend
 /// created another. A failure that writes no row answers the database's
@@ -570,7 +573,7 @@ fn a_refused_commit_of_an_unwritten_receipt_answers_the_error() {
     );
 }
 
-/// A2A_SEED=68 88 130 (one_question_pending, Lane): a reply naming a question that a turn ahead
+/// A2A_SEED=68 88 130 (one_question_pending, Partition): a reply naming a question that a turn ahead
 /// already merged found no pending question and asked its own beside the newer one still waiting.
 /// The reply answers the question waiting now.
 #[test]
@@ -591,7 +594,7 @@ fn a_reply_to_a_merged_question_answers_the_one_waiting_now() {
 /// A2A_SEED=181 350 616 (commit_is_what_the_run_staged, Concurrent): overlapping concurrent turns
 /// both claimed one pending question with no lease to make the claim exclusive; the second's
 /// terminal write was dropped and its client answered the first's outcome. A concurrent turn
-/// answers on its own task and leaves the question to the lane's exclusive turns.
+/// answers on its own task and leaves the question to the partition's exclusive turns.
 #[test]
 fn a_concurrent_turn_leaves_a_pending_question_alone() {
     let mut m = continuing(Policy::Concurrent, Some("waiting"));
@@ -666,4 +669,31 @@ fn a_receipt_answered_working_is_answered() {
     let effects = at(&mut m, Duration::ZERO, Ok(Completion::Task(Some(row))));
     let [A2aTaskEffect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
     assert_eq!(answer.task.as_ref().map(|t| t.status), Some(TaskState::Working));
+}
+
+#[test]
+fn batch_preserves_endpoint_order_and_selects_the_oldest_destination_for_recovery() {
+    use lk_agents_abi::storage::thread::RoutedInbox;
+    let mut machine = machine(Policy::Batch).with_endpoint(Some("alpha".into()));
+    machine.phase = Phase::Inbox;
+    machine.pending = Some(1);
+    let row = |id: i64, endpoint: &str| RoutedInbox {
+        row: InboxRow {
+            id,
+            partition_key: "partition_key".into(),
+            task_id: format!("task-{id}"),
+            message_id: format!("message-{id}"),
+            message: machine.message.to_a2a(),
+            received_at_ms: 0,
+        },
+        endpoint: Some(endpoint.into()),
+    };
+    let rows = vec![row(1, "alpha"), row(2, "beta"), row(3, "alpha")];
+    assert!(matches!(step(&mut machine, Completion::Inbox(rows)), Operation::Open { .. }));
+    assert_eq!(machine.rows.len(), 1, "batch must stop at the first different destination");
+    machine.phase = Phase::Inbox;
+    machine.pending = Some(1);
+    let foreign = RoutedInbox { row: machine.rows[0].clone(), endpoint: Some("beta".into()) };
+    assert!(matches!(step(&mut machine, Completion::Inbox(vec![foreign])), Operation::Open { .. }));
+    assert_eq!(machine.drain_endpoint.as_deref(), Some("beta"));
 }

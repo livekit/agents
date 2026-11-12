@@ -31,7 +31,7 @@ use lk_agents_runtime::agent_run::{self, RunSetup};
 use lk_agents_runtime::net::env::{ProcessEnv, ProcessError};
 use lk_agents_runtime::storage::StorageError;
 
-const LANE: &str = "front-desk";
+const PARTITION_KEY: &str = "front-desk";
 /// How long a client waits on its turn before giving up on it.
 const TURN_DEADLINE_MS: u64 = 600_000;
 
@@ -80,8 +80,7 @@ impl Scenario {
     pub fn draw(seed: u64) -> Self {
         let mut rng = fastrand::Rng::with_seed(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x7478);
         let cancel = |rng: &mut fastrand::Rng| (rng.u32(0..3) == 0).then(|| rng.u64(0..6_000));
-        let policies =
-            [Policy::Batch, Policy::Interrupt, Policy::Queue, Policy::Concurrent, Policy::Reject];
+        let policies = [Policy::Batch, Policy::Queue, Policy::Concurrent, Policy::Reject];
         let clients =
             [Client::Waits, Client::Waits, Client::Disconnects, Client::Cancels, Client::Aborts];
         let direct = (0..rng.u32(0..=2)).map(|_| cancel(&mut rng)).collect();
@@ -123,7 +122,7 @@ pub struct Env {
     tracer: lk_agents_telemetry::Tracer,
     process: ProcessEnv,
     scenario: Scenario,
-    /// The fakes stop faulting: the lane's next turn after the scenario.
+    /// The fakes stop faulting: the partition's next turn after the scenario.
     calm: std::sync::atomic::AtomicBool,
     recording: Mutex<TextRecording>,
 }
@@ -191,6 +190,7 @@ impl Env {
         let invocation_id = format!("run_{id}");
         let input = RunInput {
             invocation_id: invocation_id.clone(),
+            id_seed: id.into(),
             opening: Opening::Message(Box::new(self.message(&format!("m_{id}")))),
             history: Vec::new(),
             answer_tool: None,
@@ -316,7 +316,9 @@ impl Env {
         )
         .expect("a valid session");
         let request = TextSessionRequest {
+            session_sink: None,
             session_id: format!("session_{id}"),
+            id_seed: Some(id.into()),
             execution_id: format!("exec_{id}"),
             task_id: None,
             message: ChatItem::Message(self.message(&format!("m_{id}"))),
@@ -360,7 +362,7 @@ impl Env {
         }
     }
 
-    /// One client's message to the lane, as its client behaves.
+    /// One client's message to the partition, as its client behaves.
     async fn client(self: Arc<Self>, store: Arc<Store>, n: usize, plan: TurnPlan) -> TurnRecord {
         let clock = self.clock.clone();
         clock.wait_until(clock.now().saturating_add(Duration::from_millis(plan.start_ms))).await;
@@ -381,7 +383,15 @@ impl Env {
         };
         let holder = format!("worker-{}", plan.worker);
         let spawner = self.process.spawner;
-        let turn = Turn::new(thread.clone(), &holder, LANE, host, clock.clone(), spawner, options);
+        let turn = Turn::new(
+            thread.clone(),
+            &holder,
+            PARTITION_KEY,
+            host,
+            clock.clone(),
+            spawner,
+            options,
+        );
         let after = clock.now().saturating_add(Duration::from_millis(plan.after_ms));
         let answered = match plan.client {
             Client::Waits | Client::Disconnects => {
@@ -428,11 +438,11 @@ impl Env {
 
 /// A client's A2A cancel, as the door sends it: a terminal task stays as it is.
 async fn cancel_task(thread: &lk_agents_runtime::storage::Thread, message_id: &str) {
-    let lane = thread.lane(LANE);
-    let Ok(Some(row)) = lane.task_for_message(message_id).await else { return };
+    let partition_key = thread.partition(PARTITION_KEY);
+    let Ok(Some(row)) = partition_key.task_for_message(message_id).await else { return };
     let reason = Some("the client cancelled".to_owned());
     if let Some(metadata) = lk_agents_core::a2a::rpc::cancellation(&row, reason) {
-        let _ = lane.cancel_task(&row.task_id, metadata).await;
+        let _ = partition_key.cancel_task(&row.task_id, metadata).await;
     }
 }
 
@@ -527,7 +537,7 @@ async fn simulate(scenario: Scenario) -> (TextRecording, u64) {
     // Past the lease's TTL: a lease no live owner renews has lapsed.
     clock.wait_until(clock.now().saturating_add(Duration::from_secs(11))).await;
     if !turns.is_empty() {
-        // The lane's next turn, on a healed database with answering fakes: whatever a client
+        // The partition's next turn, on a healed database with answering fakes: whatever a client
         // left behind is settled by then at the latest.
         store.heal();
         env.calm.store(true, std::sync::atomic::Ordering::Release);
@@ -549,16 +559,16 @@ async fn simulate(scenario: Scenario) -> (TextRecording, u64) {
     (recording, deaths)
 }
 
-/// What the lane holds once every turn ended.
+/// What the partition holds once every turn ended.
 async fn settle_lane(store: &Store, recording: &mut TextRecording, turns: &[TurnRecord]) {
     let thread = store.clean_thread().await;
-    let lane = thread.lane(LANE);
-    let runs = lane.runs(usize::MAX).await.unwrap_or_default();
+    let partition_key = thread.partition(PARTITION_KEY);
+    let runs = partition_key.runs(usize::MAX).await.unwrap_or_default();
     let unended = runs.iter().filter(|run| run.interrupted()).count() as u32;
-    let held = store.held(LANE).await;
-    recording.lane = Some(LaneRecord { unended, held, faulted: store.faulted() });
-    let tasks = lane.tasks(None, 1_000).await.unwrap_or_default();
-    let history = lane.history().await.unwrap_or_default();
+    let held = store.held(PARTITION_KEY).await;
+    recording.partition_key = Some(PartitionRecord { unended, held, faulted: store.faulted() });
+    let tasks = partition_key.tasks(None, 1_000).await.unwrap_or_default();
+    let history = partition_key.history().await.unwrap_or_default();
     for turn in turns.iter().filter(|t| !t.message_id.is_empty()) {
         let mine = |id: &Option<String>| id.as_deref() == Some(turn.message_id.as_str());
         recording.messages.push(MessageRecord {

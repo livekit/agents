@@ -42,18 +42,16 @@ export OPENAI_API_KEY=<key>                  # for calls
 export LIVEKIT_WORKER_INSECURE=1             # temporary, staging only
 export LIVEKIT_AGENT_DEPLOYMENT=default      # temporary, staging only
 
-cd examples/frontdesk && python main.py dev
+cd examples/frontdesk && lk agent dev
 ```
 
 Pin the beta's exact version rather than allowing pre-releases, which would also take
 pre-releases of its dependencies.
 
-Then talk to it by text or by call in the console, from two more terminals with the same
-environment:
+For a terminal conversation, run the example with:
 
 ```sh
-cd console && python console_api.py
-cd console && pnpm install && pnpm dev       # http://localhost:3000
+lk agent console
 ```
 
 ## Examples
@@ -65,7 +63,7 @@ cd console && pnpm install && pnpm dev       # http://localhost:3000
 ## More
 
 - [Docs](docs/README.md), one feature per page
-- [Migrating from v1](skills/migrate-to-v2/SKILL.md): `npx skills add livekit/agents --skill migrate-to-v2`
+- [Contributor docs](docs/internals/README.md): architecture, builds, and tests
 - From source: `git clone`, then `uv sync --all-packages` (needs Rust);
   `make check`, `uv run pytest --unit`
 - Issues with the `v2` label; licensed [Apache-2.0](LICENSE)

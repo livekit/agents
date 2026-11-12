@@ -20,8 +20,14 @@ use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::thread::AbandonReason;
 use lk_agents_net::signal;
 
+#[path = "store_session.rs"]
+mod session;
+
 #[derive(Clone)]
 pub struct ContextStore {
+    pub(crate) session_view: Arc<Mutex<Option<crate::session_state::SessionState>>>,
+    owned_session: Arc<tokio::sync::Mutex<Option<session::OwnedSession>>>,
+    session_sink: Arc<Mutex<Option<Arc<dyn lk_agents_abi::a2a::turn::HandlerPort>>>>,
     activation: Arc<Mutex<Activation>>,
     database: Option<Database>,
     operation: Arc<tokio::sync::Mutex<()>>,
@@ -35,21 +41,21 @@ pub struct ContextStore {
     lost_save: Arc<Mutex<Option<signal::Cell<Option<SaveOutcome>>>>>,
 }
 
-/// The lane's thread database: direct saves outside a managed turn, and application SQL.
+/// The partition's thread database: direct saves outside a managed turn, and application SQL.
 #[derive(Clone)]
 pub(crate) struct Database {
     storage: Arc<dyn Storage>,
     thread_id: String,
-    lane: String,
-    /// The store's direct saves, one owner of the lane.
+    partition_key: String,
+    /// The store's direct saves, one owner of the partition.
     holder: Holder,
     /// The operation the store serves: its writes' health metrics record under it.
     cx: Cx,
 }
 
 impl Database {
-    fn new(storage: Arc<dyn Storage>, thread_id: String, lane: String, cx: Cx) -> Self {
-        Self { storage, thread_id, lane, holder: Holder::new("context"), cx }
+    fn new(storage: Arc<dyn Storage>, thread_id: String, partition_key: String, cx: Cx) -> Self {
+        Self { storage, thread_id, partition_key, holder: Holder::new("context"), cx }
     }
 
     async fn open(&self) -> Result<Thread, StorageError> {
@@ -100,8 +106,15 @@ impl Database {
 
     async fn snapshot(&self) -> Result<(Vec<ContextScope>, Option<Value>), StorageError> {
         with_thread(&*self.storage, &self.thread_id, async |thread| {
-            let scopes = thread.context_scopes(&self.lane).await?;
-            let routing = thread.lane(&self.lane).info().await?.and_then(|lane| lane.state);
+            let scopes = thread.context_scopes(&self.partition_key).await?;
+            let routing = thread
+                .partition(&self.partition_key)
+                .info()
+                .await?
+                .and_then(|partition_key| partition_key.state);
+            let (routing, _) =
+                crate::session_snapshot::hydrate(&**thread.conn(), &self.partition_key, routing)
+                    .await?;
             Ok((scopes, routing))
         })
         .await
@@ -154,9 +167,9 @@ impl Database {
     ) -> Result<crate::Run, StorageError> {
         let mut options = RunOptions::new(shortuuid("context_"), "");
         options.channel = Some("context".into());
-        options.kind = crate::thread::run::LaneKind::Context;
-        let mut run = thread.lane(&self.lane).open(options, &self.holder).await?;
-        // The lease serializes direct and conversational saves for this scope's lane.
+        options.kind = crate::thread::run::PartitionKind::Context;
+        let mut run = thread.partition(&self.partition_key).open(options, &self.holder).await?;
+        // The lease serializes direct and conversational saves for this scope's partition.
         // Check before any writes so a stale direct save has a typed refusal.
         for write in &writes {
             let revision = run
@@ -168,7 +181,7 @@ impl Database {
                 run.abandon(RunOutcome::Failed, AbandonReason::ContextVersionConflict.as_str())
                     .await?;
                 return Err(StorageError::VersionConflict {
-                    lane: self.lane.clone(),
+                    partition_key: self.partition_key.clone(),
                     expected: write.expected_revision,
                 });
             }
@@ -202,8 +215,21 @@ enum SaveOutcome {
 }
 
 impl ContextStore {
+    pub(crate) fn acknowledge_session_state(&self) {
+        self.activation.lock().acknowledge_session();
+    }
+
+    pub(crate) fn matches_partition(&self, thread_id: &str, partition_key: &str) -> bool {
+        self.database
+            .as_ref()
+            .is_some_and(|db| db.thread_id == thread_id && db.partition_key == partition_key)
+    }
+
     fn with(activation: Activation, database: Option<Database>, managed: bool) -> Self {
         Self {
+            session_view: Arc::default(),
+            owned_session: Arc::default(),
+            session_sink: Arc::default(),
             activation: Arc::new(Mutex::new(activation)),
             database,
             operation: Arc::new(tokio::sync::Mutex::new(())),
@@ -219,14 +245,14 @@ impl ContextStore {
     pub async fn turn(
         storage: Arc<dyn Storage>,
         thread_id: String,
-        lane: String,
+        partition_key: String,
         scopes: Vec<ContextScope>,
         routing: Option<Value>,
         read_only: bool,
         cx: Cx,
     ) -> Result<Self, StorageError> {
         let activation = Activation::new(scopes, routing, read_only)?;
-        Ok(Self::with(activation, Some(Database::new(storage, thread_id, lane, cx)), true))
+        Ok(Self::with(activation, Some(Database::new(storage, thread_id, partition_key, cx)), true))
     }
 
     /// Stages a joining transaction's writes, unless its managed turn has ended.
@@ -310,14 +336,14 @@ impl ContextStore {
         self.managed.store(false, Ordering::Release);
     }
 
-    /// The lane's context, its writes' health metrics recorded under `cx`.
+    /// The partition's context, its writes' health metrics recorded under `cx`.
     pub async fn bound(
         storage: Arc<dyn Storage>,
         thread_id: String,
-        lane: String,
+        partition_key: String,
         cx: Cx,
     ) -> Result<Self, StorageError> {
-        let database = Database::new(storage, thread_id, lane, cx);
+        let database = Database::new(storage, thread_id, partition_key, cx);
         let (scopes, routing) = database.snapshot().await?;
         Ok(Self::with(Activation::new(scopes, routing, false)?, Some(database), false))
     }
@@ -381,6 +407,95 @@ impl HostContextActivation for ContextStore {
             }
         }
         Ok(values)
+    }
+
+    async fn load_session(&self) -> Result<Option<Value>, StorageError> {
+        self.activation.lock().ensure_open()?;
+        match &self.database {
+            Some(database) => Ok(database.snapshot().await?.1),
+            None => Ok(self.activation.lock().committed_session()),
+        }
+    }
+
+    async fn load_session_snapshot(&self) -> Result<String, StorageError> {
+        let value = self
+            .load_session()
+            .await?
+            .unwrap_or_else(|| serde_json::json!({"version":1,"kind":"empty"}));
+        serde_json::to_string(&value).map_err(|error| StorageError::Invalid(error.to_string()))
+    }
+
+    fn declare_binding(
+        &self,
+        context: lk_agents_abi::HostRef,
+        store: lk_agents_abi::HostRef,
+    ) -> lk_agents_abi::storage::session::BoundContext {
+        lk_agents_abi::storage::session::BoundContext { context, store }
+    }
+
+    async fn flush_bound_session(
+        &self,
+        history: Option<Vec<lk_agents_abi::ChatItem>>,
+    ) -> Result<(), StorageError> {
+        self.activation.lock().ensure_open()?;
+        let view = self.session_view.lock().clone();
+        let Some(view) = view else { return Ok(()) };
+        let history = match history {
+            Some(history) => history,
+            None => view.root_history()?,
+        };
+        self.flush_session(history).await
+    }
+
+    fn set_session_sink(
+        &self,
+        sink: Arc<dyn lk_agents_abi::a2a::turn::HandlerPort>,
+    ) -> Result<(), StorageError> {
+        self.activation.lock().ensure_open()?;
+        *self.session_sink.lock() = Some(sink);
+        Ok(())
+    }
+
+    async fn flush_session(
+        &self,
+        history: Vec<lk_agents_abi::ChatItem>,
+    ) -> Result<(), StorageError> {
+        let state = {
+            let activation = self.activation.lock();
+            activation.ensure_open()?;
+            activation.session_state()
+        };
+        let Some(state) = state else { return Ok(()) };
+        let sink = self.session_sink.lock().clone();
+        if let Some(sink) = sink {
+            sink.save_session(state, history).await?;
+        } else if self.database.is_some() {
+            self.checkpoint_owned_session(state, history).await?;
+        }
+        self.activation.lock().acknowledge_session();
+        Ok(())
+    }
+
+    fn stage_session(&self, state: Value) -> Result<(), StorageError> {
+        let view = self.session_view.lock().clone();
+        let checked = view
+            .as_ref()
+            .map(|_| crate::session_state::SessionState::from_value(state.clone()))
+            .transpose()?;
+        let mut activation = self.activation.lock();
+        activation.stage_session(state)?;
+        if self.database.is_none() {
+            activation.acknowledge_session();
+        }
+        drop(activation);
+        if let Some((view, checked)) = view.zip(checked) {
+            view.assign(&checked);
+        }
+        Ok(())
+    }
+
+    fn session_state(&self) -> Option<Value> {
+        self.activation.lock().session_state()
     }
 
     fn writes(&self) -> Vec<ContextScopeWrite> {

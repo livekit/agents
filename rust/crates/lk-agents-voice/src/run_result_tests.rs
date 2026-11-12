@@ -80,6 +80,38 @@ fn reply(id: &str, text: &str, seconds: u64) -> ChatItem {
     ChatMessage::text(id, Role::Assistant, text, at).into()
 }
 
+/// A settled run keeps its items in the order they happened and ignores items recorded after.
+/// https://github.com/livekit/agents/pull/2787 https://github.com/livekit/agents/pull/4925
+#[test]
+fn terminal_results_keep_assistant_tool_order_despite_late_events() {
+    let mut runs = capture();
+    runs.participated();
+    let text = reply("spoken", "Checking now.", 1);
+    let call: ChatItem = lk_agents_abi::FunctionCall {
+        id: "call-item".into(),
+        call_id: "call-1".into(),
+        name: "lookup".into(),
+        arguments: "{}".into(),
+        created_at: SystemTime::UNIX_EPOCH + Duration::from_secs(2),
+        extra: Default::default(),
+        group_id: None,
+    }
+    .into();
+    runs.record(&call);
+    runs.record(&text);
+    let (open, output) = runs.decide(false).unwrap();
+    let settled = open.settle(output, vec![text, call]).1.unwrap();
+    let snapshot = settled.result.clone();
+    runs.record(&reply("spoken", "late overwrite", 0));
+    runs.record(&reply("late", "late append", 3));
+    assert!(runs.current().is_none());
+    assert_eq!(settled.result, snapshot);
+    assert_eq!(
+        settled.result.new_messages.iter().map(ChatItem::id).collect::<Vec<_>>(),
+        ["spoken", "call-item"]
+    );
+}
+
 #[test]
 fn recording_replaces_identity_orders_equal_stamps_and_answers_the_last_reply() {
     let mut runs = capture();
