@@ -477,7 +477,7 @@ class RoomIO:
         ):
             logger.info(
                 "closing agent session due to participant disconnect "
-                "(disable via `RoomInputOptions.close_on_disconnect=False`)",
+                "(disable via `RoomOptions.close_on_disconnect=False`)",
                 extra={
                     "room": self._room.name,
                     "participant": participant.identity,

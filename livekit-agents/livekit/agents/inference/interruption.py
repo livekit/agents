@@ -84,7 +84,7 @@ class InterruptionOptions:
     detection_interval: float
     """The interval between detections, defaults to 0.1 seconds"""
     inference_timeout: float
-    """The timeout for the interruption detection, defaults to 1 second"""
+    """The timeout for the interruption detection, defaults to 0.7 seconds"""
     base_url: str
     api_key: str
     api_secret: str
@@ -295,9 +295,9 @@ class AdaptiveInterruptionDetector(
             threshold (float, optional): The threshold for the interruption detection. When not set, the server-recommended default (returned in session.created) is used.
             min_interruption_duration (float, optional): The minimum duration, in seconds, of the interruption event, defaults to 50ms.
             max_audio_duration (float, optional): The maximum audio duration, including the audio prefix, in seconds, for the interruption detection, defaults to 3s.
-            audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the interruption detection, defaults to 0.5s.
+            audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the interruption detection, defaults to 1.0s.
             detection_interval (float, optional): The interval between detections, in seconds, for the interruption detection, defaults to 0.1s.
-            inference_timeout (float, optional): The timeout for the interruption detection, defaults to 1 second.
+            inference_timeout (float, optional): The timeout for the interruption detection, defaults to 0.7s.
             base_url (str, optional): The base URL for the interruption detection, defaults to the shared LIVEKIT_INFERENCE_URL environment variable.
             api_key (str, optional): The API key for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_KEY environment variable.
             api_secret (str, optional): The API secret for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_SECRET environment variable.

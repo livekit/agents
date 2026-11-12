@@ -38,7 +38,7 @@ class AvailabilityChangedEvent:
 class FallbackAdapter(
     LLM[Literal["llm_availability_changed"]],
 ):
-    """Agent Fallback Adapter for LLM. Manages multiple STT instances with automatic fallback
+    """Agent Fallback Adapter for LLM. Manages multiple LLM instances with automatic fallback
     when the primary provider fails.
     """
 

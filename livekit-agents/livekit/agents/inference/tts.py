@@ -438,7 +438,8 @@ class TTS(tts.TTS):
             language (str, optional): Language of the TTS model.
             encoding (TTSEncoding, optional): Encoding of the TTS model.
             sample_rate (int, optional): Sample rate of the TTS model.
-            base_url (str, optional): LIVEKIT_URL, if not provided, read from environment variable.
+            base_url (str, optional): LiveKit Inference URL, if not provided, read from the
+                LIVEKIT_INFERENCE_URL environment variable, else the default inference URL.
             api_key (str, optional): LIVEKIT_API_KEY, if not provided, read from environment variable.
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.

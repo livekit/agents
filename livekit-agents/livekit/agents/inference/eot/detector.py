@@ -91,7 +91,7 @@ class TurnDetector(_BaseStreamingTurnDetector):
             if missing:
                 if auto:
                     logger.warning(
-                        "LIVEKIT_INFERENCE_URL is set but %s missing; "
+                        "turn-detector-v1 requires %s (env or constructor argument); "
                         "falling back to the turn-detector-v1-mini model",
                         ", ".join(missing),
                     )
