@@ -276,6 +276,8 @@ class JobContext:
         # monotonic, connect() returned: the SDK returns once the primary transport connected
         self._connected_mono = 0.0
         self._lock = asyncio.Lock()
+        # opened by the idle process before this job arrived; used by the first connect()
+        self._prewarmed_connection: rtc.PrewarmedConnection | None = None
         self._tagger = Tagger()
         self._recording_initialized = False
         self._redaction_enabled = info.job.enable_redaction
@@ -716,11 +718,13 @@ class JobContext:
             self._connect_called_mono = self._connect_called_mono or time.monotonic()
 
             encryption = encryption or e2ee
+            prewarmed, self._prewarmed_connection = self._prewarmed_connection, None
             room_options = rtc.RoomOptions(
                 encryption=encryption,
                 auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
                 rtc_config=rtc_config,
                 single_peer_connection=single_peer_connection,
+                prewarmed_connection=prewarmed,
             )
 
             with session_context.session_span(
@@ -733,8 +737,12 @@ class JobContext:
                 },
                 job_ctx=self,
             ) as connect_span:
-                await self._room.connect(self._info.url, self._info.token, options=room_options)
-                self._connected_mono = time.monotonic()
+                try:
+                    await self._room.connect(self._info.url, self._info.token, options=room_options)
+                    self._connected_mono = time.monotonic()
+                finally:
+                    if prewarmed is not None:
+                        prewarmed.close()
                 connect_span.set_attributes(
                     {
                         trace_types.ATTR_PARTICIPANT_ID: self._room.local_participant.sid,

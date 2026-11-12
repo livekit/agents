@@ -66,12 +66,14 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._default_num_idle_processes = num_idle_processes
         self._http_proxy = http_proxy
         self._target_idle_processes = num_idle_processes
+        self._prewarm_url: str | None = None
 
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
         self._warmed_proc_queue = asyncio.Queue[JobExecutor]()
         self._executors: list[JobExecutor] = []
         self._spawn_tasks: set[asyncio.Task[None]] = set()
         self._close_tasks: set[asyncio.Task[None]] = set()
+        self._prewarm_tasks: set[asyncio.Task[None]] = set()
         self._monitor_tasks: set[asyncio.Task[None]] = set()
         self._started = False
         self._closed = False
@@ -201,6 +203,32 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                     extra={"job_id": info.job.id, "attempt": attempt + 1},
                 )
 
+    def set_prewarm_url(self, url: str | None) -> None:
+        """Set the LiveKit server URL that idle processes keep a connection open to.
+
+        Jobs connect to the URL of their assignment, which can differ from the URL the
+        worker registered with (e.g. a region-specific URL on LiveKit Cloud), so this is
+        updated whenever an assignment reveals a new one.
+        """
+        if url == self._prewarm_url:
+            return
+
+        self._prewarm_url = url
+        if not url:
+            return
+
+        for proc in self._executors:
+            if proc.running_job is None:
+                task = asyncio.create_task(self._send_prewarm(proc, url))
+                self._prewarm_tasks.add(task)
+                task.add_done_callback(self._prewarm_tasks.discard)
+
+    async def _send_prewarm(self, proc: JobExecutor, url: str) -> None:
+        try:
+            await proc.prewarm_connection(url)
+        except Exception:
+            logger.debug("failed to send prewarm request", extra=proc.logging_extra())
+
     def set_target_idle_processes(self, num_idle_processes: int) -> None:
         self._target_idle_processes = num_idle_processes
 
@@ -263,6 +291,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                     await proc.start()
                     self.emit("process_started", proc)
                     await proc.initialize()
+                    if self._prewarm_url:
+                        await self._send_prewarm(proc, self._prewarm_url)
                     self.emit("process_ready", proc)
                     self._warmed_proc_queue.put_nowait(proc)
                     if self._warmed_proc_queue.qsize() >= self._default_num_idle_processes:
@@ -321,7 +351,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
                 await asyncio.sleep(0.1)
         except asyncio.CancelledError:
-            await aio.cancel_and_wait(*self._spawn_tasks)
+            await aio.cancel_and_wait(*self._spawn_tasks, *self._prewarm_tasks)
             await asyncio.gather(*[proc.aclose() for proc in self._executors])
             await asyncio.gather(*self._close_tasks)
             await asyncio.gather(*self._monitor_tasks)

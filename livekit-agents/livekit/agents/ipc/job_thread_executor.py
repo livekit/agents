@@ -264,6 +264,13 @@ class ThreadJobExecutor:
                 proto.InferenceResponse(request_id=inf_req.request_id, error=str(e)),
             )
 
+    async def prewarm_connection(self, url: str) -> None:
+        """keep a connection to the LiveKit server ready while the executor is idle"""
+        if self._running_job is not None or not self._initialize_fut.done():
+            return
+
+        await channel.asend_message(self._pch, proto.PrewarmConnectionRequest(url=url))
+
     async def launch_job(self, info: RunningJobInfo) -> None:
         """start/assign a job to the executor"""
         if self._running_job is not None:

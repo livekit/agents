@@ -35,6 +35,10 @@ class JobExecutor(Protocol):
 
     async def launch_job(self, info: RunningJobInfo) -> None: ...
 
+    async def prewarm_connection(self, url: str) -> None:
+        """Ask the idle executor to keep a connection to the LiveKit server at `url` ready"""
+        ...
+
     def logging_extra(self) -> dict[str, Any]: ...
 
 

@@ -262,6 +262,21 @@ class JoinTiming:
         self.timing.ParseFromString(channel.read_bytes(b))
 
 
+@dataclass
+class PrewarmConnectionRequest:
+    """sent by the main process to an idle subprocess so it keeps a transport connection
+    to the LiveKit server open; the next job's room connection then skips TCP/TLS setup"""
+
+    MSG_ID: ClassVar[int] = 13
+    url: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.url)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.url = channel.read_string(b)
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -276,4 +291,5 @@ IPC_MESSAGES = {
     ShutdownRequestAck.MSG_ID: ShutdownRequestAck,
     ShuttingDown.MSG_ID: ShuttingDown,
     JoinTiming.MSG_ID: JoinTiming,
+    PrewarmConnectionRequest.MSG_ID: PrewarmConnectionRequest,
 }

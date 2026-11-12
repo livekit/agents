@@ -22,6 +22,7 @@ from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.mock_room import create_mock_room
 from livekit.agents.ipc.proc_pool import ProcPool
 from livekit.agents.job import JobAcceptArguments, RunningJobInfo
+from livekit.agents.worker import _is_cloud_url, _pick_region_url
 from livekit.protocol import agent, models
 
 pytestmark = pytest.mark.unit
@@ -467,3 +468,29 @@ async def test_final_job_status_reaches_worker_websocket(
     assert updates[0].status == agent.JobStatus.JS_RUNNING
     if scenario != "raise_before_connect":
         assert any(update.join_timing.connected_us > 0 for update in updates)
+
+
+_REGIONS = [
+    {"region": "us-east", "url": "https://proj.us-east.example", "distance": "10"},
+    {"region": "us-west", "url": "https://proj.us-west.example", "distance": "4000"},
+]
+
+
+def test_pick_region_url_prefers_the_worker_region() -> None:
+    assert _pick_region_url(_REGIONS, "us-west") == "https://proj.us-west.example"
+
+
+def test_pick_region_url_falls_back_to_closest() -> None:
+    assert _pick_region_url(_REGIONS, "eu-central") == "https://proj.us-east.example"
+    assert _pick_region_url(_REGIONS, "") == "https://proj.us-east.example"
+
+
+def test_pick_region_url_without_regions() -> None:
+    assert _pick_region_url([], "us-east") is None
+
+
+def test_is_cloud_url() -> None:
+    assert _is_cloud_url("wss://proj.livekit.cloud")
+    assert _is_cloud_url("https://proj.staging.livekit.run")
+    assert not _is_cloud_url("ws://10.0.0.19:7880")
+    assert not _is_cloud_url("wss://livekit.example.com")

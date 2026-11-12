@@ -68,6 +68,34 @@ WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
 
 
+def _prewarm_connection_enabled() -> bool:
+    """Whether idle processes keep a connection to the LiveKit server open for their next
+    job. Set LIVEKIT_PREWARM_CONNECTION=0 to disable."""
+    return os.environ.get("LIVEKIT_PREWARM_CONNECTION", "1").strip().lower() not in (
+        "0",
+        "false",
+    )
+
+
+def _is_cloud_url(url: str) -> bool:
+    host = urlparse(url).hostname or ""
+    return host.endswith(".livekit.cloud") or host.endswith(".livekit.run")
+
+
+def _pick_region_url(regions: list[dict[str, Any]], region: str) -> str | None:
+    """Pick the URL LiveKit Cloud would assign jobs to from a /settings/regions response.
+
+    The server assigns the region the worker is connected to when it is allowed, otherwise
+    the closest allowed one, which is the first entry.
+    """
+    for entry in regions:
+        if entry.get("region") == region and entry.get("url"):
+            return str(entry["url"])
+    if regions and regions[0].get("url"):
+        return str(regions[0]["url"])
+    return None
+
+
 def _default_setup_fnc(proc: JobProcess) -> Any:
     return
 
@@ -644,6 +672,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 memory_limit_mb=self._job_memory_limit_mb,
                 http_proxy=self._http_proxy or None,
             )
+            if self._should_prewarm_connection():
+                self._proc_pool.set_prewarm_url(self._ws_url)
+            self._prewarm_url_task: asyncio.Task[None] | None = None
+            self._prewarm_url_assigned = False
 
             self._previous_status = agent.WorkerStatus.WS_AVAILABLE
 
@@ -1074,6 +1106,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             # before closing the proc pool (they accepted before shutdown)
             await asyncio.gather(*self._job_lifecycle_tasks, return_exceptions=True)
 
+            if self._prewarm_url_task is not None:
+                await utils.aio.cancel_and_wait(self._prewarm_url_task)
             await self._proc_pool.aclose()
 
             if self._inference_executor is not None:
@@ -1329,6 +1363,48 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         )
         self.emit("worker_registered", reg.worker_id, reg.server_info)
 
+        if self._should_prewarm_connection() and _is_cloud_url(self._ws_url):
+            # a new registration may have landed in another region
+            self._prewarm_url_assigned = False
+            if self._prewarm_url_task is not None:
+                self._prewarm_url_task.cancel()
+            self._prewarm_url_task = self._loop.create_task(
+                self._prewarm_region_url(reg.server_info.region)
+            )
+
+    def _should_prewarm_connection(self) -> bool:
+        return bool(self._ws_url) and not self._simulation and _prewarm_connection_enabled()
+
+    @utils.log_exceptions(logger=logger)
+    async def _prewarm_region_url(self, region: str) -> None:
+        """Look up the region-specific URL LiveKit Cloud will assign jobs to, so idle processes
+        can warm it before the first assignment reveals it."""
+        if self._http_session is None:
+            return
+
+        parsed = urlparse(self._ws_url)
+        scheme = "https" if parsed.scheme in ("wss", "https") else "http"
+        token = (
+            api.AccessToken(self._api_key, self._api_secret)
+            .with_grants(api.VideoGrants(agent=True))
+            .to_jwt()
+        )
+        try:
+            async with self._http_session.get(
+                f"{scheme}://{parsed.netloc}/settings/regions",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+        except Exception as e:
+            logger.debug("failed to fetch regions for the connection prewarm", exc_info=e)
+            return
+
+        url = _pick_region_url(data.get("regions", []), region)
+        if url and not self._prewarm_url_assigned:
+            self._proc_pool.set_prewarm_url(url)
+
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
         # receipt is now, not when the task gets to run: that delay is dispatch latency
         task = self._loop.create_task(
@@ -1459,6 +1535,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 raise AssignmentTimeoutError() from None
 
             job_assign = wait_assignment.result()
+            if job_assign.url and self._should_prewarm_connection():
+                # the server may assign a different URL than the one we registered with
+                # (a region-specific one on LiveKit Cloud); warm that one for the next jobs
+                self._prewarm_url_assigned = True
+                self._proc_pool.set_prewarm_url(job_assign.url)
+
             running_info = RunningJobInfo(
                 accept_arguments=args,
                 job=msg.job,

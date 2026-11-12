@@ -45,6 +45,7 @@ from .proto import (
     InferenceResponse,
     InitializeRequest,
     JoinTiming,
+    PrewarmConnectionRequest,
     ShutdownRequest,
     ShutdownRequestAck,
     ShuttingDown,
@@ -53,6 +54,13 @@ from .proto import (
 
 if TYPE_CHECKING:
     from ..voice.remote_session import SessionHost
+
+# An idle process keeps one connection to the LiveKit server open for its next job,
+# replacing it as soon as the server closes it, or once it is older than the max age.
+# Proxies close a connection that sends no request within their read timeout (60s on
+# LiveKit Cloud), so max age + check interval must stay below that.
+PREWARM_CONNECTION_MAX_AGE = 45.0
+PREWARM_CONNECTION_CHECK_INTERVAL = 10.0
 
 # Defensive timeout for AgentSession.aclose() during job shutdown. Hardcoded for now
 # as a guardrail against close paths that hang indefinitely. If aclose() does not
@@ -219,6 +227,12 @@ class _JobProc:
         self._job_task: asyncio.Task[None] | None = None
         self._join_timing_task: asyncio.Task[None] | None = None
         self._entrypoint_started_mono = 0.0
+        self._prewarm_task: asyncio.Task[None] | None = None
+        self._prewarm_url = ""
+        self._prewarm_wake = asyncio.Event()
+        self._prewarmed: rtc.PrewarmedConnection | None = None
+        self._prewarmed_url = ""
+        self._prewarmed_at = 0.0
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
         self._ctx_connect_called = False
@@ -260,6 +274,13 @@ class _JobProc:
                         continue
 
                     self._start_job(msg)
+                if isinstance(msg, PrewarmConnectionRequest) and not self.has_running_job:
+                    self._prewarm_url = msg.url
+                    self._prewarm_wake.set()
+                    if self._prewarm_task is None:
+                        self._prewarm_task = asyncio.create_task(
+                            self._prewarm_connection(), name="prewarm_connection"
+                        )
                 if isinstance(msg, ShutdownRequest):
                     await self._client.send(ShutdownRequestAck())
 
@@ -302,7 +323,51 @@ class _JobProc:
             # ensure cleanup on cancellation (e.g. parent channel closes)
             if self._job_task is not None:
                 await aio.cancel_and_wait(self._job_task)
+            if self._prewarm_task is not None:
+                await aio.cancel_and_wait(self._prewarm_task)
             await aio.cancel_and_wait(read_task)
+
+    async def _prewarm_connection(self) -> None:
+        """Keep a connection to the server ready for the next job's room connection"""
+        logged_failure = False
+        while not self.has_running_job:
+            conn = self._prewarmed
+            if (
+                conn is None
+                or self._prewarmed_url != self._prewarm_url
+                or time.monotonic() - self._prewarmed_at > PREWARM_CONNECTION_MAX_AGE
+                or not conn.alive
+            ):
+                url = self._prewarm_url
+                try:
+                    new_conn = await rtc.PrewarmedConnection.create(url)
+                    logged_failure = False
+                except Exception as e:
+                    if not logged_failure:
+                        logger.debug("failed to prewarm the connection to the server", exc_info=e)
+                        logged_failure = True
+                else:
+                    if self.has_running_job:
+                        # the job started while this was opening, without it
+                        new_conn.close()
+                        break
+                    if conn is not None:
+                        conn.close()
+                    self._prewarmed = new_conn
+                    self._prewarmed_url = url
+                    self._prewarmed_at = time.monotonic()
+
+            self._prewarm_wake.clear()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    self._prewarm_wake.wait(), timeout=PREWARM_CONNECTION_CHECK_INTERVAL
+                )
+
+    def _take_prewarmed_connection(self) -> rtc.PrewarmedConnection | None:
+        conn, self._prewarmed = self._prewarmed, None
+        # wake the loop so it exits now that a job is running
+        self._prewarm_wake.set()
+        return conn
 
     def _start_job(self, msg: StartJobRequest) -> None:
         if msg.running_job.fake_job:
@@ -350,6 +415,12 @@ class _JobProc:
             on_shutdown=_on_ctx_shutdown,
             inference_executor=self._inf_client,
         )
+        prewarmed = self._take_prewarmed_connection()
+        if prewarmed is not None:
+            if msg.running_job.fake_job:
+                prewarmed.close()
+            else:
+                self._job_ctx._prewarmed_connection = prewarmed
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
 
