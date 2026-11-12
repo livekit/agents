@@ -51,6 +51,7 @@ class _TTSOptions:
     output_format: str
     user_instructions: str | None
     enhance_named_entities: bool
+    speaking_rate: float | None = None
 
 
 # Constants
