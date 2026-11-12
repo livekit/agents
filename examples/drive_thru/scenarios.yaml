@@ -1,0 +1,184 @@
+# Scenarios covering the drive-thru ordering flows. Run from the repo root:
+#   lk agent simulate text examples/drive_thru/agent.py \
+#     --scenarios examples/drive_thru/scenarios.yaml
+#
+# Per-scenario userdata (applied by simulation.py):
+#   expected_order:    the items the order must hold when the run ends (order ids
+#                      ignored); a mismatch fails the run even if the simulator passed it
+#   unavailable_items: menu item ids marked unavailable before the agent starts
+#   failing_tools:     tools that raise instead of running
+id: SCNG_ZDieUJzP4RA2
+name: Drive-thru ordering
+scenarios:
+  - id: SCN_2qcEmeV6J4f5
+    label: Orders, removes, then orders something else
+    instructions: |-
+      You are a customer at a drive-thru.
+
+      Goals:
+      - Ask for a Big Mac on its own, no meal.
+      - Once the agent has added it, change your mind and say you don't want
+        the Big Mac after all.
+      - Once it has been removed, ask for a McFlurry Oreo.
+      - Don't order anything else, and finish once the agent confirms.
+    agent_expectations: The agent adds a Big Mac, removes it when the customer
+      changes their mind, then adds a McFlurry Oreo, confirming each change.
+    tags:
+      feature: ordering
+    userdata:
+      expected_order:
+        - { type: regular, item_id: sweet_mcflurry_oreo }
+
+  - id: SCN_ZDtVYwmgUMLC
+    label: Combo meal ordered without a drink
+    instructions: |-
+      You are a customer at a drive-thru.
+
+      Goals:
+      - Open with exactly: "Can I get a large Combo McCrispy Original with
+        mayonnaise?" Do not mention a drink.
+      - When the agent asks which drink you want, say "a large Coca-Cola".
+      - Don't order anything else, and finish once the agent confirms.
+    agent_expectations: The agent asks which drink the customer wants before
+      adding the combo, then adds a large Combo McCrispy Original with large
+      fries, a large Coca-Cola and mayonnaise.
+    tags:
+      feature: combo
+    userdata:
+      expected_order:
+        - type: combo_meal
+          meal_id: combo_mccrispy_4a
+          drink_id: coca_cola
+          drink_size: L
+          fries_size: L
+          sauce_id: mayonnaise
+
+  - id: SCN_BLF4jNwVJdjX
+    label: Ordering tool fails
+    instructions: |-
+      You are a customer at a drive-thru.
+
+      Goals:
+      - Ask for a large vanilla shake.
+      - If the agent says something went wrong, try once more, then give up
+        and finish the conversation without ordering anything else.
+    agent_expectations: The ordering tool fails. The agent tells the customer
+      something went wrong (asking them to try again is fine) and never claims
+      the shake was added.
+    tags:
+      feature: errors
+    userdata:
+      failing_tools: [order_regular_item]
+      expected_order: []
+
+  - id: SCN_LKMW43WNb7nY
+    label: Requested drink is unavailable
+    instructions: |-
+      You are a customer at a drive-thru.
+
+      Goals:
+      - Ask for a large Coca-Cola.
+      - If the agent says it's unavailable or suggests something else, decline
+        politely; you only wanted a Coca-Cola. Finish without ordering anything.
+    agent_expectations: The agent tells the customer that Coca-Cola is
+      unavailable (offering an alternative is fine) and does not add it to the
+      order.
+    tags:
+      feature: availability
+    userdata:
+      unavailable_items: [coca_cola]
+      expected_order: []
+
+  - id: SCN_oxp8qy8wBNhh
+    label: Drink ordered without a size
+    instructions: |-
+      You are a customer at a drive-thru.
+
+      Goals:
+      - Ask for a Fanta Orange without saying a size.
+      - When the agent asks which size, say "a small one".
+      - Don't order anything else, and finish once the agent confirms.
+    agent_expectations: The agent asks for the drink size before adding it,
+      then adds a small Fanta Orange and confirms it.
+    tags:
+      feature: sizes
+    userdata:
+      expected_order:
+        - { type: regular, item_id: fanta_orange, size: S }
+
+  - id: SCN_zvEhDy2kEyEC
+    label: Two of the same sauce
+    instructions: |-
+      You are a customer at a drive-thru.
+
+      Goals:
+      - Ask for two mayonnaise sauces in one request.
+      - Don't order anything else, and finish once the agent has added them.
+    agent_expectations: The agent adds two mayonnaise sauces in one go, without
+      asking the customer to confirm the count.
+    tags:
+      feature: quantities
+    userdata:
+      expected_order:
+        - { type: regular, item_id: mayonnaise }
+        - { type: regular, item_id: mayonnaise }
+
+  - id: SCN_wqTkusiYFpc2
+    label: Two different items in one request
+    instructions: |-
+      You are a customer at a drive-thru.
+
+      Goals:
+      - Ask for a ketchup sauce and a McFlurry Oreo in one request.
+      - Don't order anything else, and finish once the agent has added them.
+    agent_expectations: The agent adds both a ketchup sauce and a McFlurry Oreo
+      from the one request.
+    tags:
+      feature: quantities
+    userdata:
+      expected_order:
+        - { type: regular, item_id: ketchup }
+        - { type: regular, item_id: sweet_mcflurry_oreo }
+
+  - id: SCN_U3RQcPx5DCjt
+    label: Combo meal built up over several turns
+    instructions: |-
+      You are a customer at a drive-thru who gives details one at a time.
+
+      Goals:
+      - Open with exactly: "Can I get a Big Mac meal?"
+      - Give one detail per message, only when asked: the drink is a Coke, the
+        size is large for both the fries and the drink, and the sauce is
+        mayonnaise.
+      - Don't order anything else, and finish once the agent confirms.
+    agent_expectations: The agent collects the drink, sizes and sauce, then
+      adds a Big Mac Combo with large fries, a large Coca-Cola and mayonnaise,
+      and confirms it.
+    tags:
+      feature: combo
+    userdata:
+      expected_order:
+        - type: combo_meal
+          meal_id: combo_big_mac
+          drink_id: coca_cola
+          drink_size: L
+          fries_size: L
+          sauce_id: mayonnaise
+
+  - id: SCN_jHfNKkhh3YNv
+    label: Item not on the menu
+    instructions: |-
+      You are a customer at a drive-thru.
+
+      Goals:
+      - Ask for a double hamburger, no meal.
+      - When the agent says they don't have it, ask for a Red Bull instead.
+      - Decline any suggested alternatives and finish without ordering
+        anything.
+    agent_expectations: The agent says the double hamburger isn't on the menu
+      (suggesting something similar is fine), then says they don't have Red
+      Bull, and adds nothing to the order.
+    tags:
+      feature: availability
+    userdata:
+      expected_order: []

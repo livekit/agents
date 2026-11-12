@@ -16,6 +16,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
 from ..utils import aio, is_given, shortuuid
 from .chat_context import ChatContext, ChatMessage, FunctionCall
+from .delegation import DelegationDetectionOptions
 from .duplex import (
     DuplexAudioFrame,
     DuplexCapabilities,
@@ -198,6 +199,8 @@ class _Burst:
     """Span clock minus audio clock, fixed by the first fragment: the sound that opened the gate
     and the oldest unclaimed fragment describe the same moment."""
     opened_at: float = field(default_factory=time.time)
+    abandoned: bool = False
+    """Interrupted by the framework, which no longer reads it; its sound plays out unheard."""
     transcript: str = ""
     _last_annotation: float = 0.0
 
@@ -331,6 +334,8 @@ class _DuplexRealtimeSession(RealtimeSession):
         # user_initiated has to be settled before a burst's event goes out, or the framework
         # schedules it as a turn of the model's own as well
         self._pending_reply: asyncio.Future[GenerationCreatedEvent] | None = None
+        # the tool_choice the framework last set; one that forces a call makes a lone call a reply
+        self._tool_choice: ToolChoice | None = None
         # the conversation as the framework sees it: the adapter names every message, so this is
         # what a context update diffs against, and only what is new reaches the model
         self._chat_ctx = ChatContext.empty()
@@ -342,6 +347,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         duplex.on("input_speech_started", lambda ev: self.emit("input_speech_started", ev))
         duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
         duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
+        duplex.on("delegation_created", lambda ev: self.emit("delegation_created", ev))
         duplex.on("error", lambda ev: self.emit("error", ev))
 
         self._segment_atask = asyncio.create_task(
@@ -385,7 +391,15 @@ class _DuplexRealtimeSession(RealtimeSession):
         finally:
             if idle_timeout is not None:
                 idle_timeout.cancel()
+            # the stream is over, so no sound will reach the words still waiting: they belong to
+            # the burst in flight, or go out as text on their own rather than be lost
+            if (burst := self._burst) is not None:
+                self._attach_fragments(burst)
+                while self._fragments:
+                    burst.attach(self._fragments.popleft())
             self._close_burst()
+            if self._fragments:
+                self._emit_as_text(len(self._fragments))
 
     def _on_audio_frame(self, f: DuplexAudioFrame) -> None:
         if f.start_ms is not None:
@@ -411,13 +425,11 @@ class _DuplexRealtimeSession(RealtimeSession):
                 "duplex transcript outlived the audio it describes",
                 extra={"lk.pii.transcript": "".join(f.text for f in self._fragments)},
             )
-            burst = self._open_burst(kind="text")
-            while self._fragments:
-                burst.attach(self._fragments.popleft())
-            if (message := burst.close()) is not None:
-                self._chat_ctx.insert(message)
+            self._emit_as_text(len(self._fragments))
 
-    def _open_burst(self, *, kind: Literal["speech", "text", "tool"] = "speech") -> _Burst:
+    def _open_burst(
+        self, *, kind: Literal["speech", "text", "tool"] = "speech", resolves_reply: bool = False
+    ) -> _Burst:
         burst = _Burst(
             id=shortuuid("item_"),
             message_ch=aio.Chan(),
@@ -434,8 +446,13 @@ class _DuplexRealtimeSession(RealtimeSession):
             response_id=burst.id,
         )
         # the model answers on the one stream it has, so speech opening is the reply asked for; a
-        # call on its own is not, nor is text for sound already played: the speech that follows is
-        if kind == "speech" and self._pending_reply is not None and not self._pending_reply.done():
+        # call on its own is not unless the ask forced one, nor is text for sound already played:
+        # the speech that follows is
+        if (
+            (kind == "speech" or resolves_reply)
+            and self._pending_reply is not None
+            and not self._pending_reply.done()
+        ):
             ev.user_initiated = True
             self._pending_reply.set_result(ev)
         self.emit("generation_created", ev)
@@ -491,11 +508,15 @@ class _DuplexRealtimeSession(RealtimeSession):
                 break
             late += 1
         if late:
-            burst = self._open_burst(kind="text")
-            for _ in range(late):
-                burst.attach(self._fragments.popleft())
-            if (message := burst.close()) is not None:
-                self._chat_ctx.insert(message)
+            self._emit_as_text(late)
+
+    def _emit_as_text(self, count: int) -> None:
+        """Hands the oldest ``count`` waiting fragments over as a generation of text alone."""
+        burst = self._open_burst(kind="text")
+        for _ in range(count):
+            burst.attach(self._fragments.popleft())
+        if (message := burst.close()) is not None:
+            self._chat_ctx.insert(message)
 
     def _on_input_transcription(self, ev: InputTranscriptionCompleted) -> None:
         if ev.is_final:
@@ -516,10 +537,16 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._chat_ctx.insert(call)
         # a call joins the burst in flight so the tool runs while the model talks; alone, it is a
         # generation of its own, over as soon as it is delivered
-        if self._burst is not None:
+        if self._burst is not None and not self._burst.abandoned:
             self._burst.function_ch.send_nowait(call)
             return
-        burst = self._open_burst(kind="tool")
+        # under a tool_choice that forces a call, the call is the reply: the speech it leads to
+        # needs the tool's result, which would otherwise queue behind the ask it answers
+        tool_choice = self._tool_choice
+        forced = (tool_choice == "required" and call.name in self._duplex.tools.function_tools) or (
+            isinstance(tool_choice, dict) and tool_choice["function"]["name"] == call.name
+        )
+        burst = self._open_burst(kind="tool", resolves_reply=forced)
         burst.function_ch.send_nowait(call)
         burst.close()
 
@@ -546,6 +573,10 @@ class _DuplexRealtimeSession(RealtimeSession):
     @property
     def tools(self) -> ToolContext:
         return self._duplex.tools
+
+    @property
+    def background_work_running(self) -> bool:
+        return self._duplex.background_work_running
 
     async def _update_session(
         self,
@@ -599,6 +630,8 @@ class _DuplexRealtimeSession(RealtimeSession):
         await self._duplex._update_tools(tools)
 
     def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None:
+        if is_given(tool_choice):
+            self._tool_choice = tool_choice
         self._duplex._update_options(tool_choice=tool_choice)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
@@ -642,7 +675,17 @@ class _DuplexRealtimeSession(RealtimeSession):
         pass
 
     def interrupt(self) -> None:
-        pass  # barge-in is the model's own, and it cannot be cancelled
+        # barge-in is the model's own and cannot be cancelled, but the framework stops reading
+        # the burst in flight, so a call arriving later must not join it
+        if self._burst is not None:
+            self._burst.abandoned = True
+
+    def delegate(self, instructions: str | None = None) -> None:
+        self._duplex.delegate(instructions)
+
+    @property
+    def _delegation_detection(self) -> DelegationDetectionOptions | None:
+        return self._duplex._delegation_detection
 
     def truncate(
         self,

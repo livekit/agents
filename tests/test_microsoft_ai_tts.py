@@ -26,7 +26,7 @@ from .microsoft_ai_fakes import (
     wav_bytes,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 OPTIONS = APIConnectOptions(max_retry=0, timeout=0.5)
 PCM = b"\x81\xff" * 3717

@@ -107,6 +107,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         stream_idle_timeout: float = DEFAULT_STREAM_IDLE_TIMEOUT,
+        client_reference_id: str | None = None,
     ) -> None:
         """Initialize instance of Soniox Text-to-Speech API service.
 
@@ -132,6 +133,9 @@ class TTS(tts.TTS):
                 stream is finalized; the next sentence starts a fresh stream. Prevents slow
                 LLM gaps from hitting the server's per-stream timeout (observed ~8-18s).
                 Defaults to 5.0.
+            client_reference_id (str): Optional client-defined identifier recorded with each
+                request in Soniox usage logs, e.g. to attribute cost to a session. Does not need
+                to be unique. Optional.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -163,6 +167,7 @@ class TTS(tts.TTS):
             websocket_url=websocket_url,
             api_key=api_key,
             stream_idle_timeout=stream_idle_timeout,
+            client_reference_id=client_reference_id,
         )
         self._session = http_session
         self._sentence_tokenizer = (
@@ -569,6 +574,7 @@ class _TTSOptions:
     websocket_url: str
     api_key: str
     stream_idle_timeout: float
+    client_reference_id: str | None = None
 
 
 @dataclass
@@ -764,6 +770,8 @@ class _Connection:
                         config["bitrate"] = msg.opts.bitrate
                     if msg.opts.reduce_silence:
                         config["reduce_silence"] = True
+                    if msg.opts.client_reference_id is not None:
+                        config["client_reference_id"] = msg.opts.client_reference_id
                     await self._ws.send_str(json.dumps(config))
                 elif isinstance(msg, _SendText):
                     payload: dict[str, Any] = {"stream_id": msg.stream_id}
