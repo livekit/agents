@@ -73,6 +73,8 @@ class PhonicToolConfig(TypedDict, total=False):
     forbid_speech_after_tool_call: bool
     forbid_tool_call_after_speech: bool
     allow_tool_chaining: bool
+    execution_mode: Literal["sync", "async"]
+    wait_for_response: bool  # async tools only
     # Built-in tools only (set on the matching ``phonic_tools`` entry):
     respond_after_sec: float  # choose_not_to_respond: seconds to wait before a follow-up (or omit)
     speech_before_tool_call: (
@@ -606,6 +608,7 @@ class RealtimeSession(llm.RealtimeSession):
         sent_tool_call_output = False
         sent_system_message = False
         forbid_speech = False
+        open_reply_turn = False
         buffered_user_text = False
         last_item_id = chat_ctx.items[-1].id if chat_ctx.items else None
 
@@ -628,14 +631,14 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                     )
                     sent_tool_call_output = True
+                    cfg = self._configs_for_tools.get(item.name or "", {})
                     # the tool forbids speech after its call, or the result wants no reply
-                    if (
-                        self._configs_for_tools.get(item.name or "", {}).get(
-                            "forbid_speech_after_tool_call", False
-                        )
-                        or not item.reply_required
-                    ):
+                    if cfg.get("forbid_speech_after_tool_call", False) or not item.reply_required:
                         forbid_speech = True
+                    # An async result can land while the agent is still speaking, so its reply
+                    # opens on assistant_started_speaking instead of cutting that speech short.
+                    if cfg.get("execution_mode", "sync") == "sync":
+                        open_reply_turn = True
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 text = item.raw_text_content
@@ -671,7 +674,7 @@ class RealtimeSession(llm.RealtimeSession):
         # Skip opening a new assistant turn when the tool forbids speech after its call:
         # Phonic will not speak, so the generation would otherwise dangle open (never
         # receiving audio nor a finished-speaking event) until the handoff reset / aclose.
-        if sent_tool_call_output and not forbid_speech:
+        if open_reply_turn and not forbid_speech:
             self._start_new_assistant_turn()
 
     def _serialize_tools(self) -> list[dict]:
@@ -682,6 +685,8 @@ class RealtimeSession(llm.RealtimeSession):
                 {
                     "type": "custom_websocket",
                     "tool_schema": tool_schema,
+                    "execution_mode": cfg.get("execution_mode", "sync"),
+                    "wait_for_response": cfg.get("wait_for_response", False),
                     "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
                     # fixed, not configurable: the plugin does not support tool calls during
                     # agent speech
