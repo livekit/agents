@@ -98,6 +98,8 @@ WS_INACTIVITY_TIMEOUT = 180
 _DIALOGUE_VOICE_SETTINGS_FIELDS = frozenset({"stability"})
 # the text-to-dialogue server finalizes a context idle for 20s; keep-alives reset that
 _DIALOGUE_KEEP_ALIVE_INTERVAL = 10.0
+# the server also closes a socket that receives nothing for 20s, logging input_timeout_exceeded
+_DIALOGUE_IDLE_RETIRE = 15.0
 
 
 class TTS(tts.TTS):
@@ -388,8 +390,8 @@ class TTS(tts.TTS):
                     if not is_dialogue_model(self._opts.model) or conn._recv_task is None:
                         return
 
-                    # Text-to-dialogue sockets are closed by the server after an idle period.
-                    # Wait for that closure and reconnect immediately so the next turn remains warm.
+                    # an unused text-to-dialogue socket retires itself before the server's idle
+                    # timeout; wait for that and reconnect so the next turn remains warm.
                     # asyncio.wait() does not propagate cancellation from the receive task.
                     await asyncio.wait({conn._recv_task})
                 except asyncio.CancelledError:
@@ -1127,14 +1129,24 @@ class _DialogueConnection(_Connection):
         super().__init__(opts, session)
         self._closing_contexts: set[str] = set()
         self._last_context_send: dict[str, float] = {}
+        self._last_send = asyncio.get_event_loop().time()
 
     def _connect_url(self) -> str:
         return _dialogue_multi_stream_url(self._opts)
 
+    def _idle_retire_delay(self) -> float | None:
+        """Seconds until an unused socket retires itself, or None while a context is open."""
+        if self._context_data or self._active_contexts:
+            return None
+        return self._last_send + _DIALOGUE_IDLE_RETIRE - asyncio.get_event_loop().time()
+
     def _next_keep_alive_delay(self) -> float:
         eligible = self._active_contexts - self._closing_contexts
         if not eligible:
-            return _DIALOGUE_KEEP_ALIVE_INTERVAL
+            retire_delay = self._idle_retire_delay()
+            if retire_delay is None:
+                return _DIALOGUE_KEEP_ALIVE_INTERVAL
+            return max(0.0, retire_delay)
         now = asyncio.get_event_loop().time()
         next_due = min(
             self._last_context_send.get(context_id, now) + _DIALOGUE_KEEP_ALIVE_INTERVAL
@@ -1163,6 +1175,10 @@ class _DialogueConnection(_Connection):
                 except asyncio.TimeoutError:
                     if not self._ws or self._ws.closed:
                         break
+                    retire_delay = self._idle_retire_delay()
+                    if retire_delay is not None and retire_delay <= 0:
+                        # close before the server does, so the next acquire opens a fresh socket
+                        break
                     await self._send_due_keep_alives()
                     continue
                 except utils.aio.ChanClosed:
@@ -1171,6 +1187,7 @@ class _DialogueConnection(_Connection):
                 if not self._ws or self._ws.closed:
                     break
 
+                self._last_send = asyncio.get_event_loop().time()
                 if isinstance(msg, _SynthesizeContent):
                     is_new_context = msg.context_id not in self._active_contexts
 

@@ -1059,3 +1059,22 @@ async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
 
         connection._input_queue.close()
         await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_retires_unused_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unused dialogue socket closes itself before the server's 20s idle timeout."""
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_IDLE_RETIRE", 0.05)
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4", voice_id="voice-1")
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection._send_task = asyncio.create_task(connection._send_loop())
+
+        await asyncio.wait({connection._send_task}, timeout=1.0)
+
+        assert connection._closed
+        assert ws.sent == []
