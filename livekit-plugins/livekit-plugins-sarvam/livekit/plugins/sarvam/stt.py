@@ -59,6 +59,9 @@ EOS_FALLBACK_TIMEOUT = 1.0
 END_OF_INPUT_GRACE = 0.5
 # How long a reconnect waits for the old connection to transcribe an open utterance.
 RECONNECT_SETTLE_TIMEOUT = 2.0
+# How much recent audio an idle reconnect replays, so speech Sarvam's VAD hadn't reported
+# yet isn't lost with the old connection.
+RECONNECT_REPLAY_S = 0.5
 
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
@@ -991,6 +994,8 @@ class SpeechStream(stt.SpeechStream):
         self._audio_buffer: list[Any] = []
         # seconds of that audio the current connection was opened with
         self._carried_audio_s = 0.0
+        # PCM sent since the last utterance ended, up to RECONNECT_REPLAY_S
+        self._recent_audio = bytearray()
 
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
@@ -1301,6 +1306,11 @@ class SpeechStream(stt.SpeechStream):
                 # The anchor is the first frame read, but carried-over samples go out ahead
                 # of it, so the new clock starts that much earlier.
                 self._input_ch.restart_provider_clock()
+                if self._recent_audio:
+                    # speech may have started in audio the old connection never reported on
+                    replay = memoryview(bytes(self._recent_audio)).cast("h").tolist()
+                    self._audio_buffer[:0] = replay
+                    self._recent_audio.clear()
                 self._carried_audio_s = len(self._audio_buffer) / self._opts.sample_rate
                 self.start_time = time.time()
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
@@ -1513,8 +1523,16 @@ class SpeechStream(stt.SpeechStream):
             )
 
         self._speaking = False
+        # the flush closed the utterance on the old connection, so nothing needs replaying
+        self._recent_audio.clear()
         self._try_commit_utterance()
         self._emit_end_of_speech()
+
+    def _remember_sent_audio(self, pcm: bytes) -> None:
+        self._recent_audio += pcm
+        excess = len(self._recent_audio) - int(RECONNECT_REPLAY_S * self._opts.sample_rate) * 2
+        if excess > 0:
+            del self._recent_audio[:excess]
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -1545,6 +1563,7 @@ class SpeechStream(stt.SpeechStream):
                     }
                 )
             )
+            self._remember_sent_audio(tail)
             audio_buffer.clear()
             flushed = False
 
@@ -1553,7 +1572,40 @@ class SpeechStream(stt.SpeechStream):
             extra={**self._build_log_context(), "chunk_size": chunk_size},
         )
 
+        async def send_full_chunks() -> None:
+            nonlocal chunks_sent, flushed
+            while len(audio_buffer) >= chunk_size:
+                # Convert to Int16Array
+                chunk_bytes = np.array(audio_buffer[:chunk_size], dtype=np.int16).tobytes()
+
+                # Send audio in the required format
+                audio_message = {
+                    "audio": {
+                        "data": base64.b64encode(chunk_bytes).decode("utf-8"),
+                        "encoding": self._audio_encoding,
+                        "sample_rate": self._opts.sample_rate,
+                    }
+                }
+
+                await ws.send_str(json.dumps(audio_message))
+                chunks_sent += 1
+                flushed = False
+                self._remember_sent_audio(chunk_bytes)
+
+                # Remove sent data from buffer
+                del audio_buffer[:chunk_size]
+
+                # Log progress periodically
+                if chunks_sent % 100 == 0:
+                    self._logger.debug(
+                        f"Sent {chunks_sent} audio chunks",
+                        extra=self._build_log_context(),
+                    )
+
         try:
+            # audio carried over from the previous connection goes out first
+            await send_full_chunks()
+
             async for frame in self._input_ch:
                 if isinstance(frame, rtc.AudioFrame):
                     try:
@@ -1563,35 +1615,7 @@ class SpeechStream(stt.SpeechStream):
                         audio_buffer.extend(audio_array)
 
                         # Check if we have enough data for a chunk
-                        while len(audio_buffer) >= chunk_size:
-                            # Convert to Int16Array
-                            chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
-
-                            # Convert to base64
-                            base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
-
-                            # Send audio in the required format
-                            audio_message = {
-                                "audio": {
-                                    "data": base64_audio,
-                                    "encoding": self._audio_encoding,
-                                    "sample_rate": self._opts.sample_rate,
-                                }
-                            }
-
-                            await ws.send_str(json.dumps(audio_message))
-                            chunks_sent += 1
-                            flushed = False
-
-                            # Remove sent data from buffer
-                            del audio_buffer[:chunk_size]
-
-                            # Log progress periodically
-                            if chunks_sent % 100 == 0:
-                                self._logger.debug(
-                                    f"Sent {chunks_sent} audio chunks",
-                                    extra=self._build_log_context(),
-                                )
+                        await send_full_chunks()
 
                     except Exception as e:
                         self._logger.error(
@@ -1606,6 +1630,8 @@ class SpeechStream(stt.SpeechStream):
                     if self._opts.flush_signal:
                         await ws.send_str(json.dumps({"type": "flush"}))
                         flushed = True
+                        # the flush closes whatever was open, so none of it needs replaying
+                        self._recent_audio.clear()
 
             await send_tail()
             if not flushed:
@@ -1879,6 +1905,8 @@ class SpeechStream(stt.SpeechStream):
                     self._logger.debug("Speech started", extra=self._build_log_context())
 
             elif signal_type == "END_SPEECH":
+                # audio up to here belongs to the utterance that just ended
+                self._recent_audio.clear()
                 if self._speaking:
                     self._speaking = False
                     self._pending_eos = True
