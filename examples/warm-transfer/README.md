@@ -88,3 +88,39 @@ Cancellation and ringing timeouts return promptly while cleanup continues in the
 background. If in-flight creation returns a call SID, the task attempts to cancel
 that call while the worker is alive. Provider failure or worker shutdown can still
 prevent cleanup.
+
+## Twilio Elastic SIP Trunking transfers with the original caller ID
+
+[`twilio_sip_trunk_warm_transfer.py`](twilio_sip_trunk_warm_transfer.py) is a
+Twilio-only variant of `warm_transfer.py`. Use it only when your outbound trunk
+terminates on Twilio Elastic SIP Trunking; other SIP providers do not use
+this header, so keep `warm_transfer.py` for them.
+
+With Twilio's [immutable call forwarding](https://www.twilio.com/en-us/changelog/elastic-sip-trunking---immutable-call-forwarding-with-calltoken-)
+(public beta), Elastic SIP Trunking adds an `X-Twilio-CallToken` header to each
+inbound trunk call. Sending that header back unchanged on the outbound call, with the
+original caller's number as `From`, lets Twilio present the customer's caller ID to
+the supervisor. `twilio_caller_id()` does this with the existing `sip_number` and
+`sip_headers` options of `WarmTransferTask`.
+
+1. Enroll your Twilio account in the beta. Without it, Twilio sends no token and
+   rejects forwarded calls that present an unverified caller ID.
+2. Set `LIVEKIT_SIP_OUTBOUND_TRUNK` to an outbound trunk that terminates on Twilio
+   Elastic SIP Trunking.
+3. Run `python twilio_sip_trunk_warm_transfer.py dev`.
+
+No inbound trunk changes are needed: the example reads the header from the caller's
+SIP leg with the [`lk.sip.GetRemoteHeaders`](https://docs.livekit.io/telephony/accepting-calls/workflow-setup/)
+RPC, so the token is never stored in participant attributes.
+
+Notes:
+
+- The example uses the caller linked to the agent session. If that caller is not a
+  SIP participant, the header is missing, or `sip.phoneNumber` is hidden by the
+  inbound trunk, it keeps `LIVEKIT_SIP_NUMBER`.
+- The token is only valid with the caller's number from the same inbound call. It
+  does not authorize an arbitrary caller ID.
+- There is no automatic fallback: if Twilio rejects the call, the task fails and the
+  caller conversation resumes.
+- Keep the token out of prompts, chat history, and logs. RPC responses are recorded in
+  traces as PII (`lk.pii.rpc.response`), so keep PII redaction on if you export traces.
