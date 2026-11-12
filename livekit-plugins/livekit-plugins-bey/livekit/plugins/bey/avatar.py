@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
 
 import aiohttp
@@ -29,6 +30,9 @@ SAMPLE_RATE = 16000
 
 _AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
 _AVATAR_AGENT_NAME = "bey-avatar-agent"
+_MAX_SESSION_DURATION = datetime.timedelta(hours=24)
+# covers the startup request and its retries, which run after the token is minted
+_AVATAR_TOKEN_TTL = _MAX_SESSION_DURATION + datetime.timedelta(hours=1)
 
 
 class BeyException(Exception):
@@ -107,6 +111,7 @@ class AvatarSession(BaseAvatarSession):
             .with_grants(api.VideoGrants(room_join=True, room=room.name))
             # allow the avatar agent to publish audio and video on behalf of your local agent
             .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
+            .with_ttl(_AVATAR_TOKEN_TTL)
             .to_jwt()
         )
 
