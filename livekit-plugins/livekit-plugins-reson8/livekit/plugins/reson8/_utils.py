@@ -43,12 +43,11 @@ _STATUS_HINTS = {
 
 
 STTModel = Literal["resonant-1", "rumble-2"]
-"""Reson8 speech-to-text models.
+"""Reson8 speech-to-text models whose options this plugin checks locally.
 
-See https://docs.reson8.dev/speech-to-text/models/.
+``STT`` also accepts any other model name and leaves its checks to Reson8. See
+https://docs.reson8.dev/speech-to-text/models/.
 """
-
-STT_MODELS: tuple[str, ...] = get_args(STTModel)
 
 # fmt: off
 SupportedLanguage = Literal[
@@ -111,7 +110,8 @@ def normalize_languages(value: str | Sequence[str] | None, model: str | None = N
 
     Raises ``ValueError`` if any code is not supported by ``model``, or not a
     :data:`SupportedLanguage` when no model is set, so invalid selections fail
-    locally rather than after a request to the API.
+    locally rather than after a request to the API. A model this plugin does
+    not list is left for Reson8 to check.
     """
 
     if value is None:
@@ -122,23 +122,17 @@ def normalize_languages(value: str | Sequence[str] | None, model: str | None = N
     if not codes:
         return None
 
-    allowed = MODEL_LANGUAGES[model] if model else SUPPORTED_LANGUAGES
-    unsupported = [c for c in codes if c not in allowed]
-    if unsupported:
-        supported = ", ".join(sorted(allowed))
-        raise ValueError(
-            f"unsupported language(s): {', '.join(unsupported)}. "
-            f"{model or 'Reson8'} supports: {supported}."
-        )
+    allowed = MODEL_LANGUAGES.get(model) if model else SUPPORTED_LANGUAGES
+    if allowed is not None:
+        unsupported = [c for c in codes if c not in allowed]
+        if unsupported:
+            supported = ", ".join(sorted(allowed))
+            raise ValueError(
+                f"unsupported language(s): {', '.join(unsupported)}. "
+                f"{model or 'Reson8'} supports: {supported}."
+            )
 
     return ",".join(codes)
-
-
-def check_model(model: str | None) -> None:
-    if model is not None and model not in STT_MODELS:
-        raise ValueError(
-            f"unsupported model: {model}. Reson8 accepts: {', '.join(sorted(STT_MODELS))}."
-        )
 
 
 def check_comma_joined(

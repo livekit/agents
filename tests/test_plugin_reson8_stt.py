@@ -455,16 +455,26 @@ def test_an_unrelated_update_leaves_the_capability_alone() -> None:
 
 def test_model_and_provider() -> None:
     assert reson8.STT(api_key="k").provider == "Reson8"
-    assert reson8.STT(api_key="k").model == "default"
+    assert reson8.STT(api_key="k").model == "resonant-1"
     assert reson8.STT(api_key="k", model="rumble-2").model == "rumble-2"
 
     biasing = BiasingOptions(custom_model_id="m1")
-    assert reson8.STT(api_key="k", biasing=biasing).model == "default"
+    assert reson8.STT(api_key="k", biasing=biasing).model == "resonant-1"
 
 
-def test_an_unsupported_model_raises() -> None:
-    with pytest.raises(ValueError, match="unsupported model"):
-        reson8.STT(api_key="k", model="rumble-2-flash")  # type: ignore[arg-type]
+def test_an_unlisted_model_is_sent_without_local_checks() -> None:
+    """A model newer than the plugin is left for Reson8 to check."""
+
+    biasing = BiasingOptions(patterns=["AMZ[0-9]{6}"], strength=1.2)
+    instance = reson8.STT(api_key="k", model="rumble-3", language="xx", biasing=biasing)
+    assert instance.model == "rumble-3"
+
+    params = STTOptions(model="rumble-3", language="XX", biasing=biasing).query_params(
+        streaming=True
+    )
+    assert params["model"] == "rumble-3"
+    assert params["language"] == "xx"
+    assert params["patterns"] == "AMZ[0-9]{6}"
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +498,7 @@ def test_an_unsupported_model_raises() -> None:
     ],
 )
 def test_normalize_languages(value: str | list[str] | None, expected: str | None) -> None:
-    assert normalize_languages(value) == expected
+    assert normalize_languages(value, "rumble-2") == expected
 
 
 @pytest.mark.parametrize("value", ["xx", "nl,xx", ["nl", "xx"], "english"])
@@ -497,27 +507,30 @@ def test_an_unsupported_language_raises(value: str | list[str]) -> None:
         reson8.STT(api_key="k", language=value)
 
 
-def test_every_advertised_language_is_accepted() -> None:
-    for code in reson8.SUPPORTED_LANGUAGES:
-        assert normalize_languages(code) == code
+def test_every_listed_language_is_accepted() -> None:
+    for model, languages in MODEL_LANGUAGES.items():
+        for code in languages:
+            assert normalize_languages(code, model) == code
 
 
 def test_every_model_language_is_advertised() -> None:
-    """With no model set, codes are checked against the advertised list alone."""
+    """A listed model missing from the table would skip its language check."""
 
     assert set(MODEL_LANGUAGES) == set(get_args(reson8.STTModel))
     for languages in MODEL_LANGUAGES.values():
         assert set(languages) <= set(reson8.SUPPORTED_LANGUAGES)
 
 
-def test_resonant_1_rejects_a_rumble_2_only_language() -> None:
+@pytest.mark.parametrize("model", [None, "resonant-1"])
+def test_resonant_1_rejects_a_rumble_2_only_language(model: reson8.STTModel | None) -> None:
+    """Reson8 uses resonant-1 when no model is sent."""
+
     with pytest.raises(ValueError, match="resonant-1 supports"):
-        reson8.STT(api_key="k", model="resonant-1", language="ja")
+        reson8.STT(api_key="k", model=model, language="ja")
 
 
-@pytest.mark.parametrize("model", [None, "rumble-2"])
-def test_a_rumble_2_language_is_accepted_without_resonant_1(model: reson8.STTModel | None) -> None:
-    reson8.STT(api_key="k", model=model, language="ja")
+def test_rumble_2_accepts_its_own_languages() -> None:
+    reson8.STT(api_key="k", model="rumble-2", language="ja")
 
 
 def test_a_language_override_is_checked_against_the_model() -> None:

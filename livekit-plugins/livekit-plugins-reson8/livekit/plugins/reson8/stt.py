@@ -54,7 +54,6 @@ from ._utils import (
     build_url,
     check_channels,
     check_comma_joined,
-    check_model,
     check_probability,
     integration_headers,
     normalize_languages,
@@ -280,7 +279,7 @@ class BiasingOptions:
 class STTOptions:
     """The resolved configuration behind an ``STT`` instance."""
 
-    model: STTModel | None = None
+    model: STTModel | str | None = None
     language: str | None = None
     turn: TurnOptions = field(default_factory=TurnOptions)
     audio: AudioOptions = field(default_factory=AudioOptions)
@@ -288,7 +287,6 @@ class STTOptions:
     biasing: BiasingOptions = field(default_factory=BiasingOptions)
 
     def __post_init__(self) -> None:
-        check_model(self.model)
         object.__setattr__(self, "language", normalize_languages(self.language, self.model))
 
         if self.model == "rumble-2":
@@ -398,7 +396,7 @@ class STT(stt.STT):
         *,
         api_key: str | None = None,
         base_url: str | None = None,
-        model: STTModel | None = None,
+        model: STTModel | str | None = None,
         language: str | Sequence[str] | None = None,
         turn: TurnOptions | None = None,
         audio: AudioOptions | None = None,
@@ -412,9 +410,10 @@ class STT(stt.STT):
             base_url: Reson8 API base URL. Falls back to ``RESON8_BASE_URL``,
                 then ``https://api.reson8.dev``.
             model: Reson8 model, e.g. ``"rumble-2"``. Fixed for the lifetime of
-                the instance. Raises ``ValueError`` for an unknown model, or
-                for a language or biasing option the model does not support,
-                here and in :meth:`update_options`.
+                the instance. Leave as ``None`` for Reson8's default model.
+                For an :data:`STTModel`, a language or biasing
+                option the model does not support raises ``ValueError``, here
+                and in :meth:`update_options`; any other name is sent as is.
             language: One or more :data:`SupportedLanguage` codes to pin
                 recognition to. Pass a single code (``"nl"``), a comma-string
                 (``"nl,de"``), or a list (``["nl", "de"]``). Leave as ``None`` to
@@ -429,7 +428,6 @@ class STT(stt.STT):
                 shared session managed by the agent framework.
         """
 
-        check_model(model)
         transcript = transcript or TranscriptOptions()
 
         super().__init__(

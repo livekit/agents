@@ -61,7 +61,7 @@ Use `rumble-2`, Reson8's latest model:
 reson8.STT(model="rumble-2")
 ```
 
-See [Models](https://docs.reson8.dev/speech-to-text/models/).
+Leave `model` unset for Reson8's default. See [Models](https://docs.reson8.dev/speech-to-text/models/).
 
 ## Turn detection
 
@@ -76,8 +76,8 @@ work server-side.
 Leave `language` unset to **auto-detect** the spoken language, or pin recognition
 to one or more supported codes. You can pass a single code, a comma-string, or a
 list - a list is normalized to Reson8's comma-joined form and any code the
-selected `model` does not support raises `ValueError` locally, before a request
-is made.
+selected `model` does not support raises `ValueError`
+locally, before a request is made.
 
 ```python
 reson8.STT(model="rumble-2")                         # auto-detects the spoken language
@@ -108,6 +108,15 @@ stt = reson8.STT(
     biasing=reson8.BiasingOptions(custom_model_id="my-model"),
 )
 ```
+
+### `TurnOptions`
+
+When Reson8 ends a turn. `None` leaves the model's default.
+
+| Field | Default | |
+|---|---|---|
+| `eager_probability` | `None` (server: `0.3` on `rumble-2`, `0.5` on `resonant-1`) | confidence at which the preflight transcript is emitted; keep it below `final_probability` |
+| `final_probability` | `None` (server: `0.5` on `rumble-2`, `0.92` on `resonant-1`) | confidence at which the turn commits |
 
 ### `AudioOptions`
 
