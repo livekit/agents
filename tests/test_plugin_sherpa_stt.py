@@ -95,9 +95,14 @@ def _frame(ms: int = 100) -> rtc.AudioFrame:
     return rtc.AudioFrame(b"\x00\x00" * n, SAMPLE_RATE, 1, n)
 
 
-async def _run(
+async def _run_timed(
     script: list[Step], frames: int, *, flush_after: int | None = None, offset: float = 0.0
-) -> list[stt.SpeechEvent]:
+) -> tuple[list[stt.SpeechEvent], float]:
+    """Run the script and return the events with the offset the stream applied.
+
+    The base class anchors start_time_offset on the capture time of the first frame read,
+    so a burst of frames pushed at once moves it back by the queued audio.
+    """
     engine = sherpa.STT(recognizer=ScriptedRecognizer(script))
     stream = engine.stream()
     stream.start_time_offset = offset
@@ -107,7 +112,15 @@ async def _run(
             stream.flush()
     stream.end_input()
     events = [ev async for ev in stream]
+    applied = stream.start_time_offset
     await stream.aclose()
+    return events, applied
+
+
+async def _run(
+    script: list[Step], frames: int, *, flush_after: int | None = None, offset: float = 0.0
+) -> list[stt.SpeechEvent]:
+    events, _ = await _run_timed(script, frames, flush_after=flush_after, offset=offset)
     return events
 
 
@@ -176,15 +189,15 @@ async def test_words_are_grouped_from_bpe_tokens_on_the_session_clock() -> None:
         timestamps=[0.1, 0.2, 0.5],
         start_time=2.0,
     )
-    events = await _run([final], frames=1, offset=10.0)
+    events, off = await _run_timed([final], frames=1, offset=10.0)
 
     data = next(ev for ev in events if ev.type == FINAL).alternatives[0]
     assert data.words is not None
     assert data.words == ["HELLO", "WORLD"]
-    assert [w.start_time for w in data.words] == CLOCK([12.1, 12.5], abs=TOL)
-    assert [w.end_time for w in data.words] == CLOCK([12.5, 12.5], abs=TOL)
-    assert (data.start_time, data.end_time) == CLOCK((12.1, 12.5), abs=TOL)
-    assert [w.start_time_offset for w in data.words] == CLOCK([10.0, 10.0], abs=TOL)
+    assert [w.start_time for w in data.words] == CLOCK([off + 2.1, off + 2.5], abs=TOL)
+    assert [w.end_time for w in data.words] == CLOCK([off + 2.5, off + 2.5], abs=TOL)
+    assert (data.start_time, data.end_time) == CLOCK((off + 2.1, off + 2.5), abs=TOL)
+    assert [w.start_time_offset for w in data.words] == CLOCK([off, off], abs=TOL)
 
 
 async def test_flush_padding_does_not_shift_later_timestamps() -> None:
@@ -201,11 +214,11 @@ async def test_flush_padding_does_not_shift_later_timestamps() -> None:
             start_time=1.0 + TAIL_PADDING_S,
         ),
     ]
-    events = await _run(script, frames=2, flush_after=0)
+    events, off = await _run_timed(script, frames=2, flush_after=0)
 
     finals = [ev for ev in events if ev.type == FINAL]
     assert [ev.alternatives[0].text for ev in finals] == ["first", "second"]
-    assert finals[1].alternatives[0].start_time == CLOCK(1.0, abs=TOL)
+    assert finals[1].alternatives[0].start_time == CLOCK(off + 1.0, abs=TOL)
 
 
 @dataclass

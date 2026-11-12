@@ -51,7 +51,7 @@ class TurnDetector(_BaseStreamingTurnDetector):
             local_fallback: Whether a ``v1`` detector may degrade to the local
                 ``v1-mini`` model when the gateway fails. False keeps it cloud-only, and
                 turns commit on the endpointing delay instead. The worker still preloads
-                the mini weights (~244MB RSS) under ``forkserver`` unless
+                the mini weights (~450MB RSS) under ``forkserver`` unless
                 ``LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE=0`` is set.
         """
         auto = not is_given(version)

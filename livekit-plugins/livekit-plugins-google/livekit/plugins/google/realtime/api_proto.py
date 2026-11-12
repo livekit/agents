@@ -63,6 +63,7 @@ ClientEvents = (
     | types.LiveClientRealtimeInput
     | types.LiveClientRealtimeInputOrDict
     | types.LiveClientToolResponseOrDict
+    | types.LiveClientContextUpdate
     | types.FunctionResponseOrDict
     | Sequence[types.FunctionResponseOrDict]
 )
