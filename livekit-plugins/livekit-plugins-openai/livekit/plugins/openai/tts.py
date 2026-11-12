@@ -115,6 +115,12 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
+        if not isinstance(speed, (int, float)) or isinstance(speed, bool):
+            raise ValueError("speed must be a float or int")
+        speed = float(speed)
+        if not 0.25 <= speed <= 4.0:
+            raise ValueError("speed must be between 0.25 and 4.0")
+
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
@@ -158,16 +164,27 @@ class TTS(tts.TTS):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str | None] = NOT_GIVEN,
+        response_format: NotGivenOr[RESPONSE_FORMATS] = NOT_GIVEN,
     ) -> None:
+        opts = replace(self._opts)
         if is_given(model):
-            self._opts.model = model
+            opts.model = model
         if is_given(voice):
-            self._opts.voice = voice
+            opts.voice = voice
         if is_given(speed):
-            self._opts.speed = speed
+            if not isinstance(speed, (int, float)) or isinstance(speed, bool):
+                raise ValueError("speed must be a float or int")
+            speed_val = float(speed)
+            if not 0.25 <= speed_val <= 4.0:
+                raise ValueError("speed must be between 0.25 and 4.0")
+            opts.speed = speed_val
         if is_given(instructions):
-            self._opts.instructions = instructions
+            opts.instructions = instructions
+        if is_given(response_format):
+            opts.response_format = response_format
+
+        self._opts = opts
 
     @staticmethod
     def with_azure(

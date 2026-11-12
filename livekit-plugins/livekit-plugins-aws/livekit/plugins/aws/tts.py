@@ -130,14 +130,14 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         speech_engine: NotGivenOr[TTSSpeechEngine] = NOT_GIVEN,
         text_type: NotGivenOr[TTSTextType] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = LanguageCode(language)
+            self._opts.language = LanguageCode(language) if language else None
         if is_given(speech_engine):
             self._opts.speech_engine = speech_engine
         if is_given(text_type):
