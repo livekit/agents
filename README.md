@@ -239,7 +239,7 @@ async def test_no_availability() -> None:
 
 ## Examples
 
-For more examples and detailed setup instructions, see the [examples directory](examples/). For even more examples, see the [python-agents-examples](https://github.com/livekit-examples/python-agents-examples) repository.
+For more examples and detailed setup instructions, see the [examples directory](examples/).
 
 <table>
 <tr>
