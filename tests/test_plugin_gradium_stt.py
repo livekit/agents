@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import aiohttp
 import pytest
 
 from livekit import rtc
@@ -32,7 +33,6 @@ READY = {
 }
 EOS = {"type": "end_of_stream"}
 SILENT = (0.99,) * len(VAD_HORIZONS)
-ACTIVE = (0.01,) * len(VAD_HORIZONS)
 
 
 def _text(text: str, start_s: float = 0.0) -> dict[str, Any]:
@@ -75,9 +75,6 @@ class FakeWebSocket:
         close_code: int = 1000,
         fail_send_on: str | None = None,
     ) -> None:
-        import aiohttp
-
-        self._ws_type = aiohttp.WSMsgType
         self._frames = list(frames)
         self._after_eos = [EOS, "close"] if after_eos is None else list(after_eos)
         self.close_code = close_code
@@ -86,8 +83,6 @@ class FakeWebSocket:
         self._client_eos = asyncio.Event()
 
     async def send_str(self, data: str) -> None:
-        import aiohttp
-
         msg = json.loads(data)
         if msg.get("type") == self._fail_send_on:
             self._client_eos.set()
@@ -104,11 +99,11 @@ class FakeWebSocket:
             await self._client_eos.wait()
             self._frames, self._after_eos = self._after_eos, []
             if not self._frames:
-                return _Msg(self._ws_type.CLOSED)
+                return _Msg(aiohttp.WSMsgType.CLOSED)
         frame = self._frames.pop(0)
         if frame == "close":
-            return _Msg(self._ws_type.CLOSE, self.close_code, "")
-        return _Msg(self._ws_type.TEXT, json.dumps(frame))
+            return _Msg(aiohttp.WSMsgType.CLOSE, self.close_code, "")
+        return _Msg(aiohttp.WSMsgType.TEXT, json.dumps(frame))
 
     async def close(self) -> bool:
         return True
