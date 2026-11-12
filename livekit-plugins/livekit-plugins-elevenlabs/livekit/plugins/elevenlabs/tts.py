@@ -217,6 +217,7 @@ class TTS(tts.TTS):
 
         self.__current_connection: _Connection | _DialogueConnection | None = None
         self._connection_lock = asyncio.Lock()
+        self._closing_connections: set[asyncio.Task[None]] = set()
         self._prewarm_task: asyncio.Task[None] | None = None
         self._opts_revision = 0
         self._warn_if_dialogue_model_ignores_options()
@@ -359,10 +360,19 @@ class TTS(tts.TTS):
                 return conn, acquire_time, False
 
     def _discard_connection(self, conn: _Connection | _DialogueConnection) -> None:
-        """Stop handing out `conn` to new streams; it closes once its contexts drain."""
+        """Stop handing out `conn` to new streams.
+
+        With no other stream on it, the socket is closed right away: a socket that stopped
+        answering may never send the final message that would let it drain. Otherwise it
+        closes once the remaining streams finish, as before.
+        """
         conn.mark_non_current()
         if self.__current_connection is conn:
             self.__current_connection = None
+        if not conn._closed and not conn._context_data:
+            task = asyncio.create_task(conn.aclose())
+            self._closing_connections.add(task)
+            task.add_done_callback(self._closing_connections.discard)
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -427,6 +437,10 @@ class TTS(tts.TTS):
         if self.__current_connection:
             await self.__current_connection.aclose()
             self.__current_connection = None
+
+        # sockets dropped after a failed stream may still be closing
+        if self._closing_connections:
+            await asyncio.gather(*self._closing_connections, return_exceptions=True)
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -509,6 +523,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._text_buffer = ""
         self._start_times_ms: list[int] = []
         self._durations_ms: list[int] = []
+        # set by the connection's receive loop when this stream gets audio
+        self._audio_received = False
+        # the socket of the attempt in progress; still set when the next attempt starts if
+        # the previous one ended without an error but the base class rejected its output
         self._connection: _Connection | _DialogueConnection | None = None
 
     async def aclose(self) -> None:
@@ -530,10 +548,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type=_encoding_to_mimetype(self._opts.encoding),
         )
         output_emitter.start_segment(segment_id=self._context_id)
+        self._audio_received = False
 
         if self._connection is not None:
-            # the previous attempt failed on this socket (an error, a timeout or no audio);
-            # a socket can stay open but stop answering, so don't retry on it
+            # a retry: the previous attempt produced no usable audio on this socket
             self._tts._discard_connection(self._connection)
             self._connection = None
 
@@ -615,11 +633,19 @@ class SynthesizeStream(tts.SynthesizeStream):
         input_t = asyncio.create_task(_input_task())
         stream_t = asyncio.create_task(_sentence_stream_task())
 
+        # the attempt failed on this socket: an error, a timeout, or a context that finished
+        # without audio. A socket can stay open but stop answering, so it is dropped and the
+        # next attempt (a retry, or a FallbackAdapter recovery probe) gets a fresh one.
+        # An interrupted stream is not a failure and keeps the socket.
+        failed = False
         try:
             await waiter
+            failed = bool(self._pushed_text.strip()) and not self._audio_received
         except asyncio.TimeoutError as e:
+            failed = True
             raise APITimeoutError() from e
         except Exception as e:
+            failed = True
             if isinstance(e, APIStatusError):
                 raise e
             raise APIStatusError("Could not synthesize") from e
@@ -632,6 +658,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             if not context_closed:
                 with contextlib.suppress(Exception):
                     connection.close_context(self._context_id)
+            if failed:
+                self._tts._discard_connection(connection)
+                self._connection = None
             await sent_tokenizer_stream.aclose()
 
 
@@ -1029,6 +1058,7 @@ class _Connection:
                 if data.get("audio"):
                     b64data = base64.b64decode(data["audio"])
                     emitter.push(b64data)
+                    stream._audio_received = True
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
                         ctx.timeout_timer = None
@@ -1309,6 +1339,7 @@ class _DialogueConnection(_Connection):
 
                 if audio:
                     emitter.push(audio)
+                    stream._audio_received = True
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
                         ctx.timeout_timer = None
