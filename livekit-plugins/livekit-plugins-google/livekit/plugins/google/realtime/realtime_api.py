@@ -1647,16 +1647,19 @@ class RealtimeSession(llm.RealtimeSession):
     def _on_avatar_audio(self, frame: rtc.AudioFrame) -> None:
         # the session's audio output tracks playout and transcript timing; the audible
         # audio is published with the video by AvatarSession
+        avatar = self._gemini_model._avatar_session
         gen = self._current_generation
-        if gen and not gen._done and not gen.audio_ch.closed:
+        if gen and not gen.audio_ch.closed:
             # the idle stream keeps running until the reply's speech starts; that lead-in
             # is not part of the reply's playout
-            if self._avatar_speaking_gen is not gen and is_speech(frame):
+            if self._avatar_speaking_gen is not gen and not gen._done and is_speech(frame):
                 self._avatar_speaking_gen = gen
+                if avatar:
+                    avatar._set_audio_muted(False)
             if self._avatar_speaking_gen is gen:
                 gen.audio_ch.send_nowait(frame)
-        if self._gemini_model._avatar_session:
-            self._gemini_model._avatar_session._push_frame(frame)
+        if avatar:
+            avatar._push_frame(frame)
 
     async def _close_avatar_decoder(self) -> None:
         if self._avatar_decoder:
@@ -1796,7 +1799,13 @@ class RealtimeSession(llm.RealtimeSession):
                 id=gen.response_id,
             )
 
-        self._close_output_streams(gen)
+        if self._avatar_decoder:
+            # the reply's last fragments may still be decoding
+            self._avatar_decoder.call_when_drained(
+                functools.partial(self._close_output_streams, gen)
+            )
+        else:
+            self._close_output_streams(gen)
 
         gen.function_ch.close()
         gen.message_ch.close()

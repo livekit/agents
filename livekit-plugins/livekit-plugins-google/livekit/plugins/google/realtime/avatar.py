@@ -70,6 +70,7 @@ class AvatarSession(_BaseAvatarSession[Any]):
         self._held_index = 0
         self._publications: list[rtc.LocalTrackPublication] = []
         self._playout: _AvatarPlayoutOutput | None = None
+        self._previous_audio_tail: AudioOutput | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -100,6 +101,7 @@ class AvatarSession(_BaseAvatarSession[Any]):
         self._forward_atask = asyncio.create_task(
             self._forward_frames(room), name="gemini-avatar-forward"
         )
+        self._previous_audio_tail = _audio_tail(agent_session.output.audio)
         self._playout = _AvatarPlayoutOutput(self)
         agent_session.output.replace_audio_tail(self._playout)
 
@@ -113,6 +115,11 @@ class AvatarSession(_BaseAvatarSession[Any]):
             self._forward_atask = None
         if self._playout:
             self._playout._end_segment()
+            output = self._agent_session.output if self._agent_session else None
+            if output and self._previous_audio_tail and _audio_tail(output.audio) is self._playout:
+                # the model's speech still reaches the generation, so the session can play it
+                output.replace_audio_tail(self._previous_audio_tail)
+            self._playout = None
         if self._room and self._room.isconnected():
             for publication in self._publications:
                 await self._room.local_participant.unpublish_track(publication.sid)
@@ -289,3 +296,9 @@ class _AvatarPlayoutOutput(AudioOutput):
         self._started_at = None
         self._pushed_duration = 0.0
         self.on_playback_finished(playback_position=position, interrupted=interrupted)
+
+
+def _audio_tail(output: AudioOutput | None) -> AudioOutput | None:
+    while output is not None and output.next_in_chain is not None:
+        output = output.next_in_chain
+    return output

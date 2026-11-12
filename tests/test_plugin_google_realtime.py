@@ -1759,3 +1759,71 @@ async def test_idle_lead_in_is_not_part_of_the_reply_playout(
         while not gen.audio_ch.empty():
             received.append(int(np.frombuffer(gen.audio_ch.recv_nowait().data, np.int16)[0]))
         assert received == [8000, 0]
+
+
+async def test_reply_audio_survives_turn_complete_while_decoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _avatar_session(monkeypatch) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+        for chunk in _fragmented_mp4_chunks():
+            assert not session._route_avatar_media(_video_message(chunk))
+        await _wait_for(lambda: not gen.audio_ch.empty())
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        await _wait_for(lambda: gen.audio_ch.closed)
+        received = 0.0
+        while not gen.audio_ch.empty():
+            received += gen.audio_ch.recv_nowait().duration
+        assert received >= 1.5
+
+
+async def test_next_reply_is_audible_from_its_first_speech_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _avatar_session(monkeypatch) as session:
+        avatar = AvatarSession(session._gemini_model)
+        session._gemini_model._avatar_session = avatar
+        avatar._set_audio_muted(True)
+        session._start_new_generation()
+        speech = rtc.AudioFrame(
+            data=b"\x10\x20" * 240,
+            sample_rate=_SAMPLE_RATE,
+            num_channels=1,
+            samples_per_channel=240,
+        )
+
+        session._on_avatar_audio(speech)
+
+        pushed, _ = avatar._frame_ch.recv_nowait()
+        assert isinstance(pushed, rtc.AudioFrame) and bytes(pushed.data) == bytes(speech.data)
+        session._gemini_model._avatar_session = None
+
+
+async def test_closing_the_avatar_restores_the_previous_audio_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    model = RealtimeModel(avatar_config=types.AvatarConfig(avatar_name="Kira"))
+    avatar = AvatarSession(model)
+    output = _AvatarPlayoutOutput(avatar)
+    room_audio = _AvatarPlayoutOutput(avatar)
+
+    class _Output:
+        audio: object = output
+
+        def replace_audio_tail(self, sink: object) -> None:
+            self.audio = sink
+
+    session_output = _Output()
+    avatar._agent_session = type(  # type: ignore[assignment]
+        "S", (), {"output": session_output, "off": lambda *_: None}
+    )()
+    avatar._playout = output
+    avatar._previous_audio_tail = room_audio
+
+    await avatar.aclose()
+
+    assert session_output.audio is room_audio
