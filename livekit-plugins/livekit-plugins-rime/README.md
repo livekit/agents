@@ -251,7 +251,7 @@ from rimelabs_sdk.realtime import TurnDetection
 model = rime.realtime.RealtimeModel(
     turn_detection=TurnDetection(eagerness="low", end_of_turn_timeout_ms=5000),
 )
-session = AgentSession(llm=model)
+session = AgentSession(llm=model, aec_warmup_duration=None)
 await session.start(agent=Agent(instructions="Give short, clear answers."), room=ctx.room)
 session.generate_reply(user_input="Hello!")
 ```
@@ -273,7 +273,7 @@ model = RealtimeModelFallbackAdapter([
     rime.realtime.RealtimeModel(),
     rime.realtime.RealtimeModel(),
 ])
-session = AgentSession(llm=model)
+session = AgentSession(llm=model, aec_warmup_duration=None)
 ```
 
 ### LiveKit compatibility
@@ -309,6 +309,14 @@ Microphone input uses Prism's server turn detection. The adapter forwards
 speech events and uses LiveKit's standard cancellation and message truncation.
 It requests interruption on caller speech. Early speech hints do not change
 playback volume. There is no custom per-response interruption policy.
+
+Set `aec_warmup_duration=None` on `AgentSession` so Prism receives caller audio
+from the beginning of the opening greeting. LiveKit's default echo-cancellation
+warmup replaces caller audio with silence during the first three seconds of
+agent speech, which prevents Prism from hearing an early stop phrase. The same
+setting applies when using `RealtimeModelFallbackAdapter`. Applications that
+need the echo warmup can set a positive duration explicitly; caller speech
+during that window is suppressed before reaching Prism.
 
 Choose playback behavior when you create the model:
 

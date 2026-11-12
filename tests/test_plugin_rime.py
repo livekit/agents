@@ -59,7 +59,7 @@ from livekit.plugins import rime
 from livekit.plugins.rime import TTS
 from livekit.plugins.rime._websocket_v1 import _codec_for_protocol
 
-from .fake_io import FakeAudioOutput
+from .fake_io import FakeAudioInput, FakeAudioOutput
 from .fake_tts import FakeTTS
 
 pytestmark = pytest.mark.unit
@@ -3590,6 +3590,39 @@ async def reply(peer, provider):
 
 @pytest.mark.skipif(not HAS_REALTIME_SDK, reason="Rime realtime SDK is not installed")
 class TestRealtime:
+    @pytest.mark.parametrize("via_fallback", [False, True])
+    @pytest.mark.parametrize("warmup", [None, 3.0])
+    async def test_opening_greeting_forwards_caller_audio_when_warmup_disabled(
+        self, via_fallback, warmup
+    ):
+        async with peer_model() as (peer, model, _):
+            realtime_model = RealtimeModelFallbackAdapter([model]) if via_fallback else model
+            async with AgentSession(llm=realtime_model, aec_warmup_duration=warmup) as session:
+                audio_input = FakeAudioInput()
+                session.input.audio = audio_input
+                session.output.audio = FakeAudioOutput()
+                await session.start(Agent(instructions="Give short, clear answers."))
+                greeting = session.generate_reply(user_input="Hello!")
+                response = await peer.start(await peer.next())
+                await peer.message(response, seconds=5, text="Welcome. How can I help?")
+                await wait_until(lambda: session.agent_state == "speaking")
+
+                caller_audio = b"\x01\x00" * 640
+                audio_input.push(rtc.AudioFrame(caller_audio, 16000, 1, 640))
+                append = await peer.next("input_audio_buffer.append")
+                received = base64.b64decode(append["audio"])
+                assert received == (caller_audio if warmup is None else bytes(len(caller_audio)))
+
+                if warmup is None:
+                    await peer.emit(
+                        "input_audio_buffer.speech_started", item_id="caller", audio_start_ms=0
+                    )
+                    await wait_until(lambda: greeting.interrupted)
+                    await asyncio.wait_for(greeting.wait_for_playout(), 3)
+                else:
+                    assert not greeting.interrupted
+                    await peer.end(response)
+
     @pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
     async def test_startup_retries_refusal_and_preserves_waiting_reply(self, status):
         attempts = 0
