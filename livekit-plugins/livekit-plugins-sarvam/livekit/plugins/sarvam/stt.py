@@ -994,8 +994,10 @@ class SpeechStream(stt.SpeechStream):
         self._audio_buffer: list[Any] = []
         # samples sent on the current connection, which is Sarvam's clock for it
         self._sent_samples = 0
-        # _sent_samples when the last END_SPEECH arrived on this connection
+        # _sent_samples when an END_SPEECH no transcript has used yet arrived
         self._end_speech_sample: int | None = None
+        # a transcript with no usable speech_end came before its END_SPEECH
+        self._release_at_end_speech = False
         # PCM sent that no finished utterance covers, up to RECONNECT_REPLAY_S
         self._recent_audio = bytearray()
         # stream-timeline position of the current connection's first sample when it opened
@@ -1551,6 +1553,7 @@ class SpeechStream(stt.SpeechStream):
             self._connection_offset = None
         self._sent_samples = 0
         self._end_speech_sample = None
+        self._release_at_end_speech = False
 
     def _remember_sent_audio(self, pcm: bytes) -> None:
         """Count sent PCM and keep the latest of it for replay after a reconnect."""
@@ -1852,7 +1855,13 @@ class SpeechStream(stt.SpeechStream):
             # been sent when END_SPEECH arrived
             boundary = self._end_speech_sample
         else:
-            boundary = self._sent_samples
+            # nothing marks where it ended yet, so wait for END_SPEECH rather than guess
+            self._release_at_end_speech = True
+            return
+        self._end_speech_sample = None
+        self._release_up_to(boundary)
+
+    def _release_up_to(self, boundary: int) -> None:
         start = self._sent_samples - len(self._recent_audio) // 2
         covered = boundary - start
         if covered > 0:
@@ -1951,7 +1960,11 @@ class SpeechStream(stt.SpeechStream):
                     self._logger.debug("Speech started", extra=self._build_log_context())
 
             elif signal_type == "END_SPEECH":
-                self._end_speech_sample = self._sent_samples
+                if self._release_at_end_speech:
+                    self._release_at_end_speech = False
+                    self._release_up_to(self._sent_samples)
+                else:
+                    self._end_speech_sample = self._sent_samples
                 if self._speaking:
                     self._speaking = False
                     self._pending_eos = True
