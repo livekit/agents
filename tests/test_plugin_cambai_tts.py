@@ -9,6 +9,7 @@ import pytest
 from aiohttp import web
 
 from livekit.agents import APIConnectOptions
+from livekit.plugins.cambai import TTS
 
 pytestmark = pytest.mark.unit
 
@@ -40,77 +41,29 @@ class _Server:
         await self._runner.cleanup()
 
 
-async def _synthesize(tts) -> None:
-    stream = tts.synthesize("hello world", conn_options=APIConnectOptions(max_retry=0, timeout=5))
-    try:
-        async for _ in stream:
+@pytest.mark.parametrize(
+    ("speaking_rate", "update", "expected"),
+    [
+        (None, {}, None),
+        (1.5, {}, 1.5),
+        (1.5, {"speaking_rate": 0.8}, 0.8),
+        (1.5, {"speaking_rate": None}, None),
+        (1.2, {"voice_id": 1234}, 1.2),
+    ],
+)
+async def test_speaking_rate_sent_only_when_set(speaking_rate, update, expected):
+    async with _Server() as server:
+        tts = TTS(
+            api_key="test-key",
+            base_url=server.base_url,
+            http_session=server.session,
+            speaking_rate=speaking_rate,
+        )
+        tts.update_options(**update)
+        async for _ in tts.synthesize(
+            "hello world", conn_options=APIConnectOptions(max_retry=0, timeout=5)
+        ):
             pass
-    finally:
-        await stream.aclose()
 
-
-async def test_speaking_rate_omitted_by_default():
-    from livekit.plugins.cambai import TTS
-
-    async with _Server() as server:
-        tts = TTS(api_key="test-key", base_url=server.base_url, http_session=server.session)
-        await _synthesize(tts)
-
-    assert "voice_settings" not in server.payloads[0]
-
-
-async def test_speaking_rate_from_constructor():
-    from livekit.plugins.cambai import TTS
-
-    async with _Server() as server:
-        tts = TTS(
-            api_key="test-key",
-            base_url=server.base_url,
-            http_session=server.session,
-            speaking_rate=1.5,
-        )
-        await _synthesize(tts)
-
-    assert server.payloads[0]["voice_settings"] == {"speaking_rate": 1.5}
-
-
-async def test_update_options_speaking_rate_applies_to_next_request():
-    from livekit.plugins.cambai import TTS
-
-    async with _Server() as server:
-        tts = TTS(
-            api_key="test-key",
-            base_url=server.base_url,
-            http_session=server.session,
-            speaking_rate=1.5,
-        )
-        await _synthesize(tts)
-        tts.update_options(speaking_rate=0.8)
-        await _synthesize(tts)
-
-    assert server.payloads[0]["voice_settings"] == {"speaking_rate": 1.5}
-    assert server.payloads[1]["voice_settings"] == {"speaking_rate": 0.8}
-
-
-async def test_update_options_speaking_rate_none_resets_to_default():
-    from livekit.plugins.cambai import TTS
-
-    async with _Server() as server:
-        tts = TTS(
-            api_key="test-key",
-            base_url=server.base_url,
-            http_session=server.session,
-            speaking_rate=1.5,
-        )
-        tts.update_options(speaking_rate=None)
-        await _synthesize(tts)
-
-    assert "voice_settings" not in server.payloads[0]
-
-
-def test_update_options_without_speaking_rate_keeps_it():
-    from livekit.plugins.cambai import TTS
-
-    tts = TTS(api_key="test-key", speaking_rate=1.2)
-    tts.update_options(voice_id=1234)
-    assert tts._opts.speaking_rate == 1.2
+    voice_settings = server.payloads[0].get("voice_settings")
+    assert voice_settings == (None if expected is None else {"speaking_rate": expected})

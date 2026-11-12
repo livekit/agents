@@ -74,7 +74,6 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
-    ToolCallEnded,
     ToolExecutionUpdatedEvent,
     UserInputTranscribedEvent,
     UserState,
@@ -93,7 +92,7 @@ from .recorder_io.recorder_io import _validate_bit_rate
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult, _RunSuspension
 from .speech_handle import InputDetails, SpeechHandle
-from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options, _RunningTasks
+from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options
 from .turn import (
     EndpointingOptions,
     InterruptionOptions,
@@ -723,6 +722,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
+        # count of active `_create_away_timer_hold` holds, by the activity that owns them
+        self._user_away_holds: dict[AgentActivity | None, int] = {}
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -1766,7 +1767,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_user_state("speaking" if speaking else "listening")
 
     def clear_user_turn(self) -> None:
-        # clear the transcription or input audio buffer of the user turn
+        """Discard uncommitted user transcription and input audio."""
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
@@ -1810,6 +1811,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def update_agent(self, agent: Agent) -> None:
+        # reject before touching state: a failed handoff would leave turns blocked
+        if agent._activity is not None and agent._activity is not self._activity:
+            raise RuntimeError("cannot update agent: the agent is already running")
+
         self._agent = agent
 
         if self._started:
@@ -2121,11 +2126,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._opts.user_away_timeout is None:
             return
 
-        if any(
-            task.executor._owning_activity in (None, self._activity)
-            for task in _RunningTasks.get(self, {}).values()
-        ):
-            # a tool that can speak when it lands holds the window; a paused agent's can't (#6883)
+        if self._user_away_holds.get(None) or self._user_away_holds.get(self._activity):
+            # a paused agent's work can't speak now, so it doesn't hold the window (#6883)
             return
 
         if (room_io := self._room_io) and (
@@ -2134,9 +2136,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         ):
             return
 
-        self._user_away_timer = self._loop.call_later(
-            self._opts.user_away_timeout, self._update_user_state, "away"
-        )
+        def _on_timeout() -> None:
+            if (
+                self._activity is not None
+                and (rt_session := self._activity.realtime_llm_session) is not None
+                and rt_session.background_work_running
+            ):
+                # the model still works on an answer, so the window starts again
+                self._set_user_away_timer()
+                return
+
+            self._update_user_state("away")
+
+        self._user_away_timer = self._loop.call_later(self._opts.user_away_timeout, _on_timeout)
 
     def _cancel_user_away_timer(self) -> None:
         if self._user_away_timer is not None:
@@ -2381,17 +2393,30 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a call recorded when its execution started must not be inserted a second time
             self._chat_ctx._upsert_item(item)
 
-    def _tool_execution_updated(self, ev: ToolExecutionUpdatedEvent) -> None:
+    def _create_away_timer_hold(self, owner: AgentActivity | None) -> None:
+        """Keep the user from going away while work that will speak when it lands runs.
+
+        ``owner`` is the activity that will speak, or None when any current agent can; only the
+        holds of the current one count, since a paused agent cannot speak (#6883).
+        """
+        self._user_away_holds[owner] = self._user_away_holds.get(owner, 0) + 1
+        if owner in (None, self._activity):
+            self._cancel_user_away_timer()
+
+    def _release_away_timer_hold(self, owner: AgentActivity | None) -> None:
+        if (count := self._user_away_holds.get(owner, 0) - 1) > 0:
+            self._user_away_holds[owner] = count
+            return
+        self._user_away_holds.pop(owner, None)
         if (
-            isinstance(ev.update, ToolCallEnded)
-            and self._user_state == "listening"
+            self._user_state == "listening"
             and self._agent_state == "listening"
             and self._user_away_timer is None
         ):
-            # tools hold the window off, so the last one to land restarts it (#6883); a running
-            # timer means the tool that ended belongs to a paused agent and never held it
+            # a running timer means the released hold belonged to a paused agent
             self._set_user_away_timer()
 
+    def _tool_execution_updated(self, ev: ToolExecutionUpdatedEvent) -> None:
         self.emit("tool_execution_updated", ev)
 
     def _config_update_added(self, item: llm.AgentConfigUpdate) -> None:

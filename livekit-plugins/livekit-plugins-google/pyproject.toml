@@ -30,10 +30,11 @@ dependencies = [
     # 2.13 is the floor for the Live transcription surface this package uses:
     # LiveServerContent.interim_input_transcription landed in 2.9 and
     # AudioTranscriptionConfig.custom_vocabulary in 2.13. 2.33 is the floor for
-    # LiveClientContextUpdate / AsyncSession.send_context_update.
-    "google-genai >= 2.33.0; python_version >= '3.10'",
+    # LiveClientContextUpdate / AsyncSession.send_context_update. 3.2 is the floor for
+    # client.aio.decisions, used by DecisionModel.
+    "google-genai >= 3.2.0; python_version >= '3.10'",
     "livekit-agents>=1.8.11",
-    # Vertex AI uses an httpx2 client (OpenAI SDK 3). google-genai still depends on httpx v1.
+    # Vertex AI uses an httpx2 client (OpenAI SDK 3), as google-genai 3 does.
     "httpx2>=2.12,<3",
 ]
 

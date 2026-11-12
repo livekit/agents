@@ -115,7 +115,10 @@ class DeepgramOptions(TypedDict, total=False):
     dictation: bool
     detect_language: bool
     no_delay: bool  # default: True
-    utterance_end: bool
+    # Gap after the last finalized word before Deepgram sends UtteranceEnd: 1000-5000 ms,
+    # and it needs interim_results on. The gateway does not forward the event.
+    utterance_end_ms: int
+    utterance_end: bool  # alias: True is utterance_end_ms=1000; prefer utterance_end_ms
     redact: str | list[str]
     replace: str | list[str]
     search: str | list[str]

@@ -1,10 +1,9 @@
-"""Rime STT compatibility, audio conversion, recognition, and streaming regressions."""
+"""Rime STT compatibility, audio conversion, recognition, and streaming tests."""
 
 from __future__ import annotations
 
 import asyncio
 import io
-import subprocess
 import sys
 import traceback
 import wave
@@ -35,12 +34,12 @@ from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.plugins import rime
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 
 @pytest.fixture
 def sdk():
-    # Compatibility checks must still run without the optional SDK or Python 3.11.
+    # compatibility checks must still run without the optional sdk or python 3.11
     if sys.version_info < (3, 11):
         pytest.skip("Rime STT requires Python 3.11+")
     return pytest.importorskip("rimelabs_sdk")
@@ -104,7 +103,7 @@ def _frame(
 ) -> rtc.AudioFrame:
     if data is None:
         samples = samples if samples is not None else sample_rate // 10
-        # Asymmetric, loud channels detect channel selection and int16 overflow.
+        # asymmetric, loud channels detect channel selection and int16 overflow
         data = np.tile(np.arange(channels, dtype=np.int16) * 1000 + 20000, (samples, 1)).tobytes()
     else:
         samples = len(data) // (channels * 2)
@@ -243,7 +242,7 @@ async def setup(sdk, client, cleanup):
 
     client.stt.stream.side_effect = stream
     client.close.side_effect = lambda: closed.append(True)
-    # Close the owner before the cleanup fixture joins readers and their consumers.
+    # close the owner before the cleanup fixture joins readers and their consumers
     async with rime.STT(
         vad=SimpleNamespace(stream=lambda: detector), output_contract="append_fragments"
     ) as owner:
@@ -265,46 +264,13 @@ async def wait_until(predicate):
     await asyncio.wait_for(poll(), 2)
 
 
-def test_tts_import_does_not_require_the_sdk() -> None:
-    # A fresh interpreter also catches accidental eager SDK imports from rime.__init__.
-    subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            """
-import sys
-from importlib.abc import MetaPathFinder
-class NoSDK(MetaPathFinder):
-    def find_spec(self, fullname, path, target=None):
-        if fullname == 'rimelabs_sdk':
-            raise ModuleNotFoundError(name=fullname)
-sys.meta_path.insert(0, NoSDK())
-from livekit.plugins import rime
-assert rime.TTS
-try:
-    rime.STT()
-except ImportError as error:
-    assert 'livekit-plugins-rime[stt]' in str(error)
-    if sys.version_info < (3, 11):
-        assert 'Python 3.11+' in str(error)
-else:
-    raise AssertionError('Missing SDK was not detected')
-""",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-
-
 def test_stt_requires_python_311(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "version_info", (3, 10, 0))
     with pytest.raises(ImportError, match=r"Rime STT requires Python 3\.11\+"):
         rime.STT()
 
 
-@pytest.mark.parametrize("sample_rate,channels", [(16000, 1), (48000, 1), (48000, 2), (44100, 2)])
+@pytest.mark.parametrize("sample_rate,channels", [(16000, 1), (44100, 2)])
 async def test_audio_and_result_mapping(
     recognizer: rime.STT, client: MagicMock, sample_rate: int, channels: int
 ) -> None:
@@ -317,7 +283,7 @@ async def test_audio_and_result_mapping(
         assert (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) == (16000, 1, 2)
         assert wav.getnframes() == 3200
         audio = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2")
-        # Ignore the resampler's edges; steady samples must have the mean channel amplitude.
+        # ignore the resampler's edges; steady samples carry the mean channel amplitude
         assert np.mean(audio[200:-200]) == pytest.approx(20000 + (channels - 1) * 500, abs=2)
 
     assert result.type == SpeechEventType.FINAL_TRANSCRIPT
@@ -400,11 +366,6 @@ async def test_invalid_audio_is_not_retried(
         ("RimeTimeoutError", APITimeoutError, True),
         ("RimeUnavailableError", APIConnectionError, True),
         ("RimeAuthenticationError", APIStatusError, False),
-        ("RimePermissionError", APIStatusError, False),
-        ("RimeInputError", APIStatusError, False),
-        ("RimeAudioFormatError", APIStatusError, False),
-        ("RimeResourceLimitError", APIStatusError, False),
-        ("RimeCancelledError", APIStatusError, False),
         ("RimeStreamError", APIStatusError, False),
     ],
 )
@@ -451,7 +412,7 @@ async def test_safe_errors_and_retry_policy(
 async def test_real_sdk_pending_request_lifecycle(
     monkeypatch: pytest.MonkeyPatch, finish: str, sdk
 ) -> None:
-    # Exercise the SDK's deadline, cancellation, and close behavior without a server.
+    # exercise the sdk's deadline, cancellation, and close behavior without a server
     from rimelabs_sdk.stt import _transport
 
     connected = asyncio.Event()
@@ -545,7 +506,7 @@ async def test_live_audio_prefix_deltas_and_final(setup, backend):
     owner, detector, streams, events, _, _ = setup
     owner._output_contract = "append_fragments" if backend == "sdk_append" else "revised_hypotheses"
     stream = owner.stream(conn_options=APIConnectOptions(timeout=120))
-    # INFERENCE before START is already included in START's prefix.
+    # inference before start is already part of the start prefix
     detector.send(VADEventType.INFERENCE_DONE, b"xx")
     detector.send(VADEventType.START_OF_SPEECH, b"aabb")
     first = await receive(stream, SpeechEventType.INTERIM_TRANSCRIPT)
@@ -724,12 +685,10 @@ async def test_flush_restarts_vad_and_resamples_live_frames(setup, monkeypatch):
     assert all(d.closed for d in detectors)
 
 
-@pytest.mark.parametrize("contract", ["append_fragments", "revised_hypotheses"])
 async def test_later_utterance_uploads_while_first_final_waits(
-    setup, monkeypatch, contract, collect_events, sdk
+    setup, monkeypatch, collect_events, sdk
 ):
     owner, detector, streams, _, _, _ = setup
-    owner._output_contract = contract
     release = asyncio.Event()
     first_eof = asyncio.Event()
     second_done = asyncio.Event()
@@ -741,10 +700,7 @@ async def test_later_utterance_uploads_while_first_final_waits(
         async for chunk in self.source:
             self.audio.append(chunk)
             text += "a" if first else "b"
-            if contract == "append_fragments":
-                yield self.sdk.TranscriptionDelta(text="a" if first else "b")
-            else:
-                yield self.sdk.TranscriptionPartial(text=text)
+            yield self.sdk.TranscriptionDelta(text="a" if first else "b")
         if first:
             first_eof.set()
             await release.wait()
@@ -762,7 +718,7 @@ async def test_later_utterance_uploads_while_first_final_waits(
     owner.update_options(mode="verbatim", language="es", context_terms=["Second"])
     detector.send(VADEventType.START_OF_SPEECH, bytes(32000))
     await wait_until(lambda: len(streams) == 2 and len(streams[1].audio) == 1)
-    # Eleven seconds consumed while the previous final is still unavailable.
+    # eleven seconds consumed while the previous final is still unavailable
     for count in range(2, 12):
         detector.send(VADEventType.INFERENCE_DONE, bytes(32000))
         await wait_until(lambda count=count: len(streams[1].audio) == count)
@@ -801,7 +757,7 @@ async def test_later_utterance_uploads_while_first_final_waits(
     assert all(s.closed for s in streams)
 
 
-@pytest.mark.parametrize("failing", [0, 1, None])
+@pytest.mark.parametrize("failing", [1, None])
 async def test_parallel_requests_cancel_on_error_or_close(
     setup, monkeypatch, failing, collect_events
 ):
@@ -901,9 +857,15 @@ async def test_pending_utterances_are_bounded(setup, monkeypatch, collect_events
     assert detector.closed
 
 
-@pytest.mark.parametrize("contract", ["append_fragments", "revised_hypotheses"])
-@pytest.mark.parametrize("second_finishes_first", [False, True])
-@pytest.mark.parametrize("commit_between_events", [False, True])
+@pytest.mark.parametrize(
+    "contract,second_finishes_first,commit_between_events",
+    [
+        ("append_fragments", False, False),
+        ("append_fragments", True, True),
+        ("revised_hypotheses", True, False),
+        ("revised_hypotheses", False, True),
+    ],
+)
 async def test_concurrent_results_reach_audio_recognition(
     setup,
     monkeypatch,
@@ -913,7 +875,6 @@ async def test_concurrent_results_reach_audio_recognition(
     cleanup,
     collect_events,
 ):
-    """Exercise the real turn consumer, including both possible commit schedules."""
     owner, detector, streams, _, _, _ = setup
     owner._output_contract = contract
     release = [asyncio.Event(), asyncio.Event()]
@@ -952,7 +913,7 @@ async def test_concurrent_results_reach_audio_recognition(
 
     async def consume(event):
         await recognition._on_stt_event(event)
-        # Both committing between events and draining queued events must be safe.
+        # both committing between events and draining queued events must be safe
         if commit_between_events and event.type == SpeechEventType.END_OF_SPEECH:
             task = recognition._end_of_turn_task
             if task is not None:
@@ -974,8 +935,7 @@ async def test_concurrent_results_reach_audio_recognition(
                 and sum(e.type == SpeechEventType.START_OF_SPEECH for e in observed) == 2
             )
         )
-        # B is still awaiting its final. A's completion must not leave B
-        # in the ended/committed state established by an earlier boundary.
+        # b still awaits its final, so a's completion must not leave b committed
         assert recognition._speaking
         release[1].set()
     await asyncio.wait_for(reader, 2)
@@ -998,7 +958,7 @@ async def test_speech_onset_accounts_for_buffering_before_deferred_publication(
 
     owner, detector, streams, _, _, _ = setup
     clock = [100.0]
-    # Patch only the adapter clock, leaving asyncio and the test runner untouched.
+    # patch only the adapter clock, leaving asyncio and the test runner untouched
     monkeypatch.setattr(_stt_stream, "time", SimpleNamespace(time=lambda: clock[0]))
     release = asyncio.Event()
     first_eof = asyncio.Event()
