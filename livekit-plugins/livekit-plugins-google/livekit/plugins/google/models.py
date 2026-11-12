@@ -227,4 +227,4 @@ GeminiTTSModels = Literal[
 ]
 
 # Decisions API (POST /v1/decisions)
-DecisionModels = Literal["decisions-prerelease"]
+DecisionModels = Literal["gemini-decision"]

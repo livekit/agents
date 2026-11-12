@@ -56,7 +56,7 @@ class DecisionModel(llm.DecisionModel):
     def __init__(
         self,
         *,
-        model: DecisionModels | str = "decisions-prerelease",
+        model: DecisionModels | str = "gemini-decision",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: genai.Client | None = None,
     ) -> None:

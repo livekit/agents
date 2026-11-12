@@ -85,7 +85,7 @@ async def test_batch_is_sent_as_questions_keyed_by_name() -> None:
 
     assert requests == [
         {
-            "model": "decisions-prerelease",
+            "model": "gemini-decision",
             "input": "user: Please book a table.",
             "questions": {
                 "human": {"type": "noul", "instructions": "The caller wants a human."},
@@ -123,7 +123,7 @@ async def test_every_kind_is_decoded_with_distributions_and_usage() -> None:
     assert (score.value, score.probabilities) == (1.4, {0: 0.1, 1: 0.4, 2: 0.5})
     assert score.levels == ["Calm", "Annoyed", "Angry"]
     assert response.errors == {}
-    assert (response.model, response.provider) == ("decisions-prerelease", "google")
+    assert (response.model, response.provider) == ("gemini-decision", "google")
     assert response.request_id == "request-1"
     assert (response.input_tokens, response.output_tokens) == (50, 5)
     assert metrics[0].input_tokens == 50
