@@ -1810,12 +1810,13 @@ class AgentActivity(RecognitionHooks):
             num_channels=1,
             samples_per_channel=samples,
         )
-        next_at = time.monotonic()
+        loop = asyncio.get_running_loop()
+        next_at = loop.time()
         while (rt_session := self._input_silence_rt) is not None:
             rt_session.push_audio(frame)
             # a loop that fell behind resumes from now rather than sending the backlog at once
-            next_at = max(next_at + frame.duration, time.monotonic())
-            await asyncio.sleep(next_at - time.monotonic())
+            next_at = max(next_at + frame.duration, loop.time())
+            await asyncio.sleep(next_at - loop.time())
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._started:
