@@ -90,7 +90,7 @@ def _active_session(
 ) -> dict[str, str]:
     return {
         "id": session_id,
-        "object": "avatar.livekit.session",
+        "object": "avatar.realtime.session",
         "status": "active",
         "avatar_identity": avatar_identity,
     }
@@ -114,7 +114,7 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
                 _Response(
                     200,
                     {
-                        "object": "avatar.list",
+                        "object": "list",
                         "data": [
                             {"avatar_id": "asset_demo", "name": "Claire"},
                             {"avatar_id": "asset_1", "name": "Emma"},
@@ -149,12 +149,12 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
     async def test_list_avatars_rejects_invalid_provider_responses(self) -> None:
         invalid_payloads = (
             {"object": "wrong", "data": []},
-            {"object": "avatar.list", "data": {}},
-            {"object": "avatar.list", "data": ["asset_demo"]},
-            {"object": "avatar.list", "data": [{"avatar_id": "", "name": "Claire"}]},
-            {"object": "avatar.list", "data": [{"avatar_id": "asset_demo"}]},
+            {"object": "list", "data": {}},
+            {"object": "list", "data": ["asset_demo"]},
+            {"object": "list", "data": [{"avatar_id": "", "name": "Claire"}]},
+            {"object": "list", "data": [{"avatar_id": "asset_demo"}]},
             {
-                "object": "avatar.list",
+                "object": "list",
                 "data": [
                     {"avatar_id": "asset_demo", "name": "Claire"},
                     {"avatar_id": "asset_demo", "name": "Duplicate"},
@@ -205,8 +205,8 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [call["url"] for call in session.calls],
             [
-                "https://avatar.example/v1/sessions",
-                "https://avatar.example/v1/sessions/avatar-session-1",
+                "https://avatar.example/v1/avatar/sessions",
+                "https://avatar.example/v1/avatar/sessions/avatar-session-1",
             ],
         )
         post = session.calls[0]
@@ -265,7 +265,7 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(keys[0], keys[1])
         sleep.assert_awaited_once_with(5.0)
         self.assertEqual(logs.records[0].error_type, "APIStatusError")
-        self.assertEqual(logs.records[0].__dict__["lk.pii.path"], "/sessions")
+        self.assertEqual(logs.records[0].__dict__["lk.pii.path"], "/avatar/sessions")
 
     async def test_non_retryable_auth_error_preserves_status_and_request_id(
         self,
@@ -321,12 +321,13 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_missing_id_and_identity_mismatch(self) -> None:
         for payload in (
             {
-                "object": "avatar.livekit.session",
+                "object": "avatar.realtime.session",
                 "status": "active",
                 "avatar_identity": "avatar-1",
             },
             _active_session(avatar_identity="wrong-avatar"),
             {**_active_session(), "status": "pending"},
+            {**_active_session(), "object": "avatar.livekit.session"},
         ):
             with self.subTest(payload=payload):
                 outcomes = [_Response(201, payload)]
@@ -409,27 +410,53 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(raised.exception.retryable)
         self.assertEqual(len(session.calls), 1)
 
-    async def test_validates_json_delete_response(self) -> None:
-        session = _Session(
-            [
-                _Response(
-                    200,
-                    {
-                        "id": "avatar-session-1",
-                        "object": "avatar.livekit.session",
-                        "status": "active",
-                    },
+    async def test_end_accepts_terminated_and_releasing(self) -> None:
+        for status in ("terminated", "releasing"):
+            with self.subTest(status=status):
+                session = _Session(
+                    [
+                        _Response(
+                            200,
+                            {
+                                "id": "avatar-session-1",
+                                "object": "avatar.realtime.session",
+                                "status": status,
+                            },
+                        )
+                    ]
                 )
-            ]
-        )
-        client = BosonAvatarAPI(
-            api_key="boson-key",
-            conn_options=APIConnectOptions(max_retry=0),
-            session=session,  # type: ignore[arg-type]
-        )
+                client = BosonAvatarAPI(
+                    api_key="boson-key",
+                    conn_options=APIConnectOptions(max_retry=0),
+                    session=session,  # type: ignore[arg-type]
+                )
+                await client.end_session("avatar-session-1")
+                self.assertEqual(
+                    session.calls[0]["url"],
+                    "https://avatar.test/v1/avatar/sessions/avatar-session-1",
+                )
 
-        with self.assertRaises(BosonAvatarException):
-            await client.end_session("avatar-session-1")
+    async def test_validates_json_delete_response(self) -> None:
+        for payload in (
+            {
+                "id": "avatar-session-1",
+                "object": "avatar.realtime.session",
+                "status": "active",
+            },
+            {
+                "id": "avatar-session-1",
+                "object": "avatar.livekit.session",
+                "status": "terminated",
+            },
+        ):
+            with self.subTest(payload=payload):
+                client = BosonAvatarAPI(
+                    api_key="boson-key",
+                    conn_options=APIConnectOptions(max_retry=0),
+                    session=_Session([_Response(200, payload)]),  # type: ignore[arg-type]
+                )
+                with self.assertRaises(BosonAvatarException):
+                    await client.end_session("avatar-session-1")
 
         unexpected_body = _Session(
             [
@@ -437,7 +464,7 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
                     204,
                     {
                         "id": "avatar-session-1",
-                        "object": "avatar.livekit.session",
+                        "object": "avatar.realtime.session",
                         "status": "terminated",
                     },
                 )

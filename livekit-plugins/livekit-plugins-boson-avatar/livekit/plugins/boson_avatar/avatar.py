@@ -66,19 +66,21 @@ class AvatarSession(BaseAvatarSession):
         Args:
             avatar_id: Boson Avatar asset ID. Defaults to `BOSON_AVATAR_ID`.
             api_key: Boson API key. Defaults to `BOSON_API_KEY`.
-            api_url: Avatar session service URL supplied by the application.
-                Defaults to `BOSON_AVATAR_API_URL`; there is no hard-coded
-                production endpoint.
+            api_url: Root of the Boson API, e.g. `https://api.boson.ai/v1`;
+                the plugin appends `/avatar/sessions` and `/avatars`. Defaults
+                to `BOSON_AVATAR_API_URL`; there is no hard-coded endpoint.
             width: Optional output width. Must be provided with `height`.
             height: Optional output height. Must be provided with `width`.
             max_duration_seconds: Optional maximum Avatar session duration.
             avatar_participant_identity: LiveKit identity used by the Avatar.
                 Must differ from the local agent participant identity.
             avatar_participant_name: LiveKit display name used by the Avatar.
-            idempotency_key: Optional stable key for provider-session creation.
-                Must be a UUID when provided. Inside an Agent job, the default
-                is a UUID derived from the job ID and immutable Avatar session
-                binding, so a redelivered job recovers the provider session.
+            idempotency_key: Optional stable key sent as `Idempotency-Key` on
+                provider-session creation, so the retries of one create carry
+                one key. Must be a UUID when provided. Inside an Agent job, the
+                default is a UUID derived from the job ID and immutable Avatar
+                session binding. The public Boson API does not deduplicate on
+                it yet.
             conn_options: Timeout and retry options for Boson API requests.
 
         Raises:
