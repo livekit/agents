@@ -641,10 +641,7 @@ async def test_recovery_is_not_suppressed_across_paths() -> None:
 
 
 async def test_tts_recover_on_streamed_path() -> None:
-    # a provider marked unavailable is skipped on later streamed requests, so
-    # nothing has awaited by the time recovery is considered and the probe used
-    # to be dropped for want of text - leaving the process pinned to its
-    # fallback for good after one transient outage (#6678)
+    # a skipped provider must still get a recovery probe, or one outage pins the fallback for good
     fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
     fake2 = FakeTTS(fake_audio_duration=1.0)
 
