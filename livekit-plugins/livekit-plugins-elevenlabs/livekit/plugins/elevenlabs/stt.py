@@ -218,8 +218,7 @@ class STT(stt.STT):
 
         if not use_realtime and is_given(secondary_languages):
             logger.warning(
-                "`secondary_languages` is only supported for realtime models "
-                "and will be ignored"
+                "`secondary_languages` is only supported for realtime models and will be ignored"
             )
             secondary_languages = NOT_GIVEN
 
