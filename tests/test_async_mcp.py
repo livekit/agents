@@ -386,3 +386,9 @@ async def test_list_tools_applies_timeout_per_tool() -> None:
     await by_name["book_flight"]({})
 
     assert [c["read_timeout_seconds"] for c in client.calls] == [None, 120]
+
+
+@pytest.mark.parametrize("timeout", [0, -1])
+def test_a_timeout_that_is_not_positive_is_rejected(timeout: float) -> None:
+    with pytest.raises(ValueError, match="greater than 0"):
+        _resolve_tool_options(MCPToolOptions(timeout=timeout))

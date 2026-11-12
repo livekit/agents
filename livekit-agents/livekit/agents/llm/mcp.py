@@ -66,8 +66,10 @@ class MCPToolOptions(TypedDict, total=False):
     """Whether to forward the tool's progress notifications to ctx.update()."""
 
     timeout: float | None
-    """Seconds to wait for the tool's result before the call fails.
-    ``None`` uses the server's ``client_session_timeout_seconds``."""
+    """Seconds to wait for the tool's result before the call fails, greater than 0.
+    ``None`` uses the server's ``client_session_timeout_seconds``. On
+    :class:`MCPServerHTTP` a call also ends once ``sse_read_timeout`` passes, so keep
+    the timeout below it."""
 
 
 # default for tools not listed in tool_options
@@ -84,7 +86,12 @@ def _resolve_tool_options(config: MCPToolOptions | None = None) -> MCPToolOption
     """Fill in defaults for missing keys."""
     if config is None:
         return MCPToolOptions(**_DEFAULT_TOOL_OPTIONS)
-    return MCPToolOptions(**{**_DEFAULT_TOOL_OPTIONS, **config})
+    options = MCPToolOptions(**{**_DEFAULT_TOOL_OPTIONS, **config})
+    # 0 would fail every call at once, unlike client_session_timeout_seconds=0 (no timeout)
+    timeout = options["timeout"]
+    if timeout is not None and timeout <= 0:
+        raise ValueError(f"MCPToolOptions timeout must be greater than 0, got {timeout}")
+    return options
 
 
 @dataclass
