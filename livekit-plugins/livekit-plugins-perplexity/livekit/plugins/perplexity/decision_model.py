@@ -37,7 +37,8 @@ from livekit.agents.types import APIConnectOptions
 from .models import PerplexityDecisionModels
 from .version import __version__
 
-_BASE_URL = "https://api.perplexity.ai/v1"
+_HOSTED_HOST = "api.perplexity.ai"
+_BASE_URL = f"https://{_HOSTED_HOST}/v1"
 _ATTRIBUTION_HEADER = {"X-Pplx-Integration": f"livekit-agents/{__version__}"}
 
 
@@ -59,7 +60,8 @@ class DecisionModel(llm.DecisionModel):
         model: Perplexity decision model. ``pplx-decider-flash-v1.3`` is the
             low-latency default for in-turn decisions. ``pplx-decider-v1.3`` is the
             larger, more accurate model for background checks.
-        api_key: Defaults to PERPLEXITY_API_KEY. Required for the default base URL.
+        api_key: Required for the default base URL, where it defaults to
+            PERPLEXITY_API_KEY. Other base URLs only receive an explicit ``api_key``.
         base_url: Defaults to ``https://api.perplexity.ai/v1``. For Decider for Mac, use
             ``http://127.0.0.1:8080/v1``; it needs no API key.
         mode: ``"web_grounding"`` runs one web search per question and adds the results
@@ -84,8 +86,10 @@ class DecisionModel(llm.DecisionModel):
         super().__init__(
             capabilities=DecisionCapabilities(decision_kinds=["probability", "choice", "score"])
         )
-        key = api_key or os.environ.get("PERPLEXITY_API_KEY")
-        if not key and urlparse(base_url).hostname == "api.perplexity.ai":
+        hosted = urlparse(base_url).hostname == _HOSTED_HOST
+        # The environment key is for Perplexity's API; never send it to another server.
+        key = api_key or (os.environ.get("PERPLEXITY_API_KEY") if hosted else None)
+        if not key and hosted:
             raise ValueError(
                 "PERPLEXITY_API_KEY is required, either as argument or set "
                 "PERPLEXITY_API_KEY environmental variable"

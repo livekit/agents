@@ -221,7 +221,10 @@ async def test_invalid_success_response_is_not_retried(
     http.post.assert_called_once()
 
 
-async def test_local_decider_needs_no_key_and_sends_no_authorization() -> None:
+async def test_custom_base_url_never_receives_the_environment_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "env-key")
     http_session = model_for(response_body())[1]
     model = perplexity.DecisionModel(base_url="http://127.0.0.1:8080/v1", http_session=http_session)
 
@@ -229,3 +232,9 @@ async def test_local_decider_needs_no_key_and_sends_no_authorization() -> None:
 
     assert http_session.post.call_args.args[0] == "http://127.0.0.1:8080/v1/decisions"
     assert "Authorization" not in http_session.post.call_args.kwargs["headers"]
+
+    explicit = perplexity.DecisionModel(
+        base_url="http://127.0.0.1:8080/v1", api_key="gateway-key", http_session=http_session
+    )
+    await explicit.evaluate(input="", decisions=QUESTIONS)
+    assert http_session.post.call_args.kwargs["headers"]["Authorization"] == "Bearer gateway-key"
