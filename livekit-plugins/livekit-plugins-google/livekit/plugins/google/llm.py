@@ -71,6 +71,18 @@ def _ignores_sampling_params(model: str) -> bool:
     return _is_gemini_4_model(model)
 
 
+def _put_a_user_turn_before_an_opening_tool_call(turns: list[dict[str, Any]]) -> None:
+    """Gemini 4 rejects a function call that opens the conversation.
+
+    Its error: "function call turn comes immediately after a user turn or after a function
+    response turn". A reply started by generate_reply() and interrupted before its text
+    was kept leaves exactly that history, so the same placeholder user turn already sent
+    at the end of the history goes in front.
+    """
+    if turns and "function_call" in turns[0]["parts"][0]:
+        turns.insert(0, {"role": "user", "parts": [{"text": "."}]})
+
+
 def _function_calling_config(
     tool_choice: NotGivenOr[ToolChoice], function_tools: Iterable[str]
 ) -> types.FunctionCallingConfig | None:
@@ -583,6 +595,8 @@ class LLMStream(llm.LLMStream):
                 thought_signatures=thought_sigs,
                 merge_dynamic_instructions=not using_cache,
             )
+            if _is_gemini_4_model(self._model):
+                _put_a_user_turn_before_an_opening_tool_call(turns_dict)
 
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             long_decode = _is_gemini_4_model(self._model)
