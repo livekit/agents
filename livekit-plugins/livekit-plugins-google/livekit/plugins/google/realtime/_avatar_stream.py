@@ -7,6 +7,7 @@ from typing import TypeVar
 
 import av
 import av.container
+import numpy as np
 
 from livekit import rtc
 from livekit.agents.utils.codecs.decoder import StreamBuffer
@@ -15,6 +16,8 @@ from ..log import logger
 
 AVATAR_AUDIO_SAMPLE_RATE = 24000
 AVATAR_AUDIO_CHANNELS = 1
+# the idle stream carries near-silent audio; speech peaks well above this int16 level
+_SPEECH_PEAK = 300
 
 _FrameT = TypeVar("_FrameT", rtc.VideoFrame, rtc.AudioFrame)
 
@@ -66,9 +69,11 @@ class AvatarStreamDecoder:
             return
         self._closed = True
         self._buffer.close()
-        await asyncio.to_thread(self._thread.join)
-        for callback in self._take_waiters():
-            callback()
+        try:
+            await asyncio.to_thread(self._thread.join)
+        finally:
+            for callback in self._take_waiters():
+                callback()
 
     def _take_waiters(self) -> list[Callable[[], None]]:
         with self._lock:
@@ -150,3 +155,8 @@ class AvatarStreamDecoder:
                 container.close()
             for callback in self._take_waiters():
                 self._schedule(callback)
+
+
+def is_speech(frame: rtc.AudioFrame) -> bool:
+    samples = np.frombuffer(frame.data, dtype=np.int16)
+    return samples.size > 0 and int(np.abs(samples.astype(np.int32)).max()) > _SPEECH_PEAK

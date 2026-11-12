@@ -5,15 +5,13 @@ import time
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
-
 from livekit import rtc
 from livekit.agents import utils
 from livekit.agents.voice.avatar import AvatarSession as _BaseAvatarSession
 from livekit.agents.voice.io import AudioOutput, AudioOutputCapabilities
 
 from ..log import logger
-from ._avatar_stream import AVATAR_AUDIO_CHANNELS, AVATAR_AUDIO_SAMPLE_RATE
+from ._avatar_stream import AVATAR_AUDIO_CHANNELS, AVATAR_AUDIO_SAMPLE_RATE, is_speech
 from .realtime_api import RealtimeModel
 
 if TYPE_CHECKING:
@@ -23,7 +21,6 @@ AVATAR_VIDEO_FPS = 24
 _MAX_IDLE_BACKLOG = 4
 _IDLE_LOOP_FRAMES = AVATAR_VIDEO_FPS
 _QUIET_VIDEO_FRAMES = 6
-_SPEECH_PEAK = 300
 
 
 class AvatarSession(_BaseAvatarSession[Any]):
@@ -71,6 +68,8 @@ class AvatarSession(_BaseAvatarSession[Any]):
         self._idle_frames: deque[rtc.VideoFrame] = deque(maxlen=_IDLE_LOOP_FRAMES)
         self._held_frames: list[rtc.VideoFrame] | None = None
         self._held_index = 0
+        self._publications: list[rtc.LocalTrackPublication] = []
+        self._playout: _AvatarPlayoutOutput | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -101,7 +100,8 @@ class AvatarSession(_BaseAvatarSession[Any]):
         self._forward_atask = asyncio.create_task(
             self._forward_frames(room), name="gemini-avatar-forward"
         )
-        agent_session.output.replace_audio_tail(_AvatarPlayoutOutput(self))
+        self._playout = _AvatarPlayoutOutput(self)
+        agent_session.output.replace_audio_tail(self._playout)
 
     async def aclose(self) -> None:
         """Detach from the model and stop publishing the avatar."""
@@ -111,6 +111,12 @@ class AvatarSession(_BaseAvatarSession[Any]):
         if self._forward_atask:
             await utils.aio.cancel_and_wait(self._forward_atask)
             self._forward_atask = None
+        if self._playout:
+            self._playout._cancel_finish()
+        if self._room and self._room.isconnected():
+            for publication in self._publications:
+                await self._room.local_participant.unpublish_track(publication.sid)
+        self._publications.clear()
         if self._av_sync:
             await self._av_sync.aclose()
         if self._audio_source:
@@ -128,7 +134,7 @@ class AvatarSession(_BaseAvatarSession[Any]):
             return
         silenced = self._audio_muted or self._output_detached
         if isinstance(frame, rtc.AudioFrame):
-            idle = not _is_speech(frame)
+            idle = not is_speech(frame)
             if not idle:
                 self._quiet_frames = 0
                 self._recent_quiet.clear()
@@ -174,18 +180,21 @@ class AvatarSession(_BaseAvatarSession[Any]):
 
     @utils.log_exceptions(logger=logger)
     async def _forward_frames(self, room: rtc.Room) -> None:
-        async for frame, idle in self._frame_ch:
-            if self._av_sync is None:
-                if not isinstance(frame, rtc.VideoFrame):
-                    # nothing is published before the first video frame sets the size
+        try:
+            async for frame, idle in self._frame_ch:
+                if self._av_sync is None:
+                    if not isinstance(frame, rtc.VideoFrame):
+                        # nothing is published before the first video frame sets the size
+                        continue
+                    await self._publish_tracks(room, frame.width, frame.height)
+                elif idle and self._frame_ch.qsize() > _MAX_IDLE_BACKLOG:
+                    # the synchronizer plays in real time, so a burst (such as the decoder's
+                    # probe window) would otherwise remain as a permanent delay
                     continue
-                await self._publish_tracks(room, frame.width, frame.height)
-            elif idle and self._frame_ch.qsize() > _MAX_IDLE_BACKLOG:
-                # the synchronizer plays in real time, so a burst (such as the decoder's
-                # probe window) would otherwise remain as a permanent delay
-                continue
-            assert self._av_sync is not None
-            await self._av_sync.push(frame)
+                assert self._av_sync is not None
+                await self._av_sync.push(frame)
+        finally:
+            self._frame_ch.close()
 
     async def _publish_tracks(self, room: rtc.Room, width: int, height: int) -> None:
         self._audio_source = rtc.AudioSource(
@@ -202,12 +211,16 @@ class AvatarSession(_BaseAvatarSession[Any]):
         )
 
         audio_track = rtc.LocalAudioTrack.create_audio_track("avatar_audio", self._audio_source)
-        await room.local_participant.publish_track(
-            audio_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        self._publications.append(
+            await room.local_participant.publish_track(
+                audio_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+            )
         )
         video_track = rtc.LocalVideoTrack.create_video_track("avatar_video", self._video_source)
-        await room.local_participant.publish_track(
-            video_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+        self._publications.append(
+            await room.local_participant.publish_track(
+                video_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+            )
         )
 
 
@@ -248,12 +261,12 @@ class _AvatarPlayoutOutput(AudioOutput):
         )
 
     def clear_buffer(self) -> None:
-        if self._started_at is None:
-            return
-        position = min(time.time() - self._started_at, self._pushed_duration)
         # the server keeps rendering the reply until it detects the interruption itself,
         # so silence it locally until the next reply plays
         self._avatar._set_audio_muted(True)
+        if self._started_at is None:
+            return
+        position = min(time.time() - self._started_at, self._pushed_duration)
         self._finish(position, True)
 
     def on_attached(self) -> None:
@@ -264,15 +277,13 @@ class _AvatarPlayoutOutput(AudioOutput):
         super().on_detached()
         self._avatar._set_output_detached(True)
 
-    def _finish(self, position: float, interrupted: bool) -> None:
+    def _cancel_finish(self) -> None:
         if self._finish_handle:
             self._finish_handle.cancel()
             self._finish_handle = None
+
+    def _finish(self, position: float, interrupted: bool) -> None:
+        self._cancel_finish()
         self._started_at = None
         self._pushed_duration = 0.0
         self.on_playback_finished(playback_position=position, interrupted=interrupted)
-
-
-def _is_speech(frame: rtc.AudioFrame) -> bool:
-    samples = np.frombuffer(frame.data, dtype=np.int16)
-    return samples.size > 0 and int(np.abs(samples.astype(np.int32)).max()) > _SPEECH_PEAK

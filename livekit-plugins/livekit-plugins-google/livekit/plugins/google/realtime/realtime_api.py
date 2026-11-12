@@ -34,7 +34,7 @@ from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModel
 from ..log import logger
 from ..utils import create_function_response, create_tools_config, get_tool_results_for_realtime
 from ..version import __version__
-from ._avatar_stream import AvatarStreamDecoder
+from ._avatar_stream import AvatarStreamDecoder, is_speech
 
 if TYPE_CHECKING:
     from .avatar import AvatarSession
@@ -338,7 +338,7 @@ class RealtimeModel(llm.RealtimeModel):
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
 
         Raises:
-            ValueError: If the API key or VertexAI project is missing, or thinking_level is unsupported.
+            ValueError: If the API key or VertexAI project is missing, thinking_level is unsupported, or avatar_config and the VIDEO modality are not set together.
         """  # noqa: E501
         if not is_given(input_audio_transcription):
             input_audio_transcription = types.AudioTranscriptionConfig()
@@ -582,6 +582,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._current_generation: _ResponseGeneration | None = None
         self._active_session: AsyncSession | None = None
         self._avatar_decoder: AvatarStreamDecoder | None = None
+        self._avatar_speaking_gen: _ResponseGeneration | None = None
         # indicates if the underlying session should end
         self._session_should_close = asyncio.Event()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
@@ -1648,7 +1649,12 @@ class RealtimeSession(llm.RealtimeSession):
         # audio is published with the video by AvatarSession
         gen = self._current_generation
         if gen and not gen._done and not gen.audio_ch.closed:
-            gen.audio_ch.send_nowait(frame)
+            # the idle stream keeps running until the reply's speech starts; that lead-in
+            # is not part of the reply's playout
+            if self._avatar_speaking_gen is not gen and is_speech(frame):
+                self._avatar_speaking_gen = gen
+            if self._avatar_speaking_gen is gen:
+                gen.audio_ch.send_nowait(frame)
         if self._gemini_model._avatar_session:
             self._gemini_model._avatar_session._push_frame(frame)
 

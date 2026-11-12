@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import gc
 import io
 import logging
 import struct
-from collections.abc import AsyncIterator, Iterator
+import time
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from fractions import Fraction
 from typing import Any
@@ -1368,7 +1370,8 @@ async def test_failed_resume_context_update_keeps_pending_chat_ctx(
 _WIDTH, _HEIGHT, _FPS, _SAMPLE_RATE = 64, 96, 24, 24000
 
 
-def _fragmented_mp4_chunks(seconds: float = 2.0) -> list[bytes]:
+@functools.cache
+def _fragmented_mp4_chunks(seconds: float = 2.0) -> tuple[bytes, ...]:
     """An H.264 + AAC stream cut the way Gemini Live sends it: the init segment, then one
     `moof`/`mdat` pair per chunk."""
     out = io.BytesIO()
@@ -1408,7 +1411,7 @@ def _fragmented_mp4_chunks(seconds: float = 2.0) -> list[bytes]:
         if box in (b"moov", b"mdat"):
             chunks.append(data[start:offset])
             start = offset
-    return chunks
+    return tuple(chunks)
 
 
 def _video_message(chunk: bytes) -> types.LiveServerMessage:
@@ -1447,15 +1450,18 @@ async def _avatar_session(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Real
         await session.aclose()
 
 
-async def _wait_for(condition: object, timeout: float = 5.0) -> None:
-    async def _poll() -> None:
-        while not condition():  # type: ignore[operator]
-            await asyncio.sleep(0.01)
+async def _wait_for(condition: Callable[[], bool], timeout: float = 5.0) -> None:
+    # the decoder runs on its own thread, so wait on the real clock while the loop stays free
+    def _poll() -> None:
+        deadline = time.monotonic() + timeout
+        while not condition():
+            if time.monotonic() > deadline:
+                raise TimeoutError("condition not met")
+            time.sleep(0.001)
 
-    await asyncio.wait_for(_poll(), timeout)
+    await asyncio.to_thread(_poll)
 
 
-@pytest.mark.real_time
 async def test_avatar_config_reaches_the_connect_config(monkeypatch: pytest.MonkeyPatch) -> None:
     async with _avatar_session(monkeypatch) as session:
         config = session._build_connect_config()
@@ -1465,7 +1471,6 @@ async def test_avatar_config_reaches_the_connect_config(monkeypatch: pytest.Monk
         assert session._gemini_model.capabilities.audio_output
 
 
-@pytest.mark.real_time
 def test_avatar_config_requires_the_video_modality(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     with pytest.raises(ValueError):
@@ -1477,7 +1482,6 @@ def test_avatar_config_requires_the_video_modality(monkeypatch: pytest.MonkeyPat
         RealtimeModel(modalities=[types.Modality.VIDEO])
 
 
-@pytest.mark.real_time
 async def test_idle_avatar_stream_reaches_the_avatar_without_a_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1501,7 +1505,6 @@ async def test_idle_avatar_stream_reaches_the_avatar_without_a_generation(
         assert not created
 
 
-@pytest.mark.real_time
 async def test_avatar_speech_feeds_the_generation_audio(monkeypatch: pytest.MonkeyPatch) -> None:
     async with _avatar_session(monkeypatch) as session:
         session._start_new_generation()
@@ -1525,7 +1528,6 @@ async def test_avatar_speech_feeds_the_generation_audio(monkeypatch: pytest.Monk
         assert gen.output_text == "Hello"
 
 
-@pytest.mark.real_time
 async def test_interrupted_reply_is_silenced_until_the_next_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1554,7 +1556,6 @@ async def test_interrupted_reply_is_silenced_until_the_next_reply(
     assert isinstance(unmuted, rtc.AudioFrame) and bytes(unmuted.data) == bytes(speech.data)
 
 
-@pytest.mark.real_time
 async def test_avatar_is_silent_while_the_session_audio_output_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1601,7 +1602,6 @@ def _published_video(avatar: AvatarSession) -> list[int]:
     return values
 
 
-@pytest.mark.real_time
 async def test_silenced_avatar_loops_listening_frames_instead_of_speech(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1630,20 +1630,26 @@ async def test_silenced_avatar_loops_listening_frames_instead_of_speech(
     assert _published_video(avatar) == [200]
 
 
-@pytest.mark.real_time
-async def test_closing_the_avatar_leaves_the_agent_in_the_room(
+async def test_closing_the_avatar_unpublishes_its_tracks_and_keeps_the_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The avatar is published by the agent participant, so closing it must not remove
-    that participant from the room."""
+    """The avatar is published by the agent participant, so closing it must unpublish its
+    tracks without removing that participant from the room."""
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     model = RealtimeModel(avatar_config=types.AvatarConfig(avatar_name="Kira"))
     avatar = AvatarSession(model)
     removed: list[object] = []
+    unpublished: list[str] = []
+
+    class _Participant:
+        identity = "agent"
+
+        async def unpublish_track(self, sid: str) -> None:
+            unpublished.append(sid)
 
     class _Room:
         name = "room"
-        local_participant = type("P", (), {"identity": "agent"})()
+        local_participant = _Participant()
 
         def isconnected(self) -> bool:
             return True
@@ -1659,14 +1665,18 @@ async def test_closing_the_avatar_leaves_the_agent_in_the_room(
                     removed.append(request)
 
     avatar._room = _Room()  # type: ignore[assignment]
+    avatar._publications = [
+        type("Pub", (), {"sid": sid})()  # type: ignore[misc]
+        for sid in ("TR_audio", "TR_video")
+    ]
     monkeypatch.setattr(
         "livekit.agents.voice.avatar._types.get_job_context", lambda required=False: _JobContext()
     )
     await avatar.aclose()
     assert not removed
+    assert unpublished == ["TR_audio", "TR_video"]
 
 
-@pytest.mark.real_time
 async def test_reply_audio_closes_only_after_its_fragments_are_decoded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1688,7 +1698,6 @@ async def test_reply_audio_closes_only_after_its_fragments_are_decoded(
         assert received >= 1.5
 
 
-@pytest.mark.real_time
 async def test_reply_audio_closes_when_the_avatar_stream_fails_to_decode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1705,3 +1714,23 @@ async def test_reply_audio_closes_when_the_avatar_stream_fails_to_decode(
         session._handle_server_content(types.LiveServerContent(generation_complete=True))
 
         await _wait_for(lambda: gen.audio_ch.closed)
+
+
+async def test_idle_lead_in_is_not_part_of_the_reply_playout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def frame(peak: int) -> rtc.AudioFrame:
+        samples = np.full(_SAMPLE_RATE // 100, peak, dtype=np.int16)
+        return rtc.AudioFrame(samples.tobytes(), _SAMPLE_RATE, 1, samples.size)
+
+    async with _avatar_session(monkeypatch) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+        for peak in (0, 5, 8000, 0):
+            session._on_avatar_audio(frame(peak))
+
+        received = []
+        while not gen.audio_ch.empty():
+            received.append(int(np.frombuffer(gen.audio_ch.recv_nowait().data, np.int16)[0]))
+        assert received == [8000, 0]
