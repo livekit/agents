@@ -237,6 +237,30 @@ async def test_stall_before_the_session_lands_in_the_job_trace(
     assert _SLEEP_CALL in attrs[trace_types.ATTR_BLOCKING_STACK]
 
 
+async def test_stall_after_session_close_parents_to_job_entrypoint(
+    span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
+) -> None:
+    """After session.close() the session object can still be the primary session while its
+    root span context is cleared. A stall sampled in ``job_task`` has no task span either.
+    Nest under ``job_entrypoint`` rather than emitting a parentless root."""
+    closed = SimpleNamespace(
+        _root_span_context=None,
+        _record_loop_stall=lambda duration, *, timestamp_ns: None,
+    )
+    job_ctx = _fake_job_context(session=closed)
+    entrypoint = tracer.start_span("job_entrypoint")
+    with tracer.use_span(entrypoint, end_on_exit=False):
+        monitor.set_report_context(_job_report_context(job_ctx))
+
+    _block_loop_synchronously(0.07)
+    await _settle()
+    entrypoint.end()
+
+    [span] = _blocked_spans(span_exporter)
+    assert span.parent is not None
+    assert span.parent.span_id == entrypoint.get_span_context().span_id
+
+
 async def test_stall_without_a_job_is_log_only(
     span_exporter: InMemorySpanExporter,
     monitor: EventLoopMonitor,
