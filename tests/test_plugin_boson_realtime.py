@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import contextlib
 import gc
 import json
 import logging
@@ -1271,11 +1270,11 @@ async def test_boson_realtime_head_text_change_rebuilds_rather_than_reorders(ope
 
     target = _ctx(("user_1", "user", "hello there"), ("user_2", "user", "again"))
     update_task = asyncio.create_task(session.update_chat_ctx(target))
-    # Bounded, so a regression that sends two events fails instead of blocking.
-    events = []
-    with contextlib.suppress(asyncio.TimeoutError):
-        while True:
-            events.append(await asyncio.wait_for(session._msg_ch.recv(), timeout=0.5))
+    # All four go out before any server reply. Bounded, so a regression that sends
+    # fewer fails instead of blocking; one that sends more leaves them queued.
+    events = [await asyncio.wait_for(session._msg_ch.recv(), timeout=1.0) for _ in range(4)]
+    await asyncio.sleep(0)
+    assert session._msg_ch.empty()
 
     # Everything torn down, then re-sent in target order.
     assert [e["type"] for e in events] == [
