@@ -599,6 +599,76 @@ async def test_reconnect_carries_buffered_audio_over(
 
 
 @pytest.mark.virtual_time
+async def test_reconnect_replays_audio_sent_since_the_last_utterance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Speech Sarvam's VAD hadn't reported yet reaches the new connection."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    onset = _pcm_frame(100, 1)  # two full chunks, sent before any START_SPEECH
+    stream.push_frame(onset)
+    old = session.sockets[0]
+    await _wait_until(lambda: len(old.audio()) == len(onset.data.tobytes()))
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    new = session.sockets[1]
+    await _wait_until(lambda: len(new.audio()) == len(onset.data.tobytes()))
+    assert new.audio() == onset.data.tobytes()
+    assert stream._carried_audio_s == pytest.approx(0.1)
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_replays_at_most_half_a_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    audio = _pcm_frame(1000, 1)
+    stream.push_frame(audio)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(audio.data.tobytes()))
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    new = session.sockets[1]
+    await _wait_until(lambda: len(new.audio()) > 0)
+    assert new.audio() == audio.data.tobytes()[-8000 * 2 :]
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_does_not_replay_a_finished_utterance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    speech = _pcm_frame(100, 1)
+    stream.push_frame(speech)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(speech.data.tobytes()))
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    await asyncio.sleep(0.05)
+    assert session.sockets[1].audio() == b""  # already transcribed on the old connection
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
 async def test_reconnect_keeps_transcript_times_on_the_stream_timeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
