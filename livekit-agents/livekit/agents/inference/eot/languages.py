@@ -4,27 +4,14 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
+from livekit.local_inference import EOT_THRESHOLDS
+
 from ..._exceptions import APIError
 from ...language import LanguageCode
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils.misc import is_given
 
-LOCAL_LANGUAGES: dict[str, float] = {
-    "ar": 0.2596,
-    "de": 0.1812,
-    "en": 0.2499,
-    "es": 0.3000,
-    "fr": 0.2284,
-    "hi": 0.2464,
-    "id": 0.1396,
-    "it": 0.1918,
-    "ja": 0.2185,
-    "ko": 0.3109,
-    "nl": 0.1503,
-    "pt": 0.3074,
-    "tr": 0.2123,
-    "zh": 0.2900,
-}
+LOCAL_LANGUAGES: dict[str, float] = dict(EOT_THRESHOLDS)
 
 TurnDetectorModels = Literal["turn-detector-v1", "turn-detector-v1-mini"]
 TurnDetectorVersions = Literal["v1", "v1-mini"]
