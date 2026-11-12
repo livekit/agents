@@ -1714,6 +1714,8 @@ class SpeechStream(stt.SpeechStream):
             and speech_end > 0
         ):
             boundary = int(speech_end * self._opts.sample_rate)
+            # a real boundary beats waiting for END_SPEECH, which may come after more audio
+            self._release_at_end_speech = False
         elif self._end_speech_sample is not None:
             # no usable speech_end (Sarvam sends 0 when it has none), so go by what had
             # been sent when END_SPEECH arrived
@@ -1726,6 +1728,7 @@ class SpeechStream(stt.SpeechStream):
         self._release_up_to(boundary)
 
     def _release_up_to(self, boundary: int) -> None:
+        """Drop replay audio before ``boundary``, a sample position on this connection."""
         start = self._sent_samples - len(self._recent_audio) // 2
         covered = boundary - start
         if covered > 0:
