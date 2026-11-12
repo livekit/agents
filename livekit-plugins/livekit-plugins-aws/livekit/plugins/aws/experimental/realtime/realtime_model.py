@@ -611,6 +611,11 @@ class RealtimeSession(  # noqa: F811
         self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
         self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+        # The pending future a generate_reply() call returned and is awaiting. update_chat_ctx()
+        # also creates a pending future when it sends user text, but nothing awaits that one
+        # unless generate_reply() hands it out, so only a claimed future marks a generation
+        # as user_initiated.
+        self._claimed_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._sent_message_ids: set[str] = set()
         self._audio_message_ids: set[str] = set()
         self._no_gen_content_roles: dict[
@@ -1142,9 +1147,11 @@ class RealtimeSession(  # noqa: F811
         generation's single-reader message/function channels, so a generation that was
         already emitted is never emitted again.
 
-        If a generate_reply() future is pending, the generation answers it: the event is
-        marked user_initiated so the framework plays it through the speech generate_reply()
-        created instead of scheduling another one.
+        If a generate_reply() call is awaiting the pending future, the generation answers it:
+        the event is marked user_initiated so the framework plays it through the speech
+        generate_reply() created instead of scheduling another one. A pending future no
+        generate_reply() claimed (user text sent by update_chat_ctx() alone) is dropped and
+        the event stays server-initiated, so the framework schedules a speech for it.
         """
         generation = self._current_generation
         if generation is None:
@@ -1159,7 +1166,16 @@ class RealtimeSession(  # noqa: F811
 
         generation._emitted = True
         pending_fut = self._pending_generation_fut
-        user_initiated = pending_fut is not None and not pending_fut.done()
+        user_initiated = (
+            pending_fut is not None
+            and not pending_fut.done()
+            and pending_fut is self._claimed_generation_fut
+        )
+        if pending_fut is not None:
+            # this generation answers the pending text either way; a claimed future is
+            # resolved below, an unclaimed one has no awaiter and must not be handed out later
+            self._pending_generation_fut = None
+            self._claimed_generation_fut = None
         logger.debug(
             f"[GEN] EMITTING generation_created for response_id={generation.response_id}, "
             f"user_initiated={user_initiated}"
@@ -1174,7 +1190,6 @@ class RealtimeSession(  # noqa: F811
 
         # Resolve the pending generate_reply future with this generation
         if pending_fut is not None and user_initiated:
-            self._pending_generation_fut = None
             pending_fut.set_result(generation_ev)
 
     @utils.log_exceptions(logger=logger)
@@ -2292,6 +2307,7 @@ class RealtimeSession(  # noqa: F811
             # Create future that will be resolved when generation starts
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
             self._pending_generation_fut = fut
+            self._claimed_generation_fut = fut
 
             # Send text message asynchronously
             async def _send_text() -> None:
@@ -2341,9 +2357,12 @@ class RealtimeSession(  # noqa: F811
 
         # No instructions: Return pending generation if exists, otherwise create empty future that never resolves
         # (Framework will timeout naturally if no generation happens)
-        if self._pending_generation_fut is not None:
+        # (the generate_reply(user_input=...) flow: update_chat_ctx() just sent the user text)
+        pending_fut = self._pending_generation_fut
+        if pending_fut is not None and not pending_fut.done():
             logger.debug("generate_reply: no instructions, returning existing pending generation")
-            return self._pending_generation_fut
+            self._claimed_generation_fut = pending_fut
+            return pending_fut
 
         logger.debug(
             "generate_reply: no instructions and no pending generation, returning empty future"
@@ -2482,6 +2501,7 @@ class RealtimeSession(  # noqa: F811
                 llm.RealtimeError("Session closed while waiting for generation")
             )
         self._pending_generation_fut = None
+        self._claimed_generation_fut = None
 
         # Only the prompt-end block depends on the session still being live. Everything after
         # it must run either way: a recycle interrupted above leaves the active event clear
