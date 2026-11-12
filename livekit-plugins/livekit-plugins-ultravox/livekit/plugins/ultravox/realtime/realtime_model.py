@@ -138,7 +138,7 @@ class RealtimeModel(llm.RealtimeModel):
 
         Parameters
         ----------
-        model_id : str | UltravoxModel
+        model : str | UltravoxModel
             The Ultravox model to use.
         voice : str | UltravoxVoice
             The voice to use for TTS.

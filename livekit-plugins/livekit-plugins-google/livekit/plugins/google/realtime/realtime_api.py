@@ -488,7 +488,8 @@ class RealtimeModel(llm.RealtimeModel):
         Args:
             voice (str, optional): The voice to use for the session.
             temperature (float, optional): The temperature to use for the session.
-            tools (list[LLMTool], optional): The tools to use for the session.
+            tool_behavior (Behavior, optional): The behavior for tool call. Defaults to NON_BLOCKING on models that declare it by default (Gemini 3.8 Live), and to the server default (BLOCKING) elsewhere.
+            tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
         """
         if is_given(voice):
             self._opts.voice = voice
