@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,6 +30,7 @@ from livekit.agents.language import LanguageCode
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given, shortuuid
 
+from . import _hosted
 from ._cache import get_or_load, not_cached_error
 from .log import logger
 
@@ -89,6 +92,10 @@ class STT(stt.STT):
         language_token_ids: dict[str, int] | None = None,
         trust_remote_code: bool = False,
         local_files_only: bool = True,
+        provider: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         """Run a Hugging Face speech recognition model locally with ``transformers``.
 
@@ -99,6 +106,12 @@ class STT(stt.STT):
 
         Weights load in a background thread when the session prewarms the STT, or
         synchronously with :meth:`load`. They are cached per process.
+
+        Set ``provider`` or ``base_url`` to run the model somewhere else instead:
+        ``provider`` sends audio to a Hugging Face Inference Provider (``"auto"``,
+        ``"hf-inference"``, ``"fal-ai"``, ``"deepinfra"``, ...) and ``base_url`` to a
+        dedicated endpoint, such as a Hugging Face Inference Endpoint. Nothing loads
+        locally then, and the local-only arguments are ignored.
 
         Args:
             model: Hugging Face Hub repo id or path to a local model directory.
@@ -127,6 +140,13 @@ class STT(stt.STT):
             trust_remote_code=trust_remote_code,
             local_files_only=local_files_only,
         )
+        self._hosted = _hosted.HostedOptions(
+            provider=provider,
+            base_url=base_url,
+            api_key=api_key,
+            extra_body=dict(extra_body or {}),
+        )
+        self._client: Any = None
         self._prewarm_task: asyncio.Future[Any] | None = None
 
     @property
@@ -138,10 +158,16 @@ class STT(stt.STT):
         return "huggingface"
 
     def load(self) -> None:
-        """Load the model weights into this process, blocking until they are ready."""
-        self._get_model()
+        """Load the model weights into this process, blocking until they are ready.
+
+        Does nothing when the model runs on a provider or endpoint.
+        """
+        if not self._hosted.enabled:
+            self._get_model()
 
     def prewarm(self) -> None:
+        if self._hosted.enabled:
+            return
         # prewarm() runs on the event loop and must not block it
         if self._prewarm_task is None:
             self._prewarm_task = asyncio.ensure_future(asyncio.to_thread(self._get_model))
@@ -161,6 +187,8 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         lang = language if is_given(language) else self._opts.language
+        if self._hosted.enabled:
+            return await self._recognize_hosted(buffer, lang, conn_options)
         try:
             loaded = await asyncio.to_thread(self._get_model)
             audio = _to_mono_float32(buffer, loaded.sample_rate)
@@ -183,6 +211,53 @@ class STT(stt.STT):
             ],
             recognition_usage=stt.RecognitionUsage(audio_duration=duration),
         )
+
+    async def _recognize_hosted(
+        self, buffer: AudioBuffer, language: str | None, conn_options: APIConnectOptions
+    ) -> stt.SpeechEvent:
+        if isinstance(buffer, list) and not buffer:
+            text, duration = "", 0.0
+        else:
+            frame = rtc.combine_audio_frames(buffer)
+            duration = frame.duration
+            if self._client is None:
+                self._client = _hosted.make_client(self._hosted)
+            extra_body = dict(self._hosted.extra_body)
+            if language and self._hosted.provider != "hf-inference":
+                extra_body.setdefault("language", language)
+            # a .wav path lets every provider tell the format: hf-inference and endpoints
+            # take the file's mime type, others read and base64-encode it
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "audio.wav")
+                with open(path, "wb") as f:
+                    f.write(frame.to_wav_bytes())
+                output = await _hosted.call(
+                    asyncio.wait_for(
+                        self._client.automatic_speech_recognition(
+                            path,
+                            model=_hosted.request_model(self._hosted, self._opts.model),
+                            extra_body=extra_body or None,
+                        ),
+                        _hosted.request_timeout(conn_options.timeout),
+                    ),
+                    what="hosted transcription",
+                )
+            text = str(getattr(output, "text", "") or "").strip()
+
+        return stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            request_id=shortuuid("hf_stt_"),
+            alternatives=[
+                stt.SpeechData(text=text, language=LanguageCode(language or ""), end_time=duration)
+            ],
+            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
+        )
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+        await super().aclose()
 
     def _transcribe(self, loaded: _LoadedSTT, audio: np.ndarray, language: str | None) -> str:
         if audio.size == 0:

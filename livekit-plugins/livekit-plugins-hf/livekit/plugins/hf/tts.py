@@ -26,6 +26,7 @@ from livekit.agents import APIConnectionError, tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils import shortuuid
 
+from . import _hosted
 from ._cache import get_or_load, not_cached_error
 from .log import logger
 
@@ -101,7 +102,7 @@ class TTS(tts.TTS):
         self,
         *,
         model: str = DEFAULT_TTS_MODEL,
-        voice: str | None = DEFAULT_VOICE,
+        voice: str | None = None,
         revision: str | None = None,
         device: str = "auto",
         dtype: str = "auto",
@@ -113,6 +114,10 @@ class TTS(tts.TTS):
         chunk_frames: int = 4,
         trust_remote_code: bool = False,
         local_files_only: bool = True,
+        provider: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         """Run a Hugging Face text-to-speech model locally with ``transformers``.
 
@@ -132,8 +137,9 @@ class TTS(tts.TTS):
         Args:
             model: Hugging Face Hub repo id or path to a local model directory.
             voice: Orpheus speaker, prepended to the text as ``"{voice}: {text}"``, e.g.
-                ``"tara"`` or ``"salt_lug_0001"``. ``None`` sends the text alone.
-                Ignored by text-to-waveform models.
+                ``"tara"`` (used when unset with the default model) or
+                ``"salt_lug_0001"``. Ignored by local text-to-waveform models. Sent as
+                ``voice`` to a provider or endpoint.
             revision: Hub revision (branch, tag or commit) to load.
             device: ``device_map`` passed to ``from_pretrained``.
             dtype: Torch dtype name, e.g. ``"auto"``, ``"float16"`` or ``"bfloat16"``.
@@ -147,6 +153,12 @@ class TTS(tts.TTS):
             trust_remote_code: Allow models that ship their own modeling code.
             local_files_only: Load only from the local Hugging Face cache and never
                 download at runtime.
+            provider: Hugging Face Inference Provider that runs ``model`` instead of
+                this process, e.g. ``"auto"``, ``"fal-ai"`` or ``"deepinfra"``.
+            base_url: URL of a dedicated endpoint serving the model, such as a Hugging
+                Face Inference Endpoint.
+            api_key: Token for the provider or endpoint. Defaults to ``HF_TOKEN``.
+            extra_body: Extra request parameters for the provider or endpoint.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -167,6 +179,13 @@ class TTS(tts.TTS):
             trust_remote_code=trust_remote_code,
             local_files_only=local_files_only,
         )
+        self._hosted = _hosted.HostedOptions(
+            provider=provider,
+            base_url=base_url,
+            api_key=api_key,
+            extra_body=dict(extra_body or {}),
+        )
+        self._client: Any = None
         self._prewarm_task: asyncio.Future[Any] | None = None
 
     @property
@@ -182,10 +201,16 @@ class TTS(tts.TTS):
             self._opts.voice = voice
 
     def load(self) -> None:
-        """Load the model weights into this process, blocking until they are ready."""
-        self._get_model()
+        """Load the model weights into this process, blocking until they are ready.
+
+        Does nothing when the model runs on a provider or endpoint.
+        """
+        if not self._hosted.enabled:
+            self._get_model()
 
     def prewarm(self) -> None:
+        if self._hosted.enabled:
+            return
         # prewarm() runs on the event loop and must not block it
         if self._prewarm_task is None:
             self._prewarm_task = asyncio.ensure_future(asyncio.to_thread(self._get_model))
@@ -196,6 +221,16 @@ class TTS(tts.TTS):
         return get_or_load(
             ("tts", opts.key), lambda: _load_tts(opts.key, local_files_only=opts.local_files_only)
         )
+
+    def _hosted_client(self) -> Any:
+        if self._client is None:
+            self._client = _hosted.make_client(self._hosted)
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -209,6 +244,10 @@ class ChunkedStream(tts.ChunkedStream):
         self._hf_tts = tts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if self._hf_tts._hosted.enabled:
+            await self._run_hosted(output_emitter)
+            return
+
         output_emitter.initialize(
             request_id=shortuuid("hf_tts_"),
             sample_rate=self._hf_tts.sample_rate,
@@ -255,6 +294,33 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError(
                 f"local synthesis failed: {type(e).__name__}", retryable=False
             ) from e
+
+    async def _run_hosted(self, output_emitter: tts.AudioEmitter) -> None:
+        hosted = self._hf_tts._hosted
+        opts = self._hf_tts._opts
+        extra_body = dict(hosted.extra_body)
+        if opts.voice:
+            extra_body.setdefault("voice", opts.voice)
+        audio: bytes = await _hosted.call(
+            asyncio.wait_for(
+                self._hf_tts._hosted_client().text_to_speech(
+                    self._input_text,
+                    model=_hosted.request_model(hosted, opts.model),
+                    extra_body=extra_body or None,
+                ),
+                _hosted.request_timeout(self._conn_options.timeout),
+            ),
+            what="hosted synthesis",
+        )
+        # providers return a whole encoded clip; the emitter decodes and resamples it
+        output_emitter.initialize(
+            request_id=shortuuid("hf_tts_"),
+            sample_rate=self._hf_tts.sample_rate,
+            num_channels=1,
+            mime_type=_hosted.sniff_audio_mime(audio),
+        )
+        output_emitter.push(audio)
+        output_emitter.flush()
 
     async def _run_orpheus(self, loaded: _LoadedTTS, emit: Any) -> None:
         opts = self._hf_tts._opts
@@ -381,7 +447,8 @@ def _generate_orpheus(
     from transformers import StoppingCriteria, StoppingCriteriaList
     from transformers.generation.streamers import BaseStreamer
 
-    prompt = f"{opts.voice}: {text}" if opts.voice else text
+    voice = opts.voice or (DEFAULT_VOICE if opts.model == DEFAULT_TTS_MODEL else None)
+    prompt = f"{voice}: {text}" if voice else text
     text_ids = loaded.tokenizer(prompt, return_tensors="pt").input_ids
     input_ids = torch.cat(
         [

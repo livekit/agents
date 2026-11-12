@@ -109,6 +109,33 @@ tts = hf.TTS(model="Sunbird/orpheus-3b-tts-multilingual", voice="salt_lug_0001")
 Speaker ids for each language are in the model card. `tts.update_options(voice=...)`
 switches the speaker mid-session.
 
+## Hosted inference
+
+Running models in the agent process is simple, but in production it ties GPU memory to
+every worker process and scales the models with your calls. To run them elsewhere, give
+`hf.STT` or `hf.TTS` a `provider` or a `base_url`. Nothing loads locally then, and
+`torch` is not used.
+
+```python
+# serverless, through Hugging Face Inference Providers (uses HF_TOKEN)
+stt = hf.STT(model="openai/whisper-large-v3-turbo", provider="hf-inference")
+tts = hf.TTS(model="hexgrad/Kokoro-82M", provider="fal-ai", voice="af_heart")
+
+# a dedicated endpoint, such as a Hugging Face Inference Endpoint
+stt = hf.STT(base_url="https://<your-endpoint>.endpoints.huggingface.cloud")
+```
+
+`provider` takes any [Inference Provider](https://huggingface.co/docs/inference-providers)
+that serves the task (`"auto"`, `"hf-inference"`, `"fal-ai"`, `"deepinfra"`, `"replicate"`, ...).
+Check the model page for which providers serve it; fine-tunes such as SunflowerASR and
+Sunbird's Orpheus usually need a dedicated endpoint. `api_key` defaults to `HF_TOKEN`, and
+`extra_body` passes provider-specific parameters. `language` (STT) and `voice` (TTS) are
+sent as request parameters, except `language` on `hf-inference`.
+
+Hosted calls are request and response: STT is batch behind the session's VAD as in local
+mode, and TTS audio starts once the provider has synthesized the whole sentence, so local
+Orpheus streaming starts sooner.
+
 ## Downloading models ahead of time
 
 By default the plugin never downloads at runtime (`local_files_only=True`). Fetch weights
