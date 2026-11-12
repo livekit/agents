@@ -6,6 +6,7 @@ import io
 import json
 import wave
 from typing import Any
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -434,3 +435,97 @@ async def test_tts_a_second_prewarm_does_not_replace_one_still_in_flight() -> No
     finally:
         release.set()
         await asyncio.gather(first, return_exceptions=True)
+
+
+_NEBIUS_MODEL = "openai/gpt-oss-120b"
+_NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
+_NEBIUS_STREAM_RESPONSE = b"""data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"ok","role":"assistant"},"finish_reason":null,"index":0}],"created":0,"model":"openai/gpt-oss-120b","object":"chat.completion.chunk"}
+
+data: {"id":"chatcmpl-test","choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":0,"model":"openai/gpt-oss-120b","object":"chat.completion.chunk"}
+
+data: [DONE]
+
+"""
+
+
+class _NebiusRecordingTransport(httpx2.AsyncBaseTransport):
+    def __init__(self) -> None:
+        self.requests: list[httpx2.Request] = []
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        await request.aread()
+        self.requests.append(request)
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_NEBIUS_STREAM_RESPONSE,
+            request=request,
+        )
+
+
+def test_nebius_helper_configures_token_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEBIUS_API_KEY", "env-key")
+
+    with patch("livekit.plugins.openai.llm.openai.AsyncClient") as client_cls:
+        client = client_cls.return_value
+        llm = LLM.with_nebius(model=_NEBIUS_MODEL)
+
+    assert llm.model == _NEBIUS_MODEL
+    assert client_cls.call_args.kwargs["api_key"] == "env-key"
+    assert str(client_cls.call_args.kwargs["base_url"]) == _NEBIUS_BASE_URL
+    assert client is llm._client
+
+
+async def test_nebius_helper_sends_request_to_configured_client() -> None:
+    transport = _NebiusRecordingTransport()
+    llm = LLM.with_nebius(
+        model=_NEBIUS_MODEL,
+        api_key="test-key",
+        base_url=_NEBIUS_BASE_URL,
+        client=None,
+    )
+    await llm._client.close()
+    llm._client = openai.AsyncClient(
+        api_key="test-key",
+        base_url=_NEBIUS_BASE_URL,
+        http_client=httpx2.AsyncClient(transport=transport),
+    )
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hello")
+
+    stream = llm.chat(chat_ctx=chat_ctx)
+    try:
+        async for _ in stream:
+            pass
+    finally:
+        await stream.aclose()
+        await llm.aclose()
+
+    assert len(transport.requests) == 1
+    request = transport.requests[0]
+    assert str(request.url) == f"{_NEBIUS_BASE_URL}chat/completions"
+    payload = json.loads(request.content)
+    assert payload["model"] == _NEBIUS_MODEL
+    assert payload["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_nebius_helper_requires_explicit_model() -> None:
+    with pytest.raises(TypeError, match="model"):
+        LLM.with_nebius(api_key="test-key")  # type: ignore[call-arg]
+
+
+def test_nebius_helper_requires_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NEBIUS_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="Nebius API key is required"):
+        LLM.with_nebius(model=_NEBIUS_MODEL)
+
+
+async def test_nebius_helper_preserves_custom_client_and_unlisted_model() -> None:
+    client = openai.AsyncClient(api_key="custom-key", base_url="https://example.invalid/v1/")
+    llm = LLM.with_nebius(model="vendor/future-model", api_key="test-key", client=client)
+    try:
+        assert llm._client is client
+        assert llm.model == "vendor/future-model"
+        assert str(client.base_url) == "https://example.invalid/v1/"
+    finally:
+        await llm.aclose()
