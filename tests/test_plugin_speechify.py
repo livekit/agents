@@ -3,9 +3,13 @@ from __future__ import annotations
 import asyncio
 import base64
 
-import httpx
+import httpx2 as httpx
 import pytest
+from speechify.core.pagination import AsyncPager
 from speechify.types.error_detail import ErrorDetail
+from speechify.types.get_voice import GetVoice
+from speechify.types.get_voices_model import GetVoicesModel
+from speechify.types.list_voices_response import ListVoicesResponse
 from speechify.types.nested_chunk import NestedChunk
 from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechChunk,
@@ -13,13 +17,18 @@ from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechError,
 )
 
-from livekit.agents import APIConnectOptions, APIStatusError, tts
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+)
 from livekit.agents.types import NOT_GIVEN, USERDATA_TIMED_TRANSCRIPT
 from livekit.plugins.speechify import tts as sfy_tts
 
 pytestmark = pytest.mark.unit
 
-_PCM_1S = b"\x00\x7f" * (24000 * 2)  # 0.5s of 24 kHz mono PCM silence
+_PCM = b"\x00\x7f" * (24000 * 2)  # 0.5s of 24 kHz mono PCM silence
 
 
 class _FakeAudio:
@@ -32,7 +41,7 @@ class _FakeAudio:
         self.stream_calls.append(kwargs)
         yield SpeechStreamEvent_SpeechChunk(
             type="speech.chunk",
-            audio=base64.b64encode(_PCM_1S).decode("ascii"),
+            audio=base64.b64encode(_PCM).decode("ascii"),
             speech_marks=[
                 NestedChunk(
                     type="word", value="Hello", start=0, end=5, start_time=0, end_time=320.0
@@ -63,13 +72,43 @@ class _FakeAudio:
 
 
 class _FakeSpeechResponse:
-    audio_data: str = base64.b64encode(_PCM_1S).decode("ascii")
+    audio_data: str = base64.b64encode(_PCM).decode("ascii")
     speech_marks = type("Marks", (), {"chunks": []})
 
 
+def _sdk_voice(voice_id: str, gender: str, *models: str) -> GetVoice:
+    return GetVoice(
+        id=voice_id,
+        display_name=voice_id,
+        gender=gender,
+        locale="en-US",
+        models=[GetVoicesModel(name=m, languages=[]) for m in models],
+        type="shared",
+    )
+
+
 class _FakeVoices:
-    async def list(self) -> list[object]:
-        return []
+    # Two pages chained by get_next, the way the SDK pages GET /v1/voices.
+    pages = [
+        [_sdk_voice("dominic_32", "male", "simba-3.2", "simba-3.5")],
+        [_sdk_voice("sam", "not_specified", "simba-3.0")],
+    ]
+
+    async def list(self, **kwargs: object) -> AsyncPager[GetVoice, ListVoicesResponse]:
+        return self._page(0)
+
+    def _page(self, i: int) -> AsyncPager[GetVoice, ListVoicesResponse]:
+        has_next = i + 1 < len(self.pages)
+
+        async def get_next() -> AsyncPager[GetVoice, ListVoicesResponse]:
+            return self._page(i + 1)
+
+        return AsyncPager(
+            has_next=has_next,
+            items=self.pages[i],
+            get_next=get_next if has_next else None,
+            response=ListVoicesResponse(voices=self.pages[i], has_more=has_next),
+        )
 
 
 class _ErrorAudio(_FakeAudio):
@@ -95,22 +134,21 @@ def _make_tts(model: str, client: _FakeClient) -> sfy_tts.TTS:
     return sfy_tts.TTS(model=model, client=client)  # type: ignore[arg-type]
 
 
-async def _collect(stream: tts.SynthesizeStream) -> list[tts.SynthesizedAudio]:
-    frames: list[tts.SynthesizedAudio] = []
-    async for frame in stream:
-        frames.append(frame)
-    return frames
-
-
-async def test_stream_with_timestamps() -> None:
-    client = _FakeClient()
-    stream = _make_tts("simba-3.2", client).stream()
+async def _run(t: sfy_tts.TTS, mode: str, conn_options: APIConnectOptions = _NO_RETRY) -> list:
+    if mode == "synthesize":
+        async with t.synthesize("Hello world.", conn_options=conn_options) as s:
+            return [f async for f in s]
+    stream = t.stream(conn_options=conn_options)
     stream.push_text("Hello world.")
     stream.end_input()
+    return [f async for f in stream]
 
-    frames = await _collect(stream)
 
-    # the streaming-native model must be routed to the SSE endpoint
+@pytest.mark.parametrize("mode", ["stream", "synthesize"])
+async def test_streaming_model_uses_sse_with_timestamps(mode: str) -> None:
+    client = _FakeClient()
+    frames = await _run(_make_tts("simba-3.2", client), mode)
+
     assert len(client.audio.stream_calls) == 1
     kwargs = client.audio.stream_calls[0]
     assert kwargs["input"] == "Hello world."
@@ -119,9 +157,7 @@ async def test_stream_with_timestamps() -> None:
     assert kwargs.get("model") == "simba-3.2"
     assert client.audio.speech_calls == []
 
-    # 0.5s of PCM audio was pushed and its word marks surfaced
-    total = sum(f.frame.duration for f in frames)
-    assert total > 0.4
+    assert sum(f.frame.duration for f in frames) > 0.4
     transcripts = [t for f in frames for t in f.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])]
     words = {str(t): t for t in transcripts}
     assert set(words) == {"Hello", "world"}
@@ -133,64 +169,10 @@ async def test_stream_with_timestamps() -> None:
     assert client.audio.streams_read_to_end == 1
 
 
-async def test_stream_falls_back_for_legacy_model() -> None:
+@pytest.mark.parametrize("mode", ["stream", "synthesize"])
+async def test_legacy_model_uses_speech_endpoint(mode: str) -> None:
     client = _FakeClient()
-    stream = _make_tts("simba-english", client).stream()
-    stream.push_text("Hello world.")
-    stream.end_input()
-
-    frames = await _collect(stream)
-
-    # legacy models do not serve the SSE route -> per-sentence /v1/audio/speech
-    assert client.audio.stream_calls == []
-    assert len(client.audio.speech_calls) == 1
-    assert sum(f.frame.duration for f in frames) > 0.4
-
-
-async def test_stream_not_given_model_uses_streaming() -> None:
-    client = _FakeClient()
-    stream = sfy_tts.TTS(model=NOT_GIVEN, client=client).stream()  # type: ignore[arg-type]
-    stream.push_text("Hello world.")
-    stream.end_input()
-
-    await _collect(stream)
-
-    # when no model is configured the server defaults to simba-3.0 (streaming-native)
-    assert len(client.audio.stream_calls) == 1
-    assert "model" not in client.audio.stream_calls[0]
-
-
-async def test_stream_predicates_speech_error() -> None:
-    client = _FakeClient()
-    client.audio = _ErrorAudio()
-    stream = _make_tts("simba-3.2", client).stream()
-    stream.push_text("Hello world.")
-    stream.end_input()
-
-    with pytest.raises(APIStatusError, match="boom"):
-        await _collect(stream)
-
-
-async def test_synthesize_streams_with_timestamps() -> None:
-    client = _FakeClient()
-    frames = [f async for f in _make_tts("simba-3.2", client).synthesize("Hello world.")]
-
-    # synthesize() now streams on the streaming-native models instead of one batch request
-    assert len(client.audio.stream_calls) == 1
-    assert client.audio.stream_calls[0]["input"] == "Hello world."
-    assert client.audio.stream_calls[0]["output_format"] == "pcm_24000"
-    assert client.audio.speech_calls == []
-    assert client.audio.streams_read_to_end == 1
-
-    assert sum(f.frame.duration for f in frames) > 0.4
-    transcripts = [t for f in frames for t in f.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])]
-    assert [str(t) for t in transcripts] == ["Hello", "world"]
-    assert transcripts[1].start_time == pytest.approx(0.34)
-
-
-async def test_synthesize_uses_speech_endpoint_for_legacy_model() -> None:
-    client = _FakeClient()
-    frames = [f async for f in _make_tts("simba-english", client).synthesize("Hello world.")]
+    frames = await _run(_make_tts("simba-english", client), mode)
 
     assert client.audio.stream_calls == []
     assert len(client.audio.speech_calls) == 1
@@ -198,15 +180,22 @@ async def test_synthesize_uses_speech_endpoint_for_legacy_model() -> None:
     assert sum(f.frame.duration for f in frames) > 0.4
 
 
-async def test_synthesize_predicates_speech_error() -> None:
+async def test_not_given_model_streams_without_model_param() -> None:
+    client = _FakeClient()
+    await _run(sfy_tts.TTS(model=NOT_GIVEN, client=client), "stream")  # type: ignore[arg-type]
+
+    # the server defaults to simba-3.0, which streams
+    assert len(client.audio.stream_calls) == 1
+    assert "model" not in client.audio.stream_calls[0]
+
+
+@pytest.mark.parametrize("mode", ["stream", "synthesize"])
+async def test_speech_error_raises(mode: str) -> None:
     client = _FakeClient()
     client.audio = _ErrorAudio()
-    t = _make_tts("simba-3.2", client)
 
     with pytest.raises(APIStatusError, match="boom"):
-        async with t.synthesize("Hello world.", conn_options=_NO_RETRY) as stream:
-            async for _ in stream:
-                pass
+        await _run(_make_tts("simba-3.2", client), mode)
 
 
 def _mock_http(monkeypatch: pytest.MonkeyPatch, handler: object) -> None:
@@ -217,6 +206,32 @@ def _mock_http(monkeypatch: pytest.MonkeyPatch, handler: object) -> None:
         real_init(self, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", init)
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [(httpx.ConnectError, APIConnectionError), (httpx.ReadTimeout, APITimeoutError)],
+)
+async def test_owned_client_transport_error_is_retried(
+    monkeypatch: pytest.MonkeyPatch, exc: type[Exception], expected: type[Exception]
+) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise exc("failed", request=request)  # type: ignore[call-arg]
+
+    _mock_http(monkeypatch, handler)
+    t = sfy_tts.TTS(api_key="sk-test", base_url="https://api.example.test/")
+    try:
+        with pytest.raises(expected):
+            await _run(t, "synthesize", APIConnectOptions(max_retry=2, retry_interval=0))
+    finally:
+        await t.aclose()
+
+    assert attempts == 3
 
 
 async def test_prewarm_opens_connection_without_credentials(
@@ -264,10 +279,22 @@ def test_prewarm_is_noop_with_injected_client() -> None:
     assert t._prewarm_task is None
 
 
+async def test_list_voices_reads_every_page() -> None:
+    voices = await _make_tts("simba-3.2", _FakeClient()).list_voices()
+
+    assert [v.id for v in voices] == ["dominic_32", "sam"]
+    assert voices[0].models == ["simba-3.2", "simba-3.5"]
+    assert voices[0].gender == "male"
+    assert voices[1].gender == "neutral"
+
+
 def test_supports_streaming_marks() -> None:
     assert sfy_tts._supports_streaming_marks(NOT_GIVEN)
     assert sfy_tts._supports_streaming_marks("simba-3.0")
     assert sfy_tts._supports_streaming_marks("simba-3.2")
+    assert sfy_tts._supports_streaming_marks("simba-3.5")
+    # a model released after this plugin streams without a plugin update
+    assert sfy_tts._supports_streaming_marks("simba-9.9")
     assert not sfy_tts._supports_streaming_marks("simba-english")
     assert not sfy_tts._supports_streaming_marks("simba-multilingual")
 
@@ -287,9 +314,11 @@ def test_marks_to_timed_uses_start_end_time() -> None:
 
 def test_warn_voice_model_compat(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level("WARNING", "livekit.plugins.speechify"):
-        # curated simba-3.2 voices (id suffix "_32") warn on other models
-        sfy_tts._warn_voice_model_compat("dominic_32", "simba-english")
-        assert any("dominic_32" in r.message for r in caplog.records)
+        # curated simba-3.2 voices (id suffix "_32") warn on models older than simba-3.2
+        for model in ("simba-english", "simba-multilingual", "simba-3.0"):
+            caplog.clear()
+            sfy_tts._warn_voice_model_compat("dominic_32", model)
+            assert any("dominic_32" in r.message for r in caplog.records), model
 
         caplog.clear()
         # NOT_GIVEN defaults the server to simba-3.0 -> still a mismatch
@@ -297,8 +326,10 @@ def test_warn_voice_model_compat(caplog: pytest.LogCaptureFixture) -> None:
         assert any("dominic_32" in r.message for r in caplog.records)
 
         caplog.clear()
-        # the supported pairing is silent
+        # simba-3.2 and every later model, including unreleased ones, are silent
         sfy_tts._warn_voice_model_compat("dominic_32", "simba-3.2")
+        sfy_tts._warn_voice_model_compat("dominic_32", "simba-3.5")
+        sfy_tts._warn_voice_model_compat("dominic_32", "simba-9.9")
         assert not caplog.records
 
         caplog.clear()

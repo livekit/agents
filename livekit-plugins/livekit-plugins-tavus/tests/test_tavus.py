@@ -1,5 +1,6 @@
+import json
 import warnings
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -158,3 +159,25 @@ async def test_avatar_session_resolves_new_and_deprecated_args():
         renamed = AvatarSession(face_id="f9", pal_id="p9")
         assert renamed._face_id == "f9"
         assert renamed._pal_id == "p9"
+
+
+async def test_set_emotion_sends_set_emotion_app_message_to_the_avatar():
+    async with http_context.open():
+        avatar = AvatarSession(face_id="f1", avatar_participant_identity="tavus-1")
+    room = MagicMock()
+    room.local_participant.publish_data = AsyncMock()
+    # the base AvatarSession.start() keeps the room it was started in
+    avatar._room = room
+
+    await avatar.set_emotion("happiness")
+
+    publish = room.local_participant.publish_data
+    publish.assert_awaited_once()
+    assert json.loads(publish.call_args.args[0]) == {
+        "message_type": "conversation",
+        "event_type": "conversation.set_emotion",
+        "properties": {"emotion": "happiness"},
+    }
+    assert publish.call_args.kwargs["topic"] == "app_messages"
+    assert publish.call_args.kwargs["destination_identities"] == ["tavus-1"]
+    assert publish.call_args.kwargs["reliable"] is True

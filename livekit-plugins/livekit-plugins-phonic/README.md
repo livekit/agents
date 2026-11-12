@@ -127,6 +127,7 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `observability_integrations` | `list["braintrust"]` | Observability integrations to forward traces to |
 | `configuration_endpoint` | `ConfigurationEndpoint` \| `None` | Endpoint the agent calls to fetch per-conversation configuration |
 | `additional_params` | `dict[str, Any]` | Additional runtime parameters forwarded to Phonic |
+| `external_id` | `str` | Your own identifier for the conversation, stored on the Phonic conversation |
 | `configs_for_tools` | `list[PhonicToolConfig]` | Per-tool behavior overrides (see [Per-tool configuration](#per-tool-configuration)) |
 
 ### Per-tool configuration

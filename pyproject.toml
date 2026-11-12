@@ -1,6 +1,15 @@
 [tool.uv]
 constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
 default-groups = ["dev", "typing"]
+# Universal resolution only checks that a wheel exists for the Python version.
+# A release that publishes wheels for one platform and no sdist (bithuman 2.12.2
+# is win_amd64-only) would otherwise lock and then fail `uv sync` on the others.
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
@@ -9,6 +18,7 @@ livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
 livekit-plugins-avatario = { workspace = true }
 livekit-plugins-asyncai = { workspace = true }
+livekit-plugins-atmee = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
@@ -33,6 +43,7 @@ livekit-plugins-hamming = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-krisp = { workspace = true }
+livekit-plugins-kalpa = { workspace = true }
 livekit-plugins-keyframe = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
 livekit-plugins-lemonslice = { workspace = true }
@@ -43,6 +54,7 @@ livekit-plugins-microsoft-ai = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
 livekit-plugins-murf = { workspace = true }
+livekit-plugins-nabrah = { workspace = true }
 livekit-plugins-neuphonic = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-nvidia = { workspace = true }
@@ -51,6 +63,7 @@ livekit-plugins-palabra = { workspace = true }
 livekit-plugins-perplexity = { workspace = true }
 livekit-plugins-protoface = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
+livekit-plugins-reson8 = { workspace = true }
 livekit-plugins-respeecher = { workspace = true }
 livekit-plugins-rime = { workspace = true }
 livekit-plugins-runway = { workspace = true }
@@ -71,8 +84,10 @@ livekit-plugins-spitch = { workspace = true }
 livekit-plugins-synthesia = { workspace = true }
 livekit-plugins-tavus = { workspace = true }
 livekit-plugins-telnyx = { workspace = true }
+livekit-plugins-thunderphone = { workspace = true }
 livekit-plugins-trugen = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
+livekit-plugins-typesafe = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-vakyam = { workspace = true }
@@ -80,9 +95,10 @@ livekit-plugins-gradium = { workspace = true }
 livekit-plugins-xai = { workspace = true }
 livekit-plugins-phonic = { workspace = true }
 livekit-plugins-did = { workspace = true }
+livekit-plugins-zoom-ai = { workspace = true }
 
 [tool.uv.workspace]
-members = ["livekit-plugins/*", "livekit-agents", "examples/avatar", "examples/drive_thru", "examples/expressive_agent", "examples/frontdesk", "examples/healthcare", "examples/homepage", "examples/hotel_receptionist", "examples/inference", "examples/survey", "examples/voice_agents"]
+members = ["livekit-plugins/*", "livekit-agents", "examples/avatar", "examples/drive_thru", "examples/expressive_agent", "examples/frontdesk", "examples/healthcare", "examples/homepage/livekit-expert", "examples/hotel_receptionist", "examples/inference", "examples/survey", "examples/voice_agents"]
 exclude = [
     "livekit-plugins/community",
     "livekit-plugins/livekit-blockguard",
@@ -91,10 +107,11 @@ exclude = [
 
 [dependency-groups]
 dev = [
+    "livekit-plugins-rime[stt]",
     "python-dotenv>=1.0.1",
     "mypy",
     "scikit-learn",
-    "pytest>=9.0.3,<9.1",
+    "pytest>=9.1.1,<9.2",
     { include-group = "lint" },
     "pytest-asyncio>=0.25.3",
     "pytest-asyncio-concurrent==0.5.2",
@@ -102,9 +119,10 @@ dev = [
     "scipy>=1.13.1",
     "tiktoken>=0.9.0",
     "pytest-xdist>=3.8.0",
+    "jsonschema>=4.25.0",
     "playwright>=1.58.0",
 ]
-docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
+docs = ["pdoc3", "setuptools>=84.1.0", "beautifulsoup4", "markdownify"]
 lint = ["ruff"]
 typing = [
     # .pyi stubs, never used at runtime
@@ -116,6 +134,8 @@ typing = [
     "types-grpcio>=1.0.0.20260607",
     "types-grpcio-status>=1.0.0.20260408",
     "types-gunicorn>=26.0.0.20260518",
+    "types-jsonschema>=4.26.0.20261006",
+    "types-nanoid>=2.0.0.20260508",
     "types-openpyxl>=3.1.5.20260518",
     "types-pexpect>=4.9.0.20260518",
     "types-psutil>=7.2.2.20260518",
@@ -147,6 +167,7 @@ select = [
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
     "RUF006", # asyncio-dangling-task: the event loop only weakly references a bare task
+    "RUF018", # assignment-in-assert: python -O strips the assert, so the name is never bound
 ]
 ignore = ["E501"]
 

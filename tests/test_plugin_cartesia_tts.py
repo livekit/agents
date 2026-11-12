@@ -270,3 +270,108 @@ async def test_rest_request_sends_the_configured_api_version_header():
     )
 
     await tts.aclose()
+
+
+def test_timestamp_options_are_sent_only_on_the_websocket_when_enabled():
+    from livekit.plugins.cartesia import TTS
+    from livekit.plugins.cartesia.tts import _to_cartesia_options
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    streaming = _to_cartesia_options(tts._opts, streaming=True)
+    assert "add_phoneme_timestamps" not in streaming
+    assert "use_normalized_timestamps" not in streaming
+
+    tts = TTS(
+        api_key=SECRET_API_KEY,
+        add_phoneme_timestamps=True,
+        use_normalized_timestamps=True,
+    )
+    streaming = _to_cartesia_options(tts._opts, streaming=True)
+    assert streaming["add_phoneme_timestamps"] is True
+    assert streaming["use_normalized_timestamps"] is True
+
+    # the bytes endpoint does not accept timestamp options
+    rest = _to_cartesia_options(tts._opts, streaming=False)
+    assert "add_phoneme_timestamps" not in rest
+    assert "use_normalized_timestamps" not in rest
+
+
+@pytest.mark.asyncio
+async def test_update_options_sets_timestamp_options():
+    from livekit.plugins.cartesia import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    tts.update_options(add_phoneme_timestamps=True, use_normalized_timestamps=True)
+    assert tts._opts.add_phoneme_timestamps is True
+    assert tts._opts.use_normalized_timestamps is True
+
+    tts.update_options(add_phoneme_timestamps=False)
+    assert tts._opts.add_phoneme_timestamps is False
+    assert tts._opts.use_normalized_timestamps is True
+
+    await tts.aclose()
+
+
+class _PhonemeFakeWS(_FakeWS):
+    """Send a phoneme_timestamps message ahead of the current context's audio."""
+
+    async def receive(self, timeout: float | None = None) -> _FakeMsg:
+        if not self._built:
+            self._built = True
+            await self._end_pkt_sent.wait()
+            ctx = self._context_id or ""
+            self._queue.append(
+                _FakeMsg.text(
+                    {
+                        "type": "phoneme_timestamps",
+                        "context_id": ctx,
+                        "phoneme_timestamps": {
+                            "phonemes": ["h", "ə"],
+                            "start": [0.0, 0.05],
+                            "end": [0.05, 0.1],
+                        },
+                    }
+                )
+            )
+            self._queue.append(_FakeMsg.text({"context_id": ctx, "data": _b64(b"\x01" * 160)}))
+            self._queue.append(_FakeMsg.text({"context_id": ctx, "done": True}))
+        return self._queue.popleft()
+
+
+@pytest.mark.asyncio
+async def test_phoneme_timestamps_message_is_not_reported_as_unexpected(caplog):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.cartesia import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY, add_phoneme_timestamps=True)
+    tts._pool = _FakePool(_PhonemeFakeWS())  # type: ignore[assignment]
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5.0))
+    stream.push_text("hello")
+    stream.end_input()
+
+    frames = [ev async for ev in stream]
+
+    assert frames, "audio after the phoneme message must still be synthesized"
+    assert not [r for r in caplog.records if "unexpected message" in r.getMessage()]
+
+
+@pytest.mark.parametrize("speed", [1, 2, 1.25])
+def test_sonic_3_accepts_numeric_speed(speed):
+    from livekit.plugins.cartesia import TTS
+    from livekit.plugins.cartesia.tts import _to_cartesia_options
+
+    tts = TTS(api_key=SECRET_API_KEY, model="sonic-3", speed=speed)
+    options = _to_cartesia_options(tts._opts, streaming=True)
+    assert options["generation_config"]["speed"] == speed
+
+    tts.update_options(speed=1)
+    assert _to_cartesia_options(tts._opts, streaming=True)["generation_config"]["speed"] == 1
+
+
+@pytest.mark.parametrize("speed", ["fast", True])
+def test_sonic_3_rejects_non_numeric_speed(speed):
+    from livekit.plugins.cartesia import TTS
+
+    with pytest.raises(ValueError, match="speed must be a number for sonic-3"):
+        TTS(api_key=SECRET_API_KEY, model="sonic-3", speed=speed)

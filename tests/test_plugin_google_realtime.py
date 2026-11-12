@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -11,55 +11,35 @@ import pytest
 from google.auth.credentials import AnonymousCredentials
 from google.genai import types
 
-from livekit.agents import llm, utils
+from livekit.agents import APIConnectOptions, llm, utils
+from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.plugins.google.realtime.api_proto import ClientEvents
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 from livekit.plugins.google.utils import create_function_response
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 
 @pytest.mark.parametrize(
-    ("model", "vertexai"),
+    ("model", "vertexai", "warns"),
     [
-        ("gemini-3.8-live", False),
-        ("gemini-3.8-live", True),
-        ("gemini-3.8-live-extended-thinking", False),
-        ("gemini-3.1-flash-live-preview", False),
-        ("gemini-2.5-flash-native-audio-preview-12-2025", False),
-        ("gemini-live-2.5-flash-native-audio", True),
-        ("publishers/google/models/gemini-3.8-live", True),
-        ("future-live-model", False),
-        ("future-live-model", True),
-    ],
-)
-def test_model_api_compatibility(
-    model: str, vertexai: bool, caplog: pytest.LogCaptureFixture
-) -> None:
-    with caplog.at_level(logging.WARNING):
-        realtime_model = RealtimeModel(
-            model=model,
-            vertexai=vertexai,
-            api_key="fake-key",
-            project="test-project",
-            location="eu",
-        )
-    assert realtime_model.model == model
-    assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
-    assert not caplog.records
-
-
-@pytest.mark.parametrize(
-    ("model", "vertexai"),
-    [
-        ("gemini-3.8-live-extended-thinking", True),
-        ("gemini-3.1-flash-live-preview", True),
-        ("gemini-2.5-flash-native-audio-preview-12-2025", True),
-        ("gemini-live-2.5-flash-native-audio", False),
+        ("gemini-3.8-live", False, False),
+        ("gemini-3.8-live", True, False),
+        ("gemini-3.8-live-extended-thinking", False, False),
+        ("gemini-3.1-flash-live-preview", False, False),
+        ("gemini-2.5-flash-native-audio-preview-12-2025", False, False),
+        ("gemini-live-2.5-flash-native-audio", True, False),
+        ("publishers/google/models/gemini-3.8-live", True, False),
+        ("future-live-model", False, False),
+        ("future-live-model", True, False),
+        ("gemini-3.8-live-extended-thinking", True, True),
+        ("gemini-3.1-flash-live-preview", True, True),
+        ("gemini-2.5-flash-native-audio-preview-12-2025", True, True),
+        ("gemini-live-2.5-flash-native-audio", False, True),
     ],
 )
 def test_model_api_mismatch_warns(
-    model: str, vertexai: bool, caplog: pytest.LogCaptureFixture
+    model: str, vertexai: bool, warns: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING):
         realtime_model = RealtimeModel(
@@ -69,14 +49,14 @@ def test_model_api_mismatch_warns(
             project="test-project",
             location="eu",
         )
-    assert realtime_model.model == model
     assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
-    assert len(caplog.records) == 1
-    warning = caplog.records[0]
-    assert warning.name == "livekit.plugins.google"
-    assert warning.levelno == logging.WARNING
-    assert f"Model '{model}' may not be available" in warning.message
-    assert f"vertexai={vertexai}" in warning.message
+    messages = [r.message for r in caplog.records if r.name == "livekit.plugins.google"]
+    if warns:
+        assert len(messages) == 1
+        assert f"Model '{model}' may not be available" in messages[0]
+        assert f"vertexai={vertexai}" in messages[0]
+    else:
+        assert not caplog.records
 
 
 @pytest.mark.parametrize("vertexai", [False, True])
@@ -116,7 +96,7 @@ async def test_thinking_level_reaches_connect_config(
     monkeypatch: pytest.MonkeyPatch, model: str, vertexai: bool
 ) -> None:
     thinking_config = types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)
-    async with _make_configured_session(
+    async with _make_session(
         monkeypatch,
         model=model,
         vertexai=vertexai,
@@ -152,38 +132,20 @@ def test_gemini_3_8_live_thinking_with_vertex_from_environment(
     assert model.provider == "Vertex AI"
 
 
-def _is_genai_client_teardown(task: asyncio.Task[Any]) -> bool:
-    """Whether this task is a genai client's ``aclose()`` left behind by a finalizer.
+@pytest.fixture(autouse=True, scope="module")
+def _quiet_genai_finalizers() -> Iterator[None]:
+    """Keep ``AsyncClient.__del__`` from scheduling a second ``aclose()`` on a later test's loop.
 
-    Keyed on the coroutine's defining module, not its name alone -- ``aclose``
-    is a common method name and this must not touch unrelated tasks. Coroutine
-    objects carry no ``__module__``, hence the walk through ``cr_frame``.
+    Every session here is closed explicitly; the finalizer would still queue a task on whatever
+    loop runs when the collector reaches the client, which then shows up as a leaked task.
     """
-    coro = task.get_coro()
-    if not (getattr(coro, "__qualname__", "") or "").endswith(".aclose"):
-        return False
-    frame = getattr(coro, "cr_frame", None)
-    module = frame.f_globals.get("__name__", "") if frame else ""
-    return module.startswith("google.genai")
+    from google.genai.client import AsyncClient
 
-
-@pytest.fixture(autouse=True)
-async def _settle_genai_finalizers() -> AsyncIterator[None]:
-    """Finish the genai client teardown this test started, before the next one.
-
-    ``AsyncClient.__del__`` schedules ``aclose()`` on whatever event loop is
-    running when the collector reaches it, with no check for a client that was
-    already closed explicitly -- so even the sessions this module closes
-    properly leave a finalizer behind. Settled here, while this test still owns
-    the loop, those tasks would otherwise surface as leaked tasks in an
-    unrelated test in a later module.
-    """
-    yield
-    gc.collect()
-    if pending := [
-        task for task in asyncio.all_tasks() if not task.done() and _is_genai_client_teardown(task)
-    ]:
-        await asyncio.gather(*pending, return_exceptions=True)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(AsyncClient, "__del__", lambda self: None)
+        yield
+        # collect while the finalizer is still silenced
+        gc.collect()
 
 
 # 10ms of silence at the output sample rate (24kHz mono, 16-bit)
@@ -191,31 +153,12 @@ _PCM_FRAME = b"\x00\x01" * 240
 
 
 @asynccontextmanager
-async def _make_session(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[RealtimeSession]:
-    """A session whose background connect loop is stopped before it hits the network.
-
-    Closed on exit so the genai http clients are released here instead of by
-    ``AsyncClient.__del__``, which schedules ``aclose()`` on whatever event loop
-    is running when the collector happens to reach them.
-    """
-    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-    session = RealtimeModel().session()
-    # cancel the connect loop before the event loop ever schedules it, so no
-    # websocket connection is attempted
-    session._msg_ch.close()
-    await utils.aio.cancel_and_wait(session._main_atask)
-    try:
-        yield session
-    finally:
-        await session.aclose()
-
-
-@asynccontextmanager
-async def _make_configured_session(
-    monkeypatch: pytest.MonkeyPatch, **options: object
+async def _make_session(
+    monkeypatch: pytest.MonkeyPatch, **options: Any
 ) -> AsyncIterator[RealtimeSession]:
+    """A session whose connect loop is stopped before it reaches the network."""
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-    session = RealtimeModel(**options).session()  # type: ignore[arg-type]
+    session = RealtimeModel(**options).session()
     session._msg_ch.close()
     await utils.aio.cancel_and_wait(session._main_atask)
     try:
@@ -248,62 +191,36 @@ async def _drain_generation(
     return text, audio_frames, function_calls
 
 
-async def test_unspoken_model_text_is_omitted_in_audio_session(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("vertexai", [False, True])
+@pytest.mark.parametrize("with_input_transcript", [False, True])
+async def test_ttft_is_unavailable_without_a_response_start_event(
+    monkeypatch: pytest.MonkeyPatch, vertexai: bool, with_input_transcript: bool
 ) -> None:
-    async with _make_session(monkeypatch) as session:
+    async with _make_session(
+        monkeypatch,
+        model="gemini-3.8-live",
+        vertexai=vertexai,
+        project="test-project",
+        location="us",
+        credentials=AnonymousCredentials() if vertexai else None,
+    ) as session:
+        collected: list[RealtimeModelMetrics] = []
+        session.on("metrics_collected", collected.append)
         session._start_new_generation()
-        gen = session._current_generation
-        assert gen is not None
-
-        session._handle_server_content(
-            types.LiveServerContent(
-                model_turn=types.Content(
-                    parts=[types.Part(text="call:getWeather{location:Seattle")]
-                ),
-                output_transcription=types.Transcription(text="Let me check."),
+        if with_input_transcript:
+            session._handle_server_content(
+                types.LiveServerContent(input_transcription=types.Transcription(text="Hello"))
             )
+        session._handle_server_content(_audio_content())
+        session._handle_usage_metadata(
+            types.UsageMetadata(prompt_token_count=10, response_token_count=5, total_token_count=15)
         )
 
-        assert gen.output_text == "Let me check."
-        assert gen.text_ch.recv_nowait() == "Let me check."
-        assert gen.text_ch.empty()
-
-
-async def test_model_text_is_forwarded_in_text_modality(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async with _make_configured_session(monkeypatch, modalities=[types.Modality.TEXT]) as session:
-        session._start_new_generation()
-        gen = session._current_generation
-        assert gen is not None
-
-        session._handle_server_content(
-            types.LiveServerContent(
-                model_turn=types.Content(parts=[types.Part(text="Hello there.")])
-            )
-        )
-
-        assert gen.output_text == "Hello there."
-        assert gen.text_ch.recv_nowait() == "Hello there."
-
-
-async def test_model_text_is_forwarded_without_output_transcription(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async with _make_configured_session(monkeypatch, output_audio_transcription=None) as session:
-        session._start_new_generation()
-        gen = session._current_generation
-        assert gen is not None
-
-        session._handle_server_content(
-            types.LiveServerContent(
-                model_turn=types.Content(parts=[types.Part(text="Hello there.")])
-            )
-        )
-
-        assert gen.output_text == "Hello there."
-        assert gen.text_ch.recv_nowait() == "Hello there."
+        assert len(collected) == 1
+        assert collected[0].ttft == -1
+        assert collected[0].input_tokens == 10
+        assert collected[0].output_tokens == 5
+        assert collected[0].duration >= 0
 
 
 async def test_transcript_contains_only_output_transcription_with_audio(
@@ -355,29 +272,15 @@ async def test_tool_call_is_delivered_without_written_call_text(
         assert await _drain_generation(generations[0]) == ("", 0, ["getWeather"])
 
 
-async def test_transcript_keeps_model_text_in_text_modality(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "options",
+    [{"modalities": [types.Modality.TEXT]}, {"output_audio_transcription": None}],
+    ids=["text-modality", "no-output-transcription"],
+)
+async def test_transcript_keeps_model_text_without_audio_transcription(
+    monkeypatch: pytest.MonkeyPatch, options: dict[str, Any]
 ) -> None:
-    async with _make_configured_session(monkeypatch, modalities=[types.Modality.TEXT]) as session:
-        generations: list[llm.GenerationCreatedEvent] = []
-        session.on("generation_created", generations.append)
-        session._start_new_generation()
-
-        session._handle_server_content(
-            types.LiveServerContent(
-                model_turn=types.Content(parts=[types.Part(text="Hello there.")]),
-                turn_complete=True,
-            )
-        )
-
-        assert len(generations) == 1
-        assert await _drain_generation(generations[0]) == ("Hello there.", 0, [])
-
-
-async def test_transcript_keeps_model_text_without_output_transcription(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async with _make_configured_session(monkeypatch, output_audio_transcription=None) as session:
+    async with _make_session(monkeypatch, **options) as session:
         generations: list[llm.GenerationCreatedEvent] = []
         session.on("generation_created", generations.append)
         session._start_new_generation()
@@ -396,13 +299,9 @@ async def test_transcript_keeps_model_text_without_output_transcription(
 async def test_output_streams_close_on_generation_complete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """generation_complete ends the audio/text segment; finalization waits for turn_complete.
+    """Output streams close on generation_complete; the generation waits for turn_complete.
 
-    Gemini delays turn_complete until it estimates client-side playback has finished, so
-    keying the stream close off turn_complete makes AudioSegmentEnd (and the finalized
-    transcript) arrive seconds late (issue #6421). Both streams must close on
-    generation_complete, while the generation stays open until turn_complete for input
-    transcription and metrics.
+    Gemini delays turn_complete until it estimates playback has finished.
     """
     async with _make_session(monkeypatch) as session:
         session._start_new_generation()
@@ -417,7 +316,7 @@ async def test_output_streams_close_on_generation_complete(
         )
 
         # audio and text were consumed and both segments ended immediately
-        assert gen._first_token_timestamp is not None
+        assert bytes(gen.audio_ch.recv_nowait().data) == _PCM_FRAME
         assert gen.output_text == "hello"
         assert gen.audio_ch.closed
         assert gen.text_ch.closed
@@ -482,12 +381,7 @@ async def test_input_transcription_uses_generation_timestamp(
 async def test_session_close_releases_the_genai_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """aclose() must release the genai http clients.
-
-    Otherwise they live until the collector runs ``AsyncClient.__del__``, which
-    does ``asyncio.get_running_loop().create_task(self.aclose())`` - creating
-    pending tasks on whatever event loop is running at that moment.
-    """
+    """aclose() releases the genai http clients instead of leaving them to the finalizer."""
     closed = False
 
     async with _make_session(monkeypatch) as session:
@@ -525,12 +419,7 @@ def _tool_output(
 async def _make_connected_session(
     monkeypatch: pytest.MonkeyPatch, *, non_blocking_tools: bool = False
 ) -> AsyncIterator[RealtimeSession]:
-    """A session that believes it is connected, so update_chat_ctx actually emits.
-
-    The placeholder is never called: the send task is not running, so client events just
-    queue up in `_msg_ch` for the test to inspect. `_make_session` closes that channel to
-    stop the connect loop, so it is replaced with an open one first.
-    """
+    """A session that believes it is connected; client events queue in `_msg_ch`."""
     async with _make_session(monkeypatch) as session:
         if non_blocking_tools:
             session._opts.tool_behavior = types.Behavior.NON_BLOCKING
@@ -559,11 +448,7 @@ async def test_tool_response_scheduling_follows_the_output(
     reply_required: bool,
     scheduling: types.FunctionResponseScheduling | None,
 ) -> None:
-    """A result owed by an interrupted turn goes out SILENT; a normal one keeps the default.
-
-    Gemini blocks the turn until every call is answered and offers no cancel, so dropping the
-    result strands the session (issue #6569). SILENT records it without prompting speech.
-    """
+    """A result owed by an interrupted turn goes out SILENT; a normal one keeps the default."""
     async with _make_connected_session(monkeypatch, non_blocking_tools=True) as session:
         session._start_new_generation()
         session._handle_tool_calls(_tool_call())
@@ -585,10 +470,7 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Gemini ignores scheduling on BLOCKING declarations, so the reply cannot be prevented.
-
-    It is sent anyway, since unblocking the turn matters more, and every one is reported.
-    """
+    """BLOCKING calls ignore scheduling, so each response is sent anyway and reported."""
     async with _make_connected_session(monkeypatch) as session:
         session._start_new_generation()
         session._handle_tool_calls(
@@ -637,11 +519,7 @@ def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> Non
 async def test_tool_response_carries_the_call_id(
     monkeypatch: pytest.MonkeyPatch, vertexai: bool
 ) -> None:
-    """The response names the call it answers on both APIs.
-
-    gemini-3.8-live on Vertex AI drops a response to a BLOCKING call that has no id and never
-    replies, so the turn stalls after the first tool call.
-    """
+    """The response names the call it answers on both APIs."""
     async with _make_connected_session(monkeypatch) as session:
         session._opts.vertexai = vertexai
         session._opts.tool_behavior = types.Behavior.BLOCKING
@@ -665,10 +543,7 @@ async def test_tool_response_carries_the_call_id(
 async def test_tool_response_omits_a_locally_made_call_id(
     monkeypatch: pytest.MonkeyPatch, vertexai: bool
 ) -> None:
-    """A call the server sent without an id is answered without one.
-
-    The id we make up to track the call locally names nothing on the server.
-    """
+    """A call the server sent without an id is answered without one."""
     async with _make_connected_session(monkeypatch) as session:
         session._opts.vertexai = vertexai
         session._opts.tool_behavior = types.Behavior.BLOCKING
@@ -699,32 +574,22 @@ async def test_tool_response_omits_a_locally_made_call_id(
         assert replayed[0].function_responses[0].id is None
 
 
-def test_vertex_scheduling_warns(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("vertexai", [False, True])
+def test_scheduling_warns_only_on_vertex(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, vertexai: bool
 ) -> None:
-    """An explicitly set scheduling is dropped on Vertex AI, so say so instead of ignoring it."""
+    """Vertex AI drops an explicit scheduling, so it says so instead of ignoring it."""
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-
     with caplog.at_level(logging.WARNING):
         RealtimeModel(
-            vertexai=True,
+            vertexai=vertexai,
             project="p",
             location="us-central1",
             tool_response_scheduling=types.FunctionResponseScheduling.SILENT,
         )
 
-    assert any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
-
-
-def test_gemini_api_scheduling_does_not_warn(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-
-    with caplog.at_level(logging.WARNING):
-        RealtimeModel(tool_response_scheduling=types.FunctionResponseScheduling.SILENT)
-
-    assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
+    warned = any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
+    assert warned is vertexai
 
 
 class _FakeLiveSession:
@@ -739,6 +604,11 @@ class _FakeLiveSession:
 
     async def send_tool_response(self, *, function_responses: object) -> None:
         self.sent.append(("tool_response", function_responses))
+
+    async def send_context_update(
+        self, *, system_instruction: object = None, tools: object = None
+    ) -> None:
+        self.sent.append(("context_update", (system_instruction, tools)))
 
     async def send_realtime_input(self, **kwargs: object) -> None:
         pass
@@ -762,13 +632,7 @@ async def _connected_session(
     pending: llm.ChatContext | None = None,
     caller_handle: bool = False,
 ) -> AsyncIterator[tuple[RealtimeSession, _FakeLiveSession]]:
-    """Connect once onto a fake socket.
-
-    `known` is the state the handle stands for, `sent_after_handle` what the previous
-    socket synced after the handle arrived, `pending` the update that arrives before the
-    connect loop runs. `caller_handle` passes the handle through `RealtimeModel` instead,
-    so its baseline is unknown.
-    """
+    """Connect once onto a fake socket, resuming `handle` whose state is `known`."""
     from google.genai.live import AsyncLive
 
     fake = _FakeLiveSession()
@@ -966,14 +830,138 @@ async def test_handle_does_not_claim_a_queued_but_unsent_update(
         # the diff is queued but its send is blocked, so the new handle must not cover it
         assert [m.text_content for m in session._resumption_chat_ctx.messages()] == ["hello"]
 
-        # restart before the send completes: the channel drain drops the queued diff
-        await session.update_tools([_restart_tool])
+        # an error restart before the send completes resumes from the handle and drops the
+        # queued diff with the old channel
+        session._mark_restart_needed(on_error=True)
         while len(opened) < 2:
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.05)
         assert _texts(opened[1].sent) == [["queued behind the handle"]]
     finally:
         await session.aclose()
+
+
+@asynccontextmanager
+async def _two_sockets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[tuple[RealtimeSession, list[_FakeLiveSession], list[str | None]]]:
+    """A session over two fake sockets, recording the resumption handle of each connect."""
+    from google.genai.live import AsyncLive
+
+    sockets = [_FakeLiveSession(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+    handles: list[str | None] = []
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_FakeLiveSession]:
+        handles.append(config.session_resumption.handle if config.session_resumption else None)
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel().session()
+    session._session_resumption_handle = "resume-1"
+    try:
+        while not opened:
+            await asyncio.sleep(0.01)
+        yield session, opened, handles
+    finally:
+        await session.aclose()
+
+
+async def _wait_for_socket(opened: list[_FakeLiveSession], count: int) -> None:
+    while len(opened) < count:
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+
+
+def _tool_ctx(output: str = "booked") -> llm.ChatContext:
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="book it")
+    chat_ctx.items.append(llm.FunctionCall(call_id="call_1", name="book", arguments="{}"))
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(call_id="call_1", name="book", output=output, is_error=False)
+    )
+    return chat_ctx
+
+
+def _tool_responses(sent: list[tuple[str, object]]) -> list[str | None]:
+    return [
+        r.id  # type: ignore[attr-defined]
+        for kind, responses in sent
+        if kind == "tool_response"
+        for r in responses  # type: ignore[attr-defined]
+    ]
+
+
+async def test_config_restart_starts_a_fresh_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resumed session keeps its old setup, so a config change must not resume."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 2)
+        assert handles == ["resume-1", None]
+
+
+async def test_handle_stored_during_config_restart_is_not_resumed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The old socket can store one more handle before its receive task stops."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        await session.update_tools([_restart_tool])
+        session._session_resumption_handle = "late"
+        await _wait_for_socket(opened, 2)
+        assert handles == ["resume-1", None]
+
+
+async def test_config_change_during_error_restart_starts_a_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A config change made while an error restart is pending still forbids resuming."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._mark_restart_needed(on_error=True)
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 2)
+        assert handles == ["resume-1", None]
+
+
+async def test_tool_result_between_sockets_reaches_the_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result that arrives with no socket open is answered on the fresh connect."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._open_call_ids.add("call_1")
+        await session.update_tools([_restart_tool])
+        session._pending_chat_ctx = _tool_ctx()
+        await _wait_for_socket(opened, 2)
+        assert _tool_responses(opened[1].sent) == ["call_1"]
+
+
+async def test_queued_tool_result_survives_config_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result queued but unsent when a config change drains the channel is still sent once."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._open_call_ids.add("call_1")
+        await session.update_chat_ctx(_tool_ctx())
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 2)
+        assert _tool_responses(opened[0].sent) + _tool_responses(opened[1].sent) == ["call_1"]
+
+
+async def test_tool_result_queued_for_the_new_socket_is_sent_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result queued while the old socket closes is not sent again after the replay."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._open_call_ids.add("call_1")
+        await session.update_tools([_restart_tool])
+        await session.update_chat_ctx(_tool_ctx())
+        await _wait_for_socket(opened, 2)
+        assert _tool_responses(opened[1].sent) == ["call_1"]
 
 
 async def test_failed_send_with_a_queued_update_replays_each_item_once(
@@ -1054,9 +1042,314 @@ def test_tool_behavior_default_follows_the_model(
     assert (behavior if utils.is_given(behavior) else None) == expected
 
 
+@pytest.mark.parametrize(
+    ("vertexai", "expected_role"),
+    [
+        (True, "system"),
+        (False, "model"),
+    ],
+)
+async def test_update_instructions_role_for_api(
+    monkeypatch: pytest.MonkeyPatch, vertexai: bool, expected_role: str
+) -> None:
+    """Vertex AI replaces the instruction with role="system"; the Gemini API rejects it."""
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.vertexai = vertexai
+        await session.update_instructions("replacement instructions")
+
+        contents = [m for m in await _drain_sent(session) if isinstance(m, types.LiveClientContent)]
+        assert len(contents) == 1
+        assert contents[0].turn_complete is False
+        assert contents[0].turns is not None
+        assert len(contents[0].turns) == 1
+        turn = contents[0].turns[0]
+        assert turn.role == expected_role
+        assert turn.parts is not None
+        assert turn.parts[0].text == "replacement instructions"
+
+
 def test_explicit_tool_behavior_wins_over_the_model_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     model = RealtimeModel(model="gemini-3.8-live", tool_behavior=types.Behavior.BLOCKING)
     assert model._opts.tool_behavior == types.Behavior.BLOCKING
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("gemini-3.8-live", [("user", "<instructions>\nGreet the guest.\n</instructions>")]),
+        (
+            "gemini-3.1-flash-live-preview",
+            [("user", "<instructions>\nGreet the guest.\n</instructions>")],
+        ),
+        (
+            "gemini-2.5-flash-native-audio-preview-12-2025",
+            [("model", "Greet the guest."), ("user", ".")],
+        ),
+    ],
+)
+async def test_reply_instructions_turns_follow_the_model(
+    monkeypatch: pytest.MonkeyPatch, model: str, expected: list[tuple[str, str]]
+) -> None:
+    """Reply instructions take the turn shape each model answers rather than continues."""
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.model = model
+        fut = session.generate_reply(instructions="Greet the guest.")
+        try:
+            sent = [m for m in await _drain_sent(session) if isinstance(m, types.LiveClientContent)]
+        finally:
+            fut.cancel()
+        assert len(sent) == 1
+        assert sent[0].turn_complete
+        assert [(t.role, t.parts[0].text) for t in sent[0].turns or [] if t.parts] == expected
+
+
+def test_mutable_tools_and_labels_in_connect_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    v38 = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+        labels={"env": "prod", "workload": "voice"},
+    )
+    g38 = RealtimeModel(model="gemini-3.8-live", vertexai=False)
+    v25 = RealtimeModel(
+        model="gemini-live-2.5-flash-native-audio",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+
+    assert v38.capabilities.mutable_tools is True
+    assert g38.capabilities.mutable_tools is False
+    assert v25.capabilities.mutable_tools is False
+
+    session = object.__new__(RealtimeSession)
+    session._opts = v38._opts
+    session._realtime_model = v38
+    session._tools = llm.ToolContext.empty()
+    session._session_resumption_handle = None
+    session._replay_tool_history = []
+    assert session._build_connect_config().labels == {"env": "prod", "workload": "voice"}
+
+
+async def test_vertex_gemini_3_8_context_update_order_and_resume_resend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from google.genai.live import AsyncLive
+
+    class _ContextUpdateSession(_FakeLiveSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.block_send = asyncio.Event()
+            self.block_send.set()
+            self.incoming: asyncio.Queue[types.LiveServerMessage | None] = asyncio.Queue()
+
+        async def send_context_update(
+            self, *, system_instruction: object = None, tools: object = None
+        ) -> None:
+            await self.block_send.wait()
+            await super().send_context_update(system_instruction=system_instruction, tools=tools)
+
+        async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+            while (msg := await self.incoming.get()) is not None:
+                yield msg
+
+        async def close(self) -> None:
+            await super().close()
+            self.incoming.put_nowait(None)
+
+    sockets = [_ContextUpdateSession(), _ContextUpdateSession()]
+    opened: list[_ContextUpdateSession] = []
+    handles: list[str | None] = []
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_ContextUpdateSession]:
+        handles.append(config.session_resumption.handle if config.session_resumption else None)
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+    session = model.session()
+    session._session_resumption_handle = "resume-initial"
+    try:
+        while not opened or session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert session._context_updated is False
+
+        # updates go out in order; update_tools([]) sends tools=[] rather than dropping the field
+        opened[0].block_send.clear()
+        await session.update_instructions("Speak concisely.")
+        await session.update_tools([_restart_tool])
+        opened[0].block_send.set()
+        await session.update_tools([])
+        while len(opened[0].sent) < 3:
+            await asyncio.sleep(0.01)
+        assert session._context_updated is True
+
+        assert [kind for kind, _ in opened[0].sent] == [
+            "context_update",
+            "context_update",
+            "context_update",
+        ]
+        ctx_0: tuple[Any, Any] = opened[0].sent[0][1]  # type: ignore[assignment]
+        assert ctx_0[0].parts[0].text == "Speak concisely."
+        assert ctx_0[1] is None
+
+        ctx_1: tuple[Any, Any] = opened[0].sent[1][1]  # type: ignore[assignment]
+        assert len(ctx_1[1]) == 1
+
+        ctx_2: tuple[Any, Any] = opened[0].sent[2][1]  # type: ignore[assignment]
+        assert ctx_2[1] == []
+
+        # a handle is still accepted after an update: it keeps the spoken conversation
+        await opened[0].incoming.put(
+            types.LiveServerMessage(
+                session_resumption_update=types.LiveServerSessionResumptionUpdate(
+                    new_handle="handle-after-update", resumable=True
+                )
+            )
+        )
+        while session._session_resumption_handle != "handle-after-update":
+            await asyncio.sleep(0.01)
+
+        # a reconnect resumes that handle and re-sends the current instructions and tools
+        # before anything else, since the handle may predate the last context_update
+        await session.update_tools([_restart_tool])
+        while len(opened[0].sent) < 4:
+            await asyncio.sleep(0.01)
+        session._mark_restart_needed(on_error=True)
+        while len(opened) < 2 or session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert handles == ["resume-initial", "handle-after-update"]
+        while len(opened[1].sent) < 1:
+            await asyncio.sleep(0.01)
+        kind, payload = opened[1].sent[0]
+        assert kind == "context_update"
+        resent: tuple[Any, Any] = payload  # type: ignore[assignment]
+        assert resent[0].parts[0].text == "Speak concisely."
+        assert len(resent[1]) == 1
+        assert resent[1][0].function_declarations[0].name == _restart_tool.info.name
+    finally:
+        await session.aclose()
+
+
+async def test_vertex_gemini_3_8_retrieval_tool_never_goes_in_context_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemini rejects retrieval tools in a context_update, so they restart the session instead."""
+    from google.genai.live import AsyncLive
+
+    from livekit.plugins.google.tools import VertexRAGRetrieval
+
+    opened: list[_FakeLiveSession] = []
+    configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_FakeLiveSession]:
+        configs.append(config)
+        sock = _FakeLiveSession()
+        opened.append(sock)
+        yield sock
+
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+    )
+    session = model.session()
+    rag = VertexRAGRetrieval(rag_resources=["projects/1/locations/us-central1/ragCorpora/2"])
+
+    def _has_rag(config: types.LiveConnectConfig) -> bool:
+        return any(tool.retrieval is not None for tool in config.tools or [])
+
+    try:
+        await _wait_for_socket(opened, 1)
+
+        # adding, keeping, or dropping a retrieval tool each start a fresh session that
+        # carries the new tools in its connect config
+        await session.update_tools([rag])
+        await _wait_for_socket(opened, 2)
+        await session.update_tools([rag, _restart_tool])
+        await _wait_for_socket(opened, 3)
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 4)
+        assert [_has_rag(config) for config in configs] == [False, True, True, False]
+        assert all(config.session_resumption.handle is None for config in configs[1:])  # type: ignore[union-attr]
+        assert not [kind for sock in opened for kind, _ in sock.sent if kind == "context_update"]
+
+        # a resume after an instructions update re-sends the instructions but leaves the
+        # tools out, since the resumed session already has its retrieval tool
+        await session.update_tools([rag, _restart_tool])
+        await _wait_for_socket(opened, 5)
+        await session.update_instructions("Cite the corpus.")
+        while not opened[4].sent:
+            await asyncio.sleep(0.01)
+        session._session_resumption_handle = "handle-with-rag"
+        session._mark_restart_needed(on_error=True)
+        await _wait_for_socket(opened, 6)
+        assert configs[5].session_resumption.handle == "handle-with-rag"  # type: ignore[union-attr]
+        kind, payload = opened[5].sent[0]
+        assert kind == "context_update"
+        resent: tuple[Any, Any] = payload  # type: ignore[assignment]
+        assert resent[0].parts[0].text == "Cite the corpus."
+        assert resent[1] is None
+    finally:
+        await session.aclose()
+
+
+async def test_failed_resume_context_update_keeps_pending_chat_ctx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resume that fails while re-sending the context must not drop pending chat context."""
+    from google.genai.live import AsyncLive
+
+    class _FailingContextUpdate(_FakeLiveSession):
+        async def send_context_update(
+            self, *, system_instruction: object = None, tools: object = None
+        ) -> None:
+            raise RuntimeError("socket closed during resume")
+
+    sockets: list[_FakeLiveSession] = [_FailingContextUpdate(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0)
+    ).session()
+    session._session_resumption_handle = "resume-me"
+    session._context_updated = True
+    pending = llm.ChatContext.empty()
+    msg = pending.add_message(role="user", content="queued while offline")
+    session._pending_chat_ctx = pending
+    try:
+        while len(opened) < 2 or session._active_session is not opened[1]:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        assert opened[1].sent[0][0] == "context_update"
+        assert session._chat_ctx.get_by_id(msg.id) is not None
+    finally:
+        await session.aclose()

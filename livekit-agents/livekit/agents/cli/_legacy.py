@@ -1888,6 +1888,16 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         if participant_identity is None:
             participant_identity = shortuuid("agent-")
 
+        kwargs: dict = {}
+        if url:
+            kwargs["ws_url"] = url
+        if api_key:
+            kwargs["api_key"] = api_key
+        if api_secret:
+            kwargs["api_secret"] = api_secret
+        if kwargs:
+            server.update_options(**kwargs)
+
         c = AgentsConsole.get_instance()
         _configure_logger(c, log_level.value)
 

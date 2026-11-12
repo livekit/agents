@@ -18,12 +18,13 @@ See https://docs.livekit.io/agents/integrations/avatar/tavus/ for more informati
 """
 
 from .api import TavusException
-from .avatar import AvatarSession
+from .avatar import AvatarSession, Emotion
 from .version import __version__
 
 __all__ = [
     "TavusException",
     "AvatarSession",
+    "Emotion",
     "__version__",
 ]
 

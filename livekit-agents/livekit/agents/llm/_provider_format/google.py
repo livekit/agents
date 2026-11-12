@@ -25,8 +25,11 @@ def to_chat_ctx(
     *,
     inject_dummy_user_message: bool = True,
     thought_signatures: dict[str, bytes] | None = None,
+    merge_dynamic_instructions: bool = True,
 ) -> tuple[list[dict], GoogleFormatData]:
-    chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+    chat_ctx = convert_mid_conversation_instructions(
+        chat_ctx, merge_dynamic_instructions=merge_dynamic_instructions
+    )
 
     turns: list[dict] = []
     system_messages: list[str] = []
@@ -57,7 +60,7 @@ def to_chat_ctx(
             for content in msg.content:
                 if isinstance(content, llm.ImageContent):
                     parts.append(_to_image_part(content))
-                elif isinstance(content, llm.AudioContent):
+                elif isinstance(content, (llm.AudioContent, llm.CacheBreakpoint)):
                     pass
                 elif content and isinstance(content, dict):
                     parts.append({"text": json.dumps(content)})

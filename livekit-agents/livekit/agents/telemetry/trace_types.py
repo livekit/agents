@@ -241,6 +241,8 @@ ATTR_GEN_AI_RETRIEVAL_DOCUMENTS = "gen_ai.retrieval.documents"
 ATTR_GEN_AI_RETRIEVAL_QUERY_TEXT = "gen_ai.retrieval.query.text"
 ATTR_GEN_AI_MEMORY_QUERY_TEXT = "gen_ai.memory.query.text"
 ATTR_GEN_AI_MEMORY_RECORDS = "gen_ai.memory.records"
+ATTR_GEN_AI_EVALUATION_NAME = "gen_ai.evaluation.name"
+ATTR_GEN_AI_EVALUATION_SCORE_LABEL = "gen_ai.evaluation.score.label"
 ATTR_GEN_AI_EVALUATION_EXPLANATION = "gen_ai.evaluation.explanation"
 ATTR_GEN_AI_PROMPT_VARIABLE = "gen_ai.prompt.variable"  # template: gen_ai.prompt.variable.<key>
 ATTR_GEN_AI_WORKFLOW_NAME = "gen_ai.workflow.name"
@@ -443,10 +445,12 @@ ATTR_PLAYOUT_POSITION = "lk.playout.position"
 # Agent handoff (update_agent span)
 ATTR_PREVIOUS_AGENT_LABEL = "lk.previous_agent_label"
 
-# Fallback adapters (the attempt span)
+# Fallback adapters (the adapter's request span)
 ATTR_FALLBACK_LABEL = "lk.fallback.label"
 """Label of the provider that served the request."""
 ATTR_FALLBACK_INDEX = "lk.fallback.index"
+ATTR_FALLBACK_RECOVERY = "lk.fallback.recovery"
+"""True on a background check that a failed provider is back; its response is discarded."""
 
 # Adaptive Interruption attributes
 ATTR_IS_INTERRUPTION = "lk.is_interruption"

@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from livekit.protocol import agent
+
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
@@ -48,6 +50,7 @@ class ThreadJobExecutor:
         high_ping_threshold: float,
         http_proxy: str | None,
         loop: asyncio.AbstractEventLoop,
+        on_join_timing: Callable[[agent.JobJoinTiming], None] | None = None,
     ) -> None:
         self._loop = loop
         self._opts = _ProcOpts(
@@ -66,6 +69,7 @@ class ThreadJobExecutor:
         self._user_args: Any | None = None
         self._job_status: JobStatus | None = None
         self._running_job: RunningJobInfo | None = None
+        self._on_join_timing = on_join_timing
 
         self._main_atask: asyncio.Task[None] | None = None
         self._initialize_fut = asyncio.Future[None]()
@@ -125,11 +129,11 @@ class ThreadJobExecutor:
                 pch = await duplex_unix._AsyncDuplex.open(mp_pch)
                 self._pch = pch
 
-                self._join_fut = asyncio.Future[None]()
+                self._join_fut = asyncio.Future[int]()
 
-                def _on_join() -> None:
+                def _on_join(exitcode: int) -> None:
                     with contextlib.suppress(RuntimeError):
-                        self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
+                        self._loop.call_soon_threadsafe(self._join_fut.set_result, exitcode)
 
                 targs = job_proc_lazy_main.ThreadStartArgs(
                     mp_cch=mp_cch,
@@ -287,7 +291,7 @@ class ThreadJobExecutor:
         ping_task = asyncio.create_task(self._ping_task())
         monitor_task = asyncio.create_task(self._monitor_task())
 
-        await self._join_fut
+        exitcode = await self._join_fut
 
         # the thread closes its end of the duplex before signaling the join, so the monitor
         # task ends on its own once it has read what the thread sent last (ShutdownRequestAck
@@ -303,7 +307,7 @@ class ThreadJobExecutor:
         with contextlib.suppress(duplex_unix.DuplexClosed):
             await self._pch.aclose()
 
-        self._job_status = JobStatus.SUCCESS
+        self._job_status = JobStatus.SUCCESS if exitcode == 0 else JobStatus.FAILED
 
     @utils.log_exceptions(logger=logger)
     async def _monitor_task(self) -> None:
@@ -339,6 +343,9 @@ class ThreadJobExecutor:
                     task = asyncio.create_task(self._do_inference_task(msg))
                     self._inference_tasks.add(task)
                     task.add_done_callback(self._inference_tasks.discard)
+
+                if isinstance(msg, proto.JoinTiming) and self._on_join_timing:
+                    self._on_join_timing(msg.timing)
         finally:
             # this task is the sole reader of the IPC channel; once it ends, the thread is gone
             # (channel closed) or being torn down (cancelled). resolve the shutdown futures here
@@ -367,5 +374,7 @@ class ThreadJobExecutor:
             extra["job_id"] = self._running_job.job.id
             extra["room"] = self._running_job.job.room.name
             extra["room_id"] = self._running_job.job.room.sid
+            if self._running_job.job.agent_name:
+                extra["agent_name"] = self._running_job.job.agent_name
 
         return extra

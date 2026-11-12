@@ -110,6 +110,8 @@ class StreamAdapter(TTS):
 
 class StreamAdapterWrapper(SynthesizeStream):
     _tts_request_span_name: ClassVar[str] = "tts_stream_adapter"
+    # each sentence's request span nests directly under the adapter's
+    _tts_attempt_span_name: ClassVar[str | None] = None
 
     def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)

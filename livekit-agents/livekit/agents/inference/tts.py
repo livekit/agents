@@ -64,6 +64,7 @@ RimeModels = Literal[
 InworldModels = Literal[
     "inworld",
     "inworld/inworld-tts-2",
+    "inworld/inworld-tts-2-flash",
     "inworld/inworld-tts-1.5-max",
     "inworld/inworld-tts-1.5-mini",
     "inworld/inworld-tts-1.5",
@@ -76,10 +77,21 @@ FishAudioModels = Literal[
     "fishaudio/s2.1-pro",
     "fishaudio/s2.1-pro-free",
     "fishaudio/s2-pro",
+    "fishaudio/drama-3",
+]
+AssemblyAIModels = Literal[
+    "assemblyai",
+    "assemblyai/assemblyai-tts-1",
 ]
 
 TTSModels = (
-    CartesiaModels | DeepgramModels | RimeModels | InworldModels | XaiModels | FishAudioModels
+    CartesiaModels
+    | DeepgramModels
+    | RimeModels
+    | InworldModels
+    | XaiModels
+    | FishAudioModels
+    | AssemblyAIModels
 )
 
 
@@ -125,6 +137,11 @@ def _has_aligned_transcript(model: str, extra_kwargs: dict[str, Any]) -> bool:
         return bool(extra_kwargs.get("add_timestamps"))
     if provider == "inworld":
         return extra_kwargs.get("timestamp_type") in ("WORD", "CHARACTER")
+    if provider == "assemblyai":
+        # Word timings are on by default on the service (word_boundaries=true),
+        # and the gateway forwards them as an aligned transcript, so this is
+        # opt-out rather than opt-in: only an explicit False turns them off.
+        return extra_kwargs.get("word_timestamps", True) is not False
     return False
 
 
@@ -155,7 +172,7 @@ class CartesiaOptions(TypedDict, total=False):
 
 
 class DeepgramOptions(TypedDict, total=False):
-    mip_opt_out: bool  # default: False
+    mip_opt_out: bool  # always True for LiveKit Inference; the passed value is ignored
 
 
 class RimeOptions(TypedDict, total=False):
@@ -200,6 +217,12 @@ class FishAudioOptions(TypedDict, total=False):
     min_chunk_length: int  # min characters before splitting a new chunk, range 0-100
     condition_on_previous_chunks: bool  # use prior audio as context for consistency
     early_stop_threshold: float  # early-stopping threshold for batching, range 0-1
+
+
+class AssemblyaiOptions(TypedDict, total=False):
+    """AssemblyAI TTS options passed through to LiveKit Inference."""
+
+    word_timestamps: bool  # default True; word timings are forwarded as an aligned transcript
 
 
 TTSEncoding = Literal["pcm_s16le"]
@@ -347,6 +370,25 @@ class TTS(tts.TTS):
     @overload
     def __init__(
         self,
+        model: AssemblyAIModels,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
@@ -383,6 +425,7 @@ class TTS(tts.TTS):
             | InworldOptions
             | XaiOptions
             | FishAudioOptions
+            | AssemblyaiOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -483,6 +526,8 @@ class TTS(tts.TTS):
                 return "inworld"
             elif provider == "inworld":
                 return ""  # older inworld models don't support markup
+            elif provider == "fishaudio" and "drama" in model:
+                return "fishaudio_drama"  # free-form direction instead of fixed emotions
             return provider
 
         # llm_instructions / normalize / convert are inherited from the base Markup,
@@ -652,12 +697,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         # alignment arrives finer-grained than a cue, so drop_bracket_cues parks the tail
         # of an unclosed span here between messages
         self._held_tokens: list[TimedString] = []
+        # lower for the model this stream sends, not whatever update_options picks
+        # mid-utterance (fishaudio s2.1-pro and drama-3 lower differently)
+        self._markup_key = tts.markup._provider_key()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = ""
 
         # chunking defaults (cap + expressive batch size) live in _provider_format
-        from ..tts._provider_format import sentence_tokenizer
+        from ..tts._provider_format import convert_markup, normalize_markup, sentence_tokenizer
 
         provider = self._opts.model.split("/")[0]
         sent_tokenizer_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
@@ -668,7 +716,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(data, self._FlushSentinel):
                     sent_tokenizer_stream.flush()
                     continue
-                sent_tokenizer_stream.push_text(self._tts.markup.normalize(data))
+                sent_tokenizer_stream.push_text(normalize_markup(self._markup_key, data))
 
             sent_tokenizer_stream.end_input()
 
@@ -679,7 +727,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt = base_pkt.copy()
                 # re-normalize at sentence level: tags split across input chunks
                 # aren't caught by the per-chunk normalize in _input_task
-                converted = self._tts.markup.convert(self._tts.markup.normalize(ev.token))
+                normalized = normalize_markup(self._markup_key, ev.token)
+                converted = convert_markup(self._markup_key, normalized)
                 token_pkt["transcript"] = converted + " "
                 generation_config: dict[str, Any] = {}
                 if self._opts.voice:

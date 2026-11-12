@@ -226,6 +226,14 @@ class _SegmentSynchronizerImpl:
             )
             return
 
+        if self._audio_data.done:
+            # a second flush of the same segment, e.g. an output wrapper that flushed early
+            logger.debug(
+                "_SegmentSynchronizerImpl.end_audio_input called after audio input ended",
+                extra={"impl_id": self._id},
+            )
+            return
+
         self._audio_data.done = True
         self._audio_data.sr_stream.end_input()
         self._reestimate_speed()
@@ -709,6 +717,10 @@ class _SyncedAudioOutput(io.AudioOutput):
         interrupted: bool,
         synchronized_transcript: str | None = None,
     ) -> None:
+        # A downstream capture can be canceled before this wrapper counts its segment.
+        if not self._pending_playback_count:
+            return
+
         if not self._synchronizer.enabled:
             super().on_playback_finished(
                 playback_position=playback_position,

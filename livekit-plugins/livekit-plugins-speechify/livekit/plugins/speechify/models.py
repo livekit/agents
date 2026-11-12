@@ -19,6 +19,7 @@ TTSModels = Literal[
     "simba-multilingual",
     "simba-3.0",
     "simba-3.2",
+    "simba-3.5",
 ]
 
 # Deprecated: output is fixed to 24 kHz PCM; kept for import compatibility.
