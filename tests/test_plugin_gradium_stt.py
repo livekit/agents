@@ -15,7 +15,7 @@ from livekit.agents import APIConnectOptions, APIStatusError
 from livekit.agents.stt import SpeechEventType
 from livekit.plugins.gradium.stt import DEFAULT_DELAY_IN_FRAMES
 
-pytestmark = pytest.mark.plugin("gradium")
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 # no retries: the tests assert on the behaviour of the single attempt
 CONN_OPTS = APIConnectOptions(max_retry=0, timeout=5)
