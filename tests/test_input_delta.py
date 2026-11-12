@@ -1,6 +1,4 @@
-"""RecordingOptions.input_delta: each LLM span continues the input recorded for the last
-committed generation, recording what follows the prefix they share, and the instructions
-only when they differ."""
+"""RecordingOptions.input_delta: each LLM span records only what follows its parent's input."""
 
 from __future__ import annotations
 
@@ -21,7 +19,7 @@ from livekit.agents.telemetry import gen_ai, input_delta, set_tracer_provider, t
 
 from .fake_session import FakeActions, create_session, run_session
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent, pytest.mark.virtual_time]
 
 
 @pytest.fixture
@@ -313,8 +311,7 @@ def test_module_docstring_example(span_exporter: InMemorySpanExporter) -> None:
 
 
 def _turn(*items: tuple[str, str, str] | llm.ChatItem, guide: bool = True) -> llm.ChatContext:
-    """A turn as the framework sends it: the instructions, the agent's initial config, the
-    history, then the expressive guide, added fresh at the end of every reply."""
+    """A turn as the framework sends it: instructions, initial config, history, then the guide."""
     ctx = _ctx(*items, *([("G", "system", "markup guide")] if guide else []))
     at = 1 if ctx.items and ctx.items[0].id == INSTR_ID else 0
     ctx.items.insert(at, llm.AgentConfigUpdate(id="cfg", instructions="initial"))
@@ -322,8 +319,7 @@ def _turn(*items: tuple[str, str, str] | llm.ChatItem, guide: bool = True) -> ll
 
 
 def test_rebuilt_input_matches_what_was_sent(span_exporter: InMemorySpanExporter) -> None:
-    """Following lk.input.* from each span back to a full one reproduces the input the
-    model received, in order, for both gen_ai.* and lk.pii.chat_ctx."""
+    """Following lk.input.* back to a full span reproduces the input the model received."""
     a1, u1 = ("a1", "assistant", "hello"), ("u1", "user", "hi")
     a2, u2 = ("a2", "assistant", "sure"), ("u2", "user", "weather?")
     a3, u3 = ("a3", "assistant", "sunny"), ("u3", "user", "tomorrow?")

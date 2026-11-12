@@ -33,6 +33,7 @@ members = [
     "livekit-plugins-anthropic",
     "livekit-plugins-assemblyai",
     "livekit-plugins-asyncai",
+    "livekit-plugins-atmee",
     "livekit-plugins-avatario",
     "livekit-plugins-avatartalk",
     "livekit-plugins-aws",
@@ -1349,13 +1350,13 @@ wheels = [
 
 [[package]]
 name = "google-genai"
-version = "2.33.0"
+version = "3.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "distro" },
     { name = "google-auth", extra = ["requests"] },
-    { name = "httpx" },
+    { name = "httpx2" },
     { name = "pydantic" },
     { name = "requests" },
     { name = "sniffio" },
@@ -1363,9 +1364,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/83/a4/b83b378b4a2fbbfb300c3fde0ff9f443f049c33e2accedf06bc0ad9bf393/google_genai-2.33.0.tar.gz", hash = "sha256:fced7f746da45264b34bcf6044a6fcdb91ebad1825e95c324ee48addb6e557ae", size = 758627, upload-time = "2026-10-23T00:06:28.332Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/fa/041ef12c71d6e150d8fb99049847388aa0d349d98a7c67614746a7b6ef65/google_genai-3.2.0.tar.gz", hash = "sha256:b848937937b7b72594e75c57f01618ca201275afaedbfd717c004434ebf592f5", size = 826292, upload-time = "2026-11-11T17:49:09.168Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/3b/9ae8e16c5b2177bfdec1c64769a93eea9093de684e0bbb95c10c77645fef/google_genai-2.33.0-py3-none-any.whl", hash = "sha256:f3f8ab696b35caf95c222e05268740c1ccd6934257890506be73b126150d3b14", size = 1222487, upload-time = "2026-10-23T00:06:26.528Z" },
+    { url = "https://files.pythonhosted.org/packages/72/23/28319604be07dfce63a2ed84453fb6528011fe20ed1fc2b14514c88ce285/google_genai-3.2.0-py3-none-any.whl", hash = "sha256:4d7289b050ae2fec5cf1e2b4775f59de1730a9bacd714b4b33a11075f929f0da", size = 1363836, upload-time = "2026-11-11T17:49:07.352Z" },
 ]
 
 [[package]]
@@ -2163,6 +2164,9 @@ assemblyai = [
 asyncai = [
     { name = "livekit-plugins-asyncai" },
 ]
+atmee = [
+    { name = "livekit-plugins-atmee" },
+]
 avatario = [
     { name = "livekit-plugins-avatario" },
 ]
@@ -2421,6 +2425,7 @@ requires-dist = [
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-asyncai", marker = "extra == 'asyncai'", editable = "livekit-plugins/livekit-plugins-asyncai" },
+    { name = "livekit-plugins-atmee", marker = "extra == 'atmee'", editable = "livekit-plugins/livekit-plugins-atmee" },
     { name = "livekit-plugins-avatario", marker = "extra == 'avatario'", editable = "livekit-plugins/livekit-plugins-avatario" },
     { name = "livekit-plugins-avatartalk", marker = "extra == 'avatartalk'", editable = "livekit-plugins/livekit-plugins-avatartalk" },
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
@@ -2520,7 +2525,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -2880,6 +2885,16 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-plugins-atmee"
+source = { editable = "livekit-plugins/livekit-plugins-atmee" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
 name = "livekit-plugins-avatario"
 source = { editable = "livekit-plugins/livekit-plugins-avatario" }
 dependencies = [
@@ -3221,7 +3236,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2,<3" },
     { name = "google-cloud-speech", specifier = ">=2.36,<3" },
     { name = "google-cloud-texttospeech", specifier = ">=2.32,<3" },
-    { name = "google-genai", marker = "python_full_version >= '3.10'", specifier = ">=2.33.0" },
+    { name = "google-genai", marker = "python_full_version >= '3.10'", specifier = ">=3.2.0" },
     { name = "httpx2", specifier = ">=2.12,<3" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
@@ -3516,6 +3531,7 @@ requires-dist = [
 name = "livekit-plugins-nvidia"
 source = { editable = "livekit-plugins/livekit-plugins-nvidia" }
 dependencies = [
+    { name = "grpcio" },
     { name = "livekit-agents" },
     { name = "nvidia-riva-client" },
 ]
@@ -3528,9 +3544,10 @@ personaplex = [
 
 [package.metadata]
 requires-dist = [
+    { name = "grpcio", specifier = ">=1.51.1" },
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "livekit-agents", extras = ["codecs"], marker = "extra == 'personaplex'", editable = "livekit-agents" },
-    { name = "nvidia-riva-client" },
+    { name = "nvidia-riva-client", specifier = ">=2.16" },
     { name = "sphn", marker = "extra == 'personaplex'", specifier = ">=0.2.0" },
 ]
 provides-extras = ["personaplex"]
@@ -3600,7 +3617,7 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "phonic", specifier = ">=0.32.36" },
+    { name = "phonic", specifier = ">=0.33.4" },
     { name = "websockets", specifier = ">=11.0" },
 ]
 
@@ -5045,7 +5062,7 @@ wheels = [
 
 [[package]]
 name = "phonic"
-version = "0.32.36"
+version = "0.33.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -5054,9 +5071,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a9/72/a5b02c676f01c807c4ea7b6cb185345d5705faa8ee77b3e890fad14efe70/phonic-0.32.36.tar.gz", hash = "sha256:2e1af35a22162f8f19314350a1119e5dbde59325df8274d9babb9dca4a06dc6a", size = 217201, upload-time = "2026-09-23T02:05:26.759Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dd/15/2c6697c2469a24df47e20ad3ff128ec1261692f138cdca6133c35ae1cf66/phonic-0.33.4.tar.gz", hash = "sha256:f1763cc14f6eab65986f664058f80c90011b8aecab4dda53322a9ad3726f584b", size = 249379, upload-time = "2026-11-11T00:12:09.918Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/64/c073822a115cb1a7f378dc7509cf2c836294a3008c4cf33172180a4ad6c7/phonic-0.32.36-py3-none-any.whl", hash = "sha256:04774b9a0d72a08566a0448168e96266513dacbd4a9c35fecdfd5e535d589fc0", size = 466547, upload-time = "2026-09-23T02:05:25.036Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/e1/af73f7ab45b9d457e99d3ffc7fa0bbd3d4f724cadf388e57331fc64d8f26/phonic-0.33.4-py3-none-any.whl", hash = "sha256:d07d3af2088abf96af025ed2ea681c23df7bc833df3609520d40c695d4e24826", size = 527758, upload-time = "2026-11-11T00:12:08.163Z" },
 ]
 
 [[package]]

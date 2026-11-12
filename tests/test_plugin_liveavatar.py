@@ -1,10 +1,4 @@
-"""Unit tests for LiveAvatar WebSocket event dispatch.
-
-The LiveAvatar LITE protocol emits ``agent.state_updated`` and
-``agent.audio_buffer_*`` acks in addition to the original speak_* events.
-These tests drive ``AvatarSession._handle_server_event`` with a fake audio
-buffer so they stay hermetic.
-"""
+"""LiveAvatar server events drive the avatar's speaking state and playback notifications."""
 
 from __future__ import annotations
 
@@ -17,7 +11,7 @@ import pytest
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.plugins.liveavatar.avatar import AvatarSession
 
-pytestmark = [pytest.mark.unit, pytest.mark.plugin("liveavatar")]
+pytestmark = pytest.mark.unit
 
 
 class _FakeAudioBuffer:
