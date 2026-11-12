@@ -100,6 +100,7 @@ _DIALOGUE_VOICE_SETTINGS_FIELDS = frozenset({"stability"})
 _DIALOGUE_KEEP_ALIVE_INTERVAL = 10.0
 # the server also closes a socket that receives nothing for 20s, logging input_timeout_exceeded
 _DIALOGUE_IDLE_RETIRE = 15.0
+_DIALOGUE_IDLE_POLL = 1.0
 
 
 class TTS(tts.TTS):
@@ -1134,24 +1135,20 @@ class _DialogueConnection(_Connection):
     def _connect_url(self) -> str:
         return _dialogue_multi_stream_url(self._opts)
 
-    def _idle_retire_delay(self) -> float | None:
-        """Seconds until an unused socket retires itself, or None while a context is open."""
-        if self._context_data or self._active_contexts:
-            return None
-        return self._last_send + _DIALOGUE_IDLE_RETIRE - asyncio.get_event_loop().time()
+    async def _send_json(self, data: dict[str, Any]) -> None:
+        assert self._ws is not None
+        await self._ws.send_json(data)
+        self._last_send = asyncio.get_event_loop().time()
 
     def _next_keep_alive_delay(self) -> float:
-        eligible = self._active_contexts - self._closing_contexts
-        if not eligible:
-            retire_delay = self._idle_retire_delay()
-            if retire_delay is None:
-                return _DIALOGUE_KEEP_ALIVE_INTERVAL
-            return max(0.0, retire_delay)
         now = asyncio.get_event_loop().time()
-        next_due = min(
-            self._last_context_send.get(context_id, now) + _DIALOGUE_KEEP_ALIVE_INTERVAL
-            for context_id in eligible
-        )
+        next_due = self._last_send + _DIALOGUE_IDLE_RETIRE
+        if self._context_data or self._active_contexts:
+            # retirement waits for the last context, so poll for it once the deadline passes
+            next_due = max(next_due, now + _DIALOGUE_IDLE_POLL)
+        for context_id in self._active_contexts - self._closing_contexts:
+            last = self._last_context_send.get(context_id, now)
+            next_due = min(next_due, last + _DIALOGUE_KEEP_ALIVE_INTERVAL)
         return max(0.0, next_due - now)
 
     async def _send_due_keep_alives(self) -> None:
@@ -1161,7 +1158,7 @@ class _DialogueConnection(_Connection):
         for context_id in self._active_contexts - self._closing_contexts:
             last = self._last_context_send.get(context_id)
             if last is None or now - last >= _DIALOGUE_KEEP_ALIVE_INTERVAL:
-                await self._ws.send_json({"context_id": context_id, "keep_alive": True})
+                await self._send_json({"context_id": context_id, "keep_alive": True})
                 self._last_context_send[context_id] = now
 
     async def _send_loop(self) -> None:
@@ -1175,8 +1172,12 @@ class _DialogueConnection(_Connection):
                 except asyncio.TimeoutError:
                     if not self._ws or self._ws.closed:
                         break
-                    retire_delay = self._idle_retire_delay()
-                    if retire_delay is not None and retire_delay <= 0:
+                    if (
+                        not self._context_data
+                        and not self._active_contexts
+                        and asyncio.get_event_loop().time()
+                        >= self._last_send + _DIALOGUE_IDLE_RETIRE
+                    ):
                         # close before the server does, so the next acquire opens a fresh socket
                         break
                     await self._send_due_keep_alives()
@@ -1187,7 +1188,6 @@ class _DialogueConnection(_Connection):
                 if not self._ws or self._ws.closed:
                     break
 
-                self._last_send = asyncio.get_event_loop().time()
                 if isinstance(msg, _SynthesizeContent):
                     is_new_context = msg.context_id not in self._active_contexts
 
@@ -1196,7 +1196,7 @@ class _DialogueConnection(_Connection):
                             self._opts,
                             context_id=msg.context_id,
                         )
-                        await self._ws.send_json(init_pkt)
+                        await self._send_json(init_pkt)
                         self._active_contexts.add(msg.context_id)
 
                     pkt: dict[str, Any] = {
@@ -1208,7 +1208,7 @@ class _DialogueConnection(_Connection):
 
                     self._start_timeout_timer(msg.context_id)
 
-                    await self._ws.send_json(pkt)
+                    await self._send_json(pkt)
                     self._last_context_send[msg.context_id] = asyncio.get_event_loop().time()
 
                 elif isinstance(msg, _CloseContext):
@@ -1219,7 +1219,7 @@ class _DialogueConnection(_Connection):
                             "close_context": True,
                         }
                         self._mark_input_closed(msg.context_id)
-                        await self._ws.send_json(close_pkt)
+                        await self._send_json(close_pkt)
 
                 await self._send_due_keep_alives()
 

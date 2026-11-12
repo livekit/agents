@@ -1078,3 +1078,28 @@ async def test_dialogue_send_loop_retires_unused_socket(monkeypatch: pytest.Monk
 
         assert connection._closed
         assert ws.sent == []
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_retires_socket_after_last_context_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A context ending between keep-alive checks does not delay retirement past the deadline."""
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_IDLE_RETIRE", 0.1)
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4", voice_id="voice-1")
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        connection._ws = _RecordingWs()  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-1", "hello ", flush=True)  # pyright: ignore[reportPrivateUsage]
+        )
+        connection.close_context("ctx-1")
+        connection._send_task = asyncio.create_task(connection._send_loop())
+        await asyncio.sleep(0.05)
+        connection._cleanup_context("ctx-1")
+
+        await asyncio.wait({connection._send_task}, timeout=1.0)
+
+        assert connection._closed
