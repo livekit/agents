@@ -18,6 +18,7 @@ livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
 livekit-plugins-avatario = { workspace = true }
 livekit-plugins-asyncai = { workspace = true }
+livekit-plugins-atmee = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
@@ -42,6 +43,7 @@ livekit-plugins-hamming = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-krisp = { workspace = true }
+livekit-plugins-kalpa = { workspace = true }
 livekit-plugins-keyframe = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
 livekit-plugins-lemonslice = { workspace = true }
@@ -96,7 +98,7 @@ livekit-plugins-did = { workspace = true }
 livekit-plugins-zoom-ai = { workspace = true }
 
 [tool.uv.workspace]
-members = ["livekit-plugins/*", "livekit-agents", "examples/avatar", "examples/drive_thru", "examples/expressive_agent", "examples/frontdesk", "examples/healthcare", "examples/homepage", "examples/hotel_receptionist", "examples/inference", "examples/survey", "examples/voice_agents"]
+members = ["livekit-plugins/*", "livekit-agents", "examples/avatar", "examples/drive_thru", "examples/expressive_agent", "examples/frontdesk", "examples/healthcare", "examples/homepage/livekit-expert", "examples/hotel_receptionist", "examples/inference", "examples/survey", "examples/voice_agents"]
 exclude = [
     "livekit-plugins/community",
     "livekit-plugins/livekit-blockguard",

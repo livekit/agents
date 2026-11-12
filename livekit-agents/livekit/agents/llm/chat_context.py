@@ -847,7 +847,11 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["aws"], *, inject_dummy_user_message: bool = True
+        self,
+        format: Literal["aws"],
+        *,
+        inject_dummy_user_message: bool = True,
+        cache_messages: bool = False,
     ) -> tuple[list[dict], _provider_format.aws.BedrockFormatData]: ...
 
     @overload
