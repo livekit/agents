@@ -178,7 +178,7 @@ pyrightconfig.json
 
 
 # Examples for development
-python/examples/dev/*
+examples/dev/*
 
 # Generated from installed external SDK schemas for strict type checking.
 .type_stubs/

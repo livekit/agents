@@ -74,7 +74,7 @@ Start with the [execution paths](internals/architecture.md#execution-paths) to f
 
 ## Running the examples
 
-- [`python/examples/`](../python/examples/README.md): three fast brain and slow brain
+- [`examples/`](../examples/README.md): three fast brain and slow brain
   pairs, each one worker: a dental practice's front desk, a hotel
   receptionist, an airline's customer care, with simulation scenarios.
 - [`python/tests/e2e/`](../python/tests/e2e/README.md) contains pytest journeys selected with

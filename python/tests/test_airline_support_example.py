@@ -21,7 +21,7 @@ from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
 
 pytestmark = pytest.mark.unit
 
-EXAMPLE = Path(__file__).parents[1] / "examples" / "airline-support"
+EXAMPLE = Path(__file__).parents[2] / "examples" / "airline-support"
 sys.path.insert(0, str(EXAMPLE))
 
 # the example builds its storage at import; a placeholder project, so the storage tests that run

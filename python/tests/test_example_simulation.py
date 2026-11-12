@@ -30,7 +30,7 @@ def load_example(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, Script], Mod
         return module
 
     def load(name: str, model: Script) -> ModuleType:
-        directory = Path(__file__).parents[1] / "examples" / name
+        directory = Path(__file__).parents[2] / "examples" / name
         monkeypatch.setenv("FRONTDESK_NOW", "2026-06-12T09:00")
         monkeypatch.setenv("HOTEL_TODAY", "2026-06-12")
         monkeypatch.delenv("CAL_API_KEY", raising=False)
@@ -61,7 +61,7 @@ async def test_frontend_restores_bound_conversation_on_the_next_request(
     # This conversation never delegates; no worker listener is needed.
     monkeypatch.setattr(backend.text, "delegation_url", lambda: "http://unused.invalid/backend")
     monkeypatch.setitem(sys.modules, "backend_agent", backend)
-    path = Path(__file__).parents[1] / "examples" / name / "frontend_agent.py"
+    path = Path(__file__).parents[2] / "examples" / name / "frontend_agent.py"
     spec = importlib.util.spec_from_file_location(
         f"example_{name.replace('-', '_')}_frontend", path
     )

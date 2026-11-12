@@ -42,7 +42,7 @@ FRONTDESK_NOW=2026-06-12T09:00 lk agent dev
 ```
 
 For a terminal conversation, run `lk agent console` from this directory with the same environment.
-Use an [A2A client](../../../docs/clients.md) for text requests.
+Use an [A2A client](../../docs/clients.md) for text requests.
 
 `FRONTDESK_NOW` pins the practice's clock, so the seeded openings and the scenarios' absolute
 dates stay where they are; without it the practice runs on the wall clock, with the same

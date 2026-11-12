@@ -32,7 +32,7 @@ from tests_new.e2e.resources import serving
 from tests_new.fakes import FakeLLM, until
 
 ROOT = Path(__file__).parents[2]
-EXAMPLES = ROOT / "examples"
+EXAMPLES = ROOT.parent / "examples"
 LIVEKIT_CREDENTIALS = ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
 
 

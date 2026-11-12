@@ -7,7 +7,7 @@ context is the example directory alone, so appending a git source for every
 in-repo dependency is what builds the image against this checkout's code
 instead of the latest release on PyPI.
 
-    python .github/pin_example_to_ref.py python/examples/hotel_receptionist --ref main
+    python .github/pin_example_to_ref.py examples/hotel_receptionist --ref main
 
 Needs Python 3.11+ for tomllib.
 """

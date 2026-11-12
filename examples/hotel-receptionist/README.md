@@ -42,7 +42,7 @@ HOTEL_TODAY=2026-11-02 lk agent dev
 ```
 
 For a terminal conversation, run `lk agent console` from this directory with the same environment.
-Use an [A2A client](../../../docs/clients.md) for text requests.
+Use an [A2A client](../../docs/clients.md) for text requests.
 
 `HOTEL_TODAY` pins the hotel's clock, so the seeded bookings and the scenarios' absolute dates
 stay where they are; without it the hotel runs on today's date.

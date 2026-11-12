@@ -19,9 +19,9 @@ member and runs in the root `.venv`. Its README covers running, evals and deploy
 
 ## Running them
 
-Follow the [Getting started](../../README.md#getting-started): install from PyPI, set the staging
+Follow the [Getting started](../README.md#getting-started): install from PyPI, set the staging
 project's keys, then run `lk agent dev` in an example's directory. Use `lk agent console`
-for a terminal conversation or an [A2A client](../../docs/clients.md) for text.
+for a terminal conversation or an [A2A client](../docs/clients.md) for text.
 
 ## Storage and conversation state
 
@@ -69,8 +69,8 @@ reviewer; these calls are individual computations within the backend conversatio
 
 The examples' seeded calendars, hotels and airline systems are in-memory fakes. Persisting
 conversation state does not make those external business effects durable; use a durable
-service with idempotent writes in a real application. See [context persistence](../../docs/context.md)
-and [threads](../../docs/threads.md) for checkpoint and ownership details.
+service with idempotent writes in a real application. See [context persistence](../docs/context.md)
+and [threads](../docs/threads.md) for checkpoint and ownership details.
 
 
 ## Testing text and voice
@@ -83,7 +83,7 @@ make test TEST_ARGS="python/tests/test_example_simulation.py python/tests/test_a
 ```
 
 For a manual conversation, use the same staging credentials as above and run from
-`python/examples/frontdesk`. These commands each start their own agent:
+`examples/frontdesk`. These commands each start their own agent:
 
 ```sh
 # Typed conversation through the voice frontend, without microphone/speaker I/O.
@@ -97,7 +97,7 @@ Ask for an opening, provide an email, reject one booking and approve another. Ch
 no appointment is booked before approval and that the saved email is reused.
 
 To test the A2A text handler, start `FRONTDESK_NOW=2026-06-12T09:00 lk agent dev`
-and use [AgentClient](../../docs/clients.md#a-client-for-an-endpoint) against the `frontend`
+and use [AgentClient](../docs/clients.md#a-client-for-an-endpoint) against the `frontend`
 endpoint. Keep the returned `thread_id` across messages and pass the waiting `task_id` when
 answering an input-required result. Console text mode does not exercise this handler.
 

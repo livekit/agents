@@ -197,9 +197,9 @@ rust/                   # The shared core and its bindings; see docs/internals/a
 python/                 # The Python SDK
 ├── livekit-agents/     # livekit-agents, built with the core as livekit.agents._core
 ├── livekit-plugins/    # Provider plugins (openai, anthropic, google, deepgram, etc.)
-├── examples/           # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
 ├── tests/              # Test suite with fakes (fake_stt.py, fake_vad.py)
 └── tests_new/          # Smoke, host, plugin and e2e suites
+examples/               # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
 otel/                   # Generated OTel registry and consumer schema (never edited)
 docs/                   # The 2.0 design, one feature per page
 bench/                  # Startup, IPC, host-boundary and sentence benchmarks

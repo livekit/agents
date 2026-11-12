@@ -92,7 +92,7 @@ livekit-plugins-phonic = { workspace = true }
 livekit-plugins-did = { workspace = true }
 
 [tool.uv.workspace]
-members = ["python/livekit-plugins/*", "python/livekit-agents", "python/examples/livekit-expert"]
+members = ["python/livekit-plugins/*", "python/livekit-agents", "examples/livekit-expert"]
 exclude = [
     "python/livekit-plugins/community",
     "python/livekit-plugins/livekit-blockguard",
@@ -203,7 +203,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = [
     "--import-mode=importlib",
-    "--ignore=python/examples",
+    "--ignore=examples",
 ]
 pythonpath = [".", "python"]
 testpaths = ["python/tests"]
@@ -287,12 +287,12 @@ stubPath = ".type_stubs"
 # (docs/README.md). The library itself is held to mypy strict; pyright's strict-only rules
 # (cross-module private names, unknown types from untyped SDKs) add no check of its API there.
 typeCheckingMode = "standard"
-strict = ["python/examples", "python/tests/type_checks"]
+strict = ["examples", "python/tests/type_checks"]
 pythonVersion = "3.11"
 executionEnvironments = [
-    { root = "python/examples/airline-support", extraPaths = ["python/examples/airline-support"] },
-    { root = "python/examples/frontdesk", extraPaths = ["python/examples/frontdesk"] },
-    { root = "python/examples/hotel-receptionist", extraPaths = ["python/examples/hotel-receptionist"] },
-    { root = "python/examples/livekit-expert", extraPaths = ["python/examples/livekit-expert"] },
+    { root = "examples/airline-support", extraPaths = ["examples/airline-support"] },
+    { root = "examples/frontdesk", extraPaths = ["examples/frontdesk"] },
+    { root = "examples/hotel-receptionist", extraPaths = ["examples/hotel-receptionist"] },
+    { root = "examples/livekit-expert", extraPaths = ["examples/livekit-expert"] },
     { root = "." },
 ]

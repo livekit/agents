@@ -120,7 +120,7 @@ def main() -> None:
         # Examples are separate applications and can use the same module names.
         targets.extend(
             [str(path.relative_to(repo_root))]
-            for path in sorted((repo_root / "python/examples").iterdir())
+            for path in sorted((repo_root / "examples").iterdir())
             if path.is_dir() or path.suffix == ".py"
         )
         for target in targets:
@@ -136,7 +136,7 @@ def main() -> None:
         source_paths = [
             "python/livekit-agents/livekit/agents",
             "python/tests/type_checks",
-            "python/examples",
+            "examples",
         ]
         source_paths.extend(
             str(path.relative_to(repo_root))
