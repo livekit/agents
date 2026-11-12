@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
@@ -16,6 +17,7 @@ from livekit.agents import (
     AgentFalseInterruptionEvent,
     AgentSession,
     AgentStateChangedEvent,
+    AgentTask,
     APIConnectionError,
     ConversationItemAddedEvent,
     FlushSentinel,
@@ -23,6 +25,8 @@ from livekit.agents import (
     MetricsCollectedEvent,
     ModelSettings,
     NotGivenOr,
+    RunContext,
+    StopResponse,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -35,20 +39,25 @@ from livekit.agents.llm import (
     FunctionToolCall,
     InputTranscriptionCompleted,
     RawFunctionTool,
-    ToolContext,
     ToolFlag,
     Toolset,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
-from livekit.agents.voice.agent_activity import AgentActivity
-from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
+from livekit.agents.voice import audio_recognition
+from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equivalent
+from livekit.agents.voice.agent_session import SessionConnectOptions
+from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo, _STTPipeline
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import FunctionToolsExecutedEvent
-from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
+from livekit.agents.voice.io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent
+from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
+from livekit.agents.voice.turn import _StreamingTurnDetector
 
+from .fake_llm import FakeLLM
 from .fake_session import FakeActions, create_session, run_session
+from .fake_vad import FakeVAD
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -167,7 +176,6 @@ def test_interim_transcript_interrupts_only_without_local_vad(
 
 
 async def test_events_and_metrics() -> None:
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)  # EOU at 2.5+0.5=3.0s
     actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
@@ -175,7 +183,7 @@ async def test_events_and_metrics() -> None:
         2.0, ttfb=0.2, duration=0.3
     )  # audio playout starts at 3.0+0.3+0.2=3.5s, ends at 5.5s
 
-    session = create_session(actions, speed_factor=speed)
+    session = create_session(actions)
     agent = MyAgent()
 
     user_state_events: list[UserStateChangedEvent] = []
@@ -198,23 +206,23 @@ async def test_events_and_metrics() -> None:
     assert conversation_events[1].item.type == "message"
     assert conversation_events[1].item.role == "user"
     assert conversation_events[1].item.text_content == "Hello, how are you?"
-    check_timestamp(conversation_events[1].created_at - t_origin, 3.0, speed_factor=speed)
+    check_timestamp(conversation_events[1].created_at - t_origin, 3.0)
     assert conversation_events[2].item.type == "message"
     assert conversation_events[2].item.role == "assistant"
     assert conversation_events[2].item.text_content == "I'm doing well, thank you!"
-    check_timestamp(conversation_events[2].created_at - t_origin, 5.5, speed_factor=speed)
+    check_timestamp(conversation_events[2].created_at - t_origin, 5.5)
 
     # user_input_transcribed
     assert len(user_transcription_events) >= 1
     assert user_transcription_events[-1].transcript == "Hello, how are you?"
     assert user_transcription_events[-1].is_final is True
-    check_timestamp(user_transcription_events[-1].created_at - t_origin, 2.7, speed_factor=speed)
+    check_timestamp(user_transcription_events[-1].created_at - t_origin, 2.7)
 
     # user_state_changed
     assert len(user_state_events) == 2
-    check_timestamp(user_state_events[0].created_at - t_origin, 0.5, speed_factor=speed)
+    check_timestamp(user_state_events[0].created_at - t_origin, 0.5)
     assert user_state_events[0].new_state == "speaking"
-    check_timestamp(user_state_events[1].created_at - t_origin, 3.0, speed_factor=speed)
+    check_timestamp(user_state_events[1].created_at - t_origin, 3.0)
     assert user_state_events[1].new_state == "listening"
 
     # agent_state_changed
@@ -222,68 +230,35 @@ async def test_events_and_metrics() -> None:
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
     assert agent_state_events[1].new_state == "thinking"
-    check_timestamp(agent_state_events[1].created_at - t_origin, 3.0, speed_factor=speed)
+    check_timestamp(agent_state_events[1].created_at - t_origin, 3.0)
     assert agent_state_events[2].new_state == "speaking"
-    check_timestamp(agent_state_events[2].created_at - t_origin, 3.5, speed_factor=speed)
+    check_timestamp(agent_state_events[2].created_at - t_origin, 3.5)
     assert agent_state_events[3].new_state == "listening"
-    check_timestamp(agent_state_events[3].created_at - t_origin, 5.5, speed_factor=speed)
+    check_timestamp(agent_state_events[3].created_at - t_origin, 5.5)
 
     # metrics
     metrics_events = [ev for ev in metrics_events if ev.metrics.type != "vad_metrics"]
     assert len(metrics_events) == 3
     assert metrics_events[0].metrics.type == "eou_metrics"
-    check_timestamp(metrics_events[0].metrics.end_of_utterance_delay, 0.5, speed_factor=speed)
-    check_timestamp(metrics_events[0].metrics.transcription_delay, 0.2, speed_factor=speed)
+    check_timestamp(metrics_events[0].metrics.end_of_utterance_delay, 0.5)
+    check_timestamp(metrics_events[0].metrics.transcription_delay, 0.2)
     assert metrics_events[1].metrics.type == "llm_metrics"
-    check_timestamp(metrics_events[1].metrics.ttft, 0.1, speed_factor=speed)
-    check_timestamp(metrics_events[1].metrics.duration, 0.3, speed_factor=speed)
+    check_timestamp(metrics_events[1].metrics.ttft, 0.1)
+    check_timestamp(metrics_events[1].metrics.duration, 0.3)
     assert metrics_events[2].metrics.type == "tts_metrics"
-    check_timestamp(metrics_events[2].metrics.ttfb, 0.2, speed_factor=speed)
-    check_timestamp(metrics_events[2].metrics.audio_duration, 2.0, speed_factor=speed)
-
-
-async def test_tts_node_ttfb_excludes_upstream_latency() -> None:
-    # the LLM stream stays open for its full duration and the fake TTS only starts
-    # synthesizing once its input is flushed. tts_node_ttfb must anchor on the text
-    # being handed to the TTS provider (~2.0s in), not on the first LLM token (~0.1s in),
-    # otherwise the LLM streaming time is misattributed to the TTS
-    speed = 1
-    actions = FakeActions()
-    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
-    actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=2.0)
-    actions.add_tts(1.0, ttfb=0.2, duration=0.3)
-
-    session = create_session(actions, speed_factor=speed)
-    agent = MyAgent()
-
-    conversation_events: list[ConversationItemAddedEvent] = []
-    session.on("conversation_item_added", conversation_events.append)
-
-    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
-
-    assistant_messages = [
-        ev.item
-        for ev in conversation_events
-        if ev.item.type == "message" and ev.item.role == "assistant"
-    ]
-    assert len(assistant_messages) == 1
-    metrics = assistant_messages[0].metrics
-    assert "tts_node_ttfb" in metrics
-    check_timestamp(metrics["tts_node_ttfb"], 0.2, speed_factor=speed)
+    check_timestamp(metrics_events[2].metrics.ttfb, 0.2)
+    check_timestamp(metrics_events[2].metrics.audio_duration, 2.0)
 
 
 async def test_llm_node_ttfs_anchors_on_synthesis_start() -> None:
-    # ttfs is the LLM->TTS handoff: inference start until the first sentence reached the
-    # provider. The fake TTS only synthesizes once its input is flushed (~2.0s in, when the
-    # LLM stream ends), so ttfs must be ~2.0 and ttfb ~0.2 -- together they decompose the
-    # gap between the first token and the first audio.
-    speed = 1
+    # the fake TTS only synthesizes once the LLM stream ends (~2.0s in), so the LLM streaming
+    # time must land in ttfs and not be misattributed to the TTS ttfb
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
     actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=2.0)
     actions.add_tts(1.0, ttfb=0.2, duration=0.3)
 
-    session = create_session(actions, speed_factor=speed)
+    session = create_session(actions)
     agent = MyAgent()
 
     conversation_events: list[ConversationItemAddedEvent] = []
@@ -298,13 +273,11 @@ async def test_llm_node_ttfs_anchors_on_synthesis_start() -> None:
     ]
     assert len(assistant_messages) == 1
     metrics = assistant_messages[0].metrics
-    assert "llm_node_ttfs" in metrics
-    check_timestamp(metrics["llm_node_ttfs"], 2.0, speed_factor=speed)
-    check_timestamp(metrics["tts_node_ttfb"], 0.2, speed_factor=speed)
+    check_timestamp(metrics["llm_node_ttfs"], 2.0)
+    check_timestamp(metrics["tts_node_ttfb"], 0.2)
 
 
 async def test_tool_call() -> None:
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "What's the weather in Tokyo?")
     actions.add_llm(
@@ -320,7 +293,7 @@ async def test_tool_call() -> None:
     )
     actions.add_tts(3.0)  # audio for the tool response
 
-    session = create_session(actions, speed_factor=speed)
+    session = create_session(actions)
     agent = MyAgent()
 
     agent_state_events: list[AgentStateChangedEvent] = []
@@ -331,11 +304,32 @@ async def test_tool_call() -> None:
     session.on("function_tools_executed", tool_executed_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    agent_speech_end_states: list[str] = []
+    on_end_of_agent_speech = AudioRecognition._on_end_of_agent_speech
+
+    def _record_agent_speech_end(
+        recognition: AudioRecognition,
+        *,
+        ended_at: float,
+    ) -> None:
+        agent_speech_end_states.append(session.agent_state)
+        on_end_of_agent_speech(
+            recognition,
+            ended_at=ended_at,
+        )
+
+    with patch.object(
+        AudioRecognition,
+        "_on_end_of_agent_speech",
+        _record_agent_speech_end,
+    ):
+        t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 2
-    check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
-    check_timestamp(playback_finished_events[1].playback_position, 3.0, speed_factor=speed)
+    check_timestamp(playback_finished_events[0].playback_position, 2.0)
+    check_timestamp(playback_finished_events[1].playback_position, 3.0)
+    assert agent_speech_end_states[0] == "thinking"
+    assert all(state == "listening" for state in agent_speech_end_states[1:])
 
     assert len(agent_state_events) == 6
     assert agent_state_events[0].old_state == "initializing"
@@ -345,7 +339,7 @@ async def test_tool_call() -> None:
     assert (
         agent_state_events[3].new_state == "thinking"
     )  # from speaking to thinking when tool call is executed
-    check_timestamp(agent_state_events[3].created_at - t_origin, 5.5, speed_factor=speed)
+    check_timestamp(agent_state_events[3].created_at - t_origin, 5.5)
     assert agent_state_events[4].new_state == "speaking"
     assert agent_state_events[5].new_state == "listening"
 
@@ -375,6 +369,181 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
 
 
+async def test_slow_tool_keeps_agent_thinking_after_filler() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="lookup_order", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_tts(1.0, input="Just a moment.")
+    actions.add_llm(content="Order 42 is on the way.", input="order 42 shipped")
+    actions.add_tts(1.0)
+
+    class SlowToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def lookup_order(self, context: RunContext) -> str:
+            async with context.with_filler("Just a moment.", delay=0.5):
+                await asyncio.sleep(8.0)
+            return "order 42 shipped"
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    user_state_events: list[UserStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("user_state_changed", user_state_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, SlowToolAgent(), drain_delay=10), timeout=SESSION_TIMEOUT
+    )
+
+    # both the reply and the filler end while the tool is still running, so each
+    # must hand back "thinking", not "listening" (which arms the user-away timer)
+    speaking_ends = [ev.new_state for ev in agent_state_events if ev.old_state == "speaking"]
+    assert speaking_ends == ["thinking", "thinking", "listening"]
+    assert all(ev.new_state != "away" for ev in user_state_events)
+
+
+async def test_tool_without_a_reply_returns_the_agent_to_listening() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="silent_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+
+    class SilentToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def silent_lookup(self, context: RunContext) -> None:
+            """A slow tool that returns nothing, so no reply follows it."""
+            await asyncio.sleep(8.0)
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, SilentToolAgent(), drain_delay=20), timeout=SESSION_TIMEOUT
+    )
+
+    # the tool holds the agent in "thinking", and nothing follows it to hand the turn back
+    transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
+    assert transitions[-2:] == [("speaking", "thinking"), ("thinking", "listening")]
+
+
+@pytest.mark.parametrize("reset_away_timer", [False, True])
+async def test_async_tool_defers_user_away_until_its_reply_lands(reset_away_timer: bool) -> None:
+    """A background tool speaks for itself, so "away" must wait for that reply."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="async_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_llm(
+        content="I'm looking it up.",
+        input=UPDATE_TEMPLATE.format(
+            function_name="async_lookup", call_id="1", message="looking it up"
+        ),
+    )
+    actions.add_tts(1.0)
+
+    tool_returned_at = 0.0
+
+    class AsyncToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def async_lookup(self, context: RunContext) -> str:
+            """Look an order up in the background."""
+            nonlocal tool_returned_at
+            await context.update("looking it up")
+            await asyncio.sleep(10.0)
+            if reset_away_timer:
+                assert context.session.agent_state == "listening"
+                context.session.reset_away_timer()
+            await asyncio.sleep(10.0)
+            tool_returned_at = time.time()
+            return "order 42 shipped"
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    away_times: list[float] = []
+    session.on(
+        "user_state_changed",
+        lambda ev: away_times.append(time.time()) if ev.new_state == "away" else None,
+    )
+
+    await asyncio.wait_for(
+        run_session(session, AsyncToolAgent(), drain_delay=40), timeout=SESSION_TIMEOUT
+    )
+
+    # the agent is genuinely listening while the tool runs, so nothing but the tool holds
+    # the window off; landing restarts it in full rather than firing on what was left
+    assert tool_returned_at > 0
+    assert len(away_times) == 1
+    assert away_times[0] >= tool_returned_at + 3.0
+
+
+async def test_async_tool_without_a_reply_still_restarts_the_away_window() -> None:
+    """A tool returning None after an update files no reply, yet still restarts the window."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="async_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_llm(
+        content="I'm looking it up.",
+        input=UPDATE_TEMPLATE.format(
+            function_name="async_lookup", call_id="1", message="looking it up"
+        ),
+    )
+    actions.add_tts(1.0)
+
+    tool_returned_at = 0.0
+
+    class AsyncToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def async_lookup(self, context: RunContext) -> None:
+            """Look an order up in the background and say nothing more."""
+            nonlocal tool_returned_at
+            await context.update("looking it up")
+            await asyncio.sleep(20.0)
+            tool_returned_at = time.time()
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    away_times: list[float] = []
+    session.on(
+        "user_state_changed",
+        lambda ev: away_times.append(time.time()) if ev.new_state == "away" else None,
+    )
+
+    await asyncio.wait_for(
+        run_session(session, AsyncToolAgent(), drain_delay=40), timeout=SESSION_TIMEOUT
+    )
+
+    assert len(away_times) == 1
+    assert away_times[0] >= tool_returned_at + 3.0
+
+
 @pytest.mark.parametrize(
     "resume_false_interruption, expected_interruption_time",
     [
@@ -385,7 +554,6 @@ async def test_tool_call() -> None:
 async def test_interruption(
     resume_false_interruption: bool, expected_interruption_time: float
 ) -> None:
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.")
@@ -395,7 +563,6 @@ async def test_interruption(
 
     session = create_session(
         actions,
-        speed_factor=speed,
         turn_handling={"interruption": {"resume_false_interruption": resume_false_interruption}},
     )
     agent = MyAgent()
@@ -420,23 +587,44 @@ async def test_interruption(
     assert agent_state_events[1].new_state == "thinking"
     assert agent_state_events[2].new_state == "speaking"
     assert agent_state_events[3].new_state == "listening"
-    check_timestamp(
-        agent_state_events[3].created_at - t_origin, expected_interruption_time, speed_factor=speed
-    )
+    check_timestamp(agent_state_events[3].created_at - t_origin, expected_interruption_time)
     assert agent_state_events[4].new_state == "thinking"
-    check_timestamp(agent_state_events[4].created_at - t_origin, 6.5, speed_factor=speed)
+    check_timestamp(agent_state_events[4].created_at - t_origin, 6.5)
     assert agent_state_events[5].new_state == "listening"
-    check_timestamp(agent_state_events[5].created_at - t_origin, 6.5, speed_factor=speed)
+    check_timestamp(agent_state_events[5].created_at - t_origin, 6.5)
 
     assert len(playback_finished_events) == 1
     assert playback_finished_events[0].interrupted is True
     if not resume_false_interruption:
         # fake audio output doesn't support pause/resume
-        check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
+        check_timestamp(playback_finished_events[0].playback_position, 2.0)
+
+
+async def test_interrupted_say_uses_speech_start_timestamp() -> None:
+    class SayOnEnterAgent(MyAgent):
+        async def on_enter(self) -> None:
+            self.session.say("I saw your application for a Honda")
+
+    actions = FakeActions()
+    actions.add_tts(10.0, input="I saw your application for a Honda")
+    actions.add_user_speech(1.0, 1.2, "Who is this?")
+    actions.add_llm("This is John.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    agent = SayOnEnterAgent()
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    messages = [item for item in agent.chat_ctx.items if item.type == "message"]
+    assert [message.role for message in messages] == ["system", "assistant", "user", "assistant"]
+    assert messages[1].interrupted is True
+    assert messages[1].created_at == messages[1].metrics["started_speaking_at"]
+    assert messages[2].text_content == "Who is this?"
+    assert messages[3].text_content == "This is John."
 
 
 async def test_interruption_options() -> None:
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.")
@@ -448,7 +636,6 @@ async def test_interruption_options() -> None:
     # test min_interruption_words
     session = create_session(
         actions,
-        speed_factor=speed,
         turn_handling={"interruption": {"min_words": 3}},
     )
     playback_finished_events: list[PlaybackFinishedEvent] = []
@@ -458,12 +645,11 @@ async def test_interruption_options() -> None:
 
     assert len(playback_finished_events) == 1
     assert playback_finished_events[0].interrupted is True
-    check_timestamp(playback_finished_events[0].playback_position, 4.0, speed_factor=speed)
+    check_timestamp(playback_finished_events[0].playback_position, 4.0)
 
     # test allow_interruptions=False
     session = create_session(
         actions,
-        speed_factor=speed,
         turn_handling={"interruption": {"enabled": False}},
     )
     playback_finished_events.clear()
@@ -473,11 +659,10 @@ async def test_interruption_options() -> None:
 
     assert len(playback_finished_events) == 1
     assert playback_finished_events[0].interrupted is False
-    check_timestamp(playback_finished_events[0].playback_position, 5.0, speed_factor=speed)
+    check_timestamp(playback_finished_events[0].playback_position, 5.0)
 
 
 async def test_interruption_by_text_input() -> None:
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.")
@@ -485,7 +670,7 @@ async def test_interruption_by_text_input() -> None:
     actions.add_llm("Ok, I'll stop now.", input="stop from text input")
     actions.add_tts(2.0)
 
-    session = create_session(actions, speed_factor=speed)
+    session = create_session(actions)
     agent = MyAgent()
 
     agent_state_events: list[AgentStateChangedEvent] = []
@@ -497,7 +682,7 @@ async def test_interruption_by_text_input() -> None:
         session.interrupt()
         session.generate_reply(user_input="stop from text input")
 
-    asyncio.get_event_loop().call_later(5 / speed, fake_text_input)
+    asyncio.get_event_loop().call_later(5, fake_text_input)
 
     await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
@@ -543,7 +728,6 @@ async def test_interruption_by_text_input() -> None:
 async def test_interruption_before_speaking(
     resume_false_interruption: bool, expected_interruption_time: float
 ) -> None:
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.", duration=1.0)
@@ -552,7 +736,6 @@ async def test_interruption_before_speaking(
 
     session = create_session(
         actions,
-        speed_factor=speed,
         turn_handling={"interruption": {"resume_false_interruption": resume_false_interruption}},
     )
     agent = MyAgent()
@@ -570,7 +753,7 @@ async def test_interruption_before_speaking(
     assert agent_state_events[1].new_state == "thinking"  # without speaking state
     assert agent_state_events[2].new_state == "listening"
     check_timestamp(
-        agent_state_events[2].created_at - t_origin, expected_interruption_time, speed_factor=speed
+        agent_state_events[2].created_at - t_origin, expected_interruption_time
     )  # interrupted at 3.5s
     assert agent_state_events[3].new_state == "thinking"
     assert agent_state_events[4].new_state == "listening"
@@ -584,27 +767,21 @@ async def test_interruption_before_speaking(
     assert agent.chat_ctx.items[2].type == "message"
     assert agent.chat_ctx.items[2].role == "user"
     assert agent.chat_ctx.items[2].text_content == "Tell me a story."
-    # before we insert an empty assistant message with interrupted=True
-    # now we ignore it when the text is empty
+    # an interrupted reply with no text is not recorded
     assert agent.chat_ctx.items[3].type == "message"
     assert agent.chat_ctx.items[3].role == "user"
     assert agent.chat_ctx.items[3].text_content == "Stop!"
 
 
 async def test_interrupt_before_speaking_with_pausable_audio() -> None:
-    """
-    Regression test for https://github.com/livekit/agents/issues/5509
-    User turn starting while the agent is ``thinking`` must pause the
-    pausable output so the stale reply never promotes to ``speaking``.
-    """
-    speed = 1
+    """A user turn starting while thinking pauses the output so the stale reply never speaks."""
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.", duration=1.0)
     actions.add_tts(10.0)
     actions.add_user_speech(3.0, 4.0, "Stop!", stt_delay=0.2)
 
-    session = create_session(actions, speed_factor=speed, can_pause_audio=True)
+    session = create_session(actions, can_pause_audio=True)
     agent = MyAgent()
 
     agent_state_events: list[AgentStateChangedEvent] = []
@@ -626,7 +803,7 @@ async def test_interrupt_before_speaking_with_pausable_audio() -> None:
     assert agent_state_events[0].new_state == "listening"
     assert agent_state_events[1].new_state == "thinking"
     assert agent_state_events[2].new_state == "listening"
-    check_timestamp(agent_state_events[2].created_at - t_origin, 3.5, speed_factor=speed)
+    check_timestamp(agent_state_events[2].created_at - t_origin, 3.5)
 
     # nothing audible reached the transport — the pause cleanup emits a single
     # playback_finished with interrupted=True and playback_position=0
@@ -645,12 +822,51 @@ async def test_interrupt_before_speaking_with_pausable_audio() -> None:
     )
 
 
+async def test_forced_interrupt_of_unplayed_speeches_returns_to_listening() -> None:
+    """A reply cancelled while still queued must not leave the agent in "thinking"."""
+
+    class StalledAudioOutput(AudioOutput):
+        def __init__(self) -> None:
+            super().__init__(
+                label="Stalled",
+                capabilities=AudioOutputCapabilities(pause=False),
+                sample_rate=24000,
+            )
+
+        async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+            await super().capture_frame(frame)
+            await asyncio.Event().wait()
+
+        def flush(self) -> None:
+            super().flush()
+
+        def clear_buffer(self) -> None:
+            pass
+
+    async def frames() -> AsyncIterable[rtc.AudioFrame]:
+        yield rtc.AudioFrame(b"\x00\x00" * 480, 24000, 1, 480)
+
+    session = AgentSession[None](llm=FakeLLM(), aec_warmup_duration=None)
+    session.output.audio = audio = StalledAudioOutput()
+    await session.start(Agent(instructions="test"))
+
+    said = session.say("One moment.", audio=frames(), add_to_chat_ctx=False)
+    reply = session.generate_reply(user_input="A question.")
+    await asyncio.sleep(0.5)
+    session.interrupt(force=True)
+    await asyncio.sleep(10.0)
+
+    assert said.done() and reply.done()
+    assert session.agent_state == "listening"
+
+    # release the playout waiters the stalled output never finishes
+    for _ in range(audio._pending_playback_count):
+        audio.on_playback_finished(playback_position=0.0, interrupted=True)
+    await session.aclose()
+
+
 async def test_false_interruption_before_speaking_resumes() -> None:
-    """
-    Brief VAD-only noise during ``thinking`` must pause then resume on VAD EOS,
-    letting the stale reply play through normally.
-    """
-    speed = 1
+    """Brief VAD-only noise while thinking pauses, then resumes the reply on VAD EOS."""
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a short reply.", ttft=0.05, duration=0.05)
@@ -658,7 +874,7 @@ async def test_false_interruption_before_speaking_resumes() -> None:
     # brief VAD-only noise — same shape as the can_pause=False test, different capability
     actions.add_user_speech(3.0, 3.3, "")
 
-    session = create_session(actions, speed_factor=speed, can_pause_audio=True)
+    session = create_session(actions, can_pause_audio=True)
     agent = MyAgent()
 
     agent_state_events: list[AgentStateChangedEvent] = []
@@ -674,20 +890,17 @@ async def test_false_interruption_before_speaking_resumes() -> None:
 
     # playout was postponed: the noise ran 3.0–3.3s, so "speaking" should fire at
     # ~3.8s (resume on VAD EOS=3.3s + 0.5s min_silence_duration)
-    check_timestamp(speaking_events[0].created_at - t_origin, 3.8, speed_factor=speed)
+    check_timestamp(speaking_events[0].created_at - t_origin, 3.8)
 
     # the reply plays to completion (not interrupted); playback_position covers the
     # full audio duration
     assert len(playback_finished_events) == 1
     assert playback_finished_events[0].interrupted is False
-    check_timestamp(playback_finished_events[0].playback_position, 5.0, speed_factor=speed)
+    check_timestamp(playback_finished_events[0].playback_position, 5.0)
 
 
 async def test_generate_reply() -> None:
-    """
-    Test `generate_reply` in `on_enter` and tool call, `say` in `on_user_turn_completed`
-    """
-    speed = 1
+    """generate_reply in on_enter and a tool, say in on_user_turn_completed."""
 
     actions = FakeActions()
     # llm and tts response for generate_reply() and say()
@@ -705,7 +918,7 @@ async def test_generate_reply() -> None:
     # tool started at 4.5(EOU) + 1.0(session.say)
     # tool finished at 5.5 + 0.5 (second LLM + TTS) + 3 (audio)
 
-    session = create_session(actions, speed_factor=speed)
+    session = create_session(actions)
     agent = MyAgent(generate_reply_on_enter=True, say_on_user_turn_completed=True)
 
     conversation_events: list[ConversationItemAddedEvent] = []
@@ -720,11 +933,11 @@ async def test_generate_reply() -> None:
     # playback_finished
     assert len(playback_finished_events) == 3
     assert playback_finished_events[0].interrupted is False
-    check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
+    check_timestamp(playback_finished_events[0].playback_position, 2.0)
     assert playback_finished_events[1].interrupted is False
-    check_timestamp(playback_finished_events[1].playback_position, 1.0, speed_factor=speed)
+    check_timestamp(playback_finished_events[1].playback_position, 1.0)
     assert playback_finished_events[2].interrupted is False
-    check_timestamp(playback_finished_events[2].playback_position, 3.0, speed_factor=speed)
+    check_timestamp(playback_finished_events[2].playback_position, 3.0)
 
     # function_tools_executed
     assert len(tool_executed_events) == 1
@@ -736,23 +949,19 @@ async def test_generate_reply() -> None:
     assert conversation_events[1].item.type == "message"
     assert conversation_events[1].item.role == "assistant"
     assert conversation_events[1].item.text_content == "What can I do for you!"
-    check_timestamp(conversation_events[1].created_at - t_origin, 2.5, speed_factor=speed)
+    check_timestamp(conversation_events[1].created_at - t_origin, 2.5)
     assert conversation_events[2].item.type == "message"
     assert conversation_events[2].item.role == "user"
     assert conversation_events[2].item.text_content == "bye"
-    check_timestamp(conversation_events[2].created_at - t_origin, 4.5, speed_factor=speed)
+    check_timestamp(conversation_events[2].created_at - t_origin, 4.5)
     assert conversation_events[3].item.type == "message"
     assert conversation_events[3].item.role == "assistant"
     assert conversation_events[3].item.text_content == "session.say from on_user_turn_completed"
-    check_timestamp(
-        conversation_events[3].created_at - t_origin, 5.5, speed_factor=speed, max_abs_diff=1.0
-    )
+    check_timestamp(conversation_events[3].created_at - t_origin, 5.5, max_abs_diff=1.0)
     assert conversation_events[4].item.type == "message"
     assert conversation_events[4].item.role == "assistant"
     assert conversation_events[4].item.text_content == "Goodbye! have a nice day!"
-    check_timestamp(
-        conversation_events[4].created_at - t_origin, 9.0, speed_factor=speed, max_abs_diff=1.0
-    )
+    check_timestamp(conversation_events[4].created_at - t_origin, 9.0, max_abs_diff=1.0)
 
     # chat context
     assert len(agent.chat_ctx.items) == 8
@@ -775,33 +984,61 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[7].type == "function_call_output"
 
 
-async def test_on_enter_hides_ignore_on_enter_tools() -> None:
-    """IGNORE_ON_ENTER tools (bare + toolset-nested) are hidden inside on_enter, restored after."""
+class _OnEnterToolset(Toolset):
+    def __init__(self) -> None:
+        end_call = function_tool(
+            self._end_call, name="end_call", description="ends", flags=ToolFlag.IGNORE_ON_ENTER
+        )
+        keep = function_tool(self._keep, name="keep", description="a normal tool")
+        super().__init__(id="ts", tools=[end_call, keep])
 
-    class _Toolset(Toolset):
+    async def _end_call(self) -> None: ...
+
+    async def _keep(self) -> str:
+        return "kept"
+
+
+@function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+async def _bare_ignored() -> None:
+    """A bare flagged tool."""
+
+
+def _record_offered_tools(session: AgentSession) -> list[set[str]]:
+    offered: list[set[str]] = []
+    orig_chat = session.llm.chat
+
+    def _recording_chat(*, chat_ctx, tools=None, **kwargs):  # type: ignore[no-untyped-def]
+        offered.append(
+            {t.info.name for t in (tools or []) if isinstance(t, (FunctionTool, RawFunctionTool))}
+        )
+        return orig_chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
+
+    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+    return offered
+
+
+@pytest.mark.parametrize("with_task", [False, True])
+async def test_on_enter_hides_ignore_on_enter_tools(with_task: bool) -> None:
+    """Flagged tools are hidden inside on_enter, also after on_enter awaits an AgentTask."""
+
+    class _Task(AgentTask[None]):
         def __init__(self) -> None:
-            end_call = function_tool(
-                self._end_call,
-                name="end_call",
-                description="ends the call",
-                flags=ToolFlag.IGNORE_ON_ENTER,
-            )
-            keep = function_tool(self._keep, name="keep", description="a normal tool")
-            super().__init__(id="ts", tools=[end_call, keep])
+            super().__init__(instructions="complete the setup")
 
-        async def _end_call(self) -> None: ...
-
-        async def _keep(self) -> None: ...
-
-    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-    async def bare_ignored() -> None:
-        """A bare flagged tool."""
+        async def on_enter(self) -> None:
+            self.complete(None)
 
     class _Agent(Agent):
         def __init__(self) -> None:
-            super().__init__(instructions="you are helpful", tools=[_Toolset(), bare_ignored])
+            super().__init__(
+                instructions="you are helpful", tools=[_OnEnterToolset(), _bare_ignored]
+            )
 
         async def on_enter(self) -> None:
+            if with_task:
+                await _Task()
+                # the fake input sends only one frame; prime it again after resume
+                session.input.audio.push(0.1)
             self.session.generate_reply(instructions="instructions:say hello to the user")
 
     actions = FakeActions()
@@ -813,16 +1050,7 @@ async def test_on_enter_hides_ignore_on_enter_tools() -> None:
 
     session = create_session(actions)
 
-    captured: list[set[str]] = []
-    orig_chat = session.llm.chat
-
-    def _recording_chat(*, chat_ctx, tools=None, **kwargs):  # type: ignore[no-untyped-def]
-        captured.append(
-            {t.info.name for t in (tools or []) if isinstance(t, (FunctionTool, RawFunctionTool))}
-        )
-        return orig_chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
-
-    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+    captured = _record_offered_tools(session)
 
     await asyncio.wait_for(run_session(session, _Agent()), timeout=SESSION_TIMEOUT)
 
@@ -830,33 +1058,75 @@ async def test_on_enter_hides_ignore_on_enter_tools() -> None:
     # on_enter reply: flagged tools hidden, normal tool still offered
     assert captured[0] == {"keep"}
     # a later (non-on_enter) turn sees every tool again
-    assert captured[1] == {"keep", "end_call", "bare_ignored"}
+    assert captured[1] == {"keep", "end_call", "_bare_ignored"}
+
+
+async def test_on_enter_marker_does_not_follow_a_handoff_back() -> None:
+    """Handing back to an agent that handed off from on_enter must not keep its tools hidden."""
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def end_call() -> None:
+        """Ends the call."""
+
+    @function_tool
+    async def keep() -> None:
+        """A normal tool."""
+
+    class _Router(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you route the caller", tools=[end_call, keep])
+            self.entered = 0
+
+        async def on_enter(self) -> None:
+            self.entered += 1
+            if self.entered == 1:
+                await self.session.generate_reply(instructions="instructions:greet the user")
+                self.session.update_agent(specialist)
+
+    class _Specialist(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you are a specialist")
+
+        async def on_user_turn_completed(
+            self, turn_ctx: ChatContext, new_message: ChatMessage
+        ) -> None:
+            self.session.update_agent(router)
+            raise StopResponse()
+
+    router = _Router()
+    specialist = _Specialist()
+
+    actions = FakeActions()
+    actions.add_llm("Hello!", input="instructions:greet the user")
+    actions.add_tts(1.0)
+    actions.add_user_speech(3.0, 4.0, "take me back")
+    actions.add_user_speech(6.0, 7.0, "goodbye")
+    actions.add_llm("Bye!")
+    actions.add_tts(1.0)
+
+    # no preemptive reply from the specialist, so the only LLM calls are the router's
+    session = create_session(actions, turn_handling={"preemptive_generation": {"enabled": False}})
+
+    captured = _record_offered_tools(session)
+
+    await asyncio.wait_for(run_session(session, router), timeout=SESSION_TIMEOUT)
+
+    assert router.entered == 2
+    assert len(captured) == 2
+    greeting, user_turn = captured
+    assert greeting == {"keep"}
+    # the router's turn after the handoff back sees every tool again
+    assert user_turn == {"keep", "end_call"}
 
 
 async def test_on_enter_hides_tools_in_nested_tool_reply() -> None:
-    """When an on_enter reply calls a tool, the tool-response follow-up (a nested speech task)
-    also hides the flagged tools — proving the on_enter contextvar reaches nested tasks."""
-
-    class _Toolset(Toolset):
-        def __init__(self) -> None:
-            end_call = function_tool(
-                self._end_call, name="end_call", description="ends", flags=ToolFlag.IGNORE_ON_ENTER
-            )
-            keep = function_tool(self._keep, name="keep", description="a normal tool")
-            super().__init__(id="ts", tools=[end_call, keep])
-
-        async def _end_call(self) -> None: ...
-
-        async def _keep(self) -> str:
-            return "kept"
-
-    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-    async def bare_ignored() -> None:
-        """A bare flagged tool."""
+    """The tool reply of an on_enter reply also hides the flagged tools."""
 
     class _Agent(Agent):
         def __init__(self) -> None:
-            super().__init__(instructions="you are helpful", tools=[_Toolset(), bare_ignored])
+            super().__init__(
+                instructions="you are helpful", tools=[_OnEnterToolset(), _bare_ignored]
+            )
 
         async def on_enter(self) -> None:
             self.session.generate_reply(instructions="instructions:say hello to the user")
@@ -878,16 +1148,7 @@ async def test_on_enter_hides_tools_in_nested_tool_reply() -> None:
 
     session = create_session(actions)
 
-    captured: list[set[str]] = []
-    orig_chat = session.llm.chat
-
-    def _recording_chat(*, chat_ctx, tools=None, **kwargs):  # type: ignore[no-untyped-def]
-        captured.append(
-            {t.info.name for t in (tools or []) if isinstance(t, (FunctionTool, RawFunctionTool))}
-        )
-        return orig_chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
-
-    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+    captured = _record_offered_tools(session)
 
     await asyncio.wait_for(run_session(session, _Agent()), timeout=SESSION_TIMEOUT)
 
@@ -897,98 +1158,45 @@ async def test_on_enter_hides_tools_in_nested_tool_reply() -> None:
     assert greeting == {"keep"}
     assert tool_reply == {"keep"}
     # the later (non-on_enter) user turn sees every tool again
-    assert user_turn == {"keep", "end_call", "bare_ignored"}
+    assert user_turn == {"keep", "end_call", "_bare_ignored"}
 
 
-def test_on_enter_ignored_tools() -> None:
-    """_on_enter_ignored_tools returns flagged tools only inside this agent/session's on_enter."""
-    from livekit.agents.voice.agent_activity import _OnEnterContextVar, _OnEnterData
-
-    class _Toolset(Toolset):
-        def __init__(self) -> None:
-            end_call = function_tool(
-                self._end_call, name="end_call", description="ends", flags=ToolFlag.IGNORE_ON_ENTER
-            )
-            ts_keep = function_tool(self._keep, name="ts_keep", description="normal")
-            super().__init__(id="ts", tools=[end_call, ts_keep])
-
-        async def _end_call(self) -> None: ...
-
-        async def _keep(self) -> None: ...
-
-    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-    async def bare_ignored() -> None:
-        """A flagged bare tool."""
-
-    @function_tool
-    async def bare_keep() -> None:
-        """A normal bare tool."""
-
-    activity = object.__new__(AgentActivity)
-    activity._agent = object()  # type: ignore[assignment]
-    activity._session = object()  # type: ignore[assignment]
-    tool_ctx = ToolContext([_Toolset(), bare_ignored, bare_keep])
-
-    # outside on_enter: nothing is ignored
-    assert activity._on_enter_ignored_tools(tool_ctx) == []
-
-    # inside this agent/session's on_enter: flagged tools (bare + nested) are returned
-    tk = _OnEnterContextVar.set(_OnEnterData(session=activity._session, agent=activity._agent))
-    try:
-        ignored = {t.info.name for t in activity._on_enter_ignored_tools(tool_ctx)}
-    finally:
-        _OnEnterContextVar.reset(tk)
-    assert ignored == {"end_call", "bare_ignored"}
-
-    # a different agent's on_enter must not leak in
-    tk = _OnEnterContextVar.set(_OnEnterData(session=activity._session, agent=object()))
-    try:
-        assert activity._on_enter_ignored_tools(tool_ctx) == []
-    finally:
-        _OnEnterContextVar.reset(tk)
+_SIP = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+_STANDARD = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
 
 
 @pytest.mark.parametrize(
-    ("kind", "attributes", "expected_duration"),
+    ("explicit", "kind", "attributes", "simulation", "expected_duration"),
     [
-        (rtc.ParticipantKind.PARTICIPANT_KIND_SIP, {}, None),
-        (
-            rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
-            {"sip.ruleID": "SDR_inbound"},
-            3.0,
-        ),
-        (rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, {}, 3.0),
+        pytest.param(NOT_GIVEN, _SIP, {}, False, None, id="outbound-sip"),
+        pytest.param(NOT_GIVEN, _SIP, {"sip.ruleID": "SDR_inbound"}, False, 3.0, id="inbound-sip"),
+        pytest.param(NOT_GIVEN, _STANDARD, {}, False, 3.0, id="standard"),
+        pytest.param(None, _SIP, {}, False, None, id="explicit-none"),
+        pytest.param(0.0, _SIP, {}, False, 0.0, id="explicit-zero"),
+        pytest.param(1.5, _SIP, {}, False, 1.5, id="explicit-outbound-sip"),
+        pytest.param(NOT_GIVEN, _STANDARD, {}, True, None, id="simulation"),
+        pytest.param(1.5, _STANDARD, {}, True, 1.5, id="explicit-simulation"),
     ],
 )
-def test_aec_warmup_default_depends_on_call_type(
+def test_aec_warmup_duration_resolves_from_call_type(
+    explicit: NotGivenOr[float | None],
     kind: rtc.ParticipantKind.ValueType,
     attributes: dict[str, str],
+    simulation: bool,
     expected_duration: float | None,
 ) -> None:
-    session = AgentSession(vad=None)
+    session = AgentSession(vad=None, aec_warmup_duration=explicit)
     participant = MagicMock(spec=rtc.RemoteParticipant)
     participant.kind = kind
     participant.attributes = attributes
 
-    session._on_room_io_participant_linked(participant)
+    with patch(
+        "livekit.agents.job.current_simulation", return_value=object() if simulation else None
+    ):
+        session._on_room_io_participant_linked(participant)
 
     assert session.options.aec_warmup_duration == expected_duration
     assert session._aec_warmup_remaining == (expected_duration or 0.0)
-
-
-@pytest.mark.parametrize("duration", [None, 0.0, 1.5])
-def test_explicit_aec_warmup_duration_overrides_outbound_sip_default(
-    duration: float | None,
-) -> None:
-    session = AgentSession(vad=None, aec_warmup_duration=duration)
-    participant = MagicMock(spec=rtc.RemoteParticipant)
-    participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-    participant.attributes = {}
-
-    session._on_room_io_participant_linked(participant)
-
-    assert session.options.aec_warmup_duration == duration
-    assert session._aec_warmup_remaining == (duration or 0.0)
 
 
 def test_outbound_sip_cancels_aec_warmup_that_already_started() -> None:
@@ -1005,88 +1213,37 @@ def test_outbound_sip_cancels_aec_warmup_that_already_started() -> None:
     assert session._aec_warmup_timer is None
 
 
-async def test_aec_warmup() -> None:
-    """AEC warmup should block audio-activity-based interruptions during the warmup window.
-
-    Without warmup, VAD-based interruption fires at 4.0 + 0.5 = 4.5s.
-    With warmup (3.0s from speaking at 3.5s, expires at 6.5s), the VAD path is blocked.
-    The interruption is delayed to 5.5s (EOU: speech end 5.0 + 0.5 endpointing delay)
-    because FakeSTT is timer-based and still produces transcripts during warmup.
-    """
-    speed = 1
+@pytest.mark.parametrize(
+    ("aec_warmup_duration", "interrupted_at"),
+    [
+        # warmup (3.5s + 3.0s) blocks the VAD path, so the EOU at 5.0 + 0.5 interrupts
+        (3.0, 5.5),
+        # without warmup VAD interrupts at 4.0 + 0.5
+        (None, 4.5),
+    ],
+)
+async def test_aec_warmup_blocks_vad_interruption(
+    aec_warmup_duration: float | None, interrupted_at: float
+) -> None:
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.")
     actions.add_tts(15.0)  # playout starts at 3.5s
-    # user speaks at 4.0-5.0s — within warmup window (3.5 + 3.0 = 6.5s expiry)
-    # without warmup: VAD interruption at 4.0 + 0.5 = 4.5s
-    # with warmup: VAD blocked, falls through to EOU at 5.0 + 0.5 = 5.5s
     actions.add_user_speech(4.0, 5.0, "Stop!", stt_delay=0.2)
 
-    session = create_session(
-        actions,
-        speed_factor=speed,
-        extra_kwargs={"aec_warmup_duration": 3.0},
-    )
-    agent = MyAgent()
-
+    session = create_session(actions, extra_kwargs={"aec_warmup_duration": aec_warmup_duration})
     agent_state_events: list[AgentStateChangedEvent] = []
     playback_finished_events: list[PlaybackFinishedEvent] = []
     session.on("agent_state_changed", agent_state_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    t_origin = await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 1
     assert playback_finished_events[0].interrupted is True
-
-    assert agent_state_events[0].new_state == "listening"
-    assert agent_state_events[1].new_state == "thinking"
-    assert agent_state_events[2].new_state == "speaking"
-    # interruption delayed to 5.5s (EOU), not 4.5s (VAD was blocked by warmup)
+    assert [ev.new_state for ev in agent_state_events[:3]] == ["listening", "thinking", "speaking"]
     speaking_to_listening = next(e for e in agent_state_events[3:] if e.new_state == "listening")
-    check_timestamp(speaking_to_listening.created_at - t_origin, 5.5, speed_factor=speed)
-
-
-async def test_start_boundary_does_not_block_vad_interruption() -> None:
-    """backchannel boundary should not interfere with VAD-based interruption when adaptive
-    detection is not active. The cooldown timer runs but has no effect on the VAD path.
-
-    This validates that the backchannel_boundary config is properly handled and doesn't
-    regress normal interruption behavior.
-    """
-    speed = 1
-    actions = FakeActions()
-    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
-    actions.add_llm("Here is a long story for you ... the end.")
-    actions.add_tts(15.0)  # playout starts at ~3.5s
-    # user speaks at 4.0-5.0s — within the 1s warmup window (3.5 + 1.0 = 4.5s expiry)
-    # VAD interruption at 4.0 + 0.5 = 4.5s (warmup does NOT block VAD)
-    actions.add_user_speech(4.0, 5.0, "Stop!", stt_delay=0.2)
-
-    session = create_session(
-        actions,
-        speed_factor=speed,
-        extra_kwargs={"aec_warmup_duration": None},
-    )
-    agent = MyAgent()
-
-    agent_state_events: list[AgentStateChangedEvent] = []
-    playback_finished_events: list[PlaybackFinishedEvent] = []
-    session.on("agent_state_changed", agent_state_events.append)
-    session.output.audio.on("playback_finished", playback_finished_events.append)
-
-    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
-
-    assert len(playback_finished_events) == 1
-    assert playback_finished_events[0].interrupted is True
-
-    assert agent_state_events[0].new_state == "listening"
-    assert agent_state_events[1].new_state == "thinking"
-    assert agent_state_events[2].new_state == "speaking"
-    # VAD interruption fires normally at ~4.5s (warmup doesn't block VAD path)
-    speaking_to_listening = next(e for e in agent_state_events[3:] if e.new_state == "listening")
-    check_timestamp(speaking_to_listening.created_at - t_origin, 4.5, speed_factor=speed)
+    check_timestamp(speaking_to_listening.created_at - t_origin, interrupted_at)
 
 
 async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> None:
@@ -1096,87 +1253,284 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
         turn_handling={"interruption": {"backchannel_boundary": (0.05, 0.0)}},
     )
     hooks = _TestRecognitionHooks()
-    recognition = AudioRecognition(
-        session,
-        hooks=hooks,
-        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
-        stt=None,
-        vad=None,
-        using_default_vad=False,
-        interruption_detection=None,
-        turn_detection="vad",
-    )
+    recognition = _recognition(session, turn_detection="vad", hooks=hooks)
 
     try:
         recognition._on_start_of_agent_speech(started_at=time.time())
-        # backchannels during the cooldown are dropped (they are a no-op anyway,
-        # but this guards against the gate firing on `on_interruption`)
-        await recognition._on_overlap_speech_event(_backchannel_event())
+        # backchannels during the cooldown are dropped
+        event = _backchannel_event()
+        hooks.on_overlap_speech(event)
+        recognition._on_overlap_speech_event(event)
         assert hooks.interruptions == []
 
         # a real interruption during the cooldown must still fire
-        await recognition._on_overlap_speech_event(_interruption_event())
+        event = _interruption_event()
+        hooks.on_overlap_speech(event)
+        recognition._on_overlap_speech_event(event)
         assert len(hooks.interruptions) == 1
 
         # after cooldown, both event types behave normally
         await asyncio.sleep(0.06)
-        await recognition._on_overlap_speech_event(_backchannel_event())
-        await recognition._on_overlap_speech_event(_interruption_event())
+        backchannel_event = _backchannel_event()
+        hooks.on_overlap_speech(backchannel_event)
+        recognition._on_overlap_speech_event(backchannel_event)
+        interruption_event = _interruption_event()
+        hooks.on_overlap_speech(interruption_event)
+        recognition._on_overlap_speech_event(interruption_event)
         assert len(hooks.interruptions) == 2
     finally:
         await _close_test_session(session)
 
 
-async def _make_stt_eos_recognition() -> AudioRecognition:
-    return AudioRecognition(
-        create_session(FakeActions()),
-        hooks=_TestRecognitionHooks(),
-        endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
-        stt=None,
-        vad=None,
-        using_default_vad=False,
-        interruption_detection=None,
-        turn_detection="stt",
+@pytest.mark.parametrize("has_vad_stream", [True, False])
+async def test_stt_eos_resets_vad(has_vad_stream: bool) -> None:
+    """STT EOS flushes an active VAD stream in place, or recreates VAD when none is running."""
+    recognition = _recognition(
+        create_session(FakeActions()), turn_detection="stt", min_delay=0.0, max_delay=0.0
     )
-
-
-async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None:
-    recognition = await _make_stt_eos_recognition()
     recognition._speaking = True
     recognition._vad_speech_started = True
     recognition._vad = MagicMock()
-    resettable_stream = MagicMock()
-    recognition._vad_stream = resettable_stream
+    vad_stream = MagicMock() if has_vad_stream else None
+    recognition._vad_stream = vad_stream
 
     try:
         with patch.object(recognition, "_update_vad") as update_vad:
             await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
 
-        resettable_stream.flush.assert_called_once_with()
-        update_vad.assert_not_called()
-        assert recognition._vad_stream is resettable_stream
+        if vad_stream is not None:
+            vad_stream.flush.assert_called_once_with()
+            update_vad.assert_not_called()
+            assert recognition._vad_stream is vad_stream
+        else:
+            update_vad.assert_called_once_with(recognition._vad)
     finally:
         if recognition._end_of_turn_task is not None:
             await aio.cancel_and_wait(recognition._end_of_turn_task)
         await _close_test_session(recognition._session)
 
 
-async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
-    recognition = await _make_stt_eos_recognition()
-    recognition._speaking = True
-    recognition._vad_speech_started = True
-    recognition._vad = MagicMock()
-    recognition._vad_stream = None
+@contextlib.asynccontextmanager
+async def _stt_turn_recognition(
+    *, min_delay: float
+) -> AsyncIterator[tuple[AudioRecognition, list[str]]]:
+    committed: list[str] = []
 
+    class _CommitRecordingHooks(_TestRecognitionHooks):
+        def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+            committed.append(info.new_transcript)
+            return True
+
+    recognition = _recognition(
+        create_session(FakeActions()),
+        turn_detection="stt",
+        hooks=_CommitRecordingHooks(),
+        min_delay=min_delay,
+        max_delay=min_delay,
+        stt=MagicMock(),
+    )
     try:
-        with patch.object(recognition, "_update_vad") as update_vad:
-            await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
-
-        update_vad.assert_called_once_with(recognition._vad)
+        yield recognition, committed
     finally:
         if recognition._end_of_turn_task is not None:
             await aio.cancel_and_wait(recognition._end_of_turn_task)
         await _close_test_session(recognition._session)
+
+
+async def _send_stt_event(
+    recognition: AudioRecognition, type: SpeechEventType, text: str | None = None
+) -> None:
+    alternatives = [SpeechData(text=text, language=LanguageCode(""))] if text else []
+    await recognition._on_stt_event(SpeechEvent(type=type, alternatives=alternatives))
+    await asyncio.sleep(0.05)
+
+
+async def _send_vad_end(recognition: AudioRecognition) -> None:
+    await recognition._on_vad_event(
+        vad.VADEvent(
+            type=vad.VADEventType.END_OF_SPEECH,
+            samples_index=0,
+            timestamp=time.time(),
+            speech_duration=0.5,
+            silence_duration=0.3,
+        )
+    )
+    await asyncio.sleep(0.05)
+
+
+@pytest.mark.parametrize(
+    ("min_delay", "first_turns"),
+    [
+        pytest.param(0.0, ["I need the OTP.", "For the guard."], id="committed-before-final"),
+        pytest.param(0.5, ["I need the OTP. For the guard."], id="final-within-delay"),
+    ],
+)
+async def test_stt_final_after_a_later_end_of_speech_still_ends_a_turn(
+    min_delay: float, first_turns: list[str]
+) -> None:
+    async with _stt_turn_recognition(min_delay=min_delay) as (recognition, committed):
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        await asyncio.sleep(min_delay + 0.1)
+
+        assert committed == first_turns
+        assert recognition._audio_transcript == ""
+
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "Thanks.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(min_delay + 0.1)
+
+        assert committed == [*first_turns, "Thanks."]
+
+
+async def test_stt_resume_supersedes_a_pending_end_of_speech() -> None:
+    """A provider START_OF_SPEECH reopens the turn; only its next END_OF_SPEECH ends it."""
+    async with _stt_turn_recognition(min_delay=0.0) as (recognition, committed):
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_vad_end(recognition)
+        assert committed == []
+
+        await _send_vad_end(recognition)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the")
+        assert committed == []
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP. For the"]
+
+
+async def test_stt_resume_after_final_is_not_ended_by_a_vad_pause() -> None:
+    """Deepgram Flux order: EndOfTurn sends FINAL_TRANSCRIPT then END_OF_SPEECH."""
+    async with _stt_turn_recognition(min_delay=0.3) as (recognition, committed):
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        # the user resumes within min_delay
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.INTERIM_TRANSCRIPT, "in the province")
+        # a short pause: VAD ends before the provider does
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_stt_event(
+            recognition, SpeechEventType.FINAL_TRANSCRIPT, "in the province of Como."
+        )
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu. in the province of Como."]
+
+
+async def test_stt_resume_without_words_is_ended_by_the_next_end_of_speech() -> None:
+    """A resume that transcribes nothing still commits the pending text on the provider's end."""
+    async with _stt_turn_recognition(min_delay=0.3) as (recognition, committed):
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        # e.g. a Flux EndOfTurn without words: no final, only END_OF_SPEECH
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu."]
+
+
+async def test_stt_final_after_resume_waits_for_the_provider_end_of_speech() -> None:
+    """A final for the resumed speech doesn't let a VAD pause end the turn early."""
+    async with _stt_turn_recognition(min_delay=0.3) as (recognition, committed):
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        # the user resumes within min_delay
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        # a mid-turn final for the resumed speech
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "the OTP")
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "for the guard")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I need the OTP for the guard"]
+
+
+async def test_stt_pending_end_of_turn_survives_vad_only_speech() -> None:
+    """VAD speech the provider ignores cancels the pending end of turn; its VAD end resumes it."""
+    async with _stt_turn_recognition(min_delay=0.3) as (recognition, committed):
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.START_OF_SPEECH,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=0.1,
+                silence_duration=0.0,
+            )
+        )
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu."]
+
+
+async def test_stt_turn_end_does_not_carry_into_manual_turn_detection() -> None:
+    async with _stt_turn_recognition(min_delay=0.0) as (recognition, committed):
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        recognition._update_options(turn_detection="manual")
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        await asyncio.sleep(0.1)
+
+        assert committed == ["I need the OTP."]
+        assert recognition._audio_transcript == "For the guard."
+
+
+async def test_stt_turn_is_not_ended_by_vad_after_the_user_resumes() -> None:
+    async with _stt_turn_recognition(min_delay=0.0) as (recognition, committed):
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_vad_end(recognition)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the")
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP.", "For the"]
+
+
+async def test_stt_cleared_turn_waits_for_its_own_end_of_speech() -> None:
+    async with _stt_turn_recognition(min_delay=0.0) as (recognition, committed):
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        recognition._clear_user_turn()
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP.", "For the guard."]
 
 
 async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
@@ -1185,43 +1539,37 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
         actions,
         turn_handling={"interruption": {"backchannel_boundary": (0.0, 0.5)}},
     )
-    recognition = AudioRecognition(
-        session,
-        hooks=_TestRecognitionHooks(),
-        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
-        stt=None,
-        vad=None,
-        using_default_vad=False,
-        interruption_detection=None,
-        turn_detection="vad",
-    )
+    recognition = _recognition(session)
     recognition._interruption_enabled = True
     recognition._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
-    input_started_at = time.time() - 10.0
-    # the input anchor lives on the STT pipeline (see _STTPipeline.input_started_at)
-    recognition._stt_pipeline = SimpleNamespace(input_started_at=input_started_at)  # type: ignore[assignment]
 
     try:
-        # the agent speaks for a couple of seconds so the held transcript still lands
-        # after the agent-speech start (the lower bound of the ignore window)
-        recognition._on_start_of_agent_speech(started_at=time.time() - 2.0)
-        speech_ended_at = time.time()
-        recognition._on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
-
-        assert not recognition._should_hold_stt_event(
+        recognition._on_start_of_agent_speech(started_at=8.0)
+        recognition._on_start_of_speech(started_at=8.1)
+        await recognition._on_stt_event(
+            _final_transcript_event(
+                text="before the boundary", start_time=0.0, end_time=0.0, created_at=9.0
+            )
+        )
+        await recognition._on_stt_event(
             _final_transcript_event(
                 text="near the boundary",
-                start_time=speech_ended_at - input_started_at - 0.25,
-                end_time=speech_ended_at - input_started_at,
+                start_time=10_000.0,
+                end_time=20_000.0,
+                created_at=9.75,
             )
         )
-        assert recognition._should_hold_stt_event(
+        recognition._on_end_of_agent_speech(ended_at=10.0)
+        await recognition._on_stt_event(
             _final_transcript_event(
-                text="before the boundary",
-                start_time=speech_ended_at - input_started_at - 0.75,
-                end_time=speech_ended_at - input_started_at - 0.5,
+                text="after agent", start_time=0.0, end_time=0.0, created_at=10.1
             )
         )
+
+        assert recognition._hooks.final_transcripts == [  # type: ignore[attr-defined]
+            "near the boundary",
+            "after agent",
+        ]
     finally:
         recognition._interruption_ch.close()
         await _close_test_session(session)
@@ -1257,34 +1605,105 @@ async def test_interruption_detection_error_is_not_session_error() -> None:
         await _close_test_session(session)
 
 
-async def test_stt_errors_use_unrecoverable_error_tolerance() -> None:
-    from livekit.agents.voice.agent_session import SessionConnectOptions
+async def test_reset_away_timer_restarts_the_full_timeout() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        user_states: list[str] = []
+        session.on("user_state_changed", lambda ev: user_states.append(ev.new_state))
+        await session.start(MyAgent())
 
-    session = create_session(
-        FakeActions(),
-        extra_kwargs={"conn_options": SessionConnectOptions(max_unrecoverable_errors=1)},
-    )
+        for _ in range(2):
+            await asyncio.sleep(2.0)
+            session.reset_away_timer()
 
-    def _stt_error() -> STTError:
-        return STTError(
-            timestamp=time.time(),
-            label="test",
-            error=RuntimeError("stt unavailable"),
-            recoverable=False,
+        await asyncio.sleep(2.0)
+        assert session.user_state == "listening"
+        assert user_states == []
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "away"
+        assert user_states == ["away"]
+
+
+@pytest.mark.parametrize("agent_state", ["listening", "speaking", "thinking"])
+async def test_reset_away_timer_returns_away_user_to_listening(agent_state: AgentState) -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        transitions: list[tuple[str, str]] = []
+        session.on(
+            "user_state_changed", lambda ev: transitions.append((ev.old_state, ev.new_state))
         )
+        await session.start(MyAgent())
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
 
-    try:
-        # first unrecoverable error is tolerated, like llm/tts
-        session._on_error(_stt_error())
-        assert session._closing_task is None
-        assert session._stt_error_counts == 1
+        session._update_agent_state(agent_state)
+        session.reset_away_timer()
+        assert session.user_state == "listening"
+        assert transitions == [("listening", "away"), ("away", "listening")]
 
-        # exceeding the tolerance closes the session
-        session._on_error(_stt_error())
-        assert session._closing_task is not None
-        await session._closing_task
-    finally:
-        await _close_test_session(session)
+        await asyncio.sleep(2.0)
+        assert session.user_state == "listening"
+        await asyncio.sleep(2.0)
+        assert session.user_state == ("away" if agent_state == "listening" else "listening")
+
+
+@pytest.mark.parametrize(
+    ("user_state", "agent_state"),
+    [("speaking", "listening"), ("listening", "speaking"), ("listening", "thinking")],
+)
+async def test_reset_away_timer_preserves_active_turns(
+    user_state: UserState, agent_state: AgentState
+) -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        await session.start(MyAgent())
+        session._update_user_state(user_state)
+        session._update_agent_state(agent_state)
+
+        session.reset_away_timer()
+        await asyncio.sleep(4.0)
+        assert session.user_state == user_state
+        assert session.agent_state == agent_state
+
+        session._update_user_state("listening")
+        session._update_agent_state("listening")
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
+
+
+async def test_reset_away_timer_is_noop_when_disabled() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=None
+    ) as session:
+        await session.start(MyAgent())
+        session.reset_away_timer()
+        await asyncio.sleep(30.0)
+        assert session.user_state == "listening"
+        assert session._user_away_timer is None
+
+
+async def test_reset_away_timer_is_noop_outside_session_lifetime() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        session.reset_away_timer()
+        assert session._user_away_timer is None
+
+        await session.start(MyAgent())
+        timer = session._user_away_timer
+        session.shutdown()
+        session.reset_away_timer()
+        assert session._user_away_timer is timer
+
+        await session.aclose()
+        session.reset_away_timer()
+        await asyncio.sleep(4.0)
+        assert session.user_state == "listening"
+        assert session._user_away_timer is None
 
 
 async def test_final_transcript_resets_away_timer_when_not_speaking() -> None:
@@ -1317,8 +1736,6 @@ async def test_final_transcript_resets_away_timer_when_not_speaking() -> None:
 
 
 async def test_stt_error_count_resets_on_user_transcript() -> None:
-    from livekit.agents.voice.agent_session import SessionConnectOptions
-
     session = create_session(
         FakeActions(),
         extra_kwargs={"conn_options": SessionConnectOptions(max_unrecoverable_errors=1)},
@@ -1333,7 +1750,9 @@ async def test_stt_error_count_resets_on_user_transcript() -> None:
         )
 
     try:
+        # the first unrecoverable error is tolerated, like llm/tts
         session._on_error(_stt_error())
+        assert session._closing_task is None
         assert session._stt_error_counts == 1
 
         # a real transcript means the stt recovered -> tolerance resets
@@ -1355,14 +1774,13 @@ async def test_stt_error_count_resets_on_user_transcript() -> None:
         await _close_test_session(session)
 
 
-async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from livekit.agents.voice import audio_recognition
-    from livekit.agents.voice.audio_recognition import _STTPipeline
-
+@pytest.fixture
+def _no_stt_reconnect_delay(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
 
+
+@pytest.mark.usefixtures("_no_stt_reconnect_delay")
+async def test_stt_pipeline_recreates_stream_after_unrecoverable_error() -> None:
     attempts = 0
 
     async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
@@ -1386,88 +1804,44 @@ async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
         ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
         assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
         assert ev.alternatives[0].text == "recovered"
+        assert ev.created_at > 0
         assert attempts == 2
     finally:
         await pipeline.aclose()
 
 
-async def test_stt_pipeline_does_not_recreate_on_non_connection_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from livekit.agents.voice import audio_recognition
-    from livekit.agents.voice.audio_recognition import _STTPipeline
-
-    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
-
-    attempts = 0
-
-    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
-        nonlocal attempts
-        attempts += 1
-        raise ValueError("bug in stt_node")
-        yield  # pragma: no cover - makes this an async generator
-
-    # a non-connection error is not retried: the pump stops instead of looping
-    pipeline = _STTPipeline(stt_node)
-    try:
-        events: list[SpeechEvent] = []
-
-        async def _collect() -> None:
-            async for ev in pipeline.event_ch:
-                events.append(ev)
-
-        await asyncio.wait_for(_collect(), timeout=5)
-        assert events == []
-        assert attempts == 1
-    finally:
-        await pipeline.aclose()
-
-
-async def test_stt_pipeline_does_not_recreate_stream_while_closing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from livekit.agents.voice import audio_recognition
-    from livekit.agents.voice.audio_recognition import _STTPipeline
-
-    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
-
+@pytest.mark.usefixtures("_no_stt_reconnect_delay")
+@pytest.mark.parametrize(
+    ("error", "closing"),
+    [
+        pytest.param(ValueError("bug in stt_node"), False, id="non-connection-error"),
+        pytest.param(APIConnectionError("stt unavailable"), True, id="session-closing"),
+    ],
+)
+async def test_stt_pipeline_does_not_recreate_stream(error: Exception, closing: bool) -> None:
     attempts = 0
 
     async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            raise APIConnectionError("stt unavailable")
-
+            raise error
         yield SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[SpeechData(text="recovered", language="en")],
         )
 
-    # session already closing: the pump must not spawn a replacement stream
-    pipeline = _STTPipeline(stt_node, is_closing=lambda: True)
+    pipeline = _STTPipeline(stt_node, is_closing=lambda: closing)
     try:
-        events: list[SpeechEvent] = []
-
-        async def _collect() -> None:
-            async for ev in pipeline.event_ch:
-                events.append(ev)
-
-        await asyncio.wait_for(_collect(), timeout=5)
+        events = [ev async for ev in pipeline.event_ch]
         assert events == []
         assert attempts == 1
     finally:
         await pipeline.aclose()
 
 
-async def test_stt_pipeline_recreation_uses_rebound_node(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from livekit.agents.voice import audio_recognition
-    from livekit.agents.voice.audio_recognition import _STTPipeline
-
-    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
-
+@pytest.mark.usefixtures("_no_stt_reconnect_delay")
+async def test_stt_pipeline_recreation_uses_rebound_node() -> None:
     started_old = asyncio.Event()
     fail_old = asyncio.Event()
 
@@ -1486,9 +1860,7 @@ async def test_stt_pipeline_recreation_uses_rebound_node(
         async for _ in audio:
             pass
 
-    # a handoff reuses the pipeline but rebinds it to the new agent's node; the
-    # recreation after the old stream fails must use that rebound node, not the
-    # previous agent's (whose activity would be torn down)
+    # a handoff rebinds the pipeline; recreation must use the new agent's node
     pipeline = _STTPipeline(old_node)
     try:
         await asyncio.wait_for(started_old.wait(), timeout=5)
@@ -1556,7 +1928,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
                 speaking=True,
             )
         )
-        current_speech.interrupt.assert_called_once_with()
+        current_speech.interrupt.assert_called_once_with(source="audio_activity")
         assert any(
             record.levelno == logging.INFO
             and "falling back to VAD-based interruption" in record.message
@@ -1567,26 +1939,17 @@ async def test_vad_fallback_uses_next_vad_inference_event(
         await _close_test_session(session)
 
 
-async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
+async def test_flush_held_transcripts_emits_buffered_events() -> None:
     actions = FakeActions()
     session = create_session(actions)
     hooks = _TestRecognitionHooks()
-    recognition = AudioRecognition(
-        session,
-        hooks=hooks,
-        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
-        stt=None,
-        vad=None,
-        using_default_vad=False,
-        interruption_detection=None,
-        turn_detection="manual",
-    )
+    recognition = _recognition(session, hooks=hooks)
     recognition._transcript_buffer.append(
         _final_transcript_event(text="held transcript", start_time=0.0, end_time=1.0)
     )
 
     try:
-        await recognition._flush_held_transcripts(cooldown=0.0, force=True)
+        recognition._flush_held_transcripts()
 
         assert hooks.final_transcripts == ["held transcript"]
         assert not recognition._transcript_buffer
@@ -1594,21 +1957,11 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
         await _close_test_session(session)
 
 
-async def test_held_final_transcript_cancels_transcription_timeout() -> None:
+async def test_held_final_transcript_cancels_timeout_on_arrival() -> None:
     session = create_session(FakeActions())
     hooks = _TestRecognitionHooks()
-    recognition = AudioRecognition(
-        session,
-        hooks=hooks,
-        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
-        stt=None,
-        vad=None,
-        using_default_vad=False,
-        interruption_detection=None,
-        turn_detection="vad",
-    )
-    recognition._interruption_enabled = True
-    recognition._agent_speaking = True
+    recognition = _recognition(session, hooks=hooks)
+    recognition._transcript_gate_active = True
     timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
     recognition._transcription_timeout_handle = timeout_handle
     event = _final_transcript_event(text="held transcript", start_time=0.0, end_time=1.0)
@@ -1620,24 +1973,57 @@ async def test_held_final_transcript_cancels_transcription_timeout() -> None:
         assert recognition._turn_transcript_received
         assert list(recognition._transcript_buffer) == [event]
         assert hooks.final_transcripts == []
+
+        recognition._flush_held_transcripts()
+
+        assert timeout_handle.cancelled()
+        assert recognition._turn_transcript_received
+        assert hooks.final_transcripts == ["held transcript"]
+        assert recognition._current_transcript == "held transcript"
     finally:
         timeout_handle.cancel()
+        await _close_test_session(session)
+
+
+async def test_true_verdict_releases_late_transcripts() -> None:
+    session = create_session(FakeActions())
+    hooks = _TestRecognitionHooks()
+    recognition = _recognition(session, hooks=hooks)
+    recognition._transcript_gate_active = True
+    recognition._agent_speaking = True
+    recognition._agent_speech_started_at = time.time() - 1.0
+    overlap_started_at = time.time() - 0.5
+    recognition._transcript_buffer.append(
+        _final_transcript_event(
+            text="already held",
+            start_time=0.0,
+            end_time=0.0,
+            created_at=overlap_started_at,
+        )
+    )
+
+    try:
+        event = inference.OverlappingSpeechEvent(
+            is_interruption=True,
+            overlap_started_at=overlap_started_at,
+        )
+        hooks.on_overlap_speech(event)
+        recognition._on_overlap_speech_event(event)
+        await recognition._on_stt_event(
+            _final_transcript_event(text="arrived later", start_time=0.0, end_time=0.0)
+        )
+
+        assert hooks.final_transcripts == ["already held", "arrived later"]
+        assert len(hooks.interruptions) == 1
+        assert not recognition._transcript_buffer
+    finally:
         await _close_test_session(session)
 
 
 async def test_preflight_transcript_does_not_cancel_transcription_timeout() -> None:
     session = create_session(FakeActions())
     hooks = _TestRecognitionHooks()
-    recognition = AudioRecognition(
-        session,
-        hooks=hooks,
-        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
-        stt=None,
-        vad=None,
-        using_default_vad=False,
-        interruption_detection=None,
-        turn_detection="manual",
-    )
+    recognition = _recognition(session, hooks=hooks)
     timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
     recognition._transcription_timeout_handle = timeout_handle
     event = SpeechEvent(
@@ -1657,16 +2043,7 @@ async def test_preflight_transcript_does_not_cancel_transcription_timeout() -> N
 
 async def test_transcription_timeout_accounts_for_vad_endpointing_delay() -> None:
     session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 2.0})
-    recognition = AudioRecognition(
-        session,
-        hooks=_TestRecognitionHooks(),
-        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
-        stt=None,
-        vad=None,
-        using_default_vad=False,
-        interruption_detection=None,
-        turn_detection="vad",
-    )
+    recognition = _recognition(session, turn_detection="vad")
     recognition._stt_pipeline = MagicMock()
     recognition._vad_speech_started = True
     event_loop = asyncio.get_running_loop()
@@ -1694,16 +2071,7 @@ async def test_transcription_timeout_accounts_for_vad_endpointing_delay() -> Non
 
 async def test_late_vad_eos_after_committed_turn_does_not_arm_transcription_timeout() -> None:
     session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 2.0})
-    recognition = AudioRecognition(
-        session,
-        hooks=_TestRecognitionHooks(),
-        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
-        stt=None,
-        vad=None,
-        using_default_vad=False,
-        interruption_detection=None,
-        turn_detection="stt",
-    )
+    recognition = _recognition(session, turn_detection="stt")
     recognition._stt_pipeline = MagicMock()
     recognition._vad_speech_started = False
 
@@ -1727,16 +2095,7 @@ async def test_late_vad_eos_after_committed_turn_does_not_arm_transcription_time
 
 async def test_clear_user_turn_resets_transcription_timeout() -> None:
     session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 1.0})
-    recognition = AudioRecognition(
-        session,
-        hooks=_TestRecognitionHooks(),
-        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
-        stt=None,
-        vad=None,
-        using_default_vad=False,
-        interruption_detection=None,
-        turn_detection="vad",
-    )
+    recognition = _recognition(session, turn_detection="vad")
     timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
     recognition._transcription_timeout_handle = timeout_handle
     recognition._turn_speech_duration = 2.0
@@ -1760,99 +2119,89 @@ async def test_clear_user_turn_resets_transcription_timeout() -> None:
 
 
 @pytest.mark.parametrize(
-    "preemptive_generation, expected_latency",
+    ("session_preemptive", "agent_preemptive", "expected_latency"),
     [
-        ({"preemptive_tts": True}, 0.7),
-        ({"preemptive_tts": False}, 0.8),
-        ({"enabled": False}, 1.1),
-    ],
-)
-async def test_preemptive_generation(preemptive_generation: dict, expected_latency: float) -> None:
-    speed = 1
-    actions = FakeActions()
-    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.1)
-    actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
-    actions.add_tts(3.0, ttfb=0.3)
-    # preemptive_generation with TTS enabled: e2e latency is 0.1+0.3+0.3=0.7s
-    # preemptive_generation without TTS enabled: e2e latency is max(0.1+0.3, 0.5)+0.3=0.8s
-    # preemptive_generation disabled: e2e latency is 0.5+0.3+0.3=1.1s
-
-    session = create_session(
-        actions,
-        speed_factor=speed,
-        turn_handling={"preemptive_generation": preemptive_generation},
-    )
-    agent = MyAgent()
-
-    agent_state_events: list[AgentStateChangedEvent] = []
-    user_state_events: list[UserStateChangedEvent] = []
-    session.on("agent_state_changed", agent_state_events.append)
-    session.on("user_state_changed", user_state_events.append)
-
-    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
-    assert len(user_state_events) == 2
-    assert user_state_events[0].old_state == "listening"
-    assert user_state_events[0].new_state == "speaking"
-    assert user_state_events[1].new_state == "listening"
-    t_user_stop_speaking = user_state_events[1].created_at
-
-    assert len(agent_state_events) == 4
-    assert agent_state_events[0].old_state == "initializing"
-    assert agent_state_events[0].new_state == "listening"
-    assert agent_state_events[1].new_state == "thinking"
-    assert agent_state_events[2].new_state == "speaking"
-    t_agent_start_speaking = agent_state_events[2].created_at
-    check_timestamp(
-        t_agent_start_speaking - t_user_stop_speaking,
-        t_target=expected_latency,
-        speed_factor=speed,
-        max_abs_diff=0.2,
-    )
-    assert agent_state_events[3].new_state == "listening"
-
-
-@pytest.mark.parametrize(
-    "session_preemptive, agent_preemptive, expected_latency",
-    [
-        # agent disables what the session enabled -> no preemptive generation (1.1s)
+        # with TTS: 0.1 + 0.3 + 0.3
+        ({"preemptive_tts": True}, NOT_GIVEN, 0.7),
+        # without TTS: max(0.1 + 0.3, 0.5) + 0.3
+        ({"preemptive_tts": False}, NOT_GIVEN, 0.8),
+        # disabled: 0.5 + 0.3 + 0.3
+        ({"enabled": False}, NOT_GIVEN, 1.1),
+        # the agent's setting overrides the session's
         ({"preemptive_tts": True}, {"enabled": False}, 1.1),
-        # agent enables (with TTS) what the session disabled -> fully preemptive (0.7s)
         ({"enabled": False}, {"enabled": True, "preemptive_tts": True}, 0.7),
     ],
 )
-async def test_preemptive_generation_on_agent(
-    session_preemptive: dict, agent_preemptive: dict, expected_latency: float
+async def test_preemptive_generation(
+    session_preemptive: dict, agent_preemptive: NotGivenOr[dict], expected_latency: float
 ) -> None:
-    # preemptive generation set on the agent must override the session value
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.1)
     actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
     actions.add_tts(3.0, ttfb=0.3)
-    # preemptive_generation with TTS enabled: e2e latency is 0.1+0.3+0.3=0.7s
-    # preemptive_generation disabled: e2e latency is 0.5+0.3+0.3=1.1s
 
-    session = create_session(
-        actions,
-        speed_factor=speed,
-        turn_handling={"preemptive_generation": session_preemptive},
+    session = create_session(actions, turn_handling={"preemptive_generation": session_preemptive})
+    agent = MyAgent(
+        turn_handling=NOT_GIVEN
+        if agent_preemptive is NOT_GIVEN
+        else {"preemptive_generation": agent_preemptive}
     )
-    agent = MyAgent(turn_handling={"preemptive_generation": agent_preemptive})
-
     agent_state_events: list[AgentStateChangedEvent] = []
     user_state_events: list[UserStateChangedEvent] = []
     session.on("agent_state_changed", agent_state_events.append)
     session.on("user_state_changed", user_state_events.append)
 
     await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
-    t_user_stop_speaking = user_state_events[1].created_at
-    t_agent_start_speaking = agent_state_events[2].created_at
+
+    assert [ev.new_state for ev in user_state_events] == ["speaking", "listening"]
+    assert [ev.new_state for ev in agent_state_events] == [
+        "listening",
+        "thinking",
+        "speaking",
+        "listening",
+    ]
     check_timestamp(
-        t_agent_start_speaking - t_user_stop_speaking,
-        t_target=expected_latency,
-        speed_factor=speed,
+        agent_state_events[2].created_at - user_state_events[1].created_at,
+        expected_latency,
         max_abs_diff=0.2,
     )
+
+
+@pytest.mark.parametrize(
+    "preflight, final, expected",
+    [
+        ("hello how are you", "Hello, how are you?", True),
+        ("مرحبا كيف حالك", "مرحبا، كيف حالك؟", True),
+        ("نعم أريد الحجز", "نعم، أريد الحجز؛", True),
+        ("آپ کیسے ہیں", "آپ کیسے ہیں۔", True),
+        ("आप कैसे हैं", "आप कैसे हैं।", True),
+        ("你好 我很好", "你好，我很好。", True),
+        # different words must still invalidate the preemptive generation
+        ("مرحبا كيف حالك", "مرحبا كيف حالكم؟", False),
+    ],
+)
+def test_preemptive_transcripts_equivalent(preflight: str, final: str, expected: bool) -> None:
+    assert _transcripts_equivalent(preflight, final) is expected
+
+
+@pytest.mark.parametrize(
+    "preemptive_generation, expected",
+    [
+        # bool form: the legacy on/off flag
+        (True, {"enabled": True, "preemptive_tts": False}),
+        (False, {"enabled": False, "preemptive_tts": False}),
+        # dict form: an options mapping, documented on the same kwarg (#7343)
+        ({"enabled": False}, {"enabled": False, "preemptive_tts": False}),
+        ({"enabled": True, "preemptive_tts": True}, {"enabled": True, "preemptive_tts": True}),
+    ],
+)
+async def test_deprecated_preemptive_generation_kwarg(
+    preemptive_generation: bool | dict, expected: dict
+) -> None:
+    session = AgentSession(preemptive_generation=preemptive_generation)
+    opts = session.options.preemptive_generation
+    assert {k: opts[k] for k in expected} == expected
+    assert isinstance(opts["enabled"], bool)
 
 
 @pytest.mark.parametrize(
@@ -1867,10 +2216,7 @@ async def test_preemptive_generation_on_agent(
 async def test_interrupt_during_on_user_turn_completed(
     preemptive_generation: bool, on_user_turn_completed_delay: float
 ) -> None:
-    """
-    Test interrupt during preemptive generation and on_user_turn_completed.
-    """
-    speed = 1
+
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.0, "Tell me a story", stt_delay=0.2)
     actions.add_llm("Here is a story for you...", ttft=0.1, duration=0.3)
@@ -1881,10 +2227,9 @@ async def test_interrupt_during_on_user_turn_completed(
 
     session = create_session(
         actions,
-        speed_factor=speed,
         turn_handling={"preemptive_generation": {"enabled": preemptive_generation}},
     )
-    agent = MyAgent(on_user_turn_completed_delay=on_user_turn_completed_delay / speed)
+    agent = MyAgent(on_user_turn_completed_delay=on_user_turn_completed_delay)
 
     agent_state_events: list[AgentStateChangedEvent] = []
     conversation_events: list[ConversationItemAddedEvent] = []
@@ -1923,7 +2268,6 @@ async def test_interrupt_during_on_user_turn_completed(
 
 
 async def test_unknown_function_call() -> None:
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Check the weather")
     actions.add_llm(
@@ -1940,7 +2284,7 @@ async def test_unknown_function_call() -> None:
     )
     actions.add_tts(2.0)
 
-    session = create_session(actions, speed_factor=speed)
+    session = create_session(actions)
     agent = MyAgent()
 
     tool_executed_events: list[FunctionToolsExecutedEvent] = []
@@ -1964,16 +2308,10 @@ async def test_unknown_function_call() -> None:
 
 
 async def test_invalid_tool_arguments_surface_as_tool_error() -> None:
-    """When the LLM emits a tool call with invalid arguments (missing required
-    field, wrong type, malformed JSON, etc.), the faulty turn must NOT be
-    stripped from the conversation. Instead the schema error is wrapped in a
-    ToolError so the model receives a descriptive message and can self-correct
-    on the next turn."""
-    speed = 1
+    """Invalid tool arguments stay in the history with a descriptive error the model can fix."""
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "What's the weather?")
-    # get_weather requires `location: str` — emit a call with no args so it
-    # fails pydantic validation.
+    # get_weather requires `location`
     actions.add_llm(
         content="",
         tool_calls=[
@@ -1981,7 +2319,7 @@ async def test_invalid_tool_arguments_surface_as_tool_error() -> None:
         ],
     )
 
-    session = create_session(actions, speed_factor=speed)
+    session = create_session(actions)
     agent = MyAgent()
 
     tool_executed_events: list[FunctionToolsExecutedEvent] = []
@@ -1989,7 +2327,6 @@ async def test_invalid_tool_arguments_surface_as_tool_error() -> None:
 
     await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
-    # Event was emitted with both the call AND a non-None output (i.e., not stripped).
     assert len(tool_executed_events) == 1
     ev = tool_executed_events[0]
     assert len(ev.function_calls) == 1
@@ -1998,15 +2335,10 @@ async def test_invalid_tool_arguments_surface_as_tool_error() -> None:
     output = ev.function_call_outputs[0]
     assert output.is_error is True
 
-    # The model must see a descriptive, schema-specific error — NOT the generic
-    # "An internal error occurred" string we reserve for unexpected exceptions.
     assert "An internal error occurred" not in output.output
     assert "get_weather" in output.output
-    # Pydantic validation error references the missing field.
     assert "location" in output.output
 
-    # The faulty call AND its error output must both end up in chat history so
-    # the LLM can see what it did wrong on the next turn (not stripped).
     items = agent.chat_ctx.items
     function_calls = [i for i in items if i.type == "function_call"]
     function_call_outputs = [i for i in items if i.type == "function_call_output"]
@@ -2019,9 +2351,7 @@ async def test_invalid_tool_arguments_surface_as_tool_error() -> None:
 
 
 async def test_tool_internal_exception_returns_generic_error() -> None:
-    """When a tool body raises a non-ToolError exception, the model receives
-    the generic "An internal error occurred" message so we don't leak internal
-    details. Validation-error path is tested separately."""
+    """A tool's unexpected exception reaches the model as a generic message, never its details."""
 
     class _BrokenToolAgent(Agent):
         def __init__(self) -> None:
@@ -2032,7 +2362,6 @@ async def test_tool_internal_exception_returns_generic_error() -> None:
             """Always blows up."""
             raise RuntimeError("kaboom: secret database password leaked")
 
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "What's the weather in Tokyo?")
     actions.add_llm(
@@ -2042,7 +2371,7 @@ async def test_tool_internal_exception_returns_generic_error() -> None:
         ],
     )
 
-    session = create_session(actions, speed_factor=speed)
+    session = create_session(actions)
     agent = _BrokenToolAgent()
 
     tool_executed_events: list[FunctionToolsExecutedEvent] = []
@@ -2054,22 +2383,20 @@ async def test_tool_internal_exception_returns_generic_error() -> None:
     output = tool_executed_events[0].function_call_outputs[0]
     assert output is not None
     assert output.is_error is True
-    # Generic message — the RuntimeError details must NOT leak to the model.
     assert output.output == "An internal error occurred"
     assert "kaboom" not in output.output
     assert "secret" not in output.output
-
-
-# helpers
 
 
 class _TestRecognitionHooks:
     def __init__(self) -> None:
         self.interruptions: list[inference.OverlappingSpeechEvent] = []
         self.final_transcripts: list[str] = []
+        self.interruption_by_audio_activity_enabled = False
 
-    def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
-        self.interruptions.append(ev)
+    def on_overlap_speech(self, ev: inference.OverlappingSpeechEvent) -> None:
+        if ev.is_interruption:
+            self.interruptions.append(ev)
 
     def on_backchannel_confirmed(self) -> None:
         pass
@@ -2095,8 +2422,31 @@ class _TestRecognitionHooks:
     def on_preemptive_generation(self, info: object) -> None:
         pass
 
+    def on_preflight_stale(self, info: object) -> None:
+        pass
+
     def retrieve_chat_ctx(self) -> ChatContext:
         return ChatContext.empty()
+
+
+def _recognition(
+    session: AgentSession,
+    *,
+    turn_detection: str = "manual",
+    hooks: _TestRecognitionHooks | None = None,
+    min_delay: float = 0.1,
+    max_delay: float = 1.0,
+    stt: object = None,
+) -> AudioRecognition:
+    return AudioRecognition(
+        session,
+        hooks=hooks or _TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=min_delay, max_delay=max_delay),
+        stt=stt,
+        vad=None,
+        interruption_detection=None,
+        turn_detection=turn_detection,
+    )
 
 
 def _interruption_event() -> inference.OverlappingSpeechEvent:
@@ -2117,8 +2467,10 @@ def _backchannel_event() -> inference.OverlappingSpeechEvent:
     )
 
 
-def _final_transcript_event(*, text: str, start_time: float, end_time: float) -> SpeechEvent:
-    return SpeechEvent(
+def _final_transcript_event(
+    *, text: str, start_time: float, end_time: float, created_at: float | None = None
+) -> SpeechEvent:
+    ev = SpeechEvent(
         type=SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
             SpeechData(
@@ -2129,6 +2481,9 @@ def _final_transcript_event(*, text: str, start_time: float, end_time: float) ->
             )
         ],
     )
+    if created_at is not None:
+        ev.created_at = created_at
+    return ev
 
 
 async def _close_test_session(session: object) -> None:
@@ -2139,44 +2494,17 @@ async def _close_test_session(session: object) -> None:
         await synchronizer.aclose()
 
 
-def check_timestamp(
-    t_event: float,
-    t_target: float,
-    *,
-    speed_factor: float = 1.0,
-    max_abs_diff: float = 0.75,
-    min_real_time_diff: float = 0.3,
-) -> None:
-    """
-    Check if the event timestamp is within the target timestamp +/- max_abs_diff.
-    The event timestamp is scaled by the speed factor.
-
-    ``max_abs_diff`` is expressed in scaled time. A real-time floor of
-    ``min_real_time_diff`` (wallclock seconds) is also applied so high
-    ``speed_factor`` values don't compress the effective tolerance below the
-    scheduling-jitter noise floor on CI runners — without this, the real-time
-    tolerance is ``max_abs_diff / speed_factor``, which at speed=5 is only
-    150 ms and routinely flakes.
-    """
-    t_event_scaled = t_event * speed_factor
-    effective_diff = max(max_abs_diff, min_real_time_diff * speed_factor)
-    print(
-        f"check_timestamp: t_event={t_event_scaled} (real {t_event:.3f}s), "
-        f"t_target={t_target}, effective_diff={effective_diff} "
-        f"(max_abs_diff={max_abs_diff}, min_real_time_diff={min_real_time_diff})"
-    )
-    assert abs(t_event_scaled - t_target) <= effective_diff, (
-        f"event timestamp {t_event_scaled} is not within {effective_diff} of target {t_target} "
-        f"(real-time tolerance {effective_diff / speed_factor:.3f}s)"
+def check_timestamp(t_event: float, t_target: float, *, max_abs_diff: float = 0.75) -> None:
+    assert abs(t_event - t_target) <= max_abs_diff, (
+        f"{t_event} is not within {max_abs_diff} of {t_target}"
     )
 
 
 async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> None:
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.1, 0.2, "What's the weather in Tokyo?", stt_delay=0.05)
 
-    # Silent tool-call step: no spoken preamble/audio before the function call.
+    # silent tool-call step: no spoken preamble before the function call
     actions.add_llm(
         content="",
         tool_calls=[
@@ -2190,8 +2518,7 @@ async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> N
         duration=1.0,
     )
 
-    # VAD-only speech starts during the silent tool-call generation and remains
-    # active after the tool reply starts.
+    # VAD-only speech starts during the silent step and lasts past the tool reply start
     actions.add_user_speech(0.85, 2.0, "", stt_delay=0.05)
 
     actions.add_llm(
@@ -2204,9 +2531,8 @@ async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> N
 
     session = create_session(
         actions,
-        speed_factor=speed,
         can_pause_audio=True,
-        turn_handling={"interruption": {"false_interruption_timeout": 0.2 / speed}},
+        turn_handling={"interruption": {"false_interruption_timeout": 0.2}},
     )
     agent = MyAgent()
 
@@ -2217,96 +2543,53 @@ async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> N
     session.on("agent_false_interruption", false_interruption_events.append)
 
     await asyncio.wait_for(
-        run_session(session, agent, drain_delay=0.8 / speed),
+        run_session(session, agent, drain_delay=0.8),
         timeout=SESSION_TIMEOUT,
     )
 
     transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
     silent_step_finished = transitions.index(("speaking", "listening"))
 
-    # Before the fix this is ("listening", "thinking") because the pause state
-    # captured during the silent tool-call step leaks into the tool reply.
+    # the pause state of the silent tool-call step must not leak into the tool reply
     assert transitions[silent_step_finished + 1] == ("listening", "speaking")
     assert false_interruption_events
     assert false_interruption_events[-1].resumed is True
 
 
-async def test_default_vad_is_auto_provisioned() -> None:
-    from livekit.agents.voice.agent_session import AgentSession
-
-    session = AgentSession()
-    try:
-        assert session.vad is not None
-        assert session._using_default_vad is True
-    finally:
-        await session.aclose()
-
-
-async def test_explicit_vad_none_opts_out() -> None:
-    from livekit.agents.voice.agent_session import AgentSession
-
-    session = AgentSession(vad=None)
-    try:
-        assert session.vad is None
-        assert session._using_default_vad is False
-    finally:
-        await session.aclose()
-
-
-async def test_user_supplied_vad_clears_default_flag() -> None:
-    from livekit.agents.voice.agent_session import AgentSession
-
-    from .fake_vad import FakeVAD
-
+@pytest.mark.parametrize("vad_arg", [NOT_GIVEN, None, "user"])
+async def test_session_vad_defaults(vad_arg: object) -> None:
     user_vad = FakeVAD(fake_user_speeches=[])
-
-    session = AgentSession(vad=user_vad)
+    session = AgentSession(vad=user_vad if vad_arg == "user" else vad_arg)
     try:
-        assert session.vad is user_vad
-        assert session._using_default_vad is False
+        if vad_arg is NOT_GIVEN:
+            assert session.vad is not None
+        else:
+            assert session.vad is (user_vad if vad_arg == "user" else None)
+        assert session._using_default_vad is (vad_arg is NOT_GIVEN)
     finally:
         await session.aclose()
 
 
-async def test_default_turn_detection_builds_default_eot() -> None:
-    """No turn_detection given → session auto-provisions a default TurnDetector."""
-    from livekit.agents.voice.agent_session import AgentSession
-    from livekit.agents.voice.turn import _StreamingTurnDetector
-
-    session = AgentSession()
-    try:
-        assert isinstance(session.turn_detection, _StreamingTurnDetector)
-    finally:
-        await session.aclose()
-
-
-async def test_turn_detection_none_opts_out() -> None:
-    """Explicit None opts out of turn detection (no default detector built)."""
-    from livekit.agents.voice.agent_session import AgentSession
-
-    session = AgentSession(turn_handling={"turn_detection": None})
-    try:
-        assert session.turn_detection is None
-    finally:
-        await session.aclose()
-
-
-async def test_user_supplied_turn_detector_passes_through() -> None:
-    from livekit.agents import inference
-    from livekit.agents.voice.agent_session import AgentSession
-
+@pytest.mark.parametrize("turn_detection", [NOT_GIVEN, None, "user"])
+async def test_session_turn_detection_defaults(turn_detection: object) -> None:
     user_detector = inference.TurnDetector(version="v1-mini")
-    session = AgentSession(turn_handling={"turn_detection": user_detector})
+    turn_handling = (
+        {}
+        if turn_detection is NOT_GIVEN
+        else {"turn_detection": user_detector if turn_detection == "user" else None}
+    )
+    session = AgentSession(turn_handling=turn_handling)
     try:
-        assert session.turn_detection is user_detector
+        if turn_detection is NOT_GIVEN:
+            assert isinstance(session.turn_detection, _StreamingTurnDetector)
+        else:
+            assert session.turn_detection is (user_detector if turn_detection == "user" else None)
     finally:
         await session.aclose()
 
 
 async def test_stt_context_options_defaults_forward_chat_context_on() -> None:
     """forward_chat_context is on by default in the resolved stt_context_options."""
-    from livekit.agents.voice.agent_session import AgentSession
-
     session = AgentSession(vad=None)
     try:
         assert session._opts.stt_context_options["forward_chat_context"] is True
@@ -2315,8 +2598,6 @@ async def test_stt_context_options_defaults_forward_chat_context_on() -> None:
 
 
 async def test_stt_context_options_passthrough() -> None:
-    from livekit.agents.voice.agent_session import AgentSession
-
     session = AgentSession(
         vad=None,
         stt_context_options={"keyterms": ["LiveKit"], "forward_chat_context": False},
@@ -2331,8 +2612,6 @@ async def test_stt_context_options_passthrough() -> None:
 
 async def test_deprecated_keyterms_options_maps_to_stt_context(caplog) -> None:
     """keyterms_options still works, maps onto stt_context_options, and warns."""
-    from livekit.agents.voice.agent_session import AgentSession
-
     with caplog.at_level(logging.WARNING):
         session = AgentSession(vad=None, keyterms_options={"keyterms": ["Acme"]})
     try:
@@ -2346,8 +2625,6 @@ async def test_deprecated_keyterms_options_maps_to_stt_context(caplog) -> None:
 
 async def test_stt_context_options_wins_over_keyterms_options() -> None:
     """When both are passed, stt_context_options takes precedence over the deprecated option."""
-    from livekit.agents.voice.agent_session import AgentSession
-
     session = AgentSession(
         vad=None,
         stt_context_options={"keyterms": ["new"]},
@@ -2359,77 +2636,39 @@ async def test_stt_context_options_wins_over_keyterms_options() -> None:
         await session.aclose()
 
 
-async def test_streaming_detector_uses_streaming_endpointing_defaults() -> None:
-    """Default session → streaming detector → tighter 0.3/2.5 endpointing defaults."""
-    from livekit.agents.voice.agent_session import AgentSession
-
-    session = AgentSession()
+@pytest.mark.parametrize(
+    ("kwargs", "min_delay", "max_delay"),
+    [
+        # streaming detectors get the tighter defaults
+        pytest.param({}, 0.3, 2.5, id="default-streaming"),
+        pytest.param(
+            {"turn_handling": {"turn_detection": inference.TurnDetector(version="v1-mini")}},
+            0.3,
+            2.5,
+            id="user-streaming",
+        ),
+        # non-streaming modes keep the legacy defaults
+        pytest.param({"turn_handling": {"turn_detection": "vad"}}, 0.5, 3.0, id="vad"),
+        pytest.param({"turn_detection": "vad"}, 0.5, 3.0, id="deprecated-vad"),
+        # an explicit delay wins per key
+        pytest.param(
+            {"turn_handling": {"endpointing": {"min_delay": 0.4}}}, 0.4, 2.5, id="explicit"
+        ),
+    ],
+)
+async def test_endpointing_defaults_follow_turn_detector(
+    kwargs: dict, min_delay: float, max_delay: float
+) -> None:
+    session = AgentSession(**kwargs)
     try:
-        assert session._opts.endpointing["min_delay"] == 0.3
-        assert session._opts.endpointing["max_delay"] == 2.5
-        assert session._opts.endpointing_overrides == {}
-    finally:
-        await session.aclose()
-
-
-async def test_non_streaming_detector_uses_legacy_endpointing_defaults() -> None:
-    """A non-streaming mode keeps the legacy 0.5/3.0 defaults."""
-    from livekit.agents.voice.agent_session import AgentSession
-
-    session = AgentSession(turn_handling={"turn_detection": "vad"})
-    try:
-        assert session._opts.endpointing["min_delay"] == 0.5
-        assert session._opts.endpointing["max_delay"] == 3.0
-    finally:
-        await session.aclose()
-
-
-async def test_explicit_endpointing_overrides_streaming_default_per_key() -> None:
-    """An explicit delay is honored; the unset one still gets the streaming default."""
-    from livekit.agents.voice.agent_session import AgentSession
-
-    session = AgentSession(turn_handling={"endpointing": {"min_delay": 0.4}})
-    try:
-        assert session._opts.endpointing["min_delay"] == 0.4
-        assert session._opts.endpointing["max_delay"] == 2.5
-        assert session._opts.endpointing_overrides == {"min_delay": 0.4}
-    finally:
-        await session.aclose()
-
-
-async def test_user_streaming_detector_uses_streaming_defaults() -> None:
-    """A user-constructed streaming detector also triggers the streaming defaults."""
-    from livekit.agents import inference
-    from livekit.agents.voice.agent_session import AgentSession
-
-    session = AgentSession(
-        turn_handling={"turn_detection": inference.TurnDetector(version="v1-mini")}
-    )
-    try:
-        assert session._opts.endpointing["min_delay"] == 0.3
-        assert session._opts.endpointing["max_delay"] == 2.5
-    finally:
-        await session.aclose()
-
-
-async def test_deprecated_turn_detection_vad_uses_legacy_defaults() -> None:
-    """Deprecated turn_detection arg + no delays → legacy defaults (non-streaming)."""
-    from livekit.agents.voice.agent_session import AgentSession
-
-    session = AgentSession(turn_detection="vad")
-    try:
-        assert session._opts.endpointing["min_delay"] == 0.5
-        assert session._opts.endpointing["max_delay"] == 3.0
+        assert session._opts.endpointing["min_delay"] == min_delay
+        assert session._opts.endpointing["max_delay"] == max_delay
     finally:
         await session.aclose()
 
 
 async def test_agent_turn_detection_override_resolves_endpointing_per_activity() -> None:
     """endpointing_opts uses the activity's resolved detector, not just the session's."""
-    from livekit.agents.voice.agent_session import AgentSession
-
-    from .fake_vad import FakeVAD
-
     # session default → streaming detector; provide VAD so it validates
     session = AgentSession(vad=FakeVAD(fake_user_speeches=[]))
     try:
@@ -2456,10 +2695,6 @@ async def test_reply_holdoff_uses_agent_endpointing_delay(
     session_min_delay: float, agent_min_delay: float, reply_held: bool
 ) -> None:
     """VAD silence uses the active agent's delay for pending reply hold-off."""
-    from livekit.agents.voice.agent_session import AgentSession
-
-    from .fake_vad import FakeVAD
-
     session = AgentSession(
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling={
@@ -2496,10 +2731,6 @@ async def test_reply_holdoff_uses_agent_endpointing_delay(
 
 async def test_runtime_endpointing_opts_survive_handoff() -> None:
     """update_options changes are recorded as overrides, so a new activity keeps them."""
-    from livekit.agents.voice.agent_session import AgentSession
-
-    from .fake_vad import FakeVAD
-
     session = AgentSession(vad=FakeVAD(fake_user_speeches=[]))
     try:
         session.update_options(endpointing_opts={"mode": "dynamic", "alpha": 0.5, "min_delay": 0.4})
@@ -2533,7 +2764,6 @@ class FlushMultiSegmentAgent(Agent):
 
 
 async def test_pipeline_multi_segment_flush() -> None:
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
     # the agent's llm_node injects a FlushSentinel, splitting the reply into two
@@ -2541,7 +2771,7 @@ async def test_pipeline_multi_segment_flush() -> None:
     actions.add_tts(1.0, input="Hello there. ", ttfb=0.1, duration=0.1)
     actions.add_tts(1.0, input="How are you?", ttfb=0.1, duration=0.1)
 
-    session = create_session(actions, speed_factor=speed)
+    session = create_session(actions)
     agent = FlushMultiSegmentAgent()
 
     playback_finished_events: list[PlaybackFinishedEvent] = []
@@ -2562,20 +2792,19 @@ async def test_pipeline_multi_segment_flush() -> None:
 
 
 async def test_pipeline_multi_segment_interrupted() -> None:
-    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
     # long first segment so the interrupt lands while it is still playing
     actions.add_tts(15.0, input="Hello there. ", ttfb=0.1, duration=0.1)
     actions.add_tts(1.0, input="How are you?", ttfb=0.1, duration=0.1)
 
-    session = create_session(actions, speed_factor=speed)
+    session = create_session(actions)
     agent = FlushMultiSegmentAgent()
 
     playback_finished_events: list[PlaybackFinishedEvent] = []
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    asyncio.get_event_loop().call_later(5 / speed, session.interrupt)
+    asyncio.get_event_loop().call_later(5, session.interrupt)
 
     await asyncio.wait_for(run_session(session, agent, drain_delay=0.5), timeout=SESSION_TIMEOUT)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import bisect
 import copy
 import inspect
 import json
@@ -10,10 +11,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     cast,
-    get_args,
     get_origin,
     get_type_hints,
 )
@@ -21,7 +20,7 @@ from typing import (
 import json_repair
 import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
-from pydantic.fields import Field, FieldInfo
+from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined, from_json
 from typing_extensions import TypeVar
 
@@ -45,9 +44,14 @@ THINK_TAG_END = "</think>"
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
     """
-    Standard dynamic-programming LCS to get the common subsequence
-    of IDs (in order) that appear in both old_ids and new_ids.
+    Get the longest common subsequence of IDs (in order) that appear in both
+    old_ids and new_ids.
     """
+    lcs_ids = _compute_unique_ids_lcs(old_ids, new_ids)
+    if lcs_ids is not None:
+        return lcs_ids
+
+    # Standard dynamic-programming LCS, O(n*m), for IDs that repeat.
     n, m = len(old_ids), len(new_ids)
     dp = [[0] * (m + 1) for _ in range(n + 1)]
 
@@ -72,6 +76,42 @@ def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
         else:
             j -= 1
 
+    return list(reversed(lcs_ids))
+
+
+def _compute_unique_ids_lcs(old_ids: list[str], new_ids: list[str]) -> list[str] | None:
+    """
+    LCS in O(n log n) when neither list repeats an ID, else None.
+
+    Without repeats, the LCS is the longest increasing subsequence of the
+    positions in new_ids, taken in the order of old_ids.
+    """
+    new_index = {item_id: i for i, item_id in enumerate(new_ids)}
+    if len(new_index) != len(new_ids) or len(set(old_ids)) != len(old_ids):
+        return None
+
+    positions = [new_index[item_id] for item_id in old_ids if item_id in new_index]
+    # tails[k] is the smallest last position of an increasing run of length
+    # k + 1, and tail_at[k] is the index in `positions` that ends that run
+    tails: list[int] = []
+    tail_at: list[int] = []
+    previous = [-1] * len(positions)
+    for at, position in enumerate(positions):
+        k = bisect.bisect_left(tails, position)
+        if k:
+            previous[at] = tail_at[k - 1]
+        if k == len(tails):
+            tails.append(position)
+            tail_at.append(at)
+        else:
+            tails[k] = position
+            tail_at[k] = at
+
+    lcs_ids: list[str] = []
+    at = tail_at[-1] if tail_at else -1
+    while at != -1:
+        lcs_ids.append(new_ids[positions[at]])
+        at = previous[at]
     return list(reversed(lcs_ids))
 
 
@@ -513,46 +553,15 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
             continue
 
         default_value = param.default if param.default is not param.empty else ...
-        field_info: FieldInfo | None = None
-        field_attrs: dict[str, Any] = {}
+        field_info = FieldInfo.from_annotation(type_hint)
 
-        # Annotated[str, Field(description="...")]
-        if get_origin(type_hint) is Annotated:
-            annotated_args = get_args(type_hint)
-            type_hint = annotated_args[0]
-            annotated_field = next(
-                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), None
-            )
-            if annotated_field and hasattr(annotated_field, "asdict"):
-                # `asdict` is available after pydantic 2.12
-                field_dict = annotated_field.asdict()
-                field_attrs = field_dict["attributes"]
-                # Constraints (ge/le/gt/lt/multiple_of/min_length/pattern/...) live
-                # in `metadata`, not `attributes`. Re-attach them to the annotation
-                # so `Field(...)` constraints on a tool argument are preserved.
-                if field_dict["metadata"]:
-                    type_hint = Annotated[(type_hint, *field_dict["metadata"])]
-            elif annotated_field:
-                field_attrs["default"] = annotated_field.default
-                field_attrs["description"] = annotated_field.description
-                field_info = annotated_field
+        if default_value is not ... and field_info.default is PydanticUndefined:
+            field_info.default = default_value
 
-        if (
-            default_value is not ...
-            and field_attrs.get("default", PydanticUndefined) is PydanticUndefined
-        ):
-            field_attrs["default"] = default_value
+        if field_info.description is None:
+            field_info.description = param_docs.get(param_name)
 
-        if field_attrs.get("description") is None:
-            field_attrs["description"] = param_docs.get(param_name, None)
-
-        if not field_info:
-            field_info = Field(**field_attrs)
-        else:
-            for k, v in field_attrs.items():
-                setattr(field_info, k, v)
-
-        fields[param_name] = (type_hint, field_info)
+        fields[param_name] = (field_info.annotation, field_info)
 
     return create_model(model_name, **fields)
 
@@ -618,9 +627,9 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
         logger.warning(
             "repaired malformed function-call JSON arguments",
             extra={
-                "raw_arguments": json_arguments[:500],
-                "repaired": cleaned,
-                "error": str(strict_err),
+                "lk.pii.raw_arguments": json_arguments[:500],
+                "lk.pii.repaired": cleaned,
+                "lk.pii.error": str(strict_err),
             },
         )
         args_dict = cleaned
@@ -643,6 +652,19 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
             f"got {type(args_dict).__name__}: {json_arguments[:200]}"
         )
     return args_dict
+
+
+def _repaired_arguments_json(json_arguments: str, args_dict: dict[str, Any]) -> str | None:
+    """Return valid JSON for ``args_dict`` when parsing ``json_arguments`` needed a repair.
+
+    Valid arguments return None, so history keeps them exactly as the model wrote them.
+    """
+    try:
+        if from_json(json_arguments) == args_dict:
+            return None
+    except ValueError:
+        pass
+    return json.dumps(args_dict, default=str)
 
 
 def prepare_function_arguments(
@@ -673,16 +695,16 @@ def prepare_function_arguments(
         except ValueError as e:
             logger.error(
                 f"error parsing arguments for `{fnc.info.name}`",
-                extra={"function": fnc.info.name, "arguments": json_arguments},
+                extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
             )
             raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
 
         # write canonical BEFORE validation so a downstream validation failure
         # still leaves valid JSON in chat history
-        if fnc_call is not None:
-            canonical = json.dumps(args_dict, default=str)
-            if canonical != json_arguments:
-                fnc_call.arguments = canonical
+        if fnc_call is not None and (
+            repaired := _repaired_arguments_json(json_arguments, args_dict)
+        ):
+            fnc_call.arguments = repaired
 
     # phase 2: validate + bind
     try:
@@ -692,13 +714,13 @@ def prepare_function_arguments(
     except (pydantic.ValidationError, ValueError, TypeError) as e:
         logger.error(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "arguments": json_arguments},
+            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
         raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
     except Exception:
         logger.exception(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "arguments": json_arguments},
+            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
         raise
 
@@ -897,7 +919,7 @@ def _is_valid_function_output(value: Any) -> bool:
 @dataclass
 class FunctionCallResult:
     fnc_call: FunctionCall
-    fnc_call_out: FunctionCallOutput | None
+    fnc_call_out: FunctionCallOutput
     raw_output: Any
     raw_exception: BaseException | None
     fnc_call_updates: list[tuple[FunctionCall, FunctionCallOutput]] = field(default_factory=list)
@@ -913,7 +935,7 @@ def make_function_call_output(
 ) -> FunctionCallResult:
     """Create a FunctionCallResult, handling ToolError, StopResponse, and validation."""
     from .chat_context import FunctionCallOutput
-    from .tool_context import StopResponse, ToolError
+    from .tool_context import StopResponse, ToolError, ToolResult
 
     if isinstance(output, BaseException):
         exception = output
@@ -933,9 +955,16 @@ def make_function_call_output(
         )
 
     if isinstance(exception, StopResponse):
+        # StopResponse asks for silence, not for the call to go unanswered
         return FunctionCallResult(
             fnc_call=fnc_call,
-            fnc_call_out=None,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="",
+                is_error=False,
+                reply_required=False,
+            ),
             raw_output=output,
             raw_exception=exception,
         )
@@ -953,15 +982,27 @@ def make_function_call_output(
             raw_exception=exception,
         )
 
+    raw_output = output
+    reply_required = True
+    if isinstance(output, ToolResult):
+        reply_required = output.reply_required
+        output = output.output
+
     if not _is_valid_function_output(output):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={"call_id": fnc_call.call_id, "output": output},
+            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
         )
         return FunctionCallResult(
             fnc_call=fnc_call,
-            fnc_call_out=None,
-            raw_output=output,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="the tool returned an invalid output",
+                is_error=True,
+                reply_required=reply_required,
+            ),
+            raw_output=raw_output,
             raw_exception=None,
         )
 
@@ -970,10 +1011,11 @@ def make_function_call_output(
         fnc_call_out=FunctionCallOutput(
             name=fnc_call.name,
             call_id=fnc_call.call_id,
-            output=str(output or ""),
+            output="" if output is None else str(output),
             is_error=False,
+            reply_required=reply_required,
         ),
-        raw_output=output,
+        raw_output=raw_output,
         raw_exception=None,
     )
 
@@ -1032,7 +1074,7 @@ async def execute_function_call(
         if not isinstance(e, ToolError):
             logger.exception(
                 f"exception executing AI function `{tool_call.name}`",
-                extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+                extra={"call_id": tool_call.call_id, "lk.pii.arguments": tool_call.arguments},
             )
         out = make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
 

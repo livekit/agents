@@ -67,11 +67,50 @@ async def test_open_isolated_per_task() -> None:
     assert sess_a.closed and sess_b.closed
 
 
+async def test_shared_session_uses_aiohttp_default_timeout() -> None:
+    async with http_context.open() as session, aiohttp.ClientSession() as default_session:
+        assert session.timeout == default_session.timeout
+
+
 async def test_http_session_error_message_points_to_helper() -> None:
     with pytest.raises(RuntimeError) as exc_info:
         http_context.http_session()
     msg = str(exc_info.value)
     assert "http_context.open()" in msg
+
+
+@pytest.fixture(autouse=True)
+def _fresh_ssl_context_cache() -> None:
+    """Each test builds its context under its own env and verify paths."""
+    http_context._ssl_context_for.cache_clear()
+
+
+def test_ssl_context_is_built_once_per_trust_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every job's session reuses one context instead of parsing the CA bundle again."""
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    certifi_count = _certifi_cert_count()
+    built: list[ssl.SSLContext] = []
+    real_create = ssl.create_default_context
+
+    def _counting(*args: object, **kwargs: object) -> ssl.SSLContext:
+        built.append(real_create(*args, **kwargs))  # type: ignore[arg-type]
+        return built[-1]
+
+    monkeypatch.setattr(ssl, "create_default_context", _counting)
+
+    system_ctx = http_context._create_ssl_context()
+    assert http_context._create_ssl_context() is system_ctx
+    assert len(built) == 1
+
+    monkeypatch.setenv("SSL_CERT_FILE", certifi.where())
+    certifi_ctx = http_context._create_ssl_context()
+    assert certifi_ctx is not system_ctx
+    assert certifi_ctx.cert_store_stats()["x509"] == certifi_count
+    assert http_context._create_ssl_context() is certifi_ctx
+    assert len(built) == 2
 
 
 def _certifi_cert_count() -> int:

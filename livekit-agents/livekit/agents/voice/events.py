@@ -25,6 +25,7 @@ from ..llm import (
     LLMError,
     RealtimeModel,
     RealtimeModelError,
+    ToolChoice,
 )
 from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
@@ -36,6 +37,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
+    from .generation import ToolExecutionOutput
     from .tool_executor import UpdatePromptArgs, _ToolExecutor
 
 
@@ -50,7 +52,9 @@ class RunContext(Generic[Userdata_T]):
         session: AgentSession[Userdata_T],
         speech_handle: SpeechHandle,
         function_call: FunctionCall,
+        activity: AgentActivity | None = None,
     ) -> None:
+        self._activity = activity
         self._session = session
         self._speech_handle = speech_handle
         self._function_call = function_call
@@ -64,6 +68,11 @@ class RunContext(Generic[Userdata_T]):
         # set/cleared by the executor around the tool's lifetime
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
+
+        # set by the first update(): whether anything voices its output, and what the step
+        # that answers it may call
+        self._suppress_reply = False
+        self._reply_tool_choice: ToolChoice | None = None
 
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
@@ -88,13 +97,15 @@ class RunContext(Generic[Userdata_T]):
     def disallow_interruptions(self) -> None:
         """Disable interruptions for this FunctionCall.
 
-        Delegates to the SpeechHandle.allow_interruptions setter,
-        which will raise a RuntimeError if the handle is already interrupted.
+        Also releases an active false-interruption pause.
 
         Raises:
             RuntimeError: If the SpeechHandle is already interrupted.
         """
-        self.speech_handle.allow_interruptions = False
+        if self._activity is not None:
+            self._activity._disallow_interruptions(self.speech_handle)
+        else:
+            self.speech_handle.allow_interruptions = False
 
     async def wait_for_playout(self) -> None:
         """Waits for the speech playout corresponding to this function call step.
@@ -171,6 +182,7 @@ class RunContext(Generic[Userdata_T]):
         message: str | Any,
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
+        silent: bool = False,
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -184,6 +196,10 @@ class RunContext(Generic[Userdata_T]):
             template: Per-call override — either a ``str.format()`` template or a
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
+            silent: Whether the user hears anything about this update. The message is
+                recorded for the model either way; True keeps it to the model alone, and
+                on the first update releases control without speaking. A realtime model
+                that cannot keep a tool result silent may still answer it.
         """
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
@@ -214,32 +230,40 @@ class RunContext(Generic[Userdata_T]):
 
         # first update keeps the original call_id
         update_step = len(self._updates)
-        pair = self._make_update_pair(
+        out = self._make_update_output(
             message, call_id_suffix=f"_update_{update_step}" if update_step > 0 else ""
         )
+        if silent:
+            # realtime providers read this to decide whether the output starts a turn
+            out.fnc_call_out.reply_required = False
+        pair = (out.fnc_call, out.fnc_call_out)
         self._updates.append(pair)
 
         if self._executor is None:
             return  # standalone — no executor, so no tool lifecycle to report
 
-        self._session.emit(
-            "tool_execution_updated",
+        self._session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolCallUpdated(
                     id=pair[0].call_id,
                     call_id=self.function_call.call_id,
                     message=raw_message,
+                    silent=silent,
                 )
             ),
         )
 
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
+            self._suppress_reply = silent
+            # a report is not a result: a model free to call tools can answer
+            # "still searching" by calling the same tool again
+            self._reply_tool_choice = "none"
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]])
+        await self._executor._enqueue_reply(self, [pair[0], pair[1]], tool_choice="none")
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]
@@ -265,10 +289,8 @@ class RunContext(Generic[Userdata_T]):
         except Exception:
             pass  # reply task's own errors aren't our concern
 
-    def _make_update_pair(
-        self, message: Any, *, call_id_suffix: str = ""
-    ) -> tuple[FunctionCall, FunctionCallOutput]:
-        """Synthesize a (FunctionCall, FunctionCallOutput) pair for a progress update.
+    def _make_update_output(self, message: Any, *, call_id_suffix: str = "") -> ToolExecutionOutput:
+        """Synthesize the tool output of a progress update, with a FunctionCall of its own.
 
         The new FunctionCall carries ``{call_id}{call_id_suffix}``; name/arguments/extra
         are copied. ``make_tool_output`` is reused so error handling matches dispatch.
@@ -281,18 +303,7 @@ class RunContext(Generic[Userdata_T]):
             arguments=self.function_call.arguments,
             extra=dict(self.function_call.extra),
         )
-        tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
-        # fall back to a stub when the message isn't a valid tool output (e.g. raw object)
-        if tool_output.fnc_call_out is None:
-            fnc_call_out = FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output=str(message or ""),
-                is_error=False,
-            )
-        else:
-            fnc_call_out = tool_output.fnc_call_out
-        return (fnc_call, fnc_call_out)
+        return make_tool_output(fnc_call=fnc_call, output=message, exception=None)
 
 
 EventTypes = Literal[
@@ -431,33 +442,31 @@ class FunctionToolsExecutedEvent(BaseModel):
     """Emitted after a batch of function tools finishes executing.
 
     ``function_calls`` and ``function_call_outputs`` are parallel lists: the
-    output at a given index belongs to the call at the same index. When an
-    output is present, its ``call_id`` matches the paired function call's
-    ``call_id``. A ``None`` output means the function call did not produce a
-    value that should be sent back to the LLM, such as when a tool raises
-    ``StopResponse`` or returns an invalid output.
+    output at a given index belongs to the call at the same index and carries
+    the same ``call_id``. Every call has one output, even one whose tool raised
+    ``StopResponse``; such an output asks for no reply with ``reply_required``.
     """
 
     type: Literal["function_tools_executed"] = "function_tools_executed"
     function_calls: list[FunctionCall]
-    function_call_outputs: list[FunctionCallOutput | None]
+    function_call_outputs: list[FunctionCallOutput]
     created_at: float = Field(default_factory=time.time)
-    _reply_required: bool = PrivateAttr(default=False)
     _handoff_required: bool = PrivateAttr(default=False)
 
-    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
+    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
         """Return calls paired with outputs by list position."""
         return list(zip(self.function_calls, self.function_call_outputs, strict=False))
 
     def cancel_tool_reply(self) -> None:
-        self._reply_required = False
+        for fnc_call_out in self.function_call_outputs:
+            fnc_call_out.reply_required = False
 
     def cancel_agent_handoff(self) -> None:
         self._handoff_required = False
 
     @property
     def has_tool_reply(self) -> bool:
-        return self._reply_required
+        return any(fnc_call_out.reply_required for fnc_call_out in self.function_call_outputs)
 
     @property
     def has_agent_handoff(self) -> bool:
@@ -499,6 +508,8 @@ class ToolCallUpdated(BaseModel):
     """Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred."""
     call_id: str
     message: str
+    silent: bool = False
+    """Kept to the model: the user hears nothing about it."""
 
 
 class ToolCallEnded(BaseModel):

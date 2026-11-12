@@ -8,6 +8,7 @@ LLMModels = Literal[
     "moonshotai/Kimi-K2-Instruct",
     "openai/gpt-oss-120b",
     "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "Qwen/Qwen3.8-27B",
 ]
 
 # Which wire protocol a deployment speaks. Baseten hosts several model families

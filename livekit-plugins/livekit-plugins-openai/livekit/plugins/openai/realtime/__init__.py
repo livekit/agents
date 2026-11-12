@@ -1,8 +1,29 @@
+from . import gpt_live_types as gpt_live_types, utils as utils
+from .gpt_live_model import (
+    DecisionEventEnvelope,
+    DecisionsOptions,
+    DecisionsTrigger,
+    GPTLiveDelegation,
+    GPTLiveModel,
+    GPTLiveSession,
+    GPTLiveVoices,
+    ResponsesDelegationOptions,
+)
+from .inference_realtime_model import InferenceRealtimeModel
 from .realtime_model import RealtimeModel, RealtimeSession
 
 __all__ = [
+    "InferenceRealtimeModel",
     "RealtimeSession",
     "RealtimeModel",
+    "DecisionEventEnvelope",
+    "DecisionsOptions",
+    "DecisionsTrigger",
+    "GPTLiveModel",
+    "GPTLiveSession",
+    "GPTLiveDelegation",
+    "GPTLiveVoices",
+    "ResponsesDelegationOptions",
 ]
 
 # Cleanup docs of unexported modules

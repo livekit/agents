@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
@@ -10,8 +9,17 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
+from ..llm import (
+    LLM,
+    ChatContext,
+    DuplexModel,
+    DuplexRealtimeAdapter,
+    RealtimeModel,
+    ToolError,
+    find_function_tools,
+)
 from ..llm.chat_context import Instructions, _ReadOnlyChatContext
+from ..llm.duplex_adapter import _DuplexRealtimeSession
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
@@ -21,10 +29,10 @@ from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
 if TYPE_CHECKING:
-    from ..inference import LLMModels, STTModels, TTSModels
+    from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession
+    from .agent_session import AgentSession, ExpressiveOptions
     from .audio_recognition import AudioRecognition
     from .io import TimedString
     from .turn import TurnDetectionMode
@@ -48,8 +56,11 @@ class Agent:
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        llm: NotGivenOr[
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
+        ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -85,15 +96,19 @@ class Agent:
             stt = inference.STT.from_model_string(stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM.from_model_string(llm)
+            llm = inference.llm_from_model_string(llm)
 
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt
-        self._llm = llm
+        # a duplex model is wrapped on the way in, so nothing downstream sees one
+        self._llm: NotGivenOr[LLM | RealtimeModel | None] = (
+            DuplexRealtimeAdapter(llm) if isinstance(llm, DuplexModel) else llm
+        )
         self._tts = tts
         self._vad = vad
+        self._expressive: NotGivenOr[bool | ExpressiveOptions] = expressive
 
         self._allow_interruptions: NotGivenOr[bool] = NOT_GIVEN
         self._interruption_detection: NotGivenOr[Literal["adaptive", "vad"]] = NOT_GIVEN
@@ -265,15 +280,20 @@ class Agent:
         *,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        llm: NotGivenOr[
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
+        ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
     ) -> None:
-        """Swap the STT, VAD, LLM, or TTS on this agent. Only the models passed are changed.
+        """Swap the STT, VAD, LLM, or TTS on this agent, or change its expressive setting.
+        Only the options passed are changed.
 
         Useful for switching a component mid-call (e.g. a different STT language or TTS voice).
         Strings resolve to inference models like the constructor. Pass ``None`` to disable a
         model (overriding the session), matching ``Agent(stt=None)``. If the agent is running,
-        the swap applies to the live pipeline.
+        the swap applies to the live pipeline. ``expressive`` overrides the session value and
+        takes effect on the next reply; pass ``False`` to force it off for this agent.
 
         Raises:
             RuntimeError: When swapping to or from a ``RealtimeModel`` while the agent is
@@ -282,9 +302,12 @@ class Agent:
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
         if isinstance(llm, str):
-            llm = inference.LLM.from_model_string(llm)
+            llm = inference.llm_from_model_string(llm)
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
+
+        if isinstance(llm, DuplexModel):
+            llm = DuplexRealtimeAdapter(llm)
 
         if self._activity is None:
             # not running: replace stored config, applied on the next start
@@ -296,9 +319,15 @@ class Agent:
                 self._llm = llm
             if is_given(tts):
                 self._tts = tts
+            if is_given(expressive):
+                self._expressive = expressive
             return
 
         self._activity._update_models(new_stt=stt, new_vad=vad, new_llm=llm, new_tts=tts)
+        if is_given(expressive):
+            # after _update_models so a rejected model swap leaves expressive untouched;
+            # resolved per turn (agent value over session), no live plumbing needed
+            self._expressive = expressive
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -358,6 +387,14 @@ class Agent:
 
         You can override this node with your own implementation for more flexibility (e.g.,
         custom pre-processing of audio, additional buffering, or alternative STT strategies).
+        Timestamps in the yielded ``SpeechData`` are relative to the first audio frame the
+        node consumes, unless the node sets ``start_time_offset`` on its stream; the default
+        implementation sets it so they are relative to the session start.
+
+        If your override buffers audio passed to Agent.default.stt_node, framework
+        flushing can occur before that audio reaches STT. Set
+        stt.capabilities.manual_flush = False on the underlying STT providers and manage
+        flushing in your implementation.
 
         Args:
             audio (AsyncIterable[rtc.AudioFrame]): An asynchronous stream of audio frames.
@@ -477,10 +514,13 @@ class Agent:
             agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
         ) -> AsyncGenerator[stt.SpeechEvent, None]:
             """Default implementation for `Agent.stt_node`"""
+            from .audio_recognition import _STTPipelineContextVar
+
             activity = agent._get_activity_or_raise()
             assert activity.stt is not None, "stt_node called but no STT node is available"
 
             wrapped_stt = activity.stt
+            temporary_adapter: stt.StreamAdapter | None = None
 
             if not activity.stt.capabilities.streaming:
                 if not activity.vad:
@@ -489,36 +529,56 @@ class Agent:
                         "Or manually wrap your STT in a stt.StreamAdapter"
                     )
 
-                wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
+                temporary_adapter = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
+                wrapped_stt = temporary_adapter
 
-            conn_options = activity.session.conn_options.stt_conn_options
-            async with wrapped_stt.stream(conn_options=conn_options) as stream:
-                _audio_input_started_at: float = (
-                    activity._audio_recognition._input_started_at
-                    if activity._audio_recognition is not None
-                    and activity._audio_recognition._input_started_at is not None
-                    else (
-                        activity.session._recorder_io.recording_started_at
-                        if activity.session._recorder_io
-                        and activity.session._recorder_io.recording_started_at
-                        else activity.session._started_at
-                        if activity.session._started_at
-                        else time.time()
+            try:
+                conn_options = activity.session.conn_options.stt_conn_options
+                async with wrapped_stt.stream(conn_options=conn_options) as stream:
+                    # Timestamps are offset onto the session timeline: a new pipeline counts
+                    # from the recording or session start, a recreated stream continues the
+                    # pipeline's timeline. The pipeline anchors them on the same instant.
+                    pipeline = (
+                        activity._audio_recognition._stt_pipeline
+                        if activity._audio_recognition is not None
+                        else None
                     )
-                )
-                stream.start_time_offset = time.time() - _audio_input_started_at
+                    _audio_input_started_at: float = (
+                        pipeline.input_started_at
+                        if pipeline is not None and pipeline.input_started_at is not None
+                        else (
+                            activity.session._recorder_io.recording_started_at
+                            if activity.session._recorder_io
+                            and activity.session._recorder_io.recording_started_at
+                            else activity.session._started_at
+                            if activity.session._started_at
+                            else time.time()
+                        )
+                    )
+                    stream.start_time_offset = time.time() - _audio_input_started_at
+                    if pipeline is not None:
+                        pipeline.input_started_at = _audio_input_started_at
 
-                @utils.log_exceptions(logger=logger)
-                async def _forward_input() -> None:
-                    async for frame in audio:
-                        stream.push_frame(frame)
+                    pipeline = _STTPipelineContextVar.get(None)
+                    if pipeline:
+                        pipeline._recognize_stream = stream
 
-                forward_task = asyncio.create_task(_forward_input())
-                try:
-                    async for event in stream:
-                        yield event
-                finally:
-                    await utils.aio.cancel_and_wait(forward_task)
+                    @utils.log_exceptions(logger=logger)
+                    async def _forward_input() -> None:
+                        async for frame in audio:
+                            stream.push_frame(frame)
+
+                    forward_task = asyncio.create_task(_forward_input())
+                    try:
+                        async for event in stream:
+                            yield event
+                    finally:
+                        if pipeline:
+                            pipeline._recognize_stream = None
+                        await utils.aio.cancel_and_wait(forward_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
 
         @staticmethod
         async def llm_node(
@@ -560,9 +620,10 @@ class Agent:
 
             expressive_active = activity._resolve_expressive_options() is not None
             wrapped_tts = activity.tts
+            temporary_adapter: tts.StreamAdapter | None = None
 
             if not activity.tts.capabilities.streaming:
-                wrapped_tts = tts.StreamAdapter(
+                temporary_adapter = tts.StreamAdapter(
                     tts=wrapped_tts,
                     sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
                         retain_format=True,
@@ -570,29 +631,34 @@ class Agent:
                         xml_aware=expressive_active,
                     ),
                 )
+                wrapped_tts = temporary_adapter
 
-            # Mark whether expressive is active for this synthesis, synchronously
-            # just before stream() snapshots it. Doing it here (the single synthesis
-            # choke point for both generate_reply and say()) scopes it to this turn
-            # rather than leaving stale state on the instance. The provider's chunk
-            # defaults then drive the TTS's input tokenizer.
-            activity.tts._set_expressive(expressive_active)
+            try:
+                # Mark whether expressive is active for this synthesis, synchronously
+                # just before stream() snapshots it. Doing it here (the single synthesis
+                # choke point for both generate_reply and say()) scopes it to this turn
+                # rather than leaving stale state on the instance. The provider's chunk
+                # defaults then drive the TTS's input tokenizer.
+                activity.tts._set_expressive(expressive_active)
 
-            conn_options = activity.session.conn_options.tts_conn_options
-            async with wrapped_tts.stream(conn_options=conn_options) as stream:
+                conn_options = activity.session.conn_options.tts_conn_options
+                async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
-                async def _forward_input() -> None:
-                    async for chunk in text:
-                        stream.push_text(chunk)
+                    async def _forward_input() -> None:
+                        async for chunk in text:
+                            stream.push_text(chunk)
 
-                    stream.end_input()
+                        stream.end_input()
 
-                forward_task = asyncio.create_task(_forward_input())
-                try:
-                    async for ev in stream:
-                        yield ev.frame
-                finally:
-                    await utils.aio.cancel_and_wait(forward_task)
+                    forward_task = asyncio.create_task(_forward_input())
+                    try:
+                        async for ev in stream:
+                            yield ev.frame
+                    finally:
+                        await utils.aio.cancel_and_wait(forward_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
 
         @staticmethod
         async def transcription_node(
@@ -627,6 +693,23 @@ class Agent:
             raise RuntimeError("no realtime LLM session")
 
         return rt_session
+
+    @property
+    def duplex_session(self) -> llm.DuplexSession:
+        """
+        Retrieve the duplex session of the current agent, for provider-specific APIs.
+
+        A duplex model is driven through an adapter that presents it as a realtime session; this
+        returns the plugin's own session, where a provider puts what the abstraction does not carry.
+
+        Raises:
+            RuntimeError: If the agent is not running, or is not running on a duplex model
+        """
+        rt_session = self._get_activity_or_raise().realtime_llm_session
+        if not isinstance(rt_session, _DuplexRealtimeSession):
+            raise RuntimeError("no duplex session, this agent is not running a DuplexModel")
+
+        return rt_session.duplex_session
 
     @property
     def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:
@@ -686,6 +769,21 @@ class Agent:
             NotGivenOr[tts.TTS | None]: An optional TTS component for generating audio output.
         """  # noqa: E501
         return self._tts
+
+    @property
+    def expressive(self) -> NotGivenOr[bool | ExpressiveOptions]:
+        """
+        Retrieves the expressive TTS delivery setting for the agent.
+
+        If this property was not set at Agent creation, the ``AgentSession``'s ``expressive``
+        value will be used at runtime instead. When set, it overrides the session value for
+        this agent's turns, matching how ``llm`` and ``tts`` overrides behave.
+
+        Returns:
+            NotGivenOr[bool | ExpressiveOptions]: Whether expressive delivery is enabled,
+                or its configuration.
+        """
+        return self._expressive
 
     @property
     def mcp_servers(self) -> NotGivenOr[list[mcp.MCPServer] | None]:
@@ -839,6 +937,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self._preserve_function_call_history = preserve_function_call_history
 
         self._old_agent: Agent | None = None
+        self.__awaiter: tuple[SpeechHandle | None, asyncio.Task[Any]] | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
@@ -864,9 +963,26 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         from .agent_activity import _SpeechHandleContextVar
 
         speech_handle = _SpeechHandleContextVar.get(None)
-
-        if speech_handle:
+        # an error raised into an awaiter that is still running inside its own speech is the
+        # awaiter's to handle, so it isn't also that speech's run output
+        awaiter = self.__awaiter
+        raised_into_awaiter = (
+            isinstance(result, Exception)
+            and awaiter is not None
+            and speech_handle is awaiter[0]
+            and not awaiter[1].done()
+        )
+        if speech_handle and not raised_into_awaiter:
             speech_handle._maybe_run_final_output = result
+
+        activity = self._activity
+        if (
+            activity
+            and activity.session.current_agent is self
+            and (run_state := activity.session._global_run_state)
+            and not run_state.done()
+        ):
+            run_state._set_final_output(result)
 
         # if not self.__inline_mode:
         #    session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
@@ -889,6 +1005,17 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 f"{self.__class__.__name__} should only be awaited inside tool_functions or the on_enter/on_exit methods of an Agent"  # noqa: E501
             )
 
+        # imported at call time: agent_activity imports Agent at module scope, so the reverse can't
+        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+        from .run_result import _RunSuspension
+
+        speech_handle = _SpeechHandleContextVar.get(None)
+        old_activity = _AgentActivityContextVar.get()
+        old_agent = old_activity.agent
+        session = old_activity.session
+        self._old_agent = old_agent
+        self.__awaiter = (speech_handle, current_task)
+
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
             if self.__fut.done():
                 return
@@ -905,31 +1032,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 )
             )
 
-        current_task.add_done_callback(_handle_task_done)
-
-        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
-
-        # TODO(theomonnom): add a global lock for inline tasks
-        # This may currently break in the case we use parallel tool calls.
-
-        speech_handle = _SpeechHandleContextVar.get(None)
-        old_activity = _AgentActivityContextVar.get()
-        old_agent = old_activity.agent
-        session = old_activity.session
-        self._old_agent = old_agent
-
-        old_allow_interruptions = True
-        if speech_handle:
-            if speech_handle.interrupted:
-                raise RuntimeError(
-                    f"{self.__class__.__name__} cannot be awaited inside a function tool that is already interrupted"
-                )
-
-            # lock the speech handle to prevent interruptions until the task is complete
-            # there should be no await before this line to avoid race conditions
-            old_allow_interruptions = speech_handle.allow_interruptions
-            speech_handle.allow_interruptions = False
-
         blocked_tasks = [current_task]
         if (
             old_activity._on_enter_task
@@ -938,119 +1040,123 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         ):
             blocked_tasks.append(old_activity._on_enter_task)
 
-        # register before any await so a concurrent drain (e.g. session close)
-        # won't wait for tasks blocked on this handoff
-        old_activity._add_drain_blocked_tasks(blocked_tasks)
-
-        # watch the blocked tasks so an active run won't complete mid-handoff
-        # (the parent speech may predate the run, e.g. created in on_enter)
-        if (run_state := session._global_run_state) and not run_state.done():
-            for task in blocked_tasks:
-                run_state._watch_handle(task)
-
-        if (
-            task_info.function_call
-            and isinstance(old_activity.llm, RealtimeModel)
-            and not old_activity.llm.capabilities.manual_function_calls
+        async with old_activity._inline_task_slot(
+            speech_handle=speech_handle, blocked_tasks=blocked_tasks
         ):
-            logger.error(
-                f"Realtime model '{old_activity.llm.label}' does not support resuming function calls from chat context, "
-                "using AgentTask inside a function tool may have unexpected behavior."
-            )
+            current_task.add_done_callback(_handle_task_done)
 
-        # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
-        self.__inactive_ev.clear()
-        suspended_handles: list[SpeechHandle | asyncio.Future[Any]] = []
-        pending_on_enter_task: asyncio.Task[None] | None = None
-        try:
-            # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
-            # AgentTasks that require user input, but session.run() can't return until
-            # all watched handles complete — creating a circular wait.
-            await session._update_activity(
-                self, previous_activity="pause", blocked_tasks=blocked_tasks, wait_on_enter=False
-            )
-
-            if not self._activity and not self.done():
-                self.complete(
-                    ToolError(
-                        f"activity doesn't start for {self.id}, likely due to session closing"
-                    )
+            if (
+                task_info.function_call
+                and isinstance(old_activity.llm, RealtimeModel)
+                and not old_activity.llm.capabilities.manual_function_calls
+            ):
+                logger.error(
+                    f"Realtime model '{old_activity.llm.label}' does not support resuming function calls from chat context, "
+                    "using AgentTask inside a function tool may have unexpected behavior."
                 )
 
-            run_state = session._global_run_state
+            # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
+            self.__inactive_ev.clear()
+            pending_on_enter_task: asyncio.Task[None] | None = None
 
-            if self._activity and (on_enter_task := self._activity._on_enter_task):
-                if run_state and not run_state.done():
-                    # watch the on_enter task as a guard so RunResult won't complete
-                    # before on_enter has registered its own speech handles
-                    run_state._watch_handle(on_enter_task)
-                    pending_on_enter_task = on_enter_task
-                else:
-                    # no active run to guard — just wait for on_enter directly
-                    await asyncio.shield(on_enter_task)
-
-            # now unwatch the parent speech handle and blocked tasks that belong to the
-            # old activity — they can't complete while this AgentTask is running, and
-            # keeping them watched would block RunResult from completing. A foreground
-            # hold waiting on this task is in the same position, so its guard suspends too.
-            if run_state and not run_state.done():
-                if speech_handle and run_state._unwatch_handle(speech_handle):
-                    suspended_handles.append(speech_handle)
-                for blocked in [*blocked_tasks, *session._foreground_guards]:
-                    if run_state._unwatch_handle(blocked):
-                        suspended_handles.append(blocked)
-                if suspended_handles:
-                    run_state._mark_done_if_needed(None)
-        except Exception:
-            self.__inactive_ev.set()
-            raise
-
-        try:
-            return await asyncio.shield(self.__fut)
-
-        finally:
-            if speech_handle:
-                with contextlib.suppress(RuntimeError):
-                    speech_handle.allow_interruptions = old_allow_interruptions
-
-            # run_state could have changed after self.__fut
-            run_state = session._global_run_state
-
-            # re-watch the suspended handles so the resumed parent activity
-            # is tracked by the current RunResult again
-            if run_state and not run_state.done():
-                for handle in suspended_handles:
-                    run_state._watch_handle(handle)
-
-            if pending_on_enter_task:
+            # registered before on_enter can run: the task may complete from it, and a run
+            # started meanwhile must see the awaiter resume
+            suspension = _RunSuspension(handles=[current_task], until=self.__fut)
+            session._run_suspensions.append(suspension)
+            try:
+                if (run_state := session._global_run_state) and not run_state.done():
+                    run_state._watch_handle(current_task)
                 try:
-                    await asyncio.shield(pending_on_enter_task)
+                    # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
+                    # AgentTasks that require user input, but session.run() can't return until
+                    # all watched handles complete — creating a circular wait.
+                    await session._update_activity(
+                        self,
+                        previous_activity="pause",
+                        blocked_tasks=blocked_tasks,
+                        wait_on_enter=False,
+                    )
+
+                    if not self._activity and not self.done():
+                        self.complete(
+                            ToolError(
+                                f"activity doesn't start for {self.id}, likely due to session closing"
+                            )
+                        )
+
+                    run_state = session._global_run_state
+
+                    on_enter_task = self._activity._on_enter_task if self._activity else None
+                    if on_enter_task and run_state and not run_state.done():
+                        # watch the on_enter task as a guard so RunResult won't complete
+                        # before on_enter has registered its own speech handles
+                        run_state._watch_handle(on_enter_task)
+                        pending_on_enter_task = on_enter_task
+
+                    # now suspend the parent speech handle and blocked tasks that belong to the
+                    # old activity — they can't complete while this AgentTask is running, and
+                    # holding the run open on them would block RunResult from completing. A
+                    # foreground hold waiting on this task is in the same position, so its guard
+                    # suspends too.
+                    if run_state and not run_state.done():
+                        suspension.handles += [
+                            handle
+                            for handle in [
+                                speech_handle,
+                                *blocked_tasks,
+                                *session._foreground_guards,
+                            ]
+                            if handle is not None
+                            and handle is not current_task
+                            and handle in run_state._handles
+                        ]
+                    suspension.active = True
+                    if run_state and not run_state.done():
+                        run_state._mark_done_if_needed(None)
+
+                    if on_enter_task and not pending_on_enter_task:
+                        # no active run to guard — just wait for on_enter directly
+                        await asyncio.shield(on_enter_task)
+                # asyncio.CancelledError derives from BaseException, not Exception
                 except BaseException:
-                    logger.exception("error in on_enter task of agent %s", self.id)
+                    self.__inactive_ev.set()
+                    raise
 
-            if session._closing and self._activity is None:
-                # the activity never started (session closing), skip the handoff;
-                # the close path owns the previous activity
-                pass
-            elif session.current_agent != self:
-                logger.warning(
-                    f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
-                    "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
-                )
-                await old_activity.aclose()
-            else:
-                merged_chat_ctx = old_agent.chat_ctx.merge(
-                    self.chat_ctx,
-                    exclude_function_call=not self._preserve_function_call_history,
-                    exclude_instructions=True,
-                )
-                # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
-                old_agent._chat_ctx.items[:] = merged_chat_ctx.items
+                try:
+                    return await asyncio.shield(self.__fut)
 
-                await session._update_activity(
-                    old_agent, new_activity="resume", wait_on_enter=False
-                )
-            self.__inactive_ev.set()
+                finally:
+                    if pending_on_enter_task:
+                        try:
+                            await asyncio.shield(pending_on_enter_task)
+                        except BaseException:
+                            logger.exception("error in on_enter task of agent %s", self.id)
+
+                    if session._closing and self._activity is None:
+                        # the activity never started (session closing), skip the handoff;
+                        # the close path owns the previous activity
+                        pass
+                    elif session.current_agent != self:
+                        logger.warning(
+                            f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
+                            "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
+                        )
+                        await old_activity.aclose()
+                    else:
+                        merged_chat_ctx = old_agent.chat_ctx.copy().merge(
+                            self.chat_ctx,
+                            exclude_function_call=not self._preserve_function_call_history,
+                            exclude_instructions=True,
+                        )
+                        # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
+                        old_agent._chat_ctx.items[:] = merged_chat_ctx.items
+
+                        await session._update_activity(
+                            old_agent, new_activity="resume", wait_on_enter=False
+                        )
+                    self.__inactive_ev.set()
+            finally:
+                session._run_suspensions.remove(suspension)
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()

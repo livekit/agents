@@ -17,12 +17,13 @@ import concurrent.futures
 import contextlib
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     LanguageCode,
     stt,
@@ -36,8 +37,10 @@ from .log import logger
 from .utils import DEFAULT_REGION
 
 try:
-    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
-    from aws_sdk_transcribe_streaming.config import Config
+    from aws_sdk_transcribe_streaming.client import (
+        AsyncTranscribeStreamingClient as TranscribeStreamingClient,
+    )
+    from aws_sdk_transcribe_streaming.config import AsyncTranscribeStreamingConfig as Config
     from aws_sdk_transcribe_streaming.models import (
         AudioEvent,
         AudioStream,
@@ -205,10 +208,18 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        opts = self._config
+        # language_code cannot be combined with automatic language identification
+        if language and (opts.identify_language or opts.identify_multiple_languages):
+            logger.warning(
+                "language is ignored when identify_language or identify_multiple_languages is enabled"
+            )
+        elif language:
+            opts = replace(opts, language=LanguageCode(language))
         return SpeechStream(
             stt=self,
             conn_options=conn_options,
-            opts=self._config,
+            opts=opts,
             credentials=self._credentials,
         )
 
@@ -224,12 +235,23 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._credentials = credentials
-        self._http_client = AWSCRTHTTPClient()
+        self._http_client: AWSCRTHTTPClient | None = None
         self._audio_duration = 0.0
         self._last_audio_duration_report_time = time.monotonic()
 
+    async def aclose(self) -> None:
+        await super().aclose()
+        if self._http_client is not None:
+            await self._http_client.close()
+
     async def _run(self) -> None:
         while True:
+            # a restarted attempt needs its own transport: the pooled HTTP/2 connection
+            # of the finished stream cannot carry a second StartStreamTranscription
+            if self._http_client is not None:
+                await self._http_client.close()
+            self._http_client = AWSCRTHTTPClient()
+
             config_kwargs: dict[str, Any] = {"region": self._opts.region}
             if self._credentials:
                 # Use a credentials resolver for explicit credentials
@@ -259,7 +281,7 @@ class SpeechStream(stt.SpeechStream):
                 )
 
             client: TranscribeStreamingClient = TranscribeStreamingClient(
-                config=Config(**config_kwargs)
+                config=await Config.resolve(transport=self._http_client, **config_kwargs)
             )
 
             live_config = {
@@ -317,6 +339,7 @@ class SpeechStream(stt.SpeechStream):
                 stream = await client.start_stream_transcription(
                     input=StartStreamTranscriptionInput(**filtered_config)
                 )
+                self._input_ch.restart_provider_clock()
 
                 # Get the output stream
                 _, output_stream = await stream.await_output()
@@ -356,6 +379,7 @@ class SpeechStream(stt.SpeechStream):
                         async for event in output_stream:
                             if isinstance(event.value, TranscriptEvent):
                                 self._process_transcript_event(event.value)
+                                self._mark_provider_progress()
                     except BadRequestException as e:
                         if (
                             e.message
@@ -383,11 +407,9 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.shield(gather_future)
             except BadRequestException as e:
                 if e.message and e.message.startswith("Your request timed out"):
-                    # AWS times out after 15s of inactivity, this tends to happen
-                    # at the end of the session, when the input is gone, we'll ignore it and
-                    # just treat it as a silent retry
-                    logger.info("restarting transcribe session")
-                    continue
+                    if self._input_ch.closed:
+                        return
+                    raise APIConnectionError("AWS Transcribe stream timed out") from e
                 else:
                     raise e
             finally:
@@ -400,6 +422,9 @@ class SpeechStream(stt.SpeechStream):
                         await asyncio.wait_for(tasks[1], timeout=3.0)
                     except (asyncio.TimeoutError, asyncio.CancelledError):
                         await utils.aio.gracefully_cancel(tasks[1])
+                    except BadRequestException:
+                        # Already handled above; preserve the retryable timeout error.
+                        pass
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
                 with contextlib.suppress(Exception):

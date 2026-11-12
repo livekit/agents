@@ -75,7 +75,6 @@ class DtmfAgent(Agent):
                         "press 1 to hear details about their current plan, press 2 to enable international data roaming, "
                         "or press 3 to explore upgrade options. Prompt them for a single digit and give them a moment to respond."
                     ),
-                    repeat_instructions=2,
                 )
             except ToolError as e:
                 await self.session.generate_reply(instructions=e.message, allow_interruptions=False)
@@ -115,7 +114,6 @@ class DtmfAgent(Agent):
                         "Provide an example such as 415 555 0199, remind them you're keeping their information secure, "
                         "then capture the digits. Read the number back in grouped segments for confirmation and invite them to confirm or re-enter."
                     ),
-                    repeat_instructions=2,
                 )
             except ToolError as e:
                 await self.session.generate_reply(instructions=e.message, allow_interruptions=False)

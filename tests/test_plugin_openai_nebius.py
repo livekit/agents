@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 
@@ -12,11 +12,11 @@ from livekit.plugins.openai import LLM
 
 pytestmark = pytest.mark.unit
 
-_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+_MODEL = "openai/gpt-oss-120b"
 _BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
-_STREAM_RESPONSE = b"""data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"ok","role":"assistant"},"finish_reason":null,"index":0}],"created":0,"model":"meta-llama/Llama-3.3-70B-Instruct","object":"chat.completion.chunk"}
+_STREAM_RESPONSE = b"""data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"ok","role":"assistant"},"finish_reason":null,"index":0}],"created":0,"model":"openai/gpt-oss-120b","object":"chat.completion.chunk"}
 
-data: {"id":"chatcmpl-test","choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":0,"model":"meta-llama/Llama-3.3-70B-Instruct","object":"chat.completion.chunk"}
+data: {"id":"chatcmpl-test","choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":0,"model":"openai/gpt-oss-120b","object":"chat.completion.chunk"}
 
 data: [DONE]
 
@@ -82,3 +82,25 @@ async def test_nebius_helper_sends_request_to_configured_client() -> None:
     payload = json.loads(request.content)
     assert payload["model"] == _MODEL
     assert payload["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_nebius_helper_requires_explicit_model() -> None:
+    with pytest.raises(TypeError, match="model"):
+        LLM.with_nebius(api_key="test-key")  # type: ignore[call-arg]
+
+
+def test_nebius_helper_requires_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NEBIUS_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="Nebius API key is required"):
+        LLM.with_nebius(model=_MODEL)
+
+
+async def test_nebius_helper_preserves_custom_client_and_unlisted_model() -> None:
+    client = openai.AsyncClient(api_key="custom-key", base_url="https://example.invalid/v1/")
+    llm = LLM.with_nebius(model="vendor/future-model", api_key="test-key", client=client)
+    try:
+        assert llm._client is client
+        assert llm.model == "vendor/future-model"
+        assert str(client.base_url) == "https://example.invalid/v1/"
+    finally:
+        await llm.aclose()

@@ -37,7 +37,6 @@ def _azure_model() -> openai.realtime.RealtimeModel:
     return openai.realtime.RealtimeModel(
         azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        api_version=os.environ["AZURE_OPENAI_API_VERSION"],
         base_url=os.environ["AZURE_OPENAI_ENDPOINT"] + "/openai",
         voice="alloy",
     )
@@ -64,6 +63,17 @@ OPENAI_AND_AZURE: list = [
 OPENAI_AZURE_AND_XAI: list = [
     pytest.param(_openai_model, id="openai"),
     pytest.param(_azure_model, id="azure"),
+    pytest.param(_xai_model, id="xai", marks=_skip_xai),
+]
+
+# Azure v1 resolves the transcription model as a deployment in the same resource
+TRANSCRIPTION_MODELS: list = [
+    pytest.param(_openai_model, id="openai"),
+    pytest.param(
+        _azure_model,
+        id="azure",
+        marks=pytest.mark.skip(reason="CI Azure resource has no gpt-4o-mini-transcribe deployment"),
+    ),
     pytest.param(_xai_model, id="xai", marks=_skip_xai),
 ]
 
@@ -236,7 +246,7 @@ async def test_vad_speech_events(rt_session: llm.RealtimeSession):
     await asyncio.wait_for(speech_stopped.wait(), timeout=10)
 
 
-@pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
+@pytest.mark.parametrize("rt_session", TRANSCRIPTION_MODELS, indirect=True)
 async def test_input_audio_transcription(rt_session: llm.RealtimeSession):
     transcripts: list[str] = []
     final_received = asyncio.Event()

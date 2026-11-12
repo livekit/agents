@@ -15,7 +15,6 @@ from typing import Literal, Protocol, runtime_checkable
 
 from livekit import rtc
 
-from ... import utils
 from ..._exceptions import APITimeoutError
 from ...language import LanguageCode
 from ...log import logger
@@ -25,6 +24,7 @@ from ...types import (
 )
 from ...utils import aio
 from ...voice.turn import TurnDetectionEvent
+from .._utils import create_inference_request_id
 from .languages import ThresholdOptions, TurnDetectorModels
 
 DEFAULT_SAMPLE_RATE: int = 16000
@@ -45,6 +45,9 @@ class TurnDetectorOptions:
 
 @runtime_checkable
 class _StreamingTurnDetectionTransport(Protocol):
+    @property
+    def session_id(self) -> str | None: ...
+
     async def run(self) -> None: ...
 
     def run_inference(self, request_id: str) -> None: ...
@@ -175,7 +178,11 @@ class _BaseStreamingTurnDetectorStream:
             return fut
 
         self.cancel_inference()  # supersede any previous request
-        self._request_id = utils.shortuuid("turn_request_")
+        self._request_id = create_inference_request_id(
+            self._transport.session_id,
+            "eot",
+            fallback_prefix="turn_request_",
+        )
         self._request_fut = asyncio.get_running_loop().create_future()
         self._transport.run_inference(self._request_id)
         return self._request_fut

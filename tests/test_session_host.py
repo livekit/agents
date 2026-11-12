@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents.llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput
+from livekit.agents import llm
+from livekit.agents._proto import encode_metrics
+from livekit.agents.llm import (
+    AgentConfigUpdate,
+    AgentHandoff,
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+)
 from livekit.agents.metrics import (
     AgentSessionUsage,
     InterruptionModelUsage,
@@ -16,6 +25,8 @@ from livekit.agents.metrics import (
 )
 from livekit.agents.voice.events import (
     AgentStateChangedEvent,
+    CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
     SessionUsageUpdatedEvent,
@@ -23,12 +34,12 @@ from livekit.agents.voice.events import (
     UserStateChangedEvent,
 )
 from livekit.agents.voice.remote_session import (
+    NO_ACTIVE_SESSION_ERROR,
     RoomSessionTransport,
     SessionHost,
     SessionTransport,
-    _chat_item_to_proto,
-    _metrics_to_proto,
-    _session_usage_to_proto,
+    encode_chat_item,
+    encode_session_usage,
 )
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
@@ -41,6 +52,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 FORWARDED_EVENTS = {
     "agent_false_interruption",
     "agent_state_changed",
+    "close",
     "conversation_item_added",
     "debug_message",
     "error",
@@ -96,10 +108,10 @@ class InMemoryTransport(SessionTransport):
 # ---------------------------------------------------------------------------
 
 
-class TestChatItemToProto:
+class TestEncodeChatItem:
     def test_chat_message(self) -> None:
         msg = ChatMessage(role="user", content=["hello"], id="msg-1")
-        pb_item = _chat_item_to_proto(msg)
+        pb_item = encode_chat_item(msg)
         assert pb_item.HasField("message")
         assert pb_item.message.id == "msg-1"
         assert pb_item.message.role == agent_pb.USER
@@ -108,12 +120,12 @@ class TestChatItemToProto:
 
     def test_chat_message_assistant(self) -> None:
         msg = ChatMessage(role="assistant", content=["hi there"], id="msg-2")
-        pb_item = _chat_item_to_proto(msg)
+        pb_item = encode_chat_item(msg)
         assert pb_item.message.role == agent_pb.ASSISTANT
 
     def test_chat_message_developer(self) -> None:
         msg = ChatMessage(role="developer", content=["system prompt"], id="msg-3")
-        pb_item = _chat_item_to_proto(msg)
+        pb_item = encode_chat_item(msg)
         assert pb_item.message.role == agent_pb.DEVELOPER
 
     def test_function_call(self) -> None:
@@ -123,7 +135,7 @@ class TestChatItemToProto:
             name="get_weather",
             arguments='{"location": "NYC"}',
         )
-        pb_item = _chat_item_to_proto(fc)
+        pb_item = encode_chat_item(fc)
         assert pb_item.HasField("function_call")
         assert pb_item.function_call.name == "get_weather"
         assert pb_item.function_call.call_id == "call-1"
@@ -131,12 +143,14 @@ class TestChatItemToProto:
 
     def test_function_call_output(self) -> None:
         fco = FunctionCallOutput(
+            id="fco-1",
             call_id="call-1",
             output="sunny, 72F",
             is_error=False,
         )
-        pb_item = _chat_item_to_proto(fco)
+        pb_item = encode_chat_item(fco)
         assert pb_item.HasField("function_call_output")
+        assert pb_item.function_call_output.id == "fco-1"
         assert pb_item.function_call_output.call_id == "call-1"
         assert pb_item.function_call_output.output == "sunny, 72F"
         assert pb_item.function_call_output.is_error is False
@@ -147,13 +161,40 @@ class TestChatItemToProto:
             output="not found",
             is_error=True,
         )
-        pb_item = _chat_item_to_proto(fco)
+        pb_item = encode_chat_item(fco)
         assert pb_item.function_call_output.is_error is True
 
+    @pytest.mark.parametrize(
+        "item",
+        [
+            ChatMessage(role="user", content=["hello"], created_at=1_700_000_000.5),
+            FunctionCall(call_id="c", name="f", arguments="{}", created_at=1_700_000_000.5),
+            FunctionCallOutput(
+                call_id="c", output="ok", is_error=False, created_at=1_700_000_000.5
+            ),
+            AgentHandoff(new_agent_id="a", created_at=1_700_000_000.5),
+            AgentConfigUpdate(created_at=1_700_000_000.5),
+        ],
+    )
+    def test_created_at_survives(self, item: llm.ChatItem) -> None:
+        pb_item = encode_chat_item(item)
+        pb_inner = getattr(pb_item, pb_item.WhichOneof("item"))
+        assert pb_inner.created_at.ToNanoseconds() == 1_700_000_000_500_000_000
 
-class TestMetricsToProto:
+    def test_transcript_confidence(self) -> None:
+        msg = ChatMessage(role="user", content=["hello"], transcript_confidence=0.75)
+        pb_item = encode_chat_item(msg)
+        assert pb_item.message.transcript_confidence == 0.75
+
+    def test_transcript_confidence_unset(self) -> None:
+        msg = ChatMessage(role="user", content=["hello"])
+        pb_item = encode_chat_item(msg)
+        assert not pb_item.message.HasField("transcript_confidence")
+
+
+class TestEncodeMetrics:
     def test_empty(self) -> None:
-        pb = _metrics_to_proto(None)
+        pb = encode_metrics(None)
         assert isinstance(pb, agent_pb.MetricsReport)
 
     def test_with_fields(self) -> None:
@@ -164,7 +205,7 @@ class TestMetricsToProto:
             "tts_node_ttfb": 0.4,
             "e2e_latency": 0.5,
         }
-        pb = _metrics_to_proto(metrics)
+        pb = encode_metrics(metrics)
         assert pb.transcription_delay == pytest.approx(0.1)
         assert pb.end_of_turn_delay == pytest.approx(0.2)
         assert pb.llm_node_ttft == pytest.approx(0.3)
@@ -173,19 +214,19 @@ class TestMetricsToProto:
 
     def test_partial_fields(self) -> None:
         metrics = {"transcription_delay": 0.42}
-        pb = _metrics_to_proto(metrics)
+        pb = encode_metrics(metrics)
         assert pb.transcription_delay == pytest.approx(0.42)
 
     def test_llm_node_throughput_fields(self) -> None:
         # guards the dict-key -> proto-field mapping: a mismatch (e.g. "tps" vs
         # "llm_node_tps") raises at MetricsReport(**kwargs) instead of silently dropping.
         metrics = {"llm_node_tps": 12.5, "llm_node_ttfs": 0.6}
-        pb = _metrics_to_proto(metrics)
+        pb = encode_metrics(metrics)
         assert pb.llm_node_tps == pytest.approx(12.5)
         assert pb.llm_node_ttfs == pytest.approx(0.6)
 
 
-class TestSessionUsageToProto:
+class TestEncodeSessionUsage:
     def test_llm_usage(self) -> None:
         usage = AgentSessionUsage(
             model_usage=[
@@ -197,7 +238,7 @@ class TestSessionUsageToProto:
                 )
             ]
         )
-        pb = _session_usage_to_proto(usage)
+        pb = encode_session_usage(usage)
         assert len(pb.model_usage) == 1
         assert pb.model_usage[0].HasField("llm")
         assert pb.model_usage[0].llm.provider == "openai"
@@ -216,7 +257,7 @@ class TestSessionUsageToProto:
                 )
             ]
         )
-        pb = _session_usage_to_proto(usage)
+        pb = encode_session_usage(usage)
         assert len(pb.model_usage) == 1
         assert pb.model_usage[0].HasField("tts")
         assert pb.model_usage[0].tts.provider == "elevenlabs"
@@ -232,7 +273,7 @@ class TestSessionUsageToProto:
                 )
             ]
         )
-        pb = _session_usage_to_proto(usage)
+        pb = encode_session_usage(usage)
         assert len(pb.model_usage) == 1
         assert pb.model_usage[0].HasField("stt")
         assert pb.model_usage[0].stt.audio_duration == pytest.approx(10.0)
@@ -247,7 +288,7 @@ class TestSessionUsageToProto:
                 )
             ]
         )
-        pb = _session_usage_to_proto(usage)
+        pb = encode_session_usage(usage)
         assert len(pb.model_usage) == 1
         assert pb.model_usage[0].HasField("interruption")
         assert pb.model_usage[0].interruption.total_requests == 42
@@ -260,7 +301,7 @@ class TestSessionUsageToProto:
                 STTModelUsage(provider="deepgram", model="nova"),
             ]
         )
-        pb = _session_usage_to_proto(usage)
+        pb = encode_session_usage(usage)
         assert len(pb.model_usage) == 3
 
 
@@ -301,7 +342,7 @@ class TestSessionHostEvents:
         session.off = MagicMock()
         return session
 
-    def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
+    def test_attach(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
         subscribed = {call.args[0] for call in mock_session.on.call_args_list}
@@ -479,6 +520,21 @@ class TestSessionHostEvents:
         assert len(transport.sent) == 1
         msg = transport.sent[0]
         assert msg.event.error.message == "something went wrong"
+
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_close(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        host._on_close(CloseEvent(reason=CloseReason.TASK_COMPLETED, created_at=1000.0))
+        await asyncio.sleep(0.1)
+
+        assert len(transport.sent) == 1
+        closed = transport.sent[0].event.session_closed
+        assert closed.reason == agent_pb.CloseReason.CR_COMPLETED
+        assert not closed.HasField("error")
 
         await host.aclose()
 
@@ -681,11 +737,164 @@ class TestSessionHostRequests:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_aclose_unregisters_events(self, transport: InMemoryTransport) -> None:
+    async def test_aclose_detaches(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
         host.register_session(session)
         await host.start()
         await host.aclose()
+        unsubscribed = {call.args[0] for call in session.off.call_args_list}
+        assert unsubscribed == FORWARDED_EVENTS
+
+    def test_attach_replaces_the_attached_session(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        first = self._make_mock_session()
+        second = self._make_mock_session()
+        host.register_session(first)
+        host.register_session(second)
+        assert host.session is second
+        assert {call.args[0] for call in first.off.call_args_list} == FORWARDED_EVENTS
+        assert {call.args[0] for call in second.on.call_args_list} == FORWARDED_EVENTS
+
+        host.unregister_session()
+        assert {call.args[0] for call in second.off.call_args_list} == FORWARDED_EVENTS
+
+
+class TestSessionHostWithoutSession:
+    """The host outlives its session: it answers between sessions instead of going quiet."""
+
+    @pytest.fixture
+    def transport(self) -> InMemoryTransport:
+        return InMemoryTransport()
+
+    @pytest.fixture
+    def simulated_job(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        sim_ctx = MagicMock()
+        sim_ctx.user_verdict = None
+        sim_ctx._dispatch.simulation_run_id = "run-1"
+        job_ctx = MagicMock()
+        job_ctx.simulation_context = MagicMock(return_value=sim_ctx)
+
+        def _on_simulation_end(ctx: MagicMock) -> None:
+            ctx.user_verdict = MagicMock(success=False, reason="vetoed")
+
+        job_ctx._simulation_end_fnc = _on_simulation_end
+        monkeypatch.setattr("livekit.agents.job.get_job_context", lambda required=True: job_ctx)
+        return job_ctx
+
+    @pytest.mark.asyncio
+    async def test_session_request_without_session_is_refused(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-run", run_input=agent_pb.SessionRequest.RunInput(text="hello?")
+            )
+        )
+
+        assert transport.sent[-1].response.request_id == "req-run"
+        assert transport.sent[-1].response.error == NO_ACTIVE_SESSION_ERROR
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_finalize_is_answered_after_detach(
+        self, transport: InMemoryTransport, simulated_job: MagicMock
+    ) -> None:
+        host = SessionHost(transport)
+        host.register_session(TestSessionHostRequests()._make_mock_session())
+        await host.start()
+        host.unregister_session()
+        assert host.session is None
+
+        finalized = asyncio.ensure_future(host.wait_for_simulation_finalized())
+        await asyncio.sleep(0)
+        assert not finalized.done()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-fin",
+                finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
+                    provisional_success=True
+                ),
+            )
+        )
+
+        resp = transport.sent[-1].response
+        assert resp.request_id == "req-fin"
+        assert resp.finalize_simulation.user_verdict.reason == "vetoed"
+        await asyncio.wait_for(finalized, timeout=0.1)
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_finalize_whose_reply_fails_to_send_still_ends_the_wait(
+        self, simulated_job: MagicMock
+    ) -> None:
+        # the job waits on this before it shuts down; a reply the transport can't deliver
+        # must not hold the shutdown for the whole session_end_timeout
+        class _BrokenTransport(InMemoryTransport):
+            async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+                raise RuntimeError("room session transport is closed")
+
+        host = SessionHost(_BrokenTransport())
+        await host.start()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-fin",
+                finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
+                    provisional_success=True
+                ),
+            )
+        )
+
+        await asyncio.wait_for(host.wait_for_simulation_finalized(), timeout=0.1)
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_a_run_cut_short_by_the_close_fails_after_session_closed(self) -> None:
+        # an event still on the wire holds back the events queued after it
+        class _SlowEventsTransport(InMemoryTransport):
+            async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+                if msg.HasField("event"):
+                    await asyncio.sleep(0.01)
+                await super().send_message(msg)
+
+        transport = _SlowEventsTransport()
+        host = SessionHost(transport)
+        session = TestSessionHostRequests()._make_mock_session()
+        run: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        session.run = MagicMock(return_value=run)
+        session.interrupt = AsyncMock()
+        host.register_session(session)
+        await host.start()
+
+        request = asyncio.ensure_future(
+            host._handle_request_safe(
+                agent_pb.SessionRequest(
+                    request_id="req-run", run_input=agent_pb.SessionRequest.RunInput(text="bye")
+                )
+            )
+        )
+        await asyncio.sleep(0)
+        host._on_error(ErrorEvent(error=RuntimeError("goodbye failed"), source="llm"))
+        host._on_close(CloseEvent(reason=CloseReason.USER_INITIATED))
+        run.set_exception(RuntimeError("session closed"))
+        await request
+        await asyncio.sleep(0.1)
+
+        assert [m.WhichOneof("message") for m in transport.sent] == ["event", "event", "response"]
+        assert transport.sent[1].event.HasField("session_closed")
+        assert transport.sent[2].response.error == "session closed"
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_detach_stops_forwarding_events(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        session = TestSessionHostRequests()._make_mock_session()
+        host.register_session(session)
+        host.unregister_session()
         unsubscribed = {call.args[0] for call in session.off.call_args_list}
         assert unsubscribed == FORWARDED_EVENTS

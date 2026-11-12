@@ -16,7 +16,6 @@ from .tts import TTS
 from .version import __version__
 
 __all__ = [
-    "LLM",
     "STT",
     "SpeechStream",
     "logger",

@@ -5,16 +5,18 @@
 # completing with a stale value) at the point where the old code fired a
 # separate generate_reply.
 #
-# Run from the repo root (requires lk >= 2.17.0, which resolves the SDK
-# version from the synced workspace environment):
-#   lk agent simulate examples/data_capture_sim/agent.py \
+# Run from the repo root (requires lk >= 2.18.7 for `simulate text`; lk
+# resolves the SDK version from the synced workspace environment):
+#   lk agent simulate text examples/data_capture_sim/agent.py \
 #     --scenarios examples/data_capture_sim/scenarios.yaml
 
+id: SCNG_Cb34zMzcx47p
 name: Data capture workflows — corrective branches
 
 scenarios:
   # --- email: happy path through the confirm tool ---------------------------
-  - label: Email captured and confirmed
+  - id: SCN_RK6KQ8ey4RdS
+    label: Email captured and confirmed
     instructions: |
       PERSONA: Maya Chen, cooperative caller registering for an event.
       OPENING LINE: "Hi, I'd like to give you my email address."
@@ -35,7 +37,8 @@ scenarios:
       branch: happy_path
 
   # --- email: correction at the confirmation step ---------------------------
-  - label: Email corrected while confirming
+  - id: SCN_4dsn3mWBcPYM
+    label: Email corrected while confirming
     instructions: |
       PERSONA: Jordan Reyes, slightly distracted, initially gives an old email.
       OPENING LINE: "I need to update my email with you."
@@ -60,7 +63,8 @@ scenarios:
       branch: confirm_stale_guard
 
   # --- phone: invalid number, then correction at confirmation ---------------
-  - label: Bad phone number, then a swap during confirmation
+  - id: SCN_8aEM6uomYzGu
+    label: Bad phone number, then a swap during confirmation
     instructions: |
       PERSONA: Sam Okafor, gives a too-short number first, then corrects himself twice.
       OPENING LINE: "Let me give you my phone number."
@@ -87,7 +91,8 @@ scenarios:
       branch: confirm_stale_guard
 
   # --- address: change during confirmation ----------------------------------
-  - label: Address changed while confirming
+  - id: SCN_udfbMD6V8X94
+    label: Address changed while confirming
     instructions: |
       PERSONA: Priya Nair, recently moved, gives the old address by habit.
       OPENING LINE: "I'd like to give you my mailing address."
@@ -112,7 +117,8 @@ scenarios:
       branch: confirm_stale_guard
 
   # --- name: spelling correction at confirmation -----------------------------
-  - label: Name spelling corrected while confirming
+  - id: SCN_t6af9erkiFLo
+    label: Name spelling corrected while confirming
     instructions: |
       PERSONA: Shayne Cole - pronounced "Shane", so say "Shane" conversationally;
       the Y appears only when you spell it.
@@ -133,7 +139,8 @@ scenarios:
       branch: confirm_stale_guard
 
   # --- dob: time of birth offered before the date ----------------------------
-  - label: Time of birth given before the date
+  - id: SCN_UjjovsUx6eTX
+    label: Time of birth given before the date
     instructions: |
       PERSONA: Leo Marsh, proud of knowing his exact time of birth; leads with it.
       OPENING LINE: "I can give you my date of birth - fun fact, I even know the time!"
@@ -141,14 +148,16 @@ scenarios:
       - time of birth: 6:45 in the morning
       - date of birth: March 3rd, 1992
       DO, IN ORDER:
-      1. When asked for the date of birth, give ONLY the time first: "I was born
+      1. Open by naming the detail you are offering (your opening line). The
+         agent asks which detail you want to give; "date of birth" is the answer.
+      2. When asked for the date of birth, give ONLY the time first: "I was born
          at 6:45 in the morning." Do not mention the date yet.
-      2. If the agent asks you to confirm before you've given a date, say "yes,
+      3. If the agent asks you to confirm before you've given a date, say "yes,
          that's right" - do NOT volunteer the date until the agent explicitly
          asks for the date itself.
-      3. When the agent asks for the date, give March 3rd, 1992.
-      4. Confirm the full date (and time) when read back.
-      5. Don't hang up until the agent reads back March 3rd, 1992 as captured.
+      4. When the agent asks for the date, give March 3rd, 1992.
+      5. Confirm the full date (and time) when read back.
+      6. Don't hang up until the agent reads back March 3rd, 1992 as captured.
     agent_expectations: >
       Records the 6:45 AM time of birth but recognizes the date is still
       missing: if the user tries to confirm before any date exists, the agent
@@ -161,19 +170,22 @@ scenarios:
       branch: confirm_missing_dob
 
   # --- dob: date changed while confirming ------------------------------------
-  - label: Date of birth corrected while confirming
+  - id: SCN_oSRqRRK4QEyY
+    label: Date of birth corrected while confirming
     instructions: |
       PERSONA: Ana Sofia Torres, mixes up day and month at first.
-      OPENING LINE: "Sure, my date of birth - it's July 9th, 1988."
+      OPENING LINE: "I'd like to give you my date of birth."
       FACTS:
       - first date given: July 9th, 1988
       - corrected date: September 7th, 1988
       DO, IN ORDER:
-      1. Give July 9th, 1988 when asked.
-      2. When the agent asks you to confirm, say: "hold on, I always flip those -
+      1. Open by naming the detail you are offering (your opening line). The
+         agent asks which detail you want to give; "date of birth" is the answer.
+      2. Give July 9th, 1988 when asked.
+      3. When the agent asks you to confirm, say: "hold on, I always flip those -
          it's September 7th, 1988. Yes, that's right."
-      3. If the agent asks you to confirm the corrected date, confirm it.
-      4. Don't hang up until the agent reads back September 7th, 1988 as captured.
+      4. If the agent asks you to confirm the corrected date, confirm it.
+      5. Don't hang up until the agent reads back September 7th, 1988 as captured.
     agent_expectations: >
       After the correction at the confirmation step, the agent confirms and
       completes with September 7th, 1988 — never July 9th. It responds verbally
@@ -183,7 +195,8 @@ scenarios:
       branch: confirm_stale_guard
 
   # --- credit card: number too short, then valid -----------------------------
-  - label: Card number too short on the first try
+  - id: SCN_xBV8hfsrjzZg
+    label: Card number too short on the first try
     instructions: |
       PERSONA: Dana Whitfield, rattles off a partial card number first.
       OPENING LINE: "I'm ready to give you my card details."
@@ -196,16 +209,16 @@ scenarios:
       DO, IN ORDER:
       1. When the agent asks for your card number, give the 10-digit partial
          number as if it were complete.
-      2. When the agent says it's invalid or asks you to repeat, give the full
-         4242 4242 4242 4242.
+      2. When the agent says it's invalid, incomplete, or asks you to continue or
+         repeat, give all sixteen digits: 4242 4242 4242 4242.
       3. Repeat the full number when asked to confirm it.
       4. Provide the expiration, security code, and name as asked, repeating
          each back when asked to confirm.
       5. Don't hang up until the agent confirms the card details are complete.
     agent_expectations: >
-      Tells the user the number is invalid (wrong length) and asks them to
-      repeat it — it must not accept the 10-digit number, must not go silent
-      after the invalid attempt, and must not read the card number back aloud.
+      Does not record the 10-digit number, and keeps talking: it asks for the
+      full number or for the remaining digits. It must not go silent after the
+      short attempt and must not read the card number back aloud.
       After the full 16-digit number is given and repeated, the flow proceeds
       through expiration, security code, and cardholder name to completion.
     tags:
@@ -213,7 +226,8 @@ scenarios:
       branch: update_invalid_length
 
   # --- credit card: repeated number doesn't match ----------------------------
-  - label: Card number repeat mismatch
+  - id: SCN_zKdAfPkZuJ3M
+    label: Card number repeat mismatch
     instructions: |
       PERSONA: Omar Haddad, fumbles one digit when repeating his card number.
       OPENING LINE: "Let's do the card details."
@@ -240,7 +254,8 @@ scenarios:
       branch: confirm_mismatch
 
   # --- credit card: expired date, then a valid one ----------------------------
-  - label: Expired card date, then corrected
+  - id: SCN_W9p6MziQFfDQ
+    label: Expired card date, then corrected
     instructions: |
       PERSONA: Grace Lindqvist, reads the date off an old card first.
       OPENING LINE: "I'll give you my card now."

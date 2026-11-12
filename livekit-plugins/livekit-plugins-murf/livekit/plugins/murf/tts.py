@@ -377,7 +377,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.end_input()
                         break
                 else:
-                    logger.warning("unexpected message %s", data)
+                    logger.warning("unexpected Murf message", extra={"lk.pii.data": data})
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:

@@ -4,10 +4,16 @@ import datetime
 import os
 import platform
 from collections.abc import Mapping
+from typing import Literal
 
 from livekit import api
 
+from ..utils.misc import shortuuid
 from ..version import __version__
+
+InferenceClass = Literal["priority", "standard", "low"]
+"""Scheduling class for a request. ``low`` yields to voice traffic, so it is only
+appropriate for work no caller is waiting on."""
 
 DEFAULT_INFERENCE_URL = "https://agent-gateway.livekit.cloud/v1"
 STAGING_INFERENCE_URL = "https://agent-gateway.staging.livekit.cloud/v1"
@@ -16,9 +22,11 @@ HEADER_USER_AGENT = "User-Agent"
 HEADER_ROOM_ID = "X-LiveKit-Room-ID"
 HEADER_JOB_ID = "X-LiveKit-Job-ID"
 HEADER_AGENT_ID = "X-LiveKit-Agent-ID"
+HEADER_SESSION_ID = "X-LiveKit-Session-ID"
 HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
+HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
 
 # Quota telemetry headers the inference gateway stamps on LLM completions
 # responses (including 429 rejections). RPM/TPM are per-minute rate limits;
@@ -67,17 +75,41 @@ def get_default_inference_url() -> str:
     return DEFAULT_INFERENCE_URL
 
 
+def resolve_credentials(
+    api_key: str | None,
+    api_secret: str | None,
+) -> tuple[str, str]:
+    resolved_api_key = api_key or os.getenv(
+        "LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", "")
+    )
+    if not resolved_api_key:
+        raise ValueError(
+            "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
+        )
+
+    resolved_api_secret = api_secret or os.getenv(
+        "LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", "")
+    )
+    if not resolved_api_secret:
+        raise ValueError(
+            "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
+        )
+
+    return resolved_api_key, resolved_api_secret
+
+
 def get_inference_headers(*, inference_class: str | None = None) -> dict[str, str]:
     """Build identification headers for inference requests.
 
     Always includes User-Agent with SDK version and Python version.
-    Includes X-LiveKit-Room-ID, X-LiveKit-Job-ID, and X-LiveKit-Agent-ID
-    when running inside a job context (omitted in console mode or tests).
+    Includes X-LiveKit-Room-ID, X-LiveKit-Job-ID, X-LiveKit-Agent-ID, and a
+    client-generated X-LiveKit-Session-ID when running inside a job context
+    (omitted in console mode or tests).
     Includes X-LiveKit-Worker-Token when LIVEKIT_WORKER_TOKEN is set (hosted agents).
 
     ``inference_class`` is the class the caller configured, if any; it lands in
     X-LiveKit-Inference-Priority. A job can override it through
-    :attr:`JobContext.inference_headers`, which is merged last.
+    :attr:`JobContext.inference_headers`. The SDK-owned session ID remains reserved.
     """
     headers: dict[str, str] = {
         HEADER_USER_AGENT: (f"LiveKit Agents/{__version__} (python {platform.python_version()})"),
@@ -106,10 +138,24 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
         # merged last: what the job asserts about itself outranks what an individual
         # model was configured with.
         headers.update(ctx.inference_headers)
+        # The session ID identifies this outbound HTTP request or WebSocket
+        # connection. It is SDK-owned so custom inference headers cannot replace it.
+        headers[HEADER_SESSION_ID] = shortuuid("inference_")
     except RuntimeError:
         pass
 
     return headers
+
+
+def create_inference_request_id(
+    session_id: str | None,
+    request_kind: Literal["tts", "eot"],
+    *,
+    fallback_prefix: str = "",
+) -> str:
+    """Create a logical request ID linked to its inference connection."""
+    prefix = f"{session_id}_{request_kind}_" if session_id else fallback_prefix
+    return shortuuid(prefix)
 
 
 def create_access_token(api_key: str | None, api_secret: str | None, ttl: float = 600) -> str:

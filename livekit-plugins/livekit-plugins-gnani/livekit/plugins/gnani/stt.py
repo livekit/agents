@@ -344,7 +344,10 @@ class SpeechStream(stt.RecognizeStream):
                 connected_msg = await asyncio.wait_for(ws.recv(), timeout=10)
                 connected_data = json.loads(connected_msg)
                 if connected_data.get("type") != "connected":
-                    logger.warning(f"Unexpected first message from Gnani STT: {connected_data}")
+                    logger.warning(
+                        "Unexpected first message from Gnani STT",
+                        extra={"lk.pii.data": connected_data},
+                    )
 
                 send_task = asyncio.create_task(self._send_audio(ws), name="gnani-stt-send")
                 recv_task = asyncio.create_task(self._recv_messages(ws), name="gnani-stt-recv")
@@ -405,6 +408,7 @@ class SpeechStream(stt.RecognizeStream):
                 msg_type = data.get("type", "")
 
                 if msg_type == "transcript":
+                    self._mark_provider_progress()
                     text = data.get("text", "")
                     if not text:
                         continue
@@ -424,6 +428,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
 
                 elif msg_type in ("speech_start", "vad_start"):
+                    self._mark_provider_progress()
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.START_OF_SPEECH,
@@ -431,6 +436,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
 
                 elif msg_type in ("speech_end", "vad_end"):
+                    self._mark_provider_progress()
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.END_OF_SPEECH,
@@ -438,7 +444,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
 
                 elif msg_type == "processing":
-                    pass
+                    self._mark_provider_progress()
 
                 elif msg_type == "error":
                     error_msg = data.get("message", "Unknown error")

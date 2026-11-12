@@ -69,7 +69,7 @@ class StreamPacerWrapper(SentenceStream):
 
     def end_input(self) -> None:
         self._sent_stream.end_input()
-        self._input_ended = True
+        # _recv_task sets _input_ended once the tokenizer has flushed its tail
         if self._audio_emitter._dst_ch.closed:
             # close the stream if the audio emitter is closed
             self._closing = True
@@ -148,7 +148,7 @@ class StreamPacerWrapper(SentenceStream):
                     self._event_ch.send_nowait(TokenData(token=text))
                     logger.debug(
                         "sent text to tts",
-                        extra={"text": text, "remaining_audio": remaining_audio},
+                        extra={"lk.pii.text": text, "remaining_audio": remaining_audio},
                     )
                     generation_started = False
                     generation_stopped = False

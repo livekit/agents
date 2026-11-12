@@ -183,8 +183,8 @@ class InterruptionOptions(TypedDict, total=False):
     speech classified as a backchannel by the adaptive detector is suppressed
     (events flagged as interruptions still pass through). Use a tuple to apply
     different values for start and end separately. ``None`` disables. Defaults
-    to ``(1.0, 1.0)``. End value accounts for STT transcript timestamp
-    inaccuracy."""
+    to ``(1.0, 1.0)``. The end value preserves transcripts received near the
+    end of agent speech."""
 
 
 _INTERRUPTION_DEFAULTS: InterruptionOptions = {
@@ -344,7 +344,7 @@ def _migrate_turn_handling(
     allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     resume_false_interruption: NotGivenOr[bool] = NOT_GIVEN,
     agent_false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
-    preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
+    preemptive_generation: NotGivenOr[bool | PreemptiveGenerationOptions] = NOT_GIVEN,
 ) -> TurnHandlingOptions:
     """Build a TurnHandlingOptions from deprecated keyword arguments."""
     if is_given(agent_false_interruption_timeout):
@@ -381,7 +381,9 @@ def _migrate_turn_handling(
     if is_given(turn_detection):
         result["turn_detection"] = turn_detection
 
-    if is_given(preemptive_generation):
+    if isinstance(preemptive_generation, dict):
+        result["preemptive_generation"] = PreemptiveGenerationOptions(**preemptive_generation)
+    elif is_given(preemptive_generation):
         result["preemptive_generation"] = {"enabled": preemptive_generation}
 
     return result
