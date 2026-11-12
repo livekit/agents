@@ -101,6 +101,18 @@ class DecisionModel(llm.DecisionModel):
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions = DEFAULT_CONN_OPTIONS,
     ) -> DecisionResponse:
+        """Evaluate a batch of decisions.
+
+        Args:
+            input: Text to evaluate, sent as-is, or a conversation converted to a
+                transcript of user and assistant text.
+            decisions: Decisions keyed by name.
+            conn_options: Retry and per-attempt timeout settings. The timeout defaults to
+                70 s, above the gateway's own deadline.
+
+        Each requested name appears in either ``results`` or ``errors``. Request failures
+        and malformed responses raise.
+        """
         return await super().evaluate(
             input=input,
             decisions=decisions,
