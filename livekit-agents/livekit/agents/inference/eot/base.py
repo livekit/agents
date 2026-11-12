@@ -385,10 +385,11 @@ class _BaseStreamingTurnDetectorStream:
 
     async def _run(self) -> None:
         """Run the active transport, retrying on cloud failure by swapping in
-        a local transport in-place. ``turn-detector-v1-mini`` just runs the
-        transport once and surfaces failures to the caller via
-        ``_resolve_prediction`` (default 1.0). With ``local_fallback=False``
-        there is nothing to swap in, so a dead cloud transport is terminal.
+        a local transport in-place. ``turn-detector-v1-mini`` surfaces a failure
+        to the caller via ``_resolve_prediction`` (default 1.0) and runs the
+        transport again, so it keeps draining the audio and the requests queued
+        behind it. With ``local_fallback=False`` there is nothing to swap in, so
+        a dead cloud transport is terminal.
         """
         while True:
             task = asyncio.create_task(self._transport.run())
@@ -412,8 +413,8 @@ class _BaseStreamingTurnDetectorStream:
                         continue
                     self._degrade(reason=e)
                     return
+                # the failed call consumed its queue item: the next run starts after it
                 self._on_local_failure(reason=e)
-                return
 
     def _degrade(self, *, reason: BaseException) -> None:
         """Give up on detection: no transport is left to drain audio or predict."""

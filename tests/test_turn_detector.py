@@ -454,6 +454,31 @@ class TestLocalFailureRetry:
         assert stream._transport is transport
         await stream.aclose()
 
+    async def test_run_loop_failure_keeps_serving_later_requests(self) -> None:
+        """One failing call ends the transport's run loop. The stream starts it again, so the
+        next request still reaches the transport instead of waiting in the queue."""
+
+        class _FlakyTransport(_ScriptedTransport):
+            def push_frame(self, frame: Any) -> None:
+                super().push_frame(frame)
+                if len([e for e in self.events if e[0] == "push_frame"]) == 1:
+                    raise RuntimeError("local boom")
+
+        transport = _FlakyTransport(run_behavior="drain")
+        stream = _make_stream_with_transport(transport, model="turn-detector-v1-mini")
+        try:
+            stream.push_audio(_frame())
+            await _wait_for(lambda: stream._warned_local_failure)
+
+            stream.push_audio(_frame())
+            stream.predict()
+            await drain_audio_queue(stream)
+
+            assert _inferences(transport) == [("run_inference", stream._request_id)]
+            assert transport.run_calls == 2
+        finally:
+            await stream.aclose()
+
     async def test_failed_prediction_resolves_the_positive_default(self) -> None:
         class _FailingEOT:
             def predict(self, pcm: Any, turn_samples: int | None = None) -> float:
