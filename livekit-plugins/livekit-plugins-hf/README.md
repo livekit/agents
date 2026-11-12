@@ -119,7 +119,7 @@ every worker process and scales the models with your calls. To run them elsewher
 ```python
 # serverless, through Hugging Face Inference Providers (uses HF_TOKEN)
 stt = hf.STT(model="openai/whisper-large-v3-turbo", provider="hf-inference")
-tts = hf.TTS(model="hexgrad/Kokoro-82M", provider="fal-ai", voice="af_heart")
+tts = hf.TTS(model="hexgrad/Kokoro-82M", provider="deepinfra", voice="af_heart")
 
 # a dedicated endpoint, such as a Hugging Face Inference Endpoint
 stt = hf.STT(base_url="https://<your-endpoint>.endpoints.huggingface.cloud")
@@ -132,9 +132,12 @@ Sunbird's Orpheus usually need a dedicated endpoint. `api_key` defaults to `HF_T
 `extra_body` passes provider-specific parameters. `language` (STT) and `voice` (TTS) are
 sent as request parameters, except `language` on `hf-inference`.
 
-Hosted calls are request and response: STT is batch behind the session's VAD as in local
-mode, and TTS audio starts once the provider has synthesized the whole sentence, so local
-Orpheus streaming starts sooner.
+Hosted calls are request and response. That suits STT, which is batch behind the
+session's VAD as in local mode: Whisper on `hf-inference` or `fal-ai` took 0.8 to 1.1 s per
+utterance in our tests. TTS audio only starts once the provider has synthesized the whole
+sentence, and serverless providers are slow for it (Kokoro took 11 s on `deepinfra` and over
+2 minutes on `fal-ai` for 4 s of audio), so treat provider TTS as a fallback, not a live
+voice. For live speech, use a dedicated endpoint you size yourself, or local streaming.
 
 ## Downloading models ahead of time
 
