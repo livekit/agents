@@ -580,7 +580,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await asyncio.gather(*tasks)
                 finally:
                     input_sent_event.set()
-                    await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -596,6 +595,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 extra={"cartesia_context_id": cartesia_context_id},
             )
             raise APIConnectionError() from e
+        finally:
+            await sent_tokenizer_stream.aclose()
 
 
 def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any]:
