@@ -1,5 +1,15 @@
+"""Tests that run real aiohttp traffic against an offline loopback server.
+
+They need no Giggy account or credentials, but they open local sockets and wait on real
+timers (heartbeats, read timeouts), so they sit in the giggy plugin category rather than
+the hermetic unit suite.
+"""
+
 import asyncio
+import io
+import json
 import unittest
+import wave
 from unittest.mock import MagicMock, patch
 
 import aiohttp
@@ -8,9 +18,24 @@ from aiohttp import web
 from yarl import URL
 
 import livekit.plugins.giggy as provider_module
-from livekit.agents import Agent, AgentSession, utils
+from livekit import rtc
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    utils,
+)
+from livekit.plugins import giggy
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.plugin("giggy")
+
+KEY = "offline-test-key"
+VOICE = "00000000-0000-0000-0000-000000000000"
+GENERATION = "00000000-0000-4000-8000-000000000001"
+RESULT_URL = "https://00000000000000000000000000000000.r2.cloudflarestorage.com/transcript.json?signature=offline"
 
 
 class WarmConnectionTests(unittest.IsolatedAsyncioTestCase):
@@ -241,3 +266,202 @@ class WarmConnectionTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(session.closed)
         finally:
             await runner.cleanup()
+
+
+class Response:
+    """A canned aiohttp response for the mocked status and signed-artifact reads."""
+
+    def __init__(self, body):
+        self.status = 200
+        self.headers = {"Content-Type": "application/json", "x-request-id": "stt-request"}
+        self.body = json.dumps(body).encode()
+        if isinstance(body, list):
+            self.headers["Content-Type"] = "text/event-stream"
+            self.body = b"".join(
+                f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
+                for event, payload in body
+            )
+        self.content = self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    async def iter_chunked(self, size):
+        for start in range(0, len(self.body), size):
+            yield self.body[start : start + size]
+
+
+def transcript_events():
+    return [
+        ("generation_created", {"generation_uuid": GENERATION}),
+        (
+            "transcript_chunk",
+            {
+                "generation_uuid": GENERATION,
+                "attempt": 1,
+                "sequence": 0,
+                "text": "Hello LiveKit.",
+                "replace": True,
+                "complete": True,
+            },
+        ),
+        (
+            "generation_updated",
+            {
+                "generation_uuid": GENERATION,
+                "status": "completed",
+                "generation": {
+                    "generation_uuid": GENERATION,
+                    "status": "completed",
+                    "result": {"url": RESULT_URL},
+                },
+            },
+        ),
+    ]
+
+
+def audio(duration=0.5):
+    return rtc.AudioFrame(
+        data=b"\x01\x02" * int(16000 * duration),
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=int(16000 * duration),
+    )
+
+
+@pytest.fixture
+def session(monkeypatch):
+    import livekit.plugins.giggy.stt as giggy_stt
+
+    monkeypatch.setattr(giggy_stt, "uuid4", lambda: GENERATION)
+    client = MagicMock(spec=aiohttp.ClientSession)
+    client.get.side_effect = [
+        Response(
+            {
+                "generation": {
+                    "generation_uuid": GENERATION,
+                    "status": "completed",
+                    "result": {"url": RESULT_URL},
+                }
+            }
+        ),
+        Response({"text": "Hello LiveKit.", "languages": ["English"], "audio_duration_ms": 500}),
+    ]
+    return client
+
+
+@pytest.mark.parametrize("case", ["success", "headers_timeout", "body_timeout", "wrong_attempt"])
+async def test_stt_real_http(session, monkeypatch, case):
+    import livekit.plugins.giggy.stt as giggy_stt
+
+    requests = []
+
+    async def handler(request):
+        requests.append(
+            {
+                "headers": dict(request.headers),
+                "query": dict(request.query),
+                "audio": await request.read(),
+            }
+        )
+        if case == "headers_timeout":
+            await asyncio.sleep(0.2)
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
+        if case == "body_timeout":
+            await asyncio.sleep(0.2)
+            return response
+        if request.transport is None or request.transport.is_closing():
+            return response
+        events = transcript_events()
+        if case == "wrong_attempt":
+            partial = dict(events[1][1], complete=False, sequence=0)
+            events[1][1].update(attempt=2, sequence=1)
+            events.insert(1, ("transcript_chunk", partial))
+        wire = Response(events).body.replace(b"\n", b"\r\n")
+        for index in range(0, len(wire), 17):
+            await response.write(wire[index : index + 17])
+        await response.write_eof()
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/audio/transcriptions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    try:
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = runner.addresses[0][1]
+        monkeypatch.setattr(giggy_stt, "GIGGY_ORIGIN", f"http://127.0.0.1:{port}")
+        async with aiohttp.ClientSession() as client:
+            # Only signed-artifact/status reads are mocked; admission, framing,
+            # connection cleanup and read timeouts exercise actual aiohttp.
+            monkeypatch.setattr(client, "get", session.get)
+            provider = giggy.STT(api_key=KEY, http_session=client)
+            options = APIConnectOptions(timeout=0.05 if "timeout" in case else 2, max_retry=5)
+            if case == "success":
+                event = await provider.recognize(audio(), conn_options=options)
+                assert event.alternatives[0].text == "Hello LiveKit."
+            else:
+                expected = APITimeoutError if "timeout" in case else APIConnectionError
+                with pytest.raises(expected) as caught:
+                    await provider.recognize(audio(), conn_options=options)
+                assert caught.value.retryable is False
+                assert caught.value.__cause__ is None
+            await provider.aclose()
+            assert not client.closed
+        assert len(requests) == 1
+        assert requests[0]["headers"]["xi-api-key"] == KEY
+        assert requests[0]["query"]["mode"] == "streaming"
+        with wave.open(io.BytesIO(requests[0]["audio"]), "rb") as wav:
+            assert wav.getnframes() == 8000
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.parametrize("read_timeout", [False, True])
+async def test_real_http_error_is_single_post(
+    monkeypatch: pytest.MonkeyPatch, read_timeout: bool
+) -> None:
+    """Exercise actual aiohttp transport against an offline loopback server."""
+    requests: list[dict[str, object]] = []
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        requests.append({"headers": dict(request.headers), "body": await request.json()})
+        if read_timeout:
+            response = web.StreamResponse(headers={"Content-Type": "application/octet-stream"})
+            await response.prepare(request)
+            await asyncio.sleep(0.3)
+            return response
+        return web.Response(status=503, text=KEY)
+
+    app = web.Application()
+    app.router.add_post("/v1/audio/speech", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    try:
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = runner.addresses[0][1]
+        base_url = f"http://127.0.0.1:{port}/v1"
+        async with aiohttp.ClientSession() as session:
+            provider = giggy.TTS(api_key=KEY, voice=VOICE, http_session=session, base_url=base_url)
+            expected = APITimeoutError if read_timeout else APIStatusError
+            with pytest.raises(expected) as caught:
+                async with provider.synthesize(
+                    "Hi",
+                    conn_options=APIConnectOptions(max_retry=5, retry_interval=0, timeout=0.05),
+                ) as stream:
+                    await asyncio.wait_for(stream.collect(), 2)
+            assert KEY not in str(caught.value)
+            assert caught.value.retryable is False
+            await provider.aclose()
+            assert not session.closed
+        assert len(requests) == 1
+        assert requests[0]["headers"]["Authorization"] == "Bearer " + KEY
+        assert "Idempotency-Key" not in requests[0]["headers"]
+    finally:
+        await runner.cleanup()
