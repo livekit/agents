@@ -664,7 +664,9 @@ def _repaired_arguments_json(json_arguments: str, args_dict: dict[str, Any]) -> 
             return None
     except ValueError:
         pass
-    return json.dumps(args_dict, default=str)
+    # ensure_ascii=False: the model wrote "recepción"; an escaped "recepci\u00f3n" in its
+    # own past calls makes it imitate (and garble) the escapes on later turns
+    return json.dumps(args_dict, default=str, ensure_ascii=False)
 
 
 def prepare_function_arguments(
