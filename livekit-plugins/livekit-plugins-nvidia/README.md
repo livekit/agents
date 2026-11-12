@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. -->
+<!-- SPDX-FileCopyrightText: Copyright 2025 LiveKit, Inc. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # NVIDIA plugin for LiveKit Agents
