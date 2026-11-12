@@ -5,6 +5,7 @@ import contextlib
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+import google.auth.exceptions
 import pytest
 from google.genai import errors, types
 
@@ -19,7 +20,7 @@ from livekit.agents.beta.translation import (
 )
 from livekit.plugins.google.beta import GeminiTranslationModel, GeminiTranslationSession
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 
 class _FakeLiveSession:
@@ -162,15 +163,7 @@ async def test_translated_audio_ends_with_a_mark_on_generation_complete(
     session = _model().session()
     try:
         await _wait_for(lambda: bool(conns))
-        conns[0].emit(
-            model_turn=types.Content(
-                parts=[
-                    types.Part(
-                        inline_data=types.Blob(data=b"\x02\x00" * 480, mime_type="audio/pcm")
-                    )
-                ]
-            )
-        )
+        conns[0].emit(model_turn=_audio_turn())
         conns[0].emit(generation_complete=True)
 
         stream = aiter(session.audio_stream)
@@ -321,10 +314,17 @@ async def test_audio_from_before_a_retarget_keeps_its_language(
         await session.aclose()
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        ConnectionError("network down"),
+        google.auth.exceptions.TransportError("connection reset"),
+    ],
+)
 async def test_a_handshake_that_fails_in_transit_is_retried(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
-    conns = _connect_hook(monkeypatch, handshake_errors=[ConnectionError("network down")])
+    conns = _connect_hook(monkeypatch, handshake_errors=[error])
     session = _model(conn_options=APIConnectOptions(max_retry=3, retry_interval=0)).session()
     errors_seen: list[TranslationModelError] = []
     session.on("error", errors_seen.append)
@@ -390,7 +390,6 @@ async def test_a_sample_rate_change_keeps_the_tail_of_the_old_rate(
 
 
 def test_transient_setup_failures_are_retried() -> None:
-    import google.auth.exceptions
     from google.genai.errors import ClientError
 
     from livekit.plugins.google.beta.gemini_translation import _is_setup_error
@@ -413,35 +412,6 @@ def test_transient_setup_failures_are_retried() -> None:
     # credentials that are simply wrong stay wrong
     assert _is_setup_error(google.auth.exceptions.RefreshError("invalid_grant"))
     assert _is_setup_error(google.auth.exceptions.DefaultCredentialsError("no credentials"))
-
-
-async def test_a_transient_handshake_failure_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
-    import google.auth.exceptions
-
-    conns: list[_FakeLiveSession] = []
-    attempts = 0
-
-    @contextlib.asynccontextmanager
-    async def _connect(
-        self: GeminiTranslationSession, config: types.LiveConnectConfig
-    ) -> AsyncIterator[_FakeLiveSession]:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise google.auth.exceptions.TransportError("connection reset")
-        conn = _FakeLiveSession(config)
-        conns.append(conn)
-        yield conn
-
-    monkeypatch.setattr(GeminiTranslationSession, "_connect", _connect)
-    session = _model(conn_options=APIConnectOptions(max_retry=3, retry_interval=0)).session()
-    errors: list[TranslationModelError] = []
-    session.on("error", errors.append)
-    try:
-        await _wait_for(lambda: bool(conns))
-        assert [e.recoverable for e in errors] == [True]
-    finally:
-        await session.aclose()
 
 
 async def test_punctuation_trailing_past_the_quiet_does_not_open_the_next_transcript(

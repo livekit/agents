@@ -27,9 +27,9 @@ classifiers = [
 ]
 dependencies = [
     "certifi>=2025.6.15",
-    "livekit==1.2.0",
+    "livekit==1.2.1",
     "livekit-api>=1.2.2,<2",
-    "livekit-local-inference>=0.2.7",
+    "livekit-local-inference>=0.3.0,<0.4",
     "livekit-protocol>=1.1.31,<2",
     "livekit-blingfire~=1.1,<2",
     "protobuf>=3",
@@ -73,6 +73,7 @@ anam = ["livekit-plugins-anam>=1.8.11"]
 anthropic = ["livekit-plugins-anthropic>=1.8.11"]
 assemblyai = ["livekit-plugins-assemblyai>=1.8.11"]
 asyncai = ["livekit-plugins-asyncai>=1.8.11"]
+atmee = ["livekit-plugins-atmee>=1.8.11"]
 avatario = ["livekit-plugins-avatario>=1.8.11"]
 avatartalk = ["livekit-plugins-avatartalk>=1.8.11"]
 aws = ["livekit-plugins-aws>=1.8.11"]
