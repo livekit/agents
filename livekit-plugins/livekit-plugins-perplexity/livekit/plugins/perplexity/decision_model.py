@@ -37,8 +37,8 @@ from livekit.agents.types import APIConnectOptions
 from .models import PerplexityDecisionModels
 from .version import __version__
 
-_HOSTED_HOST = "api.perplexity.ai"
-_BASE_URL = f"https://{_HOSTED_HOST}/v1"
+_PERPLEXITY_HOST = "api.perplexity.ai"
+_BASE_URL = f"https://{_PERPLEXITY_HOST}/v1"
 _ATTRIBUTION_HEADER = {"X-Pplx-Integration": f"livekit-agents/{__version__}"}
 
 
@@ -86,7 +86,7 @@ class DecisionModel(llm.DecisionModel):
         super().__init__(
             capabilities=DecisionCapabilities(decision_kinds=["probability", "choice", "score"])
         )
-        hosted = urlparse(base_url).hostname == _HOSTED_HOST
+        hosted = urlparse(base_url).hostname == _PERPLEXITY_HOST
         # The environment key is for Perplexity's API; never send it to another server.
         key = api_key or (os.environ.get("PERPLEXITY_API_KEY") if hosted else None)
         if not key and hosted:
