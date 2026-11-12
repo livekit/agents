@@ -8,7 +8,8 @@ import pytest
 from livekit.agents import vad
 from livekit.agents.inference import VAD as InferenceVAD
 from livekit.local_inference import VAD as NativeVAD, VAD_WINDOW_SAMPLES
-from livekit.plugins.silero import onnx_model
+from livekit.plugins import silero
+from livekit.plugins.silero import VAD as SileroVAD, onnx_model
 
 from . import utils
 
@@ -220,3 +221,75 @@ async def test_plugin_checkpoint_matches_inference_vad() -> None:
         windows += 1
 
     assert windows > 100, "test audio too short to be meaningful"
+
+
+def test_silero_with_options_matches_load_on_the_same_session() -> None:
+    base = silero.VAD.load()
+    options = {"activation_threshold": 0.6, "sample_rate": 8000}
+    vad = base.with_options(**options)
+
+    assert vad._onnx_session is base._onnx_session
+    assert vad._opts == silero.VAD.load(**options)._opts
+    assert base._opts == silero.VAD.load()._opts, "the source VAD must not change"
+
+
+def test_silero_with_options_keeps_the_options_it_is_not_given() -> None:
+    base = silero.VAD.load(min_silence_duration=0.3, deactivation_threshold=0.2)
+
+    assert (
+        base.with_options(min_speech_duration=0.1)._opts
+        == silero.VAD.load(
+            min_speech_duration=0.1, min_silence_duration=0.3, deactivation_threshold=0.2
+        )._opts
+    )
+
+
+async def test_silero_with_options_detects_speech_on_the_shared_session() -> None:
+    base = silero.VAD.load()
+    frames, *_ = await utils.make_test_speech(sample_rate=8000)
+
+    stream = base.with_options(sample_rate=8000).stream()
+    for frame in frames:
+        stream.push_frame(frame)
+    stream.end_input()
+
+    events = [ev.type async for ev in stream]
+    assert vad.VADEventType.START_OF_SPEECH in events
+    assert vad.VADEventType.END_OF_SPEECH in events
+
+
+def _silero_vad(**kwargs: Any) -> Any:
+    return SileroVAD.load(force_cpu=True, **kwargs)
+
+
+@pytest.mark.parametrize("make_vad", [_silero_vad, InferenceVAD], ids=["silero", "inference"])
+async def test_update_options_derives_deactivation_like_construction(make_vad: Any) -> None:
+    built = make_vad(activation_threshold=0.7)
+
+    updated = make_vad()
+    stream = updated.stream()
+    try:
+        updated.update_options(activation_threshold=0.7)
+
+        expected = built._opts.deactivation_threshold
+        assert expected == pytest.approx(0.55)
+        assert updated._opts.deactivation_threshold == expected
+        assert stream._opts.deactivation_threshold == expected
+    finally:
+        await stream.aclose()
+
+    lowered = make_vad()
+    lowered.update_options(activation_threshold=0.2)
+    assert lowered._opts.deactivation_threshold < 0.2
+
+
+@pytest.mark.parametrize("make_vad", [_silero_vad, InferenceVAD], ids=["silero", "inference"])
+async def test_update_options_keeps_an_explicit_deactivation_threshold(make_vad: Any) -> None:
+    built = make_vad(deactivation_threshold=0.3)
+    built.update_options(activation_threshold=0.8)
+    assert built._opts.deactivation_threshold == 0.3
+
+    updated = make_vad()
+    updated.update_options(deactivation_threshold=0.2)
+    updated.update_options(activation_threshold=0.8)
+    assert updated._opts.deactivation_threshold == 0.2
