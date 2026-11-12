@@ -1,10 +1,10 @@
 import base64
-import os
+import random
+import tracemalloc
 from typing import Any
 
 import pytest
 
-from livekit.agents import inference
 from livekit.agents.llm import (
     AgentHandoff,
     ChatContext,
@@ -29,68 +29,6 @@ pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 _IMAGE_BYTES = b"fake image bytes"
 
 
-def ai_function1(a: int, b: str = "default") -> None:
-    """
-    This is a test function
-    Args:
-        a: First argument
-        b: Second argument
-    """
-    pass
-
-
-def skip_if_no_credentials():
-    required_vars = ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
-    missing = [var for var in required_vars if not os.getenv(var)]
-    return pytest.mark.skipif(
-        bool(missing), reason=f"Missing environment variables: {', '.join(missing)}"
-    )
-
-
-def test_args_model():
-    from docstring_parser import parse_from_object
-
-    docstring = parse_from_object(ai_function1)
-    print(docstring.description)
-
-    model = utils.function_arguments_to_pydantic_model(ai_function1)
-    print(model.model_json_schema())
-
-
-def test_dict():
-    from livekit import rtc
-    from livekit.agents.beta import Instructions
-    from livekit.agents.llm import ChatContext, ImageContent
-
-    chat_ctx = ChatContext()
-    chat_ctx.add_message(
-        role="system",
-        content=Instructions(
-            "You are a helpful assistant in audio mode.",
-            text="You are a helpful assistant in text mode.",
-        ),
-    )
-    chat_ctx.add_message(
-        role="user",
-        content="Hello, world!",
-    )
-    chat_ctx.add_message(
-        role="assistant",
-        content="Hello, world!",
-    )
-    chat_ctx.add_message(
-        role="user",
-        content=[
-            ImageContent(
-                image=rtc.VideoFrame(64, 64, rtc.VideoBufferType.RGB24, b"0" * 64 * 64 * 3)
-            )
-        ],
-    )
-    print(chat_ctx.to_dict())
-    print(chat_ctx.items)
-    print(ChatContext.from_dict(chat_ctx.to_dict()).items)
-
-
 @pytest.mark.parametrize(
     ("mime_type", "expected_format"),
     [
@@ -101,7 +39,6 @@ def test_dict():
     ],
 )
 def test_aws_image_content_uses_serialized_image_format(mime_type: str, expected_format: str):
-    from livekit.agents.llm import ChatContext, ImageContent
 
     encoded = base64.b64encode(_IMAGE_BYTES).decode("utf-8")
     chat_ctx = ChatContext.empty()
@@ -118,7 +55,6 @@ def test_aws_image_content_uses_serialized_image_format(mime_type: str, expected
 
 
 def test_aws_image_content_rejects_external_urls():
-    from livekit.agents.llm import ChatContext, ImageContent
 
     chat_ctx = ChatContext.empty()
     chat_ctx.add_message(
@@ -139,6 +75,132 @@ def _ctx_with_per_turn_instructions() -> tuple[ChatContext, str]:
     chat_ctx.add_message(role="user", content=["I'd like to refill my prescription."])
     chat_ctx.add_message(role="system", content=[instructions])
     return chat_ctx, instructions
+
+
+_AWS_CACHE_POINT = {"cachePoint": {"type": "default"}}
+
+
+def _aws_cache_points(messages: list[dict]) -> list[tuple[int, int]]:
+    return [
+        (mi, bi)
+        for mi, m in enumerate(messages)
+        for bi, block in enumerate(m["content"])
+        if block == _AWS_CACHE_POINT
+    ]
+
+
+def test_aws_cache_messages_is_off_by_default():
+    chat_ctx, _ = _ctx_with_per_turn_instructions()
+
+    default, _ = chat_ctx.to_provider_format(format="aws")
+    disabled, _ = chat_ctx.to_provider_format(format="aws", cache_messages=False)
+
+    assert default == disabled
+    assert _aws_cache_points(default) == []
+
+
+def test_aws_cache_messages_ends_before_per_turn_instructions():
+    chat_ctx, instructions = _ctx_with_per_turn_instructions()
+
+    messages, extra = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert extra.system_messages == ["You are a helpful assistant."]
+    # messages[0] is the "(empty)" user turn Bedrock needs before the greeting
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert _aws_cache_points(messages) == [(2, 1)]
+    user_turn = messages[2]["content"]
+    assert user_turn[0] == {"text": "I'd like to refill my prescription."}
+    assert instructions in user_turn[2]["text"]
+
+
+def test_aws_cache_messages_ends_after_the_tool_result():
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["What's the weather in Paris?"])
+    chat_ctx.insert(FunctionCall(call_id="c1", name="get_weather", arguments='{"city": "Paris"}'))
+    chat_ctx.insert(
+        FunctionCallOutput(call_id="c1", name="get_weather", output="sunny", is_error=False)
+    )
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert messages[-1]["content"][0]["toolResult"]["toolUseId"] == "c1"
+    assert _aws_cache_points(messages) == [(2, 1)]
+
+
+def test_aws_cache_messages_next_turn_starts_with_the_cached_prefix():
+    chat_ctx, _ = _ctx_with_per_turn_instructions()
+    first, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+    [(mi, bi)] = _aws_cache_points(first)
+    cached = [*first[:mi], {**first[mi], "content": first[mi]["content"][:bi]}]
+
+    # next turn: the per-turn instructions are gone, the reply and a new message follow
+    chat_ctx.items.pop()
+    chat_ctx.add_message(role="assistant", content=["Sure, which pharmacy?"])
+    chat_ctx.add_message(role="user", content=["The one on Main Street."])
+    second, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert second[:mi] == cached[:mi]
+    assert second[mi]["content"][:bi] == cached[mi]["content"]
+    assert _aws_cache_points(second) == [(len(second) - 1, 1)]
+
+
+def test_aws_cache_messages_after_an_assistant_turn_ends_that_turn():
+    # a reply generated right after the agent spoke: the instructions open a new user turn
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["Hi"])
+    chat_ctx.add_message(role="assistant", content=["Hello! How can I help you?"])
+    chat_ctx.add_message(role="system", content=["Ask if they are still there."])
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert _aws_cache_points(messages) == [(1, 1)]
+
+
+def test_aws_cache_messages_needs_conversation_content():
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+    assert _aws_cache_points(messages) == []
+
+    # an item with no Bedrock content isn't conversation content either
+    chat_ctx.add_message(role="user", content=[""])
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+    assert _aws_cache_points(messages) == []
+
+
+def test_aws_cache_messages_follows_serialized_order_for_late_tool_results():
+    # the older call's result arrives last, but it's serialized next to its call
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["Look up both."])
+    chat_ctx.insert(FunctionCall(id="item_a", call_id="slow", name="slow_lookup", arguments="{}"))
+    chat_ctx.insert(FunctionCall(id="item_b", call_id="fast", name="fast_lookup", arguments="{}"))
+    for call_id, name in (("fast", "fast_lookup"), ("slow", "slow_lookup")):
+        chat_ctx.insert(
+            FunctionCallOutput(call_id=call_id, name=name, output="done", is_error=False)
+        )
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert messages[-1]["content"][0]["toolResult"]["toolUseId"] == "fast"
+    assert _aws_cache_points(messages) == [(len(messages) - 1, 1)]
+
+
+def test_aws_cache_messages_empty_item_keeps_the_last_conversation_block():
+    # the empty item adds nothing, so the boundary stays after the last real block, and
+    # the rewritten instructions in between never become the boundary
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["Hello"])
+    chat_ctx.add_message(role="system", content=["Ask for the year they were born."])
+    chat_ctx.add_message(role="user", content=[""])
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert len(messages) == 1
+    assert messages[0]["content"][:2] == [{"text": "Hello"}, _AWS_CACHE_POINT]
+    assert "Ask for the year" in messages[0]["content"][2]["text"]
+    assert _aws_cache_points(messages) == [(0, 1)]
 
 
 def test_openai_format_preserves_mid_conversation_system_messages():
@@ -193,7 +255,6 @@ def test_empty_mid_conversation_system_messages_are_dropped():
 
 
 def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
-    from livekit.agents.llm import AgentHandoff, ChatContext, ChatMessage
 
     items = [
         AgentHandoff(new_agent_id="default_agent", old_agent_id=None),
@@ -205,7 +266,6 @@ def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
 
 
 def test_mistralai_format_injects_trailing_user_message_after_assistant():
-    from livekit.agents import ChatContext
 
     chat_ctx = ChatContext.empty()
     chat_ctx.add_message(role="user", content="Hello")
@@ -221,7 +281,6 @@ def test_mistralai_format_injects_trailing_user_message_after_assistant():
 
 
 def test_mistralai_format_can_skip_trailing_user_message_injection():
-    from livekit.agents import ChatContext
 
     chat_ctx = ChatContext.empty()
     chat_ctx.add_message(role="assistant", content="Hi there")
@@ -229,179 +288,6 @@ def test_mistralai_format_can_skip_trailing_user_message_injection():
     messages, _ = chat_ctx.to_provider_format(format="mistralai", inject_dummy_user_message=False)
 
     assert messages == [{"type": "message.output", "role": "assistant", "content": "Hi there"}]
-
-
-@skip_if_no_credentials()
-async def test_summarize():
-    from livekit.agents import ChatContext
-
-    chat_ctx = ChatContext()
-    chat_ctx.add_message(
-        role="system",
-        content=(
-            "You are SupportGPT, a customer service agent for Acme Audio. "
-            "Gather identifying info first, then troubleshoot. "
-            "Only promise replacements if the device is under warranty. "
-            "Use the provided tools for order lookup, warranty checks, and RMA creation. "
-            "If a return is required, hand off to ReturnsAgent for shipping label logistics."
-        ),
-    )
-    chat_ctx.add_message(
-        role="user",
-        content=(
-            "Hi, I need help with an order I placed last week. The earbuds I got "
-            "keep disconnecting and the left side sounds crackly."
-        ),
-    )
-    chat_ctx.add_message(
-        role="assistant",
-        content=(
-            "I can help with that! First, could you share your full name and the email "
-            "you used at checkout, so I can locate your order?"
-        ),
-    )
-    chat_ctx.add_message(
-        role="user", content=("Sure—I'm Maya Chen, and I used maya.chen+shop@gmail.com.")
-    )
-    chat_ctx.add_message(
-        role="assistant",
-        content=("Thanks, Maya. Do you also have the order number and approximate purchase date?"),
-    )
-    chat_ctx.add_message(role="user", content=("Order #LK-4821936. I bought them on October 7."))
-
-    chat_ctx.items.append(
-        FunctionCall(
-            name="lookup_order",
-            call_id="call_lookup_order_1",
-            arguments='{"order_number": "LK-4821936", "customer_email": "maya.chen+shop@gmail.com"}',
-        )
-    )
-    chat_ctx.items.append(
-        FunctionCallOutput(
-            name="lookup_order",
-            call_id="call_lookup_order_1",
-            output=(
-                '{"order_number":"LK-4821936","customer_name":"Maya Chen","'
-                'items":[{"sku":"AC-EBD-PRO","name":"Acme Buds Pro","qty":1}],'
-                '"purchase_date":"2025-10-07","status":"delivered","serial":"ACB-PRO-7F29D4"}'
-            ),
-            is_error=False,
-        )
-    )
-    chat_ctx.add_message(
-        role="assistant",
-        content=(
-            "I found your order LK-4821936 for Acme Buds Pro, delivered October 8. "
-            "To check warranty and next steps, which device are you pairing with and what OS version?"
-        ),
-    )
-    chat_ctx.add_message(role="user", content="iPhone 14 Pro, iOS 18.0.1.")
-    chat_ctx.add_message(
-        role="assistant",
-        content=(
-            "Thanks. Have you tried any troubleshooting—resetting the buds, forgetting/re-pairing Bluetooth, "
-            "or testing another device?"
-        ),
-    )
-    chat_ctx.add_message(
-        role="user",
-        content=(
-            "I tried forgetting and re-pairing twice. I also tested on my iPad and the left ear still crackles."
-        ),
-    )
-    chat_ctx.add_message(
-        role="assistant",
-        content=("Understood. Any visible damage or signs of moisture? And when did it start?"),
-    )
-    chat_ctx.add_message(
-        role="user",
-        content=("No damage or moisture. It started the day after I received them—October 9."),
-    )
-
-    chat_ctx.items.append(
-        FunctionCall(
-            name="check_warranty",
-            call_id="call_check_warranty_1",
-            arguments='{"serial":"ACB-PRO-7F29D4","purchase_date":"2025-10-07"}',
-        )
-    )
-    chat_ctx.items.append(
-        FunctionCallOutput(
-            name="check_warranty",
-            call_id="call_check_warranty_1",
-            output='{"eligible":true,"warranty_expires":"2026-10-07"}',
-            is_error=False,
-        )
-    )
-
-    chat_ctx.add_message(
-        role="assistant",
-        content=(
-            "This appears to be a hardware defect and you’re under warranty until 2026-10-07. "
-            "I can set up a free replacement. Could you confirm your shipping address and a contact number?"
-        ),
-    )
-    chat_ctx.add_message(
-        role="user",
-        content=("Ship to 2150 Grove St, Apt 4B, Oakland, CA 94612. Phone is (510) 555-0136."),
-    )
-
-    chat_ctx.items.append(
-        FunctionCall(
-            name="create_rma",
-            call_id="call_create_rma_1",
-            arguments=(
-                '{"order_number":"LK-4821936","serial":"ACB-PRO-7F29D4","reason":"left bud crackling / disconnects",'
-                '"customer":{"name":"Maya Chen","email":"maya.chen+shop@gmail.com","phone":"(510) 555-0136","'
-                'address":"2150 Grove St, Apt 4B, Oakland, CA 94612"}}'
-            ),
-        )
-    )
-    chat_ctx.items.append(
-        FunctionCallOutput(
-            name="create_rma",
-            call_id="call_create_rma_1",
-            output='{"rma_id":"RMA-90721","replacement_eta_days":2}',
-            is_error=False,
-        )
-    )
-
-    chat_ctx.items.append(AgentHandoff(old_agent_id="SupportGPT", new_agent_id="ReturnsAgent"))
-
-    chat_ctx.items.append(
-        FunctionCall(
-            name="generate_return_label",
-            call_id="call_label_1",
-            arguments='{"rma_id":"RMA-90721","email":"maya.chen+shop@gmail.com"}',
-        )
-    )
-    chat_ctx.items.append(
-        FunctionCallOutput(
-            name="generate_return_label",
-            call_id="call_label_1",
-            output='{"label_url":"https://example.invalid/label/RMA-90721","due_in_days":14}',
-            is_error=False,
-        )
-    )
-
-    chat_ctx.add_message(
-        role="assistant",
-        content=(
-            "All set! I’ve created RMA #RMA-90721 linked to order LK-4821936. "
-            "You’ll receive the prepaid return label and instructions at maya.chen+shop@gmail.com. "
-            "Please ship the defective pair within 14 days; your replacement will ship within 48 hours."
-        ),
-    )
-
-    import json
-
-    async with inference.LLM(model="openai/gpt-4.1-mini") as llm:
-        summary = await chat_ctx._summarize(llm, keep_last_turns=1)
-        print("\n=== Summary ===\n")
-        print(json.dumps(summary.to_dict(), indent=2))
-
-
-# --- summarize unit tests (no credentials required) ---
 
 
 class _FixedSummaryLLM(FakeLLM):
@@ -441,7 +327,6 @@ CANNED_SUMMARY = "User asked about earbuds. Agent resolved the issue."
 
 def _build_conversation_ctx() -> ChatContext:
     """Build a ChatContext with system, user/assistant pairs, and interleaved tool calls."""
-    from livekit.agents.llm import ChatContext
 
     ctx = ChatContext()
     ctx.add_message(role="system", content="You are a helpful assistant.")
@@ -462,7 +347,6 @@ def _build_conversation_ctx() -> ChatContext:
 
 @pytest.mark.asyncio
 async def test_summarize_head_tail_split_basic():
-    from livekit.agents.llm import ChatContext
 
     ctx = ChatContext()
     ctx.add_message(role="system", content="System prompt.")
@@ -579,7 +463,6 @@ async def test_summarize_keep_last_turns_zero():
 
 @pytest.mark.asyncio
 async def test_summarize_preserves_structural_items():
-    from livekit.agents.llm import ChatContext
 
     ctx = ChatContext()
     ctx.add_message(role="system", content="System prompt.")
@@ -607,7 +490,6 @@ async def test_summarize_preserves_structural_items():
 
 @pytest.mark.asyncio
 async def test_summarize_skips_when_not_enough_messages():
-    from livekit.agents.llm import ChatContext
 
     ctx = ChatContext()
     ctx.add_message(role="system", content="System prompt.")
@@ -625,24 +507,62 @@ async def test_summarize_skips_when_not_enough_messages():
         assert a.id == b.id
 
 
-# --- truncate tests ---
-
-
-def _make_ctx(*roles: str):
-    """Build a ChatContext with messages of the given roles."""
-    from livekit.agents.llm import ChatContext
-
+def _make_ctx(*roles: str) -> ChatContext:
     ctx = ChatContext()
     for role in roles:
-        if role == "function_call":
-            ctx.items.append(FunctionCall(name="fn", call_id="c1", arguments="{}"))
-        elif role == "function_call_output":
-            ctx.items.append(
-                FunctionCallOutput(name="fn", call_id="c1", output="{}", is_error=False)
-            )
-        else:
-            ctx.add_message(role=role, content=f"msg-{role}")
+        ctx.add_message(role=role, content=f"msg-{role}")  # type: ignore[arg-type]
     return ctx
+
+
+@pytest.mark.parametrize(
+    ("roles", "max_items", "kept"),
+    [
+        (["system", "user", "assistant"], 5, ["system", "user", "assistant"]),
+        (["user", "assistant", "user", "assistant"], 2, ["user", "assistant"]),
+        (["system", "user", "assistant", "user", "assistant"], 2, ["system", "user", "assistant"]),
+        (
+            ["developer", "user", "assistant", "user", "assistant"],
+            2,
+            ["developer", "user", "assistant"],
+        ),
+        # the instruction is already in the tail, so it is not inserted again
+        (["system", "user", "assistant"], 3, ["system", "user", "assistant"]),
+        (["system", "user", "assistant", "user"], 0, ["system"]),
+        (["user", "assistant", "user"], 0, []),
+    ],
+    ids=[
+        "under-limit",
+        "basic",
+        "keeps-system",
+        "keeps-developer",
+        "no-duplication",
+        "zero-keeps-instruction",
+        "zero-without-instruction",
+    ],
+)
+def test_truncate(roles: list[str], max_items: int, kept: list[str]) -> None:
+    ctx = _make_ctx(*roles)
+
+    ctx.truncate(max_items=max_items)
+
+    assert [item.role for item in ctx.items] == kept  # type: ignore[union-attr]
+
+
+def test_truncate_keeps_only_the_first_instruction() -> None:
+    ctx = _make_ctx("system", "developer", "user", "user", "user")
+
+    ctx.truncate(max_items=2)
+
+    assert [item.role for item in ctx.items] == ["system", "user", "user"]  # type: ignore[union-attr]
+
+
+def test_truncate_negative_max_items_raises_and_leaves_the_context_alone() -> None:
+    ctx = _make_ctx("developer", "user", "assistant", "user")
+
+    with pytest.raises(ValueError, match="max_items must be non-negative"):
+        ctx.truncate(max_items=-2)
+
+    assert [item.role for item in ctx.items] == ["developer", "user", "assistant", "user"]  # type: ignore[union-attr]
 
 
 def test_truncate_noop_when_under_limit():
@@ -652,277 +572,20 @@ def test_truncate_noop_when_under_limit():
     assert [item.id for item in ctx.items] == original_ids
 
 
-def test_truncate_basic():
-    ctx = _make_ctx("user", "assistant", "user", "assistant")
-    ctx.truncate(max_items=2)
-    assert len(ctx.items) == 2
-    assert ctx.items[0].role == "user"
-    assert ctx.items[1].role == "assistant"
-
-
-def test_truncate_preserves_system_instruction():
-    ctx = _make_ctx("system", "user", "assistant", "user", "assistant")
-    ctx.truncate(max_items=2)
-    # system should be re-inserted at the front
-    assert ctx.items[0].role == "system"
-    assert len(ctx.items) == 3  # system + last 2
-
-
-def test_truncate_preserves_developer_instruction():
-    ctx = _make_ctx("developer", "user", "assistant", "user", "assistant")
-    ctx.truncate(max_items=2)
-    assert ctx.items[0].role == "developer"
-    assert len(ctx.items) == 3
-
-
-def test_truncate_no_duplication():
-    """When the instruction is already in the truncated tail, don't insert it again."""
+def test_remove_by_id_or_item() -> None:
     ctx = _make_ctx("system", "user", "assistant")
-    ctx.truncate(max_items=3)
-    # system is already within the last 3 items, so no duplication
-    system_items = [item for item in ctx.items if getattr(item, "role", None) == "system"]
-    assert len(system_items) == 1
-    assert len(ctx.items) <= 3
+    first, second = ctx.items[0], ctx.items[1]
 
+    ctx.remove(first.id)
+    ctx.remove(second)
 
-def test_truncate_multiple_instructions():
-    """Only the first instruction by position is preserved."""
-    from livekit.agents.llm import ChatContext
-
-    ctx = ChatContext()
-    ctx.add_message(role="system", content="first")
-    ctx.add_message(role="developer", content="second")
-    ctx.add_message(role="user", content="u1")
-    ctx.add_message(role="user", content="u2")
-    ctx.add_message(role="user", content="u3")
-
-    ctx.truncate(max_items=2)
-    # first instruction is the system msg
-    assert ctx.items[0].role == "system"
-    assert ctx.items[0].content == ["first"]
-
-
-def test_truncate_zero_max_items_keeps_only_instruction():
-    """`items[-0:]` is the whole list, so a zero budget used to keep every message."""
-    ctx = _make_ctx("system", "user", "assistant", "user")
-    ctx.truncate(max_items=0)
-    assert [item.role for item in ctx.items] == ["system"]
-
-
-def test_truncate_zero_max_items_without_instruction():
-    ctx = _make_ctx("user", "assistant", "user")
-    ctx.truncate(max_items=0)
-    assert ctx.items == []
-
-
-def test_truncate_negative_max_items_raises():
-    """A negative budget has no sensible meaning, so it is rejected rather than guessed at."""
-    ctx = _make_ctx("developer", "user", "assistant", "user")
-    with pytest.raises(ValueError, match="max_items must be non-negative"):
-        ctx.truncate(max_items=-2)
-
-    # the context is left untouched
-    assert [item.role for item in ctx.items] == [
-        "developer",
-        "user",
-        "assistant",
-        "user",
-    ]
-
-
-# --- remove tests ---
-
-
-def test_remove_by_id():
-    ctx = _make_ctx("system", "user", "assistant")
-    target = ctx.items[1]
-    ctx.remove(target.id)
-    assert ctx.get_by_id(target.id) is None
-
-
-def test_remove_by_item():
-    ctx = _make_ctx("user", "assistant", "user")
-    target = ctx.items[0]
-    ctx.remove(target)
-    assert len(ctx.items) == 2
+    assert [item.role for item in ctx.items] == ["assistant"]  # type: ignore[union-attr]
 
 
 def test_remove_nonexistent_raises():
     ctx = _make_ctx("user", "assistant")
     with pytest.raises(ValueError):
         ctx.remove("nonexistent_id")
-
-
-def test_instructions_serialization():
-    """Instructions is resolved to str before storage in ChatMessage content."""
-    from livekit.agents.llm import ChatContext, ChatMessage
-    from livekit.agents.llm.chat_context import Instructions
-
-    # Instructions is no longer a valid ChatContent type; it must be resolved to str first
-    instr = Instructions("common text", audio="audio addition", text="text addition")
-
-    # str(instr) returns the common text
-    assert str(instr) == "common text"
-
-    # render resolves to a plain string
-    assert instr.render(modality="audio") == "common text\n\naudio addition"
-    assert instr.render(modality="text") == "common text\n\ntext addition"
-
-    # ChatMessage content must be str (Instructions is resolved before storage)
-    resolved = instr.render(modality="audio")
-    msg = ChatMessage(role="system", content=[resolved])
-    assert isinstance(msg.content[0], str)
-    assert msg.content[0] == "common text\n\naudio addition"
-
-    # add_message with Instructions resolves to str(instr) = common
-    ctx = ChatContext()
-    ctx.add_message(role="system", content=instr)
-    assert isinstance(ctx.items[0].content[0], str)
-    assert ctx.items[0].content[0] == "common text"
-
-    # to_dict / from_dict round-trip with resolved str content
-    ctx2 = ChatContext([ChatMessage(role="system", content=[resolved])])
-    data = ctx2.to_dict()
-    serialized = data["items"][0]["content"][0]
-    assert isinstance(serialized, str)
-    assert serialized == "common text\n\naudio addition"
-
-    restored = ChatContext.from_dict(ctx2.to_dict())
-    restored_content = restored.items[0].content[0]
-    assert isinstance(restored_content, str)
-    assert restored_content == "common text\n\naudio addition"
-
-    # Plain str content stays as str after round-trip
-    plain_ctx = ChatContext([ChatMessage(role="user", content=["hello"])])
-    plain_restored = ChatContext.from_dict(plain_ctx.to_dict())
-    assert type(plain_restored.items[0].content[0]) is str
-
-
-def test_instructions_render():
-    """render() returns a plain str combining common + modality-specific additions."""
-    from livekit.agents.llm.chat_context import Instructions
-
-    instr = Instructions(
-        "You are a helpful assistant.",
-        audio="Keep responses short for voice.",
-        text="Use markdown formatting.",
-    )
-
-    # render('audio') returns common + audio addition
-    resolved_audio = instr.render(modality="audio")
-    assert isinstance(resolved_audio, str)
-    assert resolved_audio == "You are a helpful assistant.\n\nKeep responses short for voice."
-
-    # render('text') returns common + text addition
-    resolved_text = instr.render(modality="text")
-    assert isinstance(resolved_text, str)
-    assert resolved_text == "You are a helpful assistant.\n\nUse markdown formatting."
-
-    # str(instr) returns just the common text
-    assert str(instr) == "You are a helpful assistant."
-
-    # Instructions without modality additions returns just common for both
-    common_only = Instructions("common only")
-    assert common_only.render(modality="audio") == "common only"
-    assert common_only.render(modality="text") == "common only"
-
-    # Instructions with only one modality addition
-    audio_only = Instructions("base", audio="audio extra")
-    assert audio_only.render(modality="audio") == "base\n\naudio extra"
-    assert audio_only.render(modality="text") == "base"
-
-    text_only = Instructions("base", text="text extra")
-    assert text_only.render(modality="audio") == "base"
-    assert text_only.render(modality="text") == "base\n\ntext extra"
-
-    # Empty common with additions
-    empty_common = Instructions("", audio="audio only", text="text only")
-    assert empty_common.render(modality="audio") == "audio only"
-    assert empty_common.render(modality="text") == "text only"
-
-
-def test_resolve_template_no_double_render():
-    """resolve_template with Instructions kwargs renders each variant exactly once."""
-    from livekit.agents.llm.chat_context import Instructions
-
-    instr = Instructions.resolve_template(
-        "{persona}\n\n{modality_specific}",
-        persona="You are a helpful assistant.",
-        modality_specific=Instructions(
-            audio="Handle noisy voice input.", text="Handle typed input."
-        ),
-    )
-
-    # each modality resolves to a single copy of the template, not two
-    assert instr.render(modality="audio") == (
-        "You are a helpful assistant.\n\nHandle noisy voice input."
-    )
-    assert instr.render(modality="text") == ("You are a helpful assistant.\n\nHandle typed input.")
-    # persona (and everything else) appears exactly once per modality
-    assert instr.render(modality="audio").count("You are a helpful assistant.") == 1
-
-
-def test_resolve_template_plain_kwargs():
-    """resolve_template without Instructions kwargs is a plain common-only render."""
-    from livekit.agents.llm.chat_context import Instructions
-
-    instr = Instructions.resolve_template("Hello {name}", name="Alex")
-    assert instr.common == "Hello Alex"
-    assert instr.audio is None
-    assert instr.text is None
-    assert instr.render() == "Hello Alex"
-    assert instr.render(modality="audio") == "Hello Alex"
-
-
-def test_resolve_template_identical_variants_collapse():
-    """When modality variants are identical, resolve_template collapses to common-only."""
-    from livekit.agents.llm.chat_context import Instructions
-
-    # an Instructions kwarg with no modality-specific parts yields identical variants
-    instr = Instructions.resolve_template(
-        "{persona}\n\n{note}",
-        persona="You are a helpful assistant.",
-        note=Instructions("shared note"),
-    )
-    assert instr.audio is None
-    assert instr.text is None
-    assert instr.render() == "You are a helpful assistant.\n\nshared note"
-    assert instr.render(modality="audio") == "You are a helpful assistant.\n\nshared note"
-
-
-@pytest.mark.parametrize(
-    "template, expected",
-    [
-        ("Hello {name}, total {}", "Hello Alex, total "),
-        ("Hello {name}, item {0}", "Hello Alex, item "),
-        ("Hello {name}, price {price:.2f}", "Hello Alex, price "),
-        ("Hello {name}, caller {caller!s}", "Hello Alex, caller "),
-    ],
-)
-def test_render_missing_placeholders_become_empty(template: str, expected: str):
-    """Placeholders with no value render empty, whatever their field or format spec."""
-    from livekit.agents.llm.chat_context import Instructions
-
-    assert Instructions(template).render(data={"name": "Alex"}) == expected
-
-
-@pytest.mark.parametrize(
-    "template, expected",
-    [
-        ("Hello {user[name]}", "Hello Alex"),
-        ("Hello {user.name}", "Hello Alex"),
-        ("Plan {user[account][plan]}", "Plan pro"),
-        ("Plan {user.account[plan]}", "Plan pro"),
-        ("Tier {user[support-tier]}", "Tier gold"),
-        ("Account {user.account}", "Account namespace(plan='pro')"),
-    ],
-)
-def test_render_nested_dict_item_access(template: str, expected: str):
-    """A nested dict renders through str.format's [key] lookup as well as dotted access."""
-    from livekit.agents.llm.chat_context import Instructions
-
-    data = {"user": {"name": "Alex", "account": {"plan": "pro"}, "support-tier": "gold"}}
-    assert Instructions(template).render(data=data) == expected
 
 
 def test_upsert_places_a_backdated_item_where_it_happened():
@@ -987,72 +650,40 @@ def _tool_call_input(fmt: str, messages: list[dict[str, Any]]) -> Any:
 
 
 @pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
-def test_to_provider_format_tolerates_unparseable_tool_arguments(fmt: str):
-    """A stored tool call whose arguments never parsed must not crash a later turn.
-
-    `FunctionCall.arguments` is kept verbatim when it can't be parsed (unrecoverable
-    open-weight output, or history restored via `ChatContext.from_dict`). The
-    Anthropic/Google/AWS formatters send arguments as a JSON object, so formatting
-    such history previously raised `json.JSONDecodeError`. It should degrade to an
-    empty object instead.
-    """
-    ctx = ChatContext.empty()
-    ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments="not-a-json-object"))
-    ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="tool error", is_error=True))
-
-    messages, _ = ctx.to_provider_format(format=fmt)
-    assert _tool_call_input(fmt, messages) == {}
-
-
-@pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
-def test_to_provider_format_preserves_valid_tool_arguments(fmt: str):
-    """Valid JSON-object arguments are still passed through unchanged."""
-    ctx = ChatContext.empty()
-    ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments='{"order": "123"}'))
-    ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
-
-    messages, _ = ctx.to_provider_format(format=fmt)
-    assert _tool_call_input(fmt, messages) == {"order": "123"}
-
-
-@pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     [
+        ('{"order": "123"}', {"order": "123"}),
         ('{"a": 1,}', {"a": 1}),
         ('{"a": <|end|>1}', {"a": "end1"}),
         ('"{\\"a\\": 1}"', {"a": 1}),
+        # a stored call whose arguments never parsed must not crash a later turn
+        ("not-a-json-object", {}),
+        # a call's arguments are a named-parameter object; anything else means no arguments
+        ("", {}),
+        ("[1, 2, 3]", {}),
+        ("42", {}),
+        ("null", {}),
     ],
-    ids=["trailing-comma", "chat-template-leak", "double-encoded"],
+    ids=[
+        "valid",
+        "trailing-comma",
+        "chat-template-leak",
+        "double-encoded",
+        "unparseable",
+        "empty",
+        "array",
+        "scalar",
+        "null",
+    ],
 )
-def test_to_provider_format_recovers_repairable_tool_arguments(
-    fmt: str, arguments: str, expected: dict[str, Any]
-):
-    """Recoverable arguments are repaired rather than discarded.
-
-    Routing through `llm.utils.parse_function_arguments` means json_repair, chat-template
-    token stripping and double-encoded unwrapping all apply here too, so history that a
-    bare `json.loads` would have dropped to `{}` keeps its real arguments.
-    """
+def test_to_provider_format_tool_arguments(fmt: str, arguments: str, expected: dict[str, Any]):
     ctx = ChatContext.empty()
     ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments=arguments))
     ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
 
     messages, _ = ctx.to_provider_format(format=fmt)
     assert _tool_call_input(fmt, messages) == expected
-
-
-@pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
-@pytest.mark.parametrize("arguments", ["", "[1, 2, 3]", "42", "null"])
-def test_to_provider_format_non_object_tool_arguments(fmt: str, arguments: str):
-    """Empty or non-object arguments degrade to `{}`; a call's arguments are always a
-    named-parameter object, so an array/scalar/null is treated as no arguments."""
-    ctx = ChatContext.empty()
-    ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments=arguments))
-    ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
-
-    messages, _ = ctx.to_provider_format(format=fmt)
-    assert _tool_call_input(fmt, messages) == {}
 
 
 def test_copy_keeps_a_tool_output_with_no_name():
@@ -1107,12 +738,7 @@ def test_copy_drops_a_name_less_tool_output_whose_call_is_not_in_the_context():
 
 
 def test_readonly_chat_ctx_blocks_every_mutation_path():
-    """`Agent.chat_ctx` returns a `_ReadOnlyChatContext`; every mutation must raise.
-
-    `insert()` — and `add_message(created_at=...)`/`merge()`, which route through
-    `list.insert()` — must not silently write into the view's detached copy, and the
-    `items` setter must not swap the immutable list for a plain mutable one.
-    """
+    """`Agent.chat_ctx` is a `_ReadOnlyChatContext`; every mutation path must raise."""
     ctx = ChatContext.empty()
     ctx.add_message(role="system", content="sys")
 
@@ -1220,3 +846,57 @@ def test_fingerprint_tracks_image_url_and_inference_settings() -> None:
     )
     assert a._fingerprint() != changed_url._fingerprint()
     assert a._fingerprint() != changed_detail._fingerprint()
+
+
+def test_compute_lcs_returns_a_longest_common_subsequence() -> None:
+    def dp_lcs_length(old_ids: list[str], new_ids: list[str]) -> int:
+        n, m = len(old_ids), len(new_ids)
+        dp = [[0] * (m + 1) for _ in range(n + 1)]
+        for i in range(1, n + 1):
+            for j in range(1, m + 1):
+                if old_ids[i - 1] == new_ids[j - 1]:
+                    dp[i][j] = dp[i - 1][j - 1] + 1
+                else:
+                    dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+        return dp[n][m]
+
+    def is_subsequence(sub: list[str], seq: list[str]) -> bool:
+        it = iter(seq)
+        return all(item in it for item in sub)
+
+    for seed in range(300):
+        rng = random.Random(seed)
+        pool = [f"id_{i}" for i in range(rng.randint(0, 40))]
+        old_ids = rng.sample(pool, rng.randint(0, len(pool)))
+        new_ids = rng.sample(pool, rng.randint(0, len(pool)))
+        if seed % 3 == 0 and old_ids:
+            # repeated IDs take the dynamic-programming path
+            new_ids += rng.choices(old_ids, k=3)
+
+        lcs_ids = utils._compute_lcs(old_ids, new_ids)
+
+        assert len(lcs_ids) == dp_lcs_length(old_ids, new_ids), seed
+        assert is_subsequence(lcs_ids, old_ids), seed
+        assert is_subsequence(lcs_ids, new_ids), seed
+
+
+def test_compute_chat_ctx_diff_on_a_long_context_does_not_build_an_n_by_m_table() -> None:
+    n = 2000
+    old = ChatContext()
+    for i in range(n):
+        old.add_message(role="user", content=f"message {i}", id=f"item_{i}")
+    new = old.copy()
+    new.add_message(role="system", content="appended", id="appended")
+
+    tracemalloc.start()
+    try:
+        diff = utils.compute_chat_ctx_diff(old, new)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert diff.to_create == [(f"item_{n - 1}", "appended")]
+    assert diff.to_remove == []
+    assert diff.to_update == []
+    # the O(n*m) table for 2000 x 2001 items takes about 32 MB
+    assert peak < 1_000_000
