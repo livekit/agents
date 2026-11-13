@@ -58,6 +58,47 @@ async def test_inference_llm_settings_are_detached_and_exclude_sensitive_options
         await model.aclose()
 
 
+async def test_inference_responses_reports_settings_without_customer_content() -> None:
+    model = inference.responses.LLM(
+        model="openai/gpt-6.1-sol",
+        provider="openai",
+        api_key="private-key",
+        api_secret="private-secret",
+        base_url="https://private-endpoint.example.com",
+        reasoning="low",
+        extra_kwargs={
+            "max_output_tokens": 64,
+            "instructions": "private-prompt",
+            "metadata": {"customer": "private-customer"},
+            "user": "private-user",
+            "reasoning": {"effort": "low", "unknown": "private-value"},
+            "text": {
+                "verbosity": "low",
+                "format": {
+                    "type": "json_schema",
+                    "name": "private-name",
+                    "description": "private-description",
+                    "schema": {"private-schema": "private-content"},
+                },
+            },
+            "unknown": "private-value",
+        },
+    )
+    try:
+        reported = _snapshot(model)
+        assert reported["provider"] == "livekit"
+        assert reported["inference_provider"] == "openai"
+        assert reported["reasoning"] == {"effort": "low"}
+        assert reported["extra_kwargs"] == {
+            "max_output_tokens": 64,
+            "reasoning": {"effort": "low"},
+            "text": {"verbosity": "low"},
+        }
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
 @pytest.mark.parametrize("realtime", [False, True])
 @pytest.mark.parametrize("broken_metadata", [False, True])
 async def test_llm_fallback_preserves_healthy_children(
@@ -274,6 +315,7 @@ async def test_google_nested_configs_exclude_customer_content() -> None:
             input_audio_transcription=types.AudioTranscriptionConfig(
                 language_codes=["en"], custom_vocabulary=["private-vocabulary"]
             ),
+            labels={"private-label": "private-value"},
         ),
     ]
     try:
@@ -306,6 +348,16 @@ async def test_duplex_model_is_reported_through_session_adapter(hosted: bool) ->
         },
         "future_setting": "private-unknown",
     }
+    triggers = [
+        {
+            "type": "decisions",
+            "event_type": "session.output_transcript.delta",
+            "decisions": {
+                "model": "gpt-6-luna",
+                "questions": [{"name": "private-question", "instructions": "private-prompt"}],
+            },
+        }
+    ]
     model = (
         inference.DuplexModel(
             "openai/gpt-live-1",
@@ -313,17 +365,27 @@ async def test_duplex_model_is_reported_through_session_adapter(hosted: bool) ->
             api_key="private-key",
             api_secret="private-secret",
             voice="marin",
-            extra_kwargs={"responses_options": responses_options},
+            extra_kwargs={"responses_options": responses_options, "triggers": triggers},
         )
         if hosted
         else plugin.realtime.GPTLiveModel(
-            api_key="private-key", voice="marin", responses_options=responses_options
+            api_key="private-key",
+            voice="marin",
+            responses_options=responses_options,
+            triggers=triggers,
         )
     )
     try:
         reported = _snapshot(model)
         assert reported["type"].endswith("DuplexRealtimeAdapter")
         assert reported["llm"]["voice"] == "marin"
+        assert reported["llm"]["triggers"] == [
+            {
+                "type": "decisions",
+                "event_type": "session.output_transcript.delta",
+                "decisions": {"model": "gpt-6-luna"},
+            }
+        ]
         assert reported["llm"]["responses"] == {
             "model": "gpt-4.1",
             "max_output_tokens": 64,

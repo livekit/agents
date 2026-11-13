@@ -322,6 +322,7 @@ class FallbackChunkedStream(ChunkedStream):
                         rtc.AudioResampler(
                             input_rate=tts.sample_rate,
                             output_rate=self._tts.sample_rate,
+                            num_channels=self._tts.num_channels,
                         )
                         if tts_status.needs_resampling
                         else None
@@ -517,6 +518,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             rtc.AudioResampler(
                                 input_rate=tts.sample_rate,
                                 output_rate=self._fallback_adapter.sample_rate,
+                                num_channels=self._fallback_adapter.num_channels,
                             )
                             if tts_status.needs_resampling
                             else None

@@ -512,6 +512,86 @@ async def test_assemblyai_tts_reports_settings_without_credentials(hosted: bool)
         await model.aclose()
 
 
+@pytest.mark.parametrize(
+    "provider,kind,kwargs,expected",
+    [
+        ("kalpa", "tts", {"voice": "voice-1"}, {"voice": "voice-1"}),
+        ("lokutor", "stt", {"language": "es"}, {"language": "es"}),
+        ("lokutor", "tts", {"voice": "F2", "language": "es"}, {"voice": "F2", "language": "es"}),
+        (
+            "fishaudio",
+            "stt",
+            {"keyterms": ["private-name"], "sample_rate": 24000},
+            {"sample_rate": 24000, "eager_eot": True},
+        ),
+        (
+            "zoom_ai",
+            "stt",
+            {"vocabulary": ["private-name"], "diarization": True},
+            {"diarization": True},
+        ),
+        (
+            "gradium",
+            "stt",
+            {"keywords": ["private-name"], "keyword_boost": 1.5},
+            {"keyword_boost": 1.5},
+        ),
+        (
+            "rime",
+            "tts",
+            {
+                "model": "coda",
+                "custom_lexicon": [{"spelling": "private-name", "pronunciation": '" E k'}],
+                "allow_custom_endpoint": True,
+            },
+            {"model": "coda"},
+        ),
+    ],
+)
+async def test_new_provider_settings_exclude_credentials_and_vocabulary(
+    provider: str, kind: str, kwargs: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    plugin = pytest.importorskip(f"livekit.plugins.{provider}")
+    endpoint_option = "model_endpoint" if provider == "gradium" else "base_url"
+    model = getattr(plugin, kind.upper())(
+        api_key="private-key",
+        **{endpoint_option: "https://private-endpoint.example.com"},
+        **kwargs,
+    )
+    try:
+        reported = _report(AgentSession(vad=None, **{kind: model})).models[kind]
+        for name, value in expected.items():
+            assert reported[name] == value
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.parametrize("kind", ["stt", "tts"])
+async def test_nvidia_settings_exclude_vocabulary_and_reference_audio(kind: str) -> None:
+    plugin = pytest.importorskip("livekit.plugins.nvidia")
+    kwargs = (
+        {"boosted_lm_words": ["private-name"], "boosted_lm_score": 3.0}
+        if kind == "stt"
+        else {"audio_prompt_file": "private-reference.wav", "quality": 10}
+    )
+    model = getattr(plugin, kind.upper())(
+        api_key="private-key",
+        server="private-endpoint.example.com",
+        options={"private-option": "private-value"},
+        **kwargs,
+    )
+    try:
+        reported = _report(AgentSession(vad=None, **{kind: model})).models[kind]
+        assert reported["provider"] == "NVIDIA Speech"
+        assert reported["boosted_lm_score" if kind == "stt" else "quality"] == (
+            3.0 if kind == "stt" else 10
+        )
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
 async def test_reson8_reports_nested_settings_without_biasing_content() -> None:
     reson8 = pytest.importorskip("livekit.plugins.reson8")
     model = reson8.STT(

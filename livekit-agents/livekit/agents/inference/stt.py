@@ -71,7 +71,10 @@ AssemblyAIModels = Literal[
     "assemblyai/universal-3-5-pro",
     "assemblyai/universal-3-6-pro",
 ]
-XaiModels = Literal["xai/stt-1",]
+XaiModels = Literal[
+    "xai/stt-1",
+    "xai/stt-2",
+]
 SpeechmaticsModels = Literal[
     "speechmatics/enhanced",
     "speechmatics/standard",
@@ -113,7 +116,10 @@ class DeepgramOptions(TypedDict, total=False):
     dictation: bool
     detect_language: bool
     no_delay: bool  # default: True
-    utterance_end: bool
+    # Gap after the last finalized word before Deepgram sends UtteranceEnd: 1000-5000 ms,
+    # and it needs interim_results on. The gateway does not forward the event.
+    utterance_end_ms: int
+    utterance_end: bool  # alias: True is utterance_end_ms=1000; prefer utterance_end_ms
     redact: str | list[str]
     replace: Sensitive[str | list[str]]
     search: Sensitive[str | list[str]]
@@ -364,6 +370,7 @@ _WORD_ALIGNED_MODELS = frozenset(
         "assemblyai/universal-3-5-pro",
         "assemblyai/universal-3-6-pro",
         "xai/stt-1",
+        "xai/stt-2",
         "speechmatics/enhanced",
         "speechmatics/standard",
     }
@@ -987,6 +994,11 @@ class STT(stt.STT):
             stream._on_session_keyterms_changed()
 
     def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        # a FallbackAdapter forwards every item to each STT it wraps, and the session's
+        # subscription outlives a model switch: skip models that cannot read agent_context
+        if not self._capabilities.chat_context:
+            super()._push_conversation_item(ev)  # warns once, then ignores
+            return
         if (
             (chat_item := ev.item).type == "message"
             and chat_item.role == "assistant"
@@ -1539,7 +1551,8 @@ class SpeechStream(stt.SpeechStream):
 
         if not text and not is_final:
             return
-        self._process_start_of_speech()
+        if text:
+            self._process_start_of_speech()
 
         speech_data = self._build_speech_data(data)
 
@@ -1556,6 +1569,11 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._speech_duration = 0
 
+            # An empty flush result can account for trailing silence without
+            # starting another turn after the previous final already ended it.
+            if not text and not self._speaking:
+                return
+
             event = stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 request_id=request_id,
@@ -1565,7 +1583,17 @@ class SpeechStream(stt.SpeechStream):
 
             if self._speaking:
                 self._speaking = False
-                end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                end_alternatives = []
+                # speech_data.end_time uses start + duration. Some providers report
+                # billed audio duration (e.g. Ink-2), so use word timing for EOS.
+                if (words := data.get("words")) and (last_word_end := words[-1].get("end", 0)) > 0:
+                    end_alternatives = [
+                        replace(speech_data, end_time=self.start_time_offset + last_word_end)
+                    ]
+                end_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=end_alternatives,
+                )
                 self._event_ch.send_nowait(end_event)
                 self._on_end_of_speech()
         else:

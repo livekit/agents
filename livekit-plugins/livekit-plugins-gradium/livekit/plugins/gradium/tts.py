@@ -34,7 +34,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents._reporting import Sensitive, report_options
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
 
 from .api import ws_headers
@@ -84,6 +84,19 @@ def _api_error(msg_data: dict[str, Any]) -> APIStatusError:
     )
 
 
+def _timed_text(msg_data: dict[str, Any]) -> TimedString:
+    """Build the timed transcript for a `{"type": "text"}` frame.
+
+    The server sends the synthesized text word by word (the first frame can hold a few
+    words), with timings in seconds from the start of the stream.
+    """
+    return TimedString(
+        text=f"{msg_data['text']} ",
+        start_time=msg_data.get("start_s", NOT_GIVEN),
+        end_time=msg_data.get("stop_s", NOT_GIVEN),
+    )
+
+
 @dataclass
 class _TTSOptions:
     voice: str | None
@@ -121,7 +134,7 @@ class TTS(tts.TTS):
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),
             sample_rate=SUPPORTED_SAMPLE_RATE,
             num_channels=1,
         )
@@ -307,8 +320,7 @@ class ChunkedStream(tts.ChunkedStream):
                         msg_data = json.loads(msg.data)
                         type_ = msg_data.get("type")
                         if type_ == "text":
-                            # TODO(laurent): handle text timestamps?
-                            pass
+                            output_emitter.push_timed_transcript(_timed_text(msg_data))
                         elif type_ == "ready":
                             pass
                         elif type_ == "audio":
@@ -444,8 +456,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     msg_data = json.loads(msg.data)
                     type_ = msg_data.get("type")
                     if type_ == "text":
-                        # TODO(laurent): handle text timestamps?
-                        pass
+                        output_emitter.push_timed_transcript(_timed_text(msg_data))
                     elif type_ == "ready":
                         pass
                     elif type_ == "audio":

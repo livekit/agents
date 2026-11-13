@@ -5,6 +5,7 @@ import multiprocessing as mp
 import os
 import socket
 import sys
+from unittest.mock import patch
 
 import psutil
 import pytest
@@ -96,14 +97,15 @@ async def test_uptime_is_zero_before_start() -> None:
     assert proc.uptime == 0.0
 
 
-async def test_supervise_resolves_shutdown_futures_when_read_task_cancelled_first() -> None:
-    """Regression for #5929.
+async def test_supervise_teardown_resolves_futures_and_marks_prometheus_process_dead() -> None:
+    """Regressions for #5929 and #7006.
 
     When the child is killed externally, the join thread resolves _join_fut and
     _supervise_task cancels _read_ipc_task. If that cancellation wins the race
     against the read task observing the closed channel, the shutdown futures must
     still be resolved (by the read task's done callback) — otherwise aclose()
-    blocks waiting for an ack that can never arrive.
+    blocks waiting for an ack that can never arrive. Once the child is joined, its
+    Prometheus multiprocess metrics must also be marked dead before teardown ends.
     """
     from livekit.agents.ipc.supervised_proc import channel  # noqa: F401
     from livekit.agents.utils.aio import duplex_unix
@@ -128,18 +130,24 @@ async def test_supervise_resolves_shutdown_futures_when_read_task_cancelled_firs
         def close(self) -> None: ...
 
     proc._proc = _FakeMpProc()  # type: ignore[assignment]
+    proc._pid = 1234
     proc._join_fut = asyncio.Future()
     proc._initialize_fut.set_result(None)
 
-    supervise = asyncio.create_task(proc._supervise_task())
-    await asyncio.sleep(0)  # let _supervise_task reach `await self._join_fut`
+    with (
+        patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": "metrics"}),
+        patch("prometheus_client.multiprocess.mark_process_dead") as mark_process_dead,
+    ):
+        supervise = asyncio.create_task(proc._supervise_task())
+        await asyncio.sleep(0)  # let _supervise_task reach `await self._join_fut`
 
-    assert not proc._shutdown_ack_fut.done()
-    proc._join_fut.set_result(None)  # join thread signals the child has exited
-    await asyncio.wait_for(supervise, timeout=5)
+        assert not proc._shutdown_ack_fut.done()
+        proc._join_fut.set_result(None)  # join thread signals the child has exited
+        await asyncio.wait_for(supervise, timeout=5)
 
-    assert proc._shutdown_ack_fut.done()
-    assert proc._shutting_down_fut.done()
+        assert proc._shutdown_ack_fut.done()
+        assert proc._shutting_down_fut.done()
+        mark_process_dead.assert_called_once_with(proc._pid)
 
     b.close()
 
