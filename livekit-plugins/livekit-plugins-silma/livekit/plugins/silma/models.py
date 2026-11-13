@@ -37,10 +37,10 @@ TTSEnglishVoices = Literal["james", "emma", "isabella", "oliver"]
 
 TTSArabicVoices = Literal[
     "abdulaziz",
-    "fahd", 
+    "fahd",
     "layla",
     "maryam",
-    "nouf", 
+    "nouf",
     "noura",
     "omar",
     "reema",
@@ -54,9 +54,7 @@ TTSArabicVoices = Literal[
     "salman",
     "sulaiman",
     "salim",
-    ]
-
-
+]
 """Voices available on the Arabic (MSA and KSA) models."""
 
 TTSVoices = Literal[TTSEnglishVoices, TTSArabicVoices]
@@ -69,6 +67,10 @@ DEFAULT_VOICE: TTSVoices = "maryam"
 # SILMA v2 renders a 24 kHz mono float32 waveform.
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
+
+# The range the API accepts for `speech_rate`, where 1.0 is the natural pace.
+MIN_SPEECH_RATE = 0.7
+MAX_SPEECH_RATE = 1.4
 
 # `text` is capped by the API. Longer input is split before it is sent.
 MAX_TEXT_CHARACTERS = 250

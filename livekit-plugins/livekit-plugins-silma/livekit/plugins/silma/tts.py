@@ -52,7 +52,9 @@ from .models import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
     DEFAULT_VOICE,
+    MAX_SPEECH_RATE,
     MAX_TEXT_CHARACTERS,
+    MIN_SPEECH_RATE,
     NUM_CHANNELS,
     SAMPLE_RATE,
     USER_AGENT,
@@ -89,10 +91,11 @@ class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str
     creativity: float | None
-    speed: float | None
+    speech_rate: float | None
     user_id: str | None
     custom_audio_id: str | None
     enable_server_pronunciation_overrides: bool
+    enable_cache: bool
     api_key: str
     base_url: str
 
@@ -105,14 +108,16 @@ class _TTSOptions:
         }
         if self.creativity is not None:
             payload["creativity"] = self.creativity
-        if self.speed is not None:
-            payload["speed"] = self.speed
+        if self.speech_rate is not None:
+            payload["speech_rate"] = self.speech_rate
         if self.user_id is not None:
             payload["user_id"] = self.user_id
         if self.custom_audio_id is not None:
             payload["custom_audio_id"] = self.custom_audio_id
         if self.enable_server_pronunciation_overrides:
             payload["enable_server_pronunciation_overrides"] = True
+        if self.enable_cache:
+            payload["enable_cache"] = True
         return payload
 
 
@@ -120,6 +125,7 @@ def _validate_options(
     *,
     model: str,
     voice: str,
+    speech_rate: float | None,
     user_id: str | None,
     custom_audio_id: str | None,
     enable_server_pronunciation_overrides: bool,
@@ -128,6 +134,9 @@ def _validate_options(
         raise ValueError("model must be a non-empty string")
     if not voice or not voice.strip():
         raise ValueError("voice must be a non-empty string")
+    # Written as a negated range check so that NaN is rejected too.
+    if speech_rate is not None and not MIN_SPEECH_RATE <= speech_rate <= MAX_SPEECH_RATE:
+        raise ValueError(f"speech_rate must be between {MIN_SPEECH_RATE} and {MAX_SPEECH_RATE}")
     if custom_audio_id is not None and not user_id:
         raise ValueError(
             "user_id is required when custom_audio_id is set; "
@@ -149,10 +158,11 @@ class TTS(tts.TTS):
         model: TTSModels | str = DEFAULT_MODEL,
         voice: TTSVoices | str = DEFAULT_VOICE,
         creativity: float | None = None,
-        speed: float | None = None,
+        speech_rate: float | None = None,
         user_id: str | None = None,
         custom_audio_id: str | None = None,
         enable_server_pronunciation_overrides: bool = False,
+        enable_cache: bool = False,
         api_key: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -168,13 +178,14 @@ class TTS(tts.TTS):
             model: The SILMA model id. ``silma-tts-v2-english`` for English,
                 ``silma-tts-v2-msa`` for Modern Standard Arabic, or
                 ``silma-tts-v2-ksa`` for the Saudi (Najdi) dialect.
-            voice: The pre-defined voice id. English voices are ``james`` and
-                ``emma``; Arabic voices are ``sarah``, ``salma``, ``salwa``,
-                ``saja``, ``sultan``, ``salman``, ``sulaiman`` and ``salim``.
+            voice: The pre-defined voice id, ``maryam`` by default. See
+                ``TTSEnglishVoices`` and ``TTSArabicVoices`` for the voices
+                each model offers.
             creativity: Variance in speech prosody. Left to the server default
                 when ``None``.
-            speed: Speed of the generated speech. Left to the server default
-                when ``None``.
+            speech_rate: Speaking pace as a multiplier, where ``1.0`` is the
+                natural pace. Must be between 0.7 and 1.4. Left to the server
+                default when ``None``.
             user_id: Your SILMA user id, required for pronunciation overrides
                 and custom voices. Found at https://app.silma.ai/api-keys.
             custom_audio_id: The id of an uploaded custom voice to clone, e.g.
@@ -183,6 +194,9 @@ class TTS(tts.TTS):
             enable_server_pronunciation_overrides: Apply the pronunciation
                 overrides configured on your account at
                 https://app.silma.ai/control.
+            enable_cache: Let SILMA answer from its audio cache when your
+                account has synthesized the identical request before, and
+                cache this one for later. Off by default.
             api_key: The SILMA API key. Falls back to the ``SILMA_API_KEY``
                 environment variable.
             base_url: The API base URL. Defaults to
@@ -211,6 +225,7 @@ class TTS(tts.TTS):
         _validate_options(
             model=model,
             voice=voice,
+            speech_rate=speech_rate,
             user_id=user_id,
             custom_audio_id=custom_audio_id,
             enable_server_pronunciation_overrides=enable_server_pronunciation_overrides,
@@ -220,10 +235,11 @@ class TTS(tts.TTS):
             model=model,
             voice=voice,
             creativity=creativity,
-            speed=speed,
+            speech_rate=speech_rate,
             user_id=user_id,
             custom_audio_id=custom_audio_id,
             enable_server_pronunciation_overrides=enable_server_pronunciation_overrides,
+            enable_cache=enable_cache,
             api_key=silma_api_key,
             base_url=base_url,
         )
@@ -301,10 +317,11 @@ class TTS(tts.TTS):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
         creativity: NotGivenOr[float | None] = NOT_GIVEN,
-        speed: NotGivenOr[float | None] = NOT_GIVEN,
+        speech_rate: NotGivenOr[float | None] = NOT_GIVEN,
         user_id: NotGivenOr[str | None] = NOT_GIVEN,
         custom_audio_id: NotGivenOr[str | None] = NOT_GIVEN,
         enable_server_pronunciation_overrides: NotGivenOr[bool] = NOT_GIVEN,
+        enable_cache: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update the synthesis options.
 
@@ -315,11 +332,12 @@ class TTS(tts.TTS):
             model: The SILMA model id.
             voice: The pre-defined voice id.
             creativity: Variance in speech prosody.
-            speed: Speed of the generated speech.
+            speech_rate: Speaking pace as a multiplier, between 0.7 and 1.4.
             user_id: Your SILMA user id.
             custom_audio_id: The id of an uploaded custom voice to clone.
             enable_server_pronunciation_overrides: Apply account-level
                 pronunciation overrides.
+            enable_cache: Use SILMA's audio cache for repeated requests.
         """
         # Build a copy first so an invalid combination leaves the live options
         # untouched.
@@ -330,18 +348,21 @@ class TTS(tts.TTS):
             updated.voice = voice
         if is_given(creativity):
             updated.creativity = creativity
-        if is_given(speed):
-            updated.speed = speed
+        if is_given(speech_rate):
+            updated.speech_rate = speech_rate
         if is_given(user_id):
             updated.user_id = user_id
         if is_given(custom_audio_id):
             updated.custom_audio_id = custom_audio_id
         if is_given(enable_server_pronunciation_overrides):
             updated.enable_server_pronunciation_overrides = enable_server_pronunciation_overrides
+        if is_given(enable_cache):
+            updated.enable_cache = enable_cache
 
         _validate_options(
             model=updated.model,
             voice=updated.voice,
+            speech_rate=updated.speech_rate,
             user_id=updated.user_id,
             custom_audio_id=updated.custom_audio_id,
             enable_server_pronunciation_overrides=(updated.enable_server_pronunciation_overrides),

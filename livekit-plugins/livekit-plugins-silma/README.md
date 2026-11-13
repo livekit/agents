@@ -42,6 +42,23 @@ session = AgentSession(
 )
 ```
 
+### Options
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `speech_rate` | server default (`1.0`) | Speaking pace as a multiplier, from `0.7` (slower) to `1.4` (faster). |
+| `creativity` | server default | Variance in speech prosody. |
+| `enable_cache` | `False` | Lets SILMA answer from its audio cache when your account has synthesized the identical request before. Useful for greetings and other fixed phrases. |
+
+```python
+silma.TTS(
+    model="silma-tts-v2-msa",
+    voice="maryam"
+)
+```
+
+All of them can be changed later with `tts.update_options(...)`.
+
 ### Models and voices
 
 | Model | Language | Voices |

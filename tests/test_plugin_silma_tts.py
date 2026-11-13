@@ -58,10 +58,11 @@ def test_tts_defaults() -> None:
     assert tts.sample_rate == 24000
     assert tts.num_channels == 1
     assert tts.capabilities.streaming is True
-    assert tts._opts.voice == "sarah"
+    assert tts._opts.voice == "maryam"
     # Unset tuning knobs are left to the server rather than guessed at.
     assert tts._opts.creativity is None
-    assert tts._opts.speed is None
+    assert tts._opts.speech_rate is None
+    assert tts._opts.enable_cache is False
 
 
 def test_tts_custom_options() -> None:
@@ -72,12 +73,37 @@ def test_tts_custom_options() -> None:
         model="silma-tts-v2-english",
         voice="emma",
         creativity=0.4,
-        speed=0.3,
+        speech_rate=1.2,
+        enable_cache=True,
     )
     assert tts._opts.model == "silma-tts-v2-english"
     assert tts._opts.voice == "emma"
     assert tts._opts.creativity == 0.4
-    assert tts._opts.speed == 0.3
+    assert tts._opts.speech_rate == 1.2
+    assert tts._opts.enable_cache is True
+
+
+@pytest.mark.parametrize("speech_rate", [0.7, 1.0, 1.4])
+def test_tts_accepts_speech_rate_within_the_api_range(speech_rate: float) -> None:
+    from livekit.plugins.silma import TTS
+
+    assert TTS(api_key="test-key", speech_rate=speech_rate)._opts.speech_rate == speech_rate
+
+
+@pytest.mark.parametrize("speech_rate", [0.0, 0.69, 1.41, 3.0, -1.0, float("nan")])
+def test_tts_rejects_speech_rate_outside_the_api_range(speech_rate: float) -> None:
+    from livekit.plugins.silma import TTS
+
+    with pytest.raises(ValueError, match="speech_rate must be between 0.7 and 1.4"):
+        TTS(api_key="test-key", speech_rate=speech_rate)
+
+
+def test_tts_no_longer_accepts_speed() -> None:
+    """`speed` never controlled pace on the server; `speech_rate` replaces it."""
+    from livekit.plugins.silma import TTS
+
+    with pytest.raises(TypeError):
+        TTS(api_key="test-key", speed=0.4)  # type: ignore[call-arg]
 
 
 def test_tts_rejects_empty_voice() -> None:
@@ -114,10 +140,30 @@ def test_update_options() -> None:
     from livekit.plugins.silma import TTS
 
     tts = TTS(api_key="test-key")
-    tts.update_options(model="silma-tts-v2-ksa", voice="sultan", speed=0.5)
+    tts.update_options(model="silma-tts-v2-ksa", voice="sultan", speech_rate=0.8, enable_cache=True)
     assert tts._opts.model == "silma-tts-v2-ksa"
     assert tts._opts.voice == "sultan"
-    assert tts._opts.speed == 0.5
+    assert tts._opts.speech_rate == 0.8
+    assert tts._opts.enable_cache is True
+
+    # None hands the pace back to the server default.
+    tts.update_options(speech_rate=None, enable_cache=False)
+    assert tts._opts.speech_rate is None
+    assert tts._opts.enable_cache is False
+    assert "speech_rate" not in tts._opts.build_payload("hi")
+    assert "enable_cache" not in tts._opts.build_payload("hi")
+
+
+def test_update_options_rejects_an_out_of_range_speech_rate() -> None:
+    from livekit.plugins.silma import TTS
+
+    tts = TTS(api_key="test-key", speech_rate=1.1)
+    original = tts._opts
+
+    with pytest.raises(ValueError, match="speech_rate"):
+        tts.update_options(voice="salma", speech_rate=2.0)
+
+    assert tts._opts == original
 
 
 def test_update_options_is_atomic_on_invalid_value() -> None:
@@ -139,7 +185,7 @@ def test_payload_omits_unset_fields() -> None:
     assert payload == {
         "model_id": "silma-tts-v2-msa",
         "text": "مرحبا",
-        "voice_id": "sarah",
+        "voice_id": "maryam",
     }
 
 
@@ -149,13 +195,16 @@ def test_payload_includes_set_fields() -> None:
     payload = TTS(
         api_key="test-key",
         creativity=0.3,
-        speed=0.1,
+        speech_rate=1.3,
         user_id="u-1",
         custom_audio_id="voice_1",
         enable_server_pronunciation_overrides=True,
+        enable_cache=True,
     )._opts.build_payload("hi")
     assert payload["creativity"] == 0.3
-    assert payload["speed"] == 0.1
+    assert payload["speech_rate"] == 1.3
+    assert payload["enable_cache"] is True
+    assert "speed" not in payload
     assert payload["user_id"] == "u-1"
     assert payload["custom_audio_id"] == "voice_1"
     assert payload["enable_server_pronunciation_overrides"] is True
