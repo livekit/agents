@@ -159,3 +159,14 @@ async def drain_send_queue(transport: ControlledCloudTransport, *, timeout: floa
         if loop.time() > deadline:
             raise TimeoutError("send queue did not drain within timeout")
         await asyncio.sleep(0)
+
+
+async def drain_audio_queue(stream: Any, *, timeout: float = 1.0) -> None:
+    """Yield until the stream has handed its queued audio and requests to the transport."""
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while not stream._audio_ch.empty():
+        if loop.time() > deadline:
+            raise TimeoutError("audio queue did not drain within timeout")
+        await asyncio.sleep(0)
+    await asyncio.sleep(0)
