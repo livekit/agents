@@ -829,6 +829,16 @@ impl VoiceDriver {
             return;
         }
         let wall = self.step.wall_secs_at(now);
+        // A realtime reply to the user's audio answers it from its first frame.
+        let last = self.unanswered_user_speech();
+        let stopped = (self.activity.realtime_activity_mut())
+            .and_then(|rt| rt.heard.first_frame(speech, now, last));
+        if let Some(stopped) = stopped {
+            let stopped = self.step.wall_secs_at(stopped);
+            if let Some(turn) = self.agent_turn(speech) {
+                turn.answers_user_stop(stopped);
+            }
+        }
         self.agent_turn_speaking(speech, wall);
         // The labels arm the AEC warmup at the session's first `speaking` edge with audio output.
         self.set_agent_state(now, AgentState::Speaking);
@@ -889,7 +899,7 @@ impl VoiceDriver {
         interrupted: bool,
         has_tool_output: bool,
         tools_running: bool,
-        item: Option<Box<ChatMessage>>,
+        mut item: Option<Box<ChatMessage>>,
     ) {
         if let Some(state) = self.activity.speech_scheduler.speech_mut(speech)
             && let Err(error) = state.mark_generation_done()
@@ -903,6 +913,13 @@ impl VoiceDriver {
         // step after the edge released it, and is still a `say`'s item.
         let kind =
             self.activity.speech_kind(speech).or(self.activity.speech_scheduler.kind(speech));
+        // A realtime reply's first spoken message carries the latency its first frame measured.
+        if let Some(e2e) =
+            self.activity.realtime_activity_mut().and_then(|rt| rt.heard.spoken(speech))
+            && let Some(msg) = item.as_mut()
+        {
+            msg.metrics.e2e_latency = Some(e2e.as_secs_f64());
+        }
         let mut item = item.map(|msg| {
             let source = match kind {
                 Some(SpeechKind::Say) => Source::Say { speech },
@@ -1034,6 +1051,9 @@ impl VoiceDriver {
         });
         self.activity.spoke.remove(&speech);
         self.activity.launching.remove(&speech);
+        if let Some(rt) = self.activity.realtime_activity_mut() {
+            rt.heard.spoken(speech);
+        }
         // A finished paused speech drops the pause and resumes the sink, current or not: the
         // release at authorization can miss a pause taken in the same instant.
         self.release_paused_speech(speech);

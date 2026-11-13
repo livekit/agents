@@ -1,4 +1,5 @@
 use super::*;
+use crate::audio_recognition::AudioRecognition;
 
 /// The realtime session's requests and its open generations. State is updated before any action
 /// that can re-enter (a fatal error closes the session, and the close interrupts this machine).
@@ -45,6 +46,69 @@ impl RealtimeSessionState {
 
     pub fn new(caps: RealtimeCapabilities) -> Self {
         RealtimeSessionState { caps, ..RealtimeSessionState::default() }
+    }
+}
+
+/// The user's audio as replies answer it: a reply's `e2e_latency` runs from the last speech no
+/// reply had answered to the reply's first frame.
+#[derive(Default)]
+pub(crate) struct HeardInput {
+    /// A reply started speaking to the input, a typed request asked, or the turn was cleared.
+    answered_at: Ts,
+    /// A committed turn's last speech, kept once recognition has reset the turn's anchors.
+    unanswered: Option<Ts>,
+    /// Speeches answering the user's audio, until their first step is spoken: the latency once
+    /// their first frame measured it.
+    replies: BTreeMap<SpeechId, Option<Duration>>,
+}
+
+impl HeardInput {
+    /// The last speech no reply answered: the current turn's, else, until new speech starts, the
+    /// committed turn's.
+    pub(crate) fn last_speech(&self, recognition: &AudioRecognition) -> Option<Ts> {
+        let last = match recognition.turn_last_speaking_time() {
+            Some(last) => Some(last),
+            None if recognition.turn_started() => None,
+            None => self.unanswered,
+        };
+        last.filter(|last| *last > self.answered_at)
+    }
+
+    /// A user turn was committed: its last speech waits for the reply that answers it.
+    pub(crate) fn turn_committed(&mut self, last: Option<Ts>) {
+        if let Some(last) = last {
+            self.unanswered = Some(last);
+        }
+    }
+
+    /// Nothing heard until `at` waits for a reply any more.
+    pub(crate) fn answered(&mut self, at: Ts) {
+        self.answered_at = self.answered_at.max(at);
+        self.unanswered = None;
+    }
+
+    pub(crate) fn reply(&mut self, speech: SpeechId) {
+        self.replies.insert(speech, None);
+    }
+
+    /// The reply's first frame at `now` answers what was heard before it. The speech it answers
+    /// ended at the returned instant.
+    pub(crate) fn first_frame(
+        &mut self,
+        speech: SpeechId,
+        now: Ts,
+        last: Option<Ts>,
+    ) -> Option<Ts> {
+        let measured = self.replies.get_mut(&speech)?;
+        let last = last.filter(|last| *last <= now);
+        *measured = last.map(|last| now.saturating_duration_since(last));
+        self.answered(now);
+        last
+    }
+
+    /// The reply's first step is spoken: its latency, if its first frame measured one.
+    pub(crate) fn spoken(&mut self, speech: SpeechId) -> Option<Duration> {
+        self.replies.remove(&speech).flatten()
     }
 }
 

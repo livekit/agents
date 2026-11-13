@@ -19,6 +19,7 @@ use lk_agents_core::usage::ModelKind;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+pub(crate) use realtime_state::HeardInput;
 pub use realtime_state::response_id_of;
 use realtime_state::{Pending, Phase, Reuse, Route, Swap, bare_reply};
 pub use realtime_state::{RealtimeSessionState, Request, RequestKey, Settled};
@@ -652,6 +653,12 @@ impl VoiceDriver {
         let speech = self.start_speech(now, spec);
         if let Some(rt) = self.activity.realtime_activity_mut() {
             rt.players.insert(speech);
+            // A host request answers no speech; the server's own turn and a committed user turn
+            // answer what the user said.
+            match asked {
+                Some(_) => rt.heard.answered(now),
+                None => rt.heard.reply(speech),
+            }
         }
         if let Some(call) = asked {
             self.answer_speech(call);
@@ -1124,6 +1131,12 @@ impl VoiceDriver {
                 event: Box::new(event),
             });
         }
+    }
+
+    /// The user's last speech no realtime reply has answered.
+    pub(crate) fn unanswered_user_speech(&self) -> Option<Ts> {
+        let a = &self.activity;
+        a.realtime_activity()?.heard.last_speech(&a.audio_recognition)
     }
 
     fn close_realtime_player(&mut self, speech: SpeechId) {

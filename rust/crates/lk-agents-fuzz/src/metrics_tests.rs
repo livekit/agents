@@ -674,7 +674,6 @@ mod reply_latency_follows_the_user_turn {
     /// A realtime model's reply to a turn its server heard carries the turn's e2e latency.
     /// https://github.com/livekit/agents/pull/7719
     #[test]
-    #[ignore = "https://github.com/livekit/agents/pull/7719 reproduces: a realtime turn's user message has no stopped_speaking_at and its reply no e2e_latency"]
     fn a_realtime_reply_has_the_turns_latency() {
         let setup = Setup {
             realtime: Some(RealtimeSetup { turn_detection: true, ..RealtimeSetup::default() }),

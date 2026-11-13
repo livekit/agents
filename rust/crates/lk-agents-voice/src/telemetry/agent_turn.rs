@@ -204,6 +204,13 @@ impl AgentTurnSpan {
         trace.event(&self.span, generation(&self.id, step));
     }
 
+    /// A realtime reply answers the user's speech that ended at `stopped` (wall seconds): its
+    /// first frame measures the end-to-end latency from there.
+    pub(crate) fn answers_user_stop(&mut self, stopped: f64) {
+        let user = self.reply.user.get_or_insert_with(MetricsReport::default);
+        user.stopped_speaking_at.get_or_insert(stopped);
+    }
+
     /// The speech's first audio frame: `wall` dates it for the end-to-end latency. The caller
     /// ended every other turn's `agent_speaking` first.
     pub(crate) fn speaking(

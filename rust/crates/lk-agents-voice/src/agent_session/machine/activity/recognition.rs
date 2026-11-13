@@ -326,8 +326,9 @@ impl VoiceDriver {
                 }
                 let eff = self.activity.audio_recognition.clear_user_turn(now);
                 self.apply_recognition_effects(eff);
-                // The server holds its own input buffer.
-                if self.activity.realtime().is_some() {
+                // The server holds its own input buffer; what it held is answered.
+                if let Some(rt) = self.activity.realtime_activity_mut() {
+                    rt.heard.answered(now);
                     self.rt_send(lk_agents_abi::RealtimeCommand::ClearAudio(
                         lk_agents_abi::llm::realtime::ClearAudio {},
                     ));
@@ -387,6 +388,11 @@ impl VoiceDriver {
     }
 
     pub(crate) fn on_end_of_turn(&mut self, now: Ts, mut info: EndOfTurnInfo) {
+        // The commit resets recognition's anchors: a realtime reply measures from this speech.
+        let last = self.unanswered_user_speech();
+        if let Some(rt) = self.activity.realtime_activity_mut() {
+            rt.heard.turn_committed(last);
+        }
         // AMD already called the line a machine: the turn is committed, no reply is made for it
         // and a preemptive one goes.
         if self.session.amd_skips_replies {
@@ -662,6 +668,9 @@ impl VoiceDriver {
             let server_segments =
                 rt.session.capabilities.turn_detection && !rt.turn_detection_disabled;
             if skip_reply {
+                if let Some(rt) = self.activity.realtime_activity_mut() {
+                    rt.heard.answered(now);
+                }
                 if !server_segments {
                     self.rt_send(lk_agents_abi::RealtimeCommand::CommitAudio(
                         lk_agents_abi::llm::realtime::CommitAudio {},

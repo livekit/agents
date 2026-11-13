@@ -214,6 +214,17 @@ impl AudioRecognition {
         self.last_speaking_time
     }
 
+    /// The last speech instant when it belongs to the current turn.
+    pub fn turn_last_speaking_time(&self) -> Option<Ts> {
+        let (start, last) = (self.speech_start_time?, self.last_speaking_time?);
+        (last >= start).then_some(last)
+    }
+
+    /// Speech opened a turn whose anchors the recognizer still holds.
+    pub fn turn_started(&self) -> bool {
+        self.speech_start_time.is_some()
+    }
+
     /// `commit_user_turn` skips its flush within 0.5 s of it.
     pub fn last_final_transcript_time(&self) -> Option<Ts> {
         self.last_final_transcript_time
