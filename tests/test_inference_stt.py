@@ -27,7 +27,7 @@ from livekit.agents import (
     InterruptionOptions,
     TurnHandlingOptions,
 )
-from livekit.agents.inference._utils import HEADER_SESSION_ID
+from livekit.agents.inference._utils import HEADER_CLIENT_FEATURE, HEADER_SESSION_ID
 from livekit.agents.inference.stt import (
     STT,
     FallbackModel,
@@ -702,10 +702,12 @@ class _Gateway:
         self.answers_pings = answers_pings
         self.sockets: list[_GatewaySocket] = []
         self.urls: list[str] = []
+        self.headers: list[dict[str, str]] = []
         self.seen: defaultdict[str, asyncio.Event] = defaultdict(asyncio.Event)
 
     async def ws_connect(self, url: str, **kwargs: Any) -> _GatewaySocket:
         self.urls.append(url)
+        self.headers.append(dict(kwargs.get("headers") or {}))
         socket = _GatewaySocket(self, len(self.sockets))
         self.sockets.append(socket)
         return socket
@@ -806,6 +808,29 @@ async def test_connection_session_id_becomes_the_request_id(
         assert stream._request_id == "inference_connection"
     finally:
         await stream.aclose()
+
+
+async def test_extra_headers_go_out_below_the_sdk_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _Gateway()
+    monkeypatch.setattr(
+        inference_stt, "get_inference_headers", lambda: {HEADER_SESSION_ID: "inference_sdk"}
+    )
+    monkeypatch.setattr(inference_stt, "create_access_token", lambda *_args: "token")
+    stream = _gateway_stt(gateway).stream(
+        conn_options=_no_retry(),
+        extra_headers={HEADER_CLIENT_FEATURE: "AMD", HEADER_SESSION_ID: "caller_value"},
+    )
+    try:
+        await _live(stream)
+    finally:
+        await stream.aclose()
+
+    headers = gateway.headers[0]
+    assert headers[HEADER_CLIENT_FEATURE] == "AMD"
+    assert headers[HEADER_SESSION_ID] == "inference_sdk"
+    assert headers["Authorization"] == "Bearer token"
 
 
 @pytest.mark.parametrize(
