@@ -128,6 +128,7 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `configuration_endpoint` | `ConfigurationEndpoint` \| `None` | Endpoint the agent calls to fetch per-conversation configuration |
 | `additional_params` | `dict[str, Any]` | Additional runtime parameters forwarded to Phonic |
 | `external_id` | `str` | Your own identifier for the conversation, stored on the Phonic conversation |
+| `forward_keypad_input` | `bool` | Send the caller's keypad presses to the agent (default `False`; see [Caller keypad input](#caller-keypad-input)) |
 | `configs_for_tools` | `list[PhonicToolConfig]` | Per-tool behavior overrides (see [Per-tool configuration](#per-tool-configuration)) |
 
 ### Per-tool configuration
@@ -176,4 +177,10 @@ If you have Webhook tools set up on the Phonic platform, you can use `phonic_too
 
 ### Caller keypad input
 
-On phone calls, the plugin forwards the caller's keypad presses to the agent. Only presses from the participant the session is linked to are forwarded. Digits are buffered until the caller pauses for 2 seconds (or presses 32 keys), then sent as one user turn, `(User pressed 1234# on the keypad: 5 keys)`, which the agent replies to. Every key, including `*` and `#`, is passed through as typed. You don't need your own `sip_dtmf_received` handler for this.
+Set `forward_keypad_input=True` to send the caller's keypad presses on phone calls to the agent. It is off by default.
+
+```python
+RealtimeModel(forward_keypad_input=True)
+```
+
+Only presses from the participant the session is linked to are forwarded. Digits are buffered until the caller pauses for 2 seconds (or presses 32 keys), then sent as one user turn, `(User pressed 1234# on the keypad: 5 keys)`, which the agent replies to. Every key, including `*` and `#`, is passed through as typed. Leave the option off if your agent already handles keypad input itself (e.g. with `GetDtmfTask` or a `sip_dtmf_received` handler), or it will get each press twice.

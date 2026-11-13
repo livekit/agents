@@ -182,6 +182,7 @@ class _RealtimeOptions:
     configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None]
     additional_params: NotGivenOr[dict[str, typing.Any]]
     external_id: NotGivenOr[str]
+    forward_keypad_input: bool
     configs_for_tools: NotGivenOr[list[PhonicToolConfig]]
     forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
@@ -258,6 +259,7 @@ class RealtimeModel(llm.RealtimeModel):
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
         additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
         external_id: NotGivenOr[str] = NOT_GIVEN,
+        forward_keypad_input: bool = False,
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -321,6 +323,9 @@ class RealtimeModel(llm.RealtimeModel):
             additional_params: Additional runtime parameters forwarded to Phonic.
             external_id: Your own identifier for the conversation (e.g. a call or session ID),
                 stored on the Phonic conversation so you can look it up later.
+            forward_keypad_input: When True, the caller's keypad presses are sent to the agent as
+                user turns. Leave it off if your agent already handles keypad input itself (e.g.
+                with ``GetDtmfTask`` or a ``sip_dtmf_received`` handler).
             configs_for_tools: Per-tool behavior overrides, one ``PhonicToolConfig`` per tool
                 (keyed by ``name``); omitted fields fall back to the plugin defaults. See the
                 README for the available fields.
@@ -404,6 +409,7 @@ class RealtimeModel(llm.RealtimeModel):
             configuration_endpoint=configuration_endpoint,
             additional_params=additional_params,
             external_id=external_id,
+            forward_keypad_input=forward_keypad_input,
             configs_for_tools=configs_for_tools,
             forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
@@ -572,7 +578,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._keypad_flush_handle: asyncio.TimerHandle | None = None
         self._keypad_send_tasks: set[asyncio.Task[None]] = set()
         # Keypad presses come from the job's agent session: its room and its linked participant.
-        self._agent_session = _job_agent_session()
+        self._agent_session = _job_agent_session() if self._opts.forward_keypad_input else None
         self._keypad_room_io: RoomIO | None = None
         if self._agent_session is not None:
             try:
