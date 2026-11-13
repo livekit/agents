@@ -27,6 +27,8 @@ class RealtimeModelFallbackAdapter(RealtimeModel[Literal["realtime_availability_
     if TYPE_CHECKING:
         _members: list[RealtimeModel]
 
+        def _core_failed(self, error: BaseException, recoverable: bool) -> None: ...
+
     def __init__(
         self,
         models: Sequence[RealtimeModel],

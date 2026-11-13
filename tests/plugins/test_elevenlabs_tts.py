@@ -21,6 +21,10 @@ from livekit.plugins.elevenlabs import TTS, TTSEncoding, VoiceSettings
 
 PCM = b"\x0b\x00" * 4800
 OPTIONS = APIConnectOptions(max_retry=0, read_timeout=0.5)
+# a provider gone quiet times out at once
+QUICK_TIMEOUT = APIConnectOptions(max_retry=0, read_timeout=0.05)
+# chunks paced under the read timeout, together well over it
+PACED, PACING = APIConnectOptions(max_retry=0, read_timeout=0.2), 0.08
 FLASH, DIALOGUE = "eleven_flash_v2_5", "eleven_v3"
 PCM_RATES: dict[int, TTSEncoding] = {16000: "pcm_16000", 24000: "pcm_24000", 44100: "pcm_44100"}
 
@@ -373,7 +377,7 @@ async def test_silence_after_the_last_input_times_out(model: str, audio_first: b
         provider = TTS(
             api_key="key", model=model, encoding="pcm_24000", base_url=url, http_session=session
         )
-        async with provider.stream(conn_options=OPTIONS) as stream:
+        async with provider.stream(conn_options=QUICK_TIMEOUT) as stream:
             stream.push_text("Hello.")
             stream.end_input()
             with pytest.raises(APIError) as error:
@@ -396,7 +400,7 @@ async def test_audio_arriving_slower_than_the_whole_read_timeout_completes(model
             if packet.get("close_context"):
                 ctx = {"context_id": packet["context_id"]}
                 for _ in range(4):
-                    await asyncio.sleep(0.25)  # the provider's pacing, under the 0.5 s timeout
+                    await asyncio.sleep(PACING)  # the provider's pacing, under the read timeout
                     await ws.send_json({**ctx, "audio": b64(chunk)})
                 await ws.send_json({**ctx, final(model): True})
         return ws
@@ -405,7 +409,7 @@ async def test_audio_arriving_slower_than_the_whole_read_timeout_completes(model
         provider = TTS(
             api_key="key", model=model, encoding="pcm_24000", base_url=url, http_session=session
         )
-        async with provider.stream(conn_options=OPTIONS) as stream:
+        async with provider.stream(conn_options=PACED) as stream:
             stream.push_text("Hello.")
             stream.end_input()
             frames = await collect(stream)

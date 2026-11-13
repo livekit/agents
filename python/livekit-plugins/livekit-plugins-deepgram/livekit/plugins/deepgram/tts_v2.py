@@ -14,6 +14,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -202,6 +203,8 @@ class TTSv2(tts.TTS):
         encoding: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         bit_rate: NotGivenOr[int | None] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -209,7 +212,12 @@ class TTSv2(tts.TTS):
             encoding (str): Audio encoding to use.
             sample_rate (int): Sample rate of audio in Hz.
             bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3).
+            sentence_tokenizer (tokenize.SentenceTokenizer): What splits the text into the chunks
+                the TTS is sent.
+            pacing (tts.SentenceStreamPacer | None): A ``SentenceStreamPacer``, or ``None`` to send
+                each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         connection_params_changed = False
         if is_given(model):
             self._opts.model = model

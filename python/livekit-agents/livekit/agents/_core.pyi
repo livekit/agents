@@ -213,10 +213,10 @@ from ._generated._core_tokenize import (
 )
 from ._generated._core_tts import (
     Markup as Markup,
+    TtsOptionsCell as TtsOptionsCell,
     TtsStream as TtsStream,
     TtsStreamAdapter as TtsStreamAdapter,
     chat_message_text_content as chat_message_text_content,
-    default_tts_pacing as default_tts_pacing,
     split_expr_markup as split_expr_markup,
     strip_expr_markup as strip_expr_markup,
     supported_nonverbals as supported_nonverbals,

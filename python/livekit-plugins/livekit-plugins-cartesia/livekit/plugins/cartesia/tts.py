@@ -31,6 +31,7 @@ from livekit.agents import (
     APIStatusError,
     LanguageCode,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -236,6 +237,8 @@ class TTS(tts.TTS):
         volume: NotGivenOr[float] = NOT_GIVEN,
         pronunciation_dict_id: NotGivenOr[str] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -250,7 +253,12 @@ class TTS(tts.TTS):
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
             emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
             pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations.
+            sentence_tokenizer (tokenize.SentenceTokenizer, optional): What splits the text into the
+                chunks the TTS is sent.
+            pacing (tts.SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or
+                ``None`` to send each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(model):
             self._opts.model = model
         if is_given(language):

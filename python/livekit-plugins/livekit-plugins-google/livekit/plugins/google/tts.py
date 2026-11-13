@@ -34,6 +34,7 @@ from livekit.agents import (
     APIConnectOptions,
     APITimeoutError,
     LanguageCode,
+    tokenize,
     tts,
     utils,
 )
@@ -231,6 +232,8 @@ class TTS(tts.TTS):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
         volume_gain_db: NotGivenOr[float] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
@@ -243,7 +246,12 @@ class TTS(tts.TTS):
             prompt (str, optional): Style prompt for Gemini TTS models.
             speaking_rate (float, optional): Speed of speech.
             volume_gain_db (float, optional): Volume gain in decibels.
+            sentence_tokenizer (tokenize.SentenceTokenizer, optional): What splits the text into the
+                chunks the TTS is sent.
+            pacing (tts.SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or
+                ``None`` to send each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         params: dict[str, Any] = {}
         if is_given(language):
             params["language_code"] = LanguageCode(language)

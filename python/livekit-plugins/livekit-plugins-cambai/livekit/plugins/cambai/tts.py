@@ -24,6 +24,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -147,8 +148,11 @@ class TTS(tts.TTS):
         language: str | None = None,
         model: SpeechModel | None = None,
         user_instructions: str | None = None,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options dynamically."""
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if voice_id is not None:
             self._opts.voice_id = voice_id
         if language is not None:

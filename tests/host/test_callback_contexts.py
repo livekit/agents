@@ -616,9 +616,11 @@ class Collector:
             if span.get("name") == name and span.get("parentSpanId") in self.spans
         }
 
-    async def until_exported(self, *names: str) -> None:
-        while not all(any(s.get("name") == n for s in self.spans.values()) for n in names):
-            await asyncio.sleep(0.1)
+    async def exported(self, *names: str) -> None:
+        """Flushes every span recorded so far to this endpoint; they include ``names``."""
+        await telemetry._shutdown()
+        missing = [n for n in names if not any(s.get("name") == n for s in self.spans.values())]
+        assert not missing, f"spans never exported: {missing}"
 
 
 @pytest.fixture
@@ -713,7 +715,7 @@ async def exported_call(collector: Collector) -> Collector:
         await session.start(agent)
         audio.speak(0.4)
         await replied.wait()
-    await collector.until_exported("app.on_exit", "app.tts_node", "user_turn", "agent_session")
+    await collector.exported("app.on_exit", "app.tts_node", "user_turn", "agent_session")
     return collector
 
 
@@ -766,7 +768,7 @@ async def test_a_reply_asked_for_right_after_start_is_exported_in_the_sessions_t
     async with session:
         await session.start(Agent(instructions="Greet the caller."))
         await session.generate_reply(instructions="greet the caller")
-    await collector.until_exported("agent_turn", "agent_session")
+    await collector.exported("agent_turn", "agent_session")
 
     traces = {s["name"]: s["traceId"] for s in collector.spans.values()}
     assert traces["agent_turn"] == traces["agent_session"]
@@ -790,7 +792,7 @@ async def test_a_jobs_callback_spans_nest_under_their_job_spans(
             await asyncio.sleep(0)
 
     await run_job(entrypoint, agent_proto.Job(id="AJ_parent"), session_end=session_end)
-    await collector.until_exported("app.entrypoint", "app.on_session_end")
+    await collector.exported("app.entrypoint", "app.on_session_end")
 
     assert collector.parents_of("app.entrypoint") == {"job_entrypoint"}
     assert collector.parents_of("app.on_session_end") == {"on_session_end"}
@@ -822,8 +824,7 @@ async def test_framework_shutdown_leaves_the_applications_tracer_provider_open(
 
     await run_job(entrypoint, agent_proto.Job(id="AJ_first"))
     await run_job(entrypoint, agent_proto.Job(id="AJ_second"))
-    await telemetry._shutdown()
-    await collector.until_exported("customer.job")
+    await collector.exported("customer.job")
     provider.shutdown()
 
     assert closed == [True], "the framework closed the application's provider"

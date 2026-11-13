@@ -58,7 +58,12 @@ adapter) when a model goes down or comes back. `tts.StreamAdapter` and
 
 `tts.synthesize(text)` and `tts.stream()` are the framework's for every TTS: the text goes through
 the TTS's stage (see [sentences for the voice](lexer.md#sentences-for-the-voice)) and each attempt
-is retried within `conn_options`. `tts.options` is a `TTSOptions` that sets how:
+is retried within `conn_options`; each retried attempt is a recoverable `error` event and the error
+the request raises is its one final event. `tts.options` is a read-only `TTSOptions`, changed with
+`tts.update_options(sentence_tokenizer=, pacing=)`, which every TTS takes beside its provider's
+own options. A change reaches the TTS's next synthesis wherever the TTS was handed (a session, a
+`StreamAdapter`, a `FallbackAdapter`); one already open keeps what it started with. The options
+set how:
 
 - `sentence_tokenizer`: what splits the text, `tokenize.SentenceTokenizer()` by default. The
   built-in runs natively with its settings; a subclass that overrides `tokenize` or `stream` runs
@@ -85,7 +90,9 @@ number such as `1,000`).
 
 `tts.StreamAdapter(tts=)` gives a non-streaming TTS a streaming interface: each chunk is
 synthesized on its own with the wrapped TTS, retried within `conn_options` while it has delivered
-no audio, as one segment whose last frame is final. Its `options` are the wrapped TTS's.
+no audio, as one segment whose last frame is final. Its `options` are the wrapped TTS's, and its
+`update_options` changes them. A `tts.FallbackAdapter`'s members each prepare their text by their
+own options: its `options` are the serving member's, and its `update_options` sets every member's.
 
 A plugin implements one provider attempt: `_synthesize(chunk, conn_options=)` for a whole text,
 and `_stream(conn_options=)` when the service synthesizes text as it arrives. Its stream's `input`

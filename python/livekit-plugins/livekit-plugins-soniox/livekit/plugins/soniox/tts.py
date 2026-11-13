@@ -31,6 +31,7 @@ from livekit.agents import (
     APIStatusError,
     ProviderAttempts,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -213,6 +214,8 @@ class TTS(tts.TTS):
         speed: NotGivenOr[float] = NOT_GIVEN,
         reduce_silence: NotGivenOr[bool] = NOT_GIVEN,
         stream_idle_timeout: NotGivenOr[float] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -223,7 +226,11 @@ class TTS(tts.TTS):
             reduce_silence: Shorten the pauses between words (models with
                 supports_silence_reduction only).
             stream_idle_timeout: Idle seconds before the current stream is finalized.
+            sentence_tokenizer: What splits the text into the chunks the TTS is sent.
+            pacing: A ``SentenceStreamPacer``, or ``None`` to send each chunk as soon as it is
+                split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         _validate_reduce_silence(
             model if is_given(model) else self._opts.model,
             reduce_silence if is_given(reduce_silence) else self._opts.reduce_silence,

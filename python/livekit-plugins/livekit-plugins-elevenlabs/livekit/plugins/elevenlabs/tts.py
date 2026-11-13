@@ -266,6 +266,8 @@ class TTS(tts.TTS):
         pronunciation_dictionary_locators: NotGivenOr[
             list[PronunciationDictionaryLocator]
         ] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -274,7 +276,12 @@ class TTS(tts.TTS):
             model (NotGivenOr[TTSModels | str]): TTS model to use.
             language (NotGivenOr[str]): Language code for the TTS model.
             pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator]]): List of pronunciation dictionary locators.
+            sentence_tokenizer (NotGivenOr[tokenize.SentenceTokenizer]): What splits the text into
+                the chunks the TTS is sent.
+            pacing (NotGivenOr[tts.SentenceStreamPacer | None]): A ``SentenceStreamPacer``, or
+                ``None`` to send each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         changed = False
 
         if is_given(model) and model != self._opts.model:

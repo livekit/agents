@@ -35,8 +35,8 @@ API_KEY, API_SECRET = "pod-key", "pod-secret-pod-secret-pod-secret-pod"
 REGION = "us-east"
 WORKER_TOKEN = "wt+pod/token="  # characters a query string must escape
 IN_CLUSTER_INFERENCE = "http://inference.livekit.svc.cluster.local/v1"
-RECONNECT_GRACE = 30.0  # seconds a registered pod may stay disconnected and still be live
-DRAIN_TIMEOUT = 2.0  # the drain a test cuts short, instead of the production hour
+DRAIN_TIMEOUT = 0.5  # the drain a test cuts short, instead of the production hour
+PROCESS_EXIT_TIMEOUT = 0.5  # what a job process is given to exit, instead of the production 10 s
 SHUTDOWN_SLACK = 12.0  # what the pod may take past its drain: job and pool cleanup
 # `livekit.WorkerInfo`'s JSON tags: the only keys the watcher decodes
 WORKER_INFO_KEYS = {
@@ -113,7 +113,7 @@ class Pod:
 
 @pytest.fixture
 async def pod(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator[Pod]:
-    """The pod, its environment updated with ``request.param`` when parametrized indirectly."""
+    """The pod, ``start`` given the flags in ``request.param`` when parametrized indirectly."""
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         health_port = probe.getsockname()[1]
@@ -141,11 +141,17 @@ async def pod(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator[P
             "PYTHONUNBUFFERED": "1",
             "POD_DIR": str(tmp_path),
             "POD_HEALTH_PORT": str(health_port),
-            **getattr(request, "param", {}),
         }
         app = str(Path(__file__).with_name("cloud_pod.py"))
         async with (
-            child_process(sys.executable, app, "start", log=tmp_path / "pod.log", env=env) as child,
+            child_process(
+                sys.executable,
+                app,
+                "start",
+                *getattr(request, "param", ()),
+                log=tmp_path / "pod.log",
+                env=env,
+            ) as child,
             httpx.AsyncClient(
                 base_url=f"http://127.0.0.1:{health_port}", trust_env=False
             ) as health,
@@ -195,24 +201,26 @@ async def test_a_fresh_pod_takes_its_first_call_at_once(pod: Pod) -> None:
     assert (await pod.livekit.dispatch(JOB)).available
 
 
-async def test_a_pod_disconnected_past_the_grace_fails_liveness(pod: Pod) -> None:
-    """Catches: a pod that cannot reach LiveKit reported live forever (kubelet never restarts it),
-    a short reconnect failing liveness, or a pod back on LiveKit still failing it."""
+async def test_a_disconnected_pod_stays_live_and_takes_no_traffic_until_it_reconnects(
+    pod: Pod,
+) -> None:
+    """Catches: a dropped connection never reaching the probes (a pod that cannot reach LiveKit
+    reported ready, or live forever), a short reconnect failing liveness, or a pod back on
+    LiveKit still failing readiness. The grace past which `/` fails is `health_tests.rs`'s, on a
+    paused clock."""
     await pod.registered()
-    await pod.until_health("/", 200, STARTUP_SECONDS)
+    await pod.until_health("/ready", 200, STARTUP_SECONDS)
 
     pod.livekit.hold_registration()
     await pod.livekit.disconnect()
-    dropped = asyncio.get_running_loop().time()
-    await asyncio.sleep(2)
+    reconnecting = await pod.until_health("/ready", 503, STARTUP_SECONDS)
+    assert reconnecting.text == "reconnecting"
     assert (await pod.health.get("/")).status_code == 200, "a short reconnect stays live"
-    failed = await pod.until_health("/", 503, RECONNECT_GRACE + STARTUP_SECONDS)
-    assert asyncio.get_running_loop().time() - dropped >= RECONNECT_GRACE
-    assert failed.text == "disconnected"
 
     pod.livekit.answer_registration()
     await pod.livekit.until_registered()
-    assert (await pod.until_health("/", 200, STARTUP_SECONDS)).text == "OK"
+    assert (await pod.until_health("/ready", 200, STARTUP_SECONDS)).text == "OK"
+    assert (await pod.health.get("/")).text == "OK"
 
 
 async def test_a_pod_that_reconnects_mid_call_reports_the_call_again(pod: Pod) -> None:
@@ -298,7 +306,16 @@ async def test_sigterm_drains_the_call_then_exits(pod: Pod) -> None:
     assert pod.livekit.job_statuses[JOB.id][-1] == agent.JobStatus.JS_SUCCESS
 
 
-@pytest.mark.parametrize("pod", [{"POD_DRAIN_TIMEOUT": str(DRAIN_TIMEOUT)}], indirect=True)
+@pytest.mark.parametrize(
+    "pod",
+    [
+        (
+            f"--drain-timeout={DRAIN_TIMEOUT}",
+            f"--shutdown-process-timeout={PROCESS_EXIT_TIMEOUT}",
+        )
+    ],
+    indirect=True,
+)
 async def test_a_call_that_outlives_the_drain_is_ended_and_the_pod_exits(pod: Pod) -> None:
     """Catches: a shutdown that waits forever on a call that never ends (the pod sits in
     Terminating until SIGKILL), or its job process left running. As in 1.x, the connection closes
@@ -308,7 +325,7 @@ async def test_a_call_that_outlives_the_drain_is_ended_and_the_pod_exits(pod: Po
 
     await pod.draining()
 
-    assert await pod.exit_code(within=DRAIN_TIMEOUT + SHUTDOWN_SLACK) == 0
+    assert await pod.exit_code(within=DRAIN_TIMEOUT + PROCESS_EXIT_TIMEOUT + SHUTDOWN_SLACK) == 0
     assert await asyncio.to_thread(gone, seen["pid"], 5), "the call's job process outlived the pod"
 
 

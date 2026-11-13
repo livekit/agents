@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from livekit.agents import Agent, VoiceSession
+from livekit.agents.voice import SpeechHandle
 from livekit.agents.voice.room_io import RoomOptions
 from livekit.protocol.agent_pb.agent_session import ASSISTANT, SessionRequest
-from tests.fakes import FakeLLM, FakeTTS, until
+from tests.fakes import FakeLLM, FakeTTS
 
 from .conftest import ConsolePeer
 
@@ -52,14 +55,16 @@ async def test_a_message_typed_in_the_console_is_answered_in_its_response(
     assert replies == ["You said: hello there"]
 
 
-def greeting_agent() -> Agent:
+def greeting_agent() -> tuple[Agent, asyncio.Future[SpeechHandle]]:
+    """An agent that greets on enter, and the greeting's speech once it is said."""
     agent = Agent(instructions="Answer.")
+    greeting: asyncio.Future[SpeechHandle] = asyncio.get_running_loop().create_future()
 
     @agent.on_enter
     async def greet(session: VoiceSession) -> None:
-        session.say("Welcome to the desk.")
+        greeting.set_result(session.say("Welcome to the desk."))
 
-    return agent
+    return agent, greeting
 
 
 def said(session: VoiceSession) -> list[str | None]:
@@ -70,8 +75,9 @@ async def test_agent_initiated_messages_reach_the_console_once(console: ConsoleP
     """The on_enter greeting and a later say() reach the history and the CLI exactly once each.
     https://github.com/livekit/agents/issues/6577"""
     session = VoiceSession(tts=FakeTTS(streaming=False))
-    await session.start(greeting_agent())
-    await until(lambda: "Welcome to the desk." in said(session), "the greeting was said")
+    agent, greeting = greeting_agent()
+    await session.start(agent)
+    await (await greeting)
 
     await session.say("Are you still there?")
     await session.aclose()
@@ -91,8 +97,9 @@ async def test_agent_initiated_messages_reach_a_text_only_console_once(
     """Without a TTS, the greeting and a later say() reach the history and the CLI once each.
     https://github.com/livekit/agents/issues/6577"""
     session = VoiceSession()
-    await session.start(greeting_agent(), room_options=RoomOptions(audio_output=False))
-    await until(lambda: "Welcome to the desk." in said(session), "the greeting was said")
+    agent, greeting = greeting_agent()
+    await session.start(agent, room_options=RoomOptions(audio_output=False))
+    await (await greeting)
 
     await session.say("Are you still there?")
     await session.aclose()

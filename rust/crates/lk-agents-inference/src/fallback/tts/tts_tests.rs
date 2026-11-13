@@ -97,11 +97,11 @@ impl Tts for FakeTts {
         self.channels
     }
     /// Unpaced: the chain's clock is virtual, so a paced chunk would wait for good.
-    fn options(&self) -> lk_agents_abi::tts::types::TtsOptions {
-        lk_agents_abi::tts::types::TtsOptions {
+    fn options(&self) -> Arc<dyn lk_agents_abi::tts::types::SharedTtsOptions> {
+        Arc::new(lk_agents_abi::tts::types::TtsOptions {
             pacing: None,
             ..lk_agents_abi::tts::types::TtsOptions::default()
-        }
+        })
     }
     fn synthesize<'a>(
         &'a self,

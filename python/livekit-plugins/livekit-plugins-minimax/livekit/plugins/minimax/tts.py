@@ -15,6 +15,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -290,8 +291,11 @@ class TTS(tts.TTS):
         intensity: NotGivenOr[int] = NOT_GIVEN,
         timbre: NotGivenOr[int] = NOT_GIVEN,
         language_boost: NotGivenOr[TTSLanguageBoost | None] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update the TTS configuration options."""
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if utils.is_given(model):
             self._opts.model = model
 

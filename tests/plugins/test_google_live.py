@@ -58,7 +58,8 @@ async def test_reply_requests_settle_on_output_or_terminal_rejection(
         await gemini_live.send(
             serverContent={"turnComplete": True, "turnCompleteReason": "MALFORMED_FUNCTION_CALL"}
         )
-        await until(pending.done, "terminal rejection must resolve the waiting caller", timeout=1)
+        await gemini_live.ready(session, "after-the-rejection")  # the rejection was read
+        assert pending.done(), "terminal rejection must resolve the waiting caller"
         with pytest.raises(llm.RealtimeError, match="MALFORMED_FUNCTION_CALL"):
             pending.result()
         return

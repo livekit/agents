@@ -29,6 +29,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
@@ -240,7 +241,10 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         loudness_normalization: NotGivenOr[bool] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(model):

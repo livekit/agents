@@ -262,16 +262,23 @@ async def test_a_sessions_vad_meters_its_inferences_on_itself() -> None:
     """The VAD a session drives emits its own ``metrics_collected`` with its inference count."""
     vad = FakeVAD()
     metrics: list[VADMetrics] = []
-    vad.on("metrics_collected", metrics.append)
+    reported = asyncio.Event()
+
+    @vad.on("metrics_collected")
+    def collected(event: VADMetrics) -> None:
+        metrics.append(event)
+        reported.set()
+
     session = VoiceSession(vad=vad, aec_warmup_duration=None)
     microphone = FakeAudioInput()
     session.input.audio = microphone
 
     async with session:
         await session.start(Agent(instructions="Listen."))
-        while not metrics:  # a person speaking in real time, until the VAD reports
+        # a second of speech: the VAD reports once per 1 / update_interval inferences
+        for _ in range(10):
             microphone.push(audio_frame(0.1))
-            await asyncio.sleep(0.1)
+        await reported.wait()
 
     assert metrics[0].inference_count > 0
 

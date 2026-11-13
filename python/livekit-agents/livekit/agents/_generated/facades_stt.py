@@ -31,6 +31,8 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
     if TYPE_CHECKING:
         _members: list[STT[Any]]
 
+        def _core_failed(self, error: BaseException, recoverable: bool) -> None: ...
+
     def __init__(
         self,
         stt: Sequence[STT[Any]],

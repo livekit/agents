@@ -29,7 +29,7 @@ from urllib.parse import urljoin
 
 from pydantic import TypeAdapter
 
-from livekit.agents import ProviderAttempts, http, tts, utils
+from livekit.agents import ProviderAttempts, http, tokenize, tts, utils
 from livekit.agents._bindings import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -1036,6 +1036,8 @@ class TTS(tts.TTS):
         timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS configuration options.
@@ -1059,7 +1061,12 @@ class TTS(tts.TTS):
                 ("SYNC" or "ASYNC").
             buffer_char_threshold (int, optional): For streaming, min characters before triggering.
             max_buffer_delay_ms (int, optional): For streaming, max time to buffer.
+            sentence_tokenizer (tokenize.SentenceTokenizer, optional): What splits the text into the
+                chunks the TTS is sent.
+            pacing (tts.SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or
+                ``None`` to send each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(voice):
             self._opts.voice = voice
         if is_given(model):

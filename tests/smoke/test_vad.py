@@ -44,6 +44,8 @@ def listening_session(
         tts=tts or FakeTTS(),
         turn_handling={"turn_detection": "vad", "endpointing": {"min_delay": 0.1}},
         aec_warmup_duration=None,
+        # the speech these tests hear has no words left to transcribe once the session closes
+        session_close_transcript_timeout=0,
     )
     session.input.audio = microphone
     session.output.audio = FakeAudioOutput()
@@ -51,10 +53,9 @@ def listening_session(
 
 
 async def talk(microphone: FakeAudioInput, voice: AsyncIterable[rtc.AudioFrame]) -> None:
-    """Plays ``voice`` into the microphone in real time, as a person speaks, then pauses."""
+    """Plays ``voice`` into the microphone, as a person speaks, then pauses."""
     async for frame in voice:
         microphone.push(frame)
-        await asyncio.sleep(frame.duration)
     microphone.speak(0)
 
 

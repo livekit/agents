@@ -34,9 +34,11 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from ._utils import (
     http_stream_url,
@@ -168,8 +170,11 @@ class TTS(tts.TTS):
         language: TTSLanguages | str | None = None,
         sample_rate: TTSSampleRates | int | None = None,
         speed: float | None = None,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update synthesis options for streams created after this call."""
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         next_opts = replace(self._opts)
         next_sample_rate = self._sample_rate
         if model is not None:

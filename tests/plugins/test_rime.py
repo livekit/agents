@@ -15,7 +15,7 @@ from google.protobuf import json_format
 from rime_api import text_to_speech_pb2 as proto
 
 from livekit.agents import APIConnectOptions, APIError, APIStatusError, http
-from livekit.agents.tts import ChunkedStream, SynthesizeStream
+from livekit.agents.tts import ChunkedStream, SynthesizeStream, TTSError
 from livekit.plugins.rime import TTS
 from tests.fakes import until
 
@@ -228,6 +228,8 @@ async def test_errors_do_not_expose_provider_or_transport_details(
         else:
             tts = TTS(api_key="key", base_url=str(url))
             stream = tts.synthesize("hello", conn_options=options)
+        events: list[TTSError] = []
+        tts.on("error", events.append)
 
         with pytest.raises(APIError) as raised:
             _ = [ev async for ev in stream]
@@ -244,4 +246,7 @@ async def test_errors_do_not_expose_provider_or_transport_details(
     assert SECRET not in rendered and SECRET not in repr(error)
     assert error.__cause__ is not None, "the cause is kept, redacted"
     assert SECRET not in caplog.text
-    assert sum("retrying in" in r.getMessage() for r in caplog.records) == (1 if retryable else 0)
+    # each retried attempt is a recoverable error event; the raised error is the one final event
+    assert [ev.recoverable for ev in events] == [True] * (requests - 1) + [False]
+    assert events[-1].error is error
+    assert all(SECRET not in repr(ev.error) for ev in events)

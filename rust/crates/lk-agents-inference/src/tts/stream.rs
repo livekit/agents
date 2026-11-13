@@ -27,16 +27,17 @@ impl TtsStream {
         Self { sink: sink.map(Arc::from), source: SharedStream::new(source, clock) }
     }
 
-    fn sink(&self) -> Result<&Arc<dyn StreamInput<String>>, ProviderError> {
-        if self.source.is_closed() {
-            return Err(lk_agents_abi::errors::ApiError::new("stream input is closed")
-                .with_retryable(false)
-                .into());
-        }
-        self.sink.as_ref().ok_or_else(|| {
+    /// Where text goes; `None` once the synthesis has ended, its audio or its failure being what
+    /// reading it reports: input after a provider's failure never masks that failure.
+    fn sink(&self) -> Result<Option<&Arc<dyn StreamInput<String>>>, ProviderError> {
+        let sink = self.sink.as_ref().ok_or_else(|| {
             let message = "this is a synthesize() stream; its text was given at the call";
-            HostError { class: "RuntimeError".into(), ..HostError::new(message) }.into()
-        })
+            ProviderError::from(HostError {
+                class: "RuntimeError".into(),
+                ..HostError::new(message)
+            })
+        })?;
+        Ok((!self.source.is_closed()).then_some(sink))
     }
 }
 
@@ -122,13 +123,15 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
     }
 
     fn push_text(&self, text: String) -> Result<(), ProviderError> {
-        self.sink()?.push(text)
+        self.sink()?.map_or(Ok(()), |sink| sink.push(text))
     }
     fn flush(&self) -> Result<(), ProviderError> {
-        self.sink()?.flush()
+        self.sink()?.map_or(Ok(()), |sink| sink.flush())
     }
     fn end_input(&self) -> Result<(), ProviderError> {
-        self.sink()?.end_input();
+        if let Some(sink) = self.sink()? {
+            sink.end_input();
+        }
         Ok(())
     }
     async fn recv(&self) -> Result<Option<SynthesizedAudio>, PullError> {
@@ -220,7 +223,10 @@ mod tests {
         );
         stream.push_text("hello".into()).unwrap();
         stream.aclose().await;
-        assert!(stream.push_text("late".into()).is_err());
+        // the synthesis is over: late input is taken and said by nothing, never an error that
+        // would mask how the synthesis ended
+        stream.push_text("late".into()).unwrap();
+        stream.end_input().unwrap();
         assert_eq!(*input.0.lock(), ["text"], "aclose must not speak pending text");
     }
 
@@ -243,12 +249,6 @@ mod tests {
 pub struct SynthesisChecks;
 
 impl lk_agents_abi::tts::streams::SynthesisChecks for SynthesisChecks {
-    fn default_tts_pacing(
-        capabilities: lk_agents_abi::TtsCapabilities,
-    ) -> Option<lk_agents_abi::tts::stream_pacer::SentenceStreamPacer> {
-        capabilities.default_pacing()
-    }
-
     fn validate_synthesis(
         text: &str,
         duration: f64,

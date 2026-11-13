@@ -13,7 +13,14 @@ from livekit.agents.tts import TTS, AudioEmitter
 from .connect import APIConnectOptions
 from .expressive import SpeechSteeringOptions
 from .stream_pacer import SentenceStreamPacer
-from .tts import MarkupInfo, MarkupSplit, SegmentCount, SynthesizedAudio, TTSCapabilities
+from .tts import (
+    MarkupInfo,
+    MarkupSplit,
+    SegmentCount,
+    SentenceTokenizerLeg,
+    SynthesizedAudio,
+    TTSCapabilities,
+)
 
 def chat_message_text_content(parts: Sequence[str], assistant: bool) -> str | None: ...
 
@@ -87,12 +94,33 @@ class TtsStream:
         """
     async def aclose(self) -> None: ...
 
-def default_tts_pacing(capabilities: TTSCapabilities) -> SentenceStreamPacer | None:
-    """``TTSOptions.pacing`` until it is set: a ``SentenceStreamPacer`` for a TTS without
-    streaming, ``None`` for a streaming one.
-    """
-
 def validate_synthesis(text: str, duration: float, segments: SegmentCount | None) -> str | None:
     """Why a synthesis of ``text`` that pushed ``duration`` seconds of audio (and, streamed,
     ``segments``) failed, or ``None``.
     """
+
+class TtsOptionsCell:
+    """`_core.TtsOptionsCell`: the options a `tts.TTS` owns (`tts.options`), shared with every
+    synthesis over it. A synthesis reads them when its stage opens; one already open keeps them.
+    """
+    def __new__(
+        cls,
+        sentence_tokenizer: object,
+        leg: SentenceTokenizerLeg,
+        capabilities: TTSCapabilities,
+    ) -> Self:
+        """Split by `sentence_tokenizer` (through `leg`, its core leg), paced as a TTS with
+        `capabilities` is by default.
+        """
+    @property
+    def sentence_tokenizer(self) -> object:
+        """The tokenizer as it was given."""
+    @property
+    def pacing(self) -> SentenceStreamPacer | None: ...
+    def set(
+        self,
+        sentence_tokenizer: object,
+        leg: SentenceTokenizerLeg,
+        pacing: SentenceStreamPacer | None,
+    ) -> None:
+        """Replace both at once."""

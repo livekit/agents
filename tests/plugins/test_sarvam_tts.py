@@ -35,6 +35,7 @@ def _speaking_peer(
     *,
     audio: bytes = PCM,
     close_when_done: bool = False,
+    closed: asyncio.Event | None = None,
 ) -> Handler:
     """Answers every flush with `audio` and a final event, recording configs and API keys."""
 
@@ -53,6 +54,8 @@ def _speaking_peer(
                 await ws.send_json({"type": "event", "data": {"event_type": "final"}})
                 if close_when_done:  # Sarvam drops a connection once it sits idle
                     await ws.close()
+                    if closed is not None:
+                        closed.set()
         return ws
 
     return handle
@@ -119,10 +122,11 @@ async def test_reconnects_after_the_server_drops_an_idle_socket() -> None:
     https://github.com/livekit/agents/issues/5681
     """
     keys: list[str] = []
-    async with _ws_url(_speaking_peer(keys=keys, close_when_done=True)) as url:
+    closed = asyncio.Event()
+    async with _ws_url(_speaking_peer(keys=keys, close_when_done=True, closed=closed)) as url:
         model = _tts(url)
         first = await _speak(model, "Hello there.")
-        await asyncio.sleep(0.2)  # the server's close reaches the pooled socket
+        await closed.wait()  # the pooled socket acknowledged the server's close
         second = await _speak(model, "Hello again.")
         await model.aclose()
 

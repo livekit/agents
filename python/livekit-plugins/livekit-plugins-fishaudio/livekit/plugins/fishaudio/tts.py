@@ -15,6 +15,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -281,7 +282,10 @@ class TTS(tts.TTS):
         min_chunk_length: NotGivenOr[int] = NOT_GIVEN,
         condition_on_previous_chunks: NotGivenOr[bool] = NOT_GIVEN,
         early_stop_threshold: NotGivenOr[float] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
             # The model is sent as a connection header at ws-handshake time, not in the

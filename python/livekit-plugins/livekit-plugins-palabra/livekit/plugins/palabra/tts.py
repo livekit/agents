@@ -45,6 +45,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
@@ -162,12 +163,15 @@ class TTS(tts.TTS):
         speed: NotGivenOr[float] = NOT_GIVEN,
         deaccent_strength: NotGivenOr[float] = NOT_GIVEN,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update synthesis options; unset arguments keep their current value.
 
         Each new stream receives the new settings. Streams already running keep
         the options they were created with.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(language):
             self._opts.language = language
         if is_given(voice_id):

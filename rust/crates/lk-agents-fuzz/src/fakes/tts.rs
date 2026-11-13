@@ -221,13 +221,13 @@ impl Tts for FakeTts {
         self.markup.to_owned()
     }
 
-    fn options(&self) -> lk_agents_abi::tts::types::TtsOptions {
-        lk_agents_abi::tts::types::TtsOptions {
+    fn options(&self) -> Arc<dyn lk_agents_abi::tts::types::SharedTtsOptions> {
+        Arc::new(lk_agents_abi::tts::types::TtsOptions {
             pacing: self
                 .pacing
                 .then(lk_agents_abi::tts::stream_pacer::SentenceStreamPacer::default),
             ..lk_agents_abi::tts::types::TtsOptions::default()
-        }
+        })
     }
 
     fn synthesize<'a>(

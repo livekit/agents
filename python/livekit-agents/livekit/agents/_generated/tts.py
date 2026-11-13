@@ -7,11 +7,12 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
-from dataclasses import dataclass, field, replace
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, field
+from functools import cached_property
 from inspect import get_annotations
 from types import TracebackType
-from typing import Annotated, Any, ClassVar, Generic, Literal, Never, Self, TypeAlias
+from typing import Annotated, Any, Generic, Literal, Never, Self, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict, TypeVar
@@ -193,7 +194,10 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._markup = self.Markup(self)
-        self._options = TTSOptions(pacing=_core.default_tts_pacing(capabilities))
+        tokenizer = tokenize.SentenceTokenizer()
+        self._options_cell = _core.TtsOptionsCell(
+            tokenizer, _bindings.core_leg(tokenizer), capabilities
+        )
 
     def _core_leg(self) -> object:
         """The Python provider implementation used by the native runtime's declared proxy."""
@@ -272,12 +276,34 @@ class TTS(
 
     @property
     def options(self) -> TTSOptions:
-        """How the framework prepares this TTS's text: its sentence tokenizer and pacing."""
-        return self._options
+        """How the framework prepares this TTS's text: its sentence tokenizer and pacing, changed
+        with ``update_options``."""
+        cell = self._core_options()
+        tokenizer = cast(tokenize.SentenceTokenizer, cell.sentence_tokenizer)
+        return TTSOptions(sentence_tokenizer=tokenizer, pacing=cell.pacing)
 
-    @options.setter
-    def options(self, value: TTSOptions) -> None:
-        self._options = value
+    def update_options(
+        self,
+        *,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[SentenceStreamPacer | None] = NOT_GIVEN,
+    ) -> None:
+        """Change how the framework prepares this TTS's text, from its next synthesis on, wherever
+        the TTS was handed: a session, a ``StreamAdapter`` or a ``FallbackAdapter``.
+
+        Args:
+            sentence_tokenizer: What splits the text into the chunks the TTS is sent.
+            pacing: A ``SentenceStreamPacer``, or ``None`` to send each chunk as soon as it is
+                split.
+        """
+        cell = self._core_options()
+        tokenizer = (
+            sentence_tokenizer
+            if is_given(sentence_tokenizer)
+            else cast(tokenize.SentenceTokenizer, cell.sentence_tokenizer)
+        )
+        paced = pacing if is_given(pacing) else cell.pacing
+        cell.set(tokenizer, _bindings.core_leg(tokenizer), paced)
 
     def synthesize(
         self, text: str, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
@@ -290,7 +316,9 @@ class TTS(
         """
         return _Synthesis(tts=self, input_text=text, conn_options=self._conn(conn_options))
 
-    def stream(self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
+    ) -> SynthesizeStream:
         """Open a stream synthesizing text as it is pushed. A TTS without the ``streaming``
         capability needs a ``StreamAdapter``.
 
@@ -383,11 +411,8 @@ class TTS(
     def _core_retries_itself(self) -> bool:
         return False
 
-    def _core_options(self) -> TTSOptions:
-        # the built-in tokenizer is split by natively, a custom one through the host
-        return replace(
-            self._options, sentence_tokenizer=_bindings.core_leg(self._options.sentence_tokenizer)
-        )
+    def _core_options(self) -> _core.TtsOptionsCell:
+        return self._options_cell
 
     def _core_conn_options(self) -> APIConnectOptions | None:
         return None
@@ -428,9 +453,6 @@ class ChunkedStream(ABC):
         self._metrics: _core.TtsMetricState | None = _core.TtsMetricState(
             False, tts.label, tts.model, tts.provider
         )
-        self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
-            "tts_batch", _attempted(self, conn_options), self
-        )
         self._core_attempt_task: asyncio.Task[None] | None = None
         self._core_cancelled = False
         self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
@@ -448,6 +470,11 @@ class ChunkedStream(ABC):
     def exception(self) -> BaseException | None:
         return self._synthesize_task.exception()
 
+    @cached_property
+    def _core_attempts(self) -> _core.ProviderAttempts:
+        """The attempts ``_run`` is retried within."""
+        return _core.ProviderAttempts("tts_batch", self._conn_options, self)
+
     def _core_retrying(self, error: Exception) -> None:
         self._tts._emit_error(error, True)
 
@@ -464,28 +491,18 @@ class ChunkedStream(ABC):
         or the stream was closed: clean up and let it propagate.
         """
 
-    _core_native_retries: ClassVar[bool] = False
-    """The native synthesis ``_core_open`` opens retries on its own: no attempt is repeated."""
-
-    async def _core_open(self) -> _core.TtsStream:
-        """A native synthesis of ``input_text``, which ``_core_run_native`` drains."""
-        raise NotImplementedError
-
-    async def _core_run_native(self, output_emitter: _core.AudioEmitter) -> None:
-        """A ``_run`` over ``_core_open``: its audio into ``output_emitter``."""
-        _initialize(output_emitter, self._tts, stream=False)
-        native = await self._core_open()
-        try:
-            await native.drain_into(output_emitter, stream=False)
-        finally:
-            await native.aclose()
-
     async def _main_task(self) -> None:
         # run() starts from the task, after the framework set ``core``
         await _bindings.run_attempts(self, self._core_attempts)
 
     async def _core_attempt(self, retry: bool) -> None:
         _bindings.attempt_started(self)
+        await self._core_run(self._invalid)
+
+    async def _core_run(
+        self, invalid: Callable[[_core.AudioEmitter], str | None] | None = None
+    ) -> None:
+        """``_run`` once, into a fresh emitter whose audio reaches the reader even when it fails."""
         self._emitter = output_emitter = _core.AudioEmitter(
             label=self._tts.label, dst_ch=self._event_ch
         )
@@ -494,7 +511,7 @@ class ChunkedStream(ABC):
             output_emitter.end_input()
             # wait for all audio frames to be pushed & propagate errors
             await output_emitter.join()
-            if problem := self._invalid(output_emitter):
+            if invalid is not None and (problem := invalid(output_emitter)):
                 raise APIError(problem)
         except Exception:
             await _deliver_pushed(output_emitter)
@@ -582,9 +599,6 @@ class SynthesizeStream(ABC):
             True, tts.label, tts.model, tts.provider
         )
         self._segment_text = ""
-        self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
-            "tts_stream", _attempted(self, conn_options), self
-        )
         self._core_attempt_task: asyncio.Task[None] | None = None
         self._core_cancelled = False
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
@@ -593,6 +607,11 @@ class SynthesizeStream(ABC):
         self._pushed_text: str = ""
         self._segment_open = False
         self._num_segments = 0
+
+    @cached_property
+    def _core_attempts(self) -> _core.ProviderAttempts:
+        """The attempts ``_run`` is retried within."""
+        return _core.ProviderAttempts("tts_stream", self._conn_options, self)
 
     def _core_retrying(self, error: Exception) -> None:
         self._tts._emit_error(error, True)
@@ -611,29 +630,6 @@ class SynthesizeStream(ABC):
         propagate.
         """
 
-    _core_native_retries: ClassVar[bool] = False
-    """The native synthesis ``_core_open`` opens retries on its own: no attempt is repeated."""
-
-    async def _core_open(self) -> _core.TtsStream:
-        """A native synthesis of the text pushed, which ``_core_run_native`` pumps."""
-        raise NotImplementedError
-
-    async def _core_run_native(self, output_emitter: _core.AudioEmitter) -> None:
-        """A ``_run`` over ``_core_open``: ``input`` into it, its audio into ``output_emitter``."""
-        _initialize(output_emitter, self._tts, stream=True)
-        native = await self._core_open()
-
-        def feed(text: str | SynthesizeStream.Flush) -> None:
-            if isinstance(text, SynthesizeStream.Flush):
-                native.flush()
-            elif text:
-                self.mark_started()
-                native.push_text(text)
-
-        await _bindings.pump(
-            native, self.input, feed, native.drain_into(output_emitter, stream=True)
-        )
-
     async def _main_task(self) -> None:
         # run() starts from the task, after the framework set ``core``
         await _bindings.run_attempts(self, self._core_attempts)
@@ -642,6 +638,12 @@ class SynthesizeStream(ABC):
         _bindings.attempt_started(self)
         if retry:
             self._replay()
+        await self._core_run(self._invalid)
+
+    async def _core_run(
+        self, invalid: Callable[[_core.AudioEmitter], str | None] | None = None
+    ) -> None:
+        """``_run`` once, into a fresh emitter whose audio reaches the reader even when it fails."""
         self._emitter = output_emitter = _core.AudioEmitter(
             label=self._tts.label, dst_ch=self._event_ch
         )
@@ -650,7 +652,7 @@ class SynthesizeStream(ABC):
             output_emitter.end_input()
             # wait for all audio frames to be pushed & propagate errors
             await output_emitter.join()
-            if problem := self._invalid(output_emitter):
+            if invalid is not None and (problem := invalid(output_emitter)):
                 raise APIError(problem)
         except Exception:
             await _deliver_pushed(output_emitter)
@@ -771,41 +773,40 @@ class SynthesizeStream(ABC):
             self.end_input()
 
 
-def _attempts_report_metrics(tts: TTS) -> bool:
-    """Whether the provider's own attempts report the metrics: a host plugin's do, a TTS the core
-    runs natively has none, so its request reports them."""
-    return _bindings.core_leg(tts) is tts
-
-
 class _Synthesis(ChunkedStream):
-    """``tts.synthesize()``: the framework's request over the TTS, which prepares the text and
-    retries the provider's attempts."""
-
-    _core_native_retries = True
+    """``tts.synthesize()``: a view of the framework's native request over the TTS, which prepares
+    the text, retries the provider's attempts and reports each failure; this only reads its audio.
+    """
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        leg = _bindings.core_leg(tts)
+        self._native = _core.TtsStream(tts=leg, text=input_text, conn_options=conn_options)
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        if _attempts_report_metrics(tts):
+        # a host plugin's own attempts report the metrics; a native provider has none
+        if leg is tts:
             self._metrics = None
 
-    async def _core_open(self) -> _core.TtsStream:
-        leg = _bindings.core_leg(self._tts)
-        return _core.TtsStream(tts=leg, text=self._input_text, conn_options=self._conn_options)
+    async def _main_task(self) -> None:
+        await self._core_run()
 
     async def _run(self, output_emitter: _core.AudioEmitter) -> None:
-        await self._core_run_native(output_emitter)
+        _initialize(output_emitter, self._tts, stream=False)
+        try:
+            await self._native.drain_into(output_emitter, stream=False)
+        finally:
+            await self._native.aclose()
 
 
 class _Synthesizing(SynthesizeStream):
-    """``tts.stream()``: the framework's request over the TTS; what is pushed goes to its stage,
-    which prepares each chunk for the provider."""
-
-    _core_native_retries = True
+    """``tts.stream()``: a view of the framework's native request over the TTS; what is pushed
+    goes to its stage, which prepares each chunk for the provider. The request retries the
+    provider's attempts and reports each failure; this only reads its audio."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         leg = _bindings.core_leg(tts)
         self._native = _core.TtsStream(tts=leg, conn_options=conn_options)
         super().__init__(tts=tts, conn_options=conn_options)
+        # a host plugin's own attempts report the metrics; a native provider has none
         if leg is tts:
             self._metrics = None
 
@@ -836,8 +837,8 @@ class _Synthesizing(SynthesizeStream):
         self.input.close()
         self._native.end_input()
 
-    async def _core_open(self) -> _core.TtsStream:
-        return self._native
+    async def _main_task(self) -> None:
+        await self._core_run()
 
     async def _run(self, output_emitter: _core.AudioEmitter) -> None:
         _initialize(output_emitter, self._tts, stream=True)
@@ -882,13 +883,6 @@ async def _deliver_pushed(output_emitter: _core.AudioEmitter) -> None:
     except RuntimeError:
         # never initialized, already ended, or a decode failure: the attempt's error stands
         pass
-
-
-def _attempted(
-    stream: ChunkedStream | SynthesizeStream, conn: APIConnectOptions
-) -> APIConnectOptions:
-    """The options the stream's attempts run under: no retry over a native one that retries."""
-    return replace(conn, max_retry=0) if stream._core_native_retries else conn
 
 
 def _initialize(output_emitter: _core.AudioEmitter, tts: TTS[Any], *, stream: bool) -> None:

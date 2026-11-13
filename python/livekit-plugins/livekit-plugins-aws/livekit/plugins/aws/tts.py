@@ -25,6 +25,7 @@ from livekit.agents import (
     APIConnectOptions,
     APITimeoutError,
     LanguageCode,
+    tokenize,
     tts,
 )
 from livekit.agents.types import (
@@ -143,7 +144,10 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         speech_engine: NotGivenOr[TTSSpeechEngine] = NOT_GIVEN,
         text_type: NotGivenOr[TTSTextType] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):

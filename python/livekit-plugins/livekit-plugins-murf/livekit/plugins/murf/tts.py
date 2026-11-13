@@ -29,6 +29,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -180,6 +181,8 @@ class TTS(tts.TTS):
         style: NotGivenOr[str | None] = NOT_GIVEN,
         speed: NotGivenOr[int | None] = NOT_GIVEN,
         pitch: NotGivenOr[int | None] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -193,7 +196,12 @@ class TTS(tts.TTS):
             style (str | None, optional): The voice style to apply (e.g., "Conversation", "Promo").
             speed (int | None, optional): Controls the speech speed. Positive values increase speed, negative values decrease it. Valid range: -50 to 50.
             pitch (int | None, optional): Controls the speech pitch. Positive values raise pitch, negative values lower it. Valid range: -50 to 50.
+            sentence_tokenizer (SentenceTokenizer, optional): What splits the text into the chunks
+                the TTS is sent.
+            pacing (SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or ``None`` to
+                send each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(locale):
             self._opts.locale = locale
         if is_given(voice):

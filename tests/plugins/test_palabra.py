@@ -178,7 +178,8 @@ async def test_interruption_flow(mock_palabra_ws: PalabraTTS) -> None:
     ws = mock_palabra_ws
     tts = TTS(api_key="test-key")
 
-    ws.send_queue.put_nowait(_audio_chunk(b"\x44" * 2000, last_chunk=False))
+    # one whole 200 ms frame at 24 kHz, so it plays before the reply's end
+    ws.send_queue.put_nowait(_audio_chunk(b"\x44" * 9600, last_chunk=False))
     stream = tts.stream()
     stream.push_text("A long reply that will be interrupted.")
     stream.flush()

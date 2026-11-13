@@ -13,14 +13,14 @@ from livekit.agents import _core
 from livekit.agents.cli import NOISY_LOGGERS
 
 _E2E = Path(__file__).parent / "e2e"
+# seconds an e2e test may take against live services
+_E2E_TIMEOUT = 120
 # highest fd soft limit the room tests survive on macOS
 _MAX_OPEN_FILES = 8192
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addoption(
-        "--e2e", action="store_true", help="also run tests/e2e (live services)"
-    )
+    parser.addoption("--e2e", action="store_true", help="also run tests/e2e (live services)")
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -30,6 +30,14 @@ def pytest_configure(config: pytest.Config) -> None:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         if soft > _MAX_OPEN_FILES:
             resource.setrlimit(resource.RLIMIT_NOFILE, (_MAX_OPEN_FILES, hard))
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    # a hermetic test runs in well under a second, so the suite-wide limit is short; live
+    # services are slow, so `e2e/` keeps its own
+    for item in items:
+        if item.path.is_relative_to(_E2E) and item.get_closest_marker("timeout") is None:
+            item.add_marker(pytest.mark.timeout(_E2E_TIMEOUT))
 
 
 def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:

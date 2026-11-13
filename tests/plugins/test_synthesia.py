@@ -142,7 +142,7 @@ async def test_a_stalled_launch_fails_at_the_join_timeout(avatar_host: AvatarHos
 
     async def stall(request: web.Request) -> web.Response:
         stalled.set()
-        await asyncio.sleep(30)
+        await asyncio.Event().wait()  # never answers
         return web.json_response({"session_id": "late"})
 
     app = web.Application()
@@ -152,7 +152,7 @@ async def test_a_stalled_launch_fails_at_the_join_timeout(avatar_host: AvatarHos
             AvatarConfig(avatar_ids=["avatar-1"]),
             api_key=API_KEY,
             api_url=str(server.make_url("")).rstrip("/"),
-            join_timeout=0.5,
+            join_timeout=0.05,
         )
         started = time.monotonic()
 

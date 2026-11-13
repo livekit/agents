@@ -25,17 +25,17 @@ async def serving(server: AgentServer) -> AsyncIterator[str]:
     unregistered, with its listener on a free port.
     """
     server._update_options(listeners={"health": {"port": 0}})
+    started = asyncio.Event()
+    server._on_started.append(started.set)
     run = asyncio.create_task(server._run(devmode=True, unregistered=True))
+    listening = asyncio.create_task(started.wait())
     try:
-        while True:
-            with contextlib.suppress(RuntimeError):
-                url = server._config.delegation_url("").rstrip("/")
-                break
-            if run.done():
-                run.result()
-            await asyncio.sleep(0.05)
-        yield url
+        await asyncio.wait({run, listening}, return_when=asyncio.FIRST_COMPLETED)
+        if run.done():
+            run.result()
+        yield server._config.delegation_url("").rstrip("/")
     finally:
+        listening.cancel()
         await server.aclose()
         await run
 

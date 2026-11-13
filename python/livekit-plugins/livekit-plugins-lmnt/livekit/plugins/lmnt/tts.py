@@ -23,6 +23,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -160,6 +161,8 @@ class TTS(tts.TTS):
         sample_rate: NotGivenOr[LMNTSampleRate] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
@@ -173,7 +176,11 @@ class TTS(tts.TTS):
             sample_rate: Output sample rate in Hz.
             temperature: Controls the expressiveness of the speech. A number between 0.0 and 1.0.
             top_p: Controls the stability of the generated speech. A number between 0.0 and 1.0.
+            sentence_tokenizer: What splits the text into the chunks the TTS is sent.
+            pacing: A ``SentenceStreamPacer``, or ``None`` to send each chunk as soon as it is
+                split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(model):
             self._opts.model = model
         if is_given(voice):

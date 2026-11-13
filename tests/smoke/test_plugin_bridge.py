@@ -144,9 +144,12 @@ async def test_realtime_fallback_answers_on_the_backup_when_the_primary_dies() -
 
 
 async def test_a_custom_sentence_tokenizer_splits_the_adapters_text() -> None:
-    """A StreamAdapter splits text with the given sentence tokenizer and closes its stream."""
+    """A StreamAdapter splits text with its TTS's sentence tokenizer, set after it was wrapped,
+    and closes its stream."""
     provider, tokenizer = FakeTTS(streaming=False), FakeSentenceTokenizer()
-    adapter = tts.StreamAdapter(tts=provider, sentence_tokenizer=tokenizer)
+    adapter = tts.StreamAdapter(tts=provider)
+    # unpaced, so each sentence is its own request
+    adapter.update_options(sentence_tokenizer=tokenizer, pacing=None)
     try:
         async with adapter.stream() as stream:
             for chunk in ("one two|three", " four|five"):

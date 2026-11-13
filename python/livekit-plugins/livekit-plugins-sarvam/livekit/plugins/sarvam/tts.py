@@ -43,9 +43,11 @@ from livekit.agents import (
     LanguageCode,
     __version__ as livekit_version,
     http,
+    tokenize,
     tts,
     utils,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from .log import logger
 from .models import (
@@ -679,6 +681,8 @@ class TTS(tts.TTS):
         enable_cached_responses: bool | None = None,
         send_completion_event: bool | None = None,
         output_audio_codec: str | None = None,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options with validation.
 
@@ -687,6 +691,7 @@ class TTS(tts.TTS):
         leaves the live options untouched, and switching models cannot carry over
         a speaker or a pitch/pace/loudness/temperature the new model refuses.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         opts = replace(self._opts)
 
         if target_language_code is not None:

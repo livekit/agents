@@ -185,7 +185,7 @@ impl Stage {
         let dialect = Markup::from_provider_key(&key);
         let unit = tts.text_unit();
         let limit = tts.max_text_len().or_else(|| dialect.max_input_len());
-        let TtsOptions { sentence_tokenizer, pacing } = tts.options();
+        let TtsOptions { sentence_tokenizer, pacing } = tts.options().current();
         let pacing = pacing.filter(|_| paced && unit != TextUnit::Text);
         // a word provider takes words whatever splits the sentences
         let native = |settings| {

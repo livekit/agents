@@ -268,7 +268,6 @@ async def test_fragmented_input_alignment_and_benign_events(
             api_key="secret",
             base_url=str(server.make_url("")).rstrip("/"),
             http_session=session,
-            text_pacing=False,
         )
         try:
             async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
@@ -316,7 +315,6 @@ async def test_provider_error_preserves_diagnostic() -> None:
             api_key="secret",
             base_url=str(server.make_url("")),
             http_session=session,
-            text_pacing=False,
         )
         try:
             async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:

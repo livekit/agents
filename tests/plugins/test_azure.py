@@ -294,7 +294,7 @@ class SynthesisPeer:
     async def handle(self, request: web.Request) -> web.StreamResponse:
         self.requests.append((dict(request.headers), await request.text()))
         if self.mode == "stall":
-            await asyncio.sleep(30)
+            await asyncio.Event().wait()  # never answers
         if self.mode == "reject":
             return web.Response(status=400, text="Invalid char '&' found in SSML.")
         return web.Response(body=b"\x01\x00" * 2400, content_type="audio/pcm")
@@ -317,7 +317,9 @@ async def synthesize(
             voice=voice,
             prosody=prosody,
         )
-        options = APIConnectOptions(max_retry=0, connect_timeout=0.5, read_timeout=0.5)
+        # a stalled synthesis times the read out at once
+        read_timeout = 0.05 if peer.mode == "stall" else 5
+        options = APIConnectOptions(max_retry=0, connect_timeout=5, read_timeout=read_timeout)
         async with asyncio.timeout(3), provider.synthesize(text, conn_options=options) as stream:
             return [event.frame async for event in stream]
 

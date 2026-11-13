@@ -3816,6 +3816,40 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
             }),
         );
     }
+
+    fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let error_arg = error;
+        let error_arg =
+            match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+                Ok((crate::py_errors::ExceptionValue::to_exception(error_arg, py)?).unbind())
+            }) {
+                Ok(value) => value,
+                Err(error) => {
+                    log::warn!("ChainObserver._core_failed failed: {error}");
+                    return;
+                }
+            };
+        let recoverable_arg = recoverable;
+        ::lk_agents_runtime::host::notify(
+            &self.notifier,
+            "ChainObserver._core_failed",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            false,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    error_arg.into_bound(py),
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?,
+                ];
+                Ok((
+                    host.bind(py).getattr("_core_failed")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.

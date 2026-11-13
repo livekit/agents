@@ -157,6 +157,7 @@ pub trait Implementations: 'static {
     type TtsStreamAdapter: ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter;
     type TtsStream: ::lk_agents_abi::tts::streams::TtsStream;
     type SynthesisChecks: ::lk_agents_abi::tts::streams::SynthesisChecks;
+    type TtsOptionsCell: ::lk_agents_abi::tts::types::TtsOptionsCell;
     type InferenceEot: ::lk_agents_abi::turn::inference::InferenceEot<Stream = Self::EotStream>;
     type EotStream: ::lk_agents_abi::turn::inference::EotStream;
     type InterruptionDetector: ::lk_agents_abi::turn::inference::InterruptionDetector;
@@ -426,8 +427,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<tts::Markup>()?;
     m.add_class::<tts::TtsStreamAdapter>()?;
     m.add_class::<tts::TtsStream>()?;
-    m.add_function(wrap_pyfunction!(tts::default_tts_pacing, m)?)?;
     m.add_function(wrap_pyfunction!(tts::validate_synthesis, m)?)?;
+    m.add_class::<tts::TtsOptionsCell>()?;
     m.add_class::<turn::InferenceEot>()?;
     m.add_class::<turn::TurnDetectorStream>()?;
     m.add_class::<turn::AdaptiveInterruptionDetector>()?;

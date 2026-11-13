@@ -31,6 +31,8 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
     if TYPE_CHECKING:
         _members: list[LLM[Any]]
 
+        def _core_failed(self, error: BaseException, recoverable: bool) -> None: ...
+
     def __init__(
         self,
         llm: Sequence[LLM[Any]],

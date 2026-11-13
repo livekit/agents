@@ -30,6 +30,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -193,8 +194,11 @@ class TTS(tts.TTS):
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options"""
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
             # The model is baked into the WebSocket URL, so pooled connections

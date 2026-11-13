@@ -323,6 +323,8 @@ pub struct FallbackTts {
     needs_resampling: Arc<Vec<bool>>,
     entry_rates: Arc<Vec<u32>>,
     caller_conn: ApiConnectOptions,
+    /// The adapter that built the chain: a request's failures are its `error` events.
+    observer: Arc<dyn ChainObserver>,
 }
 
 impl FallbackTts {
@@ -353,7 +355,7 @@ impl FallbackTts {
         }
         let entry_rates: Vec<u32> = entries.iter().map(|b| b.inner.sample_rate()).collect();
         let (target, needs_resampling) = resampling_plan(&entry_rates, sample_rate);
-        let chain = FallbackChain::new(entries, policy, clock, spawner, observer)?;
+        let chain = FallbackChain::new(entries, policy, clock, spawner, observer.clone())?;
         Ok(FallbackTts {
             chain: Arc::new(chain),
             capabilities,
@@ -362,6 +364,7 @@ impl FallbackTts {
             needs_resampling: Arc::new(needs_resampling),
             entry_rates: Arc::new(entry_rates),
             caller_conn: crate::fallback::caller_default(),
+            observer,
         })
     }
 
@@ -554,6 +557,11 @@ impl Tts for FallbackTts {
     /// The chain retries and falls back on its own.
     fn retries_itself(&self) -> bool {
         true
+    }
+
+    /// The adapter's `error` event.
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.observer.failed(error, recoverable);
     }
 
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {

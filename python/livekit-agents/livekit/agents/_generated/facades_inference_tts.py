@@ -11,9 +11,11 @@ from ..utils import is_given
 from .tts import TTS as BaseTTS
 
 if TYPE_CHECKING:
+    from ..tokenize import SentenceTokenizer
     from ..types import NotGivenOr
     from .connect import APIConnectOptions
     from .inference_tts import FallbackModels, TTSEncoding, TTSModels
+    from .stream_pacer import SentenceStreamPacer
     from .tts import TTSCapabilities
 
 
@@ -96,11 +98,16 @@ class TTS(BaseTTS):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        """Update the options the next synthesis uses."""
+        """Update the options the next synthesis uses: the gateway's, and how the framework prepares
+        the text (``tts.TTS.update_options``).
+        """
         self._native.update_options(
             voice=voice if is_given(voice) else None,
             model=model if is_given(model) else None,
             language=language if is_given(language) else None,
             extra_kwargs=extra_kwargs if is_given(extra_kwargs) else None,
         )
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)

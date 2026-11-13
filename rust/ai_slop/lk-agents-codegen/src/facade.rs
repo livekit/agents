@@ -629,7 +629,7 @@ impl Module<'_> {
                     .collect()
             }
         };
-        for (n, _) in &values {
+        for (n, _) in values.iter().filter(|(n, _)| !adapt.base.contains(n)) {
             let taken = match &called {
                 Some(called) => called.params.iter().any(|p| p.name.trim_start_matches("r#") == n),
                 None => true,
@@ -733,6 +733,14 @@ impl Module<'_> {
             format!("{prefix}{}", invocation(8 + prefix.len()))
         };
         body.push_str(&format!("        {statement}\n"));
+        if !adapt.base.is_empty() {
+            let passed: Vec<String> = values
+                .iter()
+                .filter(|(n, _)| adapt.base.contains(n))
+                .map(|(n, value)| format!("{n}={value}"))
+                .collect();
+            body.push_str(&call(&format!("super().{}", m.name), &passed, 8));
+        }
         let asynchronous = awaited && !adapt.future;
         let mut text = def(&m.name, asynchronous, &signature, &ret);
         if m.kind == MethodKind::Getter {

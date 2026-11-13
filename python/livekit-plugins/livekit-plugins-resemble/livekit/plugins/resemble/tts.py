@@ -30,9 +30,11 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     http,
+    tokenize,
     tts,
     utils,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from .log import logger
 from .models import TTSModels
@@ -149,6 +151,8 @@ class TTS(tts.TTS):
         *,
         voice_uuid: str | None = None,
         model: TTSModels | str | None = None,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -156,7 +160,12 @@ class TTS(tts.TTS):
         Args:
             voice_uuid (str, optional): The voice UUID for the desired voice.
             model (TTSModels | str | None, optional): The model to use for synthesis.
+            sentence_tokenizer (SentenceTokenizer, optional): What splits the text into the chunks
+                the TTS is sent.
+            pacing (SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or ``None`` to
+                send each chunk as soon as it is split.
         """  # noqa: E501
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         self._opts.voice_uuid = voice_uuid or self._opts.voice_uuid
         self._opts.model = model if model is not None else self._opts.model
 

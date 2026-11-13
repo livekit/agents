@@ -28,6 +28,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -172,6 +173,8 @@ class TTS(tts.TTS):
         optimize_streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -182,7 +185,12 @@ class TTS(tts.TTS):
             optimize_streaming_latency (int, optional): Latency optimization level for the xAI TTS websocket.
             speed (float, optional): Speaking-rate multiplier for the generated audio.
             text_normalization (bool, optional): Whether to normalize text before synthesis.
+            sentence_tokenizer (SentenceTokenizer, optional): What splits the text into the chunks
+                the TTS is sent.
+            pacing (SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or ``None`` to
+                send each chunk as soon as it is split.
         """  # noqa: E501
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         connection_options_before = (
             self._opts.voice,
             self._opts.language,

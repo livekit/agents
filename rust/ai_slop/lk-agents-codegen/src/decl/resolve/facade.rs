@@ -23,6 +23,7 @@ const METHOD_KEYS: &[&str] = &[
     "setter",
     "abort",
     "yields",
+    "base",
 ];
 
 impl Resolver<'_> {
@@ -350,7 +351,17 @@ impl Resolver<'_> {
             bind: pairs("bind")?,
             chain: flag("chain"),
             setter: setter.transpose()?,
+            base: voc::find(&entries, "base")
+                .map_or(Vec::new(), |l| l.nested.iter().map(|n| n.key.clone()).collect()),
         };
+        for name in &adapt.base {
+            if !method.params.iter().any(|p| &p.name == name) {
+                return Err(format!("{at}: base({name}) names no parameter"));
+            }
+        }
+        if !adapt.base.is_empty() && (kind != MethodKind::Call || method.ret.ok != Ty::Unit) {
+            return Err(format!("{at}: base(..) passes a call returning nothing on to the base"));
+        }
         for (name, _) in adapt.annotations.iter().chain(&adapt.resolve) {
             if name != "ret" && !method.params.iter().any(|p| &p.name == name) {
                 return Err(format!("{at}: names no parameter {name}"));

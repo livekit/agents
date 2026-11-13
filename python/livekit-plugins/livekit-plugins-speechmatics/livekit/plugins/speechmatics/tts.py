@@ -9,6 +9,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -90,11 +91,18 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             voice (str): Voice model to use for synthesis.
+            sentence_tokenizer (SentenceTokenizer): What splits the text into the chunks the TTS
+                is sent.
+            pacing (SentenceStreamPacer | None): A ``SentenceStreamPacer``, or ``None`` to send each
+                chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(voice):
             self._opts.voice = voice
 

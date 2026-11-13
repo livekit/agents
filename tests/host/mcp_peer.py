@@ -3,7 +3,7 @@
 
 Every request it handles is appended to ``journal.jsonl`` in its directory, which the test
 reads. ``python mcp_peer.py stdio|http DIR [--port=] [--server=fastmcp] [--sse]`` runs it; over
-HTTP it writes its URL to ``DIR/url`` once listening. The Rust lifecycle tests run it too.
+HTTP it writes its URL to ``DIR/url`` and a line of its stdout once listening. The Rust lifecycle tests run it too.
 ``--server=fastmcp`` serves ``build_fastmcp``, realistic tools as a FastMCP app.
 
 Tools, listed over two pages:
@@ -15,7 +15,10 @@ Tools, listed over two pages:
 - ``reject``: a JSON-RPC error (-32602, ``data={"field": "seat"}``).
 - ``crash``: the handler raises with an internal detail.
 - ``wait``: journals ``entered``, blocks until cancelled, then journals ``settled``.
-- ``progress(steps, interval)``: a progress message per step, then ``done``.
+- ``progress(steps, interval, gate)``: a progress message per step, then ``done``; with a
+  ``gate``, journals ``holding`` after the first message and goes on once
+  ``POST /release/<gate>`` (HTTP) opens it.
+- ``meet(who, parties)``: answers ``met <who>`` once ``parties`` calls of it are in flight.
 - ``slow(seconds)``: answers after ``seconds``, without progress.
 - ``whoami``: the request's ``Authorization`` header.
 - ``unicode``: a large non-ASCII text.
@@ -76,7 +79,19 @@ PAGES: list[list[types.Tool]] = [
             name="progress",
             input_schema={
                 "type": "object",
-                "properties": {"steps": {"type": "integer"}, "interval": {"type": "number"}},
+                "properties": {
+                    "steps": {"type": "integer"},
+                    "interval": {"type": "number"},
+                    "gate": {"type": "string"},
+                },
+            },
+        ),
+        types.Tool(
+            name="meet",
+            description="Answer once every party has called.",
+            input_schema={
+                "type": "object",
+                "properties": {"who": {"type": "string"}, "parties": {"type": "integer"}},
             },
         ),
         types.Tool(
@@ -122,11 +137,23 @@ class Journal:
         return found
 
 
+_gates: dict[str, anyio.Event] = {}
+
+
+def _gate(name: str) -> anyio.Event:
+    """The event ``POST /release/<name>`` sets, created by whichever side comes first."""
+    if name not in _gates:
+        _gates[name] = anyio.Event()
+    return _gates[name]
+
+
 def _text(text: str) -> types.CallToolResult:
     return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
 
 
 def build(journal: Journal) -> Server[Any]:
+    met: list[str] = []
+
     async def list_tools(
         ctx: ServerRequestContext[Any], params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
@@ -180,7 +207,16 @@ def build(journal: Journal) -> Server[Any]:
                 for step in range(1, steps + 1):
                     await anyio.sleep(interval)
                     await ctx.session.report_progress(step, steps, f"Step {step} of {steps}.")
+                    if step == 1 and (gate := arguments.get("gate")):
+                        journal.write("holding", tool="progress")
+                        await _gate(str(gate)).wait()
                 return _text("done")
+            case "meet":
+                met.append(str(arguments["who"]))
+                if len(met) >= int(arguments["parties"]):
+                    _gate("met").set()
+                await _gate("met").wait()
+                return _text(f"met {arguments['who']}")
             case "slow":
                 await anyio.sleep(float(arguments["seconds"]))
                 return _text(f"done after {arguments['seconds']}s")
@@ -349,8 +385,7 @@ class HttpPeer:
         return f"http://127.0.0.1:{self._port}/mcp"
 
     async def start(self) -> None:
-        url = self._directory / "url"
-        url.unlink(missing_ok=True)
+        (self._directory / "url").unlink(missing_ok=True)
         self._process = await asyncio.create_subprocess_exec(
             sys.executable,
             str(Path(__file__).resolve()),
@@ -358,13 +393,23 @@ class HttpPeer:
             str(self._directory),
             f"--port={self._port}",
             *self._options,
+            stdout=asyncio.subprocess.PIPE,
         )
+        assert self._process.stdout is not None
         async with asyncio.timeout(20):
-            while not url.exists():
-                if self._process.returncode is not None:
-                    raise RuntimeError(f"the MCP peer exited with {self._process.returncode}")
-                await asyncio.sleep(0.02)
-        self._port = int(url.read_text().rsplit(":", 1)[1].split("/")[0])
+            listening = await self._process.stdout.readline()  # its URL, once listening
+        if not listening:
+            raise RuntimeError(f"the MCP peer exited with {await self._process.wait()}")
+        self._port = int(listening.decode().rsplit(":", 1)[1].split("/")[0])
+
+    async def release(self, gate: str) -> None:
+        """Opens ``gate``: a ``progress`` call holding on it answers."""
+        reader, writer = await asyncio.open_connection("127.0.0.1", self._port)
+        writer.write(f"POST /release/{gate} HTTP/1.1\r\nHost: peer\r\n\r\n".encode())
+        await writer.drain()
+        assert (await reader.readline()).startswith(b"HTTP/1.1 200")
+        writer.close()
+        await writer.wait_closed()
 
     async def stop(self) -> None:
         process, self._process = self._process, None
@@ -412,10 +457,18 @@ def _main() -> None:
         anyio.run(stdio)
         return
     import uvicorn
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.routing import Route
+
+    async def release(request: Request) -> Response:
+        _gate(request.path_params["gate"]).set()
+        return Response()
 
     sock = _listen(options.port)
     if options.server == "lowlevel":
         app = build(journal).streamable_http_app(json_response=not options.sse)
+        app.router.routes.insert(0, Route("/release/{gate}", release, methods=["POST"]))
     else:
         app = build_fastmcp(journal).http_app(path="/mcp", json_response=not options.sse)
     config = uvicorn.Config(app, log_level="critical")
@@ -430,6 +483,7 @@ def _main() -> None:
             await asyncio.sleep(0.01)
         url.with_suffix(".tmp").write_text(f"http://127.0.0.1:{port}/mcp")
         url.with_suffix(".tmp").rename(url)
+        print(f"http://127.0.0.1:{port}/mcp", flush=True)
         await task
 
     asyncio.run(serve())

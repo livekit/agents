@@ -317,14 +317,14 @@ async def test_read_timeout_bounds_silence_not_the_whole_stream(
     https://github.com/livekit/agents/issues/5972 https://github.com/livekit/agents/issues/7987
     """
     if stalled:
-        gemini.payloads, gemini.delays = [answer("0"), answer("1")], [0, 0.35]
+        gemini.payloads, gemini.delays = [answer("0"), answer("1")], [0, 0.2]
     else:
-        gemini.payloads, gemini.delays = [answer(str(i)) for i in range(5)], [0.06] * 5
+        gemini.payloads, gemini.delays = [answer(str(i)) for i in range(5)], [0.03] * 5
     provider = LLM(
         api_key="test",
         http_options=types.HttpOptions(base_url=gemini.url, headers={"X-Regression": "kept"}),
     )
-    options = APIConnectOptions(max_retry=0, connect_timeout=1, read_timeout=0.2)
+    options = APIConnectOptions(max_retry=0, connect_timeout=1, read_timeout=0.1)
 
     async with provider, provider.chat(chat_ctx=llm.ChatContext.empty(), conn_options=options) as s:
         if stalled:

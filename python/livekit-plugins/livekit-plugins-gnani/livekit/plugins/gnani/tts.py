@@ -40,9 +40,11 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from .log import logger
 from .models import (
@@ -190,7 +192,10 @@ class TTS(tts.TTS):
         voice: GnaniTTSVoices | str | None = None,
         model: GnaniTTSModels | str | None = None,
         language: GnaniTTSLanguages | str | None = None,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if voice is not None:
             self._opts.voice = voice
         if model is not None:

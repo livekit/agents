@@ -14,7 +14,7 @@ from speechify.types.speech_stream_event import (
 )
 
 from livekit.agents import APIStatusError, tts
-from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
+from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from livekit.plugins.speechify import tts as sfy_tts
 
 _PCM_1S = b"\x00\x7f" * (24000 * 2)  # 0.5s of 24 kHz mono PCM silence
@@ -138,7 +138,7 @@ async def test_stream_predicates_speech_error() -> None:
     """https://github.com/livekit/agents/pull/6926"""
     client = _FakeClient()
     client.audio = _ErrorAudio()
-    stream = _make_tts("simba-3.2", client).stream()
+    stream = _make_tts("simba-3.2", client).stream(conn_options=APIConnectOptions(retry_interval=0))
     stream.push_text("Hello world.")
     stream.end_input()
 

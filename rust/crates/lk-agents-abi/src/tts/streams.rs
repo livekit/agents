@@ -60,16 +60,9 @@ pub struct SegmentCount {
     pub actual: usize,
 }
 
-/// The rules a host synthesis applies: its pacing until set, and the checks at its end.
+/// The checks a host synthesis applies at its end.
 #[crate::host(functions(pid = false))]
 pub trait SynthesisChecks {
-    /// ``TTSOptions.pacing`` until it is set: a ``SentenceStreamPacer`` for a TTS without
-    /// streaming, ``None`` for a streaming one.
-    #[host(function)]
-    fn default_tts_pacing(
-        capabilities: crate::TtsCapabilities,
-    ) -> Option<crate::tts::stream_pacer::SentenceStreamPacer>;
-
     /// Why a synthesis of ``text`` that pushed ``duration`` seconds of audio (and, streamed,
     /// ``segments``) failed, or ``None``.
     #[host(function)]

@@ -524,6 +524,8 @@ class FallbackListener(Protocol):
 
     def _core_all_unavailable(self) -> None: ...
 
+    def _core_failed(self, error: Exception, recoverable: bool) -> None: ...
+
 
 async def next_audio_frame(source: io.AudioInput) -> rtc.AudioFrame | None:
     try:

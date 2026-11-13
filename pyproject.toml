@@ -205,8 +205,9 @@ addopts = [
 ]
 pythonpath = ["."]
 testpaths = ["tests"]
-# a hung test fails instead of stalling the run (pytest-timeout); slow suites override per test
-timeout = 120
+# a hung test fails fast instead of stalling the run (pytest-timeout): a hermetic test never
+# waits on real time; tests/e2e gets its own limit (tests/conftest.py)
+timeout = 10
 
 
 [tool.mypy]

@@ -30,6 +30,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -175,6 +176,8 @@ class TTS(tts.TTS):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -186,7 +189,12 @@ class TTS(tts.TTS):
             model (TTSModels, optional): The Async TTS model to use. Defaults to "async_flash_v1.0".
             language (str, optional): The language code for synthesis. Defaults to "en".
             voice (str, optional): The voice ID.
+            sentence_tokenizer (tokenize.SentenceTokenizer, optional): What splits the text into the
+                chunks the TTS is sent.
+            pacing (tts.SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or
+                ``None`` to send each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         connection_params_changed = False
         if is_given(model):
             self._opts.model = model

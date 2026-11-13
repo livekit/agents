@@ -19,6 +19,11 @@ pub trait ChainObserver: Send + Sync {
     /// anyway rather than failing fast, which is what `all_failed` does in all three adapters.
     #[host(notify, name = "_core_all_unavailable")]
     fn all_unavailable(&self) {}
+
+    /// The adapter's `error` event: a failed attempt of a call over the chain, `recoverable`
+    /// while the call is retried.
+    #[host(notify, name = "_core_failed")]
+    fn failed(&self, _error: crate::errors::ProviderError, _recoverable: bool) {}
 }
 
 /// The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks.

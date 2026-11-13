@@ -6,7 +6,8 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_adapter::TtsStreamAdapter;
 use lk_agents_abi::tts::types::{
-    SpeechChunk, SynthesizedAudio, TextUnit, Tts, TtsCapabilities, TtsOptions, TtsSink, TtsSource,
+    SharedTtsOptions, SpeechChunk, SynthesizedAudio, TextUnit, Tts, TtsCapabilities, TtsSink,
+    TtsSource,
 };
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
@@ -121,7 +122,7 @@ impl Tts for StreamAdapter {
         Some(Arc::new(StreamAdapter { tts, budget: *conn, clock: self.clock.clone() }))
     }
 
-    fn options(&self) -> TtsOptions {
+    fn options(&self) -> Arc<dyn SharedTtsOptions> {
         self.tts.options()
     }
 

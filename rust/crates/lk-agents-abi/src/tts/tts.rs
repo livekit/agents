@@ -152,6 +152,46 @@ impl Default for TtsOptions {
     }
 }
 
+/// A TTS's options as each synthesis over it reads them: the value current when its stage opens.
+#[crate::host(native(refused = "expected a `_core.TtsOptionsCell`"))]
+pub trait SharedTtsOptions: Send + Sync {
+    fn current(&self) -> TtsOptions;
+}
+
+/// Options that never change: a native TTS's own.
+impl SharedTtsOptions for TtsOptions {
+    fn current(&self) -> TtsOptions {
+        self.clone()
+    }
+}
+
+/// `_core.TtsOptionsCell`: the options a `tts.TTS` owns (`tts.options`), shared with every
+/// synthesis over it. A synthesis reads them when its stage opens; one already open keeps them.
+#[crate::host(class(name = "TtsOptionsCell", native = SharedTtsOptions))]
+pub trait TtsOptionsCell: SharedTtsOptions + Sized + 'static {
+    /// Split by `sentence_tokenizer` (through `leg`, its core leg), paced as a TTS with
+    /// `capabilities` is by default.
+    #[host(new)]
+    fn new(
+        sentence_tokenizer: crate::HostRef,
+        leg: crate::tokenize::bindings::SentenceTokenizerLeg,
+        capabilities: TtsCapabilities,
+    ) -> Self;
+    /// The tokenizer as it was given.
+    #[host(getter)]
+    fn sentence_tokenizer(&self) -> crate::HostRef;
+    #[host(getter)]
+    fn pacing(&self) -> Option<crate::tts::stream_pacer::SentenceStreamPacer>;
+    /// Replace both at once.
+    #[host(call)]
+    fn set(
+        &self,
+        sentence_tokenizer: crate::HostRef,
+        leg: crate::tokenize::bindings::SentenceTokenizerLeg,
+        pacing: Option<crate::tts::stream_pacer::SentenceStreamPacer>,
+    );
+}
+
 /// What each chunk of a TTS stream's input holds.
 #[crate::host(string)]
 #[crate::host(wire_strs(msg = format!("unknown text unit {s:?}")))]
@@ -286,11 +326,14 @@ pub trait Tts: Send + Sync {
         None
     }
 
-    // How its text is split and paced: `tts.options`, read when the TTS is handed to a session
-    // or a synthesis.
+    // How its text is split and paced: `tts.options`, which it shares with every synthesis over
+    // it; each reads the current value when its stage opens.
     #[host(read_once, name = "_core_options")]
-    fn options(&self) -> TtsOptions {
-        TtsOptions { pacing: self.capabilities().default_pacing(), ..TtsOptions::default() }
+    fn options(&self) -> std::sync::Arc<dyn SharedTtsOptions> {
+        std::sync::Arc::new(TtsOptions {
+            pacing: self.capabilities().default_pacing(),
+            ..TtsOptions::default()
+        })
     }
 
     // A view of this provider whose calls carry `conn`; see [`Stt::with_conn_options`](crate::Stt::with_conn_options).

@@ -18,6 +18,7 @@ from livekit.agents import (
     VoiceSession,
     http,
     stt,
+    tts,
 )
 from livekit.plugins import xai
 from livekit.plugins.xai import stt as xai_stt, tts as xai_tts
@@ -156,8 +157,12 @@ class _EagerDoneSession:
     A local server cannot order the reply before the send returns, so this race needs a socket.
     """
 
-    async def ws_connect(self, url: str, **_kwargs: object) -> _EagerDoneSession:
+    def __init__(self) -> None:
         self.replies: asyncio.Queue[http.WebSocketMessage] = asyncio.Queue()
+        self.answered = False
+        self.starved = asyncio.Event()  # every reply was read and the client waits for another
+
+    async def ws_connect(self, url: str, **_kwargs: object) -> _EagerDoneSession:
         return self
 
     async def send_str(self, data: str) -> None:
@@ -167,14 +172,21 @@ class _EagerDoneSession:
                 self.replies.put_nowait(
                     http.WebSocketMessage(http.WebSocketMessageType.TEXT, json.dumps(reply))
                 )
+            self.answered = True
             for _ in range(10):
                 await asyncio.sleep(0)
 
     async def receive(self) -> http.WebSocketMessage:
+        if self.answered and self.replies.empty():
+            self.starved.set()
         return await self.replies.get()
 
     async def close(self) -> None:
         pass
+
+
+async def _heard(stream: tts.SynthesizeStream) -> bytes:
+    return b"".join([event.frame.data.tobytes() async for event in stream])
 
 
 @pytest.mark.xfail(
@@ -188,13 +200,25 @@ async def test_audio_done_before_text_done_returns_still_completes() -> None:
     https://github.com/livekit/agents/issues/6079
     """
     # a stand-in session: only it can answer before the send returns
-    model = xai.TTS(api_key="test-key", http_session=_EagerDoneSession())  # type: ignore[arg-type]
+    session = _EagerDoneSession()
+    model = xai.TTS(api_key="test-key", http_session=session)  # type: ignore[arg-type]
     try:
-        async with asyncio.timeout(1):
-            async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
-                stream.push_text("hello")
-                stream.end_input()
-                heard = b"".join([event.frame.data.tobytes() async for event in stream])
+        async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+            stream.push_text("hello")
+            stream.end_input()
+            hearing = asyncio.create_task(_heard(stream))
+            await asyncio.wait(
+                [hearing, asyncio.create_task(session.starved.wait())],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for _ in range(20):  # a stream still able to end does so within a few turns
+                if hearing.done():
+                    break
+                await asyncio.sleep(0)
+            if not hearing.done():
+                hearing.cancel()
+                raise TimeoutError("the stream waits for a reply that never comes")
+            heard = hearing.result()
     finally:
         await model.aclose()
 

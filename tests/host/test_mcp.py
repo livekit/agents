@@ -20,7 +20,14 @@ from livekit.agents import Agent, RunCompleted, RunResult, TextSession, VoiceSes
 from livekit.agents.llm import ChatItem, RawFunctionTool, Toolset
 from livekit.agents.llm.mcp import MCPServerHTTP, MCPServerStdio, MCPToolOptions, MCPToolset
 from livekit.agents.voice.events import ToolCallUpdated, ToolExecutionUpdatedEvent
-from tests.fakes import FakeAudioOutput, FakeLLM, FakeTranscriptionOutput, FakeTTS, tool_call
+from tests.fakes import (
+    FakeAudioOutput,
+    FakeLLM,
+    FakeTranscriptionOutput,
+    FakeTTS,
+    tool_call,
+    until,
+)
 
 from .mcp_peer import CRASH_DETAIL, NAMES, UNICODE, HttpPeer, Journal, serve_http, stdio_command
 
@@ -121,16 +128,25 @@ async def fastmcp(tmp_path: Path) -> AsyncIterator[HttpPeer]:
         yield served
 
 
-@pytest.fixture
-async def silent_url() -> AsyncIterator[str]:
+@dataclass
+class Silent:
     """A server that accepts connections and never answers."""
+
+    url: str
+    accepted: asyncio.Event
+
+
+@pytest.fixture
+async def silent() -> AsyncIterator[Silent]:
     held: list[asyncio.StreamWriter] = []
+    accepted = asyncio.Event()
 
     async def hold(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         held.append(writer)
+        accepted.set()
 
     listener = await asyncio.start_server(hold, "127.0.0.1", 0)
-    yield f"http://127.0.0.1:{listener.sockets[0].getsockname()[1]}/mcp"
+    yield Silent(f"http://127.0.0.1:{listener.sockets[0].getsockname()[1]}/mcp", accepted)
     for writer in held:
         writer.close()
     listener.close()
@@ -315,13 +331,18 @@ async def test_both_streamable_http_reply_modes_answer(tmp_path: Path, json_resp
 
 @pytest.mark.parametrize("converse", SURFACES)
 async def test_slow_calls_in_one_step_run_concurrently(converse: Surface, peer: HttpPeer) -> None:
-    model = calling(("slow", {"seconds": 1}), ("slow", {"seconds": 1.2}))
+    """Each call answers only once both are in flight on the server."""
+    model = calling(
+        ("meet", {"who": "first", "parties": 2}), ("meet", {"who": "second", "parties": 2})
+    )
     toolset = MCPToolset(id="peer", mcp_server=MCPServerHTTP(peer.url))
-    started = time.monotonic()
-    reply = await converse(agent_with(model, toolset), "go")
+    try:
+        async with asyncio.timeout(5):
+            reply = await converse(agent_with(model, toolset), "go")
+    except TimeoutError:
+        pytest.fail("the second call waited for the first")
 
-    assert time.monotonic() - started < 2, "the second call waited for the first"
-    assert [output.text for output in reply.outputs()] == ["done after 1s", "done after 1.2s"]
+    assert [output.text for output in reply.outputs()] == ["met first", "met second"]
     assert reply.output == "Done."
 
 
@@ -330,7 +351,7 @@ async def test_a_call_slower_than_its_timeout_fails_and_the_reply_goes_on(
     converse: Surface, peer: HttpPeer
 ) -> None:
     model = calling(("slow", {"seconds": 30}))
-    toolset = MCPToolset(id="peer", mcp_server=MCPServerHTTP(peer.url, request_timeout=0.5))
+    toolset = MCPToolset(id="peer", mcp_server=MCPServerHTTP(peer.url, request_timeout=0.05))
     started = time.monotonic()
     reply = await converse(agent_with(model, toolset), "go")
 
@@ -345,7 +366,7 @@ async def test_a_tool_timeout_replaces_the_request_timeout(peer: HttpPeer) -> No
     toolset = MCPToolset(
         id="peer",
         mcp_server=MCPServerHTTP(peer.url, request_timeout=None),
-        tool_options={"wait": MCPToolOptions(timeout=0.5)},
+        tool_options={"wait": MCPToolOptions(timeout=0.05)},
     )
     async with asyncio.timeout(5):
         reply = await text(agent_with(model, toolset), "go")
@@ -355,9 +376,10 @@ async def test_a_tool_timeout_replaces_the_request_timeout(peer: HttpPeer) -> No
 
 
 async def test_progress_keeps_a_slow_call_alive_past_its_timeout(streaming_peer: HttpPeer) -> None:
-    model = calling(("progress", {"steps": 4, "interval": 0.3}))
+    # three steps 0.1 s apart outlast the 0.2 s timeout; each step lands within it
+    model = calling(("progress", {"steps": 3, "interval": 0.1}))
     toolset = MCPToolset(
-        id="peer", mcp_server=MCPServerHTTP(streaming_peer.url, request_timeout=0.5)
+        id="peer", mcp_server=MCPServerHTTP(streaming_peer.url, request_timeout=0.2)
     )
     reply = await text(agent_with(model, toolset), "go")
     [progress] = reply.outputs()
@@ -365,13 +387,17 @@ async def test_progress_keeps_a_slow_call_alive_past_its_timeout(streaming_peer:
 
 
 async def test_a_text_turn_waits_for_a_reporting_tool_to_finish(streaming_peer: HttpPeer) -> None:
-    model = calling(("progress", {"steps": 3, "interval": 0.2}))
+    model = calling(("progress", {"steps": 3, "gate": "finish"}))
     toolset = MCPToolset(
         id="peer",
         mcp_server=MCPServerHTTP(streaming_peer.url),
         tool_options={"progress": MCPToolOptions(report_progress=True)},
     )
-    reply = await text(agent_with(model, toolset), "go")
+    turn = asyncio.ensure_future(text(agent_with(model, toolset), "go"))
+    await streaming_peer.journal.until("holding")
+    assert not turn.done(), "the turn ended while its tool was still working"
+    await streaming_peer.release("finish")
+    reply = await turn
     assert [output.text for output in reply.outputs()] == ["done"]
     assert reply.output == "Done."
 
@@ -382,7 +408,7 @@ async def test_on_a_call_a_reporting_tool_speaks_its_progress_then_its_result(
     """The person hears the agent while a slow tool works: each progress message is a tool
     update, and the result reaches the model when the tool finishes."""
     model = FakeLLM(
-        [tool_call("progress", steps=2, interval=0.3), "Working on it.", "Still on it.", "Done."]
+        [tool_call("progress", steps=2, gate="finish"), "Working on it.", "Still on it.", "Done."]
     )
     toolset = MCPToolset(
         id="peer",
@@ -399,17 +425,22 @@ async def test_on_a_call_a_reporting_tool_speaks_its_progress_then_its_result(
         session.output.transcription = FakeTranscriptionOutput()
         session.on("tool_execution_updated", on_update)
         await session.start(Agent(instructions="Help.", tools=[toolset]))
-        started = time.monotonic()
-        first = await session._run(user_input="quote my stay")
-        answered = time.monotonic() - started
-        async with asyncio.timeout(5):
-            while not any(
+
+        def done() -> bool:
+            return any(
                 item.type == "function_call_output" and item.output == "done"
                 for item in session.history.items
-            ):
-                await asyncio.sleep(0.02)
+            )
 
-    assert answered < 0.6, "the first reply waited for the slow tool"
+        try:
+            async with asyncio.timeout(5):  # the tool holds until released below
+                first = await session._run(user_input="quote my stay")
+        except TimeoutError:
+            pytest.fail("the first reply waited for the slow tool")
+        assert not done()
+        await streaming_peer.release("finish")
+        await until(done, "the tool's result never reached the model", timeout=5)
+
     assert _reply(first).output == "Working on it."
     assert updates == ["Step 1 of 2.", "Step 2 of 2."]
 
@@ -628,20 +659,20 @@ async def test_a_server_answering_garbage_leaves_the_turn_without_its_tools() ->
     assert offered(model) == []
 
 
-async def test_init_timeout_bounds_setup_against_a_silent_server(silent_url: str) -> None:
-    toolset = MCPToolset(id="silent", mcp_server=MCPServerHTTP(silent_url, init_timeout=1))
+async def test_init_timeout_bounds_setup_against_a_silent_server(silent: Silent) -> None:
+    toolset = MCPToolset(id="silent", mcp_server=MCPServerHTTP(silent.url, init_timeout=0.1))
     started = time.monotonic()
     await toolset.setup()
     elapsed = time.monotonic() - started
     await toolset.aclose()
     assert toolset.tools == []
-    assert elapsed < 2, f"setup took {elapsed:.1f}s with init_timeout=1"
+    assert elapsed < 1, f"setup took {elapsed:.1f}s with init_timeout=0.1"
 
 
-async def test_a_cancelled_setup_is_cancelled(silent_url: str) -> None:
-    toolset = MCPToolset(id="silent", mcp_server=MCPServerHTTP(silent_url, init_timeout=30))
+async def test_a_cancelled_setup_is_cancelled(silent: Silent) -> None:
+    toolset = MCPToolset(id="silent", mcp_server=MCPServerHTTP(silent.url, init_timeout=30))
     setup = asyncio.create_task(toolset.setup())
-    await asyncio.sleep(0.2)
+    await silent.accepted.wait()
     setup.cancel()
     with pytest.raises(asyncio.CancelledError):
         await setup

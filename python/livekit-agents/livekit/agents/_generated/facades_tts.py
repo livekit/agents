@@ -24,6 +24,8 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
     if TYPE_CHECKING:
         _members: list[TTS[Any]]
 
+        def _core_failed(self, error: BaseException, recoverable: bool) -> None: ...
+
     def __init__(
         self,
         tts: Sequence[TTS[Any]],

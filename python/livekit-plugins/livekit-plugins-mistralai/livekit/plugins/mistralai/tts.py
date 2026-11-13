@@ -15,6 +15,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     TokenUsage,
+    tokenize,
     tts,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
@@ -114,6 +115,8 @@ class TTS(tts.TTS):
         voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
         ref_audio: NotGivenOr[str] = NOT_GIVEN,
         response_format: NotGivenOr[RESPONSE_FORMAT] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
@@ -123,7 +126,11 @@ class TTS(tts.TTS):
             voice: The voice ID to use for synthesis.
             ref_audio: Base64-encoded audio sample for zero-shot voice cloning. Clears ``voice``.
             response_format: The audio format of synthesized speech, between ``mp3``, ``wav``, ``pcm``, ``opus`` or ``flac``. Defaults to ``mp3``.
+            sentence_tokenizer: What splits the text into the chunks the TTS is sent.
+            pacing: A ``SentenceStreamPacer``, or ``None`` to send each chunk as soon as it is
+                split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(voice) and is_given(ref_audio):
             raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
         if is_given(model):

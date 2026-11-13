@@ -263,7 +263,8 @@ async def test_stream_preserves_punctuation_and_timed_spacing() -> None:
                 stream.end_input()
                 async with asyncio.timeout(2):
                     frames = [ev async for ev in stream]
-            assert "".join(sent) == text
+            # each chunk goes with a trailing separator, so sentences in one context stay apart
+            assert "".join(sent).rstrip() == text
             words = [
                 w.text
                 for ev in frames

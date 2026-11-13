@@ -19,7 +19,6 @@ server = AgentServer(
     agent_name="cloud-agent",
     listeners={"health": {"host": "127.0.0.1", "port": int(os.environ.get("POD_HEALTH_PORT", 0))}},
     num_idle_processes=1,
-    drain_timeout=float(os.environ.get("POD_DRAIN_TIMEOUT", 3600)),
     load_threshold=0.0,
     _load_fnc=lambda: 1.0,
 )

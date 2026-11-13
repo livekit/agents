@@ -177,7 +177,7 @@ async def test_speech_and_keepalives_wait_for_the_connected_state(
     for _ in range(10):
         await audio.capture_frame(frame(0.1))
     audio.flush()
-    await asyncio.sleep(0.15)  # the window under test: several keepalive periods
+    await asyncio.sleep(0.06)  # the window under test: three keepalive periods
     assert unconnected.commands.empty(), "sent before the session was connected"
 
     unconnected.connected.set()

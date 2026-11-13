@@ -36,6 +36,7 @@ use wire::FallbackModel;
 
 pub mod emitter;
 pub(crate) mod fed;
+pub mod options;
 pub mod pacing;
 mod provider_options;
 mod pump;
@@ -444,8 +445,11 @@ impl Tts for GatewayTts {
     }
 
     /// The host `inference.TTS`'s `options`, which this view reports for.
-    fn options(&self) -> lk_agents_abi::tts::types::TtsOptions {
-        self.reporter.as_ref().map(|host| host.options()).unwrap_or_default()
+    fn options(&self) -> Arc<dyn lk_agents_abi::tts::types::SharedTtsOptions> {
+        match &self.reporter {
+            Some(host) => host.options(),
+            None => Arc::new(lk_agents_abi::tts::types::TtsOptions::default()),
+        }
     }
 
     fn prewarm(&self) {

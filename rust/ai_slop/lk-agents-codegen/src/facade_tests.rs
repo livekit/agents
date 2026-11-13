@@ -220,3 +220,29 @@ fn a_bound_argument_that_is_also_a_parameter_is_refused() {
     let error = emit(&source).unwrap_err();
     assert!(error.contains("bind(agent) is bound, not a parameter"), "{error}");
 }
+
+// Catches: a base parameter sent to the native (which lacks it) or dropped instead of passed on
+// to the base's method of the same name.
+#[test]
+fn a_base_parameter_goes_to_the_base_method_not_the_native() {
+    let source = r#"
+        #[crate::host(class(name = "_core_Client"))]
+        pub trait Client {
+            #[host(call)]
+            fn configure(&self, #[host(kw, default = None)] voice: Option<String>);
+        }
+        #[crate::host(facade(path = "livekit.agents.tts", native = Client))]
+        pub trait Configured {
+            #[host(base(note))]
+            fn configure(
+                &self,
+                #[host(kw, default = None)] voice: Option<String>,
+                #[host(default = None)] note: Option<String>,
+            );
+        }
+    "#;
+    let python = emit(source).unwrap();
+    assert!(python.contains(
+        "        self._native.configure(voice=voice)\n        super().configure(note=note)\n"
+    ));
+}

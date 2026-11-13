@@ -33,6 +33,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -638,13 +639,20 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             voice (str): Voice to use.
             language (str): Language code.
             speed (float): Playback speed multiplier.
+            sentence_tokenizer (SentenceTokenizer): What splits the text into the chunks the TTS
+                is sent.
+            pacing (SentenceStreamPacer | None): A ``SentenceStreamPacer``, or ``None`` to send each
+                chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         invalidate_pool = False
         if is_given(voice):
             if not voice.strip():

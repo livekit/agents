@@ -29,6 +29,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
+    tokenize,
     tts,
     utils,
 )
@@ -173,6 +174,8 @@ class TTS(tts.TTS):
         lang_code: NotGivenOr[TTSLangCodes | str] = NOT_GIVEN,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         speed: NotGivenOr[float | None] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -184,7 +187,12 @@ class TTS(tts.TTS):
             lang_code (TTSLangCodes | str, optional): The language code for synthesis.
             voice_id (str, optional): The voice ID for the desired voice.
             speed (float, optional): The audio playback speed.
+            sentence_tokenizer (SentenceTokenizer, optional): What splits the text into the chunks
+                the TTS is sent.
+            pacing (SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or ``None`` to
+                send each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         connection_params_changed = False
         if is_given(lang_code):
             self._opts.lang_code = LanguageCode(lang_code)

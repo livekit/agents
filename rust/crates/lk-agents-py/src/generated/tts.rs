@@ -344,25 +344,6 @@ fn _extract_synthesis_checks_validate_synthesis_duration(
 }
 type SynthesisChecksValidateSynthesisDurationInput = f64;
 
-/// ``TTSOptions.pacing`` until it is set: a ``SentenceStreamPacer`` for a TTS without
-/// streaming, ``None`` for a streaming one.
-#[pyfunction]
-#[pyo3(signature = (capabilities))]
-pub fn default_tts_pacing<'py>(
-    py: Python<'py>,
-    capabilities: Bound<'_, PyAny>,
-) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
-    let capabilities =
-        crate::generated::records::tts::tts_capabilities_from_py(capabilities.as_any())?;
-    let out = py.detach(|| {
-        <SynthesisChecksImpl as ::lk_agents_abi::tts::streams::SynthesisChecks>::default_tts_pacing(
-            capabilities,
-        )
-    });
-    out.map(|value| crate::generated::records::stream_pacer::sentence_stream_pacer_to_py(py, value))
-        .transpose()
-}
-
 /// Why a synthesis of ``text`` that pushed ``duration`` seconds of audio (and, streamed,
 /// ``segments``) failed, or ``None``.
 #[pyfunction]
@@ -383,6 +364,109 @@ pub fn validate_synthesis(
         )
     });
     ::pyo3::PyResult::Ok(out)
+}
+
+// Declared in rust/crates/lk-agents-abi/src/tts/tts.rs.
+type TtsOptionsCellImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::TtsOptionsCell;
+
+/// `_core.TtsOptionsCell`: the options a `tts.TTS` owns (`tts.options`), shared with every
+/// synthesis over it. A synthesis reads them when its stage opens; one already open keeps them.
+#[pyclass(frozen, name = "TtsOptionsCell", module = "livekit.agents._core")]
+pub struct TtsOptionsCell(pub(crate) ::std::sync::Arc<TtsOptionsCellImpl>);
+
+#[pymethods]
+impl TtsOptionsCell {
+    /// Split by `sentence_tokenizer` (through `leg`, its core leg), paced as a TTS with
+    /// `capabilities` is by default.
+    #[new]
+    #[pyo3(signature = (sentence_tokenizer, leg, capabilities))]
+    fn new(
+        py: Python<'_>,
+        sentence_tokenizer: Bound<'_, PyAny>,
+        leg: Bound<'_, PyAny>,
+        capabilities: Bound<'_, PyAny>,
+    ) -> PyResult<TtsOptionsCell> {
+        crate::py_calls::check_pid()?;
+        let sentence_tokenizer =
+            crate::py_objects::object_ref_from_py(sentence_tokenizer.as_any())?;
+        let leg = crate::generated::records::tts::sentence_tokenizer_leg_from_py(leg.as_any())?;
+        let capabilities =
+            crate::generated::records::tts::tts_capabilities_from_py(capabilities.as_any())?;
+        let out = py.detach(|| {
+            <TtsOptionsCellImpl as ::lk_agents_abi::tts::types::TtsOptionsCell>::new(
+                sentence_tokenizer,
+                leg,
+                capabilities,
+            )
+        });
+        ::pyo3::PyResult::Ok(TtsOptionsCell(::std::sync::Arc::new(out)))
+    }
+
+    /// The tokenizer as it was given.
+    #[getter]
+    fn sentence_tokenizer<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <TtsOptionsCellImpl as ::lk_agents_abi::tts::types::TtsOptionsCell>::sentence_tokenizer(
+                &self.0,
+            )
+        });
+        crate::py_objects::object_ref_to_py(py, out)
+    }
+
+    #[getter]
+    fn pacing<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <TtsOptionsCellImpl as ::lk_agents_abi::tts::types::TtsOptionsCell>::pacing(&self.0)
+        });
+        out.map(|value| {
+            crate::generated::records::stream_pacer::sentence_stream_pacer_to_py(py, value)
+        })
+        .transpose()
+    }
+
+    /// Replace both at once.
+    #[pyo3(signature = (sentence_tokenizer, leg, pacing))]
+    fn set(
+        &self,
+        py: Python<'_>,
+        sentence_tokenizer: Bound<'_, PyAny>,
+        leg: Bound<'_, PyAny>,
+        pacing: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let sentence_tokenizer =
+            crate::py_objects::object_ref_from_py(sentence_tokenizer.as_any())?;
+        let leg = crate::generated::records::tts::sentence_tokenizer_leg_from_py(leg.as_any())?;
+        let pacing = pacing
+            .map(|v| {
+                crate::generated::records::stream_pacer::sentence_stream_pacer_from_py(v.as_any())
+            })
+            .transpose()?;
+        py.detach(|| {
+            <TtsOptionsCellImpl as ::lk_agents_abi::tts::types::TtsOptionsCell>::set(
+                &self.0,
+                sentence_tokenizer,
+                leg,
+                pacing,
+            )
+        });
+        Ok(())
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::tts::types::SharedTtsOptions`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::tts::types::SharedTtsOptions>(),
+        read: |obj| {
+            let this = obj.cast::<TtsOptionsCell>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::tts::types::SharedTtsOptions> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tts/stream_adapter.rs.
@@ -738,7 +822,7 @@ pub struct TtsProxy {
     text_unit: ::lk_agents_abi::tts::types::TextUnit,
     retries_itself: bool,
     max_text_len: ::std::option::Option<usize>,
-    options: ::lk_agents_abi::tts::types::TtsOptions,
+    options: ::std::sync::Arc<dyn ::lk_agents_abi::tts::types::SharedTtsOptions>,
     conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
     /// Appended to every awaited call once bound.
     conn: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
@@ -831,7 +915,15 @@ impl TtsProxy {
         };
         let options = {
             let v = crate::py_calls::read(obj, "_core_options")?;
-            crate::generated::records::tts::tts_options_from_py(v.as_any())?
+            crate::py_objects::native::<dyn ::lk_agents_abi::tts::types::SharedTtsOptions>(
+                v.as_any(),
+            )
+            .ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "Tts._core_options",
+                    ": expected a `_core.TtsOptionsCell`"
+                ))
+            })?
         };
         let conn_options = {
             let v = crate::py_calls::read(obj, "_core_conn_options")?;
@@ -923,7 +1015,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         ::std::clone::Clone::clone(&self.max_text_len)
     }
 
-    fn options(&self) -> ::lk_agents_abi::tts::types::TtsOptions {
+    fn options(&self) -> ::std::sync::Arc<dyn ::lk_agents_abi::tts::types::SharedTtsOptions> {
         ::std::clone::Clone::clone(&self.options)
     }
 

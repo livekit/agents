@@ -32,7 +32,6 @@ from livekit.agents import (
     APITimeoutError,
     LanguageCode,
     stt,
-    tokenize,
 )
 from livekit.agents.metrics import STTMetrics
 from livekit.agents.types import TranscriptChunk
@@ -778,7 +777,6 @@ async def test_synthesis_delivers_all_pcm_without_wav_header_clicks(
         credentials=anonymous(),
         audio_encoding=encoding,
         sample_rate=24000,
-        tokenizer=tokenize.basic.SentenceTokenizer(),
     )
 
     async with provider:
@@ -872,7 +870,8 @@ async def test_closing_the_text_input_does_not_mask_the_api_error(
     async with provider:
         with pytest.raises(APITimeoutError):
             async with provider.stream(conn_options=OPTIONS) as stream:
-                stream.push_text("Hello. ")
+                # the stage sends a sentence once the next one starts; the input stays open
+                stream.push_text("Hello there, how are you today? The")
                 _ = [event async for event in stream]
     readers[0].cancel()
 

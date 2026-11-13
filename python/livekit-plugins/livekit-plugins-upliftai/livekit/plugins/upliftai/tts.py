@@ -22,6 +22,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
@@ -165,6 +166,8 @@ class TTS(tts.TTS):
         *,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         output_format: NotGivenOr[OutputFormat] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update TTS configuration options.
@@ -172,7 +175,11 @@ class TTS(tts.TTS):
         Args:
             voice_id: New voice ID
             output_format: New output format (see __init__ for options)
+            sentence_tokenizer: What splits the text into the chunks the TTS is sent.
+            pacing: A ``SentenceStreamPacer``, or ``None`` to send each chunk as soon as it is
+                split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(voice_id):
             self._opts.voice_settings.voice_id = voice_id
         if is_given(output_format):

@@ -25,6 +25,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -111,7 +112,12 @@ class TTS(tts.TTS):
         return self._session
 
     def update_options(
-        self, *, model: NotGivenOr[TTSModels] = NOT_GIVEN, voice: NotGivenOr[TTSVoices] = NOT_GIVEN
+        self,
+        *,
+        model: NotGivenOr[TTSModels] = NOT_GIVEN,
+        voice: NotGivenOr[TTSVoices] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
@@ -119,7 +125,12 @@ class TTS(tts.TTS):
         Args:
             model (SpeechModels | str, optional): Model to use. Default is None.
             voice (SpeechVoices | str, optional): Voice to use. Default is None.
+            sentence_tokenizer (tokenize.SentenceTokenizer, optional): What splits the text into the
+                chunks the TTS is sent.
+            pacing (tts.SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or
+                ``None`` to send each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(model):
             self._opts.model = model
         if is_given(voice):

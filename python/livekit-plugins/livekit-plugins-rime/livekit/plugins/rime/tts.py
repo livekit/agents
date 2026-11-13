@@ -29,6 +29,7 @@ from livekit.agents import (
     APIStatusError,
     http,
     redacted_cause,
+    tokenize,
     tts,
     utils,
 )
@@ -498,7 +499,10 @@ class TTS(tts.TTS):
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         websocket_url: NotGivenOr[str] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         updated_audio_format: RimeAudioFormat | None = None
         if self._websocket_v1_adapter is not None:
             if is_given(audio_format):

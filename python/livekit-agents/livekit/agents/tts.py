@@ -4,11 +4,13 @@ from typing import TYPE_CHECKING
 
 from livekit import rtc
 
-from . import utils
+from . import _core, tokenize, utils
 from ._generated import facades_tts as _facades, public_tts as _public
 from ._generated.public_tts import *  # noqa: F403
 from .types import (
+    NOT_GIVEN,
     USERDATA_TIMED_TRANSCRIPT,
+    NotGivenOr,
     TranscriptChunk,
 )
 
@@ -57,10 +59,24 @@ class _EmitterOutput:
 
 
 class FallbackAdapter(_facades.FallbackAdapter):
-    """Several TTS behind one: a failed one is skipped until it recovers."""
+    """Several TTS behind one: a failed one is skipped until it recovers. Each prepares its text
+    by its own options; ``options`` are the serving TTS's."""
 
     def prewarm(self) -> None:
         self._members[0].prewarm()
+
+    def update_options(
+        self,
+        *,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[SentenceStreamPacer | None] = NOT_GIVEN,
+    ) -> None:
+        """Change how every TTS of the chain prepares its text."""
+        for member in self._members:
+            member.update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
+
+    def _core_options(self) -> _core.TtsOptionsCell:
+        return self._active._core_options()
 
 
 class StreamAdapter(_facades.StreamAdapter):
@@ -73,14 +89,10 @@ class StreamAdapter(_facades.StreamAdapter):
             assert isinstance(self._tts, StreamAdapter)
             return self._tts._tts.markup._provider_key()
 
-    @property
-    def options(self) -> TTSOptions:
-        """The wrapped TTS's: the adapter prepares its text as that TTS would."""
-        return self._tts.options
-
-    @options.setter
-    def options(self, value: TTSOptions) -> None:
-        self._tts.options = value
+    def _core_options(self) -> _core.TtsOptionsCell:
+        # the wrapped TTS's: the adapter prepares its text as that TTS would, and
+        # update_options changes them
+        return self._tts._core_options()
 
     @property
     def model(self) -> str:

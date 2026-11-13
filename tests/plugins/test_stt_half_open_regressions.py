@@ -13,6 +13,8 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, http, stt
 from livekit.plugins import deepgram, elevenlabs, inworld, openai, telnyx
 
+HEARTBEAT = 0.05  # the heartbeat a plugin asks for, scaled down from its ~45 s
+
 _UNDETECTED = pytest.mark.xfail(
     strict=True,
     raises=TimeoutError,
@@ -50,12 +52,11 @@ async def test_a_silent_socket_fails_the_stream_with_a_connection_error(
 
     connect = http.HttpSession.ws_connect
 
-    # the heartbeat the plugin asks for, scaled down so the test waits ms rather than ~45 s; a
-    # plugin that asks for none still gets none
+    # a plugin that asks for no heartbeat still gets none
     # Any: ws_connect's keyword options, forwarded untouched
     async def scaled(self: http.HttpSession, url: str, **kwargs: Any) -> http.WebSocket:
         if kwargs.get("heartbeat") is not None:
-            kwargs["heartbeat"] = 0.2
+            kwargs["heartbeat"] = HEARTBEAT
         return await connect(self, url, **kwargs)
 
     monkeypatch.setattr(http.HttpSession, "ws_connect", scaled)
@@ -85,7 +86,7 @@ async def test_a_silent_socket_fails_the_stream_with_a_connection_error(
                 stream.push_frame(frame)
                 await asyncio.wait_for(accepted.wait(), 2)
                 with pytest.raises(APIConnectionError):
-                    async with asyncio.timeout(3):
+                    async with asyncio.timeout(10 * HEARTBEAT):
                         async for _ in stream:
                             pass
         finally:

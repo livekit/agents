@@ -29,6 +29,8 @@ class SonioxPeer:
         self.authorizations: list[str | None] = []
         self.configs: list[dict[str, object]] = []
         self.texts: list[dict[str, object]] = []
+        self.ended: list[str] = []
+        self.an_end = asyncio.Event()
         self.open: set[str] = set()
         self.max_open = 0
         self.on_text: Callable[[int, str], list[dict[str, object]] | None] = lambda n, sid: None
@@ -50,6 +52,9 @@ class SonioxPeer:
                 self.texts.append(message)
                 custom = self.on_text(len(self.texts), sid)
                 replies = custom if custom is not None else [{"stream_id": sid, "audio": AUDIO}]
+            if message.get("text_end"):
+                self.ended.append(sid)
+                self.an_end.set()
             if message.get("text_end") or message.get("cancel"):
                 replies.append({"stream_id": sid, "audio_end": True, "terminated": True})
             for reply in replies:
@@ -68,12 +73,10 @@ async def peer() -> AsyncIterator[tuple[SonioxPeer, str]]:
         yield peer, str(server.make_url("/tts").with_scheme("ws"))
 
 
-async def speak(tts: TTS, *sentences: str, pause: float = 0, retries: int = 0) -> int:
-    """Pushes ``sentences`` (``pause`` seconds apart) and returns the audio frames played."""
+async def speak(tts: TTS, *sentences: str, retries: int = 0) -> int:
+    """Pushes ``sentences`` and returns the audio frames played."""
     stream = tts.stream(conn_options=APIConnectOptions(max_retry=retries, retry_interval=0))
-    for i, sentence in enumerate(sentences):
-        if i and pause:
-            await asyncio.sleep(pause)  # the LLM stalls between sentences
+    for sentence in sentences:
         stream.push_text(sentence)
     stream.end_input()
     frames = len([ev async for ev in stream])
@@ -121,7 +124,8 @@ async def test_a_connection_error_fails_every_open_stream(
     tts = TTS(api_key="key", websocket_url=url)
     # the options `speak` uses: streams share a socket only when their options match
     first = tts.stream(conn_options=APIConnectOptions(max_retry=0, retry_interval=0))
-    first.push_text("The first synthesis is still speaking. ")
+    # the stage sends a sentence once the next one starts: "speaking." could be "Dr."
+    first.push_text("The first synthesis is still speaking. The")
     await anext(first)
 
     second = await asyncio.gather(
@@ -152,13 +156,24 @@ async def test_idle_gap_finalizes_the_stream_and_opens_a_new_one(
     https://github.com/livekit/agents/issues/6225
     """
     server, url = peer
-    tts = TTS(api_key="key", websocket_url=url, stream_idle_timeout=0.1)
-
-    frames = await speak(tts, "First sentence here. ", "Second one! ", "Third?", pause=0.3)
+    tts = TTS(api_key="key", websocket_url=url, stream_idle_timeout=0.001)
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, retry_interval=0))
+    # the stage sends a sentence once the next one starts: "now." could be "Dr."
+    stream.push_text("The first sentence is spoken now. The")
+    await server.an_end.wait()  # the LLM stalls: the idle stream is finalized
+    stream.push_text(" second one comes after the stall.")
+    stream.end_input()
+    frames = len([ev async for ev in stream])
+    await stream.aclose()
     await tts.aclose()
 
     assert frames > 0
-    assert len(server.configs) >= 2
+    first, second = (c["stream_id"] for c in server.configs)
+    assert [(t["stream_id"], str(t["text"]).strip()) for t in server.texts] == [
+        (first, "The first sentence is spoken now."),
+        (second, "The second one comes after the stall."),
+    ]
+    assert server.ended == [first, second]
     assert server.max_open == 1
 
 

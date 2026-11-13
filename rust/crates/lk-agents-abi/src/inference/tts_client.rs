@@ -122,14 +122,24 @@ pub trait InferenceTtsFacade {
     #[host(getter)]
     fn capabilities(&self) -> crate::TtsCapabilities;
 
-    /// Update the options the next synthesis uses.
-    #[host(not_given, annotation(model = ".inference_tts.TTSModels | str"))]
+    /// Update the options the next synthesis uses: the gateway's, and how the framework prepares
+    /// the text (``tts.TTS.update_options``).
+    #[host(
+        not_given,
+        annotation(
+            model = ".inference_tts.TTSModels | str",
+            sentence_tokenizer = "..tokenize.SentenceTokenizer"
+        ),
+        base(sentence_tokenizer, pacing)
+    )]
     fn update_options(
         &self,
         #[host(kw, default = None)] voice: Option<String>,
         #[host(default = None)] model: Option<String>,
         #[host(default = None)] language: Option<String>,
         #[host(default = None)] extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
+        sentence_tokenizer: crate::Maybe<crate::HostRef>,
+        pacing: crate::Maybe<Option<crate::tts::stream_pacer::SentenceStreamPacer>>,
     );
 }
 

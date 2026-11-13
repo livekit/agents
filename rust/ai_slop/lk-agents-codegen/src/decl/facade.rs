@@ -146,6 +146,9 @@ pub struct Adapt {
     pub chain: bool,
     /// `setter = prop`: assigns the property `prop`, a getter declared before it.
     pub setter: Option<String>,
+    /// `base(p, ..)`: parameters the base class's method of the same name takes, passed to it by
+    /// keyword after the native call.
+    pub base: Vec<String>,
 }
 
 /// `availability(observer = "p", members = "m", kind = "..", event = "..", record = "module.Name")`

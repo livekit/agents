@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import pytest
 from aiohttp import web
@@ -28,6 +28,26 @@ async def recognize(
     messages: Sequence[Mapping[str, object]], count: int, params: STTOptions | None = None
 ) -> list[stt.SpeechEvent]:
     """The first ``count`` events of a stream whose peer sends ``messages`` after the config."""
+    return await _recognize(messages, lambda events: len(events) == count, params)
+
+
+async def recognize_through(
+    messages: Sequence[Mapping[str, object]], text: str
+) -> list[stt.SpeechEvent]:
+    """The events of a stream whose peer sends ``messages`` after the config, through the first
+    one carrying ``text``."""
+
+    def heard(events: list[stt.SpeechEvent]) -> bool:
+        return any(a.text == text for a in events[-1].alternatives)
+
+    return await _recognize(messages, heard)
+
+
+async def _recognize(
+    messages: Sequence[Mapping[str, object]],
+    done: Callable[[list[stt.SpeechEvent]], bool],
+    params: STTOptions | None = None,
+) -> list[stt.SpeechEvent]:
 
     async def soniox(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -44,8 +64,11 @@ async def recognize(
     async with TestServer(app) as server, http.open():
         model = STT(api_key="key", base_url=str(server.make_url("/transcribe")), params=params)
         stream = model.stream(conn_options=APIConnectOptions(max_retry=0))
+        events: list[stt.SpeechEvent] = []
         try:
-            return [await anext(stream) for _ in range(count)]
+            while not events or not done(events):
+                events.append(await anext(stream))
+            return events
         finally:
             await stream.aclose()
             await model.aclose()
@@ -141,12 +164,12 @@ async def test_endpoint_after_a_retracted_interim_finishes_speech() -> None:
         {"tokens": [token("hello", final=False)]},
         {"tokens": []},
         {"tokens": [END]},
+        {"tokens": [token("later")]},  # the next utterance: the endpoint before it was handled
     ]
 
-    async with asyncio.timeout(2):  # the bug is that END_OF_SPEECH never comes
-        events = await recognize(messages, 3)
+    events = await recognize_through(messages, "later")
 
-    assert events[-1].type == SpeechEventType.END_OF_SPEECH
+    assert SpeechEventType.END_OF_SPEECH in [e.type for e in events[:-1]]
 
 
 @pytest.mark.xfail(

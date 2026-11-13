@@ -99,8 +99,8 @@ impl Tts for Provider {
     fn max_text_len(&self) -> Option<usize> {
         self.limit
     }
-    fn options(&self) -> TtsOptions {
-        self.options.clone()
+    fn options(&self) -> Arc<dyn lk_agents_abi::tts::types::SharedTtsOptions> {
+        Arc::new(self.options.clone())
     }
     fn synthesize<'a>(
         &'a self,

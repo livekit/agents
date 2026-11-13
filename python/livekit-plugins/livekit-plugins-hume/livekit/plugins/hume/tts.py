@@ -29,6 +29,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -199,6 +200,8 @@ class TTS(tts.TTS):
         context: NotGivenOr[str | list[Utterance] | None] = NOT_GIVEN,
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
         audio_format: NotGivenOr[AudioFormat] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options used for all future synthesis (until updated again)
 
@@ -211,7 +214,11 @@ class TTS(tts.TTS):
             context: Optional context for synthesis, either as text or list of utterances.
             instant_mode: Whether to use instant mode.
             audio_format: Output audio format (mp3, wav, or pcm).
+            sentence_tokenizer: What splits the text into the chunks the TTS is sent.
+            pacing: A ``SentenceStreamPacer``, or ``None`` to send each chunk as soon as it is
+                split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(description):
             self._opts.description = description
         if is_given(speed):

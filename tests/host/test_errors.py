@@ -594,6 +594,49 @@ async def test_a_native_tts_failure_in_a_session_is_its_error_event(rejecting_ga
     assert all(isinstance(e.error, APIStatusError) and e.error.status_code == 401 for e in errors)
 
 
+@pytest.mark.parametrize("status", [401, 429])
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_a_native_tts_request_reports_its_final_error_once(
+    status: int, streamed: bool
+) -> None:
+    """``synthesize()`` and ``stream()`` over a native TTS report each retried attempt as a
+    recoverable ``error`` and the error they raise as the one final event."""
+    requests = 0
+
+    async def reject(request: web.Request) -> web.Response:
+        nonlocal requests
+        requests += 1
+        return web.json_response({"error": "refused"}, status=status)
+
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", reject)
+    async with TestServer(app) as server:
+        model = inference.TTS(
+            "cartesia/sonic-3",
+            base_url=str(server.make_url("/v1")),
+            api_key="key",
+            api_secret="secret",
+        )
+        events: list[tts.TTSError] = []
+        model.on("error", events.append)
+        if streamed:
+            streaming = model.stream(conn_options=NO_RETRY)
+            streaming.push_text("Hello there.")
+            streaming.end_input()
+            stream: tts.SynthesizeStream | tts.ChunkedStream = streaming
+        else:
+            stream = model.synthesize("Hello there.", conn_options=NO_RETRY)
+        with pytest.raises(APIStatusError) as raised:
+            _ = [audio async for audio in stream]
+        await stream.aclose()
+        await model.aclose()
+
+    assert (raised.value.status_code, raised.value.retryable) == (status, status == 429)
+    assert requests == (2 if status == 429 else 1)
+    assert [e.recoverable for e in events] == [True] * (requests - 1) + [False]
+    assert all(isinstance(e.error, APIStatusError) for e in events)
+
+
 # A node that calls the session's default must still run a native provider natively: handed its
 # Python wrapper instead, the core runs the wrapper as a plugin, whose provider hooks a native
 # provider does not have (a `tts_node` over `inference.TTS` failed every reply with

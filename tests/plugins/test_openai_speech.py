@@ -539,7 +539,7 @@ async def test_a_failure_keeps_its_category_and_is_not_retried_by_the_sdk(
     async def fail(request: web.Request) -> web.StreamResponse:
         requests.append(request.headers["authorization"])
         if failure == "timeout":
-            await asyncio.sleep(2)
+            await asyncio.Event().wait()  # never answers
         if failure == "connection":
             assert request.transport is not None
             request.transport.close()
@@ -550,7 +550,8 @@ async def test_a_failure_keeps_its_category_and_is_not_retried_by_the_sdk(
         )
 
     routes = [("POST", path, fail) for path in ("/v1/audio/transcriptions", "/v1/audio/speech")]
-    options = APIConnectOptions(max_retry=0, read_timeout=0.5)
+    # a silent server times the read out at once
+    options = APIConnectOptions(max_retry=0, read_timeout=0.05 if failure == "timeout" else 5)
     async with _serve(*routes, ("POST", "/v1/responses", fail)) as base_url:
         with pytest.raises(error) as caught:
             await _call(provider, base_url, options)

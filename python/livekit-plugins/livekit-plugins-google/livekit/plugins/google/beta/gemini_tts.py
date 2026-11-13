@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
-from livekit.agents import APIConnectionError, APIStatusError, tts, utils
+from livekit.agents import APIConnectionError, APIStatusError, tokenize, tts, utils
 from livekit.agents.tts import split_expr_markup
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -250,6 +250,8 @@ class TTS(tts.TTS):
         *,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
@@ -257,7 +259,12 @@ class TTS(tts.TTS):
         Args:
             voice_name (str, optional): The voice to use for synthesis.
             speaker (str, optional): Which configured speaker to voice from now on.
+            sentence_tokenizer (tokenize.SentenceTokenizer, optional): What splits the text into the
+                chunks the TTS is sent.
+            pacing (tts.SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or
+                ``None`` to send each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(voice_name):
             self._opts.voice_name = voice_name
         if is_given(speaker):

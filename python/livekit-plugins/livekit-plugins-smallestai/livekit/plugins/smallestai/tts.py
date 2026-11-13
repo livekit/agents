@@ -32,6 +32,7 @@ from livekit.agents import (
     LanguageCode,
     create_api_error_from_http,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -231,8 +232,11 @@ class TTS(tts.TTS):
         max_buffer_flush_ms: NotGivenOr[int] = NOT_GIVEN,
         use_continuations: NotGivenOr[bool] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options."""
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(model):
             self._opts.model = model
         if is_given(voice_id):

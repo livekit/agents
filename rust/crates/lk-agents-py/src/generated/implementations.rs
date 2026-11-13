@@ -106,6 +106,7 @@ impl super::Implementations for Selected {
     type TtsStreamAdapter = ::lk_agents_runtime::inference::tts::sentence_adapter::StreamAdapter;
     type TtsStream = ::lk_agents_runtime::inference::tts::stream::TtsStream;
     type SynthesisChecks = ::lk_agents_runtime::inference::tts::stream::SynthesisChecks;
+    type TtsOptionsCell = ::lk_agents_runtime::inference::tts::options::OptionsCell;
     type InferenceEot = ::lk_agents_runtime::inference::eot::AudioEot;
     type EotStream = ::lk_agents_runtime::inference::eot::DetectorStream;
     type InterruptionDetector =

@@ -14,6 +14,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     http,
+    tokenize,
     tts,
     utils,
 )
@@ -187,6 +188,8 @@ class TTS(tts.TTS):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         bit_rate: NotGivenOr[int | None] = NOT_GIVEN,
         speed: NotGivenOr[float | None] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -197,7 +200,12 @@ class TTS(tts.TTS):
                 See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
             speed (float | None): Speaking rate, from 0.7 to 1.5; None leaves it out of the request.
                 See https://developers.deepgram.com/docs/tts-voice-controls
+            sentence_tokenizer (tokenize.SentenceTokenizer): What splits the text into the chunks
+                the TTS is sent.
+            pacing (tts.SentenceStreamPacer | None): A ``SentenceStreamPacer``, or ``None`` to send
+                each chunk as soon as it is split.
         """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(speed) and speed is not None and not MIN_SPEED <= speed <= MAX_SPEED:
             raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
 
