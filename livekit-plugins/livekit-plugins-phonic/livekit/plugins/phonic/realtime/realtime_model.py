@@ -1554,8 +1554,10 @@ class RealtimeSession(llm.RealtimeSession):
         if self._session_should_close.is_set() or not self._socket:
             return
         logger.info("Sending caller keypad input", extra={"lk.pii.digits": digits})
+        # The count saves the model from counting the keys itself, which it sometimes gets wrong.
+        count = f"{len(digits)} key" if len(digits) == 1 else f"{len(digits)} keys"
         await self._socket.send_generate_reply(
-            GenerateReplyPayload(user_message=f"(User pressed {digits} on the keypad)")
+            GenerateReplyPayload(user_message=f"(User pressed {digits} on the keypad: {count})")
         )
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> typing.Iterator[rtc.AudioFrame]:

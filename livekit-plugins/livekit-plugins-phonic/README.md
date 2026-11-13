@@ -176,4 +176,4 @@ If you have Webhook tools set up on the Phonic platform, you can use `phonic_too
 
 ### Caller keypad input
 
-On phone calls, the plugin forwards the caller's keypad presses to the agent. Digits are buffered until the caller pauses for 2 seconds (or presses 32 keys), then sent as one user turn, `(User pressed 1234# on the keypad)`, which the agent replies to. Every key, including `*` and `#`, is passed through as typed. You don't need your own `sip_dtmf_received` handler for this.
+On phone calls, the plugin forwards the caller's keypad presses to the agent. Digits are buffered until the caller pauses for 2 seconds (or presses 32 keys), then sent as one user turn, `(User pressed 1234# on the keypad: 5 keys)`, which the agent replies to. Every key, including `*` and `#`, is passed through as typed. You don't need your own `sip_dtmf_received` handler for this.
