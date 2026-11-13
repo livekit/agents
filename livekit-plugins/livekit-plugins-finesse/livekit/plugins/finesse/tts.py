@@ -242,11 +242,9 @@ class TTS(tts.TTS):
             )
         except aiohttp.WSServerHandshakeError as e:
             # The handshake error keeps the request headers, including the API key.
-            retryable = e.status in (429, 503)
             raise APIStatusError(
                 "Finesse refused the connection",
                 status_code=e.status,
-                retryable=retryable,
             ) from None
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:

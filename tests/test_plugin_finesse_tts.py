@@ -339,11 +339,11 @@ async def test_pause_in_the_text_longer_than_the_timeout_still_speaks(
     server: FakeFinesse, session: aiohttp.ClientSession
 ) -> None:
     tts = _tts(server, session)
-    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.3))
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.05))
     stream.push_text("Let me check that for you.")
 
     async def llm() -> None:
-        await asyncio.sleep(1.0)  # e.g. a tool call, well past the 0.3 s timeout
+        await asyncio.sleep(0.1)  # e.g. a tool call, well past the 0.05 s timeout
         stream.push_text(" Your order shipped today.")
         stream.end_input()
 
@@ -369,7 +369,7 @@ async def test_timeout_applies_once_the_input_is_finalized(
 
     server.answer_finalize = False  # the server never finishes the context
     tts = _tts(server, session)
-    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.3))
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.05))
     stream.push_text("Hello.")
     stream.end_input()
 
@@ -567,7 +567,19 @@ async def test_unexpected_close(
     await tts.aclose()
 
 
-@pytest.mark.parametrize(("status", "retryable"), [(401, False), (429, True), (503, True)])
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [
+        (401, False),
+        (402, False),
+        (403, False),
+        (429, True),
+        (500, True),
+        (502, True),
+        (503, True),
+        (504, True),
+    ],
+)
 async def test_refused_handshake(
     server: FakeFinesse, session: aiohttp.ClientSession, status: int, retryable: bool
 ) -> None:
