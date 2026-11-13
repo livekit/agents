@@ -198,7 +198,8 @@ jobs:
           # AWS_REGION: ${{ secrets.AWS_REGION }}
           SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
         run: |
-          uv run pytest -n 3 -v --stt --tb=long --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
+          set -o pipefail
+          uv run pytest -n 3 -v --stt --tb=long --junitxml=test-results.xml 2>&1 | tee test-output.txt
 
       - name: Cleanup Google credentials
         if: always()
