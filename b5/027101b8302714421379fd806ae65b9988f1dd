@@ -1,0 +1,19 @@
+tests/test_plugin_elevenlabs_stt.py
+  s_1b8b1c74b18a89::t_3465d978ef1020 459
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b5027101b8302714421379fd806ae65b9988f1dd",
+  "prompts": {},
+  "sessions": {
+    "s_1b8b1c74b18a89": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1d0fd-83d3-7c21-aae2-b80c9c716f17",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
