@@ -1410,3 +1410,359 @@ async def test_an_update_during_speech_does_not_flush_deferred_keyterms() -> Non
         await stream.aclose()
 
     assert keyterm_updates() == [["Acme"]]
+
+
+# -- coordinated gateway handoff --
+
+
+async def _handoff_reply(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+    kind = event["type"]
+    if kind == "session.create":
+        ws.reply("session.created")
+        if ws.index:
+            ws.reply("session.handoff.ready", handoff_id="h1")
+    elif kind == "session.update":
+        ws.reply("session.updated", success=True)
+    elif kind == "session.handoff.pause":
+        ws.reply("session.handoff.drained", handoff_id="h1")
+    elif kind == "session.handoff.complete":
+        ws.reply("session.handoff.accepted", handoff_id="h1")
+
+
+async def test_partial_audio_precedes_a_live_update() -> None:
+    gateway = _Gateway(_handoff_reply)
+    stream = _gateway_stt(gateway).stream(conn_options=_no_retry())
+    try:
+        await _live(stream)
+        stream.push_frame(_silence(16000, 0.02))
+        stream.update_options(language="fr")
+        await gateway.seen["session.update"].wait()
+        assert gateway.types() == ["session.create", "input_audio", "session.update"]
+        audio = gateway.messages("input_audio")[0]
+        assert len(base64.b64decode(audio["audio"])) == 640
+    finally:
+        await stream.aclose()
+
+
+async def test_handoff_keeps_updates_and_partial_audio_on_each_side_of_the_barrier() -> None:
+    paused = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "session.handoff.pause":
+            paused.set()
+            await release.wait()
+        await _handoff_reply(ws, event)
+
+    gateway = _Gateway(handler)
+    stream = _gateway_stt(gateway, language="en").stream(conn_options=_no_retry())
+    try:
+        await _live(stream)
+        stream.push_frame(_silence(16000, 0.02))
+        stream.update_options(language="de", extra={"keyterm": ["before"]})
+        await gateway.seen["session.update"].wait()
+        gateway.sockets[0].reply("session.handoff.request", handoff_id="h1")
+        await paused.wait()
+        stream.push_frame(_silence(16000, 0.02))
+        stream.update_options(language="fr", extra={"keyterm": ["after"]})
+        stream.push_frame(_silence(16000, 0.02))
+        stream.flush()
+        assert len(gateway.sockets) == 1
+        release.set()
+        # A final input frame on the replacement proves all preceding queue items ran.
+        stream.push_frame(_silence(16000))
+        while len(gateway.sockets) < 2 or gateway.types(1).count("input_audio") < 4:
+            await asyncio.sleep(0.01)
+        assert gateway.types() == [
+            "session.create",
+            "input_audio",
+            "session.update",
+            "session.handoff.pause",
+            "session.handoff.complete",
+            "session.handoff.switched",
+        ]
+        replacement = gateway.sockets[1].received
+        assert replacement[0]["settings"]["language"] == "de"
+        assert replacement[0]["settings"]["extra"]["keyterm"] == ["before"]
+        assert gateway.types(1)[:4] == [
+            "session.create",
+            "input_audio",
+            "session.update",
+            "input_audio",
+        ]
+        assert replacement[2]["settings"]["language"] == "fr"
+        assert gateway.sockets[0].closed
+    finally:
+        release.set()
+        await stream.aclose()
+    assert all(ws.closed for ws in gateway.sockets)
+
+
+async def test_handoff_waits_for_preceding_update_acknowledgments() -> None:
+    update_sent = asyncio.Event()
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "session.update":
+            update_sent.set()
+            return
+        await _handoff_reply(ws, event)
+
+    gateway = _Gateway(handler)
+    stream = _gateway_stt(gateway, language="en").stream(conn_options=_no_retry())
+    try:
+        await _live(stream)
+        stream.update_options(language="fr")
+        await update_sent.wait()
+        gateway.sockets[0].reply("session.handoff.request", handoff_id="h1")
+        await asyncio.sleep(0.01)
+        assert "session.handoff.pause" not in gateway.types()
+        gateway.sockets[0].reply("session.updated", success=True)
+        await gateway.seen["session.handoff.switched"].wait()
+        assert gateway.sockets[1].received[0]["settings"]["language"] == "fr"
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("stage", ["pause", "connect", "ready", "complete", "switched"])
+@pytest.mark.parametrize("failure", ["abort", "disconnect", "candidate_error"])
+async def test_handoff_failure_at_each_stage(stage: str, failure: str) -> None:
+    reached = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        kind = event["type"]
+        blocked = (
+            (stage == "pause" and kind == "session.handoff.pause")
+            or (stage == "ready" and kind == "session.create" and ws.index == 1)
+            or (stage == "complete" and kind == "session.handoff.complete")
+            or (stage == "switched" and kind == "session.handoff.switched")
+        )
+        if blocked:
+            reached.set()
+            await release.wait()
+        await _handoff_reply(ws, event)
+
+    gateway = _Gateway(handler)
+    connect = gateway.ws_connect
+
+    async def ws_connect(url: str, **kwargs: Any) -> _GatewaySocket:
+        if stage == "connect" and gateway.sockets:
+            reached.set()
+            await release.wait()
+        return await connect(url, **kwargs)
+
+    gateway.ws_connect = ws_connect  # type: ignore[method-assign]
+    stream = _gateway_stt(gateway).stream(conn_options=_no_retry())
+    try:
+        await _live(stream)
+        old = gateway.sockets[0]
+        old.reply("session.handoff.request", handoff_id="h1")
+        await reached.wait()
+        stream.push_frame(_silence(16000))
+        if failure == "abort":
+            old.reply("session.handoff.abort", handoff_id="h1")
+        elif failure == "disconnect":
+            old.hang_up(1001)
+        elif len(gateway.sockets) > 1:
+            gateway.sockets[1].reply("error", code=429)
+        else:
+            old.reply("session.handoff.abort", handoff_id="h1")
+        # The reader must report failures even while a write or dial is blocked.
+        await asyncio.sleep(0.01)
+        if failure == "disconnect":
+            with pytest.raises(APIError):
+                await stream._task
+        else:
+            await gateway.seen["input_audio"].wait()
+            assert gateway.messages("input_audio")
+            assert "input_audio" in gateway.types()
+            assert "session.handoff.switched" not in gateway.types() or stage == "switched"
+            assert all(ws.closed for ws in gateway.sockets[1:])
+    finally:
+        release.set()
+        await stream.aclose()
+
+
+@pytest.mark.parametrize(
+    "blocked_kind",
+    [
+        "session.handoff.pause",
+        "session.handoff.complete",
+        "session.handoff.switched",
+        "session.create",
+    ],
+)
+async def test_handoff_deadline_bounds_writes(
+    blocked_kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(inference_stt, "HANDOFF_TIMEOUT", 0.1)
+    reached = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == blocked_kind and (blocked_kind != "session.create" or ws.index):
+            reached.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        await _handoff_reply(ws, event)
+
+    gateway = _Gateway(handler)
+    stream = _gateway_stt(gateway).stream(conn_options=_no_retry())
+    try:
+        await _live(stream)
+        gateway.sockets[0].reply("session.handoff.request", handoff_id="h1")
+        await reached.wait()
+        stream.push_frame(_silence(16000))
+        await gateway.seen["input_audio"].wait()
+        assert cancelled.is_set()
+        assert "session.handoff.abort" in gateway.types()
+        assert "input_audio" in gateway.types()
+        assert all(ws.closed for ws in gateway.sockets[1:])
+    finally:
+        await stream.aclose()
+
+
+async def test_handoff_refuses_uncertain_configuration() -> None:
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "session.update":
+            ws.reply("session.updated", success=False)
+        else:
+            await _handoff_reply(ws, event)
+
+    gateway = _Gateway(handler)
+    stream = _gateway_stt(gateway).stream(conn_options=_no_retry())
+    try:
+        await _live(stream)
+        stream.update_options(language="fr")
+        await gateway.seen["session.update"].wait()
+        gateway.sockets[0].reply("session.handoff.request", handoff_id="h1")
+        await gateway.seen["session.handoff.abort"].wait()
+        stream.push_frame(_silence(16000))
+        await gateway.seen["input_audio"].wait()
+        assert len(gateway.sockets) == 1
+    finally:
+        await stream.aclose()
+
+
+async def test_live_updates_share_the_input_queue_before_connect() -> None:
+    gateway = _Gateway(_handoff_reply)
+    stream = _gateway_stt(gateway, language="en").stream(conn_options=_no_retry())
+    try:
+        stream.push_frame(_silence(16000, 0.02))
+        stream.update_options(language="fr")
+        stream.flush()
+        await _live(stream)
+        await asyncio.sleep(0.01)
+        assert gateway.sockets[0].received[0]["settings"]["language"] == "en"
+        assert gateway.types()[:3] == ["session.create", "input_audio", "session.update"]
+    finally:
+        await stream.aclose()
+
+
+async def test_handoff_deadline_starts_while_request_is_queued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(inference_stt, "HANDOFF_TIMEOUT", 0.1)
+    blocked = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "input_audio" and not blocked.is_set():
+            blocked.set()
+            await release.wait()
+        await _handoff_reply(ws, event)
+
+    gateway = _Gateway(handler)
+    stream = _gateway_stt(gateway).stream(conn_options=_no_retry())
+    try:
+        stream.push_frame(_silence(16000, 0.05))
+        await blocked.wait()
+        gateway.sockets[0].reply("session.handoff.request", handoff_id="h1")
+        await asyncio.sleep(0.2)
+        release.set()
+        await gateway.seen["session.handoff.abort"].wait()
+        assert "session.handoff.pause" not in gateway.types()
+        assert len(gateway.sockets) == 1
+    finally:
+        release.set()
+        await stream.aclose()
+
+
+async def test_end_input_during_handoff_finalizes_the_replacement() -> None:
+    paused = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "session.handoff.pause":
+            paused.set()
+            await release.wait()
+        if event["type"] == "session.finalize":
+            ws.reply("final_transcript", transcript="done", language="en")
+            ws.hang_up()
+        else:
+            await _handoff_reply(ws, event)
+
+    gateway = _Gateway(handler)
+    stream = _gateway_stt(gateway).stream(conn_options=_no_retry())
+    try:
+        await _live(stream)
+        gateway.sockets[0].reply("session.handoff.request", handoff_id="h1")
+        await paused.wait()
+        stream.push_frame(_silence(16000, 0.02))
+        stream.end_input()
+        release.set()
+        assert await _finals(stream) == ["done"]
+        assert gateway.types(1) == ["session.create", "input_audio", "session.finalize"]
+    finally:
+        release.set()
+        await stream.aclose()
+
+
+async def test_handoff_flush_write_timeout_aborts_before_later_input() -> None:
+    blocked = asyncio.Event()
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "input_audio" and not blocked.is_set():
+            blocked.set()
+            await asyncio.Event().wait()
+        await _handoff_reply(ws, event)
+
+    gateway = _Gateway(handler)
+    stream = _gateway_stt(gateway).stream(conn_options=_no_retry(timeout=0.05))
+    try:
+        await _live(stream)
+        stream.push_frame(_silence(16000, 0.02))
+        gateway.sockets[0].reply("session.handoff.request", handoff_id="h1")
+        await blocked.wait()
+        gateway.seen["input_audio"].clear()
+        stream.push_frame(_silence(16000, 0.05))
+        await asyncio.sleep(0.1)
+        assert "session.handoff.abort" in gateway.types()
+        assert gateway.seen["input_audio"].is_set()
+    finally:
+        await stream.aclose()
+
+
+async def test_handoff_abort_write_has_bounded_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(inference_stt, "HANDOFF_TIMEOUT", 0.1)
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "session.handoff.abort":
+            await asyncio.Event().wait()
+        elif event["type"] != "session.handoff.pause":
+            await _handoff_reply(ws, event)
+
+    gateway = _Gateway(handler)
+    stream = _gateway_stt(gateway).stream(conn_options=_no_retry())
+    try:
+        await _live(stream)
+        started = asyncio.get_running_loop().time()
+        gateway.sockets[0].reply("session.handoff.request", handoff_id="h1")
+        with pytest.raises(APIConnectionError):
+            await stream._task
+        assert asyncio.get_running_loop().time() - started < 0.5
+        assert gateway.sockets[0].closed
+    finally:
+        await stream.aclose()
