@@ -15,7 +15,7 @@ import google.auth.credentials
 from google.genai import Client as GenAIClient, errors as genai_errors, types
 from google.genai.live import AsyncSession
 from livekit import rtc
-from livekit.agents import APIConnectionError, LanguageCode, TokenUsage, llm, utils
+from livekit.agents import APIConnectionError, APIError, LanguageCode, TokenUsage, llm, utils
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -1108,7 +1108,7 @@ class RealtimeSession(llm.RealtimeSession):
                         raise APIConnectionError(
                             message="Gemini Live session context exhausted (1007): reconnecting "
                             "would replay the same context",
-                            retryable=False,
+                            kind="invalid_request",
                         ) from e
 
                     # we shouldn't retry when it's not connected, usually this means incorrect
@@ -1617,8 +1617,10 @@ class RealtimeSession(llm.RealtimeSession):
                 self._synthetic_call_ids.add(call_id)
 
             if not fnc_call.name:
-                raise APIConnectionError(
-                    "Gemini sent a function call without a name", retryable=False
+                raise APIError(
+                    "Gemini sent a function call without a name",
+                    kind="protocol",
+                    detail=fnc_call.model_dump_json(exclude_none=True),
                 )
             gen.function_ch.send_nowait(
                 llm.FunctionCall(

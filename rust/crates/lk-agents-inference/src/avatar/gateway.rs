@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use crate::avatar::{
     AvatarOptions, AvatarRoom, ProviderSession, create_request, decode_created, terminate_request,
 };
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderError};
 use lk_agents_abi::inference::avatar_session::{AvatarError, InferenceAvatar};
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::{ApiConnectOptions, Closed, Extra, Ts};
@@ -144,9 +144,9 @@ impl InferenceAvatar for GatewayAvatar {
         api_secret: String,
         conn_options: ApiConnectOptions,
     ) -> Result<Self, AvatarError> {
-        conn_options
-            .validate()
-            .map_err(|e| AvatarError::from(ApiError::new(e.to_string()).with_retryable(false)))?;
+        conn_options.validate().map_err(|e| {
+            AvatarError::from(ApiError::new(ErrorKind::InvalidRequest, e.to_string()))
+        })?;
         // Signing then cannot fail when an attempt launches.
         lk_agents_net::token::inference_bearer(&api_key, &api_secret)?;
         let opts = AvatarOptions::new(

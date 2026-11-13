@@ -13,7 +13,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     http,
     tokenize,
     tts,
@@ -501,7 +500,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async with self._pool.connection(conn_options=self._conn_options) as ws:
                 await self._run_ws(ws, output_emitter)
 
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -554,10 +553,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif event == "finish":
                     reason = data.get("reason")
                     if reason == "error":
-                        raise APIStatusError(
+                        raise APIError(
                             "Fish Audio TTS reported an error",
-                            status_code=-1,
-                            request_id=None,
+                            kind="invalid_request",
                             body=str(data),
                         )
                     break

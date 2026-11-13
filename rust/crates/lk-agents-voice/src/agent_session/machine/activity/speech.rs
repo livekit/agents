@@ -721,7 +721,7 @@ impl VoiceDriver {
 
             GenEvent::Failed { speech, error } => {
                 if self.session.storage.enabled {
-                    self.storage_abandon(speech, error);
+                    self.storage_abandon(now, speech, error);
                 } else {
                     self.generation_failed(now, speech, error);
                 }
@@ -1132,7 +1132,6 @@ impl VoiceDriver {
         let at = self.deadline(watchdog);
         self.activity.outliving_tools.insert(speech);
         self.record_trace(SpeechStep::ReleasedToTools { speech });
-        self.storage_outlive(speech);
         self.release_speech(now, speech);
         if let Some(at) = at {
             self.set_deadline(watchdog, at);

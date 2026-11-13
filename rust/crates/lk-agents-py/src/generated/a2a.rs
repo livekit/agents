@@ -561,7 +561,7 @@ inventory::submit! {
 type CoreRemoteInteractionImpl =
     <crate::generated::implementations::Selected as super::Implementations>::RemoteInteraction;
 
-/// One delegation of a tool call to a remote agent (docs/agents.md "Remote agents").
+/// One delegation of a tool call to a remote agent.
 #[pyclass(frozen, name = "_core_RemoteInteraction", module = "livekit.agents._core")]
 pub struct CoreRemoteInteraction(pub(crate) ::std::sync::Arc<CoreRemoteInteractionImpl>);
 

@@ -171,7 +171,7 @@ CI has one workflow per area, each job one category:
 
 | Workflow | Jobs |
 | --- | --- |
-| [`rust.yml`](../../.github/workflows/rust.yml) | `rules` (`make -C rust check test-checks`), `tests` (`make -C rust test`), `bindings` (`make -C rust test-bindings`), `dst` (`make -C rust dst`: 4,096 seeds on a change, 32,768 nightly), `otel-registry` (`weaver registry check -r otel`) |
+| [`rust.yml`](../../.github/workflows/rust.yml) | `rules` (`make -C rust check test-checks`), `tests` (`make -C rust test`), `bindings` (`make -C rust test-bindings`), `dst` (`make -C rust dst`: 4,096 seeds on a change, 32,768 nightly), `otel-registry` (`weaver registry check -r rust/otel`) |
 | [`python.yml`](../../.github/workflows/python.yml) | `lint` (ruff), `types` (`make type-check`), `tests` (one job each for `tests/host`, `plugins` and `smoke`), `blockguard` |
 | [`e2e.yml`](../../.github/workflows/e2e.yml) | `tests/e2e --e2e`, with the repository's LiveKit secrets |
 | [`storage-backends.yml`](../../.github/workflows/storage-backends.yml) | the storage contracts against a real AgentDB |

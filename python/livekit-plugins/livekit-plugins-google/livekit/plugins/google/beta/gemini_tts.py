@@ -434,24 +434,18 @@ class ChunkedStream(tts.ChunkedStream):
                 "gemini tts: client error",
                 status_code=e.code,
                 body=f"{e.message} {e.status}",
-                retryable=True if e.code in {429, 499} else False,
             ) from e
         except ServerError as e:
             raise APIStatusError(
                 "gemini tts: server error",
                 status_code=e.code,
                 body=f"{e.message} {e.status}",
-                retryable=True,
             ) from e
         except APIError as e:
             raise APIStatusError(
                 "gemini tts: api error",
                 status_code=e.code,
                 body=f"{e.message} {e.status}",
-                retryable=True,
             ) from e
         except Exception as e:
-            raise APIConnectionError(
-                f"gemini tts: error generating speech {str(e)}",
-                retryable=True,
-            ) from e
+            raise APIConnectionError(f"gemini tts: error generating speech {str(e)}") from e

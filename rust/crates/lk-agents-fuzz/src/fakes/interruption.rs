@@ -132,6 +132,7 @@ pub(super) fn deliver(port: &Arc<FakeInterruption>, what: &Input) -> bool {
             req,
             recoverable: true,
             err: ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::Server,
                 "interruption detector failed",
             )),
         },

@@ -69,7 +69,7 @@ pub struct Fence {
 pub struct Commit {
     pub(crate) session_items: Vec<crate::session_snapshot::SessionItemWrite>,
     pub run_id: String,
-    pub items: Vec<ItemRow>,
+    pub items: Vec<crate::thread::run::PlacedItem>,
     pub delete_items: Vec<String>,
     pub events: Vec<EventWrite>,
     pub tasks: Vec<TaskWrite>,
@@ -520,9 +520,10 @@ fn add_fenced_rows(
             partition_key,
             version,
             token,
-            id: &item.id,
-            message_id: item.message_id.as_deref(),
-            payload: SqlValue::json(&item.payload),
+            id: &item.row.id,
+            seq: item.seq,
+            message_id: item.row.message_id.as_deref(),
+            payload: SqlValue::json(&item.row.payload),
         });
     }
     for id in &c.delete_items {
@@ -569,9 +570,10 @@ fn add_unfenced_rows(b: &mut Batch, partition_key: &str, c: &Commit) {
         b.add(InsertItemUnfenced {
             partition_key,
             run_id,
-            id: &item.id,
-            message_id: item.message_id.as_deref(),
-            payload: SqlValue::json(&item.payload),
+            id: &item.row.id,
+            seq: item.seq,
+            message_id: item.row.message_id.as_deref(),
+            payload: SqlValue::json(&item.row.payload),
         });
     }
     for id in &c.delete_items {

@@ -22,12 +22,12 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     APITimeoutError,
     LanguageCode,
     http,
@@ -338,7 +338,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         except TimeoutError:
             raise APITimeoutError() from None
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -431,7 +431,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             self._pool.prewarm()
         except TimeoutError:
             raise APITimeoutError() from None
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -554,7 +554,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         if msg.type is not http.WebSocketMessageType.TEXT:
             return None
 
-        parsed = _TtsEvent.model_validate_json(msg.data)
+        try:
+            parsed = _TtsEvent.model_validate_json(msg.data)
+        except ValidationError as e:
+            raise APIError(
+                "SmallestAI TTS sent a malformed message", kind="protocol", detail=str(msg.data)
+            ) from e
         status = parsed.status
 
         if status == "chunk":
@@ -571,7 +576,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     TranscriptChunk(text=word, start_time=start, end_time=end)
                 )
         elif status == "error":
-            raise APIConnectionError("SmallestAI TTS error", detail=parsed.message)
+            raise APIError(
+                "SmallestAI TTS error", kind="invalid_request", detail=str(parsed.message)
+            )
         return status
 
 

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderError};
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{
@@ -143,9 +143,11 @@ impl InputTee {
                 let Some(index) =
                     preroll.pending.iter().position(|item| matches!(item, PreFrame::Audio(_)))
                 else {
-                    return Err(ApiError::new("STT preroll is full of pending flush boundaries")
-                        .with_retryable(false)
-                        .into());
+                    return Err(ApiError::new(
+                        ErrorKind::InvalidRequest,
+                        "STT preroll is full of pending flush boundaries",
+                    )
+                    .into());
                 };
                 preroll.pending.remove(index);
                 preroll.dropped_frames += 1;
@@ -291,7 +293,10 @@ impl SttBackend {
 }
 
 fn no_duplex(label: &str) -> ProviderError {
-    ProviderError::Local(ApiError::new(format!("{label} has no streaming path")))
+    ProviderError::Local(ApiError::new(
+        ErrorKind::InvalidRequest,
+        format!("{label} has no streaming path"),
+    ))
 }
 
 #[async_trait]

@@ -139,10 +139,14 @@ class ProtofaceAPI:
                     payload = _JSON_VALUE.validate_json(text) if text else {}
                 except ValueError as exc:
                     raise APIError(
-                        "Protoface returned an invalid response", retryable=False
+                        "Protoface returned an invalid response", kind="protocol", detail=text
                     ) from exc
                 if not isinstance(payload, dict):
-                    raise APIError("Protoface returned a non-object JSON response", retryable=False)
+                    raise APIError(
+                        "Protoface returned a non-object JSON response",
+                        kind="protocol",
+                        detail=text,
+                    )
                 return payload
 
         return await http.retry_request(request, conn_options=self._conn_options)

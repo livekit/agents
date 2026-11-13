@@ -65,7 +65,10 @@ fn last_completed_participating_speech_preserves_failure_precedence() {
             answer_tool: None,
         }),
     );
-    let error = ProviderError::Local(lk_agents_abi::errors::ApiError::new("tts failed"));
+    let error = ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+        lk_agents_abi::errors::ErrorKind::Server,
+        "tts failed",
+    ));
     runs.speech_ended(speech, Some(error.clone()));
     let (open, output) = runs.decide(false).expect("settled");
     assert!(runs.outputs.is_empty());

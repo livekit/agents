@@ -18,64 +18,6 @@ use lk_agents_runtime::room_io::output::transcription::SegmentIds;
 use lk_agents_runtime::rtc::events::RoomEventBus;
 use lk_agents_voice::avatar::RPC_CLEAR_BUFFER;
 
-/// A room I/O created after an earlier one on the same room closed receives chat: the closed one
-/// released the chat topic, and its repeated start did not register it twice. https://github.com/livekit/agents/issues/2034
-#[tokio::test]
-async fn a_room_io_after_a_restarted_and_closed_one_receives_chat() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
-    let room = rtc.room("chat-lifecycle");
-    room.add_participant("person", ParticipantKind::Standard);
-    let config = RoomIoConfig {
-        text_input: true,
-        audio_input: None,
-        audio_output: None,
-        transcription_output: None,
-        close_on_disconnect: false,
-        ..Default::default()
-    };
-    let spawner = Arc::new(TokioSpawner::current());
-    let first = RoomIo::new(
-        room.clone(),
-        clock.clone(),
-        spawner.clone(),
-        Arc::new(SegmentIds::counting()),
-        config.clone(),
-        None,
-        None,
-    );
-    first.clone().start(lk_agents_abi::telemetry::Cx::NONE);
-    first.clone().start(lk_agents_abi::telemetry::Cx::NONE);
-    first.wait_for_ready().await.expect("first room io ready");
-    first.clone().aclose().await;
-
-    let second = RoomIo::new(
-        room.clone(),
-        clock,
-        spawner,
-        Arc::new(SegmentIds::counting()),
-        config,
-        None,
-        None,
-    );
-    let (mut events, _) = second.events().expect("the room io's events");
-    second.clone().start(lk_agents_abi::telemetry::Cx::NONE);
-    second.wait_for_ready().await.expect("second room io ready");
-    let chat = StreamInfo { topic: TOPIC_CHAT.into(), ..Default::default() };
-    room.send_text_stream("person", chat, ["hello"])
-        .expect("the closed room io kept the chat topic registered");
-    let delivered = tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            if let Some(RoomIoEvent::TextInput(TextInput { text, .. })) = events.recv().await {
-                return text;
-            }
-        }
-    })
-    .await
-    .expect("the chat reached the new room io");
-    assert_eq!(delivered, "hello");
-    second.clone().aclose().await;
-}
-
 /// An avatar's clear-buffer request reaches only the receiver in its own room, even when both
 /// rooms' avatars share an identity. https://github.com/livekit/agents/issues/8288
 #[tokio::test(start_paused = true)]

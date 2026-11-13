@@ -9,9 +9,10 @@ use lk_agents_abi::storage::voice::{VoiceStorageCommand, VoiceStorageEvent};
 use lk_agents_abi::{ChatItem, storage::StorageError};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_storage::{context::store::ContextStore, storage::Namespace, voice::VoiceStore};
-use lk_agents_voice::agent_session::VoiceEvent;
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+use lk_agents_voice::agent_session::{StorageRequest, VoiceEvent};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::OnceCell;
 
 /// The call's partition on the supplied thread or, without one, in memory.
@@ -190,46 +191,78 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
     }
 }
 
-/// Typed storage receipts, over the session's existing event queue.
-pub(in crate::voice) struct StorageReporter(pub Tx);
+/// Typed storage receipts, over the session's existing event queue. A reporter that owes a
+/// request's answer gives it exactly once: dropped unanswered (its task died, or the store dropped
+/// it), it answers with that death, so the speech waiting on it never waits on nothing.
+pub(in crate::voice) struct StorageReporter {
+    tx: Tx,
+    owed: Option<(SpeechId, StorageRequest)>,
+    answered: AtomicBool,
+}
+
+impl StorageReporter {
+    /// Watches the partition's loss: no answer is owed.
+    pub(in crate::voice) fn observer(tx: Tx) -> Self {
+        Self { tx, owed: None, answered: AtomicBool::new(false) }
+    }
+
+    /// Owes the answer to `speech`'s `request`.
+    pub(in crate::voice) fn answering(tx: Tx, speech: SpeechId, request: StorageRequest) -> Self {
+        Self { tx, owed: Some((speech, request)), answered: AtomicBool::new(false) }
+    }
+
+    fn answer(
+        &self,
+        speech: u64,
+        request: StorageRequest,
+        result: Result<(), StorageError>,
+    ) -> Result<(), ProviderError> {
+        self.answered.store(true, Ordering::Release);
+        let speech = SpeechId(speech);
+        self.tx.send(VoiceEvent::StorageAnswered { speech, request, result }).map_err(|_| {
+            ProviderError::Local(ApiError::connection(Some("the voice session has closed".into())))
+        })
+    }
+
+    /// Answers the request this reporter owes, if any, here rather than from the store.
+    fn answer_owed(&self, result: Result<(), StorageError>) {
+        if let Some((speech, request)) = self.owed {
+            let _ = self.answer(speech.0, request, result);
+        }
+    }
+}
+
+impl Drop for StorageReporter {
+    fn drop(&mut self) {
+        if let Some((speech, request)) = self.owed
+            && !self.answered.load(Ordering::Acquire)
+        {
+            let result = Err(StorageError::Unavailable("the storage task ended".into()));
+            let _ = self.tx.send(VoiceEvent::StorageAnswered { speech, request, result });
+        }
+    }
+}
 
 impl StreamInput<VoiceStorageEvent> for StorageReporter {
     fn push(&self, event: VoiceStorageEvent) -> Result<(), ProviderError> {
-        let input = match event {
+        match event {
             VoiceStorageEvent::Settled { speech, result, lease_lost } => {
-                if let Err(error) = result {
-                    return self
-                        .0
-                        .send(VoiceEvent::StorageFailed { speech: SpeechId(speech), error })
-                        .map_err(|_| {
-                            ProviderError::Local(ApiError::connection(Some(
-                                "the voice session has closed".into(),
-                            )))
-                        });
-                }
                 if lease_lost {
-                    let _ = self.0.send(VoiceEvent::StorageLost(SpeechId(speech)));
+                    let _ = self.tx.send(VoiceEvent::StorageLost(SpeechId(speech)));
                 }
-                VoiceEvent::StorageSettled(SpeechId(speech))
+                self.answer(speech, StorageRequest::Commit, result)
             }
             VoiceStorageEvent::Abandoned { speech, result } => {
-                if let Err(error) = result {
-                    return self
-                        .0
-                        .send(VoiceEvent::StorageFailed { speech: SpeechId(speech), error })
-                        .map_err(|_| {
-                            ProviderError::Local(ApiError::connection(Some(
-                                "the voice session has closed".into(),
-                            )))
-                        });
-                }
-                VoiceEvent::StorageAbandoned(SpeechId(speech))
+                self.answer(speech, StorageRequest::Abort, result)
             }
-            VoiceStorageEvent::LeaseLost { speech } => VoiceEvent::StorageLost(SpeechId(speech)),
-        };
-        self.0.send(input).map_err(|_| {
-            ProviderError::Local(ApiError::connection(Some("the voice session has closed".into())))
-        })
+            VoiceStorageEvent::LeaseLost { speech } => {
+                self.tx.send(VoiceEvent::StorageLost(SpeechId(speech))).map_err(|_| {
+                    ProviderError::Local(ApiError::connection(Some(
+                        "the voice session has closed".into(),
+                    )))
+                })
+            }
+        }
     }
     fn flush(&self) -> Result<(), ProviderError> {
         Ok(())
@@ -239,31 +272,24 @@ impl StreamInput<VoiceStorageEvent> for StorageReporter {
 
 impl VoiceRuntime {
     pub(in crate::voice) fn storage_command(&self, command: VoiceStorageCommand) {
-        let event = match &command {
-            VoiceStorageCommand::Settle { speech, .. } => Some(VoiceStorageEvent::Settled {
-                speech: *speech,
-                result: Ok(()),
-                lease_lost: false,
-            }),
+        let tx = self.reports.clone();
+        let reporter = Arc::new(match &command {
+            VoiceStorageCommand::Settle { speech, .. } => {
+                StorageReporter::answering(tx, SpeechId(*speech), StorageRequest::Commit)
+            }
             VoiceStorageCommand::Abort { speech } => {
-                Some(VoiceStorageEvent::Abandoned { speech: *speech, result: Ok(()) })
+                StorageReporter::answering(tx, SpeechId(*speech), StorageRequest::Abort)
             }
-            VoiceStorageCommand::ObserveLoss { .. } => None,
-        };
-        let reporter = Arc::new(StorageReporter(self.reports.clone()));
-        if let Some(storage) = &self.storage {
-            if let Err(error) = storage.clone().dispatch(command, reporter.clone())
-                && let Some(mut event) = event
-            {
-                match &mut event {
-                    VoiceStorageEvent::Settled { result, .. }
-                    | VoiceStorageEvent::Abandoned { result, .. } => *result = Err(error),
-                    VoiceStorageEvent::LeaseLost { .. } => {}
+            VoiceStorageCommand::ObserveLoss { .. } => StorageReporter::observer(tx),
+        });
+        match &self.storage {
+            Some(storage) => {
+                if let Err(error) = storage.clone().dispatch(command, reporter.clone()) {
+                    reporter.answer_owed(Err(error));
                 }
-                let _ = reporter.push(event);
             }
-        } else if let Some(event) = event {
-            let _ = reporter.push(event);
+            // No store: the save has nothing to write.
+            None => reporter.answer_owed(Ok(())),
         }
     }
 }

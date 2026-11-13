@@ -132,7 +132,7 @@ impl Fake {
 }
 
 fn boom() -> ProviderError {
-    ProviderError::Local(ApiError::new("boom"))
+    ProviderError::Local(ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "boom"))
 }
 
 #[async_trait]

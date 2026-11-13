@@ -23,7 +23,7 @@ from aiobotocore.config import AioConfig
 from aiobotocore.session import AioSession
 from botocore.exceptions import BotoCoreError, ClientError
 
-from livekit.agents import APIConnectionError, APIStatusError, TokenUsage, llm
+from livekit.agents import APIConnectionError, APIError, APIStatusError, TokenUsage, llm
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -343,7 +343,6 @@ class LLMStream(llm.LLMStream):
                         status_code=response["ResponseMetadata"]["HTTPStatusCode"],
                         # Not sure there is a single error field: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html#
                         # body=response,
-                        retryable=False,
                         request_id=request_id,
                     )
 
@@ -357,9 +356,14 @@ class LLMStream(llm.LLMStream):
             # support the temperature field."). Keep the HTTP status so a 4xx is not retried;
             # throttling and 5xx still are.
             meta = e.response.get("ResponseMetadata", {})
+            status = meta.get("HTTPStatusCode")
+            if status is None:
+                raise APIError(
+                    "aws bedrock llm: error generating content", kind="server", detail=str(e)
+                ) from e
             raise APIStatusError(
                 "aws bedrock llm: error generating content",
-                status_code=meta.get("HTTPStatusCode", -1),
+                status_code=status,
                 request_id=meta.get("RequestId"),
                 detail=str(e),
             ) from e
@@ -383,7 +387,11 @@ class LLMStream(llm.LLMStream):
             delta = chunk["contentBlockDelta"]["delta"]
             if "toolUse" in delta:
                 if self._fnc_raw_arguments is None:
-                    raise APIConnectionError("Bedrock sent tool arguments before a tool start")
+                    raise APIError(
+                        "Bedrock sent tool arguments before a tool start",
+                        kind="protocol",
+                        detail=str(delta),
+                    )
                 self._fnc_raw_arguments += delta["toolUse"]["input"]
             elif "text" in delta:
                 return llm.ChatChunk(

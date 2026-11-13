@@ -249,11 +249,6 @@ pub enum SpeechStep {
     ReleasedToTools {
         speech: SpeechId,
     },
-    /// The speech's turn commits after an earlier one still outliving its interruption: the
-    /// speech is done now, and its commit follows.
-    CommitWaits {
-        speech: SpeechId,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -935,8 +930,7 @@ impl Step {
                 | SpeechStep::IdleAskWithdrawn { speech, .. }
                 | SpeechStep::WatchdogArmed { speech, .. }
                 | SpeechStep::WatchdogCleared { speech }
-                | SpeechStep::ReleasedToTools { speech }
-                | SpeechStep::CommitWaits { speech } => Some(*speech),
+                | SpeechStep::ReleasedToTools { speech } => Some(*speech),
                 SpeechStep::SayRefused { .. }
                 | SpeechStep::FloorArmed { .. }
                 | SpeechStep::FloorReleased

@@ -16,6 +16,17 @@ pub async fn connect_with_limit(
     headers: Headers,
     max_message_size: Option<usize>,
 ) -> Result<RawWebSocket, TransportError> {
+    connect_through(url, headers, max_message_size, None).await
+}
+
+/// [`connect_with_limit`] through `proxy` (`http://[user:password@]host[:port]`), tunnelled with
+/// `CONNECT` as the host's HTTP session does with the job's proxy; `None` connects directly.
+pub async fn connect_through(
+    url: &str,
+    headers: Headers,
+    max_message_size: Option<usize>,
+    proxy: Option<&str>,
+) -> Result<RawWebSocket, TransportError> {
     use tungstenite::client::IntoClientRequest;
 
     let mut request =
@@ -43,9 +54,12 @@ pub async fn connect_with_limit(
     let host = uri.host().ok_or_else(|| TransportError::Connect(format!("no host in {url}")))?;
     let host = host.trim_start_matches('[').trim_end_matches(']').to_owned();
     let port = uri.port_u16().unwrap_or(if uri.scheme_str() == Some("wss") { 443 } else { 80 });
-    let stream = crate::dns::connect((host, port))
-        .await
-        .map_err(|error| TransportError::Connect(error.to_string()))?;
+    let stream = match proxy {
+        Some(proxy) => tunnel(proxy, &host, port).await?,
+        None => crate::dns::connect((host, port))
+            .await
+            .map_err(|error| TransportError::Connect(error.to_string()))?,
+    };
     let (socket, _response) =
         tokio_tungstenite::client_async_tls_with_config(request, stream, config, connector)
             .await
@@ -53,11 +67,129 @@ pub async fn connect_with_limit(
     Ok(socket)
 }
 
+/// The longest proxy response head read before the proxy is refused.
+const MAX_PROXY_HEAD: usize = 8 * 1024;
+
+/// A TCP stream to `host:port` through the HTTP proxy at `proxy`, opened with `CONNECT`.
+async fn tunnel(
+    proxy: &str,
+    host: &str,
+    port: u16,
+) -> Result<tokio::net::TcpStream, TransportError> {
+    use base64::Engine as _;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let connect = |message: String| TransportError::Connect(message);
+    let proxy = url::Url::parse(proxy).map_err(|e| connect(format!("invalid proxy URL: {e}")))?;
+    if proxy.scheme() != "http" {
+        return Err(connect(format!("unsupported proxy scheme {}", proxy.scheme())));
+    }
+    let proxy_host = proxy.host_str().ok_or_else(|| connect("no host in the proxy URL".into()))?;
+    let proxy_host = proxy_host.trim_start_matches('[').trim_end_matches(']').to_owned();
+    let proxy_port = proxy.port_or_known_default().unwrap_or(80);
+    let mut stream = crate::dns::connect((proxy_host, proxy_port))
+        .await
+        .map_err(|error| connect(format!("proxy: {error}")))?;
+    let authority =
+        if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
+    let mut request = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n");
+    if !proxy.username().is_empty() {
+        let credentials = format!(
+            "{}:{}",
+            percent_decoded(proxy.username()),
+            percent_decoded(proxy.password().unwrap_or(""))
+        );
+        let encoded = base64::engine::general_purpose::STANDARD.encode(credentials);
+        request.push_str(&format!("Proxy-Authorization: Basic {encoded}\r\n"));
+    }
+    request.push_str("\r\n");
+    stream.write_all(request.as_bytes()).await.map_err(|e| connect(format!("proxy: {e}")))?;
+    // One byte at a time: the tunnel's first bytes after the head belong to the TLS handshake.
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        if head.len() >= MAX_PROXY_HEAD {
+            return Err(connect("the proxy's response head is too long".into()));
+        }
+        let mut byte = [0u8; 1];
+        match stream.read(&mut byte).await {
+            Ok(0) => return Err(connect("the proxy closed the connection".into())),
+            Ok(_) => head.push(byte[0]),
+            Err(error) => return Err(connect(format!("proxy: {error}"))),
+        }
+    }
+    let head = String::from_utf8_lossy(&head);
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse::<i64>().ok())
+        .ok_or_else(|| connect("the proxy sent no status".into()))?;
+    if !(200..300).contains(&status) {
+        return Err(TransportError::Status {
+            status,
+            message: format!("proxy refused the tunnel: {}", response_reason(status)),
+            headers: Headers::new(),
+            body: None,
+        });
+    }
+    Ok(stream)
+}
+
+/// A URL's percent-encoded user or password as the proxy expects it in its credentials.
+fn percent_decoded(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%')
+            .then(|| value.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn response_reason(status: i64) -> String {
     lk_agents_abi::errors::http_reason(status).unwrap_or("HTTP error").to_owned()
 }
 
 pub struct TungsteniteTransport;
+
+/// [`TungsteniteTransport`] through the job's HTTP proxy, when it has one.
+pub struct ProxiedTransport {
+    pub proxy: Option<String>,
+}
+
+#[async_trait]
+impl WsTransport for ProxiedTransport {
+    /// Unbounded: the caller bounds it on its session clock.
+    async fn connect(&self, url: &str, headers: Headers) -> Result<Halves, TransportError> {
+        split(connect_through(url, headers, None, self.proxy.as_deref()).await?)
+    }
+}
+
+/// A connected socket's two halves.
+type Halves = (Arc<dyn WsSender>, Box<dyn WsReceiver>);
+
+fn split(stream: RawWebSocket) -> Result<Halves, TransportError> {
+    let (sink, source) = stream.split();
+    Ok((
+        Arc::new(TungsteniteSender {
+            sink: tokio::sync::Mutex::new(sink),
+            closed: std::sync::atomic::AtomicBool::new(false),
+        }),
+        Box::new(TungsteniteReceiver { source, close_code: None, close_reason: None }),
+    ))
+}
 
 #[async_trait]
 impl WsTransport for TungsteniteTransport {
@@ -67,15 +199,7 @@ impl WsTransport for TungsteniteTransport {
         url: &str,
         headers: Headers,
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
-        let stream = connect_with_limit(url, headers, None).await?;
-        let (sink, source) = stream.split();
-        Ok((
-            Arc::new(TungsteniteSender {
-                sink: tokio::sync::Mutex::new(sink),
-                closed: std::sync::atomic::AtomicBool::new(false),
-            }),
-            Box::new(TungsteniteReceiver { source }),
-        ))
+        split(connect_with_limit(url, headers, None).await?)
     }
 }
 
@@ -156,6 +280,8 @@ impl WsSender for TungsteniteSender {
 
 struct TungsteniteReceiver {
     source: futures_util::stream::SplitStream<RawWebSocket>,
+    close_code: Option<u16>,
+    close_reason: Option<String>,
 }
 
 #[async_trait]
@@ -165,12 +291,27 @@ impl WsReceiver for TungsteniteReceiver {
         Ok(match self.source.next().await {
             Some(Ok(Message::Text(text))) => WsMessage::Text(text.to_string()),
             Some(Ok(Message::Binary(data))) => WsMessage::Binary(data.to_vec()),
-            Some(Ok(Message::Close(_))) => WsMessage::Closed,
+            Some(Ok(Message::Close(frame))) => {
+                if let Some(frame) = frame {
+                    self.close_code = Some(u16::from(frame.code));
+                    self.close_reason =
+                        Some(frame.reason.to_string()).filter(|reason| !reason.is_empty());
+                }
+                WsMessage::Closed
+            }
             None => WsMessage::Closed,
             // Ping/pong are answered by tungstenite.
             Some(Ok(_)) => WsMessage::Other,
             Some(Err(err)) => return Err(classify_tungstenite(err)),
         })
+    }
+
+    fn close_code(&self) -> Option<u16> {
+        self.close_code
+    }
+
+    fn close_reason(&self) -> Option<String> {
+        self.close_reason.clone()
     }
 }
 
@@ -179,6 +320,60 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::io::AsyncWriteExt;
+
+    /// A proxy that answers `CONNECT` with `status`, then serves the websocket itself on the
+    /// tunnel; returns the request head it received.
+    async fn proxy(status: &str) -> (String, impl Future<Output = String>) {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://user%40corp:p%3Ass@{}", listener.local_addr().unwrap());
+        let status = status.to_owned();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let mut byte = [0u8; 1];
+                socket.read_exact(&mut byte).await.unwrap();
+                head.push(byte[0]);
+            }
+            socket.write_all(format!("HTTP/1.1 {status}\r\n\r\n").as_bytes()).await.unwrap();
+            if status.starts_with("200") {
+                let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+                ws.send(Message::text("through")).await.unwrap();
+            }
+            String::from_utf8(head).unwrap()
+        });
+        (url, async move { server.await.unwrap() })
+    }
+
+    // Catches: a job's HTTP proxy ignored by the Rust transport, so a socket the host's session
+    // would tunnel connects directly (and fails behind a corporate egress).
+    #[tokio::test]
+    async fn a_proxy_tunnels_the_socket_with_its_credentials() {
+        let (proxy_url, server) = proxy("200 Connection established").await;
+        let mut socket =
+            connect_through("ws://example.test:9000/v1", Headers::new(), None, Some(&proxy_url))
+                .await
+                .unwrap();
+        let first = socket.next().await.unwrap().unwrap();
+        assert_eq!(first.into_text().unwrap().as_str(), "through");
+        let head = server.await;
+        assert!(head.starts_with("CONNECT example.test:9000 HTTP/1.1\r\n"), "{head}");
+        // "user@corp:p:ss", percent-decoded from the URL, as Basic credentials
+        assert!(head.contains("Proxy-Authorization: Basic dXNlckBjb3JwOnA6c3M=\r\n"), "{head}");
+    }
+
+    // Catches: a proxy's refusal read as a transport failure with no status, so a 407 is retried.
+    #[tokio::test]
+    async fn a_refused_tunnel_carries_the_proxy_status() {
+        let (proxy_url, server) = proxy("407 Proxy Authentication Required").await;
+        let error =
+            connect_through("wss://example.test/v1", Headers::new(), None, Some(&proxy_url))
+                .await
+                .unwrap_err();
+        server.await;
+        assert!(matches!(error, TransportError::Status { status: 407, .. }), "{error:?}");
+    }
 
     #[tokio::test]
     async fn connection_message_limit_refuses_an_oversized_prefix_without_waiting_for_payload() {

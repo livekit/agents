@@ -23,8 +23,8 @@ from typing import cast
 
 import google.auth.credentials
 from google.genai import Client, types
-from google.genai.errors import APIError, ClientError, ServerError
-from livekit.agents import APIConnectionError, APIStatusError, TokenUsage, llm, utils
+from google.genai.errors import APIError as GenAIError, ClientError, ServerError
+from livekit.agents import APIConnectionError, APIError, APIStatusError, TokenUsage, llm, utils
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -471,7 +471,6 @@ class LLMStream(llm.LLMStream):
         self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
-        retryable = True
         request_id = utils.shortuuid()
         http_options = genai_http_options(self._conn_options, self._http_options)
 
@@ -511,10 +510,9 @@ class LLMStream(llm.LLMStream):
             finish_reason: types.FinishReason | None = None
             async for response in stream:
                 if response.prompt_feedback:
-                    raise APIStatusError(
+                    raise APIError(
                         "gemini llm: prompt blocked",
-                        retryable=False,
-                        request_id=request_id,
+                        kind="invalid_request",
                         detail=response.prompt_feedback.model_dump_json(),
                     )
 
@@ -549,10 +547,9 @@ class LLMStream(llm.LLMStream):
                 if candidate.finish_reason is not None:
                     finish_reason = candidate.finish_reason
                     if candidate.finish_reason in BLOCKED_REASONS:
-                        raise APIStatusError(
+                        raise APIError(
                             f"generation blocked by gemini: {candidate.finish_reason}",
-                            retryable=False,
-                            request_id=request_id,
+                            kind="invalid_request",
                         )
 
                 if not candidate.content or not candidate.content.parts:
@@ -566,14 +563,12 @@ class LLMStream(llm.LLMStream):
                         # response as generated, otherwise a thought-only turn would
                         # be treated as successful and skip the retry below.
                         response_generated = True
-                        retryable = False
                         self.send(chat_chunk)
 
             if not response_generated:
-                raise APIStatusError(
+                raise APIError(
                     "no response generated",
-                    retryable=retryable,
-                    request_id=request_id,
+                    kind="server",
                     body=f"finish reason: {finish_reason}",
                 )
 
@@ -583,7 +578,6 @@ class LLMStream(llm.LLMStream):
                 status_code=e.code,
                 body=f"{e.message} {e.status}",
                 request_id=request_id,
-                retryable=True if e.code in {429, 499} else False,
             ) from e
         except ServerError as e:
             raise APIStatusError(
@@ -591,28 +585,26 @@ class LLMStream(llm.LLMStream):
                 status_code=e.code,
                 body=f"{e.message} {e.status}",
                 request_id=request_id,
-                retryable=retryable,
             ) from e
-        except APIError as e:
+        except GenAIError as e:
             raise APIStatusError(
                 "gemini llm: api error",
                 status_code=e.code,
                 body=f"{e.message} {e.status}",
                 request_id=request_id,
-                retryable=retryable,
             ) from e
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except Exception as e:
-            raise APIConnectionError(
-                "gemini llm: error generating content", retryable=retryable, detail=str(e)
-            ) from e
+            raise APIConnectionError("gemini llm: error generating content", detail=str(e)) from e
 
     def _parse_part(self, id: str, part: types.Part) -> llm.ChatChunk | None:
         if part.function_call:
             if not part.function_call.name:
-                raise APIConnectionError(
-                    "Gemini sent a function call without a name", retryable=False
+                raise APIError(
+                    "Gemini sent a function call without a name",
+                    kind="protocol",
+                    detail=part.model_dump_json(exclude_none=True),
                 )
             tool_call = llm.FunctionToolCall(
                 arguments=json.dumps(part.function_call.args),

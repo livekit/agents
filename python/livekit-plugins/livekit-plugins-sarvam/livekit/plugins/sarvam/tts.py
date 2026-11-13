@@ -37,6 +37,7 @@ from pydantic import ValidationError
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -284,23 +285,23 @@ _MESSAGE_STATUS_RE = re.compile(r"\s*(\d{3})\s*:")
 _CODE_STATUS_RE = re.compile(r"\s*\d{3}\s*")
 
 
-def _error_status_code(error_data: ErrorData) -> int:
+def _error_status_code(error_data: ErrorData) -> int | None:
     """Extract the HTTP-equivalent status code from a Sarvam websocket error frame.
 
     Schema rejections carry ``code`` (e.g. 422, or the string ``"422"``). Others omit
     it and prefix the message instead, as in ``"400: Speaker '...' is not compatible
-    with model bulbul:v4-flash"``. Returns -1 when neither form is present.
+    with model bulbul:v4-flash"``. Returns None when neither form is present.
     """
     code = error_data.code
     if isinstance(code, bool):  # bool is an int subclass; never a status code
-        return -1
+        return None
     if isinstance(code, int):
         return code
     if isinstance(code, str) and _CODE_STATUS_RE.fullmatch(code):
         return int(code)
 
     match = _MESSAGE_STATUS_RE.match(str(error_data.message))
-    return int(match.group(1)) if match else -1
+    return int(match.group(1)) if match else None
 
 
 class TTS(tts.TTS):
@@ -916,7 +917,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(
                     tasks.spawn(_split_segments()), tasks.spawn(_process_segments())
                 )
-        except (APIStatusError, APIConnectionError, APITimeoutError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError(f"TTS stream failed: {e}") from e
@@ -1055,12 +1056,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # pool's next acquisition, which may not come, so close it now.
                 await self._return_ws(ws)
 
-        except (APIStatusError, APIConnectionError, APITimeoutError):
+        except APIError:
             self._connection_state = ConnectionState.FAILED
             raise
         except Exception as e:
             self._connection_state = ConnectionState.FAILED
-            raise APIStatusError(f"TTS WebSocket session failed: {e}") from e
+            raise APIConnectionError(f"TTS WebSocket session failed: {e}") from e
         finally:
             self._connection_state = ConnectionState.DISCONNECTED
             self._ws_conn = None
@@ -1105,18 +1106,21 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         except ValidationError as e:
             if any(error["type"] != "json_invalid" for error in e.errors()):
-                raise APIConnectionError("Sarvam TTS sent an invalid event", retryable=False) from e
+                raise APIError(
+                    "Sarvam TTS sent an invalid event", kind="protocol", detail=str(msg_data)
+                ) from e
             logger.warning(
                 f"Invalid JSON in WebSocket message: {e}",
                 extra={**self._build_log_context(), "lk.pii.raw_data": msg_data[:200]},
             )
             return True  # Continue processing
-        except (APIStatusError, APIConnectionError):
-            # Preserve provider-originated status/body/retry metadata.
+        except APIError:
+            # Preserve provider-originated status/body/kind metadata.
             raise
         except Exception as e:
-            raise APIStatusError(
+            raise APIError(
                 "Sarvam TTS message processing error",
+                kind="protocol",
                 body={"raw_message": msg_data},
                 detail=str(msg_data),
             ) from e
@@ -1130,18 +1134,19 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             audio_bytes = base64.b64decode(audio_data, validate=True)
         except binascii.Error as e:
-            raise APIConnectionError("Sarvam TTS sent malformed audio", retryable=False) from e
+            raise APIError("Sarvam TTS sent malformed audio", kind="protocol") from e
         output_emitter.push(audio_bytes)
         return True
 
     async def _handle_error_message(self, resp: ErrorMessage) -> None:
         """Handle error messages from the API."""
         error_data = resp.data or ErrorData()
-        error_msg = error_data.message
+        error_msg = None if error_data.message is None else str(error_data.message)
         error_code = _error_status_code(error_data)
 
-        # APIStatusError derives retryability from the status code (4xx permanent
-        # except 408/429, 5xx transient); an unrecognized frame stays retryable via -1.
+        if error_code is None:
+            # an error frame without a status refused the request
+            raise APIError("TTS API error from Sarvam", kind="invalid_request", detail=error_msg)
         raise APIStatusError(
             f"TTS API error from Sarvam (status {error_code})",
             status_code=error_code,

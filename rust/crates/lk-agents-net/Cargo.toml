@@ -37,6 +37,8 @@ log.workspace = true
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "multipart"] }
 bytes = "1"
 url = "2"
+# A proxy's `Proxy-Authorization: Basic` credentials.
+base64.workspace = true
 serde.workspace = true
 # The delegation A2A client: the protocol records and the A2A decisions it executes
 # (`lk_agents_core::a2a`, sans-I/O).

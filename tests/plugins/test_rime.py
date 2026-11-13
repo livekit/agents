@@ -237,7 +237,7 @@ async def test_errors_do_not_expose_provider_or_transport_details(
         await tts.aclose()
 
     error = raised.value
-    retryable = mode == "redirect" or status == 500
+    retryable = status == 500
     assert isinstance(error, APIStatusError)
     assert (error.status_code, error.request_id, error.body) == (status, None, None)
     assert error.retryable is retryable

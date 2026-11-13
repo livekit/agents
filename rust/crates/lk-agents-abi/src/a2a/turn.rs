@@ -62,7 +62,7 @@ pub struct HandlerOutput {
     pub error: Option<String>,
     /// The calls' starts, progress and ends the handler recorded, for the journal.
     pub tool_executions: Vec<ToolExecution>,
-    /// A `Rejected` or `Working` transition's state (docs/server.md#handler-outcomes); `output`
+    /// A `Rejected` or `Working` transition's state; `output`
     /// is then its reason or status message.
     #[host(default = None)]
     pub status: Option<TaskState>,
@@ -85,7 +85,7 @@ pub enum TurnEvent {
     Token { task_id: String, delta: String },
 }
 
-/// The handler's side of one turn (docs/server.md "Progress, checkpoints and cancellation"):
+/// The handler's side of one turn:
 /// what it reports, in the order it awaited each report.
 #[crate::host(native(refused = "expected a native handler turn"))]
 pub trait HandlerPort: std::any::Any + Send + Sync {
@@ -174,7 +174,7 @@ pub trait Turn: Send + Sync + Sized + 'static {
     ) -> Result<crate::a2a::turn::TurnResult, StorageError>;
 }
 
-/// What an `a2a_session` handler returned, told apart by its class (docs/server.md#handler-outcomes);
+/// What an `a2a_session` handler returned, told apart by its class;
 /// a value is read as its JSON (`to_jsonable_python`).
 #[crate::host(record(module = "storage_handler", transparent, extract))]
 #[derive(Clone)]

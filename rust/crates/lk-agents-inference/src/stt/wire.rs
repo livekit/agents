@@ -1,6 +1,6 @@
 use super::SttOptions;
 use super::options::keyterms_extra_for_model;
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::inference::models::InferenceProvider;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -115,7 +115,7 @@ fn provider_options(
         }
     }
     super::provider_options::Options::parse(model, extra)
-        .map_err(|_| ApiError::new("Invalid STT provider options").with_retryable(false))
+        .map_err(|_| ApiError::new(ErrorKind::InvalidRequest, "Invalid STT provider options"))
 }
 
 pub fn input_audio(base64_pcm: &str) -> Value {

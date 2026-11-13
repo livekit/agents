@@ -356,8 +356,8 @@ async fn a_malformed_stream_fails_the_request() {
     let peer = Peer::start(vec![Reply::Sse(vec![Part::Bytes(b"data: {not json\n\n")])]).await;
     let llm = llm(&peer);
     let err = text(&mut open(&llm, policy(0, 2_000))).await.unwrap_err();
-    assert_eq!(err.kind, ApiErrorKind::Connection);
-    assert!(err.message.contains("malformed"), "{}", err.message);
+    assert_eq!(err.error_kind, lk_agents_abi::errors::ErrorKind::Protocol);
+    assert!(!err.retryable, "a broken provider contract is final");
 }
 
 // Catches: a body cut before `[DONE]` read as a complete answer (the provider contract ends every

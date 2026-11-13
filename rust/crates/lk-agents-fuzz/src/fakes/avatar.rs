@@ -143,7 +143,10 @@ impl Receiver {
 }
 
 fn receiver_error(error: ReceiverEnd) -> ProviderError {
-    ProviderError::Local(ApiError::new(format!("{error:?}")))
+    ProviderError::Local(ApiError::new(
+        lk_agents_abi::errors::ErrorKind::Server,
+        format!("{error:?}"),
+    ))
 }
 
 impl AvatarAudio for Receiver {

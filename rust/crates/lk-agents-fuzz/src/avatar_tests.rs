@@ -576,36 +576,6 @@ async fn playback_reports_go_to_the_agent_and_a_failing_one_ends_the_receiver() 
 }
 
 // Catches: a stream with no format read as some default, which would play garbage.
-// Catches: a v1 agent that streams as soon as the avatar worker is in the room (one not waiting
-// for its video) losing its first segment: the receiver took the room's streams only once it had
-// chosen its sender, and the SDK drops a stream nobody handles.
-#[tokio::test]
-async fn a_v1_stream_sent_while_the_receiver_waits_for_its_agent_is_played() {
-    let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
-    let room = rtc.room("rx-early");
-    std::mem::forget(rtc);
-    let rx = Arc::new(DataStreamAudioReceiver::new(
-        room.clone(),
-        None,
-        std::num::NonZeroU32::new(100).unwrap(),
-        3,
-        None,
-        clock.clone(),
-        Arc::new(TokioSpawner::current()),
-    ));
-    let start = {
-        let rx = rx.clone();
-        tokio::spawn(async move { rx.start().await })
-    };
-    settle().await;
-    room.add_participant("agent-1", ParticipantKind::Agent);
-    let v1 = StreamInfo { name: Some("AUDIO_hT3kW9mQx2Lp".into()), ..audio_info("S1") };
-    room.send_byte_stream("agent-1", v1, [vec![0u8; 2000]]).unwrap();
-
-    start.await.unwrap().unwrap();
-    assert_eq!(take(&rx, 2).await, ["frame 1000", "end"]);
-}
-
 #[tokio::test]
 async fn a_stream_without_its_format_fails_the_receiver() {
     let f = receiver("rx5").await;

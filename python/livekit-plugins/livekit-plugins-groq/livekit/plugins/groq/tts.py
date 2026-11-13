@@ -22,7 +22,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     APITimeoutError,
     http,
     tokenize,
@@ -184,7 +183,12 @@ class ChunkedStream(tts.ChunkedStream):
 
                 if not resp.content_type.startswith("audio"):
                     content = await resp.text()
-                    raise APIError(message="Groq returned non-audio data", body=content)
+                    raise APIError(
+                        "Groq returned non-audio data",
+                        kind="protocol",
+                        body=content,
+                        detail=content,
+                    )
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -199,7 +203,7 @@ class ChunkedStream(tts.ChunkedStream):
                 output_emitter.flush()
         except TimeoutError:
             raise APITimeoutError() from None
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e

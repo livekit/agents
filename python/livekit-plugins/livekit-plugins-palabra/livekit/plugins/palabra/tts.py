@@ -49,7 +49,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -62,8 +62,11 @@ from .models import (
     TTSModels,
 )
 
-# Server `error` codes that are worth retrying.
-_RETRYABLE_ERROR_CODES = frozenset({"SERVICE_UNAVAILABLE", "RATE_LIMIT_EXCEEDED"})
+# A server error code's kind; any other code refused the request.
+_ERROR_KINDS: dict[str, ErrorKind] = {
+    "SERVICE_UNAVAILABLE": "server",
+    "RATE_LIMIT_EXCEEDED": "rate_limit",
+}
 
 # The server accepts at most 20 text messages per second per identity.
 # Above that it replies with a RATE_LIMIT_EXCEEDED error frame and does not synthesize the text.
@@ -191,7 +194,7 @@ class TTS(tts.TTS):
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         if self._closed:
-            raise APIConnectionError("palabra tts is closed", retryable=False)
+            raise APIError("palabra tts is closed", kind="invalid_request")
         stream = SynthesizeStream(
             tts=self,
             client=self._client,
@@ -293,7 +296,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(event, ServerError):
                     raise APIError(
                         f"palabra tts error: {event.code}",
-                        retryable=event.code in _RETRYABLE_ERROR_CODES,
+                        kind=_ERROR_KINDS.get(event.code, "invalid_request"),
                     )
                 if not isinstance(event, TtsChunk) or event.generation_id not in pending_gens:
                     continue
@@ -338,7 +341,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         except TaskError as e:
             # `code` is a short server enum (e.g. VALIDATION_ERROR); `desc` is free-form
             # server text.
-            raise APIConnectionError(f"palabra tts error: {e.code}", detail=e.desc) from None
+            raise APIError(
+                f"palabra tts error: {e.code}",
+                kind=_ERROR_KINDS.get(e.code, "invalid_request"),
+                detail=e.desc,
+            ) from None
         except (SessionError, PalabraError) as e:
             # The SDK interpolates the underlying websockets error into its message, and the
             # connect URL carries the API key as a ?token= query parameter -- so neither

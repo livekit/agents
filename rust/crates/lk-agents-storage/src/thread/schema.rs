@@ -400,21 +400,23 @@ statement! {
 }
 
 statement! {
-    /// Inserts or replaces a history item at the end of the partition. An id another partition holds sets
+    /// Inserts or replaces a history item at its position in the conversation, `seq`, which the
+    /// lease holder gives for every row it writes. An id another partition holds sets
     /// `partition_key` to NULL, which the NOT NULL column refuses: the whole commit fails, nothing moved.
     InsertItem<'a> {
         partition_key: &'a str,
         version: i64,
         token: &'a str,
         id: &'a str,
+        seq: i64,
         message_id: Option<&'a str>,
         payload: SqlValue,
     } => r#"
 INSERT INTO items (id, partition_key, seq, message_id, payload)
-SELECT :id, :partition_key, COALESCE((SELECT MAX(seq) FROM items WHERE partition_key = :partition_key), 0) + 1, :message_id, jsonb(:payload)
+SELECT :id, :partition_key, :seq, :message_id, jsonb(:payload)
 FROM partitions
 WHERE partition_key = :partition_key AND version = :version AND lease_token = :token
-ON CONFLICT(id) DO UPDATE SET message_id = excluded.message_id, payload = excluded.payload,
+ON CONFLICT(id) DO UPDATE SET seq = excluded.seq, message_id = excluded.message_id, payload = excluded.payload,
   partition_key = CASE WHEN items.partition_key = excluded.partition_key THEN items.partition_key END
 "#
 }
@@ -425,14 +427,15 @@ statement! {
         partition_key: &'a str,
         run_id: &'a str,
         id: &'a str,
+        seq: i64,
         message_id: Option<&'a str>,
         payload: SqlValue,
     } => r#"
 INSERT INTO items (id, partition_key, seq, message_id, payload)
-SELECT :id, :partition_key, COALESCE((SELECT MAX(seq) FROM items WHERE partition_key = :partition_key), 0) + 1, :message_id, jsonb(:payload)
+SELECT :id, :partition_key, :seq, :message_id, jsonb(:payload)
 FROM partitions
 WHERE partition_key = :partition_key AND NOT EXISTS (SELECT 1 FROM events WHERE partition_key = :partition_key AND run_id = :run_id AND type = 'run_ended')
-ON CONFLICT(id) DO UPDATE SET message_id = excluded.message_id, payload = excluded.payload,
+ON CONFLICT(id) DO UPDATE SET seq = excluded.seq, message_id = excluded.message_id, payload = excluded.payload,
   partition_key = CASE WHEN items.partition_key = excluded.partition_key THEN items.partition_key END
 "#
 }
@@ -610,7 +613,7 @@ RETURNING version
 statement! {
     /// The partition's history in order.
     SelectItems<'a> { partition_key: &'a str } => r#"
-SELECT id, message_id, json(payload) FROM items WHERE partition_key = :partition_key ORDER BY seq
+SELECT id, message_id, json(payload) FROM items WHERE partition_key = :partition_key ORDER BY seq, pos
 "#
 }
 

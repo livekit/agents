@@ -43,6 +43,6 @@ HandlerOutcome: TypeAlias = (
     | Working
     | object
 )
-"""What an `a2a_session` handler returned, told apart by its class (docs/server.md#handler-outcomes);
+"""What an `a2a_session` handler returned, told apart by its class;
 a value is read as its JSON (`to_jsonable_python`).
 """

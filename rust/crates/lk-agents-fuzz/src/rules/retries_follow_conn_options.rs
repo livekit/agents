@@ -157,7 +157,7 @@ fn error(recoverable: bool) -> Step {
     Step::Emitted(SessionEvent::Error(Box::new(ErrorEvent::provider(
         ErrorSource::Llm,
         recoverable,
-        ProviderError::Local(ApiError::new("injected")),
+        ProviderError::Local(ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "injected")),
         Some(SpeechId(4)),
     ))))
 }

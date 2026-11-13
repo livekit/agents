@@ -10,7 +10,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import api
-from livekit.agents import APIConnectionError, APIConnectOptions, APIError, APIStatusError, http
+from livekit.agents import APIConnectOptions, APIError, APIStatusError, http
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.plugins.bey import AvatarSession
 

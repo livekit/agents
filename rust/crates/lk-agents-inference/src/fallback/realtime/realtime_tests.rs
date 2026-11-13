@@ -203,15 +203,14 @@ async fn cancellation_case(failed_open: bool) {
             _: Option<lk_agents_abi::HostRef>,
         ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
             Box::pin(async {
-                Err(lk_agents_abi::errors::ApiError::status("provider cancelled", 499, None, None)
-                    .into())
+                Err(lk_agents_abi::errors::ApiError::status("provider cancelled", 499, None).into())
             })
         }
     }
     let mut error = fatal();
     if !failed_open && let Event::Error(e) = &mut error {
         e.provider_error =
-            Some(lk_agents_abi::errors::ApiError::status("provider cancelled", 499, None, None));
+            Some(lk_agents_abi::errors::ApiError::status("provider cancelled", 499, None));
     }
     let primary = scripted(vec![error]);
     let backup: Arc<dyn Realtime> =

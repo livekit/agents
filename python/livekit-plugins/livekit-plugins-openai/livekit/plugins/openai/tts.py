@@ -325,10 +325,12 @@ class ChunkedStream(tts.ChunkedStream):
 
                         try:
                             event = json.loads(data)
-                        except json.JSONDecodeError as e:
+                        except json.JSONDecodeError:
+                            event = None
+                        if not isinstance(event, dict):
                             raise APIError(
-                                "OpenAI TTS sent a malformed event", retryable=False
-                            ) from e
+                                "OpenAI TTS sent a malformed event", kind="protocol", detail=data
+                            )
 
                         event_type = event.get("type", "")
 
@@ -340,7 +342,7 @@ class ChunkedStream(tts.ChunkedStream):
                                     audio_data = base64.b64decode(audio_b64, validate=True)
                                 except binascii.Error as e:
                                     raise APIError(
-                                        "OpenAI TTS sent malformed audio", retryable=False
+                                        "OpenAI TTS sent malformed audio", kind="protocol"
                                     ) from e
                                 output_emitter.push(audio_data)
                         elif event_type == "speech.audio.done" and (usage := event.get("usage")):

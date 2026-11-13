@@ -105,7 +105,13 @@ impl NodeFactory for GaveUp {
         _req: &'a ChatRequest,
         _calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
-        Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })
+        Box::pin(async move {
+            Err(lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::Server,
+                "down",
+            )
+            .into())
+        })
     }
 
     fn tts_node(
@@ -116,7 +122,13 @@ impl NodeFactory for GaveUp {
         '_,
         Result<lk_agents_abi::DuplexStream<lk_agents_abi::TextSink, TtsSource>, ProviderError>,
     > {
-        Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })
+        Box::pin(async move {
+            Err(lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::Server,
+                "down",
+            )
+            .into())
+        })
     }
 
     fn stt_node(
@@ -127,7 +139,13 @@ impl NodeFactory for GaveUp {
         '_,
         Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
     > {
-        Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })
+        Box::pin(async move {
+            Err(lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::Server,
+                "down",
+            )
+            .into())
+        })
     }
 }
 

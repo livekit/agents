@@ -7,8 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 # Async I/O: provider clients, their retry/fallback/reconnect execution, provider-side media
-# execution and evaluation judges (docs/internals/architecture.md). The sans-I/O crates never depend
-# on it.
+# execution and evaluation judges. The sans-I/O crates never depend on it.
 [dependencies]
 # The provider traits and records this crate implements.
 lk-agents-abi = { path = "../lk-agents-abi" }

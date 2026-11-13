@@ -31,6 +31,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     http,
@@ -141,11 +142,18 @@ class _ReceivedWsEvent:
     error_status: int | None = None
 
 
+def _tts_error(status: int | None, detail: str | None) -> APIError:
+    """An error frame: its status's kind, or a refused request when it has none."""
+    if status is None:
+        return APIError("SLNG TTS error", kind="invalid_request", detail=detail)
+    return APIStatusError("SLNG TTS error", status_code=status, detail=detail)
+
+
 def _decode_audio(audio_b64: str) -> bytes:
     try:
         return base64.b64decode(audio_b64, validate=True)
     except binascii.Error as e:
-        raise APIConnectionError("SLNG sent malformed audio", retryable=False) from e
+        raise APIError("SLNG sent malformed audio", kind="protocol") from e
 
 
 def _decode_audio_payload(resp: dict[str, JsonValue]) -> bytes | None:
@@ -906,11 +914,7 @@ class ChunkedStream(tts.ChunkedStream):
                         break
 
                     if resp.get("error") is not None:
-                        raise APIStatusError(
-                            "SLNG TTS error",
-                            status_code=_extract_error_status(resp) or -1,
-                            detail=str(resp.get("error")),
-                        )
+                        raise _tts_error(_extract_error_status(resp), str(resp.get("error")))
                     continue
 
                 event = _parse_ws_event(resp)
@@ -927,16 +931,12 @@ class ChunkedStream(tts.ChunkedStream):
                     output_emitter.flush()
                     break
                 elif event.kind == "error":
-                    raise APIStatusError(
-                        "SLNG TTS error",
-                        status_code=event.error_status or -1,
-                        detail=event.error,
-                    )
+                    raise _tts_error(event.error_status, event.error)
                 else:
                     logger.debug("[TTS] ignoring unknown message", extra={"lk.pii.data": resp})
         except TimeoutError:
             raise APITimeoutError() from None
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -1036,7 +1036,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(tasks.spawn(_segment_input()), tasks.spawn(_run_segments()))
         except TimeoutError:
             raise APITimeoutError() from None
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -1267,11 +1267,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             break
 
                         if resp.get("error") is not None:
-                            raise APIStatusError(
-                                "SLNG TTS error",
-                                status_code=_extract_error_status(resp) or -1,
-                                detail=str(resp.get("error")),
-                            )
+                            raise _tts_error(_extract_error_status(resp), str(resp.get("error")))
                         continue
 
                     event = _parse_ws_event(resp)
@@ -1296,11 +1292,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         break
 
                     elif event.kind == "error":
-                        raise APIStatusError(
-                            "SLNG TTS error",
-                            status_code=event.error_status or -1,
-                            detail=event.error,
-                        )
+                        raise _tts_error(event.error_status, event.error)
 
                     else:
                         logger.debug("[TTS] ignoring unknown message", extra={"lk.pii.data": resp})

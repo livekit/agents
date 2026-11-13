@@ -1,7 +1,7 @@
 use crate::headers::{Headers, gateway_headers};
 use crate::llm::request::ChatArgs;
 use crate::llm::{Auth, BodyEncoding, LlmOptions, models, request};
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ChatContext, ToolSpec};
 use lk_agents_net::transport::HttpRequest;
@@ -29,7 +29,12 @@ pub fn tool_schemas(tools: &[ToolSpec], strict: bool) -> Result<Vec<Map<String, 
                 Some(&tool.description),
                 &tool.json_schema,
             )
-            .map_err(|e| ApiError::new(format!("tool {:?} has an unusable schema: {e}", tool.name)))
+            .map_err(|e| {
+                ApiError::new(
+                    ErrorKind::InvalidRequest,
+                    format!("tool {:?} has an unusable schema: {e}", tool.name),
+                )
+            })
         })
         .collect()
 }
@@ -59,7 +64,9 @@ pub fn build_request(
     }
 
     let formatted = lk_agents_core::llm::provider_format::openai::to_chat_ctx(chat_ctx, images)
-        .map_err(|e| ApiError::new(format!("failed to format chat context: {e}")))?;
+        .map_err(|e| {
+            ApiError::new(ErrorKind::InvalidRequest, format!("failed to format chat context: {e}"))
+        })?;
     let schemas = tool_schemas(tools, opts.strict_tools)?;
     let body = request::build_body(&opts.model, formatted.messages, schemas, &args, extra);
 
@@ -83,8 +90,12 @@ pub fn build_request(
     headers.insert("Authorization", format!("Bearer {bearer}"));
     let body = encode_body(&body, opts.body, &mut headers)?;
 
-    let mut url = url::Url::parse(&request::completions_url(&opts.base_url))
-        .map_err(|e| ApiError::new(format!("invalid base_url {:?}: {e}", opts.base_url)))?;
+    let mut url = url::Url::parse(&request::completions_url(&opts.base_url)).map_err(|e| {
+        ApiError::new(
+            ErrorKind::InvalidRequest,
+            format!("invalid base_url {:?}: {e}", opts.base_url),
+        )
+    })?;
     if let Some(Value::Object(query)) = extra_query {
         url.query_pairs_mut().extend_pairs(query.into_iter().map(|(k, v)| (k, text(v))));
     }
@@ -97,7 +108,9 @@ fn encode_body(
     encoding: BodyEncoding,
     headers: &mut Headers,
 ) -> Result<Vec<u8>, ApiError> {
-    let invalid = |e: String| ApiError::new(format!("cannot encode the request: {e}"));
+    let invalid = |e: String| {
+        ApiError::new(ErrorKind::InvalidRequest, format!("cannot encode the request: {e}"))
+    };
     let mut bytes = if encoding.msgpack {
         headers.insert("Content-Type", "application/vnd.msgpack");
         rmp_serde::to_vec_named(body).map_err(|e| invalid(e.to_string()))?

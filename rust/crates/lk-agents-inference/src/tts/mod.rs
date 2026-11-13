@@ -7,7 +7,7 @@ use crate::telemetry;
 use futures_util::future::{Either, select};
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::Invalid;
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderError};
 use lk_agents_abi::inference::fallback::{TtsFallbackEntry, TtsFallbacks};
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::inference::tts_client::InferenceTts;
@@ -327,7 +327,9 @@ impl GatewayTts {
         }
         let provider = InferenceProvider::of_model(&opts.model);
 
-        opts.conn_options.validate().map_err(|error| ApiError::new(error.to_string()))?;
+        opts.conn_options
+            .validate()
+            .map_err(|error| ApiError::new(ErrorKind::InvalidRequest, error.to_string()))?;
         let (text_tx, text_rx) = mpsc::channel::<String>(TEXT_QUEUE_CAPACITY);
         let (audio_tx, audio_rx) =
             mpsc::channel::<Result<SynthesizedAudio, ApiError>>(AUDIO_QUEUE_CAPACITY);
@@ -496,7 +498,7 @@ impl SynthesisInput {
     fn queue(&self, text: String) -> Result<(), ProviderError> {
         self.sender()?.try_send(text).map_err(|error| match error {
             mpsc::error::TrySendError::Full(_) => {
-                ApiError::new("TTS pending text queue is full").into()
+                ApiError::new(ErrorKind::InvalidRequest, "TTS pending text queue is full").into()
             }
             mpsc::error::TrySendError::Closed(_) => self.gate.refused(),
         })
@@ -567,7 +569,11 @@ impl SynthesisOutput {
         match settled.await {
             Ok(Ok(())) => Ok(None),
             Ok(Err(error)) => Err(error.into()),
-            Err(_) => Err(ApiError::new("TTS pump ended without a terminal outcome").into()),
+            Err(_) => Err(ApiError::new(
+                ErrorKind::InvalidRequest,
+                "TTS pump ended without a terminal outcome",
+            )
+            .into()),
         }
     }
 }

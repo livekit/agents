@@ -379,7 +379,9 @@ async def test_a_failed_turn_saves_none_of_the_context_its_tools_saved(
 ) -> None:
     """A text turn that fails after a tool saved context fields commits none of them: the next
     request on the thread loads the fields as they were before."""
-    model = FakeLLM([tool_call("increment"), APIError("the provider failed", retryable=False)])
+    model = FakeLLM(
+        [tool_call("increment"), APIError("the provider failed", kind="invalid_request")]
+    )
     agent = Agent(name="desk", instructions="Help.", llm=model)
     loaded: list[int] = []
 

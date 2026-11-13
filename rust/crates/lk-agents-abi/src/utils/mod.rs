@@ -7,6 +7,7 @@ pub mod filters;
 pub mod host_ref;
 pub mod maybe;
 pub mod resample;
+pub mod socket;
 pub mod spawner;
 pub mod stream;
 pub mod strings;

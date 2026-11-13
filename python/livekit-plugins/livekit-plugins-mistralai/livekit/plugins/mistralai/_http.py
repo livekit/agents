@@ -18,7 +18,7 @@ def request_timeout_ms(options: APIConnectOptions) -> int:
         raise APIError(
             "Mistral SDK applies one finite limit, in whole milliseconds, to every phase: "
             "pool/connect/write/read timeouts must be equal",
-            retryable=False,
+            kind="invalid_request",
         )
     return int(timeout * 1000)
 

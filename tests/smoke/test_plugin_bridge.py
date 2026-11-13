@@ -67,7 +67,7 @@ async def test_a_heard_turn_is_answered(streaming: bool) -> None:
 
 async def test_llm_fallback_marks_a_repeated_provider_unavailable_once() -> None:
     """A provider listed twice in an LLM FallbackAdapter shares one health state."""
-    failure = APIError("scripted failure", retryable=True)
+    failure = APIError("scripted failure", kind="server")
     primary, backup = FakeLLM([failure] * 4), FakeLLM(["Recovered."])
     adapter = llm.FallbackAdapter([primary, primary, backup], retry_interval=0, sticky=True)
     changes: list[tuple[object, bool]] = []
@@ -88,7 +88,7 @@ async def test_llm_fallback_marks_a_repeated_provider_unavailable_once() -> None
 
 async def test_stt_fallback_recovers_on_the_backup() -> None:
     """A failing STT is marked unavailable and the backup's transcript is returned."""
-    failure = APIError("recognizer failed", retryable=True)
+    failure = APIError("recognizer failed", kind="server")
     primary, backup = FakeSTT([failure] * 4, streaming=False), FakeSTT([HEARD], streaming=False)
     adapter = stt.FallbackAdapter(
         [primary, backup], vad=FakeVAD(), max_retry_per_stt=0, retry_interval=0
@@ -108,7 +108,7 @@ async def test_stt_fallback_recovers_on_the_backup() -> None:
 
 async def test_tts_fallback_recovers_on_the_backup() -> None:
     """A failing TTS is marked unavailable and the backup synthesizes the text."""
-    failure = APIError("synthesis failed", retryable=True)
+    failure = APIError("synthesis failed", kind="server")
     primary, backup = FakeTTS(streaming=False, error=failure), FakeTTS(streaming=False)
     adapter = tts.FallbackAdapter([primary, backup], max_retry_per_tts=0)
     changes: list[tuple[object, bool]] = []

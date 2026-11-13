@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from abc import abstractmethod
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from livekit import rtc
@@ -7,9 +9,18 @@ from livekit import rtc
 from . import _core, tokenize, utils
 from ._generated import facades_tts as _facades, public_tts as _public
 from ._generated.public_tts import *  # noqa: F403
+from .http.socket import (
+    Done,
+    EndOfInput,
+    InboundT,
+    OutboundT,
+    SocketProtocol,
+    _single_retry_owner,
+)
 from .types import (
     NOT_GIVEN,
     USERDATA_TIMED_TRANSCRIPT,
+    APIConnectOptions,
     NotGivenOr,
     TranscriptChunk,
 )
@@ -18,6 +29,7 @@ if TYPE_CHECKING:
     from ._generated.usage import TokenUsage
 
 __all__ = [
+    "SocketStream",
     "StreamAdapter",
     "FallbackAdapter",
 ]
@@ -104,3 +116,62 @@ class StreamAdapter(_facades.StreamAdapter):
 
     def prewarm(self) -> None:
         self._tts.prewarm()
+
+
+class SocketStream(
+    SocketProtocol[SpeechChunk | SynthesizeStream.Flush, InboundT, OutboundT], SynthesizeStream
+):
+    """A synthesis over the provider's socket: the plugin writes ``connect``, ``encode`` (text
+    chunks, ``Flush`` and ``EndOfInput``) and ``on_message``, which returns the audio it carries;
+    the framework runs the socket. Each attempt is one socket session; the stream's attempts own
+    the retries and replay the text."""
+
+    mime_type: str = "audio/pcm"
+    """The encoding of the audio ``on_message`` returns."""
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._socket_init()
+        self._socket_emitter: _core.AudioEmitter | None = None
+        self._socket_segment = False
+
+    @abstractmethod
+    def on_message(self, message: InboundT) -> bytes | Iterable[bytes] | Done | None:
+        """One received message: the audio it carries, ``DONE`` once the provider finished."""
+
+    async def _run(self, output_emitter: _core.AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+            mime_type=self.mime_type,
+            stream=True,
+        )
+        self._socket_emitter = output_emitter
+        self._socket_segment = False
+        await self._socket_run(_single_retry_owner(self._conn_options))
+
+    async def _socket_input(self) -> SpeechChunk | SynthesizeStream.Flush | EndOfInput:
+        try:
+            item = await self.input.recv()
+        except utils.aio.ChanClosed:
+            return EndOfInput()
+        if isinstance(item, SpeechChunk):
+            self.mark_started()
+        return item
+
+    def _socket_boundary(self, item: object) -> bool:
+        return isinstance(item, SynthesizeStream.Flush)
+
+    def _socket_label(self) -> str:
+        return self._tts.label
+
+    def _socket_deliver(self, answer: bytes | Iterable[bytes] | None) -> None:
+        emitter = self._socket_emitter
+        if answer is None or emitter is None:
+            return
+        if not self._socket_segment:
+            emitter.start_segment(segment_id=utils.shortuuid())
+            self._socket_segment = True
+        for audio in [answer] if isinstance(answer, bytes) else answer:
+            emitter.push(audio)

@@ -49,8 +49,9 @@ from ._generated._core_constants import (
     DEFAULT_PARTITION_KEY as DEFAULT_PARTITION_KEY,
 )
 from ._generated._core_errors import (
+    error_kind_for_status as error_kind_for_status,
+    error_kind_retryable as error_kind_retryable,
     http_error_display as http_error_display,
-    retryable_for_status as retryable_for_status,
     websocket_close_kind as websocket_close_kind,
 )
 from ._generated._core_evals import (
@@ -243,6 +244,8 @@ from ._generated._core_utils import (
     ConnectionPoolState as ConnectionPoolState,
     ExpFilter as ExpFilter,
     MovingAverage as MovingAverage,
+    SocketMux as SocketMux,
+    SocketSession as SocketSession,
     StaleHandle as StaleHandle,
 )
 from ._generated._core_vad import (

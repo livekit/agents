@@ -17,7 +17,6 @@ from numpy.typing import NDArray
 from livekit import api, rtc
 from livekit.agents import (
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,

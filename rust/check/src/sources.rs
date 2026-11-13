@@ -35,6 +35,9 @@
 //! 10. In `lk-agents-runtime`, no `log::error!` in a fallback (an `unwrap_or_else` closure or an
 //!     `Err(..) =>` arm): a fallback is a decision, which the core makes from a `Result` input
 //!     ("Sans-I/O cores").
+//! 11. No source and no `Cargo.toml`, generated or not, names a page of the repository's docs
+//!     (`docs/` then a path ending `.md`, outside a URL): code states the rule it follows, since
+//!     a pointer drifts from the page it names ("Layout and tests").
 //!
 //! Rules 4 to 10 skip test files, benches, examples and `#[cfg(test)]` items. pyo3 and `#[host]`
 //! placement need no rule here: the crate graph ([`crate::graph`]) leaves the compiler to reject
@@ -60,6 +63,8 @@ const SENT_WRITES: &[&str] = &[
     "crates/lk-agents-fuzz/src/fakes/",
 ];
 const GENERATED: &str = "//! GENERATED FILE -- DO NOT EDIT.";
+/// Where a repository docs page's path starts (rule 11).
+const DOCS: &str = "docs/";
 /// The one place an input's refusal is worded (rule 7).
 const INPUT_STATE: &str = "crates/lk-agents-abi/src/utils/stream.rs";
 /// What a literal of a refused input says (rule 7), lowercased.
@@ -202,7 +207,16 @@ pub fn check(rust: &Path) -> Vec<String> {
 
 fn tracked(rust: &Path) -> Vec<String> {
     let output = Command::new("git")
-        .args(["ls-files", "-z", "--", "crates/*.rs", "ai_slop/*.rs", "check/*.rs"])
+        .args([
+            "ls-files",
+            "-z",
+            "--",
+            "crates/*.rs",
+            "ai_slop/*.rs",
+            "check/*.rs",
+            "Cargo.toml",
+            "*/Cargo.toml",
+        ])
         .current_dir(rust)
         .output()
         .expect("git runs");
@@ -216,6 +230,10 @@ fn tracked(rust: &Path) -> Vec<String> {
 
 fn check_source(source: &Source) -> Vec<String> {
     let mut errors = Vec::new();
+    docs_pages(source, &mut errors);
+    if source.path.ends_with("Cargo.toml") {
+        return errors;
+    }
     if !source.generated() && source.text.lines().count() > MAX_LINES {
         errors
             .push(source.error(1, &format!("over {MAX_LINES} lines: split it by responsibility")));
@@ -657,6 +675,28 @@ fn select_order(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) 
     });
 }
 
+/// Each line that names a docs page (rule 11); a path inside a URL is another site's.
+fn docs_pages(source: &Source, errors: &mut Vec<String>) {
+    for (index, line) in source.text.lines().enumerate() {
+        let mut from = 0;
+        while let Some(at) = line[from..].find(DOCS).map(|at| from + at) {
+            from = at + DOCS.len();
+            let word = line[..at].rsplit(char::is_whitespace).next().unwrap_or_default();
+            let page: String = line[from..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || "_-/.".contains(*c))
+                .collect();
+            if !word.contains("://") && page.trim_end_matches('.').ends_with(".md") {
+                errors.push(source.error(
+                    index + 1,
+                    "names a docs page: state the rule it stands for, never point at the page",
+                ));
+                break;
+            }
+        }
+    }
+}
+
 /// The file's tokens without `#[cfg(test)]` and `#[test]` items.
 fn without_tests(text: &str) -> TokenStream {
     let Ok(mut file) = syn::parse_file(text) else {
@@ -865,6 +905,21 @@ mod tests {
         assert!(errors(path, "fn f() { match r { Err(e) => return Err(e), _ => {} } }").is_empty());
         let inference = "crates/lk-agents-inference/src/x.rs";
         assert!(errors(inference, fallbacks[0]).is_empty(), "only the runtime");
+    }
+
+    #[test]
+    fn a_docs_page_named_in_code_fails() {
+        let page = format!("{DOCS}internals/storage.md#journal");
+        let core = "crates/lk-agents-core/src/x.rs";
+        assert_eq!(errors(core, &format!("/// One page ({page}).\nfn f() {{}}")).len(), 1);
+        let generated = format!("{GENERATED}\n/// Runs it ({DOCS}models.md \"Attempts\").");
+        assert_eq!(errors(core, &generated).len(), 1);
+        assert_eq!(errors("check/src/x.rs", &format!("//! See {DOCS}agents.md.")).len(), 1);
+        let manifest = format!("[package]\n# The I/O half ({page}).\n");
+        let found = errors("crates/x/Cargo.toml", &manifest);
+        assert!(found.len() == 1 && found[0].starts_with("rust/crates/x/Cargo.toml:2:"));
+        let elsewhere = format!("/// https://developers.example.com/{DOCS}stt.md, {DOCS}README");
+        assert!(errors(core, &elsewhere).is_empty());
     }
 
     #[test]

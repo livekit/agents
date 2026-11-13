@@ -54,10 +54,18 @@ impl<T: Send + 'static> NodeOutput<T> {
                     drop(finished);
                 };
                 owner.tasks.try_spawn(owner.spawner.as_ref(), name, task).then_some(()).ok_or_else(
-                    || lk_agents_abi::errors::ApiError::new("the session running the node closed"),
+                    || {
+                        lk_agents_abi::errors::ApiError::new(
+                            lk_agents_abi::errors::ErrorKind::Connection,
+                            "the session running the node closed",
+                        )
+                    },
                 )
             }
-            Err(error) => Err(lk_agents_abi::errors::ApiError::new(error.to_string())),
+            Err(error) => Err(lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                error.to_string(),
+            )),
         };
         if let Err(error) = spawned {
             let sent = refused.try_send(Err(error.into()));
@@ -250,7 +258,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
             let label = stt.label();
             let opened = lk_agents_inference::stt::stream(stt.clone(), conn_options, clock.clone(), &telemetry::Cx::NONE, None, None).await.and_then(|opened| {
                 opened.ok_or_else(|| {
-                    lk_agents_abi::errors::ApiError::new(format!(
+                    lk_agents_abi::errors::ApiError::new(lk_agents_abi::errors::ErrorKind::InvalidRequest, format!(
                         "the STT ({label}) does not stream: add a VAD, or wrap it in an stt.StreamAdapter"
                     ))
                     .into()

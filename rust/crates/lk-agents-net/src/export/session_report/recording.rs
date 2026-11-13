@@ -3,7 +3,7 @@ use std::time::Duration;
 use futures_util::{StreamExt as _, stream};
 use livekit_protocol::MetricsRecordingHeader;
 use lk_agents_abi::Clock;
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::telemetry::report::RecordingHeader;
 use lk_agents_core::request::{Policy, Request, Step};
 use lk_agents_core::telemetry::report::RecordingUpload;
@@ -73,19 +73,23 @@ pub(crate) async fn upload(
             Err(PostError::Refused { status, body }) => {
                 let message = format!("recording upload failed with HTTP {status}");
                 let retry_after = retry_delay(&body).map(Duration::from_millis);
-                let error = ApiError::from_http(&message, status.into(), None);
-                let retryable = error.retryable || retry_after.is_some();
+                let mut error = ApiError::from_http(&message, status.into(), None);
+                if retry_after.is_some() && !error.retryable {
+                    // the server named when to come back: a rate limit, whatever the status
+                    error = error.with_kind(ErrorKind::RateLimit);
+                }
                 failure = PostError::Refused { status, body };
                 ApiError {
                     said: lk_agents_abi::errors::ProviderSaid::boxed(None, retry_after),
-                    ..error.with_retryable(retryable)
+                    ..error
                 }
             }
             Err(PostError::Transport(err)) => {
                 let message = format!("recording upload transport failed: {err}");
                 let retryable = err.is_connect() || err.is_timeout() || err.is_body();
                 failure = PostError::Transport(err);
-                ApiError::connection(Some(message)).with_retryable(retryable)
+                let error = ApiError::connection(Some(message));
+                if retryable { error } else { error.with_kind(ErrorKind::InvalidRequest) }
             }
             Err(error) => return Err(error),
         };

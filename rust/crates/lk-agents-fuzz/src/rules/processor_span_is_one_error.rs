@@ -105,7 +105,7 @@ fn error(recoverable: bool) -> SessionEvent {
     SessionEvent::Error(Box::new(ErrorEvent {
         source: ErrorSource::AudioProcessing,
         recoverable,
-        error: ProviderError::Local(ApiError::new("fake.Denoiser rejected the frame")),
+        error: ProviderError::Local(ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "fake.Denoiser rejected the frame")),
         speech: None,
         processor_failure: Some(ProcessorFailure {
             label: DENOISER.into(),

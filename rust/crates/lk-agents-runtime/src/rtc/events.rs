@@ -20,7 +20,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 const EVENT_CAPACITY: usize = 128;
 
 fn capacity(resource: &str, limit: usize) -> ProviderError {
-    ProviderError::Local(ApiError::new(format!("RTC {resource} exceeds limit {limit}")))
+    ProviderError::Local(ApiError::new(
+        lk_agents_abi::errors::ErrorKind::InvalidRequest,
+        format!("RTC {resource} exceeds limit {limit}"),
+    ))
 }
 
 struct Subscriber {
@@ -151,7 +154,10 @@ impl<T: Send + 'static> StreamOutput<T> for AdmittedSource<T> {
             };
             if let Err(error) = self.budget.admit((self.size)(&chunk)) {
                 self.ended = true;
-                return Err(ProviderError::Local(ApiError::new(error.to_string())));
+                return Err(ProviderError::Local(ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                    error.to_string(),
+                )));
             }
             Ok(Some(chunk))
         })

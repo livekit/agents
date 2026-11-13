@@ -71,7 +71,7 @@ NO_RETRY = APIConnectOptions(max_retry=1, retry_interval=0)
 async def test_a_provider_exception_reaches_the_caller_as_itself_with_its_cause() -> None:
     """The exception a Python LLM raises comes out of `agent.run` as the same object, its cause
     kept and rendered. https://github.com/livekit/agents/pull/6894"""
-    failure = APIConnectionError("request failed", retryable=False)
+    failure = APIConnectionError("request failed", kind="invalid_request")
     failure.__cause__ = ValueError("upstream refused the request")
 
     with pytest.raises(APIConnectionError) as raised:
@@ -83,9 +83,36 @@ async def test_a_provider_exception_reaches_the_caller_as_itself_with_its_cause(
     assert pickle.loads(pickle.dumps(raised.value)).message == "request failed"
 
 
+@pytest.mark.parametrize(
+    ("status", "kind"),
+    [
+        (401, "auth"),
+        (403, "auth"),
+        (402, "quota"),
+        (408, "timeout"),
+        (429, "rate_limit"),
+        (400, "invalid_request"),
+        (404, "invalid_request"),
+        (500, "server"),
+        (503, "server"),
+    ],
+)
+def test_a_status_names_the_kind_that_decides_the_retry(status: int, kind: str) -> None:
+    """A 401 or 402 is final however the plugin built it (they used to be retried), a 408, 429
+    or 5xx is retried, a provider's own meaning overrides the status's, and a broken provider
+    contract is final."""
+    error = APIStatusError("refused", status_code=status)
+
+    assert (error.kind, error.retryable) == (kind, kind in ("timeout", "rate_limit", "server"))
+    overridden = APIStatusError("out of credit", status_code=400, kind="quota")
+    assert (overridden.kind, overridden.retryable) == ("quota", False)
+    broken = APIError("the provider sent a malformed frame", kind="protocol", detail="{")
+    assert (broken.retryable, broken.detail) == (False, "{")
+
+
 async def test_a_text_session_preserves_the_provider_status() -> None:
     """A provider's 401 surfaces from a `TextSession` turn as an `APIStatusError` with its code."""
-    denied = APIStatusError("denied", status_code=401, retryable=False)
+    denied = APIStatusError("denied", status_code=401)
     agent = Agent(name="desk", instructions="Help.", llm=FakeLLM([denied]))
 
     with pytest.raises(APIStatusError) as raised:
@@ -112,7 +139,7 @@ def test_a_tokenizer_exception_comes_back_as_the_same_object() -> None:
 async def test_exhausted_llm_retries_fail_with_the_last_provider_error_as_cause() -> None:
     """Retries that all fail end in `APIConnectionError` naming the attempts, caused by the last
     failure; each failure is reported, only the last as unrecoverable."""
-    failure = APIError("the provider failed", retryable=True)
+    failure = APIError("the provider failed", kind="server")
     model = FakeLLM([failure, failure])
     reports: list[bool] = []
     model.on("error", lambda event: reports.append(event.recoverable))
@@ -128,7 +155,7 @@ async def test_exhausted_llm_retries_fail_with_the_last_provider_error_as_cause(
 async def test_exhausted_stt_stream_retries_fail_with_the_last_provider_error_as_cause() -> None:
     """A streaming Python STT that fails every attempt ends in `APIConnectionError` caused by
     its own last failure."""
-    failure = APIError("the provider failed", retryable=True)
+    failure = APIError("the provider failed", kind="server")
     provider = FakeSTT([failure, failure])
 
     with pytest.raises(APIConnectionError, match="after 2 attempts") as raised:
@@ -149,7 +176,7 @@ def test_a_connection_error_names_the_transport_failure_behind_it() -> None:
         try:
             raise ConnectionResetError("connection reset by peer")
         except OSError as error:
-            raise APIConnectionError(retryable=False) from error
+            raise APIConnectionError(kind="invalid_request") from error
 
     assert str(raised.value) == (
         "Connection error. (caused by ConnectionResetError: connection reset by peer)"
@@ -171,7 +198,7 @@ async def test_a_timeout_keeps_its_phase_through_retries() -> None:
 
 async def test_a_failure_after_output_is_final_and_not_retried() -> None:
     """Once text reached the caller, a provider failure is raised as is, never retried."""
-    failure = APIError("failed after output", retryable=True)
+    failure = APIError("failed after output", kind="server")
     model = FakeLLM([["partial", failure], "a retry must not happen"])
     texts: list[str] = []
 
@@ -189,7 +216,7 @@ async def test_a_failure_after_output_is_final_and_not_retried() -> None:
 async def test_a_request_retried_to_success_reports_each_failure_as_recoverable() -> None:
     """A Python LLM that fails twice and then answers gives its answer; both failures are
     reported, as recoverable."""
-    failure = APIError("the provider failed", retryable=True)
+    failure = APIError("the provider failed", kind="server")
     model = FakeLLM([failure, failure, "Hello."])
     reports: list[bool] = []
     model.on("error", lambda event: reports.append(event.recoverable))
@@ -205,7 +232,7 @@ async def test_a_request_retried_to_success_reports_each_failure_as_recoverable(
 async def test_a_retried_tts_stream_is_fed_again_the_text_pushed_before_its_failure() -> None:
     """A Python TTS stream that fails is retried with the text pushed before the failure, and
     that retry speaks."""
-    provider = FakeTTS(failures=[APIError("the provider failed", retryable=True)])
+    provider = FakeTTS(failures=[APIError("the provider failed", kind="server")])
 
     async with provider.stream(conn_options=NO_RETRY) as stream:
         stream.push_text("Hello ")
@@ -219,7 +246,7 @@ async def test_a_retried_tts_stream_is_fed_again_the_text_pushed_before_its_fail
 
 async def test_a_recognition_that_fails_once_is_retried() -> None:
     """A Python STT's `recognize` that fails once is retried and returns the transcript."""
-    provider = FakeSTT([APIError("the provider failed", retryable=True), "hello"], streaming=False)
+    provider = FakeSTT([APIError("the provider failed", kind="server"), "hello"], streaming=False)
 
     event = await provider.recognize([audio_frame(0.2)], conn_options=NO_RETRY)
 
@@ -229,7 +256,7 @@ async def test_a_recognition_that_fails_once_is_retried() -> None:
 async def test_a_recognition_that_fails_for_good_is_not_retried() -> None:
     """A Python STT's `recognize` that raises a non-retryable error raises it at once instead of
     asking the provider again."""
-    failure = APIError("the provider refused", retryable=False)
+    failure = APIError("the provider refused", kind="invalid_request")
     provider = FakeSTT([failure, "hello"], streaming=False)
 
     with pytest.raises(APIError) as raised:
@@ -241,7 +268,7 @@ async def test_a_recognition_that_fails_for_good_is_not_retried() -> None:
 async def test_exhausted_recognition_retries_fail_with_the_last_provider_error_as_cause() -> None:
     """A Python STT's `recognize` that fails every attempt ends in `APIConnectionError` caused
     by its own last failure."""
-    failure = APIError("the provider failed", retryable=True)
+    failure = APIError("the provider failed", kind="server")
     provider = FakeSTT([failure, failure], streaming=False)
 
     with pytest.raises(APIConnectionError, match="after 2 attempts") as raised:
@@ -253,7 +280,7 @@ async def test_exhausted_recognition_retries_fail_with_the_last_provider_error_a
 async def test_a_fallback_reports_and_raises_the_providers_own_exception() -> None:
     """A failure after a transcript is final: the STT fallback raises the original exception
     and reports that same object once."""
-    failure = APIError("the provider's own failure", retryable=False)
+    failure = APIError("the provider's own failure", kind="invalid_request")
     provider = FakeSTT(["hello", failure])
     reports: list[Exception] = []
     provider.on("error", lambda event: reports.append(event.error))
@@ -322,7 +349,7 @@ async def test_a_storage_failure_in_a_turn_fails_its_task_as_storage_unavailable
     a2a_door: Callable[[A2AHandler], AbstractAsyncContextManager[httpx.AsyncClient]],
 ) -> None:
     """A turn whose save cannot be written fails its A2A task with the `storage-unavailable`
-    reason, so the client resends (docs/protocol/a2a.md)."""
+    reason, so the client resends."""
 
     async def handler(ctx: A2ASessionContext) -> str:
         raise StorageUnavailable("the database went away")
@@ -669,7 +696,7 @@ async def test_input_after_a_tts_failure_raises_that_failure(
             "cartesia/sonic-3", base_url=rejecting_gateway, api_key="key", api_secret="secret"
         )
         if native
-        else FakeTTS(error=APIStatusError("refused", status_code=401, retryable=False))
+        else FakeTTS(error=APIStatusError("refused", status_code=401))
     )
 
     async with model.stream(conn_options=NO_RETRY) as stream:
@@ -692,7 +719,7 @@ async def test_input_after_an_stt_failure_raises_that_failure(
             "deepgram/nova-3", base_url=rejecting_gateway, api_key="key", api_secret="secret"
         )
         if native
-        else FakeSTT([APIStatusError("refused", status_code=401, retryable=False)])
+        else FakeSTT([APIStatusError("refused", status_code=401)])
     )
 
     async with model.stream(conn_options=NO_RETRY) as stream:
@@ -710,7 +737,7 @@ async def test_input_after_an_stt_failure_raises_that_failure(
 async def test_input_after_a_vad_failure_raises_that_failure() -> None:
     """Audio pushed, flushed or ended after the detector failed raises the detector's own error,
     not that the stream is closed."""
-    detector = FakeVAD(error=APIStatusError("refused", status_code=401, retryable=False))
+    detector = FakeVAD(error=APIStatusError("refused", status_code=401))
 
     async with detector.stream() as stream:
         with pytest.raises(APIStatusError):
@@ -913,7 +940,7 @@ async def test_an_stt_fallback_runs_once_and_each_provider_reports_one_final_err
     """``recognize()`` over a fallback runs the chain once: each member's attempt the chain moves
     past is a recoverable ``error`` on that member, the attempt it gives up after a final one, and
     the adapter reports the give-up once."""
-    down = APIError("the provider is down", retryable=True)
+    down = APIError("the provider is down", kind="server")
     members = [FakeSTT([down] * 8), FakeSTT([down] * 8)]
     reports: list[list[bool]] = [[], [], []]
     fallback = stt.FallbackAdapter(members, max_retry_per_stt=1, retry_interval=0)
@@ -933,7 +960,7 @@ async def test_an_llm_fallback_runs_once_and_each_provider_reports_one_final_err
     """A run over an LLM fallback runs the chain once: each member's attempt the chain moves past
     is a recoverable ``error`` on that member, the attempt it gives up after a final one, and the
     adapter reports the give-up once."""
-    down = APIError("the provider is down", retryable=True)
+    down = APIError("the provider is down", kind="server")
     members = [FakeLLM([down] * 8), FakeLLM([down] * 8)]
     reports: list[list[bool]] = [[], [], []]
     fallback = llm.FallbackAdapter(members, max_retry_per_llm=1, retry_interval=0)

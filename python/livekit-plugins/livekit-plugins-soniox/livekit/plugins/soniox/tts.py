@@ -805,12 +805,10 @@ class _Connection:
                                 extra={"stream_id": stream_id},
                             )
                             stream.waiter.set_exception(
-                                APIStatusError(
-                                    message=(
-                                        "Soniox TTS stream terminated without producing audio"
-                                    ),
+                                APIError(
+                                    "Soniox TTS stream terminated without producing audio",
+                                    kind="server",
                                     body=f"stream_id={stream_id}",
-                                    retryable=True,
                                 )
                             )
                         else:

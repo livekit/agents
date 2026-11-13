@@ -318,7 +318,7 @@ fn a_session_created_with_no_threshold_anywhere_is_fatal() {
     let err = c
         .on_server_message(ServerMessage::SessionCreated { default_threshold: None }, ts(0.0), 0.0)
         .unwrap_err();
-    assert_eq!(err.error.status_code, Some(500));
+    assert_eq!(err.error.error_kind, lk_agents_abi::errors::ErrorKind::Protocol);
     assert!(!err.error.retryable, "reconnecting cannot conjure a threshold");
 
     // Either source alone is enough.
@@ -501,11 +501,7 @@ fn a_server_error_carries_the_code_as_status_and_the_text_as_body() {
     let mut c = core();
     let err = c
         .on_server_message(
-            ServerMessage::Error {
-                message: "model unavailable".to_owned(),
-                code: 503,
-                session_id: "sess".to_owned(),
-            },
+            ServerMessage::Error { message: "model unavailable".to_owned(), code: 503 },
             ts(0.0),
             0.0,
         )
@@ -520,11 +516,7 @@ fn a_server_error_carries_the_code_as_status_and_the_text_as_body() {
 
     let err = c
         .on_server_message(
-            ServerMessage::Error {
-                message: "bad key".to_owned(),
-                code: 401,
-                session_id: "sess".to_owned(),
-            },
+            ServerMessage::Error { message: "bad key".to_owned(), code: 401 },
             ts(0.0),
             0.0,
         )

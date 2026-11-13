@@ -32,6 +32,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     http,
@@ -970,14 +971,14 @@ class SpeechStream(stt.RecognizeStream):
                 msg = await ws.receive()
                 if msg.type is http.WebSocketMessageType.CLOSE:
                     if pending_non_empty_transcript:
-                        raise APIStatusError("SLNG STT closed before final transcript")
+                        raise ws.close_error("SLNG STT closed before final transcript")
                     if awaiting_final:
-                        raise APIStatusError("SLNG STT closed while awaiting final transcript")
+                        raise ws.close_error("SLNG STT closed while awaiting final transcript")
                     if input_finished or protocol_close_sent:
                         return True
                     if not buffered_audio:
                         return False
-                    raise APIStatusError("SLNG connection closed unexpectedly")
+                    raise ws.close_error("SLNG connection closed unexpectedly")
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     continue
@@ -985,7 +986,9 @@ class SpeechStream(stt.RecognizeStream):
                 try:
                     data = _MESSAGE.validate_json(msg.data)
                 except ValidationError as error:
-                    raise APIConnectionError("Malformed SLNG response", retryable=False) from error
+                    raise APIError(
+                        "Malformed SLNG response", kind="protocol", detail=str(msg.data)
+                    ) from error
 
                 msg_type = data.get("type")
                 if msg_type == "ready":
@@ -1031,7 +1034,7 @@ class SpeechStream(stt.RecognizeStream):
                         raise APIStatusError(
                             "SLNG STT error", status_code=status_code, detail=message
                         )
-                    raise APIStatusError("SLNG STT error", detail=message)
+                    raise APIError("SLNG STT error", kind="invalid_request", detail=message)
 
                 if msg_type in ("partial_transcript", "final_transcript"):
                     text = transcript_data.get("transcript")
@@ -1298,9 +1301,10 @@ class SpeechStream(stt.RecognizeStream):
                         if not connection_had_transcript:
                             silent_reconnects += 1
                             if silent_reconnects >= _MAX_SILENT_RECONNECTS:
-                                raise APIStatusError(
+                                raise APIError(
                                     "SLNG STT closed the connection repeatedly"
-                                    " without producing transcripts"
+                                    " without producing transcripts",
+                                    kind="server",
                                 )
                         retry_connection = True
                         break
@@ -1453,7 +1457,9 @@ class SpeechStream(stt.RecognizeStream):
             try:
                 data = _MESSAGE.validate_json(msg.data)
             except ValidationError as error:
-                raise APIConnectionError("Malformed SLNG response", retryable=False) from error
+                raise APIError(
+                    "Malformed SLNG response", kind="protocol", detail=str(msg.data)
+                ) from error
 
             msg_type = data.get("type")
             if msg_type == "ready":
@@ -1464,7 +1470,7 @@ class SpeechStream(stt.RecognizeStream):
                 status_code = _extract_error_code(data)
                 if status_code is not None:
                     raise APIStatusError("SLNG STT error", status_code=status_code, detail=message)
-                raise APIStatusError("SLNG STT error", detail=message)
+                raise APIError("SLNG STT error", kind="invalid_request", detail=message)
 
     def _emit_session_event(self, data: _Message) -> None:
         self._emit_plugin_event(

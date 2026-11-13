@@ -704,11 +704,16 @@ impl VoiceDriver {
     fn on_realtime_error(&mut self, now: Ts, err: rt::RealtimeModelError) {
         let error = RealtimeError::with_code(err.message.clone(), err.code.clone());
         let recoverable = err.recoverable;
-        let reported = ProviderError::Local(
-            err.provider_error
-                .unwrap_or_else(|| ApiError::new(err.message))
-                .with_retryable(recoverable),
-        );
+        let api = err.provider_error.unwrap_or_else(|| {
+            let kind = if recoverable {
+                lk_agents_abi::errors::ErrorKind::Server
+            } else {
+                lk_agents_abi::errors::ErrorKind::InvalidRequest
+            };
+            ApiError::new(kind, err.message)
+        });
+        // the model's own verdict: an unrecoverable error is never retried
+        let reported = ProviderError::Local(if recoverable { api } else { api.into_final() });
         let source = crate::events::ErrorSource::Realtime;
         if recoverable {
             let pending = err
@@ -813,7 +818,11 @@ impl VoiceDriver {
     }
 
     fn close_on_realtime_failure(&mut self, now: Ts) {
-        let error = ApiError::new("the realtime session ended with an unrecoverable error");
+        let error = ApiError::new(
+            lk_agents_abi::errors::ErrorKind::Server,
+            "the realtime session ended with an unrecoverable error",
+        )
+        .into_final();
         let close = Close {
             reason: lk_agents_abi::voice::events::CloseReason::Error,
             drain: false,

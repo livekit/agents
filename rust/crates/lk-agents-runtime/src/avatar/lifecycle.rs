@@ -138,6 +138,14 @@ impl avatar::AvatarLifecycle for AvatarLifecycle {
         output.follow_absence(self.0.absence.clone());
     }
 
+    fn fail(&self, error: ProviderError) {
+        log::warn!(target: lk_agents_abi::LOG_TARGET, identity = self.0.identity.as_str();
+            "the avatar failed: {error}");
+        let Some(session) = self.0.owner.session() else { return };
+        // A closed session reports no more errors.
+        let _ = session.send(lk_agents_voice::agent_session::Command::AvatarError(error));
+    }
+
     async fn aclose(&self) {
         let inner = &self.0;
         inner
@@ -233,7 +241,10 @@ impl Inner {
         log::warn!(target: lk_agents_abi::LOG_TARGET, identity = self.identity.as_str();
             "{timeout}; its audio fails until it joins");
         let Some(session) = self.owner.session() else { return };
-        let error = ProviderError::from(ApiError::new(timeout.to_string()));
+        let error = ProviderError::from(ApiError::new(
+            lk_agents_abi::errors::ErrorKind::Timeout,
+            timeout.to_string(),
+        ));
         // A closed session reports no more errors.
         let _ = session.send(lk_agents_voice::agent_session::Command::AvatarError(error));
     }

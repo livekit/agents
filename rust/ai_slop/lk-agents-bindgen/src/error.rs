@@ -95,6 +95,7 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
             "error.declare",
             "error.by",
             "error.cause",
+            "error.attrs.",
             "error.kinds.",
         ],
     )?;
@@ -286,6 +287,38 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
         },
         None => raise,
     };
+    // `attrs(field)`: set on the exception after construction, for a value its constructor
+    // derives that this error may have overridden.
+    let mut attr_names = Vec::new();
+    let mut attr_values = Vec::new();
+    for (key, _) in m.under("error.attrs.") {
+        let f = format_ident!("{key}");
+        let field = match item {
+            syn::Item::Struct(st) => st.fields.iter().find(|x| x.ident.as_ref() == Some(&f)),
+            _ => None,
+        };
+        let Some(field) = field else {
+            return Err(syn::Error::new_spanned(
+                ident,
+                format!("`attrs({key})` names a field of this struct"),
+            ));
+        };
+        attr_names.push(key.to_owned());
+        attr_values.push(to_host(&field.ty, quote!(::std::clone::Clone::clone(&self.#f)))?);
+    }
+    let raise = if attr_names.is_empty() {
+        raise
+    } else {
+        quote! {
+            let err = { #raise };
+            ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<()> {
+                let value = err.value(py).as_any();
+                #( ::pyo3::types::PyAnyMethods::setattr(value, #attr_names, #attr_values)?; )*
+                ::std::result::Result::Ok(())
+            })
+            .map_or_else(|e| e, |()| err)
+        }
+    };
     Ok(Read { raise, kind, declared: None })
 }
 
@@ -327,12 +360,17 @@ fn kind_selected(
                 format!("`{class}`: a kind-selected class is dotted"),
             ));
         };
+        // `kwargs(a)` passes field `a` as `a`; `kwargs(a = b)` passes field `b` as `a`.
         let mut fields = Vec::new();
         for (key, value) in m.under(&prefix) {
             match (key, value) {
                 ("class", _) => {}
                 (kwarg, crate::meta::Value::Word) if kwarg.starts_with("kwargs.") => {
-                    fields.push(format_ident!("{}", &kwarg["kwargs.".len()..]));
+                    let name = &kwarg["kwargs.".len()..];
+                    fields.push((name.to_owned(), format_ident!("{name}")));
+                }
+                (kwarg, crate::meta::Value::Rust(field)) if kwarg.starts_with("kwargs.") => {
+                    fields.push((kwarg["kwargs.".len()..].to_owned(), format_ident!("{field}")));
                 }
                 _ => {
                     return Err(syn::Error::new_spanned(
@@ -342,10 +380,10 @@ fn kind_selected(
                 }
             }
         }
-        let names = fields.iter().map(|f| f.to_string());
+        let names = fields.iter().map(|(name, _)| name);
         let values = fields
             .iter()
-            .map(|f| {
+            .map(|(_, f)| {
                 let syn::Item::Struct(st) = item else {
                     unreachable!("`by` is checked to be on a struct")
                 };

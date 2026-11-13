@@ -34,6 +34,7 @@ from livekit.agents._bindings import APIConnectionError, APIError, APIStatusErro
 from livekit.agents.types import (
     NOT_GIVEN,
     APIConnectOptions,
+    ErrorKind,
     NotGivenOr,
 )
 from livekit.agents.utils import aio, is_given
@@ -56,6 +57,23 @@ DEFAULT_SPEAKING_RATE = 1.0
 DEFAULT_BUFFER_CHAR_THRESHOLD = 120
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
+
+# Inworld reports errors as gRPC status codes; an unlisted code refused the request
+_GRPC_ERROR_KINDS: dict[int, ErrorKind] = {
+    4: "timeout",  # DEADLINE_EXCEEDED
+    7: "auth",  # PERMISSION_DENIED
+    8: "rate_limit",  # RESOURCE_EXHAUSTED
+    13: "server",  # INTERNAL
+    14: "server",  # UNAVAILABLE
+    16: "auth",  # UNAUTHENTICATED
+}
+
+
+def _grpc_error_kind(code: object) -> ErrorKind:
+    if not isinstance(code, int):
+        return "invalid_request"
+    return _GRPC_ERROR_KINDS.get(code, "invalid_request")
+
 
 TTSModels = Literal["inworld-tts-2", "inworld-tts-1.5-max"]
 Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"]
@@ -465,7 +483,14 @@ class _InworldConnection:
                 if msg.type != http.WebSocketMessageType.TEXT:
                     continue
 
-                data = json.loads(msg.data)
+                try:
+                    data = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    data = None
+                if not isinstance(data, dict):
+                    raise APIError(
+                        "Inworld TTS sent a malformed message", kind="protocol", detail=msg.text
+                    )
 
                 # Check for errors that are not associated with a context
                 if err_obj := data.get("error"):
@@ -486,7 +511,11 @@ class _InworldConnection:
                 # Check for errors in status
                 status = result.get("status", {})
                 if status.get("code", 0) != 0:
-                    error = APIError("Inworld TTS context error", detail=status.get("message"))
+                    error = APIError(
+                        "Inworld TTS context error",
+                        kind=_grpc_error_kind(status.get("code")),
+                        detail=status.get("message"),
+                    )
                     logger.warning(
                         "Received error from Inworld",
                         extra={
@@ -1263,10 +1292,14 @@ class ChunkedStream(tts.ChunkedStream):
 
                     try:
                         data = json.loads(line)
-                    except json.JSONDecodeError as e:
-                        raise APIConnectionError(
-                            "Inworld TTS sent a malformed response line", retryable=False
-                        ) from e
+                    except json.JSONDecodeError:
+                        data = None
+                    if not isinstance(data, dict):
+                        raise APIError(
+                            "Inworld TTS sent a malformed response line",
+                            kind="protocol",
+                            detail=str(line),
+                        )
 
                     if result := data.get("result"):
                         # Handle timestamp info if present
@@ -1286,11 +1319,9 @@ class ChunkedStream(tts.ChunkedStream):
                             if self._opts.encoding == "PCM":
                                 output_emitter.flush()
                     elif error := data.get("error"):
-                        raise APIStatusError(
+                        raise APIError(
                             "Inworld TTS error",
-                            status_code=error.get("code"),
-                            request_id=x_request_id,
-                            body=None,
+                            kind=_grpc_error_kind(error.get("code")),
                             detail=error.get("message"),
                         )
         except TimeoutError:

@@ -2,7 +2,7 @@ use crate::telemetry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderError};
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::inference::EotStream as AbiEotStream;
 use lk_agents_abi::types::provider::NativeLabel;
@@ -559,7 +559,9 @@ impl lk_agents_abi::EotDetector for DetectorStream {
             rx
         };
         Box::pin(async {
-            rx.await.map_err(|_| ApiError::new("turn detector stream closed").into())
+            rx.await.map_err(|_| {
+                ApiError::new(ErrorKind::Connection, "turn detector stream closed").into()
+            })
         })
     }
 

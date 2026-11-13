@@ -6,7 +6,7 @@ use livekit_api::services::room::RoomClient;
 use livekit_api::services::sip::{CreateSIPParticipantOptions, SIPClient};
 use livekit_api::services::{ServerError, ServerErrorCode, ServiceError};
 use livekit_protocol as proto;
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 
 /// A project's RoomService: its `LIVEKIT_URL` (`wss://` or `https://`) and key pair.
 pub struct RoomService(RoomClient);
@@ -134,7 +134,7 @@ pub fn api_error(error: ServiceError) -> ApiError {
         ServiceError::Twirp(ServerError::Request(error)) => {
             ApiError::connection(Some(crate::http::error_chain(&error)))
         }
-        error => ApiError::new(error.to_string()),
+        error => ApiError::new(ErrorKind::Server, error.to_string()),
     }
 }
 
@@ -145,7 +145,7 @@ pub async fn post_form(
     form: &[(String, String)],
 ) -> Result<(u16, String), ApiError> {
     let unbuilt =
-        |error: crate::tls::TlsError| ApiError::new(error.to_string()).with_retryable(false);
+        |error: crate::tls::TlsError| ApiError::new(ErrorKind::InvalidRequest, error.to_string());
     let builder = crate::tls::http_client_builder().map_err(unbuilt)?;
     let client =
         crate::tls::build(builder.redirect(reqwest::redirect::Policy::none())).map_err(unbuilt)?;

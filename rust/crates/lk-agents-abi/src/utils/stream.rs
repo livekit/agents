@@ -90,9 +90,11 @@ impl InputState {
     pub fn admit(&self) -> Result<(), ProviderError> {
         match self {
             InputState::Open => Ok(()),
-            InputState::Ended => Err(crate::errors::ApiError::new("stream input is closed")
-                .with_retryable(false)
-                .into()),
+            InputState::Ended => Err(crate::errors::ApiError::new(
+                crate::errors::ErrorKind::InvalidRequest,
+                "stream input is closed",
+            )
+            .into()),
             InputState::Failed(error) => Err(error.clone()),
         }
     }

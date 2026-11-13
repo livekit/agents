@@ -82,10 +82,10 @@ impl Realtime for HostRealtimeModel {
             let host =
                 self.host.session(&cx, turn_detection_disabled, tools).await.map_err(|e| {
                     lk_agents_abi::errors::ProviderError::Local(
-                        lk_agents_abi::errors::ApiError::new(format!(
-                            "realtime session could not be opened: {}",
-                            e.message()
-                        )),
+                        lk_agents_abi::errors::ApiError::new(
+                            lk_agents_abi::errors::ErrorKind::Server,
+                            format!("realtime session could not be opened: {}", e.message()),
+                        ),
                     )
                 })?;
             let leg = HostRealtimeLeg::open(host, cx, self.caps, self.anchor, &self.spawner);

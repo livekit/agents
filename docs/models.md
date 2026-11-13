@@ -139,6 +139,19 @@ connection error; its `timeout` names the limit that expired: `"pool"`, `"connec
 `"write"`, `"read"` or `"total"`, or `None` when the failing layer cannot identify it. Provider
 errors keep their class and diagnostic cause through an agent run.
 
+A provider failure names what failed with its `kind`, and the kind alone decides
+`retryable`: `"rate_limit"`, `"server"`, `"connection"` and `"timeout"` are retried;
+`"auth"`, `"quota"`, `"invalid_request"` and `"protocol"` are final. `"protocol"` means the
+provider broke its own contract: an answer or frame whose fields the plugin reads are missing
+or have the wrong type, or an answer that does not parse; the offending payload is its
+`detail`. A plugin fails only on what it reads: unknown message types and extra fields are
+ignored. `APIError(message, kind=...)`
+requires one. `APIStatusError(message, status_code=...)` takes its status's kind (401 and
+403 `auth`, 402 `quota`, 408 `timeout`, 429 `rate_limit`, other 3xx and 4xx
+`invalid_request`, anything else `server`) unless `kind=` names the provider's own meaning.
+`APIConnectionError` is `"connection"` unless a close code says otherwise, and
+`APITimeoutError` is `"timeout"`. `ErrorKind` is exported from `livekit.agents.types`.
+
 `retryable` permits retry consideration; it does not establish safe replay.
 Delivered output is not replayed on failure without a deduplication protocol.
 A TTS stream (`tts.stream()`) takes text through `push_text()`, `flush()` and
@@ -238,7 +251,7 @@ names, and failures are framework errors, never the transport's exceptions.
 | `HttpResponse` | `status`, `ok`, `reason`, `headers`, `content_type`; `await read()`, `text()`, `json()` (a `JsonValue`); `async for chunk in response.iter_bytes()`, `async for line in response.iter_lines()`; `await raise_for_status()` raises `APIStatusError` carrying the status, body and `retry_after` (the `Retry-After` seconds) |
 | `FormData` | `add_field(name, value, *, filename=, content_type=)`, a multipart body |
 | `await session.ws_connect(url, *, conn_options=, headers=, params=, heartbeat=, protocols=)` | A `WebSocket`; a rejected handshake raises `APIStatusError` |
-| `WebSocket` | `headers` (the upgrade response's), `closed`, `close_code`; `await send_str()`, `send_bytes()`, `send_json()`, `close(code=1000)`; `await receive(timeout=None)` returns a `WebSocketMessage`; `async for message in ws` yields until the socket closes; `raise ws.close_error(message)` for a socket the provider closed: final when its code refuses the request or the client (policy, auth, invalid data), else retryable, the close reason as its `detail` |
+| `WebSocket` | `headers` (the upgrade response's), `closed`, `close_code`; `await send_str()`, `send_bytes()`, `send_json()`, `close(code=1000)`; `await receive(timeout=None)` returns a `WebSocketMessage`; `async for message in ws` yields until the socket closes; `raise ws.close_error(message, codes=None)` for a socket the provider closed: an `APIConnectionError` of the kind its close code names (policy and auth codes `auth`, refused data `invalid_request`, a server error `server`, a private 44xx code its HTTP status's kind, anything else `connection`), the provider's own close codes in `codes` (`{4001: "auth"}`) read first, the close reason as its `detail`; `http.close_kind(code, codes=None)` is the same kind for a socket a provider SDK owns |
 | `await retry_request(request, *, conn_options=)` | Runs `request()` (one request and the parsing of its answer, such as starting an avatar session) under `conn_options`' retries: 5xx, 429 and connection failures are retried after at least `Retry-After`; a request whose answer timed out is never sent again |
 | `WebSocketMessage` | `type` (`WebSocketMessageType.TEXT`, `BINARY` or `CLOSE`), `data` (`str` text, `bytes` binary, the close reason), `json()` |
 
@@ -267,8 +280,7 @@ enforces `conn_options` itself.
   `SynthesizeStream` retry reads `input` again from its first token, and a
   `RecognizeStream` retry reads the audio the failed attempt had not taken, with
   `start_time`/`start_time_offset` moved on so timestamps stay linear.
-- **What is retried.** An `APIError` with `retryable=True` (the default for
-  connection errors and retryable statuses), up to `max_retry` more attempts
+- **What is retried.** An `APIError` whose kind is retryable, up to `max_retry` more attempts
   (the first after 0.1 seconds, then `retry_interval` apart), all within
   `total_timeout`. Any other exception, or a
   non-retryable `APIError`, ends the stream with that same exception. For LLM and TTS a

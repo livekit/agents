@@ -20,13 +20,12 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APITimeoutError,
     http,
     redacted_cause,
     tts,
@@ -44,16 +43,12 @@ _Pool = utils.ConnectionPool[http.WebSocket]
 
 
 class WordTimestamps(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     words: list[str] = Field(default_factory=list[str])
     start: list[float] = Field(default_factory=list[float])
     end: list[float] = Field(default_factory=list[float])
 
 
 class Response(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     type: str
     data: str = ""
     word_timestamps: WordTimestamps | None = None
@@ -106,10 +101,6 @@ class LegacyWebSocketAdapter:
     async def _close(self, websocket: http.WebSocket) -> None:
         try:
             await websocket.send_str(json.dumps({"operation": "eos"}))
-            try:
-                await websocket.receive(timeout=1.0)
-            except APITimeoutError:
-                pass
         except Exception as error:
             logger.warning(
                 "error during Rime WebSocket close sequence",
@@ -220,8 +211,10 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                 try:
                     data = Response.model_validate_json(message.data)
                 except ValidationError as cause:
-                    raise APIConnectionError(
-                        "Rime WebSocket sent an invalid response", retryable=False
+                    raise APIError(
+                        "Rime WebSocket sent an invalid response",
+                        kind="protocol",
+                        detail=str(message.data),
                     ) from redacted_cause(cause)
                 message_type = data.type
                 if message_type == "chunk":
@@ -240,7 +233,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                     break
                 elif message_type == "error":
                     # auth fails the handshake, so an in-band error rejects the request itself
-                    raise APIError("Rime WebSocket request failed", retryable=False)
+                    raise APIError("Rime WebSocket request failed", kind="invalid_request")
 
         try:
             async with self._pool.connection(conn_options=self._conn_options) as websocket:

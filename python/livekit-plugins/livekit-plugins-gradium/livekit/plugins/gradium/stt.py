@@ -28,6 +28,7 @@ from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -50,6 +51,17 @@ bytes_per_frame = {
 
 
 SUPPORTED_SAMPLE_RATE = 24000
+
+
+def _decode(raw: str | bytes) -> dict[str, Any]:
+    """A provider message, which must be a JSON object."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("Gradium STT sent a malformed message", kind="protocol", detail=str(raw))
+    return data
 
 
 @dataclass
@@ -297,7 +309,7 @@ class SpeechStream(stt.RecognizeStream):
                     logger.error("Unexpected Gradium message type: %s", msg.type)
                     continue
 
-                data = json.loads(msg.data)
+                data = _decode(msg.data)
 
                 type_ = data.get("type", "")
 

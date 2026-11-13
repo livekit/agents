@@ -6,7 +6,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIStatusError, http
+from livekit.agents import APIError, http
 from livekit.plugins.nabrah import STT
 
 TRANSCRIPT = "private customer transcript"
@@ -30,7 +30,7 @@ async def test_provider_error_does_not_expose_provider_message() -> None:
     async with TestServer(app) as server, http.open():
         provider = STT(api_key="key", base_url=str(server.make_url("/listen").with_scheme("ws")))
 
-        with pytest.raises(APIStatusError) as caught:
+        with pytest.raises(APIError) as caught:
             async with provider.stream() as stream:
                 async for _ in stream:
                     pass

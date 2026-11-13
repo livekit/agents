@@ -365,9 +365,11 @@ async def test_websocket_messages_and_close(server: str, session: HttpSession) -
     assert ws.close_code == 4000
 
 
-@pytest.mark.parametrize(("code", "retryable"), [(1008, False), (4401, False), (1011, True)])
-async def test_a_provider_close_is_an_error_its_code_makes_final_or_retryable(
-    server: str, session: HttpSession, code: int, retryable: bool
+@pytest.mark.parametrize(
+    ("code", "kind"), [(1008, "auth"), (4401, "auth"), (4402, "quota"), (1011, "server")]
+)
+async def test_a_provider_close_names_the_kind_its_code_means(
+    server: str, session: HttpSession, code: int, kind: str
 ) -> None:
     """An auth or policy close is final (it used to be retried like any close), a server error
     is retried; the provider's close reason is the error's detail, never its text."""
@@ -377,11 +379,25 @@ async def test_a_provider_close_is_an_error_its_code_makes_final_or_retryable(
 
     error = ws.close_error("provider closed")
 
-    assert (str(error), error.retryable, error.detail) == (
+    assert (str(error), error.kind, error.retryable, error.detail) == (
         f"provider closed (close code {code})",
-        retryable,
+        kind,
+        kind == "server",
         "bye",
     )
+
+
+async def test_a_provider_close_code_of_its_own_is_read_from_its_table(
+    server: str, session: HttpSession
+) -> None:
+    """A provider's private close code (Vakyam's 4001 for a rejected key) is final once its
+    table names it, where the standard rule reads any 4000 code as a dropped connection."""
+    ws = await session.ws_connect(f"{server}/echo")
+    await ws.send_str("close:4001")
+    assert (await ws.receive()).type is WebSocketMessageType.CLOSE
+
+    assert ws.close_error("closed").kind == "connection"
+    assert ws.close_error("closed", {4001: "auth"}).kind == "auth"
 
 
 def _assert_redacted(err: BaseException) -> None:
@@ -713,4 +729,4 @@ async def test_a_session_start_whose_answer_timed_out_is_never_sent_again(
             lambda: _post_json(session, f"{url}/stall", options), conn_options=options
         )
 
-    assert (raised.value.timeout, raised.value.retryable, seen) == ("read", False, ["/stall"])
+    assert (raised.value.timeout, seen) == ("read", ["/stall"])

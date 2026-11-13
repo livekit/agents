@@ -21,22 +21,21 @@ so this plugin does not wrap ``vakyamai``.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
-from pydantic import Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import Discriminator, JsonValue, Tag, TypeAdapter, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     __version__ as livekit_version,
     http,
 )
+from livekit.agents.types import ErrorKind
 
 from ._utils import (
     ErrorResponse,
@@ -122,17 +121,48 @@ class _EndOfUtterance(ErrorResponse):
     reason: str | None = None
 
 
-_Message = Annotated[_ControlMessage | _Cancellation | _EndOfUtterance, Field(discriminator="type")]
-_MESSAGE: TypeAdapter[_ControlMessage | _Cancellation | _EndOfUtterance] = TypeAdapter(_Message)
+class _Other(ErrorResponse):
+    type: object = None
 
 
-def _decode_message(message: str | bytes) -> _ControlMessage | _Cancellation | _EndOfUtterance:
+_KNOWN = {"connected", "configured", "error", "pong", "cancellation", "end_of_utterance"}
+
+
+def _message_kind(value: object) -> str:
+    kind = value.get("type") if isinstance(value, dict) else None
+    return kind if isinstance(kind, str) and kind in _KNOWN else "other"
+
+
+_Message = Annotated[
+    Annotated[_ControlMessage, Tag("connected")]
+    | Annotated[_ControlMessage, Tag("configured")]
+    | Annotated[_ControlMessage, Tag("error")]
+    | Annotated[_ControlMessage, Tag("pong")]
+    | Annotated[_Cancellation, Tag("cancellation")]
+    | Annotated[_EndOfUtterance, Tag("end_of_utterance")]
+    | Annotated[_Other, Tag("other")],
+    Discriminator(_message_kind),
+]
+_MESSAGE: TypeAdapter[_ControlMessage | _Cancellation | _EndOfUtterance | _Other] = TypeAdapter(
+    _Message
+)
+
+
+def _decode_message(
+    message: str | bytes,
+) -> _ControlMessage | _Cancellation | _EndOfUtterance | _Other:
     try:
         return _MESSAGE.validate_json(message)
     except ValidationError as exc:
-        raise APIConnectionError(
-            "Vakyam TTS returned an invalid WebSocket message", retryable=False
+        raise APIError(
+            "Vakyam TTS returned an invalid WebSocket message",
+            kind="protocol",
+            detail=message if isinstance(message, str) else repr(message),
         ) from exc
+
+
+def _unexpected(what: str, message: object) -> APIError:
+    return APIError(f"Vakyam TTS sent an unexpected {what}", kind="protocol", detail=repr(message))
 
 
 def speech_result_from_terminal(
@@ -217,13 +247,13 @@ class AsyncStreamingTTSSession:
         try:
             connected = await self._recv_control(conn_options.read_timeout)
             if connected.type != "connected":
-                raise APIConnectionError("Unexpected WebSocket handshake response")
+                raise _unexpected("handshake response", connected)
             await self._connection.send_json(self._config.to_wire_message())
             configured = await self._recv_control(conn_options.read_timeout)
             if configured.type == "error":
                 raise_ws_error(configured)
             if configured.type != "configured":
-                raise APIConnectionError("Unexpected WebSocket config response")
+                raise _unexpected("config response", configured)
         except BaseException:
             await self.close()
             raise
@@ -233,9 +263,8 @@ class AsyncStreamingTTSSession:
     ) -> AsyncIterator[bytes]:
         """Send one utterance and yield raw audio until EOU or cancellation.
 
-        If this coroutine is cancelled mid-stream (LiveKit barge-in), it sends
-        ``cancel``, drains until ``cancellation``, then re-raises so the
-        WebSocket can be reused.
+        If this coroutine is cancelled mid-stream (LiveKit barge-in), the socket
+        is reusable only after :meth:`abort` drains the utterance.
         """
         ws = self._socket()
         payload = text_message(text)
@@ -256,10 +285,7 @@ class AsyncStreamingTTSSession:
                 if isinstance(message, (_EndOfUtterance, _Cancellation)):
                     self.last_result = speech_result_from_terminal(message)
                     return
-                raise APIConnectionError(f"Unexpected WebSocket message type: {message.type}")
-        except asyncio.CancelledError:
-            await asyncio.shield(self._abort_and_drain(timeout=timeout))
-            raise
+                raise _unexpected("message", message)
         finally:
             self._utterance_active = False
 
@@ -278,9 +304,7 @@ class AsyncStreamingTTSSession:
         if response.type == "error":
             raise_ws_error(response)
         if response.type != "pong":
-            raise APIConnectionError(
-                f"Unexpected Vakyam TTS WebSocket ping response: {response.type}"
-            )
+            raise _unexpected("ping response", response)
         return True
 
     async def close(self) -> None:
@@ -301,24 +325,25 @@ class AsyncStreamingTTSSession:
         self, timeout: float | None
     ) -> bytes | _ControlMessage | _Cancellation | _EndOfUtterance:
         ws = self._socket()
-        message = await ws.receive(timeout=timeout)
-        if message.type is http.WebSocketMessageType.BINARY:
-            return message.binary
-        if message.type is http.WebSocketMessageType.TEXT:
-            return _decode_message(message.text)
-        if ws.close_code == _AUTH_FAILED:
-            raise APIStatusError("Vakyam TTS authentication failed", status_code=401)
-        raise ws.close_error("Vakyam TTS WebSocket closed")
+        while True:
+            message = await ws.receive(timeout=timeout)
+            if message.type is http.WebSocketMessageType.BINARY:
+                return message.binary
+            if message.type is not http.WebSocketMessageType.TEXT:
+                raise ws.close_error("Vakyam TTS WebSocket closed", _CLOSE_CODES)
+            decoded = _decode_message(message.text)
+            if not isinstance(decoded, _Other):
+                return decoded
 
     async def _recv_control(
         self, timeout: float | None
     ) -> _ControlMessage | _Cancellation | _EndOfUtterance:
         message = await self._recv(timeout)
         if isinstance(message, bytes):
-            raise APIConnectionError("Unexpected binary WebSocket message", retryable=False)
+            raise _unexpected("binary message", message)
         return message
 
-    async def _abort_and_drain(self, *, timeout: float | None) -> None:
+    async def abort(self, *, timeout: float | None) -> None:
         """Best-effort cancel + drain after the consumer task was cancelled."""
         if self._connection is None:
             return
@@ -337,10 +362,8 @@ class AsyncStreamingTTSSession:
                 result = speech_result_from_terminal(message)
                 self.last_result = result
                 return result
-            raise APIConnectionError(
-                f"Unexpected WebSocket message type while draining: {message.type}"
-            )
+            raise _unexpected("message while draining", message)
 
 
-# Vakyam's documented close code for a rejected API key: the shared close-code rule would retry it.
-_AUTH_FAILED = 4001
+# Vakyam's documented close code for a rejected API key.
+_CLOSE_CODES: dict[int, ErrorKind] = {4001: "auth"}

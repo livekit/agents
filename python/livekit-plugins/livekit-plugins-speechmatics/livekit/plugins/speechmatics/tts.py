@@ -178,7 +178,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 if buffer:
                     raise APIError(
-                        "Speechmatics returned an incomplete PCM sample", retryable=False
+                        "Speechmatics returned an incomplete PCM sample", kind="protocol"
                     )
                 output_emitter.flush()
 

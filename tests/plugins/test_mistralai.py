@@ -312,7 +312,7 @@ async def test_in_band_error_is_not_retried() -> None:
 
     assert len(received) == 1
     assert isinstance(caught.value, APIStatusError)
-    assert caught.value.retryable is False
+    assert caught.value.kind == "invalid_request"
 
 
 @pytest.mark.parametrize("language", ["en", None])

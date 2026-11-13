@@ -20,6 +20,7 @@ import json
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from typing import Any
 
 from pydantic import JsonValue
 
@@ -38,6 +39,17 @@ from livekit.agents.utils import is_given
 from .log import logger
 
 SUPPORTED_SAMPLE_RATE = 48000
+
+
+def _decode(raw: str | bytes) -> dict[str, Any]:
+    """A provider message, which must be a JSON object."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("Gradium TTS sent a malformed message", kind="protocol", detail=str(raw))
+    return data
 
 
 @dataclass
@@ -235,7 +247,7 @@ class ChunkedStream(tts.ChunkedStream):
                         break
 
                     if msg.type is http.WebSocketMessageType.TEXT:
-                        msg_data = json.loads(msg.data)
+                        msg_data = _decode(msg.data)
                         type_ = msg_data.get("type")
                         if type_ == "text":
                             # TODO(laurent): handle text timestamps?
@@ -358,7 +370,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
 
                 if msg.type is http.WebSocketMessageType.TEXT:
-                    msg_data = json.loads(msg.data)
+                    msg_data = _decode(msg.data)
                     type_ = msg_data.get("type")
                     if type_ == "text":
                         # TODO(laurent): handle text timestamps?

@@ -14,7 +14,7 @@ from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import GoogleAPICallError
 from google.auth.credentials import Credentials
 from google.genai import types
-from livekit.agents import APIConnectOptions, APIStatusError, llm
+from livekit.agents import APIConnectOptions, APIError, APIStatusError, llm
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -44,11 +44,12 @@ class APICallError(Protocol):
     def details(self) -> list[object]: ...
 
 
-def api_status_error(error: GoogleAPICallError) -> APIStatusError:
+def api_status_error(error: GoogleAPICallError) -> APIError:
     sdk_error = cast(APICallError, error)
-    return APIStatusError(
-        sdk_error.message, status_code=sdk_error.code or -1, body=sdk_error.details
-    )
+    if sdk_error.code is None:
+        # an api_core error without an HTTP status: the service failed in an unknown way
+        return APIError(sdk_error.message, kind="server", body=sdk_error.details)
+    return APIStatusError(sdk_error.message, status_code=sdk_error.code, body=sdk_error.details)
 
 
 ClientT = TypeVar("ClientT", covariant=True)

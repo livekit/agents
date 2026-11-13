@@ -47,10 +47,11 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    http,
     stt,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 
 # ASR recommended input rate; the base RecognizeStream resamples room audio to it.
@@ -59,8 +60,11 @@ DEFAULT_STT_SAMPLE_RATE = 16000
 # Room audio arrives as 10 ms frames; re-buffer into 100 ms binary WS frames.
 _CHUNK_MS = 100
 
-# Server `error` codes that are worth retrying.
-_RETRYABLE_ERROR_CODES = frozenset({"SERVICE_UNAVAILABLE", "RATE_LIMIT_EXCEEDED"})
+# A server error code's kind; any other code refused the request.
+_ERROR_KINDS: dict[str, ErrorKind] = {
+    "SERVICE_UNAVAILABLE": "server",
+    "RATE_LIMIT_EXCEEDED": "rate_limit",
+}
 
 # Finished utterances stay in the registry (size-capped).
 # A late event for a finished transcription_id must be ignored, not restart the utterance.
@@ -331,14 +335,19 @@ class SpeechStream(stt.RecognizeStream):
                 if isinstance(event, ServerError):
                     raise APIError(
                         f"palabra stt error: {event.code}",
-                        retryable=event.code in _RETRYABLE_ERROR_CODES,
+                        kind=_ERROR_KINDS.get(event.code, "invalid_request"),
                     )
                 if isinstance(event, SttTranscript):
                     _emit(event)
             # The iterator ends when the connection closes.
             # That is expected only after _send_task closed the WS at end of input.
             if not input_closed.is_set():
-                raise APIConnectionError("palabra stt connection closed unexpectedly")
+                # the SDK ends the iterator on any close: its socket keeps the code
+                code = session._ws.close_code if session._ws is not None else None
+                raise APIConnectionError(
+                    f"palabra stt connection closed unexpectedly (close code {code})",
+                    kind=http.close_kind(code),
+                )
 
         session: SttSession | None = None
         try:
@@ -357,7 +366,11 @@ class SpeechStream(stt.RecognizeStream):
         except TaskError as e:
             # `code` is a short server enum (e.g. VALIDATION_ERROR); `desc` is free-form
             # server text.
-            raise APIConnectionError(f"palabra stt error: {e.code}", detail=e.desc) from None
+            raise APIError(
+                f"palabra stt error: {e.code}",
+                kind=_ERROR_KINDS.get(e.code, "invalid_request"),
+                detail=e.desc,
+            ) from None
         except (SessionError, PalabraError) as e:
             # The SDK interpolates the underlying websockets error into its message, and the
             # connect URL carries the API key as a ?token= query parameter -- so neither

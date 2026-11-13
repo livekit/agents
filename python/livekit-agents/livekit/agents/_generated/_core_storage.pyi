@@ -40,7 +40,7 @@ from .storage_session import BoundContext, SessionKind
 from .text_session import FrameId, SessionFrame, TextSessionState
 
 class Storage:
-    """Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
+    """Threads in one storage namespace: a local
     directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
     """
     async def _core_serve_threads(
@@ -190,7 +190,7 @@ class _core_ContextActivation:
     def statements(self) -> list[AppStatement]:
         """The application statements managed transactions staged for the turn's commit."""
     async def transaction(self, independent: bool) -> _core_AppTransaction:
-        """Application SQL (docs/context.md#application-records-and-transactions): `independent`
+        """Application SQL: `independent`
         commits when the transaction ends; otherwise it joins the managed turn's commit, or
         commits like an independent one outside a managed turn.
         """
@@ -282,7 +282,7 @@ class Run:
     async def abandon(self, outcome: RunOutcome, reason: str) -> None: ...
 
 class _core_ThreadHandle:
-    """`ctx.thread` (docs/threads.md): one thread of a storage namespace, as the partition_key `partition_key` reads
+    """`ctx.thread`: one thread of a storage namespace, as the partition_key `partition_key` reads
     it. Each read opens the thread's database for the call and releases it after; there is
     nothing to open or close.
     """
@@ -334,7 +334,7 @@ class _core_ThreadHandle:
     async def task(self, task_id: str) -> TaskRecord | None:
         """One task record, `None` when this thread has none of that id."""
     async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
-        """One page of the journal (docs/internals/storage.md#journal), every partition, in order; pass
+        """One page of the journal, every partition, in order; pass
         the last `id` to read the next.
         """
     async def history(self, partition_key: str) -> list[ItemRow]:

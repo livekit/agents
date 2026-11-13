@@ -144,7 +144,10 @@ impl VoiceDriver {
                 return self.dtmf_step(digit);
             }
             RoomIoEvent::InputProcessorFailed(failure) => {
-                let error = lk_agents_abi::errors::ApiError::new(failure.message.clone());
+                let error = lk_agents_abi::errors::ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Server,
+                    failure.message.clone(),
+                );
                 let ev = crate::events::ErrorEvent {
                     source: crate::events::ErrorSource::AudioProcessing,
                     recoverable: true,

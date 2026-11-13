@@ -53,7 +53,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     LanguageCode,
     http,
     stt,
@@ -304,9 +303,6 @@ class SpeechStream(stt.RecognizeStream):
     async def _connect_ws(self) -> http.WebSocket:
         return await self._session.ws_connect(self._opts.base_url, conn_options=self._conn_options)
 
-    def _stream_failure(self, message: str) -> APIConnectionError:
-        return APIConnectionError(message, retryable=self._audio_position == 0.0)
-
     async def _run(self) -> None:
         self._latest_audio_processed = None
         self._audio_position = 0.0
@@ -335,15 +331,15 @@ class SpeechStream(stt.RecognizeStream):
                         raise APIConnectionError("nabrah STT closed before ready")
                     try:
                         payload = _Message.model_validate_json(msg.data)
-                    except (ValueError, TypeError):
-                        raise APIConnectionError(
-                            "nabrah STT sent an invalid ready response"
-                        ) from None
+                    except ValueError as e:
+                        raise APIError(
+                            "nabrah STT sent an invalid ready response",
+                            kind="protocol",
+                            detail=str(msg.data),
+                        ) from e
                     if payload.type == "error":
-                        raise APIStatusError(
-                            "nabrah STT rejected the configuration",
-                            status_code=-1,
-                            retryable=False,
+                        raise APIError(
+                            "nabrah STT rejected the configuration", kind="invalid_request"
                         )
                     if payload.type == "ready":
                         return
@@ -401,19 +397,19 @@ class SpeechStream(stt.RecognizeStream):
             self._input_done = True
             await ws.send_str(json.dumps({"type": "eof"}))
         except Exception as e:
-            raise self._stream_failure(f"nabrah STT send failed ({type(e).__name__})") from None
+            raise APIConnectionError(f"nabrah STT send failed ({type(e).__name__})") from None
 
     async def _recv_task(self, ws: http.WebSocket) -> None:
         while True:
             try:
                 msg = await ws.receive()
             except Exception as e:
-                raise self._stream_failure(
+                raise APIConnectionError(
                     f"nabrah STT receive failed ({type(e).__name__})"
                 ) from None
             if msg.type is http.WebSocketMessageType.CLOSE:
                 if not self._input_done:
-                    raise self._stream_failure("nabrah STT closed unexpectedly")
+                    raise ws.close_error("nabrah STT closed unexpectedly")
                 return
             if msg.type is not http.WebSocketMessageType.TEXT:
                 continue
@@ -537,13 +533,7 @@ class SpeechStream(stt.RecognizeStream):
         msg_type = data.type
 
         if msg_type == "error":
-            raise APIStatusError(
-                message="nabrah STT reported an error",
-                status_code=-1,
-                request_id=None,
-                body=None,
-                retryable=False,
-            )
+            raise APIError("nabrah STT reported an error", kind="invalid_request")
 
         if msg_type != "transcript":
             return

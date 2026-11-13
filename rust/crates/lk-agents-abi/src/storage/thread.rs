@@ -258,7 +258,7 @@ pub enum AbandonReason {
     RunDropped,
 }
 
-/// How a task listing is ordered (docs/internals/storage.md#reading-thread-items-and-tasks).
+/// How a task listing is ordered.
 #[crate::host(record(module = "storage_class", extract))]
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -457,7 +457,7 @@ pub fn timestamp(t: f64) -> pbjson_types::Timestamp {
     }
 }
 
-/// The host's twins (docs/internals/storage.md#thread-database): chat items and A2A messages
+/// The host's twins: chat items and A2A messages
 /// become their protobuf JSON, which cannot fail for these types.
 #[cfg(feature = "serde")]
 mod host {

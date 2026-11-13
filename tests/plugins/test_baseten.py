@@ -12,7 +12,7 @@ from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, http, stt
+from livekit.agents import APIConnectOptions, APIError, http, stt
 from livekit.agents.llm import ChatContext
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.baseten import LLM, STT
@@ -73,10 +73,10 @@ async def test_transcript_timing_is_validated_before_delivery(
             stream.start_time_offset = 0.25
             stream.end_input()
             if invalid_timing:
-                with pytest.raises(APIConnectionError, match="invalid transcript") as failure:
+                with pytest.raises(APIError, match="invalid transcript") as failure:
                     async for _ in stream:
                         pass
-                assert failure.value.retryable is False
+                assert failure.value.kind == "protocol"
             else:
                 async for event in stream:
                     if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:

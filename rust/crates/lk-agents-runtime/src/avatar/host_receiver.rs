@@ -75,7 +75,9 @@ impl avatar::HostAudioReceiver for HostAudioReceiver {
         let audio = match audio {
             Some(audio) => Audio::Native(audio),
             None => {
-                let spawner = (env.spawner)().map_err(|e| ApiError::new(e.to_string()))?;
+                let spawner = (env.spawner)().map_err(|e| {
+                    ApiError::new(lk_agents_abi::errors::ErrorKind::InvalidRequest, e.to_string())
+                })?;
                 let (sender, queue) = media_queue::audio(
                     HOST_AUDIO_POLICY,
                     telemetry::AudioConsumer::AvatarReceiver,
@@ -122,7 +124,13 @@ async fn pump(
                 if sender.event(Event::SegmentEnd).is_ok() {
                     continue;
                 }
-                Event::Failed(ApiError::new("the avatar runner stopped reading audio").into())
+                Event::Failed(
+                    ApiError::new(
+                        lk_agents_abi::errors::ErrorKind::Connection,
+                        "the avatar runner stopped reading audio",
+                    )
+                    .into(),
+                )
             }
             Ok(None) => {
                 // A receiver that ran out still has its queued audio played.

@@ -1,12 +1,25 @@
 from __future__ import annotations
 
+from abc import abstractmethod
+from collections.abc import Iterable
+
 from livekit import rtc
 
 from ._generated import facades_stt as _facades, public_stt as _public
 from ._generated.public_stt import *  # noqa: F403
+from .http.socket import (
+    Done,
+    EndOfInput,
+    InboundT,
+    OutboundT,
+    SocketProtocol,
+    _single_retry_owner,
+)
 from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from .utils import aio
 
 __all__ = [
+    "SocketStream",
     "StreamAdapter",
     "FallbackAdapter",
 ]
@@ -77,3 +90,46 @@ class StreamAdapter(_facades.StreamAdapter):
 
     def prewarm(self) -> None:
         self._stt.prewarm()
+
+
+class SocketStream(
+    SocketProtocol[rtc.AudioFrame | RecognizeStream.Flush, InboundT, OutboundT], RecognizeStream
+):
+    """A recognition over the provider's socket: the plugin writes ``connect``, ``encode`` (audio
+    frames, ``Flush`` and ``EndOfInput``) and ``on_message``; the framework runs the socket. Each
+    attempt is one socket session; the stream's attempts own the retries."""
+
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        conn_options: APIConnectOptions,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+    ) -> None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
+        self._socket_init()
+
+    @abstractmethod
+    def on_message(self, message: InboundT) -> SpeechEvent | Iterable[SpeechEvent] | Done | None:
+        """One received message: the events it carries, ``DONE`` once the provider finished."""
+
+    async def _run(self) -> None:
+        await self._socket_run(_single_retry_owner(self._conn_options))
+
+    async def _socket_input(self) -> rtc.AudioFrame | RecognizeStream.Flush | EndOfInput:
+        try:
+            return await self.input.recv()
+        except aio.ChanClosed:
+            return EndOfInput()
+
+    def _socket_boundary(self, item: object) -> bool:
+        return isinstance(item, RecognizeStream.Flush)
+
+    def _socket_label(self) -> str:
+        return self._stt.label
+
+    def _socket_deliver(self, answer: SpeechEvent | Iterable[SpeechEvent] | None) -> None:
+        if answer is None:
+            return
+        for event in [answer] if isinstance(answer, SpeechEvent) else answer:
+            self.send(event)

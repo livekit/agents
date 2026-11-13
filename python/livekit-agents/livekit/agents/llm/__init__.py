@@ -42,6 +42,7 @@ from .realtime import (
     RealtimeModelFallbackAdapter,
     RealtimeSession,
     RealtimeSessionReconnectedEvent,
+    RealtimeSocketSession,
     RemoteItemAddedEvent,
 )
 from .tool_context import (
@@ -120,6 +121,7 @@ __all__ = [
     "RealtimeError",
     "RealtimeCapabilities",
     "RealtimeSession",
+    "RealtimeSocketSession",
     "InputTranscriptionCompleted",
     "InputSpeechStartedEvent",
     "InputSpeechStoppedEvent",

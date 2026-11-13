@@ -394,9 +394,10 @@ impl<I> ChannelSink<I> {
 impl<I: Send + 'static> StreamInput<I> for ChannelSink<I> {
     fn push(&self, item: I) -> Result<(), ProviderError> {
         self.sender()?.try_send(item).map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) => lk_agents_abi::errors::ApiError::new(format!(
-                "the node is not taking its input: {NODE_INPUT} items are waiting"
-            ))
+            mpsc::error::TrySendError::Full(_) => lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::Server,
+                format!("the node is not taking its input: {NODE_INPUT} items are waiting"),
+            )
             .into(),
             mpsc::error::TrySendError::Closed(_) => self.gate.refused(),
         })

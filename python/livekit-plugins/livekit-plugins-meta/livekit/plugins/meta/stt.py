@@ -32,7 +32,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     APITimeoutError,
     LanguageCode,
     http,
@@ -161,21 +160,16 @@ def _normalize_language_hint(language: str) -> str:
     return mapped_name
 
 
-def _protocol_error(detail: str) -> APIConnectionError:
-    return APIConnectionError(
-        f"Meta Muse realtime ASR protocol error: {detail}",
-        retryable=False,
+def _protocol_error(what: str, payload: object = None) -> APIError:
+    return APIError(
+        f"Meta Muse realtime ASR protocol error: {what}",
+        kind="protocol",
+        detail=None if payload is None else str(payload),
     )
 
 
-def _server_error(*, phase: str) -> APIStatusError:
-    return APIStatusError(
-        f"Meta Muse realtime ASR {phase} error",
-        status_code=400,
-        request_id=None,
-        body=None,
-        retryable=False,
-    )
+def _server_error(*, phase: str) -> APIError:
+    return APIError(f"Meta Muse realtime ASR {phase} error", kind="invalid_request")
 
 
 def _parse_ws_message(
@@ -188,9 +182,9 @@ def _parse_ws_message(
     try:
         message = json.loads(raw.data)
     except (json.JSONDecodeError, TypeError):
-        raise _protocol_error(f"invalid JSON during {phase}") from None
+        raise _protocol_error(f"invalid JSON during {phase}", raw.data) from None
     if not isinstance(message, dict):
-        raise _protocol_error(f"non-object message during {phase}")
+        raise _protocol_error(f"non-object message during {phase}", raw.data)
     return _MESSAGE.validate_python(message)
 
 
@@ -314,7 +308,7 @@ class STT(stt.STT[Never]):
     ) -> stt.SpeechEvent:
         raise APIError(
             "Meta Muse Voice Transcribe supports streaming recognition only",
-            retryable=False,
+            kind="invalid_request",
         )
 
     def stream(
@@ -455,10 +449,7 @@ class SpeechStream(stt.RecognizeStream):
             raise _server_error(phase="handshake")
         session_id = message.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
-            raise APIConnectionError(
-                "Meta Muse realtime ASR sent an invalid handshake response",
-                retryable=False,
-            )
+            raise _protocol_error("invalid handshake response", message)
         self._session_id = session_id
 
     async def _drive_tasks(
@@ -512,7 +503,7 @@ class SpeechStream(stt.RecognizeStream):
                 continue
 
             if item.num_channels != _CHANNELS:
-                raise APIError("Meta Muse realtime ASR requires mono audio", retryable=False)
+                raise APIError("Meta Muse realtime ASR requires mono audio", kind="invalid_request")
             pending.extend(item.data.tobytes())
             while len(pending) >= _CHUNK_BYTES:
                 await send_packet(bytes(pending[:_CHUNK_BYTES]))
@@ -531,6 +522,8 @@ class SpeechStream(stt.RecognizeStream):
                 if self._end_stream_sent and ws.close_code == 1000:
                     return
                 raise ws.close_error("Meta Muse realtime ASR closed during stream")
+            if raw.type is not http.WebSocketMessageType.TEXT:
+                continue
             message = _parse_ws_message(raw, ws, phase="stream")
             event_type = message.get("type")
             if event_type == "error":
@@ -554,7 +547,7 @@ class SpeechStream(stt.RecognizeStream):
             or not math.isfinite(processed_ms)
             or processed_ms < 0
         ):
-            raise _protocol_error("audioProgress event has invalid audioProcessedMs")
+            raise _protocol_error("audioProgress event has invalid audioProcessedMs", message)
         if processed_ms <= self._last_audio_processed_ms:
             return
         delta_seconds = (processed_ms - self._last_audio_processed_ms) / 1000
@@ -573,7 +566,7 @@ class SpeechStream(stt.RecognizeStream):
     def _transcript(self, message: dict[str, object]) -> None:
         text = message.get("transcript")
         if not isinstance(text, str):
-            raise _protocol_error("transcript event has invalid text")
+            raise _protocol_error("transcript event has invalid text", message)
         if not text and message.get("turnId") is None and self._provider_active_turn_id is None:
             return
         turn_id = self._transcript_turn_id(message)
@@ -602,7 +595,7 @@ class SpeechStream(stt.RecognizeStream):
             return
         text = message.get("transcript")
         if not isinstance(text, str):
-            raise _protocol_error("speechComplete event has invalid transcript")
+            raise _protocol_error("speechComplete event has invalid transcript", message)
         turn = self._turns.setdefault(turn_id, _TurnState())
         if turn.final_text is None:
             turn.final_text = text
@@ -701,7 +694,4 @@ class SpeechStream(stt.RecognizeStream):
 
     def _validate_clean_close(self) -> None:
         if self._turns:
-            raise APIConnectionError(
-                "Meta Muse realtime ASR closed with incomplete speech turns",
-                retryable=False,
-            )
+            raise _protocol_error("closed with incomplete speech turns")

@@ -5,15 +5,20 @@
 
 from __future__ import annotations
 
-from .types import CloseKind
+from .types import ErrorKind
 
 def http_error_display(message: str, status: int, reason: str | None) -> str:
     """The message of an `APIStatusError` built from an HTTP status: the message and the reason
     when the message adds detail, else just the reason.
     """
 
-def retryable_for_status(status_code: int, retryable: bool | None) -> bool:
-    """`APIStatusError`'s `retryable`: a non-transient 4xx status, 499 among them, never is."""
+def error_kind_for_status(status_code: int, kind: ErrorKind | None) -> ErrorKind:
+    """`APIStatusError`'s kind: the one its caller named, else its status's."""
 
-def websocket_close_kind(code: int | None) -> CloseKind:
-    """What a close code says about the failure: `http.WebSocket.close_error`'s retryability."""
+def error_kind_retryable(kind: ErrorKind) -> bool:
+    """`APIError.retryable`: whether its kind is worth another attempt."""
+
+def websocket_close_kind(code: int | None) -> ErrorKind | None:
+    """What a close code says failed: `http.WebSocket.close_error`'s kind, `None` for a close on
+    purpose.
+    """

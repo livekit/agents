@@ -2,7 +2,7 @@ use super::*;
 use crate::telemetry;
 use gaps::Gaps;
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::Timeout;
+use lk_agents_abi::errors::{ErrorKind, Timeout};
 use lk_agents_abi::metrics::base::ConnectionAcquired;
 use lk_agents_media::Frame;
 use lk_agents_media::media_queue::{self, Item};
@@ -262,7 +262,7 @@ impl SttStreamExecutor {
         outcome.map_err(|error| {
             // A reconnect sends only new audio, so it repeats no delivered transcript; once the
             // input ended there is nothing left to send and the pending transcript would be lost.
-            if progress.lock().input_ended { error.with_retryable(false) } else { error }
+            if progress.lock().input_ended { error.into_final() } else { error }
         })
     }
 
@@ -380,7 +380,7 @@ impl Progress {
             return Some(None);
         }
         let outcome = if self.total_deadline.is_some_and(|deadline| now >= deadline) {
-            Err(ApiError::timed_out(Timeout::Total).with_retryable(false))
+            Err(ApiError::timed_out(Timeout::Total).into_final())
         } else if self.finalization_deadline.is_some_and(|deadline| now >= deadline) {
             Ok(())
         } else {
@@ -533,7 +533,7 @@ impl AudioUplink {
         let samples = usize::try_from(frame.sample_rate / FRAMES_PER_SECOND).unwrap_or(0).max(1);
         let stride = usize::from(frame.num_channels) * PCM_SAMPLE_BYTES;
         if stride == 0 || frame.sample_rate == 0 || !frame.data.len().is_multiple_of(stride) {
-            return Err(ApiError::new("Invalid STT audio frame").with_retryable(false));
+            return Err(ApiError::new(ErrorKind::InvalidRequest, "Invalid STT audio frame"));
         }
         let mut frames = Vec::new();
         for start in (0..frame.data.len()).step_by(samples * stride) {
@@ -548,7 +548,7 @@ impl AudioUplink {
             let resampled = self
                 .resampler
                 .push_frame(&chunk)
-                .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+                .map_err(|error| ApiError::new(ErrorKind::InvalidRequest, error.to_string()))?;
             frames.extend(resampled.iter().flat_map(|frame| self.bstream.push(&frame.data)));
             tokio::task::yield_now().await;
         }
@@ -560,7 +560,7 @@ impl AudioUplink {
         let tail = self
             .resampler
             .flush()
-            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+            .map_err(|error| ApiError::new(ErrorKind::InvalidRequest, error.to_string()))?;
         let mut frames: Vec<_> =
             tail.iter().flat_map(|frame| self.bstream.push(&frame.data)).collect();
         frames.extend(self.bstream.flush());
@@ -674,7 +674,7 @@ impl RecvCtx {
         text: &str,
     ) -> Result<Received, ApiError> {
         let incoming = wire::decode(text)
-            .ok_or_else(|| ApiError::new("Malformed STT gateway message").with_retryable(false))?;
+            .ok_or_else(|| ApiError::protocol("Malformed STT gateway message", text))?;
         if matches!(incoming, wire::Incoming::SessionCreated) {
             self.awaiting_ack = false;
         }

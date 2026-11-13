@@ -1,5 +1,5 @@
 use super::{CapturedError, HostError, HostErrorKind};
-use crate::errors::api::{ApiError, ApiErrorKind, ProviderSaid};
+use crate::errors::api::{ApiError, ApiErrorKind, ErrorKind, ProviderSaid};
 
 // A host exception is re-raised as the same object; `retryable` and `status_code` are copied out
 // so `FallbackChain` decides without the GIL.
@@ -15,12 +15,14 @@ pub enum ProviderError {
     Host {
         error: HostError,
         api_kind: Option<ApiErrorKind>,
+        /// `APIError.kind`; `None` outside the taxonomy or when the object names none.
+        error_kind: Option<ErrorKind>,
         retryable: bool,
         status_code: Option<i64>,
         /// `APIError.detail` and `APIStatusError.retry_after`.
         said: Option<Box<ProviderSaid>>,
     },
-    /// A native provider's failure, already classified by [`crate::errors::retryable_for_status`].
+    /// A native provider's failure, its retry decided by its [`ErrorKind`].
     #[error("{0}")]
     #[host(delegate)]
     Local(#[from] ApiError),
@@ -32,6 +34,7 @@ impl From<HostError> for ProviderError {
         ProviderError::Host {
             error,
             api_kind: None,
+            error_kind: None,
             retryable: false,
             status_code: None,
             said: None,
@@ -43,12 +46,17 @@ impl ProviderError {
     /// The same failure, no longer to be retried: whoever spent the budget already gave up.
     pub fn into_final(self) -> ProviderError {
         match self {
-            ProviderError::Host { error, api_kind, status_code, said, .. } => {
-                ProviderError::Host { error, api_kind, retryable: false, status_code, said }
+            ProviderError::Host { error, api_kind, error_kind, status_code, said, .. } => {
+                ProviderError::Host {
+                    error,
+                    api_kind,
+                    error_kind,
+                    retryable: false,
+                    status_code,
+                    said,
+                }
             }
-            ProviderError::Local(error) => {
-                ProviderError::Local(ApiError { retryable: false, ..error })
-            }
+            ProviderError::Local(error) => ProviderError::Local(error.into_final()),
         }
     }
 
@@ -57,16 +65,19 @@ impl ProviderError {
     pub fn attempt_error(&self) -> ApiError {
         match self {
             ProviderError::Local(error) => error.clone(),
-            ProviderError::Host { error, api_kind, retryable, status_code, said } => ApiError {
-                kind: api_kind.unwrap_or(ApiErrorKind::Api),
-                message: error.message.clone(),
-                retryable: api_kind.is_some() && *retryable,
-                status_code: *status_code,
-                request_id: None,
-                timeout: None,
-                cause: None,
-                said: said.clone(),
-            },
+            ProviderError::Host { error, api_kind, error_kind, retryable, status_code, said } => {
+                ApiError {
+                    kind: api_kind.unwrap_or(ApiErrorKind::Api),
+                    error_kind: error_kind.unwrap_or(ErrorKind::Server),
+                    message: error.message.clone(),
+                    retryable: api_kind.is_some() && *retryable,
+                    status_code: *status_code,
+                    request_id: None,
+                    timeout: None,
+                    cause: None,
+                    said: said.clone(),
+                }
+            }
         }
     }
 

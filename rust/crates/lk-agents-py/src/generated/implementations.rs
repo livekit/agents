@@ -121,6 +121,8 @@ impl super::Implementations for Selected {
     type ExpFilter = ::lk_agents_runtime::media::ExpFilter;
     type MovingAverage = ::lk_agents_runtime::media::MovingAverage;
     type AudioConverter = ::lk_agents_runtime::media::AudioConverter;
+    type SocketSession = ::lk_agents_runtime::inference::socket::Session;
+    type SocketMux = ::lk_agents_runtime::inference::socket::Mux;
     type InferenceVad = ::lk_agents_runtime::inference::vad::LocalVad;
     type AmdFunctions = ::lk_agents_runtime::voice::AmdRules;
     type HostAudioReceiver = ::lk_agents_runtime::avatar::host_receiver::HostAudioReceiver;

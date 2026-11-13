@@ -1682,7 +1682,7 @@ fn _extract_mcp_toolset_lifecycle_new_idle_timeout(
 }
 type McpToolsetLifecycleNewIdleTimeoutInput = f64;
 
-/// An `MCPToolset`'s lifecycle (docs/tools.md "MCP servers"): one listing at a time; an
+/// An `MCPToolset`'s lifecycle: one listing at a time; an
 /// unreachable server leaves the toolset without tools and is listed again in the background at
 /// the session's backoff until it answers; the connection closes `idle_timeout` seconds after the
 /// last run released the toolset unless a run sets it up again first. `host` is the toolset,

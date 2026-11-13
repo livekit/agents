@@ -291,6 +291,7 @@ impl Fake {
                     ..HostError::new("the model is down")
                 },
                 api_kind: None,
+                error_kind: None,
                 retryable: true,
                 status_code: None,
                 said: None,

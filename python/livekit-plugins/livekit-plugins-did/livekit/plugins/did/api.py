@@ -1,5 +1,4 @@
 import os
-from json import JSONDecodeError
 
 from pydantic import BaseModel, JsonValue, ValidationError
 
@@ -73,9 +72,12 @@ class DIDAPI:
                 conn_options=self._conn_options,
             ) as response:
                 await response.raise_for_status()
+                text = await response.text()
                 try:
-                    return _JoinSessionResponse.model_validate(await response.json())
-                except (ValidationError, JSONDecodeError) as exc:
-                    raise APIError("D-ID returned an invalid response", retryable=False) from exc
+                    return _JoinSessionResponse.model_validate_json(text)
+                except ValidationError as exc:
+                    raise APIError(
+                        "D-ID returned an invalid response", kind="protocol", detail=text
+                    ) from exc
 
         return await http.retry_request(request, conn_options=self._conn_options)

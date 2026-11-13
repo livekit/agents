@@ -510,6 +510,7 @@ impl AmdSystem {
                 }
                 Err(error) => Err(error),
                 Ok(None) => Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::InvalidRequest,
                     "the AMD STT does not stream",
                 ))),
             };

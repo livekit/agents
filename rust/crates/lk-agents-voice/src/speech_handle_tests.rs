@@ -65,7 +65,10 @@ fn a_failed_speech_keeps_its_first_error() {
     let first = ProviderError::Local(ApiError::timeout(Some("generation timed out".into())));
     speech.mark_done(Some(first.clone()));
     speech.mark_done(None);
-    speech.mark_done(Some(ProviderError::Local(ApiError::new("late failure"))));
+    speech.mark_done(Some(ProviderError::Local(ApiError::new(
+        lk_agents_abi::errors::ErrorKind::Server,
+        "late failure",
+    ))));
     assert_eq!(speech.exception(), Ok(Some(first)));
     assert_eq!(speech.outcome(), crate::events::SpeechOutcome::Failed);
 }

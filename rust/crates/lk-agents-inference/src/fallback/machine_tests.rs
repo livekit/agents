@@ -7,7 +7,11 @@ fn at(seconds: u64) -> Ts {
 fn fail(attempt: u64) -> ChainEvent {
     ChainEvent::Failed {
         attempt,
-        error: ApiError::new(format!("failure {attempt}")).into(),
+        error: ApiError::new(
+            lk_agents_abi::errors::ErrorKind::Server,
+            format!("failure {attempt}"),
+        )
+        .into(),
         produced_output: false,
     }
 }
@@ -122,6 +126,7 @@ fn a_host_error_outside_the_api_taxonomy_does_not_retry_the_same_backend() {
             error: ProviderError::Host {
                 error: lk_agents_abi::errors::HostError::new("application failure"),
                 api_kind: None,
+                error_kind: None,
                 retryable: true,
                 status_code: Some(503),
                 said: None,

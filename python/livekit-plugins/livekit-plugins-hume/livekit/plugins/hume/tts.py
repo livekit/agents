@@ -39,6 +39,17 @@ from livekit.agents.utils import is_given
 from .version import __version__
 
 
+def _decode(raw: str | bytes) -> dict[str, Any]:
+    """A provider message, which must be a JSON object."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("Hume sent a malformed message", kind="protocol", detail=str(raw))
+    return data
+
+
 class VoiceById(TypedDict, total=False):
     id: str
     provider: VoiceProvider | None
@@ -308,7 +319,7 @@ class ChunkedStream(tts.ChunkedStream):
                     if not line:
                         continue
 
-                    data = json.loads(line.decode())
+                    data = _decode(line.decode())
                     if data.get("type") == "error":
                         # an in-band error follows an accepted request: retry only on a
                         # status that says retrying can help
@@ -319,7 +330,10 @@ class ChunkedStream(tts.ChunkedStream):
                                 "Hume returned an error", status_code=code, body=data, detail=detail
                             )
                         raise APIError(
-                            "Hume returned an error", body=data, retryable=False, detail=detail
+                            "Hume returned an error",
+                            kind="invalid_request",
+                            body=data,
+                            detail=detail,
                         )
 
                     audio_b64 = data.get("audio")

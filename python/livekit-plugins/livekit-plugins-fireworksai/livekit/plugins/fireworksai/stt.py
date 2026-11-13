@@ -28,6 +28,7 @@ from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
+    APIError,
     LanguageCode,
     http,
     stt,
@@ -348,7 +349,13 @@ class SpeechStream(stt.RecognizeStream):
                     logger.error("unexpected FireworksAI message type %s", msg.type)
                     continue
 
-                self._process_stream_event(json.loads(msg.data))
+                try:
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data)
+                except ValueError as e:  # unparseable, or a field it reads is wrong
+                    raise APIError(
+                        "Fireworks sent a malformed message", kind="protocol", detail=str(msg.data)
+                    ) from e
 
         ws: http.WebSocket | None = None
 

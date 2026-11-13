@@ -429,6 +429,11 @@ pub trait AvatarLifecycle: Send + Sync + Sized + 'static {
     #[host(call)]
     fn attach_output(&self, output: std::sync::Arc<Self::Output>);
 
+    /// The avatar failed after it started (its audio can no longer reach it): the session's
+    /// `avatar_error`. The avatar closes itself next.
+    #[host(call)]
+    fn fail(&self, error: crate::errors::ProviderError);
+
     /// Stops the join wait and the metrics, then, inside a job and while `room` is connected,
     /// removes the avatar participant from the room through the job's RoomService
     /// (`RemoveParticipant`): a participant already gone (`not_found`) is skipped, any other

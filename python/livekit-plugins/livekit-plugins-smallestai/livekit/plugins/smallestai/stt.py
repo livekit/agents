@@ -49,6 +49,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -342,7 +343,7 @@ class STT(stt.STT):
 
         except TimeoutError as e:
             raise APITimeoutError() from e
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -636,12 +637,17 @@ class SpeechStream(stt.RecognizeStream):
                     and "transcription" not in data.model_fields_set
                 ):
                     payload = data.model_dump(mode="json", exclude_unset=True)
-                    raise APIStatusError(
-                        f"Smallest AI STT error ({data.status or 'error'})",
-                        status_code=-1,
-                        request_id=self._session_id or None,
-                        body=payload,
-                        detail=json.dumps(payload),
+                    message = f"Smallest AI STT error ({data.status or 'error'})"
+                    if data.status is not None and data.status.isdigit():
+                        raise APIStatusError(
+                            message,
+                            status_code=int(data.status),
+                            request_id=self._session_id or None,
+                            body=payload,
+                            detail=json.dumps(payload),
+                        )
+                    raise APIError(
+                        message, kind="invalid_request", body=payload, detail=json.dumps(payload)
                     )
                 if data.type == "pong":
                     continue

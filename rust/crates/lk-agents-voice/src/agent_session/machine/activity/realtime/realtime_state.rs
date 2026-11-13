@@ -224,7 +224,10 @@ impl AttributedTranscript {
 }
 
 fn transcript_overload() -> ApiError {
-    ApiError::new("realtime attributed transcript retention exceeded").with_retryable(false)
+    ApiError::new(
+        lk_agents_abi::errors::ErrorKind::InvalidRequest,
+        "realtime attributed transcript retention exceeded",
+    )
 }
 
 fn finish_transcript(mut transcript: AttributedTranscript) -> Option<ChatMessage> {
@@ -273,15 +276,19 @@ impl RealtimeSessionState {
         if attribution.response_id == attribution.source_response_id
             || self.open.iter().any(|open| open.response_id == attribution.response_id)
         {
-            return Err(ApiError::new("realtime transcript attribution reused a speech identity")
-                .with_retryable(false));
+            return Err(ApiError::new(
+                lk_agents_abi::errors::ErrorKind::Protocol,
+                "realtime transcript attribution reused a speech identity",
+            ));
         }
         if let Some(known) = self.attributed.get(&attribution.response_id) {
             return if known.source_response_id == attribution.source_response_id {
                 Ok(())
             } else {
-                Err(ApiError::new("realtime transcript attribution changed its source")
-                    .with_retryable(false))
+                Err(ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Protocol,
+                    "realtime transcript attribution changed its source",
+                ))
             };
         }
         let bytes = attribution.response_id.len() + attribution.source_response_id.len();
@@ -324,9 +331,10 @@ impl RealtimeSessionState {
         let completed = match event {
             Event::MessageStarted(message) => {
                 if transcript.message.is_some() {
-                    return Err(
-                        ApiError::new("realtime transcript messages overlap").with_retryable(false)
-                    );
+                    return Err(ApiError::new(
+                        lk_agents_abi::errors::ErrorKind::Protocol,
+                        "realtime transcript messages overlap",
+                    ));
                 }
                 if message.message_id.len()
                     > ATTRIBUTED_TRANSCRIPT_BYTES.saturating_sub(self.attributed_bytes)
@@ -339,12 +347,16 @@ impl RealtimeSessionState {
             }
             Event::TextDelta(delta) => {
                 let Some(message) = &mut transcript.message else {
-                    return Err(ApiError::new("realtime transcript delta has no message")
-                        .with_retryable(false));
+                    return Err(ApiError::new(
+                        lk_agents_abi::errors::ErrorKind::Protocol,
+                        "realtime transcript delta has no message",
+                    ));
                 };
                 if message.id != delta.message_id {
-                    return Err(ApiError::new("realtime transcript delta changed its message")
-                        .with_retryable(false));
+                    return Err(ApiError::new(
+                        lk_agents_abi::errors::ErrorKind::Protocol,
+                        "realtime transcript delta changed its message",
+                    ));
                 }
                 let available = ATTRIBUTED_TRANSCRIPT_BYTES.saturating_sub(self.attributed_bytes);
                 if delta.delta.len() > available {
@@ -356,14 +368,18 @@ impl RealtimeSessionState {
             Event::MessageDone(done) => {
                 if transcript.message.as_ref().is_some_and(|message| message.id != done.message_id)
                 {
-                    return Err(ApiError::new("realtime transcript ended another message")
-                        .with_retryable(false));
+                    return Err(ApiError::new(
+                        lk_agents_abi::errors::ErrorKind::Protocol,
+                        "realtime transcript ended another message",
+                    ));
                 }
                 transcript.finish_message()
             }
             Event::AudioDelta(_) => {
-                return Err(ApiError::new("an attributed transcript contained new audio")
-                    .with_retryable(false));
+                return Err(ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Protocol,
+                    "an attributed transcript contained new audio",
+                ));
             }
             _ => None,
         };

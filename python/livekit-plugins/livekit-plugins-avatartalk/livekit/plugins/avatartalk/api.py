@@ -1,5 +1,4 @@
 import os
-from json import JSONDecodeError
 from typing import TypeVar
 
 from pydantic import BaseModel, JsonValue, ValidationError
@@ -53,10 +52,13 @@ class AvatarTalkAPI:
             method, f"{self._api_url}{path}", headers=self._headers, json=json
         ) as response:
             await response.raise_for_status()
+            text = await response.text()
             try:
-                return response_type.model_validate(await response.json())
-            except (ValidationError, JSONDecodeError) as exc:
-                raise APIError("AvatarTalk returned an invalid response", retryable=False) from exc
+                return response_type.model_validate_json(text)
+            except ValidationError as exc:
+                raise APIError(
+                    "AvatarTalk returned an invalid response", kind="protocol", detail=text
+                ) from exc
 
     async def start_session(
         self,

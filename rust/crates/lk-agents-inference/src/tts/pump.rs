@@ -3,7 +3,7 @@ use super::*;
 use base64::Engine as _;
 use futures_util::future::{Either, select};
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::Timeout;
+use lk_agents_abi::errors::{ErrorKind, Timeout};
 use lk_agents_abi::metrics::base::ConnectionAcquired;
 use lk_agents_net::owned::{Background, Owned};
 use lk_agents_net::transport::{TransportError, WsMessage, connect_error};
@@ -159,7 +159,9 @@ impl Synthesis {
     ) -> Result<SynthesizedAudio, ApiError> {
         self.segment(session_id)?;
         if !data.len().is_multiple_of(2) {
-            return Err(self.fail(ApiError::new("TTS returned truncated PCM audio")));
+            return Err(
+                self.fail(ApiError::new(ErrorKind::Protocol, "TTS returned truncated PCM audio"))
+            );
         }
         self.response_deadline = if self.final_flush_sent {
             self.read_timeout.map(|timeout| now.saturating_add(timeout))
@@ -182,7 +184,9 @@ impl Synthesis {
     /// The provider completed: a final frame for every segment, the current one last.
     fn done(&mut self, session_id: Option<String>) -> Result<Vec<SynthesizedAudio>, ApiError> {
         if !self.final_flush_sent {
-            return Err(self.fail(ApiError::new("TTS completed before final flush")));
+            return Err(
+                self.fail(ApiError::new(ErrorKind::Protocol, "TTS completed before final flush"))
+            );
         }
         self.segment(session_id)?;
         let segment_id = self.segment_id.clone();
@@ -201,7 +205,10 @@ impl Synthesis {
     fn segment(&mut self, id: Option<String>) -> Result<(), ApiError> {
         if let Some(id) = id {
             if id.is_empty() {
-                return Err(self.fail(ApiError::new("TTS returned an empty segment identity")));
+                return Err(self.fail(ApiError::new(
+                    ErrorKind::Protocol,
+                    "TTS returned an empty segment identity",
+                )));
             }
             self.segment_id = id;
         }
@@ -246,14 +253,13 @@ fn gateway_error(code: ErrorCode, retryable: Option<bool>) -> ApiError {
         | ErrorCode::BadRequest => Some(400),
         _ => None,
     };
-    match status {
-        Some(status) => ApiError::status(message, status, None, retryable),
-        None => {
-            let mut error = ApiError::new(message);
-            error.retryable = retryable.unwrap_or(matches!(code, ErrorCode::InactivityTimeout));
-            error
-        }
-    }
+    let error = match (status, code) {
+        (Some(status), _) => ApiError::status(message, status, None),
+        (None, ErrorCode::InactivityTimeout) => ApiError::new(ErrorKind::Timeout, message),
+        (None, ErrorCode::ConnectionError) => ApiError::new(ErrorKind::Connection, message),
+        (None, _) => ApiError::new(ErrorKind::InvalidRequest, message),
+    };
+    error.with_should_retry(retryable)
 }
 
 impl Pump {
@@ -426,9 +432,10 @@ impl Pump {
             synthesis.check(now)?;
         }
         match event {
-            Event::Text(_) if synthesis.input_ended => {
-                Err(synthesis.fail(ApiError::new("TTS text received after input EOF")))
-            }
+            Event::Text(_) if synthesis.input_ended => Err(synthesis.fail(ApiError::new(
+                ErrorKind::InvalidRequest,
+                "TTS text received after input EOF",
+            ))),
             Event::Text(text) => {
                 self.send_input(synthesis, sender, Outbound::Transcript(text)).await?;
                 Ok(None)
@@ -479,12 +486,13 @@ impl Pump {
                 Ok(None)
             }
             Event::Received(Incoming::Malformed { detail }) => {
-                Err(synthesis.fail(ApiError::new(detail)))
+                Err(synthesis.fail(ApiError::new(ErrorKind::Protocol, detail)))
             }
             Event::Failed(error) => Err(synthesis.fail(error)),
-            Event::ServerEof => {
-                Err(synthesis.fail(ApiError::new("TTS gateway closed before synthesis completion")))
-            }
+            Event::ServerEof => Err(synthesis.fail(ApiError::new(
+                ErrorKind::Connection,
+                "TTS gateway closed before synthesis completion",
+            ))),
             Event::Cancel => Ok(Some(SynthesisEnd::Stopped)),
             // Session-created and heartbeat frames do not satisfy outstanding synthesis work.
             Event::Received(_) | Event::Wake => Ok(None),
@@ -631,7 +639,7 @@ impl Pump {
         )
         .await
         {
-            Either::Left(_) => Err(ApiError::new("TTS synthesis cancelled")),
+            Either::Left(_) => Err(ApiError::new(ErrorKind::Connection, "TTS synthesis cancelled")),
             Either::Right((Either::Left(_), _)) => {
                 Err(ApiError::timed_out(if total_deadline.is_some_and(|at| clock.now() >= at) {
                     Timeout::Total
@@ -669,11 +677,14 @@ fn received_event(
         Some(wire::Incoming::OutputAudio { session_id, audio }) => {
             match base64::engine::general_purpose::STANDARD.decode(audio) {
                 Ok(data) => Event::Audio { session_id, data },
-                Err(_) => Event::Failed(ApiError::new("TTS returned malformed base64 audio")),
+                Err(_) => Event::Failed(ApiError::new(
+                    ErrorKind::Protocol,
+                    "TTS returned malformed base64 audio",
+                )),
             }
         }
         Some(incoming) => Event::Received(incoming),
-        None => Event::Failed(ApiError::new("TTS returned malformed protocol data")),
+        None => Event::Failed(ApiError::protocol("TTS returned malformed protocol data", raw)),
     }
 }
 

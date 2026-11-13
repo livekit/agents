@@ -1,4 +1,4 @@
-use lk_agents_abi::errors::{ApiError, ApiErrorKind};
+use lk_agents_abi::errors::{ApiError, ApiErrorKind, ErrorKind};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{ApiConnectOptions, ApiConnectOptionsError};
 use std::time::Duration;
@@ -59,15 +59,11 @@ impl AttemptFailure {
     pub fn into_error(self) -> ApiError {
         match self {
             Self::Rejected { status, message, request_id, retryable } => {
-                let error = ApiError::from_http(&message, status, request_id);
-                match retryable {
-                    Some(retryable) => error.with_retryable(retryable),
-                    None => error,
-                }
+                ApiError::from_http(&message, status, request_id).with_should_retry(retryable)
             }
             Self::Connection(message) => ApiError::connection(Some(message)),
             Self::Malformed(message) => {
-                ApiError::connection(Some(format!("malformed response: {message}")))
+                ApiError::new(ErrorKind::Protocol, format!("malformed response: {message}"))
             }
         }
     }

@@ -212,4 +212,4 @@ RunOutcome: TypeAlias = Literal["completed", "input-required", "failed", "cancel
 
 
 TaskOrder: TypeAlias = Literal["updated", "inserted"]
-"""How a task listing is ordered (docs/internals/storage.md#reading-thread-items-and-tasks)."""
+"""How a task listing is ordered."""

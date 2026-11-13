@@ -48,6 +48,17 @@ from .models import (
 API_AUTH_HEADER = "api-key"
 
 
+def _decode(raw: str | bytes) -> dict[str, Any]:
+    """A provider message, which must be a JSON object."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("Murf sent a malformed message", kind="protocol", detail=str(raw))
+    return data
+
+
 @dataclass
 class _TTSOptions:
     api_key: str
@@ -361,7 +372,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected Murf AI message type %s", msg.type)
                     continue
 
-                data = json.loads(msg.data)
+                data = _decode(msg.data)
                 if current_segment_id is None:
                     current_segment_id = request_id
                     output_emitter.start_segment(segment_id=request_id)

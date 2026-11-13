@@ -45,6 +45,17 @@ fn the_transcript_keeps_its_text_and_takes_the_voices_timings() {
     assert_eq!(got.last().map(|p| p.0.as_str()), Some("🎉"));
 }
 
+/// Seed 283's "Wednesday 9-1 ☕": no word follows the emoji, so no stamp releases it. It is the
+/// voice's text all the same and shows with the word before it, never untimed as the model's.
+#[test]
+fn silent_text_after_the_last_word_shows_with_it() {
+    let got = aligned("Open 9-1 \u{2615}", &[stamp("Open", 0.0, 0.3), stamp("9-1", 0.3, 0.7)]);
+    assert_eq!(got.last(), Some(&("\u{2615}".into(), Some(0.3), Some(0.3), false)));
+    // a word no stamp reached is still shown at the end, untimed
+    let got = aligned("Open now", &[stamp("Open", 0.0, 0.3)]);
+    assert_eq!(got.last().map(|p| (p.0.trim(), p.1)), Some(("now", None)));
+}
+
 #[test]
 fn a_word_the_voice_expanded_takes_its_span_and_nothing_drifts() {
     let got = aligned(

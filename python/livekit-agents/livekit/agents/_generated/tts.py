@@ -490,7 +490,7 @@ class ChunkedStream(ABC):
         """One attempt: synthesize ``input_text`` into ``output_emitter``.
 
         Called once per attempt with a fresh emitter; a retry calls it again from the start.
-        Raise ``APIError`` (``retryable=True`` for transient failures) to fail the attempt;
+        Raise ``APIError`` (its ``kind`` decides the retry) to fail the attempt;
         once audio was pushed a failure is not retried. Cancellation means a deadline passed
         or the stream was closed: clean up and let it propagate.
         """
@@ -516,7 +516,7 @@ class ChunkedStream(ABC):
             # wait for all audio frames to be pushed & propagate errors
             await output_emitter.join()
             if invalid is not None and (problem := invalid(output_emitter)):
-                raise APIError(problem)
+                raise APIError(problem, kind="protocol")
         except Exception:
             await _deliver_pushed(output_emitter)
             raise
@@ -630,8 +630,8 @@ class SynthesizeStream(ABC):
         """One attempt: read ``input`` and synthesize it into ``output_emitter``.
 
         Called once per attempt with a fresh emitter; a retry calls it again with ``input``
-        replayed from the start. Raise ``APIError`` (``retryable=True`` for transient
-        failures) to fail the attempt; once audio was pushed a failure is not retried.
+        replayed from the start. Raise ``APIError`` (its ``kind`` names what failed and
+        decides the retry) to fail the attempt; once audio was pushed a failure is not retried.
         Cancellation means a deadline passed or the stream was closed: clean up and let it
         propagate.
         """
@@ -659,7 +659,7 @@ class SynthesizeStream(ABC):
             # wait for all audio frames to be pushed & propagate errors
             await output_emitter.join()
             if invalid is not None and (problem := invalid(output_emitter)):
-                raise APIError(problem)
+                raise APIError(problem, kind="protocol")
         except Exception:
             await _deliver_pushed(output_emitter)
             raise

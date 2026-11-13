@@ -130,7 +130,8 @@ impl From<StorageError> for crate::errors::ApiError {
             _ => 503,
         };
         let message = if status == 503 { "storage unavailable".into() } else { error.to_string() };
-        Self::status(message, status, None, Some(error.retryable()))
+        let api = Self::status(message, status, None);
+        if error.retryable() { api } else { api.into_final() }
     }
 }
 
@@ -146,7 +147,7 @@ pub struct LocalStorageOptions {
     pub project_id: String,
 }
 
-/// Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
+/// Threads in one storage namespace: a local
 /// directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
 #[crate::host(class(name = "Storage", native = StorageNamespace))]
 pub trait Storage: Send + Sync + Sized + 'static {

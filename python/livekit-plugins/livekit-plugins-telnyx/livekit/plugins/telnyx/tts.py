@@ -174,8 +174,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 read_deadline.progress()
                                 decoder.push(audio_bytes)
                     except ValidationError as exc:
-                        raise APIConnectionError(
-                            "Invalid Telnyx audio message", retryable=False
+                        raise APIError(
+                            "Invalid Telnyx audio message", kind="protocol", detail=str(msg.data)
                         ) from exc
 
             decoder.end_input()

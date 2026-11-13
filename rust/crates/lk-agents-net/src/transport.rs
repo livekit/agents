@@ -35,16 +35,17 @@ pub fn connect_error(what: &str, err: TransportError) -> ApiError {
     match err {
         TransportError::Status { status, message, headers, body } => {
             let message = body.as_deref().and_then(crate::http::error_message).unwrap_or(message);
-            let error = ApiError::from_http(
+            let should_retry = match headers.get("X-Should-Retry") {
+                Some("false") => Some(false),
+                Some("true") => Some(true),
+                _ => None,
+            };
+            ApiError::from_http(
                 &message,
                 status,
                 headers.get("X-LiveKit-Request-Id").map(str::to_owned),
-            );
-            match headers.get("X-Should-Retry") {
-                Some("false") => error.with_retryable(false),
-                Some("true") => error.with_retryable(true),
-                _ => error,
-            }
+            )
+            .with_should_retry(should_retry)
         }
         TransportError::Timeout => ApiError {
             timeout: Some(Timeout::Connect),
@@ -122,6 +123,11 @@ pub trait WsReceiver: Send {
     /// `ws.close_code` once [`WsMessage::Closed`] was read: the peer's close frame's code, `None`
     /// when it sent none.
     fn close_code(&self) -> Option<u16> {
+        None
+    }
+
+    /// The peer's close frame's reason, once [`WsMessage::Closed`] was read.
+    fn close_reason(&self) -> Option<String> {
         None
     }
 }

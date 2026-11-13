@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::gaps::Gaps;
 use super::input::{AudioInput, Flush};
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderError};
 use lk_agents_abi::stt::events::{SpeechEvent, SpeechEventType};
 use lk_agents_abi::stt::types::{Stt, SttSink, SttSource};
 use lk_agents_abi::tokenize::language::LanguageCode;
@@ -50,7 +50,9 @@ fn attempts(
     now: Ts,
     report: Report<'_>,
 ) -> Result<Request, ProviderError> {
-    options.validate().map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+    options
+        .validate()
+        .map_err(|error| ApiError::new(ErrorKind::InvalidRequest, error.to_string()))?;
     let mut policy = Policy::from_options(options);
     policy.connect_timeout = None;
     policy.write_timeout = None;

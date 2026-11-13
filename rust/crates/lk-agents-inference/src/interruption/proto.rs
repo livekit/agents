@@ -27,8 +27,8 @@ pub enum ClientMessage {
     SessionClose,
 }
 
-/// What the server sends. Echoed client messages are ignored variants; an unknown `type` is a
-/// deserialisation error that takes the connection down, as in the reference.
+/// What the server sends. Echoed client messages and a `type` this client does not know are
+/// ignored.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "type")]
 pub enum ServerMessage {
@@ -46,12 +46,18 @@ pub enum ServerMessage {
     #[serde(rename = "inference_done")]
     InferenceDone(Verdict),
     #[serde(rename = "error")]
-    Error { message: String, code: i64, session_id: String },
+    Error {
+        #[serde(default)]
+        message: String,
+        code: i64,
+    },
     /// The client messages, echoed; ignored with a warning.
     #[serde(rename = "session.create")]
-    EchoedSessionCreate { settings: serde_json::Value },
+    EchoedSessionCreate,
     #[serde(rename = "session.close")]
     EchoedSessionClose,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]

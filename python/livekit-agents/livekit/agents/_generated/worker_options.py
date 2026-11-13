@@ -24,8 +24,8 @@ MultiprocessingContext: TypeAlias = Literal["spawn", "forkserver"]
 
 
 class Listeners(TypedDict, total=False):
-    """`AgentServer(listeners=)`: public traffic and operational information never share a port
-    (docs/server.md "Listeners"). A listener left out keeps its default.
+    """`AgentServer(listeners=)`: public traffic and operational information never share a port.
+    A listener left out keeps its default.
     """
 
     public: PublicListener
@@ -73,7 +73,7 @@ class ServerOptions:
     `LIVEKIT_AGENT_NAME`. `LIVEKIT_AGENT_NAME_OVERRIDE` wins over it.
     """
     listeners: NotGivenOr[Listeners] = NOT_GIVEN
-    """The worker's `public`, `health` and `prometheus` listeners (docs/server.md "Listeners")."""
+    """The worker's `public`, `health` and `prometheus` listeners."""
     load_threshold: NotGivenOr[float] = NOT_GIVEN
     """Load at which the worker stops taking jobs; 0.7 in production."""
     num_idle_processes: NotGivenOr[int] = NOT_GIVEN
@@ -112,7 +112,7 @@ class ServerOptionsKwargs(TypedDict, total=False):
     `LIVEKIT_AGENT_NAME`. `LIVEKIT_AGENT_NAME_OVERRIDE` wins over it.
     """
     listeners: Listeners
-    """The worker's `public`, `health` and `prometheus` listeners (docs/server.md "Listeners")."""
+    """The worker's `public`, `health` and `prometheus` listeners."""
     load_threshold: float
     """Load at which the worker stops taking jobs; 0.7 in production."""
     num_idle_processes: int

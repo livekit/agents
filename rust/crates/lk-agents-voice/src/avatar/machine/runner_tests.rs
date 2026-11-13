@@ -239,7 +239,10 @@ fn wait_for_complete_is_gather() {
 
     let mut core = running();
     core.handle(AvatarEvent::WaitForComplete { call: 3 });
-    let failed = ProviderError::Local(lk_agents_abi::errors::ApiError::new("boom"));
+    let failed = ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+        lk_agents_abi::errors::ErrorKind::Server,
+        "boom",
+    ));
     let out = core.handle(AvatarEvent::Frame(Err(failed.clone())));
     assert!(
         out.contains(&AvatarEffect::Answer { call: 3, result: Err(RunnerError::Failed(failed)) })
@@ -280,7 +283,11 @@ fn a_failed_receiver_close_preserves_the_running_loops() {
         [AvatarEffect::Answer { call: 4, result: Ok(()) }]
     );
     assert!(core.handle(audio_input(&core, Ok(None))).is_empty());
-    let error: ProviderError = lk_agents_abi::errors::ApiError::new("receiver close failed").into();
+    let error: ProviderError = lk_agents_abi::errors::ApiError::new(
+        lk_agents_abi::errors::ErrorKind::Server,
+        "receiver close failed",
+    )
+    .into();
     assert_eq!(
         core.handle(AvatarEvent::ReceiverClosed(Err(error.clone()))),
         [AvatarEffect::Answer { call: 3, result: Err(RunnerError::Failed(error)) }]
@@ -443,7 +450,11 @@ fn stale_first_audio_is_reported_once_before_or_after_the_generator_clear_result
             assert_eq!(ops(&stale), [AvatarIoOperation::NextAudio]);
             let failed = core.handle(AvatarEvent::GeneratorCleared {
                 clear: 1,
-                result: Err(lk_agents_abi::errors::ApiError::new("clear failed").into()),
+                result: Err(lk_agents_abi::errors::ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Server,
+                    "clear failed",
+                )
+                .into()),
             });
             assert_eq!(ops(&failed), [report]);
         }
@@ -553,8 +564,11 @@ fn failed_finish_delivery_keeps_the_barrier_and_close_releases_its_pending_frame
     core.handle(AvatarEvent::GeneratorCleared { clear: 1, result: Ok(()) });
     assert_eq!(core.reports.len(), 1);
     core.handle(AvatarEvent::WaitForComplete { call: 42 });
-    let error: ProviderError =
-        lk_agents_abi::errors::ApiError::new("finish delivery failed").into();
+    let error: ProviderError = lk_agents_abi::errors::ApiError::new(
+        lk_agents_abi::errors::ErrorKind::Server,
+        "finish delivery failed",
+    )
+    .into();
     let failed = core.handle(AvatarEvent::Reported { finished: true, result: Err(error.clone()) });
     assert!(ops(&failed).is_empty(), "a failed delivery must not advance reports or audio");
     assert!(
@@ -577,8 +591,10 @@ fn a_room_stream_failure_settles_pending_start_and_completion() {
     let mut core = RunnerCore::new(false);
     core.handle(AvatarEvent::Start { call: 1, connected: false });
     core.handle(AvatarEvent::WaitForComplete { call: 2 });
-    let error =
-        ProviderError::Local(lk_agents_abi::errors::ApiError::new("room event delivery failed"));
+    let error = ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+        lk_agents_abi::errors::ErrorKind::Server,
+        "room event delivery failed",
+    ));
     let failed = RunnerError::Failed(error.clone());
     let effects = core.handle(AvatarEvent::RoomFailed(error));
     assert!(effects.contains(&AvatarEffect::Answer { call: 1, result: Err(failed.clone()) }));

@@ -226,9 +226,9 @@ class RecognizeStream(ABC):
     """A live recognition: audio in through ``push_frame``, ``SpeechEvent`` out.
 
     Plugins implement ``_run``: one attempt at the recognition, reading ``input`` and handing
-    each event to ``send``. The framework runs it under ``conn_options`` (docs/models.md
-    "Provider attempts"): a retryable ``APIError`` reconnects by calling ``_run`` again, which
-    reads the audio the failed attempt had not taken; transcripts already sent stay delivered.
+    each event to ``send``. The framework runs it under ``conn_options``: a retryable
+    ``APIError`` reconnects by calling ``_run`` again, which reads the audio the failed attempt
+    had not taken; transcripts already sent stay delivered.
     """
 
     class Flush:
@@ -317,7 +317,7 @@ class RecognizeStream(ABC):
 
         Called once per attempt, in a fresh task; a retry calls it again with ``input`` still
         holding the audio not yet read, and ``start_time``/``start_time_offset`` moved on so
-        timestamps stay linear. Raise ``APIError`` (``retryable=True`` for transient failures)
+        timestamps stay linear. Raise ``APIError`` (its ``kind`` decides the retry)
         to fail the attempt. Cancellation means a deadline passed or the stream was closed:
         clean up and let it propagate.
         """

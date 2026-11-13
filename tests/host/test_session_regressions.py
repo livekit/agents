@@ -57,7 +57,7 @@ async def test_two_sessions_never_mint_the_same_chat_item_id() -> None:
 async def test_a_failed_reply_reports_its_error_on_the_awaited_handle() -> None:
     """A failed `generate_reply` settles with the provider's error on its handle.
     https://github.com/livekit/agents/issues/6224"""
-    failure = APIError("scripted failure", retryable=False)
+    failure = APIError("scripted failure", kind="invalid_request")
     async with VoiceSession(llm=FakeLLM([failure])) as session:
         await session.start(Agent(instructions="Help."))
         speech = session.generate_reply(user_input="hello")

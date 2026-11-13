@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any, Literal
 
 import anthropic
@@ -36,7 +37,7 @@ def _response(blocks: list[Wire]) -> httpx.Response:
     ]
     for index, block in enumerate(blocks):
         kind = block["type"]
-        if kind == "tool_use":
+        if kind == "tool_use" and block["input"]:  # a call without arguments streams no JSON
             initial = {**block, "input": {}}
             deltas = [
                 {"type": "input_json_delta", "partial_json": part}
@@ -370,3 +371,49 @@ async def test_default_request_to_a_thinking_model_leaves_room_for_text(model_na
         finally:
             await model.aclose()
     assert sent[0].get("thinking") == {"type": "disabled"}
+
+
+async def test_a_tool_call_without_arguments_carries_an_empty_object() -> None:
+    """A tool_use block streams no input_json_delta when the tool takes no arguments: the call's
+    arguments are ``{}`` and its replay sends ``"input": {}``. Catches arguments left as ``""``,
+    which fails to parse as the tool's arguments and replays as invalid input."""
+    sent: list[Wire] = []
+    replies: Iterator[list[Wire]] = iter(
+        [
+            [{"type": "tool_use", "id": "call_1", "name": "ring", "input": {}}],
+            [{"type": "text", "text": "rung"}],
+        ]
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return _response(next(replies))
+
+    async with anthropic.AsyncClient(
+        api_key="test", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    ) as client:
+        model = LLM(model="claude-sonnet-4-6", client=client)
+        context = _context()
+        try:
+            first = await model.chat(
+                chat_ctx=context, conn_options=APIConnectOptions(max_retry=0)
+            ).collect()
+            [tool_call] = first.tool_calls
+            call = llm.FunctionCall(
+                call_id=tool_call.call_id, name=tool_call.name, arguments=tool_call.arguments
+            )
+            context.insert(call)
+            context.insert(
+                llm.FunctionCallOutput(
+                    call_id=call.call_id, name="ring", output="ok", is_error=False
+                )
+            )
+            await model.chat(
+                chat_ctx=context, conn_options=APIConnectOptions(max_retry=0)
+            ).collect()
+        finally:
+            await model.aclose()
+
+    assert call.arguments == "{}"
+    replayed = [b for m in sent[1]["messages"] for b in m["content"] if b["type"] == "tool_use"]
+    assert replayed[0]["input"] == {}

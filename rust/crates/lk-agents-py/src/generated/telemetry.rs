@@ -318,7 +318,7 @@ fn _extract_loop_watch_new_os_thread(
 }
 type LoopWatchNewOsThreadInput = u64;
 
-/// One asyncio loop's stall watch (docs/internals/telemetry.md "Event-loop stalls"): the loop's
+/// One asyncio loop's stall watch: the loop's
 /// own timer beats it every 20 ms; the process's detector records a beat 100 ms old as a stall,
 /// with the loop thread's stack where it can be read. Beats take no lock.
 #[pyclass(frozen, name = "_core_LoopWatch", module = "livekit.agents._core")]

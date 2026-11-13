@@ -43,6 +43,8 @@ pub mod llm;
 // `_core`'s inference lookups, declared in ABI.
 pub mod local_models;
 pub mod models;
+// A plugin's provider socket: the plugin encodes and decodes, the executor runs it.
+pub mod socket;
 pub mod stt;
 pub mod telemetry;
 #[cfg(any(test, feature = "testkit"))]

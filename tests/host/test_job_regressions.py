@@ -296,8 +296,7 @@ async def test_an_end_call_tool_closes_the_session_and_shuts_the_job_down(
 async def test_job_shutdown_closes_the_jobs_session_with_the_job_shutdown_reason(
     run_job: RunJob, no_livekit_credentials: None
 ) -> None:
-    """A session the job's shutdown ends reports `job_shutdown` (docs/voice-session.md, A job's
-    sessions)."""
+    """A session the job's shutdown ends reports `job_shutdown`."""
     reasons: list[str] = []
 
     async def entrypoint(ctx: JobContext) -> None:

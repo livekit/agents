@@ -402,7 +402,7 @@ async def _synthesize_text(
         raise APIError(
             "Speechify SDK applies one finite limit, in whole seconds, to every phase: "
             "pool/connect/write/read timeouts must be equal",
-            retryable=False,
+            kind="invalid_request",
         )
     request_options: RequestOptions = {"timeout_in_seconds": int(timeout), "max_retries": 0}
 
@@ -436,10 +436,9 @@ async def _synthesize_text(
         elif isinstance(event, SpeechStreamEvent_SpeechDone):
             output_emitter.report_usage(characters_count=event.billable_characters_count)
         elif isinstance(event, SpeechStreamEvent_SpeechError):
-            raise APIStatusError(
+            raise APIError(
                 "Speechify returned a speech error",
-                status_code=-1,
-                request_id=event.request_id,
+                kind="invalid_request",
                 detail=event.error.message,
             )
     return pushed
@@ -449,10 +448,11 @@ def _raise_from(e: Exception) -> None:
     if isinstance(e, APIError):
         raise e
     if isinstance(e, ApiError):
+        detail = str(e.body) if e.body is not None else None
+        if e.status_code is None:
+            raise APIError("Speechify API error", kind="server", detail=detail) from None
         raise APIStatusError(
-            "Speechify API error",
-            status_code=e.status_code or -1,
-            detail=str(e.body) if e.body is not None else None,
+            "Speechify API error", status_code=e.status_code, detail=detail
         ) from None
     if isinstance(e, asyncio.TimeoutError):
         raise APITimeoutError() from None

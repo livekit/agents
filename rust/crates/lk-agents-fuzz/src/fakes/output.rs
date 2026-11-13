@@ -422,6 +422,9 @@ pub struct UnreportedClear {
     pub late: Option<Duration>,
 }
 
+/// What a host audio output set to raise says.
+pub const CAPTURE_RAISED: &str = "the host audio output raised";
+
 /// A frame a host audio output never takes: the nth it is handed (from zero), across its life.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CaptureFault {
@@ -504,7 +507,8 @@ impl AudioOutput for FakeAudioOutput {
                     std::future::pending::<()>().await;
                 }
                 Some(CaptureFault { at, hangs: false }) if at == nth => {
-                    return Err(io::IoError::Rtc("the host audio output raised".into()));
+                    self.registry.record_sink(Sink::CaptureRaised { output: self.id });
+                    return Err(io::IoError::Rtc(CAPTURE_RAISED.into()));
                 }
                 _ => {}
             }

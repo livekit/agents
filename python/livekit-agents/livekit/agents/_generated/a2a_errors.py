@@ -13,6 +13,9 @@ class AuthError(Exception):
         super().__init__(message)
         self.message = message
 
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self).__new__, (type(self), *self.args), self.__dict__)
+
 
 class Unauthorized(AuthError):
     __module__ = "livekit.agents.a2a"

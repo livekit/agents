@@ -460,7 +460,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                     elif mtype in ("Error", "error"):
                         raise APIError(
-                            "Deepgram TTS returned error", body=resp, detail=resp.get("description")
+                            "Deepgram TTS returned error",
+                            kind="invalid_request",
+                            body=resp,
+                            detail=resp.get("description"),
                         )
                     elif mtype not in (
                         "Metadata",

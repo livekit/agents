@@ -353,6 +353,10 @@ pub enum Sink {
     TextFlush {
         output: u32,
     },
+    /// An output raised on a frame the product handed it, as the case set it to.
+    CaptureRaised {
+        output: u32,
+    },
     Recorder(RecorderCall),
 }
 

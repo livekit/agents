@@ -18,27 +18,28 @@ use crate::{
 // voice gave, and a piece with a word shows the word the voice said there (case, punctuation and
 // blanks ignored); silent pieces show at the next word's stamp.
 
-/// A forwarded piece: its text, its stamp, and whether the voice says it.
-type Forwarded = (String, Option<f64>, bool);
+/// A forwarded piece: its text, its stamp, whether the voice says it, and its synthesis.
+type Forwarded = (String, Option<f64>, bool, usize);
 
 /// The forwarded pieces as words, each its whole text and what of it is said: a word the reply's
 /// deltas split, and the markdown glued to it, come as consecutive pieces at one stamp with no
-/// blank between them.
+/// blank between them. Each synthesis stamps on its own timeline, so a word the reply's segments
+/// split is one word per segment, each stamped by its own synthesis.
 fn words(forwarded: &[Forwarded]) -> Vec<(String, String, Option<f64>)> {
-    let mut out: Vec<(String, String, Option<f64>)> = Vec::new();
-    for (text, start, spoken) in forwarded {
+    let mut out: Vec<(String, String, Option<f64>, usize)> = Vec::new();
+    for (text, start, spoken, segment) in forwarded {
         let said = if *spoken { text.as_str() } else { "" };
         match out.last_mut() {
-            Some((word, words, at))
-                if at.is_some() && at == start && continues_word(word, text) =>
+            Some((word, words, at, of))
+                if at.is_some() && at == start && of == segment && continues_word(word, text) =>
             {
                 word.push_str(text);
                 words.push_str(said);
             }
-            _ => out.push((text.clone(), said.to_owned(), *start)),
+            _ => out.push((text.clone(), said.to_owned(), *start, *segment)),
         }
     }
-    out
+    out.into_iter().map(|(word, said, at, _)| (word, said, at)).collect()
 }
 
 /// What float arithmetic may leave between a stamp and the pacer's start, in seconds.
@@ -50,7 +51,11 @@ impl Rule for AlignedTranscriptFollowsTts {
     const CONTRACT: Contract = Contract {
         id: "aligned_transcript_follows_tts",
         guarantee: "With a voice that aligns its words, the transcript is shown on the voice's stamps: each piece at a stamp the voice gave, each word at the stamp of the word the voice said.",
-        examples: &[aligned_and_shown_at_stamps, off_forwards_the_model_text],
+        examples: &[
+            aligned_and_shown_at_stamps,
+            off_forwards_the_model_text,
+            a_word_split_across_syntheses,
+        ],
         counterexamples: &[
             stamped_while_off,
             model_text_while_on,
@@ -66,12 +71,20 @@ impl Rule for AlignedTranscriptFollowsTts {
         let stamped = r.stamped();
         for speech in host.speeches() {
             let trace = internal.speech(speech.id);
+            let mut segment = 0;
             let forwarded: Vec<Forwarded> = trace
                 .steps()
                 .filter_map(|(_, step)| match step {
+                    Step::Generation(GenerationStep::TtsRequested { .. }) => {
+                        segment += 1;
+                        None
+                    }
                     Step::Playout(PlayoutStep::TranscriptForwarded {
-                        text, start_time, spoken, ..
-                    }) => Some((strip_all_markup(text), *start_time, *spoken)),
+                        text,
+                        start_time,
+                        spoken,
+                        ..
+                    }) => Some((strip_all_markup(text), *start_time, *spoken, segment)),
                     _ => None,
                 })
                 .collect();
@@ -107,8 +120,8 @@ impl Rule for AlignedTranscriptFollowsTts {
                 // a blank the end released has no word to be stamped for
                 let unstamped: Vec<&str> = forwarded
                     .iter()
-                    .filter(|(t, s, _)| s.is_none() && !t.trim().is_empty())
-                    .map(|(t, _, _)| t.as_str())
+                    .filter(|(t, s, ..)| s.is_none() && !t.trim().is_empty())
+                    .map(|(t, ..)| t.as_str())
                     .collect();
                 check.expect(
                     speech,
@@ -117,7 +130,7 @@ impl Rule for AlignedTranscriptFollowsTts {
                 );
             }
 
-            if setup.synchronized && forwarded.iter().all(|(_, s, _)| s.is_some()) {
+            if setup.synchronized && forwarded.iter().all(|(_, s, ..)| s.is_some()) {
                 // Segment by segment: each synthesis is stamped from its own start.
                 type Segment<'a> = (Vec<(String, Option<f64>)>, Vec<Shown<'a>>);
                 let mut segments: Vec<Segment<'_>> = Vec::new();
@@ -257,6 +270,20 @@ fn aligned_and_shown_at_stamps() -> Recording {
         .journal(shown(",", 0.002))
         .journal(shown(" ", 0.004))
         .journal(shown("I ", 0.005))
+        .speech(1, Handle::finished())
+        .done()
+}
+
+/// The reply's segments split "Upgrade": each synthesis stamps its part at its own start.
+fn a_word_split_across_syntheses() -> Recording {
+    Authored::new()
+        .transcript(setup(true))
+        .stamped(0, 0, "Up", &[("Up", 0.0)])
+        .stamped(1, 0, "grade", &[("grade", 0.0)])
+        .journal(requested())
+        .journal(forwarded("Up", Some(0.0)))
+        .journal(requested())
+        .journal(forwarded("grade", Some(0.0)))
         .speech(1, Handle::finished())
         .done()
 }

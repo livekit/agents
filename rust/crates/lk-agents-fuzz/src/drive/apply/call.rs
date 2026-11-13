@@ -483,7 +483,10 @@ impl Run {
             }
             Input::HostMetrics {} => api.report_avatar_metrics(avatar_metrics()).ok()?,
             Input::AvatarError {} => {
-                let error = lk_agents_abi::errors::ApiError::new("the avatar did not join");
+                let error = lk_agents_abi::errors::ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Server,
+                    "the avatar did not join",
+                );
                 api.send(Command::AvatarError(error.into())).ok()?
             }
             // A hung hook is one the host never answers, whatever the case sends.

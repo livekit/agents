@@ -482,7 +482,12 @@ class SpeechStream(stt.RecognizeStream):
 
                 msg_type = data.type
                 if msg_type == "error":
-                    raise APIError("Baseten STT error", body=msg.text, detail=data.message)
+                    raise APIError(
+                        "Baseten STT error",
+                        kind="invalid_request",
+                        body=msg.text,
+                        detail=data.message,
+                    )
                 # Skip other non-transcription messages (e.g. status)
                 if msg_type and msg_type not in ("transcription",):
                     logger.debug("Ignoring message type: %s", msg_type)

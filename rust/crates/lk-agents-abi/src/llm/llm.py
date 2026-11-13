@@ -217,9 +217,9 @@ class LLMStream(ABC):
     """One completion: ``ChatChunk`` out.
 
     Plugins implement ``_run``: one attempt at the request, sending the provider's chunks to
-    ``_event_ch``. The framework runs it under ``conn_options`` (docs/models.md "Provider
-    attempts"): a retryable ``APIError`` raised before any chunk with content reached the
-    reader runs ``_run`` again from the start; once content was delivered, or for any other
+    ``_event_ch``. The framework runs it under ``conn_options``: a retryable
+    ``APIError`` raised before any chunk with content reached the reader runs ``_run`` again
+    from the start; once content was delivered, or for any other
     exception, the error ends the stream. The read deadline is armed while a response is owed;
     report progress through ``self._core_attempts``.
     """
@@ -253,8 +253,8 @@ class LLMStream(ABC):
         """One attempt: send the request and push every chunk to ``_event_ch``.
 
         Called once per attempt, in a fresh task; a retry calls it again with nothing kept
-        from the failed attempt. Raise ``APIError`` (``retryable=True`` for transient
-        failures) to fail the attempt. Cancellation means a deadline passed or the stream was
+        from the failed attempt. Raise ``APIError`` (its ``kind`` names what failed and
+        decides the retry) to fail the attempt. Cancellation means a deadline passed or the stream was
         closed: clean up and let it propagate.
         """
 

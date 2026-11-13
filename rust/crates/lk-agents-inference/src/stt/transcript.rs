@@ -58,31 +58,37 @@ impl TranscriptMachine {
             Incoming::InterimTranscript(data) => self.transcript(&data, false),
             Incoming::FinalTranscript(data) => self.transcript(&data, true),
             Incoming::Error { code } => Processed {
-                error: Some(lk_agents_abi::errors::ApiError::status(
-                    "LiveKit Inference STT returned an error",
-                    code,
-                    None,
-                    lk_agents_abi::inference::stt_wire::SttErrorCode::from_wire(&code.to_string())
+                error: Some(
+                    lk_agents_abi::errors::ApiError::status(
+                        "LiveKit Inference STT returned an error",
+                        code,
+                        None,
+                    )
+                    .with_should_retry(
+                        lk_agents_abi::inference::stt_wire::SttErrorCode::from_wire(
+                            &code.to_string(),
+                        )
                         .map(|code| code.retryable()),
-                )),
+                    ),
+                ),
                 ..Default::default()
             },
             Incoming::SessionUpdated { success: false } => Processed {
-                error: Some(
-                    lk_agents_abi::errors::ApiError::new(
-                        "LiveKit Inference STT session update was rejected",
-                    )
-                    .with_retryable(false),
-                ),
+                error: Some(lk_agents_abi::errors::ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                    "LiveKit Inference STT session update was rejected",
+                )),
                 ..Default::default()
             },
             Incoming::SessionFinalized { truncated: true }
             | Incoming::SessionClosed { truncated: true } => Processed {
                 error: Some(
+                    // the transcript before the cut was delivered: a retry would repeat it
                     lk_agents_abi::errors::ApiError::new(
+                        lk_agents_abi::errors::ErrorKind::Server,
                         "LiveKit Inference STT transcript was truncated",
                     )
-                    .with_retryable(false),
+                    .into_final(),
                 ),
                 ..Default::default()
             },

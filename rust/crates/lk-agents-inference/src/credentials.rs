@@ -1,5 +1,5 @@
-use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::errors::Invalid;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::inference::GatewayCredentials;
 
 /// `api_key if is_given(api_key) else os.getenv("LIVEKIT_INFERENCE_API_KEY",
@@ -27,9 +27,9 @@ pub fn resolve_api_key(
     let key = resolve_credential(explicit, inference, server);
     if key.is_empty() {
         return Err(ApiError::new(
+            ErrorKind::Auth,
             "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable",
-        )
-        .with_retryable(false));
+        ));
     }
     Ok(key)
 }
@@ -42,7 +42,10 @@ pub fn resolve_api_secret(
 ) -> Result<String, ApiError> {
     let secret = resolve_credential(explicit, inference, server);
     if secret.is_empty() {
-        return Err(ApiError::new("api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable").with_retryable(false));
+        return Err(ApiError::new(
+            ErrorKind::Auth,
+            "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable",
+        ));
     }
     Ok(secret)
 }

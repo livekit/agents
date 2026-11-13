@@ -987,13 +987,16 @@ def plugin_error():
     try:
         from livekit.agents import APIStatusError
     except ImportError:
-        APIStatusError = Exception
+
+        class APIStatusError(Exception):
+            def __init__(self, message, *, status_code):
+                super().__init__(message)
+                self.kind = "rate_limit"
+                self.status_code = status_code
 
     class MyStatusError(APIStatusError):
         def __init__(self):
-            super().__init__("rate limited")
-            self.retryable = True
-            self.status_code = 429
+            super().__init__("rate limited", status_code=429)
 
         def __str__(self):
             return "rate limited"

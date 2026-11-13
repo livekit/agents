@@ -18,6 +18,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     LanguageCode,
     http,
     stt,
@@ -239,8 +240,10 @@ class SpeechStream(stt.RecognizeStream):
                     try:
                         data = _Transcript.model_validate_json(msg.data)
                     except ValidationError as e:
-                        raise APIConnectionError(
-                            "Telnyx STT sent a malformed message", retryable=False
+                        raise APIError(
+                            "Telnyx STT sent a malformed message",
+                            kind="protocol",
+                            detail=str(msg.data),
                         ) from e
                     self._process_stream_event(data)
 

@@ -70,7 +70,7 @@ pub trait DelegationHost: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<String, crate::errors::HostError>>;
 }
 
-/// One delegation of a tool call to a remote agent (docs/agents.md "Remote agents").
+/// One delegation of a tool call to a remote agent.
 #[crate::host(class(name = "_core_RemoteInteraction"))]
 pub trait RemoteInteraction: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.

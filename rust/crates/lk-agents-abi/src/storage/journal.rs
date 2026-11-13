@@ -144,7 +144,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// docs/internals/storage.md#journal: every event round-trips under its documented type and
+    /// Every journal event round-trips under its documented type and
     /// payload; a malformed payload is refused.
     #[test]
     fn every_journal_event_round_trips_its_documented_row() {

@@ -507,12 +507,13 @@ class LLMStream(llm.LLMStream):
             return chunks
 
         if isinstance(data, ResponseErrorEvent):
+            # the conversation already exists: another attempt would open a second one
             raise APIStatusError(
                 data.message,
                 status_code=data.code,
+                kind="invalid_request",
                 request_id=None,
                 body=None,
-                retryable=False,
             )
 
         if isinstance(data, ToolExecutionStartedEvent):

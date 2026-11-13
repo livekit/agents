@@ -12,8 +12,8 @@ from aiohttp.test_utils import TestServer
 
 from livekit.agents import (
     Agent,
-    APIConnectionError,
     APIConnectOptions,
+    APIError,
     UserInputTranscribedEvent,
     VoiceSession,
     http,
@@ -100,12 +100,14 @@ async def test_batch_transcript_keeps_word_timings_and_speaker(
     assert [(w.start_time, w.end_time) for w in speech.words] == [(0.1, 0.7)]
 
 
-async def test_a_malformed_batch_transcript_is_a_connection_error(
+async def test_a_malformed_batch_transcript_breaks_the_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A transcript the service mangled fails as an API error, not a validation crash."""
-    with pytest.raises(APIConnectionError, match="invalid xAI transcript"):
+    with pytest.raises(APIError, match="invalid xAI transcript") as failure:
         await _recognize(monkeypatch, {"text": "hello", "words": [{"text": ["bad"]}]})
+
+    assert failure.value.kind == "protocol", "a broken contract is never retried"
 
 
 class _TTSPeer:

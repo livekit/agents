@@ -478,7 +478,7 @@ async fn agent_run_honors_a_gateway_retry_refusal() {
     let mut s = setup(
         vec![Reply::Fail(
             lk_agents_abi::errors::ApiError::from_http("project out of credits", 429, None)
-                .with_retryable(false),
+                .into_final(),
         )],
         Body::Reports,
         OutputSpec::Text { validated: false },

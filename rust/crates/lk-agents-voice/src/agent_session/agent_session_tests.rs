@@ -14,6 +14,12 @@ fn pending_voice_progress_is_coalesced_until_the_writer_acknowledges() {
     driver.session.storage.enabled = true;
     let speech = SpeechId(10);
     driver.storage_started(speech);
+    driver.storage_answered(
+        lk_agents_abi::Ts::ZERO,
+        speech,
+        crate::agent_session::StorageRequest::Acquire,
+        Ok(()),
+    );
     let partial = |text| {
         lk_agents_abi::ChatMessage::text(
             "reply",
@@ -40,7 +46,12 @@ fn pending_voice_progress_is_coalesced_until_the_writer_acknowledges() {
             .iter()
             .any(|effect| matches!(effect, VoiceEffect::StorageCheckpoint { .. }))
     );
-    driver.storage_checkpointed(lk_agents_abi::Ts::ZERO, checkpoint, Ok(()));
+    driver.storage_answered(
+        lk_agents_abi::Ts::ZERO,
+        speech,
+        crate::agent_session::StorageRequest::Checkpoint(checkpoint),
+        Ok(()),
+    );
     let effects = driver.take_outbox();
     let histories: Vec<_> = effects
         .iter()
@@ -51,7 +62,12 @@ fn pending_voice_progress_is_coalesced_until_the_writer_acknowledges() {
         .collect();
     assert_eq!(histories.len(), 1);
     assert_eq!(
-        histories[0].last().unwrap().as_message().unwrap().raw_text_content().as_deref(),
+        histories[0]
+            .iter()
+            .find(|item| item.id() == "reply")
+            .and_then(|item| item.as_message())
+            .and_then(|message| message.raw_text_content())
+            .as_deref(),
         Some("latest")
     );
 }
@@ -64,6 +80,12 @@ fn a_failed_generation_drains_accepted_progress_before_abandoning_its_run() {
     driver.session.storage.enabled = true;
     let speech = SpeechId(9);
     driver.storage_started(speech);
+    driver.storage_answered(
+        lk_agents_abi::Ts::ZERO,
+        speech,
+        crate::agent_session::StorageRequest::Acquire,
+        Ok(()),
+    );
     driver.storage_progress(
         speech,
         lk_agents_abi::ChatMessage::text(
@@ -81,11 +103,20 @@ fn a_failed_generation_drains_accepted_progress_before_abandoning_its_run() {
             _ => None,
         })
         .unwrap();
-    driver.storage_abandon(speech, Box::new(crate::generation::fatal("model failed")));
+    driver.storage_abandon(
+        lk_agents_abi::Ts::ZERO,
+        speech,
+        Box::new(crate::generation::fatal("model failed")),
+    );
     assert!(
         !driver.take_outbox().iter().any(|effect| matches!(effect, VoiceEffect::StorageAbort(_)))
     );
-    driver.storage_checkpointed(lk_agents_abi::Ts::ZERO, checkpoint, Ok(()));
+    driver.storage_answered(
+        lk_agents_abi::Ts::ZERO,
+        speech,
+        crate::agent_session::StorageRequest::Checkpoint(checkpoint),
+        Ok(()),
+    );
     assert!(
         driver
             .take_outbox()
@@ -103,6 +134,12 @@ fn a_final_voice_commit_waits_for_delivered_progress_checkpoint_receipts() {
     driver.session.storage.enabled = true;
     let speech = SpeechId(8);
     driver.storage_started(speech);
+    driver.storage_answered(
+        lk_agents_abi::Ts::ZERO,
+        speech,
+        crate::agent_session::StorageRequest::Acquire,
+        Ok(()),
+    );
     let mut partial = ChatMessage::text("reply", Role::Assistant, "heard", std::time::UNIX_EPOCH);
     partial.interrupted = true;
     driver.storage_progress(speech, partial);
@@ -133,7 +170,12 @@ fn a_final_voice_commit_waits_for_delivered_progress_checkpoint_receipts() {
             .iter()
             .any(|effect| matches!(effect, VoiceEffect::StorageCommit { .. }))
     );
-    driver.storage_checkpointed(Ts::ZERO, checkpoint, Ok(()));
+    driver.storage_answered(
+        Ts::ZERO,
+        speech,
+        crate::agent_session::StorageRequest::Checkpoint(checkpoint),
+        Ok(()),
+    );
     assert_eq!(
         driver
             .take_outbox()
@@ -142,7 +184,12 @@ fn a_final_voice_commit_waits_for_delivered_progress_checkpoint_receipts() {
             .count(),
         1
     );
-    driver.storage_checkpointed(Ts::ZERO, checkpoint, Ok(()));
+    driver.storage_answered(
+        Ts::ZERO,
+        speech,
+        crate::agent_session::StorageRequest::Checkpoint(checkpoint),
+        Ok(()),
+    );
     assert!(
         !driver
             .take_outbox()
@@ -157,13 +204,15 @@ fn bound_storage_loss_and_failed_commit_close_the_call_with_a_storage_error() {
     use lk_agents_abi::voice::events::{CloseReason, ErrorSource};
     for event in [
         VoiceEvent::StorageLost(SpeechId(7)),
-        VoiceEvent::StorageFailed {
+        VoiceEvent::StorageAnswered {
             speech: SpeechId(7),
-            error: StorageError::Unavailable("write failed".into()),
+            request: crate::agent_session::StorageRequest::Commit,
+            result: Err(StorageError::Unavailable("write failed".into())),
         },
     ] {
         let mut driver = driver();
         driver.session.storage.enabled = true;
+        driver.storage_started(SpeechId(7));
         driver.handle(
             Some(event),
             crate::agent_session::time::Now {
@@ -420,6 +469,12 @@ fn a_speech_ended_without_its_turn_releases_the_partition_within_30_s() {
     driver.session.storage.enabled = true;
     let speech = SpeechId(7);
     driver.storage_started(speech);
+    driver.storage_answered(
+        lk_agents_abi::Ts::ZERO,
+        speech,
+        crate::agent_session::StorageRequest::Acquire,
+        Ok(()),
+    );
     driver.release_speech(Ts::ZERO, speech);
     let released = driver.settle_step();
     assert!(!released.iter().any(|e| matches!(e, VoiceEffect::StorageAbort(_))));

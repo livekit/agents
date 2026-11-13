@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from json import JSONDecodeError
 from types import TracebackType
 
 from pydantic import BaseModel, Field, JsonValue, ValidationError
@@ -149,9 +148,12 @@ class AnamAPI:
                 url, headers=headers, json=payload, conn_options=self._conn_options
             ) as response:
                 await response.raise_for_status()
+                text = await response.text()
                 try:
-                    return SessionResponse.model_validate(await response.json())
-                except (ValidationError, JSONDecodeError) as exc:
-                    raise APIError("Anam returned an invalid response", retryable=False) from exc
+                    return SessionResponse.model_validate_json(text)
+                except ValidationError as exc:
+                    raise APIError(
+                        "Anam returned an invalid response", kind="protocol", detail=text
+                    ) from exc
 
         return await http.retry_request(request, conn_options=self._conn_options)

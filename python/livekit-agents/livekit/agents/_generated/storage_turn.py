@@ -68,7 +68,7 @@ class HandlerOutput:
     tool_executions: list[ToolExecution]
     """The calls' starts, progress and ends the handler recorded, for the journal."""
     status: TaskState | None = None
-    """A `Rejected` or `Working` transition's state (docs/server.md#handler-outcomes); `output`
+    """A `Rejected` or `Working` transition's state; `output`
     is then its reason or status message.
     """
 

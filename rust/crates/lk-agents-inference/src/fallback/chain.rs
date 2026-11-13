@@ -755,9 +755,9 @@ impl<B: Backend, S, F> AttemptLaunch<B, S, F> {
         if self.stop.is_cancelled() || self.closed.is_cancelled() {
             return Some(ApiError::cancelled("fallback cancelled").into());
         }
-        self.deadline.is_some_and(|at| now >= at).then(|| {
-            ApiError::timed_out(lk_agents_abi::errors::Timeout::Total).with_retryable(false).into()
-        })
+        self.deadline
+            .is_some_and(|at| now >= at)
+            .then(|| ApiError::timed_out(lk_agents_abi::errors::Timeout::Total).into_final().into())
     }
 }
 

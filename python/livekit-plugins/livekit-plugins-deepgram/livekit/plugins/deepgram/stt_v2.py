@@ -22,6 +22,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from pydantic import ValidationError
+
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -489,7 +491,13 @@ class SpeechStreamv2(stt.RecognizeStream):
                     logger.warning("unexpected deepgram message type %s", msg.type)
                     continue
 
-                self._process_stream_event(json.loads(msg.data))
+                try:
+                    event = FluxResponse.model_validate_json(msg.data)
+                except ValidationError as e:
+                    raise APIError(
+                        "deepgram sent a malformed message", kind="protocol", detail=str(msg.data)
+                    ) from e
+                self._process_stream_event(event)
 
         ws: http.WebSocket | None = None
 
@@ -570,7 +578,7 @@ class SpeechStreamv2(stt.RecognizeStream):
         )
         return ws
 
-    def _send_transcript_event(self, event_type: stt.SpeechEventType, data: object) -> None:
+    def _send_transcript_event(self, event_type: stt.SpeechEventType, data: FluxResponse) -> None:
         alts = _parse_transcription(self._opts.language, data, self.start_time_offset)
         if alts:
             event = stt.SpeechEvent(
@@ -580,8 +588,8 @@ class SpeechStreamv2(stt.RecognizeStream):
             )
             self.send(event)
 
-    def _process_stream_event(self, data: object) -> None:
-        event = FluxResponse.model_validate(data)
+    def _process_stream_event(self, data: FluxResponse) -> None:
+        event = data
         assert self._opts.language is not None
 
         if request_id := event.request_id:
@@ -631,19 +639,25 @@ class SpeechStreamv2(stt.RecognizeStream):
                 self.send(end_event)
 
         elif event.type == "ConfigureSuccess":
-            logger.debug("deepgram applied Configure update", extra={"lk.pii.data": data})
+            logger.debug(
+                "deepgram applied Configure update", extra={"lk.pii.data": data.model_dump()}
+            )
 
         elif event.type == "ConfigureFailure":
-            logger.warning("deepgram rejected Configure update", extra={"lk.pii.data": data})
+            logger.warning(
+                "deepgram rejected Configure update", extra={"lk.pii.data": data.model_dump()}
+            )
 
         elif event.type == "Error":
-            raise APIError("deepgram returned an error", detail=event.description)
+            raise APIError(
+                "deepgram returned an error", kind="invalid_request", detail=event.description
+            )
 
 
 def _parse_transcription(
-    language: str, data: object, start_time_offset: float
+    language: str, data: FluxResponse, start_time_offset: float
 ) -> list[stt.SpeechData]:
-    response = FluxResponse.model_validate(data)
+    response = data
     transcript = response.transcript
     words = response.words
     if not words:

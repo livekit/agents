@@ -14,11 +14,13 @@
 
 from __future__ import annotations
 
+from typing import Annotated
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, JsonValue, ValidationError
+from pydantic import BaseModel, BeforeValidator, JsonValue, ValidationError
 
-from livekit.agents import APIStatusError
+from livekit.agents import APIError, APIStatusError
+from livekit.agents.types import ErrorKind
 
 from .models import (
     CUSTOM_VOICE_PREFIX,
@@ -32,13 +34,14 @@ from .models import (
     TTS_WEBSOCKET_PATH,
 )
 
-_RETRYABLE_WS_CODES = {
-    "rate_limit_exceeded",
-    "concurrency_limit_exceeded",
-    "tts_workers_busy",
-    "tts_workers_unconfigured",
-    "tts_workers_unavailable",
-    "internal_error",
+# A WebSocket error frame's code; any other code refused the request.
+_WS_ERROR_KINDS: dict[str, ErrorKind] = {
+    "rate_limit_exceeded": "rate_limit",
+    "concurrency_limit_exceeded": "rate_limit",
+    "tts_workers_busy": "server",
+    "tts_workers_unconfigured": "server",
+    "tts_workers_unavailable": "server",
+    "internal_error": "server",
 }
 
 
@@ -46,8 +49,13 @@ class _ErrorDetail(BaseModel):
     code: str | int | None = None
 
 
+def _error_detail(value: object) -> object:
+    # only an object carries a code: any other shape is no error detail
+    return value if isinstance(value, dict) else None
+
+
 class ErrorResponse(BaseModel):
-    error: _ErrorDetail | None = None
+    error: Annotated[_ErrorDetail | None, BeforeValidator(_error_detail)] = None
 
 
 def normalize_voice(voice: object) -> str:
@@ -179,18 +187,14 @@ def raise_http_error(status: int, body: str) -> None:
 
 
 def raise_ws_error(data: ErrorResponse) -> None:
-    """Raise ``APIStatusError`` from a Vakyam WebSocket ``error`` frame."""
+    """Raise ``APIError`` from a Vakyam WebSocket ``error`` frame."""
     code = data.error.code if data.error is not None else None
     error_code = str(code) if code is not None else None
-    retryable = error_code in _RETRYABLE_WS_CODES
     message = "Vakyam TTS WebSocket request failed"
     safe_body: dict[str, str] = {"type": "error"}
     if error_code is not None:
         message += f" (error code: {error_code})"
         safe_body["code"] = error_code
-    raise APIStatusError(
-        message,
-        status_code=-1,
-        body=safe_body,
-        retryable=retryable,
+    raise APIError(
+        message, kind=_WS_ERROR_KINDS.get(error_code or "", "invalid_request"), body=safe_body
     )

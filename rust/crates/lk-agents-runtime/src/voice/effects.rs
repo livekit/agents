@@ -7,7 +7,7 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_voice::agent_session::effects::{SpeechHistory, StreamKind, VoiceEffect};
 use lk_agents_voice::agent_session::machine::activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::{SystemTap, VoiceEvent, VoiceHostEvent};
+use lk_agents_voice::agent_session::{StorageRequest, SystemTap, VoiceEvent, VoiceHostEvent};
 use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::audio_recognition::InterruptionSignal;
 use lk_agents_voice::events::SessionEvent;
@@ -183,8 +183,9 @@ impl VoiceRuntime {
                     speech,
                     "voice conversation checkpoint",
                     move || {
-                        let _ = lost.send(VoiceEvent::StorageCheckpointed {
-                            checkpoint,
+                        let _ = lost.send(VoiceEvent::StorageAnswered {
+                            speech,
+                            request: StorageRequest::Checkpoint(checkpoint),
                             result: Err(lk_agents_abi::storage::StorageError::Unavailable(
                                 "checkpoint task ended".into(),
                             )),
@@ -195,7 +196,8 @@ impl VoiceRuntime {
                             Some(storage) => storage.checkpoint(checkpoint, agent, history).await,
                             None => Ok(()),
                         };
-                        let _ = queue.send(VoiceEvent::StorageCheckpointed { checkpoint, result });
+                        let request = StorageRequest::Checkpoint(checkpoint);
+                        let _ = queue.send(VoiceEvent::StorageAnswered { speech, request, result });
                     },
                 );
             }
@@ -476,7 +478,8 @@ impl VoiceRuntime {
                 match reload_history(&task, storage, local, &queue).await {
                     Ok(Some(history)) => context.plan.request.chat_ctx.items = history,
                     Ok(None) => {} // An interrupted speech settles through the normal core path.
-                    Err(_) => return, // StorageFailed owns the call's error/cleanup path.
+                    // The refused take is the speech's answer: the core ends the speech with it.
+                    Err(_) => return,
                 }
             }
             crate::voice::generation::pipeline_reply::pipeline_reply_task(
@@ -714,9 +717,10 @@ impl VoiceRuntime {
     /// is closed.
     fn open_stream(&mut self, open: u64, leg: StreamKind, provider: Option<PendingOpen>) {
         let Some(pending) = provider else {
-            let error = ProviderError::Local(
-                ApiError::new("provider resource is no longer available").with_retryable(false),
-            );
+            let error = ProviderError::Local(ApiError::new(
+                lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                "provider resource is no longer available",
+            ));
             let _ = self.reports.send_opened(StreamOpened { open, leg, outcome: Err(error) });
             return;
         };
@@ -749,25 +753,34 @@ async fn reload_history(
     queue: &crate::voice::session::Tx,
 ) -> Result<Option<Vec<lk_agents_abi::ChatItem>>, lk_agents_abi::storage::StorageError> {
     let speech = handle.id();
+    let request = StorageRequest::Acquire;
     let acquired = tokio::select! {
         biased;
         acquired = storage.acquire(speech.0, local.clone()) => acquired,
-        () = handle.wait_for_interrupted() => return Ok(None),
+        () = handle.wait_for_interrupted() => {
+            let result = Err(lk_agents_abi::storage::StorageError::Cancelled(
+                "the speech was cut before it took the partition".into(),
+            ));
+            let _ = queue.send(VoiceEvent::StorageAnswered { speech, request, result });
+            return Ok(None);
+        }
     };
     match acquired {
         Ok(history) => {
             let _ =
                 queue.send(VoiceEvent::StorageReloaded { read: local, history: history.clone() });
+            let _ = queue.send(VoiceEvent::StorageAnswered { speech, request, result: Ok(()) });
             let _ = storage.clone().dispatch(
                 lk_agents_abi::storage::voice::VoiceStorageCommand::ObserveLoss {
                     speech: speech.0,
                 },
-                Arc::new(super::session::storage::StorageReporter(queue.clone())),
+                Arc::new(super::session::storage::StorageReporter::observer(queue.clone())),
             );
             Ok(Some(history))
         }
         Err(error) => {
-            let _ = queue.send(VoiceEvent::StorageFailed { speech, error: error.clone() });
+            let result = Err(error.clone());
+            let _ = queue.send(VoiceEvent::StorageAnswered { speech, request, result });
             Err(error)
         }
     }
@@ -796,6 +809,7 @@ impl PendingOpen {
                         .await?
                 else {
                     return Err(ProviderError::Local(ApiError::new(
+                        lk_agents_abi::errors::ErrorKind::InvalidRequest,
                         "the new agent's STT does not stream",
                     )));
                 };

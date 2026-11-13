@@ -6,6 +6,7 @@ import weakref
 from dataclasses import dataclass
 
 import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
+from websockets.exceptions import ConnectionClosed
 
 from livekit import rtc
 from livekit.agents import (
@@ -19,6 +20,7 @@ from livekit.agents import (
     TokenUsage,
     VADEventType,
     VADStream,
+    http,
     stt,
     utils,
 )
@@ -254,6 +256,11 @@ class STT(stt.STT):
                 request_id=e.headers.get("x-request-id"),
                 body=e.body,
             ) from e
+        except ConnectionClosed as e:
+            code = e.rcvd.code if e.rcvd is not None else None
+            raise APIConnectionError(
+                f"Mistral closed the connection (close code {code})", kind=http.close_kind(code)
+            ) from e
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -471,6 +478,11 @@ class SpeechStream(stt.RecognizeStream):
                 status_code=e.status_code,
                 request_id=e.headers.get("x-request-id"),
                 body=e.body,
+            ) from e
+        except ConnectionClosed as e:
+            code = e.rcvd.code if e.rcvd is not None else None
+            raise APIConnectionError(
+                f"Mistral closed the connection (close code {code})", kind=http.close_kind(code)
             ) from e
         except Exception as e:
             raise APIConnectionError() from e

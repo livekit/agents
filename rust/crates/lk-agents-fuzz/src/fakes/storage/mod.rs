@@ -389,7 +389,7 @@ impl FakeDatabase {
         });
         let faulted = self.state.lock().faulted;
         self.registry.record_storage(StorageStep::PartitionSettled { unended, held, faulted });
-        // The thread keeps its rows in the order they were first written.
+        // The thread reads its rows back in their positions in the conversation.
         let items = partition_key.history().await.unwrap_or_default();
         let items = items.into_iter().map(|row| row.id).collect();
         self.registry.record_storage(StorageStep::Saved { items });

@@ -279,7 +279,10 @@ pub mod fallback {
     }
 
     pub fn boom(what: &str) -> ProviderError {
-        ProviderError::Local(ApiError::new(what.to_owned()))
+        ProviderError::Local(ApiError::new(
+            lk_agents_abi::errors::ErrorKind::Server,
+            what.to_owned(),
+        ))
     }
 
     pub struct Frames {

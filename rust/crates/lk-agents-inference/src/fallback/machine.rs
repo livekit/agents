@@ -240,7 +240,7 @@ impl ChainRequest {
             let mut effects = self.cancel_active(now);
             self.phase = Phase::Finished;
             effects.push(FallbackChainEffect::Finished(Err(ApiError::timed_out(Timeout::Total)
-                .with_retryable(false)
+                .into_final()
                 .into())));
             return effects;
         }
@@ -304,7 +304,7 @@ impl ChainRequest {
                                 .join(", ")
                         ),
                     ))
-                    .with_retryable(false)
+                    .into_final()
                     .into()))];
                 }
                 self.phase = Phase::Ready;

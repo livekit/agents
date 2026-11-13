@@ -390,8 +390,7 @@ async def test_non_contract_success_status_is_not_retried(
         await _start(_avatar(max_retry=3), avatar_host)
 
     assert raised.value.status_code == 202
-    assert not raised.value.retryable
-    assert boson.methods() == ["POST"]
+    assert boson.methods() == ["POST"], "the provider may have created the session"
 
 
 @pytest.mark.parametrize(

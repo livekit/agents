@@ -26,6 +26,7 @@ from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    ErrorKind,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
@@ -67,14 +68,13 @@ _ASK_BARE = f"Reply to the caller now. {_SPEAK_NOW}"
 # session.closed carries the final usage; the service drains first
 _SESSION_CLOSE_TIMEOUT = 5.0
 _CLOSING_EVENTS = frozenset({"session.usage.updated", "session.closed"})
-_FATAL_ERROR_CODES = frozenset(
-    {
-        "insufficient_quota",
-        "invalid_api_key",
-        "account_deactivated",
-        "billing_hard_limit_reached",
-    }
-)
+# error codes that end the session; any other error event is recoverable
+_ERROR_KINDS: dict[str, ErrorKind] = {
+    "insufficient_quota": "quota",
+    "invalid_api_key": "auth",
+    "account_deactivated": "auth",
+    "billing_hard_limit_reached": "quota",
+}
 
 Role = Literal["user", "assistant"]
 GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone", "vesper"]
@@ -603,7 +603,7 @@ class GPTVoiceSession(
         options = self._opts.conn_options
         if options.total_timeout is not None:
             # a live session has no operation that a total deadline could bound
-            raise APIError("GPT-Live sessions cannot enforce total_timeout", retryable=False)
+            raise APIError("GPT-Live sessions cannot enforce total_timeout", kind="invalid_request")
         headers = {"User-Agent": "LiveKit Agents"}
         if not self._opts.is_azure:
             headers["Authorization"] = f"Bearer {self._opts.api_key}"
@@ -698,9 +698,13 @@ class GPTVoiceSession(
                 try:
                     event = json.loads(msg.data)
                 except json.JSONDecodeError:
+                    event = None
+                if not isinstance(event, dict):
                     raise APIError(
-                        f"{self._provider_label} sent a malformed event", retryable=False
-                    ) from None
+                        f"{self._provider_label} sent a malformed event",
+                        kind="protocol",
+                        detail=msg.text,
+                    )
                 self.emit("openai_server_event_received", event)
                 # while closing only the shutdown events matter; the framework has torn down
                 if self._closing and event.get("type") not in _CLOSING_EVENTS:
@@ -1031,13 +1035,12 @@ class GPTVoiceSession(
         )
 
     def _handle_error(self, error: types.ErrorBody) -> None:
-        recoverable = (error.code or error.type or "") not in _FATAL_ERROR_CODES
         api_error = APIError(
             message="GPT-Live returned an error",
-            retryable=recoverable,
+            kind=_ERROR_KINDS.get(error.code or error.type or "", "server"),
             detail=error.model_dump_json(exclude_none=True),
         )
-        if not recoverable:
+        if not api_error.retryable:
             raise api_error
         self._emit_error(api_error, recoverable=True)
 

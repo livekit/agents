@@ -30,7 +30,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     APITimeoutError,
     LanguageCode,
     http,
@@ -88,7 +88,7 @@ def _decode_transcript(data: object) -> _Transcript:
     try:
         return _Transcript.model_validate(data)
     except ValidationError as error:
-        raise APIConnectionError("invalid xAI transcript", retryable=False) from error
+        raise APIError("invalid xAI transcript", kind="protocol", detail=str(data)) from error
 
 
 class STT(stt.STT):
@@ -198,7 +198,7 @@ class STT(stt.STT):
                 )
         except TimeoutError as e:
             raise APITimeoutError() from e
-        except (APIConnectionError, APIStatusError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -394,7 +394,9 @@ class SpeechStream(stt.RecognizeStream):
                 try:
                     raw = json.loads(msg.data)
                 except json.JSONDecodeError as e:
-                    raise APIConnectionError("xAI sent a malformed message", retryable=False) from e
+                    raise APIError(
+                        "xAI sent a malformed message", kind="protocol", detail=str(msg.data)
+                    ) from e
                 self._process_stream_event(raw)
 
         ws: http.WebSocket | None = None

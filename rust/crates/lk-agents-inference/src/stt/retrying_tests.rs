@@ -46,7 +46,9 @@ impl StreamOutput<SpeechEvent> for Attempt {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
         Box::pin(async move {
             match std::mem::replace(self, Attempt::Done) {
-                Attempt::Fail => Err(ApiError::new("hiccup").into()),
+                Attempt::Fail => {
+                    Err(ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "hiccup").into())
+                }
                 Attempt::Fatal(error) => Err(error.into()),
                 Attempt::Cancelled => Err(lk_agents_abi::errors::HostError {
                     kind: lk_agents_abi::errors::HostErrorKind::Cancelled,
@@ -86,7 +88,10 @@ impl Stt for Flaky {
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
-        let error = self.fatal.clone().unwrap_or_else(|| ApiError::new("down"));
+        let error = self
+            .fatal
+            .clone()
+            .unwrap_or_else(|| ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "down"));
         Box::pin(async move { Err(error.into()) })
     }
     fn stream(
@@ -157,7 +162,7 @@ fn retrying(inner: Arc<Flaky>, max_retry: u32) -> Recognition {
 #[tokio::test(start_paused = true)]
 async fn a_nonretryable_error_reaches_the_caller_unretried() {
     for streaming in [false, true] {
-        let fatal = ApiError::status("recognition refused", 401, None, None).with_retryable(false);
+        let fatal = ApiError::status("recognition refused", 401, None).into_final();
         let stt = retrying(Arc::new(Flaky { fatal: Some(fatal), ..Default::default() }), 3);
 
         let error = if streaming {
@@ -366,7 +371,11 @@ struct RefusingSink(Arc<StalledInput>);
 impl StreamInput<AudioFrame> for RefusingSink {
     fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
         if self.0.accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1 {
-            return Err(ApiError::new("recognition input refused").with_retryable(false).into());
+            return Err(ApiError::new(
+                lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                "recognition input refused",
+            )
+            .into());
         }
         Ok(())
     }
@@ -685,7 +694,7 @@ struct SinkFails(Arc<tokio::sync::Notify>);
 impl StreamInput<AudioFrame> for SinkFails {
     fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
         self.0.notify_one();
-        Err(ApiError::new("the socket closed").into())
+        Err(ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "the socket closed").into())
     }
     fn flush(&self) -> Result<(), ProviderError> {
         Ok(())
@@ -731,7 +740,9 @@ impl Stt for FailingSink {
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
-        Box::pin(async move { Err(ApiError::new("down").into()) })
+        Box::pin(async move {
+            Err(ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "down").into())
+        })
     }
     fn stream(
         &self,

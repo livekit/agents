@@ -26,6 +26,7 @@ from typing import Any, cast
 
 from livekit.agents import (
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     http,
@@ -58,6 +59,17 @@ from .models import (
 
 def _is_sonic_3(model: str) -> bool:
     return model.startswith("sonic-3")
+
+
+def _decode(raw: str | bytes) -> dict[str, Any]:
+    """A provider message, which must be a JSON object."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("Cartesia sent a malformed message", kind="protocol", detail=str(raw))
+    return data
 
 
 @dataclass
@@ -462,7 +474,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected Cartesia message type %s", msg.type)
                     continue
 
-                data = json.loads(msg.data)
+                data = _decode(msg.data)
                 segment_id = data.get("context_id")
                 # A pooled websocket may still hold audio/done from an interrupted
                 # previous context; ignore messages tagged with another context id.

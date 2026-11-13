@@ -694,6 +694,20 @@ impl CoreAvatarLifecycle {
         Ok(())
     }
 
+    /// The avatar failed after it started (its audio can no longer reach it): the session's
+    /// `avatar_error`. The avatar closes itself next.
+    #[pyo3(signature = (error))]
+    fn fail(&self, py: Python<'_>, error: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let error = PyResult::Ok(crate::py_errors::capture_value(&error))?;
+        py.detach(|| {
+            <CoreAvatarLifecycleImpl as ::lk_agents_abi::voice::avatar::AvatarLifecycle>::fail(
+                &self.0, error,
+            )
+        });
+        Ok(())
+    }
+
     /// Stops the join wait and the metrics, then, inside a job and while `room` is connected,
     /// removes the avatar participant from the room through the job's RoomService
     /// (`RemoveParticipant`): a participant already gone (`not_found`) is skipped, any other

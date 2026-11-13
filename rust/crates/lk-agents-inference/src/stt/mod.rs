@@ -26,7 +26,7 @@ use base64::Engine as _;
 use executor::SttStreamExecutor;
 use input::{AudioInput, Flush};
 use lk_agents_abi::Spawner;
-use lk_agents_abi::errors::{ApiError, Invalid, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, Invalid, ProviderError};
 use lk_agents_abi::inference::fallback::{SttFallbackEntry, SttFallbacks};
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::tokenize::language::LanguageCode;
@@ -331,13 +331,15 @@ impl GatewayStt {
             })
             && opts.sample_rate != options::OPENAI_SAMPLE_RATE
         {
-            return Err(ApiError::new("OpenAI STT requires a sample rate of 24000 Hz")
-                .with_retryable(false)
-                .into());
+            return Err(ApiError::new(
+                ErrorKind::InvalidRequest,
+                "OpenAI STT requires a sample rate of 24000 Hz",
+            )
+            .into());
         }
         opts.conn_options
             .validate()
-            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+            .map_err(|error| ApiError::new(ErrorKind::InvalidRequest, error.to_string()))?;
         let keyterms = self.shared.session_keyterms.lock().clone();
         // Checked now, so bad options fail the call rather than the first connect.
         wire::session_create(&opts, &keyterms)?;
@@ -600,6 +602,7 @@ impl Stt for GatewayStt {
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
         Box::pin(async move {
             Err(ProviderError::Local(ApiError::new(
+                ErrorKind::InvalidRequest,
                 "LiveKit Inference STT does not support batch recognition, use stream() instead",
             )))
         })

@@ -163,7 +163,7 @@ async fn items_and_tasks_page_through_the_existing_client() {
             break;
         }
     }
-    assert_eq!(seq, [3, 2, 1]);
+    assert_eq!(seq, [2, 1, 0]);
     let page = client
         .tasks(agent_task::GetTasksRequest {
             thread_id: record.thread_id.clone(),

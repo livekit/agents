@@ -44,6 +44,20 @@ pub enum SystemTap {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueClosed;
 
+/// What a speech's turn asks of the store, each request answered once by
+/// [`VoiceEvent::StorageAnswered`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageRequest {
+    /// Take the partition and read its history, before the speech's reply runs.
+    Acquire,
+    /// Save the conversation so far; a checkpoint may hold the reply's next step.
+    Checkpoint(u64),
+    /// Commit the turn: the speech's save.
+    Commit,
+    /// Abandon the turn.
+    Abort,
+}
+
 /// Timers are the loop's own.
 #[derive(lk_agents_abi::Vocabulary)]
 pub enum VoiceEvent {
@@ -59,17 +73,15 @@ pub enum VoiceEvent {
         read: Vec<lk_agents_abi::ChatItem>,
         history: Vec<lk_agents_abi::ChatItem>,
     },
-    StorageSettled(crate::agent_session::machine::activity::scheduling::SpeechId),
-    StorageAbandoned(crate::agent_session::machine::activity::scheduling::SpeechId),
-    StorageCheckpointed {
-        checkpoint: u64,
+    /// A request a speech's turn made of the store was answered: success or failure, or the
+    /// death of the task that carried it. Each request is answered exactly once.
+    StorageAnswered {
+        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
+        request: StorageRequest,
         result: Result<(), lk_agents_abi::storage::StorageError>,
     },
+    /// The partition's lease was lost: not an answer, an observation.
     StorageLost(crate::agent_session::machine::activity::scheduling::SpeechId),
-    StorageFailed {
-        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
-        error: lk_agents_abi::storage::StorageError,
-    },
     Realtime(crate::agent_session::machine::activity::realtime::RealtimeWake),
     Eot(
         lk_agents_abi::turn::detector::ReqId,
@@ -366,15 +378,10 @@ impl VoiceDriver {
             Some(VoiceEvent::StorageReloaded { read, history }) => {
                 self.storage_reloaded(read, history)
             }
-            Some(VoiceEvent::StorageCheckpointed { checkpoint, result }) => {
-                self.storage_checkpointed(now, checkpoint, result)
+            Some(VoiceEvent::StorageAnswered { speech, request, result }) => {
+                self.storage_answered(now, speech, request, result)
             }
-            Some(VoiceEvent::StorageSettled(speech)) => self.storage_settled(now, speech),
-            Some(VoiceEvent::StorageAbandoned(speech)) => self.storage_abandoned(now, speech),
             Some(VoiceEvent::StorageLost(speech)) => self.storage_lost(now, speech),
-            Some(VoiceEvent::StorageFailed { speech, error }) => {
-                self.storage_failed(now, speech, error)
-            }
             Some(VoiceEvent::Realtime(ev)) => self.on_realtime(now, ev),
             Some(VoiceEvent::Eot(req, p, thresholds)) => {
                 let (observations, effects) = self.activity.on_eot(now, req, p, thresholds);
@@ -426,10 +433,10 @@ impl VoiceDriver {
         let allow_interruptions = self.session.config.effective().turn.interruption.enabled();
         let (id, mut state) = self.new_speech(call.as_ref().map(|c| c.speech), allow_interruptions);
         state.mark_done(Some(lk_agents_abi::errors::ProviderError::Local(
-            lk_agents_abi::errors::ApiError::new(format!(
-                "the session loop ended before {}() ran",
-                kind.source()
-            )),
+            lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                format!("the session loop ended before {}() ran", kind.source()),
+            ),
         )));
         self.outbox.extend(unqueued_speech(id, state));
         self.activity.retire_speech_later(id);

@@ -19,7 +19,7 @@ import dataclasses
 import os
 from collections.abc import Sequence
 from enum import Enum, StrEnum
-from typing import TypeVar, cast
+from typing import Protocol, TypeVar, cast
 from urllib.parse import urlparse
 
 from pydantic import TypeAdapter, ValidationError
@@ -34,11 +34,13 @@ from livekit.agents import (
     LanguageCode,
     VADEventType,
     VADStream,
+    http,
     stt,
     utils,
 )
 from livekit.agents.types import (
     NOT_GIVEN,
+    ErrorKind,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
@@ -70,6 +72,23 @@ from .version import __version__ as lk_version
 
 _OptionT = TypeVar("_OptionT")
 _SPEAKERS = TypeAdapter(list[SpeakerIdentifier])
+
+
+class _Socket(Protocol):
+    @property
+    def close_code(self) -> int | None: ...
+
+
+# An `Error` message's type; any other type refused the session.
+_ERROR_KINDS: dict[str, ErrorKind] = {
+    "not_authorised": "auth",
+    "insufficient_funds": "quota",
+    "quota_exceeded": "quota",
+    "job_error": "server",
+    "unknown_error": "server",
+    "idle_timeout": "timeout",
+    "session_timeout": "timeout",
+}
 _VOCAB_ENTRY = TypeAdapter(AdditionalVocabEntry)
 
 # Endpoint resolution. The default is the EU real-time Agent STT host; the env var
@@ -533,7 +552,9 @@ class SpeechStream(stt.RecognizeStream):
             return []
         if self._speaker_error is not None:
             raise APIError(
-                "Speechmatics returned invalid speaker identifiers", retryable=False
+                "Speechmatics returned invalid speaker identifiers",
+                kind="protocol",
+                detail=str(self._speaker_error),
             ) from self._speaker_error
         return self._speaker_result or []
 
@@ -592,13 +613,15 @@ class SpeechStream(stt.RecognizeStream):
         try:
             async with self._client:
                 logger.debug("Connected to Speechmatics STT service")
+                # the SDK drops its socket on a close: keep it to read the close code
+                socket = self._client._transport._websocket
                 if (
                     self._vad is not None
                     and self._turn_detection_mode == TurnDetectionMode.EXTERNAL
                 ):
                     self._vad_stream = self._vad.stream()
 
-                audio_task = owned.spawn(self._process_audio())
+                audio_task = owned.spawn(self._process_audio(socket))
                 message_task = owned.spawn(self._process_messages())
                 self._tasks = [audio_task, message_task]
                 vad_task: asyncio.Task[None] | None = None
@@ -622,7 +645,7 @@ class SpeechStream(stt.RecognizeStream):
                 # SDK exit flushes final messages while the receiver is still running.
         except (TranscriptionError, SessionError) as e:
             raise APIError(
-                "Speechmatics rejected the session", retryable=False, detail=str(e)
+                "Speechmatics rejected the session", kind="invalid_request", detail=str(e)
             ) from e
         except (SMConnectionError, SMTimeoutError, TransportError) as e:
             raise APIConnectionError(f"failed to connect to Speechmatics: {e}") from e
@@ -631,7 +654,7 @@ class SpeechStream(stt.RecognizeStream):
             if self in self._streams:
                 self._streams.remove(self)
 
-    async def _process_audio(self) -> None:
+    async def _process_audio(self, socket: _Socket | None) -> None:
         """Process audio from the input channel."""
         try:
             # Input audio stream
@@ -661,8 +684,10 @@ class SpeechStream(stt.RecognizeStream):
                         # lost connection.
                         if not self._client.is_ready_for_audio:
                             if self._client.session_error is None:
+                                code = socket.close_code if socket is not None else None
                                 raise APIConnectionError(
-                                    "lost connection to Speechmatics while sending audio"
+                                    "lost connection to Speechmatics while sending audio",
+                                    kind=http.close_kind(code),
                                 )
                             break
 
@@ -718,8 +743,8 @@ class SpeechStream(stt.RecognizeStream):
             error_type = message.get("type", "error")
             raise APIError(
                 f"Speechmatics returned an error [{error_type}]",
+                kind=_ERROR_KINDS.get(str(error_type), "invalid_request"),
                 body=message,
-                retryable=False,
                 detail=str(reason),
             )
 
@@ -803,14 +828,8 @@ class SpeechStream(stt.RecognizeStream):
         """Close the STT stream."""
         await super().aclose()
 
-        # Cancel message processing task
-        if self._tasks:
-            for task in self._tasks:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        # a task's failure already failed the stream: read, not raised again
+        await utils.aio.cancel_and_wait(*self._tasks)
 
         # Close the VAD stream if it's still open
         if self._vad_stream is not None:

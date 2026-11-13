@@ -1719,6 +1719,7 @@ version = "0.1.0"
 dependencies = [
  "a2a-lf",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "flate2",
  "futures-util",

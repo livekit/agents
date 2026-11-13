@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::llm::duplex::{self as abi, DuplexInputGap, DuplexInputItem, DuplexInputMute};
 use lk_agents_abi::{AudioFrame, Clock};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy, Stuck};
@@ -22,7 +22,7 @@ pub struct DuplexInput {
 }
 
 fn stuck(_: Stuck) -> ApiError {
-    ApiError::new("the duplex plugin stopped pulling its input")
+    ApiError::new(ErrorKind::InvalidRequest, "the duplex plugin stopped pulling its input")
 }
 
 impl DuplexInput {

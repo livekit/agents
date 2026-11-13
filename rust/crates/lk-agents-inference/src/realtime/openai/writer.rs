@@ -1,7 +1,7 @@
 use super::wire::{EncodeError, WireShape};
 use crate::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
 use crate::realtime::machine::{Outgoing, ReplyKind};
-use lk_agents_abi::errors::{ApiError, Timeout};
+use lk_agents_abi::errors::{ApiError, ErrorKind, Timeout};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, Clock, Elapsed, Ts};
 use lk_agents_media::AudioByteStream;
@@ -156,12 +156,15 @@ impl Writer {
                 let frames = encoder.encode(batch, images.as_ref(), &shape);
                 (encoder, frames)
             })
-            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+            .map_err(|error| ApiError::new(ErrorKind::InvalidRequest, error.to_string()))?;
         let (encoder, frames) = prepared.await.map_err(|error| {
-            ApiError::new(format!("realtime frame worker failed: {error}")).with_retryable(false)
+            ApiError::new(
+                ErrorKind::InvalidRequest,
+                format!("realtime frame worker failed: {error}"),
+            )
         })?;
         let frames =
-            frames.map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+            frames.map_err(|error| ApiError::new(ErrorKind::InvalidRequest, error.to_string()))?;
         Ok((encoder, frames))
     }
 
@@ -184,7 +187,7 @@ impl Writer {
         let Some((req_id, kind)) = frame.response else { return Ok(()) };
         let sent = ResponseSent { generation: self.generation, at: self.clock.now(), req_id, kind };
         self.receipts.send(sent).await.map_err(|_| {
-            ApiError::new("realtime write receipt consumer closed").with_retryable(false)
+            ApiError::new(ErrorKind::InvalidRequest, "realtime write receipt consumer closed")
         })
     }
 }

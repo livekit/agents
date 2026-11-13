@@ -16,7 +16,10 @@ pub async fn chat(
 ) -> Result<lk_agents_abi::LlmStream, lk_agents_abi::errors::ProviderError> {
     let options = req.conn_options;
     options.validate().map_err(|error| {
-        lk_agents_abi::errors::ApiError::new(error.to_string()).with_retryable(false)
+        lk_agents_abi::errors::ApiError::new(
+            lk_agents_abi::errors::ErrorKind::InvalidRequest,
+            error.to_string(),
+        )
     })?;
     let (given, options) = crate::retry::owner(llm.retries_itself(), options);
     let attempt = lk_agents_abi::ChatRequest { conn_options: given, ..req.clone() };

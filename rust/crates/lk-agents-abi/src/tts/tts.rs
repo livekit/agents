@@ -407,10 +407,10 @@ pub trait Tts: Send + Sync {
 
 /// Non-retryable: wrap it in Python’s `tts.StreamAdapter` instead.
 pub fn no_duplex_path(label: &str) -> ProviderError {
-    ProviderError::Local(ApiError {
-        retryable: false,
-        ..ApiError::new(format!("{label} has no duplex path; wrap it in StreamAdapter"))
-    })
+    ProviderError::Local(ApiError::new(
+        crate::errors::ErrorKind::InvalidRequest,
+        format!("{label} has no duplex path; wrap it in StreamAdapter"),
+    ))
 }
 
 // Public data contracts. Python behavior remains in its adapters.

@@ -37,7 +37,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -74,22 +74,16 @@ _KEEPALIVE_TIMEOUT = 3.0
 
 
 class WordAlignment(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     words: list[str] = Field(default_factory=list[str])
     word_start_times_seconds: list[float] = Field(default_factory=list[float])
     word_end_times_seconds: list[float] = Field(default_factory=list[float])
 
 
 class TimestampInfo(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     word_alignment: WordAlignment | None = None
 
 
 class TTSResponse(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     type: str
     sample_rate: int = SAMPLE_RATE
     error: str | bool | None = None
@@ -102,8 +96,8 @@ def _decode_response(payload: str) -> TTSResponse:
     try:
         return TTSResponse.model_validate_json(payload)
     except ValidationError as error:
-        raise APIConnectionError(
-            "Baseten returned an invalid synthesis response", retryable=False
+        raise APIError(
+            "Baseten returned an invalid synthesis response", kind="protocol", detail=payload
         ) from error
 
 
@@ -740,8 +734,8 @@ async def register_voice(
         raise RuntimeError(f"voice.add failed: {response.get('message') or response}")
     voice = response.get("voice", response)
     if not isinstance(voice, dict):
-        raise APIConnectionError(
-            "Qwen3 voice.add returned an invalid voice record", retryable=False
+        raise APIError(
+            "Qwen3 voice.add returned an invalid voice record", kind="protocol", detail=str(voice)
         )
     return voice
 

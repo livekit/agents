@@ -22,8 +22,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-from pydantic import BaseModel
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -33,7 +31,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -57,30 +55,27 @@ _MAX_SESSION_DURATION = 50
 # connection, and spending it here stalls the next turn behind a dead one.
 _CANCEL_DRAIN_TIMEOUT = 0.5
 
-# Errors that a retry cannot fix: bad credentials, a bad request, or an account that
-# needs attention. Everything else (synthesis failures, a busy concurrency pool) is
-# worth another attempt.
-_FATAL_ERROR_CODES = frozenset(
-    {
-        "AUTH_FAILED",
-        "INSUFFICIENT_CREDITS",
-        "ORG_DELETED",
-        "ORG_STRIPE_OVERDUE",
-        "ORG_SUSPENDED",
-        "USER_BANNED",
-        "already_initialized",
-        "context_overflow",
-        "init_required",
-        "insufficient_credits",
-        "invalid_message",
-        "invalid_request",
-        "unsupported_encoding",
-        "unsupported_sample_rate",
-        "unsupported_voice",
-        "voice_not_found",
-        "voice_not_live",
-    }
-)
+# What each error code means. An unlisted code (a synthesis failure, a busy concurrency pool) is
+# the provider's failure and worth another attempt.
+_ERROR_KINDS: dict[str, ErrorKind] = {
+    "AUTH_FAILED": "auth",
+    "INSUFFICIENT_CREDITS": "quota",
+    "ORG_DELETED": "auth",
+    "ORG_STRIPE_OVERDUE": "quota",
+    "ORG_SUSPENDED": "auth",
+    "USER_BANNED": "auth",
+    "already_initialized": "invalid_request",
+    "context_overflow": "invalid_request",
+    "init_required": "invalid_request",
+    "insufficient_credits": "quota",
+    "invalid_message": "invalid_request",
+    "invalid_request": "invalid_request",
+    "unsupported_encoding": "invalid_request",
+    "unsupported_sample_rate": "invalid_request",
+    "unsupported_voice": "invalid_request",
+    "voice_not_found": "invalid_request",
+    "voice_not_live": "invalid_request",
+}
 
 
 @dataclass
@@ -190,13 +185,17 @@ class TTS(tts.TTS):
                 init["controls"] = controls
             await ws.send_str(json.dumps(init))
 
-            msg = await ws.receive(timeout=conn_options.read_timeout)
-            if msg.type is not http.WebSocketMessageType.TEXT:
-                raise APIError(f"Bland did not acknowledge init: {msg.type}")
-
-            data = json.loads(msg.data)
-            if data.get("type") != "ready":
-                raise _api_error(data)
+            while True:
+                msg = await ws.receive(timeout=conn_options.read_timeout)
+                if msg.type is http.WebSocketMessageType.CLOSE:
+                    raise ws.close_error("Bland closed before acknowledging init")
+                if msg.type is not http.WebSocketMessageType.TEXT:
+                    continue
+                data = _frame(msg.text)
+                if data.get("type") == "error":
+                    raise _api_error(data)
+                if data.get("type") == "ready":
+                    break
             if (
                 data.get("encoding") != "pcm_s16le"
                 or data.get("sample_rate") != self._opts.sample_rate
@@ -204,7 +203,7 @@ class TTS(tts.TTS):
                 raise APIError(
                     "Bland acknowledged an unexpected audio format",
                     body=data,
-                    retryable=False,
+                    kind="invalid_request",
                 )
         except BaseException:
             try:
@@ -431,7 +430,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected Bland message type %s", msg.type)
                     continue
 
-                data = json.loads(msg.data)
+                data = _frame(msg.text)
                 event = data.get("type")
                 if event == "utterance_end":
                     # A stale terminator can only belong to a turn this stream already
@@ -439,7 +438,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if data.get("context_id") != context_id:
                         continue
                     if (reason := data.get("reason")) != "complete":
-                        raise APIError(f"Bland turn ended as {reason}", body=data)
+                        raise APIError(f"Bland turn ended as {reason}", kind="server", body=data)
                     output_emitter.end_segment()
                     return
                 elif event == "utterance_start":
@@ -461,13 +460,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     continue
 
-                data = json.loads(msg.data)
+                data = _frame(msg.text)
                 if data.get("context_id") != context_id:
                     continue
                 if data.get("type") == "utterance_end":
                     if data.get("reason") in ("cancelled", "complete"):
                         return
-                    raise APIError("Bland did not cancel the turn cleanly", body=data)
+                    raise APIError(
+                        "Bland did not cancel the turn cleanly", kind="server", body=data
+                    )
                 if data.get("type") == "error":
                     # An admission failure creates no turn and emits no terminal, so
                     # there is nothing left to drain to. Returning here would hand the
@@ -564,16 +565,21 @@ def _controls(opts: _TTSOptions) -> dict[str, float]:
     return controls
 
 
-class _ErrorDetails(BaseModel):
-    code: str | int | None = None
-    message: str | None = None
+def _frame(text: str) -> dict[str, Any]:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("Bland sent a malformed message", kind="protocol", detail=text)
+    return data
 
 
-def _api_error(data: object) -> APIError:
-    error = _ErrorDetails.model_validate(data)
+def _api_error(data: dict[str, Any]) -> APIError:
+    code, message = data.get("code"), data.get("message")
     return APIError(
-        f"Bland returned an error ({error.code})" if error.code else "Bland returned an error",
+        f"Bland returned an error ({code})" if code else "Bland returned an error",
         body=data,
-        retryable=error.code not in _FATAL_ERROR_CODES,
-        detail=error.message,
+        kind=_ERROR_KINDS.get(str(code), "server") if code else "invalid_request",
+        detail=None if message is None else str(message),
     )

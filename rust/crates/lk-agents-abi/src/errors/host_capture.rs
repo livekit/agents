@@ -1,4 +1,4 @@
-use super::ApiErrorKind;
+use super::{ApiErrorKind, ErrorKind};
 
 /// Several may be true.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -26,15 +26,16 @@ impl ApiErrorKind {
     }
 }
 
-/// Only inside the taxonomy and only if `.retryable` says so. Without the classes the flag is
-/// trusted.
+/// Only inside the taxonomy, only for a kind worth another attempt, and never when the object
+/// was made final (`retryable` cleared). Without the classes the kind is trusted.
 pub fn host_retryable(
     api_kind: Option<ApiErrorKind>,
     taxonomy_available: bool,
+    kind: Option<ErrorKind>,
     declared: Option<bool>,
 ) -> bool {
     let in_taxonomy = api_kind.is_some() || !taxonomy_available;
-    in_taxonomy && declared.unwrap_or(false)
+    in_taxonomy && kind.is_some_and(ErrorKind::retryable) && declared.unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -57,16 +58,19 @@ mod tests {
         assert_eq!(ApiErrorKind::from_matches(TaxonomyMatches::default(), Some(429)), None);
     }
 
-    // Catches: retrying outside the taxonomy, assuming retryable when unset, or never retrying
-    // when the classes cannot be resolved.
+    // Catches: retrying outside the taxonomy, a missing kind read as retryable, a final kind
+    // retried, an error the core made final retried again, or never retrying when the classes
+    // cannot be resolved.
     #[test]
-    fn retryable_needs_the_taxonomy_and_the_objects_own_word() {
-        assert!(host_retryable(Some(ApiErrorKind::Status), true, Some(true)));
-        assert!(!host_retryable(Some(ApiErrorKind::Status), true, Some(false)));
-        assert!(!host_retryable(Some(ApiErrorKind::Status), true, None), "no attribute is no");
-        assert!(!host_retryable(None, true, Some(true)), "outside the taxonomy is never retried");
-        assert!(host_retryable(None, false, Some(true)), "no classes to check: trust the object");
-        assert!(!host_retryable(None, false, None));
+    fn retryable_needs_the_taxonomy_and_a_transient_kind() {
+        let status = Some(ApiErrorKind::Status);
+        assert!(host_retryable(status, true, Some(ErrorKind::Server), None));
+        assert!(!host_retryable(status, true, Some(ErrorKind::Auth), None));
+        assert!(!host_retryable(status, true, None, None), "no kind is never retried");
+        assert!(!host_retryable(status, true, Some(ErrorKind::Server), Some(false)));
+        assert!(!host_retryable(None, true, Some(ErrorKind::Server), None), "outside the taxonomy");
+        assert!(host_retryable(None, false, Some(ErrorKind::Server), None), "no classes: the kind");
+        assert!(!host_retryable(None, false, None, None));
     }
 }
 
@@ -82,6 +86,10 @@ mod tests {
 pub struct ProviderErrorMetadata {
     #[host(lenient)]
     pub status_code: Option<i64>,
+    /// `APIError.kind`: what failed.
+    #[host(lenient)]
+    pub kind: Option<ErrorKind>,
+    /// `APIError.retryable`: cleared on an error the core made final.
     #[host(lenient)]
     pub retryable: Option<bool>,
     /// `APIError.detail`: the provider's own message.

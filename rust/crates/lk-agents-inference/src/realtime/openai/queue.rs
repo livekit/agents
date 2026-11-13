@@ -1,6 +1,6 @@
 use super::session::Cmd;
 use lk_agents_abi::RealtimeCommand as Command;
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::llm::realtime::{
     Event, GenerateReply, GenerateReplyFailed, PushAudio, RealtimeError, RealtimeModelError, Say,
 };
@@ -70,7 +70,8 @@ impl Delivery {
             Event::AudioDelta(delta) => delta.frame.data.len(),
             _ => 0,
         };
-        let mut result = Err(ApiError::new("realtime event stream ended").with_retryable(false));
+        let mut result =
+            Err(ApiError::new(ErrorKind::InvalidRequest, "realtime event stream ended"));
         let mut event = Some(event);
         // Admission reads the terminal under its lock, so a producer cannot keep filling freshly
         // drained capacity and postpone the required completion indefinitely.
@@ -84,12 +85,15 @@ impl Delivery {
                         retained.checked_add(bytes).filter(|total| *total <= AUDIO_BYTES)
                     })
                     .map_err(|_| {
-                        ApiError::new("realtime event audio limit exceeded").with_retryable(false)
+                        ApiError::new(
+                            ErrorKind::InvalidRequest,
+                            "realtime event audio limit exceeded",
+                        )
                     })?;
                 let queued =
                     QueuedEvent { event: event.take(), bytes, retained: self.retained.clone() };
                 self.events.try_send(queued).map_err(|_| {
-                    ApiError::new("realtime event backlog exceeded").with_retryable(false)
+                    ApiError::new(ErrorKind::InvalidRequest, "realtime event backlog exceeded")
                 })
             })();
         });
@@ -198,7 +202,7 @@ impl Ingress {
     /// reply it asked for fails instead of waiting forever.
     fn stuck(&self, stuck: media_queue::Stuck, reply: Option<String>) {
         let now = self.clock.now();
-        let error = ApiError::new(stuck.to_string()).with_retryable(true);
+        let error = ApiError::new(ErrorKind::Server, stuck.to_string());
         let mut events = vec![Event::Error(RealtimeModelError {
             timestamp: now,
             label: self.label.clone(),
@@ -255,7 +259,7 @@ mod tests {
         delivery
             .send(Event::InputSpeechStarted(lk_agents_abi::llm::realtime::InputSpeechStarted {}))
             .unwrap();
-        delivery.fail(Ts::ZERO, "model", ApiError::new("overloaded"));
+        delivery.fail(Ts::ZERO, "model", ApiError::new(ErrorKind::Server, "overloaded"));
         assert!(matches!(receiver.next().await, Some(Event::InputSpeechStarted(_))));
         assert!(
             delivery

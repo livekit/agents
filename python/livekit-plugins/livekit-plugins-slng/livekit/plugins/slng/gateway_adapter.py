@@ -6,6 +6,8 @@ from typing import cast
 
 from pydantic import JsonValue
 
+from livekit.agents import APIError
+
 _EXTERNAL_TRACKING_ID_RE = re.compile(r"[\x00-\x1f\x7f,]")
 _MODEL_IDENTIFIER_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)+"
@@ -214,9 +216,9 @@ def http_status_from_exception(exc: BaseException | None) -> int | None:
 
 def is_non_retryable_client_error(exc: BaseException | None) -> bool:
     status = http_status_from_exception(exc)
-    return (
-        status is not None and 400 <= status < 500 and status not in _RETRYABLE_CLIENT_STATUS_CODES
-    )
+    if status is not None:
+        return 400 <= status < 500 and status not in _RETRYABLE_CLIENT_STATUS_CODES
+    return isinstance(exc, APIError) and not exc.retryable
 
 
 def is_payload_too_large(exc: BaseException | None) -> bool:

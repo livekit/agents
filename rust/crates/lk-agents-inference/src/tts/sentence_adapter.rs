@@ -2,7 +2,7 @@ use super::pacing::trim_python_whitespace;
 use crate::telemetry;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::TranscriptChunk;
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_adapter::TtsStreamAdapter;
 use lk_agents_abi::tts::types::{
@@ -157,7 +157,7 @@ impl StreamAdapter {
     ) -> Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError> {
         self.budget
             .validate()
-            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+            .map_err(|error| ApiError::new(ErrorKind::InvalidRequest, error.to_string()))?;
         // Unbounded on purpose: text -> TTS may not drop, a lost token mangles speech.
         let (tx, chunks) = mpsc::unbounded_channel();
         let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
@@ -200,9 +200,10 @@ impl AdapterSink {
         match guard.as_ref() {
             // The source was dropped without `aclose`. Nothing will ever read this.
             None => Ok(()),
-            Some(tx) => tx
-                .send(item)
-                .map_err(|_| ApiError::new("stream adapter: the source half is gone").into()),
+            Some(tx) => tx.send(item).map_err(|_| {
+                ApiError::new(ErrorKind::InvalidRequest, "stream adapter: the source half is gone")
+                    .into()
+            }),
         }
     }
 }

@@ -48,11 +48,19 @@ fn item_changes_skip_instructions_and_unchanged_items_and_list_deletions() {
         ItemRow { message_id: Some("m4".into()), ..msg("i4", ChatRole::User, "bye") },
     ];
     let (changed, deleted) = item_changes(&history, &loaded);
-    assert_eq!(
-        changed.iter().map(|w| (w.id.as_str(), w.message_id.as_deref())).collect::<Vec<_>>(),
-        vec![("i2", None), ("i4", Some("m4"))]
-    );
+    let placed = |changed: &[PlacedItem]| {
+        changed
+            .iter()
+            .map(|w| (w.row.id.clone(), w.row.message_id.clone(), w.seq))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(placed(&changed), vec![("i2".into(), None, 1), ("i4".into(), Some("m4".into()), 2)]);
     assert_eq!(deleted, vec!["i3".to_owned()]);
+    // Catches: a row moved in the conversation kept the place it was first written at. A row is
+    // rewritten when its position changes, though its content did not.
+    let moved = vec![msg("i2", ChatRole::Assistant, "hello"), msg("i1", ChatRole::User, "hi")];
+    let (changed, _) = item_changes(&moved, &loaded);
+    assert_eq!(placed(&changed), vec![("i2".into(), None, 0), ("i1".into(), None, 1)]);
     history.clear();
     let (changed, deleted) = item_changes(&history, &loaded);
     assert!(changed.is_empty());
@@ -171,7 +179,7 @@ async fn the_second_partition_waits_while_the_first_holds_and_gets_it_after_the_
     run1.set_usage(usage);
     let request = run1.writes(CommitOptions::default()).unwrap();
     assert_eq!(request.items.len(), 2, "instructions are not stored");
-    assert_eq!(request.items[0].message_id.as_deref(), Some("m1"));
+    assert_eq!(request.items[0].row.message_id.as_deref(), Some("m1"));
     assert_eq!(
         request.events.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(),
         vec!["conversation_item_added", "conversation_item_added", "error", "usage"]

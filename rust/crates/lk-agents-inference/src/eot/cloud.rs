@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::{ApiError, Timeout};
+use lk_agents_abi::errors::{ApiError, ErrorKind, Timeout};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_net::transport::{
@@ -39,7 +39,7 @@ pub struct CloudOptions {
 /// Every socket failure is non-retryable, as in `_connect_ws`: the cloud->local fallback is the
 /// recovery.
 fn socket_error(err: TransportError) -> ApiError {
-    lk_agents_net::transport::connect_error("LiveKit turn detector", err).with_retryable(false)
+    lk_agents_net::transport::connect_error("LiveKit turn detector", err).into_final()
 }
 
 /// `/eot` path (`transports.py:154`).
@@ -174,7 +174,7 @@ impl CloudTransport {
                         Some(&backchannel),
                         f64::from(created.default_backchannel_threshold),
                     )
-                    .map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
+                    .map_err(|e| ApiError::new(ErrorKind::Protocol, e.to_string()))?;
             }
             Some(proto::server_message::Message::SessionClosed(_))
             | Some(proto::server_message::Message::InferenceStarted(_))
@@ -188,8 +188,8 @@ impl CloudTransport {
                     error.message,
                     i64::from(error.code),
                     Some(request_id),
-                    Some(false),
-                ));
+                )
+                .into_final());
             }
             None => self.sink.warn(EotWarning::UnexpectedServerMessage),
         }
@@ -213,7 +213,7 @@ impl CloudTransport {
                 let message = Some("turn detector connection timed out".to_owned());
                 let error =
                     ApiError { timeout: Some(Timeout::Connect), ..ApiError::timeout(message) };
-                return Err(error.with_retryable(false));
+                return Err(error.into_final());
             }
             Ok(Err(e)) => return Err(socket_error(e)),
             Ok(Ok(halves)) => halves,
@@ -240,7 +240,7 @@ impl CloudTransport {
     async fn run_once(&self) -> Result<(), ApiError> {
         let (ws_sink, mut ws_stream) = self.connect().await?;
         let mut send_rx = self.receiver.lock().take().ok_or_else(|| {
-            ApiError::new("the turn detector connection already ran").with_retryable(false)
+            ApiError::new(ErrorKind::InvalidRequest, "the turn detector connection already ran")
         })?;
         self.state.lock().connected = true;
 
@@ -290,8 +290,10 @@ impl CloudTransport {
             match ws_stream.recv().await.map_err(socket_error)? {
                 WsMessage::Binary(data) => {
                     let msg = proto::ServerMessage::decode(data.as_slice()).map_err(|e| {
-                        ApiError::new(format!("malformed turn detector message: {e}"))
-                            .with_retryable(false)
+                        ApiError::new(
+                            ErrorKind::Protocol,
+                            format!("malformed turn detector message: {e}"),
+                        )
                     })?;
                     self.process_message(msg)?;
                 }
@@ -303,8 +305,8 @@ impl CloudTransport {
                         "turn detector connection closed unexpectedly",
                         close_status(ws_stream.close_code()),
                         None,
-                        Some(false),
-                    ));
+                    )
+                    .into_final());
                 }
             }
         }

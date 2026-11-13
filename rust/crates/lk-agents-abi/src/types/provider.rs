@@ -63,8 +63,7 @@ pub trait ProviderEvents: Send + Sync {
 /// One host provider request, its attempts run by the native executor.
 ///
 /// The host implements one attempt; the executor decides when an attempt may start, runs it,
-/// cancels it when a deadline passes, and retries it under `conn_options`
-/// (docs/models.md "Provider attempts").
+/// cancels it when a deadline passes, and retries it under `conn_options`.
 #[crate::host(proxy(host = "livekit.agents._bindings.AttemptHost"))]
 pub trait AttemptHost: Send + Sync {
     /// Run one attempt to completion: the provider's `_run`. Its value is the request's result

@@ -470,11 +470,15 @@ class SpeechStream(stt.RecognizeStream):
             try:
                 content = json.loads(msg.data)
             except json.JSONDecodeError as e:
-                raise APIConnectionError(
-                    "Soniox STT sent a malformed message", retryable=False
+                raise APIError(
+                    "Soniox STT sent a malformed message", kind="protocol", detail=str(msg.data)
                 ) from e
+            if not isinstance(content, dict):
+                raise APIError(
+                    "Soniox STT sent a malformed message", kind="protocol", detail=str(msg.data)
+                )
             has_error = bool(content.get("error_code") or content.get("error_message"))
-            tokens = content.get("tokens", []) if has_error else content["tokens"]
+            tokens = content.get("tokens") or []
 
             non_final = _TokenAccumulator()
             non_final_original = _TokenAccumulator()

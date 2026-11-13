@@ -109,17 +109,17 @@ def _decode_wav(data: bytes, sample_rate: int) -> bytes:
             ):
                 raise APIError(
                     "Microsoft AI TTS requires PCM16 mono WAV at the configured sample rate",
-                    retryable=False,
+                    kind="invalid_request",
                 )
             expected_bytes = audio.getnframes() * 2
             pcm = audio.readframes(audio.getnframes())
             if not expected_bytes or len(pcm) != expected_bytes:
                 raise APIError(
-                    "Microsoft AI TTS returned empty or truncated audio", retryable=False
+                    "Microsoft AI TTS returned empty or truncated audio", kind="protocol"
                 )
             return pcm
     except (wave.Error, EOFError):
-        raise APIError("Microsoft AI TTS returned invalid WAV audio", retryable=False) from None
+        raise APIError("Microsoft AI TTS returned invalid WAV audio", kind="protocol") from None
 
 
 class TTS(tts.TTS):
@@ -288,19 +288,24 @@ class ChunkedStream(tts.ChunkedStream):
                 if response.status != 200:
                     raise status_error("TTS", response.status)
                 if response.content_type not in ("audio/wav", "audio/x-wav", "audio/wave"):
-                    raise APIError("Microsoft AI TTS expected a WAV response", retryable=False)
+                    raise APIError(
+                        "Microsoft AI TTS expected a WAV response",
+                        kind="protocol",
+                        detail=response.content_type,
+                    )
                 limit = self._max_audio_bytes
                 content_length = response.headers.get("Content-Length")
                 if content_length is not None and int(content_length) > limit:
                     raise APIError(
-                        "Microsoft AI TTS response exceeds max_audio_bytes", retryable=False
+                        "Microsoft AI TTS response exceeds max_audio_bytes", kind="invalid_request"
                     )
                 data = bytearray()
                 async for chunk in response.iter_bytes():
                     data.extend(chunk)
                     if len(data) > limit:
                         raise APIError(
-                            "Microsoft AI TTS response exceeds max_audio_bytes", retryable=False
+                            "Microsoft AI TTS response exceeds max_audio_bytes",
+                            kind="invalid_request",
                         )
                 pcm = _decode_wav(bytes(data), self._tts.sample_rate)
         except TimeoutError:

@@ -23,7 +23,7 @@ pub enum ProcessError {
 /// A client that cannot get its process handles fails for good, as a non-retryable `APIError`.
 impl From<ProcessError> for lk_agents_abi::errors::ApiError {
     fn from(error: ProcessError) -> Self {
-        Self::new(error.to_string()).with_retryable(false)
+        Self::new(lk_agents_abi::errors::ErrorKind::InvalidRequest, error.to_string())
     }
 }
 

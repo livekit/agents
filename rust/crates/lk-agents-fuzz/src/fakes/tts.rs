@@ -172,6 +172,7 @@ impl Synthesis {
                 if let Some(sender) = state.sender.take() {
                     return sender
                         .send(Err(ProviderError::Local(ApiError::new(
+                            lk_agents_abi::errors::ErrorKind::Server,
                             "injected synthesis failure",
                         ))))
                         .is_ok();
@@ -257,7 +258,10 @@ impl Tts for FakeTts {
     > {
         Box::pin(async move {
             if self.registry.voice_down() {
-                return Err(ProviderError::Local(ApiError::new("voice provider is down")));
+                return Err(ProviderError::Local(ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Server,
+                    "voice provider is down",
+                )));
             }
             if let Some(fault) = self.registry.hazard(Site::TtsOpen) {
                 return strike(fault, Site::TtsOpen).await;
@@ -343,6 +347,7 @@ impl StreamInput<SpeechChunk> for InputSide {
         if state.held {
             if state.queued.len() >= HELD_INPUT {
                 return Err(ProviderError::Local(ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Server,
                     "the voice is not taking its input",
                 )));
             }

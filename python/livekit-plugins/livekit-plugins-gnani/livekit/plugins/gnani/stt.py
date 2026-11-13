@@ -60,6 +60,17 @@ STREAM_SUPPORTED_SAMPLE_RATES = (
 STREAM_CHUNK_BYTES = 1024
 
 
+def _decode(raw: str | bytes) -> dict[str, Any]:
+    """A provider message, which must be a JSON object."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("Gnani STT sent a malformed message", kind="protocol", detail=str(raw))
+    return data
+
+
 @dataclass
 class GnaniSTTOptions:
     api_key: str
@@ -292,7 +303,7 @@ class SpeechStream(stt.RecognizeStream):
             if connected.type is http.WebSocketMessageType.CLOSE:
                 raise ws.close_error("Gnani STT WebSocket closed before it was ready")
             if connected.type is not http.WebSocketMessageType.TEXT or (
-                json.loads(connected.text).get("type") != "connected"
+                _decode(connected.text).get("type") != "connected"
             ):
                 logger.warning("Unexpected first message from Gnani STT")
 
@@ -335,7 +346,7 @@ class SpeechStream(stt.RecognizeStream):
             if msg.type is not http.WebSocketMessageType.TEXT:
                 continue
 
-            data = json.loads(msg.text)
+            data = _decode(msg.text)
             msg_type = data.get("type", "")
 
             if msg_type == "transcript":
@@ -375,6 +386,11 @@ class SpeechStream(stt.RecognizeStream):
                 pass
 
             elif msg_type == "error":
-                raise APIError("Gnani STT stream error", body=data, detail=data.get("message"))
+                raise APIError(
+                    "Gnani STT stream error",
+                    kind="invalid_request",
+                    body=data,
+                    detail=data.get("message"),
+                )
         if ws.close_code != 1000:
             raise ws.close_error("Gnani STT WebSocket closed unexpectedly")

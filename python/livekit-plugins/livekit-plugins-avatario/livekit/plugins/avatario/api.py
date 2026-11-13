@@ -122,11 +122,12 @@ class AvatarioAPI:
                 conn_options=self._conn_options,
             ) as response:
                 await response.raise_for_status()
+                text = await response.text()
                 try:
-                    return _JSON_OBJECT.validate_python(await response.json())
+                    return _JSON_OBJECT.validate_json(text)
                 except ValueError as exc:
                     raise APIError(
-                        "Avatario returned an invalid response", retryable=False
+                        "Avatario returned an invalid response", kind="protocol", detail=text
                     ) from exc
 
         return await http.retry_request(request, conn_options=self._conn_options)

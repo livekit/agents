@@ -1,6 +1,6 @@
 use super::TtsOptions;
 use lk_agents_abi::TranscriptChunk;
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::inference::models::InferenceProvider;
 pub use lk_agents_abi::inference::tts_wire::{ErrorCode, FallbackCause, FallbackType};
 use lk_agents_abi::tts::markup::Provider as MarkupProvider;
@@ -106,9 +106,7 @@ struct FallbackEntry<'a> {
 }
 
 fn invalid_options(_: serde_json::Error) -> ApiError {
-    let mut error = ApiError::new("Invalid LiveKit Inference TTS provider options");
-    error.retryable = false;
-    error
+    ApiError::new(ErrorKind::InvalidRequest, "Invalid LiveKit Inference TTS provider options")
 }
 
 pub fn session_create(opts: &TtsOptions) -> Result<Value, ApiError> {
@@ -197,7 +195,10 @@ pub fn decode(text: &str, provider: Option<InferenceProvider>) -> Option<Incomin
         return Some(Incoming::Malformed { detail: "TTS gateway frame exceeds its limit".into() });
     }
     let envelope: MessageType = serde_json::from_str(text).ok()?;
-    envelope.kind?;
+    if envelope.kind.is_none() {
+        // a frame without a type is a control frame this client does not know
+        return Some(Incoming::Unknown { session_id: None });
+    }
     let frame: ServerFrame = match serde_json::from_str(text) {
         Ok(frame) => frame,
         Err(_) => {
@@ -257,8 +258,11 @@ enum ServerMessage {
     #[serde(rename = "fallback_activated")]
     FallbackActivated {
         fallback_type: FallbackType,
+        #[serde(default)]
         provider: String,
+        #[serde(default)]
         model: String,
+        #[serde(default)]
         voice: String,
         cause: FallbackCause,
     },

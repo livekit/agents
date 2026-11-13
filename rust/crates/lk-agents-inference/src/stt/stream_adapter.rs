@@ -401,9 +401,11 @@ mod tests {
         ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
             Box::pin(async move {
                 if self.requires_prewarm && !self.loaded.load(std::sync::atomic::Ordering::SeqCst) {
-                    return Err(lk_agents_abi::errors::ApiError::new("model is not loaded")
-                        .with_retryable(false)
-                        .into());
+                    return Err(lk_agents_abi::errors::ApiError::new(
+                        lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                        "model is not loaded",
+                    )
+                    .into());
                 }
                 let text = self.replies.lock().pop_front().unwrap_or(Ok(""))?;
                 let mut ev = SpeechEvent::new(SpeechEventType::FinalTranscript);
@@ -468,7 +470,7 @@ mod tests {
         use lk_agents_abi::errors::ApiError;
         let stt = Arc::new(BatchStt::new([
             Ok("first utterance"),
-            Err(ApiError::status("recognition refused", 401, None, None)),
+            Err(ApiError::status("recognition refused", 401, None)),
         ]));
         let vad = Arc::new(ScriptedVad(vec![
             VadEventType::StartOfSpeech,

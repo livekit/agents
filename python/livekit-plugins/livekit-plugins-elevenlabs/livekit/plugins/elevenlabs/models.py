@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 TTSModels = Literal[
     "eleven_monolingual_v1",
@@ -60,8 +60,6 @@ STTRealtimeSampleRates = Literal[
 
 
 class STTWord(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     text: str = ""
     start: float = 0.0
     end: float = 0.0
@@ -71,28 +69,22 @@ class STTWord(BaseModel):
 
 
 class STTResponse(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     message_type: str = ""
     text: str = ""
     language_code: str | None = None
     words: list[STTWord] | None = None
-    session_id: str = "unknown"
-    message: str = "Unknown error"
-    details: str = ""
+    session_id: object = "unknown"
+    message: object = "Unknown error"
+    details: object = ""
 
 
 class STTBatchResponse(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     text: str
     language_code: str | None = None
     words: list[STTWord] | None = None
 
 
 class TTSAlignment(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     chars: list[str] | None = None
     starts_ms: list[float] | None = Field(
         default=None,
@@ -107,14 +99,12 @@ class TTSAlignment(BaseModel):
 
 
 class TTSFrame(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     # the multi-stream API spells its keys in camelCase, text-to-dialogue in snake_case
     context_id: str | None = Field(
         default=None, validation_alias=AliasChoices("contextId", "context_id")
     )
     audio: str | None = None
-    error: str | None = None
+    error: object = None
     is_final: bool = Field(default=False, validation_alias=AliasChoices("isFinal", "is_final"))
     alignment: TTSAlignment | None = None
     normalized_alignment: TTSAlignment | None = Field(default=None, alias="normalizedAlignment")

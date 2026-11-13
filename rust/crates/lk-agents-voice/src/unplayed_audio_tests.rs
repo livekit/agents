@@ -94,3 +94,30 @@ fn a_finished_segment_is_forgotten() {
     });
     assert_eq!(audio.join(at(2_000)), Vec::new());
 }
+
+// Catches: seed 107's hole. A sink that reports progress, its segment started long ago but held
+// (nothing to play yet, or paused), taken as having played it: the recorder attached then got
+// nothing, and the progress reported later placed silence where the person heard the audio.
+#[test]
+fn a_reporting_sink_with_no_report_yet_has_played_nothing() {
+    let mut audio = playing(None);
+    let earlier = PlaybackSegment { attachment: 1, segment: 0 };
+    audio.observe(&PlaybackEvent::Progressed(PlaybackProgressed {
+        segment: earlier,
+        started_at: at(0),
+        offset: ms(0),
+        duration: ms(100),
+    }));
+    let replay = audio.join(at(30_000));
+    let [Replay::Started(started), Replay::Capture(first), Replay::Capture(second)] =
+        replay.as_slice()
+    else {
+        panic!("{replay:?}")
+    };
+    assert_eq!(
+        (*started, first.samples_per_channel, second.samples_per_channel),
+        (at(1_000), 300, 200)
+    );
+    // its first report is told as it came: the recorder places the audio where it played
+    assert_eq!(audio.told(&progressed(30_100, 0, 100)), Some(progressed(30_100, 0, 100)));
+}

@@ -78,5 +78,5 @@ async def test_malformed_socket_message_fails_pending_synthesis_without_waiting_
         async with asyncio.timeout(1):
             await _synthesize(provider)
 
-    assert failure.value.retryable is False
+    assert failure.value.kind == "protocol"
     assert isinstance(failure.value.__cause__, ValidationError)

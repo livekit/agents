@@ -13,7 +13,7 @@ from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechError,
 )
 
-from livekit.agents import APIStatusError, tts
+from livekit.agents import APIError, tts
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from livekit.plugins.speechify import tts as sfy_tts
 
@@ -142,7 +142,7 @@ async def test_stream_predicates_speech_error() -> None:
     stream.push_text("Hello world.")
     stream.end_input()
 
-    with pytest.raises(APIStatusError) as raised:
+    with pytest.raises(APIError) as raised:
         await _collect(stream)
     assert raised.value.detail == "boom"
 

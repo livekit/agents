@@ -137,7 +137,7 @@ pub trait ContextActivation: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn statements(&self) -> Vec<AppStatement>;
 
-    /// Application SQL (docs/context.md#application-records-and-transactions): `independent`
+    /// Application SQL: `independent`
     /// commits when the transaction ends; otherwise it joins the managed turn's commit, or
     /// commits like an independent one outside a managed turn.
     #[host(await)]
@@ -192,8 +192,7 @@ pub trait AppTransaction: Send + Sync + Sized + 'static {
     fn rollback(&self);
 }
 
-/// `storage.Transaction`: application SQL in one transaction
-/// (docs/context.md#application-records-and-transactions).
+/// `storage.Transaction`: application SQL in one transaction.
 ///
 /// Reads observe committed records. Writes are staged and applied together when the
 /// transaction ends, so read before the first write: a read after one is refused.

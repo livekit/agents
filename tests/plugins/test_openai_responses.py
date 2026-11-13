@@ -19,7 +19,6 @@ from livekit.agents import (
     NOT_GIVEN,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     NotGivenOr,
     http,
     llm,
@@ -252,16 +251,16 @@ async def test_an_incomplete_response_fails_once_and_is_not_continued(
         model = _llm(base_url, transport)
         retrying = APIConnectOptions(max_retry=2, retry_interval=0)
         try:
-            with pytest.raises(APIStatusError) as caught:
+            with pytest.raises(APIError) as caught:
                 await _reply(model, _hi(), retrying)
             followup = _hi()
             followup.add_message(role="user", content="follow up")
-            with pytest.raises(APIStatusError):
+            with pytest.raises(APIError):
                 await _reply(model, followup)
         finally:
             await model.aclose()
 
-    assert caught.value.retryable is False
+    assert caught.value.kind == "invalid_request"
     assert (reason or "reason unavailable") in caught.value.message
     assert len(peer.requests) == 2
     assert "previous_response_id" not in peer.requests[1]

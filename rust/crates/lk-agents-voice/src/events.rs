@@ -57,11 +57,12 @@ impl SessionEvent {
 fn journal_error(
     error: &lk_agents_abi::errors::ProviderError,
 ) -> lk_agents_abi::errors::ProviderError {
-    use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError};
+    use lk_agents_abi::errors::{ApiError, ApiErrorKind, ErrorKind, ProviderError};
     match error {
-        ProviderError::Host { error, api_kind, retryable, status_code, said } => {
+        ProviderError::Host { error, api_kind, error_kind, retryable, status_code, said } => {
             ProviderError::Local(ApiError {
                 kind: api_kind.unwrap_or(ApiErrorKind::Api),
+                error_kind: error_kind.unwrap_or(ErrorKind::Server),
                 message: error.to_string(),
                 retryable: *retryable,
                 status_code: *status_code,

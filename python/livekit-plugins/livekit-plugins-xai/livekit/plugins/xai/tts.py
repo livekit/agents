@@ -20,12 +20,13 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
+from typing import Any
 from urllib.parse import urlencode
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     APITimeoutError,
     http,
     tokenize,
@@ -43,6 +44,17 @@ NUM_CHANNELS = 1
 
 XAI_WEBSOCKET_URL = "wss://api.x.ai/v1/tts"
 DEFAULT_VOICE = "ara"
+
+
+def _decode(raw: str | bytes) -> dict[str, Any]:
+    """A provider message, which must be a JSON object."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("xAI sent a malformed message", kind="protocol", detail=str(raw))
+    return data
 
 
 @dataclass
@@ -327,7 +339,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("Unexpected xAI message type %s", msg.type)
                     continue
 
-                data = json.loads(msg.data)
+                data = _decode(msg.data)
                 msg_type = data.get("type")
                 if msg_type == "audio.delta":
                     read_deadline.audio_received()
@@ -337,9 +349,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.end_segment()
                         break
                 elif msg_type == "error":
-                    raise APIStatusError(
+                    raise APIError(
                         "xAI TTS error",
-                        status_code=-1,
+                        kind="invalid_request",
                         body=str(data),
                         detail=data.get("message"),
                     )

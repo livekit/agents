@@ -25,6 +25,8 @@ from dataclasses import dataclass, field, replace
 from functools import cached_property
 from typing import Any, Literal, cast
 
+from pydantic import ValidationError
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -464,7 +466,9 @@ class ChunkedStream(tts.ChunkedStream):
 
                 if not resp.content_type.startswith("audio/"):
                     content = await resp.text()
-                    raise APIError(message="11labs returned non-audio data", body=content)
+                    raise APIError(
+                        "11labs returned non-audio data", kind="protocol", detail=content
+                    )
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -902,7 +906,12 @@ class _Connection:
                     logger.warning("unexpected message type %s", msg.type)
                     continue
 
-                data = TTSFrame.model_validate_json(msg.data)
+                try:
+                    data = TTSFrame.model_validate_json(msg.data)
+                except ValidationError:
+                    raise APIError(
+                        f"{self._LABEL} sent a malformed message", kind="protocol", detail=msg.text
+                    ) from None
                 # ElevenLabs currently sends snake_case context IDs on the websocket API,
                 # while older responses and some examples use camelCase.
                 context_id = data.context_id
@@ -912,7 +921,11 @@ class _Connection:
                     if ctx and not ctx.waiter.done():
                         # its stream reports it
                         ctx.waiter.set_exception(
-                            APIError(f"{self._LABEL} returned an error", detail=error)
+                            APIError(
+                                f"{self._LABEL} returned an error",
+                                kind="invalid_request",
+                                detail=str(error),
+                            )
                         )
                     else:
                         logger.error(

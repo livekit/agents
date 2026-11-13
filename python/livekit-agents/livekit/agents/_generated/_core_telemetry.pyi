@@ -95,7 +95,7 @@ async def _core_telemetry_shutdown() -> None:
     """The process-exit flush: every destination's queue, bounded."""
 
 class _core_LoopWatch:
-    """One asyncio loop's stall watch (docs/internals/telemetry.md "Event-loop stalls"): the loop's
+    """One asyncio loop's stall watch: the loop's
     own timer beats it every 20 ms; the process's detector records a beat 100 ms old as a stall,
     with the loop thread's stack where it can be read. Beats take no lock.
     """

@@ -5,7 +5,7 @@ use std::time::Duration;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::Clock;
 use lk_agents_abi::RealtimeCommand as Command;
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, ChatContext};
 use lk_agents_abi::{Spawner, SpawnerExt};
@@ -699,7 +699,7 @@ impl Pump {
                 result = &mut writer => return result.map(|()| Outcome::Closed),
                 () = self.shared.closing.cancelled() => { self.close().await; return Ok(Outcome::Closed); },
                 reserved = outgoing.reserve(), if !writable => {
-                    permit = Some(reserved.map_err(|_| ApiError::new("realtime writer closed").with_retryable(false))?);
+                    permit = Some(reserved.map_err(|_| ApiError::new(ErrorKind::InvalidRequest, "realtime writer closed"))?);
                     continue;
                 },
                 () = async { match sleep { Some(s) => s.await, None => std::future::pending().await } }, if writable => {
@@ -763,9 +763,10 @@ impl Pump {
         match msg {
             Ok(WsMessage::Text(text)) => {
                 if text.len() > MAX_MESSAGE_BYTES {
-                    return Err(
-                        ApiError::new("realtime message exceeds 16 MiB").with_retryable(false)
-                    );
+                    return Err(ApiError::new(
+                        ErrorKind::Protocol,
+                        "realtime message exceeds 16 MiB",
+                    ));
                 }
                 Ok(Some(decode_off_thread(text, self.shape.clone(), self.clock.wall())))
             }
@@ -902,14 +903,17 @@ fn decode_off_thread(
     Box::pin(async move {
         let worker = lk_agents_media::pool::media_pool()
             .try_spawn(lk_agents_media::pool::JobClass::Decoder, move || {
-                wire::decode_text(&text, &shape, created_at)
+                wire::decode_text(&text, &shape, created_at).map_err(|error| (error, text))
             })
-            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+            .map_err(|error| ApiError::new(ErrorKind::InvalidRequest, error.to_string()))?;
         let decoded = worker.await.map_err(|error| {
-            ApiError::new(format!("realtime decoder worker failed: {error}")).with_retryable(false)
+            ApiError::new(
+                ErrorKind::InvalidRequest,
+                format!("realtime decoder worker failed: {error}"),
+            )
         })?;
-        decoded.map_err(|error| {
-            let mut api = ApiError::new(error.to_string()).with_retryable(false);
+        decoded.map_err(|(error, text)| {
+            let mut api = ApiError::protocol(error.to_string(), text);
             api.request_id = error.event_id;
             api
         })

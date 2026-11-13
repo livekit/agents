@@ -37,6 +37,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -659,7 +660,7 @@ class STT(stt.STT):
                     alternatives=alternatives,
                 )
 
-        except (APIStatusError, APIConnectionError, APITimeoutError):
+        except APIError:
             # Preserve provider-originated status/body/retry metadata.
             raise
         except Exception as e:
@@ -1089,15 +1090,15 @@ class SpeechStream(stt.RecognizeStream):
         self._server_request_id = None
         try:
             await self._run_connection()
-        except (APIStatusError, APIConnectionError, APITimeoutError):
+        except APIError:
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED
-            # Preserve provider-originated status/body/retry metadata.
+            # Preserve provider-originated status/body/kind metadata.
             raise
         except Exception as e:
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED
-            raise APIStatusError(f"STT WebSocket session failed: {e}") from e
+            raise APIConnectionError(f"STT WebSocket session failed: {e}") from e
 
     async def _run_connection(self) -> None:
         """Run a single WebSocket connection attempt."""
@@ -1278,12 +1279,13 @@ class SpeechStream(stt.RecognizeStream):
                     await self._handle_message(STT_MESSAGE.validate_json(msg.data))
                 except ValidationError as e:
                     if any(error["type"] != "json_invalid" for error in e.errors()):
-                        raise APIConnectionError(
-                            "Sarvam STT sent an invalid event", retryable=False
+                        raise APIError(
+                            "Sarvam STT sent an invalid event", kind="protocol", detail=msg.text
                         ) from e
                     if looks_like_error_text(msg.data):
-                        raise APIStatusError(
+                        raise APIError(
                             "Sarvam STT sent a non-JSON error",
+                            kind="invalid_request",
                             body={"raw_message": msg.data},
                             detail=msg.text,
                         ) from e
@@ -1296,12 +1298,13 @@ class SpeechStream(stt.RecognizeStream):
                         },
                     )
                     continue  # Skip malformed message
-                except (APIStatusError, APIConnectionError):
+                except APIError:
                     # Let API errors propagate without re-wrapping
                     raise
                 except Exception as e:
-                    raise APIStatusError(
+                    raise APIError(
                         "Sarvam STT message processing error",
+                        kind="protocol",
                         body={"raw_message": msg.data},
                         detail=msg.text,
                     ) from e
@@ -1364,11 +1367,13 @@ class SpeechStream(stt.RecognizeStream):
                 f"Missing required field in message: {e}",
                 extra={**self._build_log_context(), "lk.pii.data": data},
             )
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             # Let API errors propagate without re-wrapping
             raise
         except Exception as e:
-            raise APIStatusError(f"Message processing error: {e}") from e
+            raise APIError(
+                "Sarvam STT message processing error", kind="protocol", detail=str(e)
+            ) from e
 
     async def _handle_transcript_data(self, data: TranscriptMessage) -> None:
         """Handle transcription result messages."""
@@ -1487,9 +1492,17 @@ class SpeechStream(stt.RecognizeStream):
         raw = message.model_dump(mode="json", exclude_unset=True)
         raw_error_message = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
         self._maybe_set_server_request_id(message_request_id(message))
-        status_code = int(error_code) if isinstance(error_code, int) else -1
+        status_code = int(error_code) if isinstance(error_code, int) else None
         if isinstance(error_code, str) and error_code.isdigit():
             status_code = int(error_code)
+        if status_code is None:
+            # an error frame without a status refused the request
+            raise APIError(
+                "Sarvam streaming API error",
+                kind="invalid_request",
+                body=raw,
+                detail=raw_error_message,
+            )
         raise APIStatusError(
             "Sarvam streaming API error",
             status_code=status_code,

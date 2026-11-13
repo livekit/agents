@@ -63,8 +63,8 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
     let (items, delete_items) = item_changes(w.history, w.loaded);
     let concurrent = w.access == PartitionAccess::Concurrent;
     if concurrent {
-        let edited = items.iter().find(|i| w.loaded.iter().any(|(id, _)| *id == i.id));
-        if let Some(id) = edited.map(|i| &i.id).or(delete_items.first()) {
+        let edited = items.iter().find(|i| w.loaded.iter().any(|(id, _)| *id == i.row.id));
+        if let Some(id) = edited.map(|i| &i.row.id).or(delete_items.first()) {
             return Err(StorageError::Invalid(format!(
                 "a concurrent run only appends to the history; it edited or deleted item {id}"
             )));
@@ -81,12 +81,14 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
         };
         events.push(EventWrite::new(w.now_ms, JournalEvent::RunStarted(started)));
     }
-    events.extend(items.iter().filter(|i| !w.loaded.iter().any(|(id, _)| *id == i.id)).map(|i| {
-        EventWrite::new(
-            w.now_ms,
-            JournalEvent::ConversationItemAdded { item: Box::new(i.payload.clone()) },
-        )
-    }));
+    events.extend(items.iter().filter(|i| !w.loaded.iter().any(|(id, _)| *id == i.row.id)).map(
+        |i| {
+            EventWrite::new(
+                w.now_ms,
+                JournalEvent::ConversationItemAdded { item: Box::new(i.row.payload.clone()) },
+            )
+        },
+    ));
     events.extend(w.events.iter().cloned());
     if w.usage.requests != 0 || w.usage.tool_calls != 0 {
         events.push(EventWrite::new(w.now_ms, JournalEvent::Usage(w.usage.clone())));
@@ -115,18 +117,31 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
     })
 }
 
-/// The stored items that differ from what was `loaded`, and the loaded ids no longer in the
-/// history, in loaded order.
+/// A history row as written: the item and its position in the conversation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedItem {
+    /// The row's place in the history its writer gave, from 0: the thread reads rows back in
+    /// this order, never in the order they were written.
+    pub seq: i64,
+    pub row: ItemRow,
+}
+
+/// The stored items that differ from what was `loaded`, in content or in position, and the
+/// loaded ids no longer in the history, in loaded order. A row's position is its place among the
+/// stored rows of `history`, which is the whole conversation in its writer's order.
 pub fn item_changes(
     history: &[ItemRow],
     loaded: &[(String, ChatItem)],
-) -> (Vec<ItemRow>, Vec<String>) {
-    let by_id: BTreeMap<&str, &ChatItem> = loaded.iter().map(|(id, i)| (id.as_str(), i)).collect();
+) -> (Vec<PlacedItem>, Vec<String>) {
+    let by_id: BTreeMap<&str, (usize, &ChatItem)> =
+        loaded.iter().enumerate().map(|(at, (id, i))| (id.as_str(), (at, i))).collect();
     let stored: Vec<&ItemRow> = history.iter().filter(|i| i.stored()).collect();
-    let changed = stored
-        .iter()
-        .filter(|i| by_id.get(i.id.as_str()) != Some(&&i.payload))
-        .map(|i| (*i).clone())
+    let changed = (stored.iter().enumerate())
+        .filter(|(at, i)| by_id.get(i.id.as_str()) != Some(&(*at, &i.payload)))
+        .map(|(at, i)| PlacedItem {
+            seq: i64::try_from(at).expect("a history fits i64"),
+            row: (*i).clone(),
+        })
         .collect();
     let kept: std::collections::BTreeSet<&str> = stored.iter().map(|i| i.id.as_str()).collect();
     let deleted =

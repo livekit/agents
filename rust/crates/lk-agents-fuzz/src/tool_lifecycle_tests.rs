@@ -440,6 +440,7 @@ mod interrupted_during_tools_frees_the_floor {
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, UserText};
     use lk_agents_fuzz::record::{Kind, StorageOperation, StorageStep};
     use lk_agents_voice::events::SessionEvent;
+    use lk_agents_voice::trace::{SpeechStep, Step};
 
     /// The reply calls `lookup`, which hangs; the person interrupts at 300 ms and asks again.
     fn interrupted_during_lookup() -> Vec<Input> {
@@ -625,31 +626,21 @@ mod interrupted_during_tools_frees_the_floor {
             .collect()
     }
 
-    /// Each turn ends once, and a later turn's end is asked for only after every earlier one
-    /// was answered.
-    fn assert_in_turn_order(run: &Run) {
-        let order = run.record.speech_order();
+    /// Each of the two turns ends once, and each end asked for is answered.
+    fn assert_each_turn_saved_once(run: &Run) {
         let turns = turns(run);
-        let turn = |speech: &u64| order[speech];
         let mut asked: Vec<u64> = turns.iter().filter(|t| !t.2).map(|t| t.0).collect();
-        let answered: Vec<u64> = turns.iter().filter(|t| t.2).map(|t| t.0).collect();
+        let mut answered: Vec<u64> = turns.iter().filter(|t| t.2).map(|t| t.0).collect();
         assert_eq!(asked.len(), 2, "each turn ends once: {turns:?}");
-        assert!(
-            asked.windows(2).all(|w| turn(&w[0]) < turn(&w[1])),
-            "out of turn order: {turns:?}"
-        );
-        asked.sort_by_key(turn);
-        let first_answer = turns.iter().position(|t| t.2 && t.0 == asked[0]);
-        let second_ask = turns.iter().position(|t| !t.2 && t.0 == asked[1]);
-        assert!(first_answer < second_ask, "the second turn did not wait: {turns:?}");
+        asked.sort_unstable();
+        answered.sort_unstable();
         assert_eq!(answered, asked, "every end answered: {turns:?}");
     }
 
     // Catches: on a call with a thread, the interrupted reply held the person until its tool ended,
-    // or, once freed, its turn committed after the next one (out of order) or never released its
-    // hold on the partition.
+    // or, once freed, its turn never saved or never released its hold on the partition.
     #[test]
-    fn on_a_thread_the_floor_is_free_and_turns_commit_in_order() {
+    fn on_a_thread_the_floor_is_free_and_each_turn_is_saved() {
         let mut exercised = 0;
         for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
             for schedule in 0..8 {
@@ -679,7 +670,7 @@ mod interrupted_during_tools_frees_the_floor {
                     "{policy:?} {schedule}: {:?}",
                     turns(&run)
                 );
-                assert_in_turn_order(&run);
+                assert_each_turn_saved_once(&run);
                 assert_eq!(storage_failures(&run), Vec::<String>::new(), "{policy:?} {schedule}");
             }
         }
@@ -706,7 +697,7 @@ mod interrupted_during_tools_frees_the_floor {
                     "{policy:?} {schedule}: speeches done at {done:?} ms"
                 );
                 assert_eq!(outputs(&run).len(), 1, "{policy:?} {schedule}: {:?}", outputs(&run));
-                assert_in_turn_order(&run);
+                assert_each_turn_saved_once(&run);
                 let order = run.record.speech_order();
                 let second = turns(&run).into_iter().filter(|t| !t.2).max_by_key(|t| order[&t.0]);
                 assert!(
@@ -778,6 +769,58 @@ mod interrupted_during_tools_frees_the_floor {
                 assert_eq!(order, Vec::<String>::new(), "{policy:?} {schedule}");
             }
         }
+    }
+
+    // Catches (seed 4, BasicPos): a turn cut while its tool ran, after some of its words were
+    // heard. A checkpoint taken once it was cut dropped the call it had already written (the cut
+    // reply's run was no longer read) and wrote the heard words in its place, so the thread kept
+    // the words before the call the session holds ahead of them.
+    #[test]
+    fn on_a_thread_a_cut_turn_keeps_its_call_ahead_of_its_words() {
+        let inputs = [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmText {
+                chat: Ref::new(0),
+                text: AgentText("Let me look that up for you, one moment please.".into()),
+            },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "lookup".into(),
+                args: ToolArgs("{}".into()),
+            },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(1_500) },
+            Input::Interrupt { force: true, wait: false },
+            Input::Advance { ms: Millis(1_000) },
+            Input::ToolAnswered {
+                tool: Ref::new(0),
+                answer: ToolAnswer::Value,
+                text: AgentText("found".into()),
+            },
+            Input::Advance { ms: Millis(6_000) },
+        ];
+        let mut exercised = 0;
+        for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
+            for schedule in 0..8 {
+                let setup = Setup {
+                    tools: vec!["lookup".into()],
+                    storage: Some(StorageSetup::default()),
+                    ..Setup::default()
+                };
+                let run = run_setup(&setup, &inputs, &closed(), schedule, policy);
+                let cut = run.record.journal().iter().any(|(_, step)| {
+                    matches!(step, Step::Speech(SpeechStep::ReleasedToTools { .. }))
+                });
+                if !cut {
+                    continue;
+                }
+                exercised += 1;
+                let order = failures_of(&run, "storage_saves_the_conversation_in_order");
+                assert_eq!(order, Vec::<String>::new(), "{policy:?} {schedule}");
+            }
+        }
+        assert!(exercised >= 12, "the scenario ran in only {exercised} of 24 runs");
     }
 
     // Catches: the cut turn's late output saved after the next turn the person took meanwhile,

@@ -626,7 +626,7 @@ class RealtimeMessage(ProviderMessage[RequestMetadata]):
     end_s: _OptionalNumber = None
     is_fatal: bool | None = False
     message: str | None = None
-    status_code: int | None = -1
+    status_code: int | None = None
 
     @field_validator("utterance_idx", "status_code", mode="before")
     @classmethod

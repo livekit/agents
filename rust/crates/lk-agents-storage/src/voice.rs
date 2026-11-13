@@ -258,9 +258,11 @@ impl VoiceStore {
                     .collect();
                 state.known = stored.into_iter().map(|item| (item.id().to_owned(), item)).collect();
                 state.known.extend(added.iter().map(|item| (item.id().to_owned(), item.clone())));
+                // The turn's new items are the session's to write, at their positions in its
+                // conversation: what the store writes now is only the partition's own rows.
+                let written = instructions.iter().chain(&merged).cloned().collect();
                 merged.extend(added);
                 instructions.extend(merged);
-                let written = instructions.clone();
                 (instructions, written)
             };
             let session = self.activation.session_state();

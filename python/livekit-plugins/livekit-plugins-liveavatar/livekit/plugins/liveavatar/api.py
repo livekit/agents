@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from json import JSONDecodeError
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 from pydantic import BaseModel, JsonValue, ValidationError
@@ -155,11 +154,12 @@ class LiveAvatarAPI:
                 url, headers=headers, json=payload, conn_options=self._conn_options
             ) as response:
                 await response.raise_for_status()
+                text = await response.text()
                 try:
-                    return response_type.model_validate(await response.json())
-                except (ValidationError, JSONDecodeError) as exc:
+                    return response_type.model_validate_json(text)
+                except ValidationError as exc:
                     raise APIError(
-                        "LiveAvatar returned an invalid response", retryable=False
+                        "LiveAvatar returned an invalid response", kind="protocol", detail=text
                     ) from exc
 
         return await http.retry_request(request, conn_options=self._conn_options)

@@ -13,7 +13,7 @@ use crate::events::{AgentBackchannelOpportunityEvent, SessionEvent, UserTranscri
 use lk_agents_abi::tokenize::language::{LanguageCode, ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{EotPrediction, SpeechEvent, Ts};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
 
 mod end_of_turn;
@@ -39,6 +39,10 @@ pub struct AudioRecognition {
     pub(crate) wall_anchor: Option<WallAnchor>,
 
     audio_transcript: String,
+    /// Each committed turn's words and their confidences, until its verdict. They leave the
+    /// accumulator when the turn commits, so a later turn never repeats them, whenever (or
+    /// whether) the verdict comes; a verdict that keeps them puts them back.
+    committed_words: BTreeMap<TurnId, (String, Vec<f64>)>,
     interim_transcript: String,
     preflight_transcript: String,
     final_confidences: Vec<f64>,
@@ -117,6 +121,7 @@ impl AudioRecognition {
             thresholds: ThresholdOptions::new(TurnDetectorModel::V1Mini, None, None),
             wall_anchor: None,
             audio_transcript: String::new(),
+            committed_words: BTreeMap::new(),
             interim_transcript: String::new(),
             preflight_transcript: String::new(),
             final_confidences: Vec::new(),

@@ -247,7 +247,11 @@ impl Execution {
         // A stream whose task ended without its end or failure (it panicked) reports it failed.
         let task = self.spawner.spawn_settled(stream, move |outcome| async move {
             if !matches!(outcome, lk_agents_abi::TaskOutcome::Completed) {
-                let error = ApiError::new("the model request ended without reporting").into();
+                let error = ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Server,
+                    "the model request ended without reporting",
+                )
+                .into();
                 lost.send(Report::LlmFailed { request, error }).await;
             }
         });

@@ -22,12 +22,12 @@ import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
+from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
-    APIStatusError,
+    APIError,
     APITimeoutError,
     LanguageCode,
     http,
@@ -58,23 +58,17 @@ WS_ENDPOINT = "stt/v1/transcribe:streamBidirectional"
 
 
 class _Transcription(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     transcript: str = ""
     is_final: bool = Field(default=False, alias="isFinal")
     voice_profile: JsonValue = Field(default=None, alias="voiceProfile")
 
 
 class _TranscriptionResult(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     speech_started: object = Field(default=None, alias="speechStarted")
     transcription: _Transcription | None = None
 
 
 class _StreamEvent(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     result: _TranscriptionResult = Field(default_factory=_TranscriptionResult)
 
 
@@ -327,7 +321,7 @@ class SpeechStream(stt.RecognizeStream):
 
             except TimeoutError as e:
                 raise APITimeoutError("Timeout connecting to Inworld STT API") from e
-            except (APIConnectionError, APIStatusError):
+            except APIError:
                 raise
             except Exception as e:
                 raise APIConnectionError(f"Unexpected error: {e}") from e
@@ -369,8 +363,8 @@ class SpeechStream(stt.RecognizeStream):
                 try:
                     event = _StreamEvent.model_validate_json(msg.data)
                 except ValidationError as exc:
-                    raise APIConnectionError(
-                        "Inworld STT sent an invalid event", retryable=False
+                    raise APIError(
+                        "Inworld STT sent an invalid event", kind="protocol", detail=msg.text
                     ) from exc
                 self._process_stream_event(event)
         if not self._input_closed:

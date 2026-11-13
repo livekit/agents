@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.tool_options import ProviderToolDeclaration, ToolSpec
+    from ._generated.types import ErrorKind
     from .llm.chat_context import ChatItem
     from .llm.tool_context import Tool, Toolset
     from .types import APIConnectOptions, NotGivenOr
@@ -374,9 +375,7 @@ async def api_connect_options_total_deadline(self: APIConnectOptions) -> AsyncIt
     except TimeoutError as e:
         if not deadline.expired():
             raise
-        raise APITimeoutError(
-            "Operation exceeded total_timeout", retryable=False, timeout="total"
-        ) from e
+        raise APITimeoutError("Operation exceeded total_timeout", timeout="total") from e
 
 
 def api_connect_options_interval(self: APIConnectOptions, num_retries: int) -> float:
@@ -622,7 +621,7 @@ def _status_error_str(self: APIStatusError) -> str:
     parts = [
         f"message={self.message!r}",
         f"status_code={self.status_code}",
-        f"retryable={self.retryable}",
+        f"kind={self.kind}",
     ]
     if self.request_id:
         parts.append(f"request_id={self.request_id}")
@@ -673,8 +672,10 @@ def create_api_error_from_http(
     status: int,
     request_id: str | None = None,
     body: object | None = None,
+    kind: ErrorKind | None = None,
 ) -> APIStatusError:
-    """Create an APIStatusError from an HTTP status code and an optional detail message."""
+    """Create an APIStatusError from an HTTP status code and an optional detail message; its
+    kind is the status's unless ``kind`` names the provider's meaning."""
     from http import HTTPStatus
 
     from . import _core
@@ -685,4 +686,5 @@ def create_api_error_from_http(
         status_code=status,
         request_id=request_id,
         body=body,
+        kind=kind,
     )

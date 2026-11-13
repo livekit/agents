@@ -1008,7 +1008,10 @@ impl EotTransport for EndingTransport {
             backchannel_probability: None,
         };
         self.listener.resolve(&id, prediction);
-        Err(lk_agents_abi::errors::ApiError::new("the local model died"))
+        Err(lk_agents_abi::errors::ApiError::new(
+            lk_agents_abi::errors::ErrorKind::Server,
+            "the local model died",
+        ))
     }
 }
 

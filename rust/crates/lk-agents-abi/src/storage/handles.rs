@@ -106,7 +106,7 @@ pub trait Run: Send + Sync + Sized + 'static {
     ) -> Result<(), StorageError>;
 }
 
-/// `ctx.thread` (docs/threads.md): one thread of a storage namespace, as the partition_key `partition_key` reads
+/// `ctx.thread`: one thread of a storage namespace, as the partition_key `partition_key` reads
 /// it. Each read opens the thread's database for the call and releases it after; there is
 /// nothing to open or close.
 #[crate::host(class(name = "_core_ThreadHandle"))]
@@ -168,7 +168,7 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
     /// One task record, `None` when this thread has none of that id.
     #[host(await)]
     async fn task(&self, task_id: String) -> Result<Option<TaskRecord>, StorageError>;
-    /// One page of the journal (docs/internals/storage.md#journal), every partition, in order; pass
+    /// One page of the journal, every partition, in order; pass
     /// the last `id` to read the next.
     #[host(await)]
     async fn journal(
@@ -189,7 +189,7 @@ pub trait ThreadHandle: Send + Sync + Sized + 'static {
     ) -> Result<Vec<TaskRecord>, StorageError>;
 }
 
-/// `ctx.thread`'s reads (docs/threads.md): each opens the thread's database for the call.
+/// `ctx.thread`'s reads: each opens the thread's database for the call.
 #[crate::host(facade(
     path = "livekit.agents.storage",
     extended,
@@ -231,7 +231,7 @@ pub trait ThreadFacade {
     ) -> Result<TaskPage, StorageError>;
     /// One task record, `None` when this thread has none of that id.
     async fn task(&self, task_id: String) -> Result<Option<TaskRecord>, StorageError>;
-    /// One page of the journal (docs/internals/storage.md#journal), every partition, in order; pass
+    /// One page of the journal, every partition, in order; pass
     /// the last `id` to read the next.
     async fn journal(
         &self,
@@ -240,7 +240,7 @@ pub trait ThreadFacade {
     ) -> Result<Vec<EventRow>, StorageError>;
 }
 
-/// `thread.partition(partition_key)`: one partition_key's partition of a thread (docs/threads.md), its history and its
+/// `thread.partition(partition_key)`: one partition_key's partition of a thread, its history and its
 /// tasks.
 #[crate::host(facade(path = "livekit.agents.storage", native = ThreadHandle, from_native))]
 pub trait Partition {

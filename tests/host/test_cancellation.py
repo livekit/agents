@@ -117,13 +117,13 @@ async def test_a_stream_cancelled_during_a_tool_settles_it_and_replies_no_more(
 
 @pytest.mark.xfail(
     strict=True,
-    reason="docs/agents.md: a cancelled call records a tool_result with outcome cancelled; none is emitted",
+    reason="a cancelled call records a tool_result with outcome cancelled; none is emitted",
 )
 @pytest.mark.parametrize("return_late_result", [False, True])
 async def test_a_tool_cancelled_mid_call_records_a_cancelled_outcome(
     return_late_result: bool,
 ) -> None:
-    """An unfinished cancelled call streams a cancelled tool_result (docs/agents.md)."""
+    """An unfinished cancelled call streams a cancelled tool_result."""
     seen = await _cancelled_during_tool(return_late_result=return_late_result)
 
     assert [(e.type, getattr(e, "call_id", None), getattr(e, "outcome", None)) for e in seen] == [
@@ -316,7 +316,7 @@ async def test_a_cancelled_session_start_can_be_joined_by_the_next_start() -> No
 async def test_a_failed_turn_leaves_the_saved_state_usable() -> None:
     """A `TextSession` turn that fails does not spoil the state it started from: the next turn
     continues the conversation from it."""
-    model = FakeLLM(["Ready.", APIError("scripted failure", retryable=False), "Again."])
+    model = FakeLLM(["Ready.", APIError("scripted failure", kind="invalid_request"), "Again."])
     agent = Agent(name="desk", instructions="Help.", llm=model)
     first = await TextSession(agent=agent).run("Hi")
 

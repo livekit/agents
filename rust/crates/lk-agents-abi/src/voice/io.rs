@@ -602,7 +602,11 @@ impl From<IoError> for crate::errors::ProviderError {
     fn from(error: IoError) -> Self {
         match error {
             IoError::Host(error) => error.into(),
-            error => crate::errors::ApiError::new(error.to_string()).into(),
+            error => crate::errors::ApiError::new(
+                crate::errors::ErrorKind::Connection,
+                error.to_string(),
+            )
+            .into(),
         }
     }
 }

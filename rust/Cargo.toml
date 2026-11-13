@@ -6,7 +6,7 @@ members = ["crates/*", "ai_slop/*", "check"]
 # crate; linking it never adds a host feature or interpreter dependency to the sans-I/O crates.
 # Ordinary cargo build/test uses the host-neutral default members below. Runtime is also
 # excluded: it is compiled as a dependency of fuzz, but its own unit/integration targets need
-# `cargo test -p lk-agents-runtime`. See docs/internals/testing.md#running-the-suites for the test recipes.
+# `cargo test -p lk-agents-runtime`.
 default-members = [
     "crates/lk-agents-abi",
     "crates/lk-agents-cli",

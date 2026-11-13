@@ -48,7 +48,6 @@ from smithy_http.aio.crt import AWSCRTHTTPClient
 
 from livekit import rtc
 from livekit.agents import (
-    APIConnectionError,
     APIError,
     APIStatusError,
     TokenUsage,
@@ -218,18 +217,18 @@ class Boto3CredentialsResolver(IdentityResolver[AWSCredentialsIdentity, Mapping[
         """The current credentials, refreshed first when they near expiry.
 
         Raises:
-            APIError: (not retryable) when no complete credentials can be loaded.
+            APIError: of kind ``auth`` when no complete credentials can be loaded.
         """
         try:
             if self._credentials is None:
                 self._credentials = boto3.Session().get_credentials()
             if self._credentials is None:
-                raise APIError("Unable to load AWS credentials", retryable=False)
+                raise APIError("Unable to load AWS credentials", kind="auth")
             creds = self._credentials.get_frozen_credentials()
         except BotoCoreError as e:
-            raise APIError(f"Failed to load AWS credentials: {e}", retryable=False) from e
+            raise APIError(f"Failed to load AWS credentials: {e}", kind="auth") from e
         if not creds.access_key or not creds.secret_key:
-            raise APIError("AWS credentials are incomplete", retryable=False)
+            raise APIError("AWS credentials are incomplete", kind="auth")
         return AWSCredentialsIdentity(
             access_key_id=creds.access_key,
             secret_access_key=creds.secret_key,
@@ -773,7 +772,6 @@ class RealtimeSession(  # noqa: F811
                         status_code=500,
                         request_id=request_id,
                         body=e,
-                        retryable=False,
                     ),
                     recoverable=False,
                 ),
@@ -1015,7 +1013,9 @@ class RealtimeSession(  # noqa: F811
         try:
             event_data = SonicOutputEvent.model_validate(raw_event)
         except PayloadValidationError as error:
-            raise APIConnectionError("invalid Nova Sonic event", retryable=False) from error
+            raise APIError(
+                "invalid Nova Sonic event", kind="protocol", detail=json.dumps(raw_event)
+            ) from error
         event_type = self._event_builder.get_event_type(event_data)
         event_handler = self._event_handlers.get(event_type)
         if event_handler:
@@ -1464,8 +1464,10 @@ class RealtimeSession(  # noqa: F811
                         logger.debug("[SESSION] Stream returned None, exiting")
                         break
                     if not isinstance(result, InvokeModelWithBidirectionalStreamOutputChunk):
-                        raise APIConnectionError(
-                            "unexpected Nova Sonic output event", retryable=False
+                        raise APIError(
+                            "unexpected Nova Sonic output event",
+                            kind="protocol",
+                            detail=type(result).__name__,
                         )
                     if result.value.bytes_:
                         response_data = result.value.bytes_.decode("utf-8")
@@ -1532,7 +1534,6 @@ class RealtimeSession(  # noqa: F811
                                     status_code=400,
                                     request_id="",
                                     body=ve,
-                                    retryable=False,
                                 ),
                                 recoverable=True,
                             ),
@@ -1550,7 +1551,6 @@ class RealtimeSession(  # noqa: F811
                                     status_code=400,
                                     request_id="",
                                     body=ve,
-                                    retryable=False,
                                 ),
                                 recoverable=False,
                             ),
@@ -1600,7 +1600,6 @@ class RealtimeSession(  # noqa: F811
                                 status_code=500,
                                 request_id=request_id,
                                 body=e,
-                                retryable=False,
                                 detail=err_msg,
                             ),
                             recoverable=False,
@@ -1639,7 +1638,6 @@ class RealtimeSession(  # noqa: F811
                         status_code=500,
                         request_id=request_id,
                         body=ex,
-                        retryable=False,
                         detail=err_msg,
                     ),
                     recoverable=False,

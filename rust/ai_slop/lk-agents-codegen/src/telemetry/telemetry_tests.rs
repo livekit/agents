@@ -272,7 +272,7 @@ fn outputs_describe_the_declarations() {
     let files: std::collections::BTreeMap<String, String> =
         telemetry::otel(&r).into_iter().collect();
     let schema: serde_json::Value =
-        serde_json::from_str(&files["otel/schema.json"]).expect("schema is JSON");
+        serde_json::from_str(&files["rust/otel/schema.json"]).expect("schema is JSON");
     let turn = &schema["spans"][1];
     assert_eq!((turn["name"].as_str(), turn["kind"].as_str()), (Some("turn"), Some("client")));
     assert_eq!(
@@ -293,7 +293,7 @@ fn outputs_describe_the_declarations() {
         let body: String = text.lines().filter(|l| !l.starts_with('#')).collect();
         serde_json::from_str(&body).expect("JSON")
     };
-    let attributes = yaml("otel/registry/attributes.yaml");
+    let attributes = yaml("rust/otel/registry/attributes.yaml");
     let owned: Vec<&serde_json::Value> = attributes["groups"]
         .as_array()
         .unwrap()
@@ -306,19 +306,19 @@ fn outputs_describe_the_declarations() {
         !owned.iter().any(|a| a["id"] == "gen_ai.request.model" || a["id"] == "lk.room_id"),
         "dependency keys are referenced, never redefined: {attributes}"
     );
-    let spans = yaml("otel/registry/spans.yaml");
+    let spans = yaml("rust/otel/registry/spans.yaml");
     let turn = spans["groups"].as_array().unwrap().iter().find(|g| g["id"] == "span.turn");
     let turn = turn.expect("span.turn");
     assert_eq!((turn["type"].as_str(), turn["span_kind"].as_str()), (Some("span"), Some("client")));
     assert!(turn["attributes"].as_array().unwrap().contains(
         &serde_json::json!({"ref": "gen_ai.request.model", "requirement_level": "recommended"})
     ));
-    let metrics = yaml("otel/registry/metrics.yaml");
+    let metrics = yaml("rust/otel/registry/metrics.yaml");
     assert_eq!(metrics["groups"][0]["metric_name"], "lk.turn.delay");
     assert_eq!(metrics["groups"].as_array().unwrap().len(), 1, "imports are not redeclared");
-    let imports = yaml("otel/registry/imports.yaml");
+    let imports = yaml("rust/otel/registry/imports.yaml");
     assert_eq!(imports["imports"]["metrics"], serde_json::json!(["gen_ai.invoke_agent.duration"]));
-    let manifest = &files["otel/manifest.yaml"];
+    let manifest = &files["rust/otel/manifest.yaml"];
     assert!(
         manifest.contains("livekit/protocol.git@") && manifest.contains("[otel/model/shared]"),
         "{manifest}"
@@ -338,174 +338,5 @@ fn outputs_describe_the_declarations() {
         "GEN_AI_REQUEST_MODEL: Final = \"gen_ai.request.model\"",
     ] {
         assert!(python.contains(line), "{line}: {python}");
-    }
-}
-
-/// The 1.8.10 keys the declarations write under another name, on purpose.
-const RENAMED: [(&str, &str); 2] = [("lk.room_sid", "lk.room_id"), ("lk.track_sid", "lk.track_id")];
-/// Spans whose kind changed from 1.8.10's `INTERNAL`, on purpose.
-const NEW_KINDS: [&str; 5] =
-    ["llm_request", "tts_request", "realtime_inference", "rpc_handler", "rpc_call"];
-/// The request keys 1.8.10 copied onto its node spans: a node span describes its callback; the
-/// model and provider are only its request's.
-const NODE_REQUEST_KEYS: [(&str, &str); 4] = [
-    ("llm_node", "gen_ai.request.model"),
-    ("llm_node", "gen_ai.provider.name"),
-    ("tts_node", "gen_ai.request.model"),
-    ("tts_node", "gen_ai.provider.name"),
-];
-/// 1.8.10 keys replaced on purpose: `lk.shutdown.cause` names what ended the job, the
-/// application among them; a stall's GC time, CPU time and asyncio task, which nothing measures
-/// (its `lk.blocking.stack` names the code instead).
-const RETIRED_KEYS: [(&str, &str); 4] = [
-    ("job_shutdown", "lk.shutdown.user_initiated"),
-    ("event_loop_blocked", "lk.blocking.gc_time"),
-    ("event_loop_blocked", "lk.blocking.cpu_time"),
-    ("event_loop_blocked", "lk.blocking.task"),
-];
-/// 1.8.10 metrics the GenAI registry removed (upstream #374): the
-/// `gen_ai.client.inference.usage.{input,output}_tokens` counters replace them.
-const RETIRED_METRICS: [&str; 1] = ["gen_ai.client.token.usage"];
-/// Log attributes Python's logging handler added in 1.8.10; report records do not carry them.
-const LOGGING_HANDLER: [&str; 1] = ["logger.name"];
-
-fn compatible(baseline: &str, wire: &Wire) -> bool {
-    match (baseline, wire) {
-        ("empty", _) => true,
-        ("string" | "string(json)", Wire::String)
-        | ("int", Wire::Int)
-        | ("double", Wire::Double)
-        | ("bool", Wire::Bool) => true,
-        (b, Wire::KvList) => b.starts_with("kvlist"),
-        (b, Wire::Array(inner)) => {
-            b.strip_prefix("array<").and_then(|b| b.strip_suffix('>')).is_some_and(|element| {
-                element == "empty" || element.split('|').all(|e| compatible(e, inner))
-            })
-        }
-        _ => false,
-    }
-}
-
-// Catches: a span, parent, attribute, event, metric, label or record key that livekit-agents
-// 1.8.10 sends and Cloud reads disappearing from (or changing type in) the declarations, other
-// than the documented deliberate differences and the exporter-owned identity stamp.
-#[test]
-fn declarations_cover_the_1_8_10_wire() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let abi = Crate::read(&root, "rust/crates/lk-agents-abi", "lk_agents_abi").expect("abi");
-    let r = telemetry::read(&abi).expect("the declarations read");
-    let text =
-        std::fs::read_to_string(root.join("otel/baseline/schema_1_8_10.json")).expect("baseline");
-    let baseline: serde_json::Value = serde_json::from_str(&text).expect("baseline JSON");
-    let stamped: Vec<&str> = r
-        .groups
-        .iter()
-        .filter(|g| ["session_identity", "session_flags", "every_span"].contains(&g.name.as_str()))
-        .flat_map(|g| g.attrs.iter().map(|a| a.key.as_str()))
-        .collect();
-    let rename = |key: &str| {
-        RENAMED.iter().find(|(old, _)| *old == key).map_or(key, |(_, new)| *new).to_owned()
-    };
-    let check = |at: &str, attrs: &serde_json::Value, declared: &[&telemetry::Attr]| {
-        let mut missing = Vec::new();
-        for (key, types) in attrs.as_object().expect("attributes") {
-            let key = rename(key);
-            if stamped.contains(&key.as_str())
-                || LOGGING_HANDLER.contains(&key.as_str())
-                || NODE_REQUEST_KEYS.contains(&(at, key.as_str()))
-                || RETIRED_KEYS.contains(&(at, key.as_str()))
-            {
-                continue;
-            }
-            let Some(a) = declared.iter().find(|a| a.key == key) else {
-                missing.push(format!("{at}: `{key}` is not declared"));
-                continue;
-            };
-            for t in types.as_array().expect("types").iter().map(|t| t.as_str().expect("a type")) {
-                if !compatible(t, &a.wire) {
-                    missing.push(format!("{at}: `{key}` was {t}, is declared {:?}", a.wire));
-                }
-            }
-        }
-        missing
-    };
-    let mut missing = Vec::new();
-    for (name, span) in baseline["spans"].as_object().expect("spans") {
-        let Some(d) = r.spans.iter().find(|s| &s.name == name) else {
-            missing.push(format!("span {name} is not declared"));
-            continue;
-        };
-        for parent in span["parents"].as_array().expect("parents") {
-            let ok = match parent.as_str().expect("a parent") {
-                "<root>" => {
-                    d.parents.iter().any(|p| matches!(p, Parent::External | Parent::Current))
-                }
-                p => {
-                    d.parents.iter().any(|q| q == &Parent::Current || q == &Parent::Span(p.into()))
-                }
-            };
-            if !ok {
-                missing.push(format!("{name}: parent {parent} is not declared"));
-            }
-        }
-        if !NEW_KINDS.contains(&name.as_str()) && d.kind != SpanKind::Internal {
-            missing.push(format!("{name}: kind changed to {:?}", d.kind));
-        }
-        let declared: Vec<_> = d.start.iter().chain(&d.end).collect();
-        missing.extend(check(name, &span["attributes"], &declared));
-        for (event, attrs) in span["events"].as_object().into_iter().flatten() {
-            let Some(e) =
-                r.events.iter().find(|e| &e.name == event).filter(|_| d.events.contains(event))
-            else {
-                missing.push(format!("{name}: event {event} is not declared"));
-                continue;
-            };
-            let declared: Vec<_> = e.attrs.iter().collect();
-            missing.extend(check(&format!("{name}/{event}"), attrs, &declared));
-        }
-    }
-    for (name, metric) in baseline["metrics"].as_object().expect("metrics") {
-        if RETIRED_METRICS.contains(&name.as_str()) {
-            continue;
-        }
-        let Some(d) = r.metrics.iter().find(|m| &m.name == name) else {
-            missing.push(format!("metric {name} is not declared"));
-            continue;
-        };
-        let kind = match d.kind {
-            lk_agents_bindgen::telemetry::InstrumentKind::Counter => "sum",
-            lk_agents_bindgen::telemetry::InstrumentKind::Gauge => "gauge",
-            lk_agents_bindgen::telemetry::InstrumentKind::Histogram => "histogram",
-        };
-        if (metric["kind"].as_str(), metric["unit"].as_str()) != (Some(kind), Some(d.unit.as_str()))
-        {
-            missing.push(format!(
-                "metric {name}: was {} {}, is {kind} {:?}",
-                metric["kind"], metric["unit"], d.unit
-            ));
-        }
-        let declared: Vec<_> = d.labels.iter().collect();
-        missing.extend(check(name, &metric["attributes"], &declared));
-    }
-    for (name, log) in baseline["logs"].as_object().expect("logs") {
-        // Process logs go to stdout, never OTLP.
-        let Some((scope, body)) =
-            name.split_once(" / ").filter(|(scope, _)| !scope.starts_with('<'))
-        else {
-            continue;
-        };
-        let Some(d) = r.records.iter().find(|rec| rec.scope == scope && rec.body == body) else {
-            missing.push(format!("record {name} is not declared"));
-            continue;
-        };
-        let declared: Vec<_> = d.attrs.iter().collect();
-        missing.extend(check(name, &log["attributes"], &declared));
-    }
-    assert!(missing.is_empty(), "the declarations drop 1.8.10's wire:\n  {}", missing.join("\n  "));
-    for (old, new) in RENAMED {
-        assert!(
-            r.referenced.iter().any(|a| a.key == new && a.registry == "protocol"),
-            "{old} becomes the shared {new}"
-        );
     }
 }

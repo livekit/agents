@@ -415,16 +415,16 @@ fn imports_yaml(r: &Registry) -> String {
     yaml_file(json!({ "file_format": "definition/2", "imports": { "metrics": names } }))
 }
 
-/// Every file under `otel/`, by repo-relative path.
+/// Every file under `rust/otel/`, by repo-relative path.
 pub fn otel(r: &Registry) -> Vec<(String, String)> {
     vec![
-        ("otel/manifest.yaml".into(), manifest()),
-        ("otel/registry/attributes.yaml".into(), attributes_yaml(r)),
-        ("otel/registry/spans.yaml".into(), spans_yaml(r)),
-        ("otel/registry/events.yaml".into(), events_yaml(r)),
-        ("otel/registry/metrics.yaml".into(), metrics_yaml(r)),
-        ("otel/registry/imports.yaml".into(), imports_yaml(r)),
-        ("otel/schema.json".into(), schema(r)),
+        ("rust/otel/manifest.yaml".into(), manifest()),
+        ("rust/otel/registry/attributes.yaml".into(), attributes_yaml(r)),
+        ("rust/otel/registry/spans.yaml".into(), spans_yaml(r)),
+        ("rust/otel/registry/events.yaml".into(), events_yaml(r)),
+        ("rust/otel/registry/metrics.yaml".into(), metrics_yaml(r)),
+        ("rust/otel/registry/imports.yaml".into(), imports_yaml(r)),
+        ("rust/otel/schema.json".into(), schema(r)),
     ]
 }
 

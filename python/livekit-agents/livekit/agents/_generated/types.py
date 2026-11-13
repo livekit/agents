@@ -16,8 +16,10 @@ from typing_extensions import TypedDict
 #     rust/crates/lk-agents-abi/src/types/identity.rs
 
 
-CloseKind: TypeAlias = Literal["normal", "final", "retryable"]
-"""What a websocket close code says about the failure that closed the socket."""
+ErrorKind: TypeAlias = Literal["auth", "quota", "invalid_request", "rate_limit", "server", "connection", "timeout", "protocol"]
+"""What failed, as the provider meant it. A plugin names the kind; only [`ErrorKind::retryable`]
+turns it into a retry decision.
+"""
 
 
 Timeout: TypeAlias = Literal["pool", "connect", "read", "write", "total"]

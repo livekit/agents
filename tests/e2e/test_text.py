@@ -234,7 +234,7 @@ async def test_a_dropped_stream_leaves_the_task_to_get_task_not_resubscribe(
     thread_storages: tuple[Storage, Storage],
 ) -> None:
     """After a caller drops its stream, B refuses resubscribe and GetTask returns the saved
-    answer (events are live only: docs/protocol/a2a.md)."""
+    answer: events are live only."""
     release = asyncio.Event()
 
     async def handler(ctx: A2ASessionContext) -> str:

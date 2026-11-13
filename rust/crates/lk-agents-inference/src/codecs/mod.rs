@@ -396,8 +396,10 @@ pub struct StreamDecoder {
 }
 
 fn decode_failed(error: DecoderError) -> lk_agents_abi::errors::ApiError {
-    lk_agents_abi::errors::ApiError::new(format!("error decoding audio: {error}"))
-        .with_retryable(false)
+    lk_agents_abi::errors::ApiError::new(
+        lk_agents_abi::errors::ErrorKind::Protocol,
+        format!("error decoding audio: {error}"),
+    )
 }
 
 impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {

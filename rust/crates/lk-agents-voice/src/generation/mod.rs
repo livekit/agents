@@ -672,7 +672,10 @@ pub struct PlannedReply {
 
 /// A local generation failure that cannot be retried.
 pub fn fatal(message: impl Into<String>) -> ProviderError {
-    ProviderError::Local(lk_agents_abi::errors::ApiError::new(message).with_retryable(false))
+    ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+        lk_agents_abi::errors::ErrorKind::InvalidRequest,
+        message,
+    ))
 }
 
 #[cfg(test)]

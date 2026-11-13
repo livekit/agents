@@ -64,6 +64,7 @@ class WebSocketV1Adapter:
         self._ensure_session = ensure_session
         self._allow_custom_endpoint = allow_custom_endpoint
         self._pools = PoolManager(self._new_pool())
+        self._drains = utils.aio.TaskSet()
 
     def _new_pool(self) -> _Pool:
         websocket_v1_url = self._websocket_v1_url
@@ -93,7 +94,7 @@ class WebSocketV1Adapter:
         conn_options: APIConnectOptions,
     ) -> _WebSocketV1SynthesizeStream:
         if not is_given(options.language):
-            raise APIError("Rime v1 requires a language", retryable=False)
+            raise APIError("Rime v1 requires a language", kind="invalid_request")
         protocol_options = _websocket_v1.SynthesisOptions(
             model=options.model,
             speaker=options.speaker,
@@ -115,10 +116,38 @@ class WebSocketV1Adapter:
             tts_instance=tts_instance,
             pool=pool,
             pool_manager=self._pools,
+            reuse_after_cancel=self._reuse_after_cancel,
             options=protocol_options,
             conn_options=conn_options,
         )
         return stream
+
+    def _reuse_after_cancel(
+        self,
+        pool: _Pool,
+        connection: _websocket_v1.Connection,
+        context_id: str,
+        read_timeout: float | None,
+    ) -> None:
+        """Returns a socket whose context was cancelled to its pool once Rime ends the context.
+        The adapter owns the drain, so closing the stream never waits on it."""
+        if self._drains.closed:
+            pool.remove(connection)
+            return
+
+        async def _drain() -> None:
+            reusable = False
+            try:
+                reusable = await _websocket_v1.cancel_and_drain(
+                    connection, context_id=context_id, read_timeout=read_timeout
+                )
+            finally:
+                if reusable:
+                    pool.put(connection)
+                else:
+                    pool.remove(connection)
+
+        self._drains.spawn(_drain(), name="rime-v1-cancel-drain")
 
     def prewarm(self) -> None:
         self._pools.current.prewarm()
@@ -140,6 +169,8 @@ class WebSocketV1Adapter:
         self._pools.replace(self._new_pool())
 
     async def aclose(self) -> None:
+        # each drain hands its socket back to its pool first
+        await self._drains.aclose()
         await self._pools.aclose()
 
 
@@ -152,6 +183,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         tts_instance: tts.TTS,
         pool: _Pool,
         pool_manager: PoolManager[_websocket_v1.Connection],
+        reuse_after_cancel: Callable[[_Pool, _websocket_v1.Connection, str, float | None], None],
         options: _websocket_v1.SynthesisOptions,
         conn_options: APIConnectOptions,
     ) -> None:
@@ -160,6 +192,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
             tts=StreamTTS(tts_instance, model=options.model), conn_options=conn_options
         )
         self._pool = pool
+        self._reuse_after_cancel = reuse_after_cancel
         self._options = options
         pool_manager.track_stream(pool, self._task)
 
@@ -185,7 +218,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
                     yield chunk.text + " "
 
         connection = await self._pool.get(conn_options=self._conn_options)
-        reusable = False
+        reusable = handed_off = False
         try:
             result = await _websocket_v1.run_context(
                 connection,
@@ -200,11 +233,17 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
             )
             reusable = result.reusable
         except _websocket_v1.ContextCancelled as error:
-            reusable = error.reusable
+            if error.open_context is not None:
+                handed_off = True
+                self._reuse_after_cancel(
+                    self._pool, connection, error.open_context, self._conn_options.read_timeout
+                )
+            else:
+                reusable = True
             raise
         finally:
             if reusable:
                 self._pool.put(connection)
-            else:
+            elif not handed_off:
                 self._pool.remove(connection)
                 await _websocket_v1.close(connection)

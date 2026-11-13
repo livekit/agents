@@ -47,8 +47,8 @@ pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{COMPLETION_TOKENS, FakeLlm};
 pub use nodes::FakeNodes;
 pub use output::{
-    CaptureFault, FakeAudioInput, FakeAudioOutput, FakeSoundStream, FakeTranscriptionOutput,
-    FakeVideoInput, HALF, UnreportedClear, room_camera,
+    CAPTURE_RAISED, CaptureFault, FakeAudioInput, FakeAudioOutput, FakeSoundStream,
+    FakeTranscriptionOutput, FakeVideoInput, HALF, UnreportedClear, room_camera,
 };
 pub use realtime::{FakeDuplex, FakeRealtime, RealtimeDelays, ServerSetup, Vad as RealtimeVad};
 pub use recorder::FakeRecorder;

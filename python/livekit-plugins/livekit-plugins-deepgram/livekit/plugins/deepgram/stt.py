@@ -23,6 +23,8 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from pydantic import ValidationError
+
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -659,7 +661,13 @@ class SpeechStream(stt.RecognizeStream):
                     logger.warning("unexpected deepgram message type %s", msg.type)
                     continue
 
-                self._process_stream_event(STREAM_RESPONSE.validate_json(msg.data))
+                try:
+                    event = STREAM_RESPONSE.validate_json(msg.data)
+                except ValidationError as e:
+                    raise APIError(
+                        "deepgram sent a malformed message", kind="protocol", detail=str(msg.data)
+                    ) from e
+                self._process_stream_event(event)
 
         ws: http.WebSocket | None = None
 
@@ -762,7 +770,7 @@ class SpeechStream(stt.RecognizeStream):
         # see this page:
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
         # for more information about the different types of events
-        elif event.type == "Results":
+        elif isinstance(event, LiveTranscriptionResponse):
             metadata = event.metadata
             request_id = metadata.request_id
             is_final_transcript = event.is_final

@@ -163,7 +163,7 @@ async fn handle(service: Arc<ThreadService>, request: Request<Incoming>) -> Resp
                 )
                 .await
         }
-        Err(_) => Err(ApiError::status("request body exceeds limit", 413, None, Some(false))),
+        Err(_) => Err(ApiError::status("request body exceeds limit", 413, None)),
     };
     response(result, origin.as_deref())
 }

@@ -77,7 +77,7 @@ from openai.types.realtime.session_update_event import SessionUpdateEvent
 
 from .log import logger
 from .models import STTModels
-from .utils import AsyncAzureADTokenProvider, http_timeout
+from .utils import AsyncAzureADTokenProvider, error_kind, http_timeout
 
 # OpenAI Realtime API has a timeout of 15 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -857,8 +857,12 @@ class SpeechStream(stt.RecognizeStream):
 
                 try:
                     data = json.loads(msg.data)
-                except json.JSONDecodeError as e:
-                    raise APIError("OpenAI sent a malformed message", retryable=False) from e
+                except json.JSONDecodeError:
+                    data = None
+                if not isinstance(data, dict):
+                    raise APIError(
+                        "OpenAI sent a malformed message", kind="protocol", detail=msg.text
+                    )
                 msg_type = data.get("type")
                 if msg_type == "input_audio_buffer.speech_started":
                     item_id = data.get("item_id", "")
@@ -965,8 +969,8 @@ class SpeechStream(stt.RecognizeStream):
                     error_body = data.get("error", {})
                     raise APIError(
                         "OpenAI Realtime STT error",
+                        kind=error_kind(error_body.get("code") or error_body.get("type")),
                         body=error_body,
-                        retryable=False,
                         detail=error_body.get("message"),
                     )
 

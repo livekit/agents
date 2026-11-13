@@ -33,6 +33,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import (
     NOT_GIVEN,
+    ErrorKind,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
@@ -309,7 +310,7 @@ class SpeechStream(stt.RecognizeStream):
                         details = self._cancellation_error
                         raise APIConnectionError(
                             f"Azure STT canceled: {details.reason} ({details.code})",
-                            retryable=details.code not in _REJECTED,
+                            kind=_CANCELLATION_KINDS.get(details.code, "connection"),
                             detail=details.error_details,
                         )
                     raise APIConnectionError("SpeechRecognition session stopped")
@@ -434,14 +435,16 @@ class SpeechStream(stt.RecognizeStream):
                 self._loop.call_soon_threadsafe(self._session_stopped_event.set)
 
 
-# cancellations that fail the same way on a retry
-_REJECTED = frozenset(
-    {
-        speechsdk.CancellationErrorCode.AuthenticationFailure,
-        speechsdk.CancellationErrorCode.BadRequest,
-        speechsdk.CancellationErrorCode.Forbidden,
-    }
-)
+# what a cancellation code says failed; any other code is a lost connection
+_CANCELLATION_KINDS: dict[speechsdk.CancellationErrorCode, ErrorKind] = {
+    speechsdk.CancellationErrorCode.AuthenticationFailure: "auth",
+    speechsdk.CancellationErrorCode.Forbidden: "auth",
+    speechsdk.CancellationErrorCode.BadRequest: "invalid_request",
+    speechsdk.CancellationErrorCode.TooManyRequests: "rate_limit",
+    speechsdk.CancellationErrorCode.ServiceError: "server",
+    speechsdk.CancellationErrorCode.ServiceUnavailable: "server",
+    speechsdk.CancellationErrorCode.ServiceTimeout: "timeout",
+}
 
 
 def _create_speech_recognizer(

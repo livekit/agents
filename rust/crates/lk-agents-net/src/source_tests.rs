@@ -260,7 +260,7 @@ impl StreamOutput<u32> for Failing {
 impl lk_agents_abi::utils::stream::ProviderStream<u32> for Failing {}
 
 fn refused() -> ProviderError {
-    lk_agents_abi::errors::ApiError::status("refused", 401, None, None).into()
+    lk_agents_abi::errors::ApiError::status("refused", 401, None).into()
 }
 
 // Catches: input after a provider's failure answered with a generic close (or accepted) instead

@@ -397,16 +397,29 @@ class STT(stt.STT):
                 while True:
                     msg = await ws.receive(timeout=receive_timeout)
                     if msg.type == http.WebSocketMessageType.TEXT:
-                        message = StreamMessage.model_validate_json(msg.data)
-                        if message.type == "transcript":
-                            transcript = TranscriptMessage.model_validate(message.data)
+                        try:
+                            message = StreamMessage.model_validate_json(msg.data)
+                            transcript = (
+                                TranscriptMessage.model_validate(message.data)
+                                if message.type == "transcript"
+                                else None
+                            )
+                        except ValueError as e:
+                            raise APIError(
+                                "Gladia sent a malformed message",
+                                kind="protocol",
+                                detail=str(msg.data),
+                            ) from e
+                        if transcript is not None:
                             if transcript.is_final:
                                 utterances.append(transcript.utterance)
                         elif message.type == "post_final_transcript":
                             break
                         elif message.type == "error":
                             raise APIError(
-                                "Gladia WebSocket error", detail=str(message.data)
+                                "Gladia WebSocket error",
+                                kind="invalid_request",
+                                detail=str(message.data),
                             ) from None
 
                     elif msg.type == http.WebSocketMessageType.CLOSE:
@@ -442,9 +455,15 @@ class STT(stt.STT):
             headers={"X-Gladia-Key": self._api_key},
             conn_options=conn_options,
         ) as res:
-            # a 4xx other than 408/429 is not retryable: the status decides
+            # the status's kind decides the retry
             await res.raise_for_status()
-            return LiveSession.model_validate(await res.json())
+            text = await res.text()
+            try:
+                return LiveSession.model_validate_json(text)
+            except ValueError as e:
+                raise APIError(
+                    "Gladia returned an invalid session", kind="protocol", detail=text
+                ) from e
 
     def _create_speech_event(
         self, utterances: list[TranscriptionUtterance], session_id: str, languages: list[str] | None
@@ -899,7 +918,13 @@ class SpeechStream(stt.RecognizeStream):
 
         async for msg in self._ws:
             if msg.type == http.WebSocketMessageType.TEXT:
-                self._process_gladia_message(json.loads(msg.data))
+                try:
+                    data = json.loads(msg.data)
+                    self._process_gladia_message(data)
+                except ValueError as e:  # unparseable, or a field it reads is wrong
+                    raise APIError(
+                        "Gladia sent a malformed message", kind="protocol", detail=str(msg.data)
+                    ) from e
             else:
                 logger.warning(f"Unexpected message type from Gladia: {msg.type}")
 
@@ -1055,6 +1080,11 @@ class SpeechStream(stt.RecognizeStream):
             # but ensure speaking state is reset if somehow missed.
             if self._speaking:
                 self._speaking = False
+
+        elif message.type == "error":
+            raise APIError(
+                "Gladia WebSocket error", kind="invalid_request", detail=str(message.data)
+            )
 
     def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:
         """Check the energy state of an audio frame."""

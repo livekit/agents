@@ -338,6 +338,7 @@ impl TurnHost for FakeHandler {
                     return Err(ProviderError::Host {
                         error: cancelled_error(),
                         api_kind: None,
+                        error_kind: None,
                         retryable: false,
                         status_code: None,
                         said: None,

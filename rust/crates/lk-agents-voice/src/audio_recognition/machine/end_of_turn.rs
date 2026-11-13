@@ -344,25 +344,23 @@ impl AudioRecognition {
         decision: &UserTurnCommitDecision,
     ) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
+        let committed = decision.committed;
+        // The turn's own words: put back for a backchannel the realtime model did not take,
+        // otherwise gone. A later turn's verdict settles every earlier one's.
+        let held = self.committed_words.remove(&info.turn_id);
+        self.committed_words.retain(|turn, _| *turn > info.turn_id);
+        if let Some((words, confidences)) = held
+            && !committed
+            && decision.verdict == UserTurnCommitVerdict::RealtimeBackchannel
+        {
+            self.audio_transcript = format!("{words} {}", self.audio_transcript).trim().to_owned();
+            self.final_confidences.splice(0..0, confidences);
+        }
         let Phase::Committed { turn_id, speaking } = &self.phase else { return eff };
         if *turn_id != info.turn_id {
             return eff;
         }
         let speaking = *speaking;
-
-        let committed = decision.committed;
-        let drops_transcript = match decision.verdict {
-            UserTurnCommitVerdict::Reply
-            | UserTurnCommitVerdict::LateTranscript
-            | UserTurnCommitVerdict::Dropped { .. }
-            | UserTurnCommitVerdict::Empty
-            | UserTurnCommitVerdict::TooFewWords => true,
-            UserTurnCommitVerdict::RealtimeBackchannel => false,
-        };
-        if committed || drops_transcript {
-            self.audio_transcript.clear();
-            self.final_confidences.clear();
-        }
         // The opportunity held for this verdict: surfaced on a refusal or `Dropped` (no reply can
         // collide with it), dropped on a commit that replies.
         let deferred = self.deferred_opportunity.take();
@@ -417,6 +415,7 @@ impl AudioRecognition {
         skip_reply: bool,
     ) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
+        eff.extend(self.take_held_finals());
         eff.extend(self.promote_interim(text));
         // Past the close's edge nothing waits: commit what the turn holds, or nothing; a manual
         // turn completes even with no words.
@@ -425,6 +424,32 @@ impl AudioRecognition {
             return eff;
         }
         eff.extend(self.run_eou_detection(now, Start::Manual { skip_reply }));
+        eff
+    }
+
+    /// A manual commit takes the turn's words as heard so far. Finals the hold kept back while
+    /// the agent spoke are this turn's: they join it, replacing the interim words they finalize,
+    /// rather than being released later into another turn, which would say them twice.
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn take_held_finals(&mut self) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
+        let held = std::mem::take(&mut self.transcript_buffer);
+        let (finals, rest): (Vec<SpeechEvent>, Vec<SpeechEvent>) =
+            held.into_iter().partition(|ev| ev.kind == SpeechEventType::FinalTranscript);
+        self.transcript_buffer = rest.into();
+        for ev in finals {
+            let Some(text) = ev.best_alternative().map(|a| a.text.clone()) else { continue };
+            if text.is_empty() {
+                continue;
+            }
+            self.interim_transcript.clear();
+            eff.push(AudioRecognitionEffect::PublishSessionEvent(user_transcript(
+                &ev,
+                true,
+                self.speaking_hint(),
+            )));
+            self.audio_transcript = format!("{} {}", self.audio_transcript, text).trim().to_owned();
+        }
         eff
     }
 
@@ -871,13 +896,17 @@ impl AudioRecognition {
         let mut eff = Vec::new();
         self.turn_seq += 1;
         let turn_id = TurnId(self.turn_seq);
+        let transcript_confidence = self.average_confidence();
+        let words = std::mem::take(&mut self.audio_transcript);
+        let confidences = std::mem::take(&mut self.final_confidences);
+        self.committed_words.insert(turn_id, (words.clone(), confidences));
         let info = EndOfTurnInfo {
             turn_id,
             owner: self.cfg.turn_detection_mode,
             stt_enabled: self.cfg.stt_enabled,
             skip_reply: run.skip_reply,
-            new_transcript: self.audio_transcript.clone(),
-            transcript_confidence: self.average_confidence(),
+            new_transcript: words,
+            transcript_confidence,
             metrics: compute_end_of_turn_metrics(
                 run.snapshot.speech_start_time,
                 run.snapshot.last_speaking_time,

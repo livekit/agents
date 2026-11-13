@@ -24,7 +24,7 @@ const INPUT_POLICY: Policy = Policy::Now(Duration::from_millis(500));
 const OUTPUT_CAPACITY: usize = 64;
 
 fn failed(message: impl Into<String>) -> ProviderError {
-    ProviderError::Local(ApiError::new(message.into()))
+    ProviderError::Local(ApiError::new(lk_agents_abi::errors::ErrorKind::InvalidRequest, message))
 }
 
 /// The `_FlushSentinel`, in order with the audio.

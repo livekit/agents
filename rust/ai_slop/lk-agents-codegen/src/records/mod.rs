@@ -810,6 +810,11 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             | Ty::JsonObject => {
                 ("dict", "obj.is_instance_of::<::pyo3::types::PyDict>()".into())
             }
+            // `Vec<u8>` crosses as `bytes`
+            Ty::List(item) if **item == Ty::Int(crate::decl::Int::U8) => (
+                "bytes",
+                "obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>()".into(),
+            ),
             Ty::List(_) => ("list", "obj.is_instance_of::<::pyo3::types::PyList>()".into()),
             other => {
                 return Err(format!(

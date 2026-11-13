@@ -10,6 +10,7 @@ from .connect import (
 from .transcript import TranscriptChunk as TranscriptChunk
 from .types import (
     ATTRIBUTE_PUBLISH_ON_BEHALF as ATTRIBUTE_PUBLISH_ON_BEHALF,
+    ErrorKind as ErrorKind,
     FlushSentinel as FlushSentinel,
     NOT_GIVEN as NOT_GIVEN,
     NotGiven as NotGiven,
@@ -18,6 +19,7 @@ from .types import (
 )
 
 __all__: list[str] = [
+    "ErrorKind",
     "TranscriptChunk",
     "FlushSentinel",
     "NotGiven",

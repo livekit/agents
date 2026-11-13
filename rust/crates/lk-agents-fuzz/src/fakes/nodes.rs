@@ -155,7 +155,8 @@ impl TextNode for EchoText {
 }
 
 fn missing(leg: &str) -> ProviderError {
-    ApiError::new(format!("no {leg} below the node")).into()
+    ApiError::new(lk_agents_abi::errors::ErrorKind::Server, format!("no {leg} below the node"))
+        .into()
 }
 
 impl NodeFactory for FakeNodes {

@@ -25,7 +25,7 @@ from pydantic import JsonValue
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     APITimeoutError,
     http,
     tokenize,
@@ -329,7 +329,7 @@ class ChunkedStream(tts.ChunkedStream):
                 output_emitter.flush()
         except TimeoutError:
             raise APITimeoutError() from None
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -403,7 +403,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws.close()
         except TimeoutError:
             raise APITimeoutError() from None
-        except (APIConnectionError, APIStatusError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e

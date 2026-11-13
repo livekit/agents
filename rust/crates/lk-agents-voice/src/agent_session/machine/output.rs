@@ -344,9 +344,11 @@ impl VoiceDriver {
             .with("attachment", segment.attachment.to_string())
             .with("segment", segment.segment.to_string());
         self.publish_event(crate::events::SessionEvent::Diagnostic(diagnostic));
-        let error = lk_agents_abi::errors::ProviderError::Local(
-            lk_agents_abi::errors::ApiError::new(UNREPORTED_CUT),
-        );
+        let error =
+            lk_agents_abi::errors::ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::Connection,
+                UNREPORTED_CUT,
+            ));
         let source = crate::events::ErrorSource::AudioOutput;
         self.report_error(now, source, true, error, Some(speech));
         self.release_output(request, speech);

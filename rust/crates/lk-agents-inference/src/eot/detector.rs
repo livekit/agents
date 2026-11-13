@@ -4,7 +4,7 @@ use super::{
     TransportFactory,
 };
 use lk_agents_abi::errors::Invalid;
-use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, HostError, ProviderError};
 use lk_agents_abi::inference::EotSelection;
 use lk_agents_abi::tokenize::language::{ThresholdOptions, ThresholdOverride, TurnDetectorModel};
 use lk_agents_abi::turn::inference::{EotMetricsObserver, EotModel, EotModelFactory};
@@ -143,7 +143,10 @@ impl lk_agents_abi::turn::inference::InferenceEot for AudioEot {
         conn_options: ApiConnectOptions,
     ) -> Result<DetectorStream, ProviderError> {
         let spawner = (self.env.spawner)().map_err(|error| {
-            ProviderError::Local(ApiError::new(format!("turn detector unavailable: {error}")))
+            ProviderError::Local(ApiError::new(
+                ErrorKind::Server,
+                format!("turn detector unavailable: {error}"),
+            ))
         })?;
         let model = self.table().model();
         let session = EotSession::new(model, Arc::clone(&self.thresholds), self.local_fallback);
@@ -185,7 +188,7 @@ impl EotTransport for FailedTransport {
     fn end_input(&self) {}
     fn detach(&self) {}
     async fn run(&self) -> Result<(), ApiError> {
-        Err(ApiError::new(self.0.clone()))
+        Err(ApiError::new(ErrorKind::Server, self.0.clone()))
     }
 }
 

@@ -559,12 +559,11 @@ still require explicit load/save.
 When the person interrupts a reply while its tools run, the conversation is freed at once, as on
 a call without a thread: the reply's speech is done and the next turn is answered. Only
 persistence waits. The interrupted turn keeps its hold on the partition until its tools end, or
-the 5 second interruption bound cancels them, and its turn is committed or abandoned. Turns
-commit in order: a later turn's commit waits for the earlier one, so the thread's history keeps
-the order the turns were taken in. The interrupted turn's late tool output is placed right after
-its call, in `session.history` and in the thread, before what was said since; the thread holds
-back the later turn's items until it lands. The thread saves the call's items in the order the
-session holds them, its opening handoff first.
+the 5 second interruption bound cancels them, and its turn is committed or abandoned. The
+interrupted turn's late tool output is placed right after its call, in `session.history` and in
+the thread, before what was said since. The thread saves the call's items in the order the
+session holds them, its opening handoff first: every saved item stores its position in the
+conversation, and the thread reads items back in that order, whenever each was written.
 
 The history matches what the person heard: what was said is kept in the order it was heard,
 with only the words heard. An item the person never heard, a tool call, its output or a

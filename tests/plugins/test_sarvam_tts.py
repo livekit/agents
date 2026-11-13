@@ -12,7 +12,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions, APIStatusError, http
+from livekit.agents import APIConnectOptions, APIError, http
 from livekit.plugins.sarvam import tts as sarvam_tts
 
 NO_RETRY = APIConnectOptions(max_retry=0)
@@ -211,13 +211,13 @@ async def test_interrupting_a_synthesis_closes_quietly_and_the_next_one_plays() 
         # transient failures stay retryable
         ({"code": 429, "message": "rate limit exceeded"}, 429, True),
         ({"code": 503, "message": "model unavailable"}, 503, True),
-        # an unrecognized frame keeps retrying by default
-        ({"message": "something we cannot classify"}, -1, True),
-        ({"code": "invalid_request_error", "message": "bad input"}, -1, True),
+        # an unrecognized frame is a refusal, never retried by default
+        ({"message": "something we cannot classify"}, None, False),
+        ({"code": "invalid_request_error", "message": "bad input"}, None, False),
     ],
 )
 async def test_an_error_frame_status_decides_retryability_and_hides_provider_text(
-    frame: dict[str, object], status_code: int, retryable: bool
+    frame: dict[str, object], status_code: int | None, retryable: bool
 ) -> None:
     """The provider text goes to the error's detail, never its message.
 
@@ -225,11 +225,11 @@ async def test_an_error_frame_status_decides_retryability_and_hides_provider_tex
     """
     async with _ws_url(_error_peer(frame)) as url:
         model = _tts(url)
-        with pytest.raises(APIStatusError) as caught:
+        with pytest.raises(APIError) as caught:
             await _speak(model, "Hello there.")
         await model.aclose()
 
-    assert caught.value.status_code == status_code
+    assert getattr(caught.value, "status_code", None) == status_code
     assert caught.value.retryable is retryable
     assert str(frame["message"]) not in str(caught.value)
     assert caught.value.detail == frame["message"]

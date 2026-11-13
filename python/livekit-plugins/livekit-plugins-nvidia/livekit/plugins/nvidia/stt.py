@@ -20,7 +20,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
@@ -28,12 +28,13 @@ from . import auth
 
 logger = logging.getLogger(__name__)
 
-_NON_RETRYABLE_CODES = (
-    grpc.StatusCode.UNAUTHENTICATED,
-    grpc.StatusCode.PERMISSION_DENIED,
-    grpc.StatusCode.INVALID_ARGUMENT,
-    grpc.StatusCode.NOT_FOUND,
-)
+# Riva's refusals by what failed; any other status is the connection or the server failing
+_GRPC_ERROR_KINDS: dict[grpc.StatusCode, ErrorKind] = {
+    grpc.StatusCode.UNAUTHENTICATED: "auth",
+    grpc.StatusCode.PERMISSION_DENIED: "auth",
+    grpc.StatusCode.INVALID_ARGUMENT: "invalid_request",
+    grpc.StatusCode.NOT_FOUND: "invalid_request",
+}
 
 
 @dataclass
@@ -247,7 +248,7 @@ class SpeechStream(stt.RecognizeStream):
         except grpc.RpcError as e:
             error = APIConnectionError(
                 f"NVIDIA Riva recognition failed: {e.code()}",
-                retryable=e.code() not in _NON_RETRYABLE_CODES,
+                kind=_GRPC_ERROR_KINDS.get(e.code(), "connection"),
             )
         except Exception as e:
             error = APIConnectionError(f"NVIDIA Riva recognition failed: {e}")

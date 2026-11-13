@@ -14,7 +14,7 @@ pub struct StorageSpeechDoneAfterItsSave;
 impl Rule for StorageSpeechDoneAfterItsSave {
     const CONTRACT: Contract = Contract {
         id: "storage_speech_done_after_its_save",
-        guarantee: "A speech is announced done only after its turn's save, a commit or an abort, is answered, including slow and failed ones. A turn the person cut while its tools ran, and a turn saving behind it, are done at once: only their save waits. A speech the interruption watchdog ended never reports its turn: its partition_key is released afterwards. Nor does one the close released at its bound, its commit still pending (a partition_key another live worker holds) or reported afterwards, within the partition_key's release bound.",
+        guarantee: "A speech is announced done only after its turn's save, a commit or an abort, is answered, including slow and failed ones. A turn the person cut while its tools ran is done at once: only its save waits. A speech the interruption watchdog ended never reports its turn: its partition_key is released afterwards. Nor does one the close released at its bound, its commit still pending (a partition_key another live worker holds) or reported afterwards, within the partition_key's release bound.",
         examples: &[
             waited,
             released_after_watchdog,
@@ -48,11 +48,10 @@ impl Rule for StorageSpeechDoneAfterItsSave {
                     if s.0 == *speech)
                 .then_some(*at)
             });
-            // Done at once on purpose: cut while its tools ran, or saving behind such a turn.
+            // Done at once on purpose: cut while its tools ran.
             let done_at_once = r.journal().iter().any(|(_, step)| {
-                matches!(step, Step::Speech(
-                    SpeechStep::ReleasedToTools { speech: s } | SpeechStep::CommitWaits { speech: s }
-                ) if s.0 == *speech)
+                matches!(step, Step::Speech(SpeechStep::ReleasedToTools { speech: s })
+                    if s.0 == *speech)
             });
             if done_at_once {
                 check.expect(
@@ -137,7 +136,7 @@ fn reported_after_the_close() -> Recording {
         .done()
 }
 
-/// Speech 1, cut while its tools ran, is done at once; speech 2's save waits behind its turn.
+/// Speech 1, cut while its tools ran, is done at once; its save follows when they end.
 fn cut_during_its_tools() -> Recording {
     let settle = StorageOperation::Settle;
     let answered = |speech| StorageStep::Answered {
@@ -149,13 +148,9 @@ fn cut_during_its_tools() -> Recording {
     Authored::new()
         .journal(Step::Speech(SpeechStep::ReleasedToTools { speech: SpeechId(1) }))
         .speech_done(1, SpeechOutcome::Interrupted)
-        .journal(Step::Speech(SpeechStep::CommitWaits { speech: SpeechId(2) }))
-        .speech_done(2, SpeechOutcome::Completed)
         .later(1500)
         .storage(StorageStep::Requested { speech: 1, operation: settle })
         .storage(answered(1))
-        .storage(StorageStep::Requested { speech: 2, operation: settle })
-        .storage(answered(2))
         .done()
 }
 

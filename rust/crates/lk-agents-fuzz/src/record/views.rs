@@ -740,7 +740,8 @@ fn sink_output(sink: &Sink) -> Option<u32> {
         | Sink::Text { output, .. }
         | Sink::TextFlush { output }
         | Sink::Paused { output }
-        | Sink::Resumed { output } => Some(*output),
+        | Sink::Resumed { output }
+        | Sink::CaptureRaised { output } => Some(*output),
         Sink::Played { .. }
         | Sink::FinishLost { .. }
         | Sink::Started { .. }

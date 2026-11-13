@@ -334,7 +334,8 @@ mod tests {
         let error = ErrorEvent::provider(
             ErrorSource::Llm,
             false,
-            lk_agents_abi::errors::ApiError::new("boom").into(),
+            lk_agents_abi::errors::ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "boom")
+                .into(),
             None,
         );
         let close = SessionEvent::Close { reason: CloseReason::Error, error: Some(error) };

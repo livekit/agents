@@ -31,7 +31,7 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 from livekit.agents import (
     APIConnectOptions,
@@ -58,6 +58,17 @@ GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
+
+
+def _decode(raw: str | bytes) -> dict[str, Any]:
+    """A provider message, which must be a JSON object."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("Gnani TTS sent a malformed message", kind="protocol", detail=str(raw))
+    return data
 
 
 @dataclass
@@ -353,6 +364,7 @@ class SSEChunkedStream(tts.ChunkedStream):
                 if payload.get("status") == "error" or "error" in payload:
                     raise APIError(
                         "Gnani TTS error",
+                        kind="invalid_request",
                         body=payload,
                         detail=payload.get("message", json.dumps(payload)),
                     )
@@ -487,7 +499,7 @@ async def _synthesize_ws(
             if msg.type is http.WebSocketMessageType.CLOSE:
                 raise ws.close_error("Gnani TTS WebSocket closed")
 
-            payload = json.loads(msg.text)
+            payload = _decode(msg.text)
             msg_type = payload.get("type", "")
             if msg_type in ("audio", "complete"):
                 if audio_b64 := (payload.get("data") or {}).get("audio"):
@@ -496,7 +508,10 @@ async def _synthesize_ws(
                     return
             elif msg_type == "error":
                 raise APIError(
-                    "Gnani TTS stream error", body=payload, detail=payload.get("message")
+                    "Gnani TTS stream error",
+                    kind="invalid_request",
+                    body=payload,
+                    detail=payload.get("message"),
                 )
     finally:
         await ws.close()

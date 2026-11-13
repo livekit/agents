@@ -1,4 +1,4 @@
-//! What a span records of a failure (docs/internals/telemetry.md "Errors"), for both span
+//! What a span records of a failure, for both span
 //! handles.
 
 use std::borrow::Cow;

@@ -505,7 +505,7 @@ impl DataStreamAudioReceiver {
 }
 
 fn failure(error: ReceiverEnd) -> ProviderError {
-    ApiError::new(error.to_string()).into()
+    ApiError::new(lk_agents_abi::errors::ErrorKind::Connection, error.to_string()).into()
 }
 
 impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
@@ -520,7 +520,9 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
         on_clear_buffer: Option<Arc<dyn ClearBufferListener>>,
     ) -> Result<Self, ProviderError> {
         let frame_size = frame_size(frame_size_ms).map_err(failure)?;
-        let spawner = (env.spawner)().map_err(|e| ApiError::new(e.to_string()))?;
+        let spawner = (env.spawner)().map_err(|e| {
+            ApiError::new(lk_agents_abi::errors::ErrorKind::InvalidRequest, e.to_string())
+        })?;
         let on_clear = on_clear_buffer.map(|listener| {
             Arc::new(move || listener.clear_buffer()) as Arc<dyn Fn() + Send + Sync>
         });

@@ -51,7 +51,10 @@ impl AudioInput {
     }
 
     pub(crate) fn flush(&self) -> Result<(), ProviderError> {
-        self.open()?.event(Flush).map_err(|stuck| ApiError::new(stuck.to_string()).into())
+        self.open()?.event(Flush).map_err(|stuck| {
+            ApiError::new(lk_agents_abi::errors::ErrorKind::InvalidRequest, stuck.to_string())
+                .into()
+        })
     }
 
     pub(crate) fn end(&self) {

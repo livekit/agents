@@ -7,7 +7,7 @@ use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
     input::{Input, Ref, RtEvent},
-    record::{Applied, Handle, Recording, Sink},
+    record::{Applied, Handle, Recording, Sink, StorageOperation, StorageStep},
 };
 
 pub struct SpeechErrorIsInjected;
@@ -15,14 +15,18 @@ pub struct SpeechErrorIsInjected;
 impl Rule for SpeechErrorIsInjected {
     const CONTRACT: Contract = Contract {
         id: "speech_error_is_injected",
-        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, waited out the reply bound on a stalled server, was refused by Close before scheduling, was a say the driver refused on the journal, lost its own keyed sink completion after its declared deadline with no playback receipt in between, or met a panic or hang the run injected.",
+        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, waited out the reply bound on a stalled server, was refused by Close before scheduling, was a say the driver refused on the journal, lost its own keyed sink completion after its declared deadline with no playback receipt in between, carried the error its audio output raised on a frame, had one of its own storage requests fail, or met a panic or hang the run injected.",
         examples: &[
             failed_by_injection,
             failed_from_its_own_missing_playback,
             output_refusal_with_its_own_diagnostic,
+            failed_with_its_output_raising,
+            failed_by_its_own_storage,
         ],
         counterexamples: &[
             failed_without_injection,
+            output_error_with_no_raise,
+            failed_by_another_speechs_storage,
             playback_timeout_without_its_own_deadline,
             playback_timeout_after_a_console_receipt,
             output_refusal_without_its_own_diagnostic,
@@ -116,15 +120,46 @@ impl Rule for SpeechErrorIsInjected {
                         }))
                 })
             });
+            // The output the run set to raise did, on a frame before the speech ended: the speech
+            // carries the output's own error.
+            let output_raised = error.contains(crate::fakes::CAPTURE_RAISED)
+                && r.sink().iter().any(|(at, sink)| {
+                    matches!(sink, Sink::CaptureRaised { .. })
+                        && speech.done_at().is_none_or(|done| *at <= done)
+                });
+            // Its own storage request failed, or the call closed on a storage error after
+            // the run faulted the store (a checkpoint has no request of its own): the fake store
+            // fails only where the run injects a fault, and a bound call cannot run the speech
+            // without its partition.
+            let before_its_end =
+                |at: &crate::record::Observed| speech.done_at().is_none_or(|done| *at <= done);
+            let storage = host.storage();
+            let own_request_failed = storage.iter().any(|(at, step)| {
+                matches!(step, StorageStep::Answered { speech: s, result: Err(_), .. }
+                    if *s == speech.id)
+                    && before_its_end(at)
+            });
+            // A fault injected before its end, or one the store reports it met (a lost answer or an
+            // outage leaves no step of its own).
+            let store_faulted = storage.iter().any(|(at, step)| match step {
+                StorageStep::Fault { .. } => before_its_end(at),
+                StorageStep::PartitionSettled { faulted, .. } => *faulted,
+                _ => false,
+            });
+            // The close is told last, once the call has wound down; the storage error it carries
+            // is the call's, whichever speech's request met it first.
+            let closed_on_storage = host.events().iter().any(|(_, ev)| {
+                matches!(ev, SessionEvent::Close { error: Some(e), .. }
+                    if e.source == ErrorSource::Storage)
+            });
+            let storage_failed = own_request_failed || (store_faulted && closed_on_storage);
             let output_refused = internal.steps().iter().any(|(_, step)| {
                 matches!(step, Step::Playout(PlayoutStep::OutputRefused { speech: refused, reason })
                     if refused.0 == speech.id && error.contains(&format!("output admission refused: {reason}")))
             });
             // A provider or host call the run made panic or hang (`fakes::hazard`).
-            let faulted = r
-                .faults()
-                .iter()
-                .any(|(at, _, _)| speech.done_at().is_none_or(|done| *at < done));
+            let faulted =
+                r.faults().iter().any(|(at, _, _)| speech.done_at().is_none_or(|done| *at < done));
             let accounted = injected
                 || faulted
                 || voice_failed
@@ -135,7 +170,9 @@ impl Rule for SpeechErrorIsInjected {
                 || refused_by_close
                 || refused_by_driver
                 || missing_playback
-                || output_refused;
+                || output_refused
+                || output_raised
+                || storage_failed;
             check.expect(
                 speech,
                 accounted,
@@ -219,4 +256,45 @@ fn output_refusal_with_its_own_diagnostic() -> Recording {
 
 fn output_refusal_without_its_own_diagnostic() -> Recording {
     output_refusal_record(false)
+}
+
+fn output_raise_record(raised: bool) -> Recording {
+    let mut authored = Authored::new();
+    if raised {
+        authored = authored.sink(Sink::CaptureRaised { output: 0 });
+    }
+    authored.speech(4, Handle::finished().failed(crate::fakes::CAPTURE_RAISED)).done()
+}
+
+/// Seed 55 (TaskBridge): the output the run set to raise did on the speech's frame.
+fn failed_with_its_output_raising() -> Recording {
+    output_raise_record(true)
+}
+
+/// The output's error with no raise recorded: nothing the run injected broke it.
+fn output_error_with_no_raise() -> Recording {
+    output_raise_record(false)
+}
+
+fn storage_failure_record(speech: u64) -> Recording {
+    let unavailable =
+        lk_agents_abi::storage::StorageError::Unavailable("sqlite: disk I/O error".into());
+    Authored::new()
+        .storage(StorageStep::Answered {
+            speech,
+            operation: StorageOperation::Acquire,
+            result: Err(unavailable),
+            delivered: true,
+        })
+        .speech(4, Handle::finished().failed("storage unavailable"))
+        .done()
+}
+
+/// Seed 18 (TaskBridge): the speech's partition could not be taken on a faulted store.
+fn failed_by_its_own_storage() -> Recording {
+    storage_failure_record(4)
+}
+
+fn failed_by_another_speechs_storage() -> Recording {
+    storage_failure_record(5)
 }

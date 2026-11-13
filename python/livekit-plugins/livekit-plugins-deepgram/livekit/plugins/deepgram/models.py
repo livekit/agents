@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, TypeAdapter
 
 DeepgramModels = Literal[
     "nova-general",
@@ -229,9 +229,36 @@ class MetadataResponse(BaseModel):
     type: Literal["Metadata"]
 
 
-StreamResponse = LiveTranscriptionResponse | SpeechBoundaryResponse | MetadataResponse
+class OtherResponse(BaseModel):
+    """A message type this client does not read: ignored."""
+
+    type: str = ""
+
+
+_TAGS = {
+    "Results": "Results",
+    "SpeechStarted": "boundary",
+    "UtteranceEnd": "boundary",
+    "Metadata": "Metadata",
+}
+
+
+def _response_tag(value: object) -> str:
+    kind = value.get("type") if isinstance(value, dict) else getattr(value, "type", None)
+    return _TAGS.get(kind, "other") if isinstance(kind, str) else "other"
+
+
+StreamResponse = (
+    LiveTranscriptionResponse | SpeechBoundaryResponse | MetadataResponse | OtherResponse
+)
 STREAM_RESPONSE: TypeAdapter[StreamResponse] = TypeAdapter(
-    Annotated[StreamResponse, Field(discriminator="type")]
+    Annotated[
+        Annotated[LiveTranscriptionResponse, Tag("Results")]
+        | Annotated[SpeechBoundaryResponse, Tag("boundary")]
+        | Annotated[MetadataResponse, Tag("Metadata")]
+        | Annotated[OtherResponse, Tag("other")],
+        Discriminator(_response_tag),
+    ]
 )
 
 

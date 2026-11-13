@@ -262,7 +262,7 @@ mod tests {
     impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for Failing {}
 
     fn refused() -> lk_agents_abi::errors::ApiError {
-        lk_agents_abi::errors::ApiError::status("refused", 401, None, None)
+        lk_agents_abi::errors::ApiError::status("refused", 401, None)
     }
 
     // Catches: input after a provider's failure answered with a generic close, or swallowed,

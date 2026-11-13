@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# The runtime half of the core/runtime boundary (docs/internals/architecture.md "Ownership boundaries"):
+# The runtime half of the core/runtime boundary, executing what the cores decide:
 # Tokio, sockets, real clocks, task ownership, effect execution and the async host bridge. Cores
 # never depend on it. Grown from consumers: each module lands with the slice that uses it.
 [dependencies]

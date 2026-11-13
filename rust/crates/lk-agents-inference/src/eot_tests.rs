@@ -33,7 +33,7 @@ impl EotTransport for CloudFailure {
     fn detach(&self) {}
     async fn run(&self) -> Result<(), ApiError> {
         self.0.notified().await;
-        Err(ApiError::new("cloud disconnected"))
+        Err(ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "cloud disconnected"))
     }
 }
 
@@ -212,7 +212,7 @@ impl EotTransport for DyingTransport {
     fn end_input(&self) {}
     fn detach(&self) {}
     async fn run(&self) -> Result<(), ApiError> {
-        Err(ApiError::new("gateway gone"))
+        Err(ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "gateway gone"))
     }
 }
 

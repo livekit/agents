@@ -286,8 +286,8 @@ follow_untyped_imports = true
 
 [tool.pyright]
 stubPath = ".type_stubs"
-# Strict where code is written as a user writes it: user code passes mypy strict and pyright
-# (docs/README.md). The library itself is held to mypy strict; pyright's strict-only rules
+# Strict where code is written as a user writes it: user code passes mypy strict and pyright.
+# The library itself is held to mypy strict; pyright's strict-only rules
 # (cross-module private names, unknown types from untyped SDKs) add no check of its API there.
 typeCheckingMode = "standard"
 strict = ["examples", "tests/type_checks"]

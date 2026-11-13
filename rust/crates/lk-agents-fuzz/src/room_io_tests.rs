@@ -9,17 +9,16 @@ use lk_agents_abi::voice::room_owner::{RoomIo as _, RoomIoEvent};
 use lk_agents_abi::voice::rtc::{
     AudioInputStream, AudioSource, AudioStreamItem, AudioStreamOptions, AudioTrackFeature,
     ByteStreamIngress, ConnectionState, DisconnectReason, LocalParticipant, ParticipantIdentity,
-    ParticipantKind, ProcessorFailure, RemoteParticipant, RoomEvent, RoomEventSink, RtcError,
-    RtcRoom, StreamInfo, StreamTextOptions, TextStreamIngress, TextStreamWriter, TrackPublication,
-    TrackPublishOptions, TrackSid, TrackSource, Transcription, VideoFrameRef, silence_frame,
+    ParticipantKind, RemoteParticipant, RoomEvent, RoomEventSink, RtcError, RtcRoom, StreamInfo,
+    StreamTextOptions, TextStreamIngress, TextStreamWriter, TrackPublication, TrackPublishOptions,
+    TrackSid, TrackSource, Transcription, VideoFrameRef, silence_frame,
 };
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, AudioFrame, Closed,
     HOST_TEARDOWN_TIMEOUT, StreamOutput, TOPIC_CHAT, Ts, VirtualClock, utils::video::FakeFrame,
 };
 use lk_agents_fuzz::fakes::room::{
-    FailingProcessors, FakeRemoteParticipant, FakeRoom, FakeRtc, FakeTrackPublication, Faults,
-    SdkRx, SdkTx, sdk_queue,
+    FakeRemoteParticipant, FakeRoom, FakeRtc, FakeTrackPublication, SdkRx, SdkTx, sdk_queue,
 };
 use lk_agents_runtime::net::clock::RealClock;
 use lk_agents_runtime::net::task::TokioSpawner;
@@ -589,83 +588,16 @@ fn input(
     clock: Arc<VirtualClock>,
     handler: Option<Arc<PreConnectAudioHandler>>,
 ) -> Arc<ParticipantAudioInput> {
-    session_input(room, clock, AudioInputConfig::default(), handler).0
-}
-
-/// One session's microphone reader, and the processor failures it reports to that session, one
-/// at a time: the session takes each report before the next fits.
-fn session_input(
-    room: &Arc<FakeRoom>,
-    clock: Arc<VirtualClock>,
-    config: AudioInputConfig,
-    handler: Option<Arc<PreConnectAudioHandler>>,
-) -> (Arc<ParticipantAudioInput>, tokio::sync::mpsc::Receiver<ProcessorFailure>) {
     let spawner = Arc::new(TokioSpawner::current());
-    let (failures, reported) = lk_agents_runtime::net::outbox::outbox(1);
-    (ParticipantAudioInput::new(room.clone(), spawner, clock, config, handler, failures), reported)
-}
-
-// Catches: a processor failure reported to every session in the room or once per failed frame,
-// a report dropped because the session had yet to take the previous one, and a recovered
-// processor never reported again.
-#[tokio::test(start_paused = true)]
-async fn a_failing_processor_span_is_one_error_on_the_session_whose_input_failed() {
-    let (room, clock) = fake_room("processor-spans");
-    let user = room.add_participant("user", ParticipantKind::Standard);
-    let mic = user.publish_microphone("TR_mic");
-    // The denoiser rejects frames 0, 1, 3 and 4: two spans, the second after a clean frame.
-    mic.fail_processors(FailingProcessors {
-        denoiser: Faults::Flapping { period: 3, fails: 2 },
-        gain_control: Faults::None,
-        first_ref: 1 << 40,
-        refs: Arc::new(NoRefs),
-        spans: Arc::new(|_, _| {}),
-    });
-    let denoised = AudioInputConfig {
-        noise_cancellation: Some(lk_agents_abi::HostRef::new(1, &(Arc::new(NoRefs) as _))),
-        auto_gain_control: false,
-        pre_connect_audio: false,
-        ..Default::default()
-    };
-    let plain = AudioInputConfig { noise_cancellation: None, ..denoised.clone() };
-    let (failing, mut failing_reports) = session_input(&room, clock.clone(), denoised, None);
-    let (healthy, mut healthy_reports) = session_input(&room, clock, plain, None);
-    for input in [&failing, &healthy] {
-        input.set_participant(Some("user".into())).unwrap();
-        input.handle_event(&subscribed(&user, mic.clone())).unwrap();
-    }
-    yields(4).await;
-    // The frames arrive together: the second span opens before the session took the first report.
-    for chunk in 0..5i16 {
-        mic.push_frame(AudioFrame::new(chunk.to_le_bytes().repeat(480), 24000, 1, 480));
-    }
-    // A backlog may arrive merged: each input hears the five frames' samples.
-    let hearing = async {
-        for input in [&failing, &healthy] {
-            let mut heard = 0;
-            while heard < 5 * 480 {
-                let frame = input.next_frame(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap();
-                heard += frame.expect("the input stopped hearing").samples_per_channel;
-            }
-        }
-    };
-    let reports = async { [failing_reports.recv().await, failing_reports.recv().await] };
-    let ((), reports) =
-        tokio::time::timeout(Duration::from_secs(1), async { tokio::join!(hearing, reports) })
-            .await
-            .expect("every failing span is reported");
-    assert_eq!(reports.map(|failure| failure.unwrap().label), ["fake.Denoiser"; 2]);
-    yields(4).await;
-    assert!(failing_reports.try_recv().is_err(), "one report per failing span");
-    assert!(healthy_reports.try_recv().is_err(), "another session's input never failed");
-    failing.aclose().await;
-    healthy.aclose().await;
-}
-
-struct NoRefs;
-
-impl lk_agents_abi::errors::RefRegistry for NoRefs {
-    fn release(&self, _: u64) {}
+    let (failures, _) = lk_agents_runtime::net::outbox::outbox(1);
+    ParticipantAudioInput::new(
+        room.clone(),
+        spawner,
+        clock,
+        AudioInputConfig::default(),
+        handler,
+        failures,
+    )
 }
 
 #[tokio::test]

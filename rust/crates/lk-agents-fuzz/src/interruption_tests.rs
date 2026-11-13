@@ -370,3 +370,53 @@ fn an_empty_final_transcript_keeps_a_false_interruption_false() {
         "the empty final turned the false interruption into a real one"
     );
 }
+
+// Catches: seeds 104, 155, 352 ... A reply whose partition take the store refused: its task
+// returned without a word, so the close that refusal starts held the speech until the
+// interruption watchdog ended it 5 s later. Nothing was left to cut; the speech ends with the
+// refusal once the store answers its release.
+#[test]
+fn a_refused_partition_take_ends_the_speech_at_once() {
+    use lk_agents_fuzz::drive::{ConnSetup, StorageSetup};
+    use lk_agents_fuzz::record::{StorageOperation, StorageStep};
+    let setup = Setup {
+        tts: false,
+        storage: Some(StorageSetup { faults: true, ..StorageSetup::default() }),
+        conn: Some(ConnSetup { llm: 0, ..ConnSetup::DEFAULT }),
+        ..Setup::default()
+    };
+    let mut refused = 0;
+    for seed in 0..256 {
+        let record = simulate(async {
+            let mut run = Run::start(&setup, seed, Default::default()).await;
+            for input in [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(8_000) },
+            ] {
+                run.apply(&input).await;
+            }
+            run.record
+        });
+        let host = record.host_view();
+        for (at, step) in host.storage() {
+            let StorageStep::Answered {
+                speech,
+                operation: StorageOperation::Acquire,
+                result: Err(_),
+                ..
+            } = step
+            else {
+                continue;
+            };
+            refused += 1;
+            let done = host.speech(*speech).done_announcements().first().map(|(done, _)| *done);
+            assert!(
+                done.is_some_and(|done| done.at_ms < at.at_ms + 1_000),
+                "seed {seed}: the refused take at {} ms ended its speech at {done:?}",
+                at.at_ms
+            );
+            assert!(record.internal_view().speech(*speech).timed_out_at().is_none(), "seed {seed}");
+        }
+    }
+    assert!(refused > 0, "no seed refused a partition take");
+}

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use lk_agents_abi::Clock;
 use lk_agents_abi::HostRef;
-use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError};
+use lk_agents_abi::errors::{ApiError, ApiErrorKind, ErrorKind, ProviderError};
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::signal::{self, Cell};
@@ -205,7 +205,7 @@ impl AttemptMachine {
             return Err(ApiError::connection(Some(
                 "recognition ended before input and transcript completion".into(),
             ))
-            .with_retryable(false));
+            .into_final());
         }
         if let Some(attempt) = self.attempts.current() {
             self.attempts.succeeded(attempt, now);
@@ -289,7 +289,7 @@ impl AttemptMachine {
                 {
                     self.permit = false;
                     self.attempts.cancel(now, &mut Vec::new());
-                    self.error = Some(backoff.abandon().with_retryable(false));
+                    self.error = Some(backoff.abandon().into_final());
                 }
                 // announced by `failure`, once the attempt's own outcome shows it replayable
                 Step::Retry(backoff)
@@ -465,9 +465,11 @@ impl ProviderAttempts {
                 return Ok(());
             }
             let Some(at) = wake else {
-                return Err(ApiError::new("provider request has no pending attempt")
-                    .with_retryable(false)
-                    .into());
+                return Err(ApiError::new(
+                    ErrorKind::InvalidRequest,
+                    "provider request has no pending attempt",
+                )
+                .into());
             };
             self.clock().wait_until(self.at(at)).await;
         }
@@ -539,9 +541,11 @@ impl ProviderAttempts {
         let mut attempt = std::pin::pin!(outcome.wait());
         let joined = |result: Result<Outcome, signal::Ended>| {
             result.unwrap_or_else(|signal::Ended| {
-                Err(ApiError::new("provider attempt task ended without a result")
-                    .with_retryable(false)
-                    .into())
+                Err(ApiError::new(
+                    ErrorKind::InvalidRequest,
+                    "provider attempt task ended without a result",
+                )
+                .into())
             })
         };
         let interrupted = loop {

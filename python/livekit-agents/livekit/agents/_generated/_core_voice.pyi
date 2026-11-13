@@ -215,6 +215,10 @@ class _core_AvatarLifecycle:
         """The avatar's audio output: once the avatar has not joined within [`JOIN_TIMEOUT`], its
         audio fails at once with that error instead of waiting, until the avatar joins.
         """
+    def fail(self, error: BaseException) -> None:
+        """The avatar failed after it started (its audio can no longer reach it): the session's
+        `avatar_error`. The avatar closes itself next.
+        """
     async def aclose(self) -> None:
         """Stops the join wait and the metrics, then, inside a job and while `room` is connected,
         removes the avatar participant from the room through the job's RoomService

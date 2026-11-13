@@ -30,7 +30,7 @@ from .._bindings import (
     redacted_cause,
     run_attempts,
 )
-from .._generated.types import Timeout
+from .._generated.types import ErrorKind, Timeout
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
@@ -45,6 +45,7 @@ __all__ = [
     "WebSocket",
     "WebSocketMessage",
     "WebSocketMessageType",
+    "close_kind",
     "http_session",
     "open",
     "retry_request",
@@ -310,6 +311,13 @@ class WebSocketMessage:
         return value
 
 
+def close_kind(code: int | None, codes: Mapping[int, ErrorKind] | None = None) -> ErrorKind:
+    """What a websocket close code says failed: the provider's own ``codes`` first, then the
+    standard ones. A dropped connection, or a close on purpose the protocol did not expect, is
+    ``connection``."""
+    return (codes or {}).get(code or 0) or _core.websocket_close_kind(code) or "connection"
+
+
 class WebSocket:
     """An open websocket. Sends run under the write limit; reads belong to the protocol."""
 
@@ -331,14 +339,16 @@ class WebSocket:
     def close_code(self) -> int | None:
         return self._ws.close_code
 
-    def close_error(self, message: str) -> APIConnectionError:
+    def close_error(
+        self, message: str, codes: Mapping[int, ErrorKind] | None = None
+    ) -> APIConnectionError:
         """The error to raise when the provider closed the socket: ``message`` with the close
-        code, retryable unless the code refuses the request or the client (policy, auth, invalid
-        data), and the provider's close reason as its ``detail``."""
+        code, the kind the code names (``codes``, the provider's own close codes, first), and the
+        provider's close reason as its ``detail``."""
         code = self._ws.close_code or None
         return APIConnectionError(
             f"{message} (close code {code})" if code else message,
-            retryable=_core.websocket_close_kind(code) != "final",
+            kind=close_kind(code, codes),
             detail=self._close_reason or None,
         )
 
@@ -547,10 +557,10 @@ async def retry_request(
     """Run ``request`` (one HTTP request and the parsing of its answer, such as creating an
     avatar session) under ``conn_options``' retries.
 
-    A 5xx, 429 or connection failure is retried, after at least the provider's ``Retry-After``;
-    nothing is retried once the request may have reached the provider and its answer timed out,
-    since a retry could create a second session. Once the retries are exhausted it raises the
-    last failure.
+    A failure whose kind is retryable is retried, after at least the provider's ``Retry-After``,
+    unless its answer timed out after the request may have reached the provider: a retry then
+    could create a second session. An answer that breaks the provider's contract is a
+    ``protocol`` error, never retried. Once the retries are exhausted it raises the last failure.
     """
     host = _Request(request)
     result = await run_attempts(host, _core.ProviderAttempts("avatar", conn_options, host))
@@ -562,6 +572,7 @@ class _Request:
 
     def __init__(self, request: Callable[[], Awaitable[Any]]) -> None:
         self._request = request
+        self._maybe_accepted = False
         self._core_attempt_task: asyncio.Task[Any] | None = None
         self._core_cancelled = False
 
@@ -570,13 +581,12 @@ class _Request:
         try:
             return await self._request()
         except APITimeoutError as e:
-            if e.timeout in ("pool", "connect"):
-                raise
-            # the request may have been accepted: a retry could repeat it
-            raise APITimeoutError(str(e), timeout=e.timeout, retryable=False) from e
+            # past the connection the request may have been accepted: a retry could repeat it
+            self._maybe_accepted = e.timeout not in ("pool", "connect")
+            raise
 
     def _core_produced(self) -> bool:
-        return False
+        return self._maybe_accepted
 
     def _core_retrying(self, error: Exception) -> None:
         pass

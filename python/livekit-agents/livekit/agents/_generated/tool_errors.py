@@ -12,6 +12,9 @@ class ToolError(Exception):
         super().__init__(message)
         self._message = message
 
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self).__new__, (type(self), *self.args), self.__dict__)
+
     @property
     def message(self) -> str:
         return self._message
@@ -26,6 +29,9 @@ class ModelRetry(Exception):
         super().__init__(message)
         self._message = message
 
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self).__new__, (type(self), *self.args), self.__dict__)
+
     @property
     def message(self) -> str:
         return self._message
@@ -37,6 +43,9 @@ class StopResponse(Exception):
 
     def __init__(self) -> None:
         super().__init__()
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self).__new__, (type(self), *self.args), self.__dict__)
 
 
 __all__ = [

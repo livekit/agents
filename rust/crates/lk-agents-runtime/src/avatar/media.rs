@@ -145,6 +145,10 @@ fn provider_error(error: RtcError) -> ProviderError {
     match error {
         RtcError::Host(error) => error.into(),
         RtcError::Stream(error) => error,
-        error => lk_agents_abi::errors::ApiError::new(error.to_string()).into(),
+        error => lk_agents_abi::errors::ApiError::new(
+            lk_agents_abi::errors::ErrorKind::Connection,
+            error.to_string(),
+        )
+        .into(),
     }
 }

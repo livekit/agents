@@ -468,9 +468,12 @@ impl<I: Send + 'static> HostSink<I> {
             gate.admit()?;
             let ending = matches!(entry, Entry::EndInput);
             if !ending && queue.entries.len() >= SINK_QUEUE {
-                return Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(format!(
-                    "the host stream is not taking its input: {SINK_QUEUE} entries are waiting"
-                ))));
+                return Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Server,
+                    format!(
+                        "the host stream is not taking its input: {SINK_QUEUE} entries are waiting"
+                    ),
+                )));
             }
             if ending {
                 gate.end();
@@ -489,7 +492,10 @@ impl<I: Send + 'static> HostSink<I> {
     fn schedule(&self, py: Python<'_>) -> PyResult<()> {
         let (shared, lost) = (self.shared.clone(), self.shared.clone());
         let release = move || {
-            let closed = lk_agents_abi::errors::ApiError::new("the host event loop closed");
+            let closed = lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::Connection,
+                "the host event loop closed",
+            );
             lost.stop.gate.fail(closed.into());
             // Dropped after the guard: an item's host objects may run Python finalizers.
             let _dropped = {

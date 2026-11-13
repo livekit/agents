@@ -198,7 +198,7 @@ impl SessionChatCtx {
             self.items.insert(idx, entry.clone());
             CommitOutcome::Added
         } else {
-            // Replaced in place under the committing agent; an item in history stays there.
+            // Replaced under the committing agent; an item in history stays where it is.
             let idx = self
                 .items
                 .iter()
@@ -212,23 +212,29 @@ impl SessionChatCtx {
                     (true, false) => Visibility::Model,
                     (false, _) => Visibility::History,
                 };
-            self.items[idx] = Committed { visibility, ..entry.clone() };
             if !was.history() && visibility.history() {
+                // Joining the history, it takes its place there by its own instant, as an item
+                // added now would: one the model saw earlier carried an earlier stamp.
+                self.items.remove(idx);
+                let at = self.find_insertion_index(&entry.item);
+                self.items.insert(at, Committed { visibility, ..entry.clone() });
                 CommitOutcome::Added
             } else {
+                self.items[idx] = Committed { visibility, ..entry.clone() };
                 CommitOutcome::Replaced
             }
         };
         (entry, outcome)
     }
 
-    /// The partition as storage reloaded it for a turn that read `read`, in the partition's order. Rows the
-    /// turn read are the partition's to change: another turn's edits replace them (a row given back as
-    /// the turn read it is the turn's own rendering, never an edit), and rows it removed,
-    /// compacted away or abandoned leave. Rows the turn did not read (another agent's,
-    /// one dropped from the view, one committed since) stay where their instant puts them, and
-    /// what another turn added joins as the host's, everyone's to read. An entry kept keeps its
-    /// source, visibility and agent. True when the record changed.
+    /// The partition as storage reloaded it for a turn that read `read`. The record keeps its own
+    /// order: storage holds each row at the position the record gave it, so its order is never
+    /// the record's to take. Rows the turn read are the partition's to change: another turn's
+    /// edits replace them in place (a row given back as the turn read it is the turn's own
+    /// rendering, never an edit), and rows it removed, compacted away or abandoned leave. Rows
+    /// the turn did not read (another agent's, one dropped from the view, one committed since)
+    /// stay. What another turn added joins where its instant puts it, as the host's, everyone's
+    /// to read. True when the record changed.
     pub(crate) fn reload_transport(
         &mut self,
         read: &[ChatItem],
@@ -237,30 +243,39 @@ impl SessionChatCtx {
     ) -> bool {
         let read: BTreeMap<&str, &ChatItem> = read.iter().map(|item| (item.id(), item)).collect();
         let before: Vec<ChatItem> = self.items.iter().map(|entry| entry.item.clone()).collect();
-        let mut held: BTreeMap<String, Committed> =
-            self.items.drain(..).map(|entry| (entry.item.id().to_owned(), entry)).collect();
-        // A row the turn read that the record does not hold is the request's own (its prompt, its
-        // new message): never the partition's to add.
-        self.items = items
+        let mut partition: Vec<Option<ChatItem>> = items
             .into_iter()
             .filter(|item| item.id() != INSTRUCTIONS_MESSAGE_ID)
-            .filter_map(|item| match held.remove(item.id()) {
-                // An unread row is not the partition's to change: the record's entry stays.
-                Some(entry) if read.get(item.id()).is_none_or(|read| *read == &item) => Some(entry),
-                Some(entry) => Some(Committed { item, ..entry }),
-                None if read.contains_key(item.id()) => None,
-                None => Some(Committed {
-                    item,
-                    source: Source::HostCtx,
-                    visibility: Visibility::Both,
-                    agent: agent.to_owned(),
-                }),
-            })
+            .map(Some)
             .collect();
+        let mut take = |id: &str| {
+            partition.iter_mut().find(|row| row.as_ref().is_some_and(|row| row.id() == id))?.take()
+        };
+        self.items.retain_mut(|entry| {
+            let id = entry.item.id().to_owned();
+            match (take(&id), read.get(id.as_str())) {
+                // An unread row is not the partition's to change; a read one given back as read is
+                // the turn's own rendering.
+                (Some(row), Some(read)) if *read != &row => {
+                    entry.item = row;
+                    true
+                }
+                (Some(_), _) | (None, None) => true,
+                (None, Some(_)) => false,
+            }
+        });
         self.ids = self.items.iter().map(|entry| entry.item.id().to_owned()).collect();
-        for (id, entry) in held.into_iter().filter(|(id, _)| !read.contains_key(id.as_str())) {
+        // A row the turn read that the record does not hold is the request's own (its prompt, its
+        // new message): never the partition's to add.
+        for row in partition.into_iter().flatten().filter(|row| !read.contains_key(row.id())) {
+            let entry = Committed {
+                item: row,
+                source: Source::HostCtx,
+                visibility: Visibility::Both,
+                agent: agent.to_owned(),
+            };
             let at = self.find_insertion_index(&entry.item);
-            self.ids.insert(id);
+            self.ids.insert(entry.item.id().to_owned());
             self.items.insert(at, entry);
         }
         let changed = !before.iter().eq(self.items.iter().map(|entry| &entry.item));
@@ -367,33 +382,52 @@ impl SessionChatCtx {
         group.map(|c| c.item.created_at()).max()
     }
 
-    /// How many leading items have their place for good while a call stamped `open_since` is still
-    /// open: what was stamped no later, then that call's group of tool items, since its output
-    /// lands right after them. `group` names the open turn's items.
-    pub fn settled_prefix(
-        &self,
-        open_since: std::time::SystemTime,
-        group: impl Fn(&Source) -> bool,
-    ) -> usize {
-        let after = self.items.iter().position(|c| c.item.created_at() > open_since);
-        let Some(after) = after else { return self.items.len() };
-        let tools = self.items[after..].iter().take_while(|c| {
-            matches!(c.item, ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_))
-                && group(&c.source)
-        });
-        after + tools.count()
-    }
-
     /// After the last item stamped at or before this one: ties go after.
     fn find_insertion_index(&self, item: &ChatItem) -> usize {
-        let at = item.created_at();
-        for (i, c) in self.items.iter().enumerate().rev() {
-            if c.item.created_at() <= at {
-                return i + 1;
-            }
-        }
-        0
+        insertion_index(self.items.iter().map(|c| &c.item), item)
     }
+
+    /// Every item as the record will hold it once `pending` is committed: each one inserted as a
+    /// commit inserts it, by its own instant, one already held replaced in place.
+    pub fn projected(&self, pending: impl IntoIterator<Item = ChatItem>) -> Vec<ChatItem> {
+        let mut items: Vec<ChatItem> = self.items().cloned().collect();
+        for item in pending {
+            commit_by_instant(&mut items, item);
+        }
+        items
+    }
+}
+
+/// `item` committed to `items` as the record commits it: in place of its earlier telling, else
+/// after the last item stamped at or before it (ties go after).
+pub fn commit_by_instant(items: &mut Vec<ChatItem>, item: ChatItem) {
+    match items.iter_mut().find(|held| held.id() == item.id()) {
+        Some(held) => *held = item,
+        None => {
+            let at = insertion_index(items.iter(), &item);
+            items.insert(at, item);
+        }
+    }
+}
+
+/// When `call_id`'s group ends in `items`: its call and the calls and outputs right after it.
+pub fn call_group_end(items: &[ChatItem], call_id: &str) -> Option<std::time::SystemTime> {
+    let call = items
+        .iter()
+        .position(|item| matches!(item, ChatItem::FunctionCall(call) if call.call_id == call_id))?;
+    let group = items[call..].iter().take_while(|item| {
+        matches!(item, ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_))
+    });
+    group.map(ChatItem::created_at).max()
+}
+
+/// After the last item stamped at or before `item`: ties go after.
+fn insertion_index<'a>(
+    mut items: impl DoubleEndedIterator<Item = &'a ChatItem> + ExactSizeIterator,
+    item: &ChatItem,
+) -> usize {
+    let at = item.created_at();
+    items.rposition(|held| held.created_at() <= at).map_or(0, |i| i + 1)
 }
 
 #[cfg(test)]
@@ -451,5 +485,52 @@ mod tests {
         ));
         let items: Vec<_> = ctx.items().cloned().collect();
         assert_eq!(items, [output("Monday"), said("hello, edited")]);
+    }
+
+    // Catches (seed 127): a reload took the partition's order for the rows the turn read, so a
+    // message the session held before the reply moved after it, in `session.history` and, once
+    // saved again, in the thread. The record keeps its order; another turn's row joins by its
+    // instant.
+    #[test]
+    fn a_reload_keeps_the_records_order() {
+        let at = |s: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(s);
+        let said = |id: &str, s| ChatItem::Message(ChatMessage::text(id, Role::User, id, at(s)));
+        let mut ctx = SessionChatCtx::new("caller");
+        for item in [said("asked", 1), said("reply", 3)] {
+            let _ = ctx.commit(item, Source::HostCtx, Visibility::Both, "caller");
+        }
+        let read = [said("asked", 1), said("reply", 3)];
+        let partition = vec![said("reply", 3), said("text", 2), said("asked", 1)];
+        assert!(ctx.reload_transport(&read, partition, "caller"));
+        let ids: Vec<_> = ctx.items().map(|item| item.id().to_owned()).collect();
+        assert_eq!(ids, ["asked", "text", "reply"]);
+    }
+
+    // Catches (seed 289): a realtime reply the model held before it was heard joined the history
+    // where its earlier telling sat, ahead of the person's words said before it was heard, so
+    // the history and the thread held it out of order. Joining the history, an item takes its
+    // place by its own instant.
+    #[test]
+    fn an_item_joining_the_history_takes_its_place_by_its_instant() {
+        let at = |s: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(s);
+        let msg = |id: &str, role, s| ChatItem::Message(ChatMessage::text(id, role, id, at(s)));
+        let mut ctx = SessionChatCtx::new("caller");
+        let _ = ctx.commit(
+            msg("reply", Role::Assistant, 1),
+            Source::HostCtx,
+            Visibility::Model,
+            "caller",
+        );
+        let _ =
+            ctx.commit(msg("asked", Role::User, 2), Source::HostCtx, Visibility::Both, "caller");
+        let (_, outcome) = ctx.commit(
+            msg("reply", Role::Assistant, 3),
+            Source::HostCtx,
+            Visibility::Both,
+            "caller",
+        );
+        assert_eq!(outcome, CommitOutcome::Added);
+        let ids: Vec<_> = ctx.history().map(|item| item.id().to_owned()).collect();
+        assert_eq!(ids, ["asked", "reply"]);
     }
 }

@@ -278,10 +278,10 @@ impl Segmenter {
                 recoverable: false,
                 req_id: None,
                 code: Some("duplex_transcript_backlog_exceeded".into()),
-                provider_error: Some(
-                    lk_agents_abi::errors::ApiError::new("duplex transcript backlog exceeded")
-                        .with_retryable(false),
-                ),
+                provider_error: Some(lk_agents_abi::errors::ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                    "duplex transcript backlog exceeded",
+                )),
             }));
             let mut step = out.into();
             self.close_burst(&mut step);

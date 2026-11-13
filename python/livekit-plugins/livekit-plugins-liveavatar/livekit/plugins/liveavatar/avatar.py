@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Literal, Required
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 import livekit.rtc as rtc
@@ -18,6 +18,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    APIError,
     APITimeoutError,
     NotGivenOr,
     VoiceSession,
@@ -359,7 +360,12 @@ class AvatarSession(BaseAvatarSession):
                         )
                         return
                     raise ws_conn.close_error("LiveAvatar connection closed unexpectedly")
-                event = _SERVER_EVENT.validate_json(msg.data, strict=True)
+                try:
+                    event = _SERVER_EVENT.validate_json(msg.data, strict=True)
+                except ValidationError as e:
+                    raise APIError(
+                        "LiveAvatar sent a malformed event", kind="protocol", detail=str(msg.data)
+                    ) from e
                 self._handle_server_event(event)
 
         try:

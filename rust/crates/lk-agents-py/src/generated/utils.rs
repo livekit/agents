@@ -584,6 +584,670 @@ impl AudioConverter {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/utils/socket.rs.
+type SocketSessionImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SocketSession;
+
+/// `_core.SocketSession`: one provider socket stream. `run()` connects through the protocol,
+/// sends its input, hands it each received frame, keeps the connection alive and rotates it;
+/// failures retry under `conn_options`.
+#[pyclass(frozen, name = "SocketSession", module = "livekit.agents._core")]
+pub struct SocketSession(pub(crate) ::std::sync::Arc<SocketSessionImpl>);
+
+#[pymethods]
+impl SocketSession {
+    /// `label` names the provider in retries. With `mux`, the stream is the context
+    /// `context_id` on one of its shared sockets.
+    #[new]
+    #[pyo3(signature = (host, conn_options, label, *, mux = None, context_id = None))]
+    fn new(
+        py: Python<'_>,
+        host: Bound<'_, PyAny>,
+        conn_options: Bound<'_, PyAny>,
+        label: ::std::string::String,
+        mux: Option<Bound<'_, PyAny>>,
+        context_id: ::std::option::Option<::std::string::String>,
+    ) -> PyResult<SocketSession> {
+        crate::py_calls::check_pid()?;
+        let env = crate::process::env();
+        let host = crate::generated::utils::SocketHostProxy::from_host(host.as_any())?;
+        let conn_options =
+            crate::generated::records::connect::api_connect_options_from_py(conn_options.as_any())?;
+        let mux = mux
+            .map(|v| {
+                crate::py_objects::native::<dyn ::lk_agents_abi::utils::socket::SharedSockets>(
+                    v.as_any(),
+                )
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "mux",
+                            ": expected a native SocketMux"
+                        ))
+                    })
+                })
+            })
+            .transpose()?;
+        let out = py.detach(|| <SocketSessionImpl as ::lk_agents_abi::utils::socket::SocketSession>::new(&env, host, conn_options, label, mux, context_id)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(SocketSession(::std::sync::Arc::new(out)))
+    }
+
+    /// Rotate the connection now: goodbye, drain, close, connect again. No retry is spent.
+    #[pyo3(signature = (reason))]
+    fn reconnect(&self, py: Python<'_>, reason: ::std::string::String) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <SocketSessionImpl as ::lk_agents_abi::utils::socket::SocketSession>::reconnect(
+                &self.0, reason,
+            )
+        });
+        Ok(())
+    }
+
+    /// Run until the input ended and the provider finished, or the failure that ended it.
+    fn run<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let cx = crate::py_calls::entry_cx()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <SocketSessionImpl as ::lk_agents_abi::utils::socket::SocketSession>::run(&this, cx)
+                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// Stop: the socket is closed, bounded, and `run()` returns.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () =
+                <SocketSessionImpl as ::lk_agents_abi::utils::socket::SocketSession>::aclose(&this)
+                    .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/utils/socket.rs.
+type SocketMuxImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SocketMux;
+
+fn _extract_socket_mux_new_max_contexts(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SocketMuxNewMaxContextsInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<u32>(obj.as_any(), "max_contexts")).map(Some)
+    }
+}
+type SocketMuxNewMaxContextsInput = ::std::option::Option<u32>;
+
+/// `_core.SocketMux`: the shared sockets of a multiplexing provider, opened on demand, each
+/// carrying up to `max_contexts` streams and replaced after `max_session_duration`.
+#[pyclass(frozen, name = "SocketMux", module = "livekit.agents._core")]
+pub struct SocketMux(pub(crate) ::std::sync::Arc<SocketMuxImpl>);
+
+#[pymethods]
+impl SocketMux {
+    #[new]
+    #[pyo3(signature = (host, *, max_contexts = None))]
+    fn new(
+        py: Python<'_>,
+        host: Bound<'_, PyAny>,
+        #[pyo3(from_py_with = _extract_socket_mux_new_max_contexts)]
+        max_contexts: SocketMuxNewMaxContextsInput,
+    ) -> PyResult<SocketMux> {
+        crate::py_calls::check_pid()?;
+        let env = crate::process::env();
+        let host = crate::generated::utils::MuxHostProxy::from_host(host.as_any())?;
+        let out = py.detach(|| {
+            <SocketMuxImpl as ::lk_agents_abi::utils::socket::SocketMux>::new(
+                &env,
+                host,
+                max_contexts,
+            )
+        });
+        ::pyo3::PyResult::Ok(SocketMux(::std::sync::Arc::new(out)))
+    }
+
+    /// Options changed: idle sockets close, busy ones close once their streams end.
+    fn invalidate(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <SocketMuxImpl as ::lk_agents_abi::utils::socket::SocketMux>::invalidate(&self.0)
+        });
+        Ok(())
+    }
+
+    /// Close every socket, bounded.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () =
+                <SocketMuxImpl as ::lk_agents_abi::utils::socket::SocketMux>::aclose(&this).await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::utils::socket::SharedSockets`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::utils::socket::SharedSockets>(),
+        read: |obj| match obj.cast::<SocketMux>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::utils::socket::SharedSockets> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/utils/socket.rs.
+
+/// [`::lk_agents_abi::utils::socket::SocketHost`] over a host `livekit.agents.http.SocketProtocol`.
+#[derive(Clone)]
+pub struct SocketHostProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
+    /// The `notify` calls, delivered in order.
+    notifier: crate::py_calls::Notifier,
+}
+
+impl SocketHostProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::utils::socket::SocketHost>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::utils::socket::SocketHost>(obj)?
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::utils::socket::SocketHost>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::utils::socket::SocketHost>(obj)?
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::utils::socket::SocketHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::utils::socket::SocketHost>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `SocketHost` is shared, never handed over to be owned",
+            ));
+        }
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
+        };
+        Ok(SocketHostProxy {
+            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            context,
+            notifier: ::std::default::Default::default(),
+        })
+    }
+}
+
+impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
+    fn connect(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        conn_options: ::lk_agents_abi::ApiConnectOptions,
+    ) -> ::lk_agents_abi::BoxFuture<
+        '_,
+        ::std::result::Result<
+            ::lk_agents_abi::utils::socket::SocketConnection,
+            ::lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let conn_options_arg = conn_options;
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "SocketHost._core_connect",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [crate::generated::records::connect::api_connect_options_to_py(
+                        py,
+                        conn_options_arg,
+                    )?];
+                Ok((
+                    host.bind(py).getattr("_core_connect")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::socket::socket_connection_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
+            })
+        })
+    }
+
+    fn next(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+    ) -> ::lk_agents_abi::BoxFuture<
+        '_,
+        ::std::result::Result<
+            ::lk_agents_abi::utils::socket::SocketSend,
+            ::lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "SocketHost._core_next",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_next")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::socket::socket_send_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
+            })
+        })
+    }
+
+    fn on_message(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        frame: ::lk_agents_abi::utils::socket::WsFrame,
+    ) -> ::lk_agents_abi::BoxFuture<
+        '_,
+        ::std::result::Result<bool, ::lk_agents_abi::errors::ProviderError>,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let frame_arg = frame;
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "SocketHost._core_on_message",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [crate::generated::records::socket::ws_frame_to_py(py, frame_arg)?];
+                Ok((
+                    host.bind(py).getattr("_core_on_message")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let out = (o.extract::<bool>()).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
+            })
+        })
+    }
+
+    fn retrying(&self, error: ::lk_agents_abi::errors::ProviderError) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let error_arg = error;
+        let error_arg = match ::pyo3::Python::attach(
+            |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+                Ok((crate::py_errors::ExceptionValue::to_exception(error_arg, py)?).unbind())
+            },
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!(target: ::lk_agents_abi::LOG_TARGET, "SocketHost._core_retrying failed: {error}");
+                return;
+            }
+        };
+        ::lk_agents_runtime::host::notify(
+            &self.notifier,
+            "SocketHost._core_retrying",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            false,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [error_arg.into_bound(py)];
+                Ok((
+                    host.bind(py).getattr("_core_retrying")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/utils/socket.rs.
+
+/// [`::lk_agents_abi::utils::socket::MuxHost`] over a host `livekit.agents.http.Multiplexer`.
+#[derive(Clone)]
+pub struct MuxHostProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
+}
+
+impl MuxHostProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::utils::socket::MuxHost>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::utils::socket::MuxHost>(obj)?
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::utils::socket::MuxHost>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::utils::socket::MuxHost>(obj)?
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::utils::socket::MuxHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::utils::socket::MuxHost>(obj)?.is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `MuxHost` is shared, never handed over to be owned",
+            ));
+        }
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
+        };
+        Ok(MuxHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
+    }
+}
+
+impl ::lk_agents_abi::utils::socket::MuxHost for MuxHostProxy {
+    fn connect(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        conn_options: ::lk_agents_abi::ApiConnectOptions,
+    ) -> ::lk_agents_abi::BoxFuture<
+        '_,
+        ::std::result::Result<
+            ::lk_agents_abi::utils::socket::SocketConnection,
+            ::lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let conn_options_arg = conn_options;
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "MuxHost._core_connect",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [crate::generated::records::connect::api_connect_options_to_py(
+                        py,
+                        conn_options_arg,
+                    )?];
+                Ok((
+                    host.bind(py).getattr("_core_connect")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::socket::socket_connection_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
+            })
+        })
+    }
+
+    fn route(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        frame: ::lk_agents_abi::utils::socket::WsFrame,
+    ) -> ::lk_agents_abi::BoxFuture<
+        '_,
+        ::std::result::Result<
+            ::std::option::Option<::std::string::String>,
+            ::lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let frame_arg = frame;
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "MuxHost._core_route",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [crate::generated::records::socket::ws_frame_to_py(py, frame_arg)?];
+                Ok((
+                    host.bind(py).getattr("_core_route")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let out = (if o.is_none() { Ok(None) } else { (o.extract::<::std::string::String>()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
+            })
+        })
+    }
+
+    fn open_context(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        context_id: ::std::string::String,
+    ) -> ::lk_agents_abi::BoxFuture<
+        '_,
+        ::std::result::Result<
+            ::std::vec::Vec<::lk_agents_abi::utils::socket::WsFrame>,
+            ::lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let context_id_arg = context_id;
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "MuxHost._core_open_context",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [::pyo3::IntoPyObjectExt::into_bound_py_any(context_id_arg, py)?];
+                Ok((
+                    host.bind(py).getattr("_core_open_context")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::socket::ws_frame_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
+            })
+        })
+    }
+
+    fn close_context(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        context_id: ::std::string::String,
+    ) -> ::lk_agents_abi::BoxFuture<
+        '_,
+        ::std::result::Result<
+            ::std::vec::Vec<::lk_agents_abi::utils::socket::WsFrame>,
+            ::lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let context_id_arg = context_id;
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "MuxHost._core_close_context",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [::pyo3::IntoPyObjectExt::into_bound_py_any(context_id_arg, py)?];
+                Ok((
+                    host.bind(py).getattr("_core_close_context")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::socket::ws_frame_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
+            })
+        })
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/utils/video.rs.
 
 /// [`::lk_agents_abi::utils::video::RtcVideoFrame`] over a host `livekit.rtc.VideoFrame`.

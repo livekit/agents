@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use crate::headers::{Headers, gateway_headers};
 use crate::llm::request::ChatArgs;
 use crate::llm::{Auth, BodyEncoding, LlmOptions, models};
-use lk_agents_abi::errors::{ApiError, Invalid, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, Invalid, ProviderError};
 use lk_agents_abi::llm::fallback::{HostChatContext, HostTools};
 use lk_agents_abi::llm::inference::{ProviderEndpoint, ResponseFormat};
 use lk_agents_abi::types::provider::{NativeLabel, ProviderEvents};
@@ -218,7 +218,9 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         extra_kwargs: Option<Extra>,
     ) -> Result<LlmChunks, ApiError> {
         let conn_options = conn_options.unwrap_or_default();
-        conn_options.validate().map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
+        conn_options
+            .validate()
+            .map_err(|e| ApiError::new(ErrorKind::InvalidRequest, e.to_string()))?;
         let args = ChatArgs {
             extra_kwargs,
             parallel_tool_calls,
@@ -293,7 +295,7 @@ impl Llm for GatewayLlm {
         Box::pin(async move {
             req.conn_options
                 .validate()
-                .map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
+                .map_err(|e| ApiError::new(ErrorKind::InvalidRequest, e.to_string()))?;
             let policy = Policy::from_options(&req.conn_options);
             let args = ChatArgs {
                 extra_kwargs: req.extra.clone(),

@@ -180,10 +180,13 @@ class AvatarSession(BaseAvatarSession):
                 conn_options=self._conn_options,
             ) as response:
                 await response.raise_for_status()
+                text = await response.text()
                 try:
-                    return _JSON_VALUE.validate_json(await response.read())
+                    return _JSON_VALUE.validate_json(text)
                 except ValueError as exc:
-                    raise APIError("Runway returned an invalid response", retryable=False) from exc
+                    raise APIError(
+                        "Runway returned an invalid response", kind="protocol", detail=text
+                    ) from exc
 
         payload = await http.retry_request(request, conn_options=self._conn_options)
         session_id = payload.get("id") if isinstance(payload, dict) else None

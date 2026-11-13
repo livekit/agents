@@ -131,7 +131,7 @@ class _core_A2ADoor:
     async def aclose(self) -> None: ...
 
 class _core_RemoteInteraction:
-    """One delegation of a tool call to a remote agent (docs/agents.md "Remote agents")."""
+    """One delegation of a tool call to a remote agent."""
     def __new__(
         cls,
         endpoint: str,

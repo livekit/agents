@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
 import httpx2 as httpx
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from yarl import URL
 
 import openai
@@ -57,7 +57,7 @@ from openai.types.shared_params import ResponsesModel
 from ..log import logger
 from ..models import supports_reasoning_effort
 from ..tools import OpenAITool
-from ..utils import http_timeout
+from ..utils import error_kind, http_timeout
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "ultrafast"]
 Verbosity = Literal["low", "medium", "high"]
@@ -164,10 +164,17 @@ class _ResponsesWebsocket:
                 if raw_msg.type is not http.WebSocketMessageType.TEXT:
                     continue
 
-                event = _WS_EVENT.validate_json(raw_msg.data)
+                try:
+                    event = _WS_EVENT.validate_json(raw_msg.data)
+                except ValidationError:
+                    raise APIError(
+                        "OpenAI Responses sent a malformed event",
+                        kind="protocol",
+                        detail=raw_msg.text,
+                    ) from None
                 attempts.progress()
                 yield event
-                if event["type"] in [
+                if event.get("type") in [
                     "response.completed",
                     "response.failed",
                     "response.incomplete",
@@ -551,7 +558,15 @@ class LLMStream(llm.LLMStream):
                 async for raw_event in self._websocket.generate_response(
                     payload, attempts=self._core_attempts, conn_options=self._conn_options
                 ):
-                    self._process_event(self._parse_ws_event(raw_event))
+                    try:
+                        parsed = self._parse_ws_event(raw_event)
+                    except ValidationError:
+                        raise APIError(
+                            "OpenAI Responses sent a malformed event",
+                            kind="protocol",
+                            detail=json.dumps(raw_event),
+                        ) from None
+                    self._process_event(parsed)
 
                 if not self._response_completed:
                     raise APIConnectionError()
@@ -654,28 +669,21 @@ class LLMStream(llm.LLMStream):
         return chunk
 
     def _handle_error(self, event: ResponseErrorEvent) -> None:
-        error_code = -1
-        try:
-            error_code = int(event.code) if event.code else -1
-        except ValueError:
-            pass
-        raise APIStatusError(event.message, status_code=error_code, retryable=False)
+        if event.code and event.code.isdigit():
+            raise APIStatusError(event.message, status_code=int(event.code))
+        raise APIError(event.message, kind=error_kind(event.code))
 
     def _handle_response_failed(self, event: ResponseFailedEvent) -> None:
         err = event.response.error
-        raise APIStatusError(
-            err.message if err else "response.failed",
-            status_code=-1,
-            retryable=False,
+        raise APIError(
+            err.message if err else "response.failed", kind=error_kind(err.code if err else None)
         )
 
     def _handle_response_incomplete(self, event: ResponseIncompleteEvent) -> None:
         details = event.response.incomplete_details
         reason = details.reason if details else None
-        raise APIStatusError(
-            f"response incomplete: {reason or 'reason unavailable'}",
-            status_code=-1,
-            retryable=False,
+        raise APIError(
+            f"response incomplete: {reason or 'reason unavailable'}", kind="invalid_request"
         )
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:

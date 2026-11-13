@@ -586,9 +586,13 @@ partition, so the partition index can seek past unrelated history in either
 direction. The local registry indexes `(scope, last_active, thread_id)` for thread
 listings. Writes already use WAL and batch each commit in one transaction.
 
-`items.seq` is a model-context position within a partition; `pos` on `items` and `tasks` is the
-insertion order, never reused, the platform's page cursor; `id` on
-`events` and `inbox` is the insertion order.
+`items.seq` is the item's position in its partition's conversation: the lease holder writes
+every row with its place in the whole history it holds, so a row written early (a checkpoint)
+moves to its place when a later write puts something before it, and history reads order by
+`(seq, pos)`, never by write order. A run without the lease only appends: its rows take their
+place after what it loaded, ties going in insertion order. `pos` on `items` and `tasks` is the
+insertion order, never reused, the platform's page cursor; `id` on `events` and `inbox` is the
+insertion order.
 
 | Table            | One row per                   | Columns                                                                                                                                                              |
 | ---------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

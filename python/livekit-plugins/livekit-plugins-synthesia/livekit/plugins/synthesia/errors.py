@@ -18,6 +18,7 @@ import enum
 import json
 
 from livekit.agents import APIError
+from livekit.agents.types import ErrorKind
 
 __all__ = [
     "ErrorType",
@@ -79,11 +80,18 @@ class ErrorType(enum.Enum):
     """
 
 
-_RETRYABLE_TYPES = {
-    ErrorType.RATE_LIMITED,
-    ErrorType.CONCURRENCY_LIMIT,
-    ErrorType.TIMEOUT,
-    ErrorType.CONNECTION,
+_KINDS: dict[ErrorType, ErrorKind] = {
+    ErrorType.AUTH: "auth",
+    ErrorType.FEATURE_NOT_IN_PLAN: "quota",
+    ErrorType.INVALID_ROOM_TOKEN: "auth",
+    ErrorType.LIVEKIT_CREDENTIALS_REJECTED: "auth",
+    ErrorType.INVALID_SESSION_REQUEST: "invalid_request",
+    ErrorType.UNKNOWN_AVATAR: "invalid_request",
+    ErrorType.QUOTA_EXCEEDED: "quota",
+    ErrorType.RATE_LIMITED: "rate_limit",
+    ErrorType.CONCURRENCY_LIMIT: "rate_limit",
+    ErrorType.TIMEOUT: "timeout",
+    ErrorType.CONNECTION: "connection",
 }
 
 
@@ -91,8 +99,7 @@ class SynthesiaError(APIError):
     """Every error the Synthesia plugin raises. Also a :class:`~livekit.agents.APIError`.
 
     - ``type`` identifies what went wrong; see :class:`ErrorType`.
-    - ``retryable`` reports whether retrying the same call could plausibly
-      succeed, and defaults based on ``type`` unless overridden.
+    - ``kind`` follows ``type``; an error without a type is a refused request.
     - ``retry_after`` carries the server-provided back-off in seconds for a
       ``RATE_LIMITED`` or ``CONCURRENCY_LIMIT`` error, when the backend
       supplied one.
@@ -108,7 +115,6 @@ class SynthesiaError(APIError):
         *,
         type: ErrorType | None = None,
         body: object | None = None,
-        retryable: bool | None = None,
         retry_after: float | None = None,
         status: int | None = None,
         request_id: str | None = None,
@@ -118,9 +124,8 @@ class SynthesiaError(APIError):
         self.retry_after = retry_after
         self.status = status
         self.request_id = request_id
-        if retryable is None:
-            retryable = type in _RETRYABLE_TYPES
-        super().__init__(message_text, body=body, retryable=retryable)
+        kind = _KINDS[type] if type is not None else "invalid_request"
+        super().__init__(message_text, kind=kind, body=body)
 
 
 def _stringify(value: object) -> str:

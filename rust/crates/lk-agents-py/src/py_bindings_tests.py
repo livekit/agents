@@ -820,10 +820,10 @@ async def test_voice_failure_keeps_input_requirements_on_the_raised_exception(
         )
     ]
     run: asyncio.Future[object] = asyncio.get_running_loop().create_future()
-    original = APIError("tts failed") if provider else None
+    original = APIError("tts failed", kind="server") if provider else None
     failed = RunFailedWire(
         run=run,
-        error=APIError("the model request failed: tts failed", retryable=False),
+        error=APIError("the model request failed: tts failed", kind="invalid_request"),
         input_requirements=requirements,
         provider_error=original,
     )

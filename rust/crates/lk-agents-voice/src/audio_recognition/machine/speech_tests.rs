@@ -16,6 +16,9 @@ struct Turns {
     now: Ts,
     deadlines: Vec<(Timer, Ts)>,
     ended: Vec<EndOfTurnInfo>,
+    /// Verdicts the driver has not given yet (its `on_user_turn_completed` hook still runs).
+    withheld: Vec<EndOfTurnInfo>,
+    withholding: bool,
 }
 
 impl Turns {
@@ -26,7 +29,14 @@ impl Turns {
         let eff = r.set_turn_detection_mode(Ts::ZERO, TurnDetectionMode::Stt);
         r.input_started_at = Some(input_started_at);
         r.wall_anchor = Some(WallAnchor { wall: 1_000.0, at: Ts::ZERO });
-        let mut turns = Turns { r, now: Ts::ZERO, deadlines: Vec::new(), ended: Vec::new() };
+        let mut turns = Turns {
+            r,
+            now: Ts::ZERO,
+            deadlines: Vec::new(),
+            ended: Vec::new(),
+            withheld: Vec::new(),
+            withholding: false,
+        };
         turns.apply(eff);
         turns
     }
@@ -40,6 +50,10 @@ impl Turns {
                 }
                 AudioRecognitionEffect::ClearDeadline(timer) => {
                     self.deadlines.retain(|(t, _)| *t != timer);
+                }
+                AudioRecognitionEffect::EndOfTurn(info) if self.withholding => {
+                    self.ended.push(info.clone());
+                    self.withheld.push(info);
                 }
                 AudioRecognitionEffect::EndOfTurn(info) => {
                     let verdict = if info.late {
@@ -104,6 +118,20 @@ impl Turns {
             ev.alternatives.push(alt);
         }
         self.stt(at, ev);
+    }
+
+    /// The driver gives the withheld verdicts: each turn replied to.
+    fn give_verdicts(&mut self) {
+        self.withholding = false;
+        for info in std::mem::take(&mut self.withheld) {
+            let decision = UserTurnCommitDecision {
+                verdict: UserTurnCommitVerdict::Reply,
+                committed: true,
+                cancel_false_interruption: false,
+            };
+            let eff = self.r.on_commit_verdict(self.now, &info, &decision);
+            self.apply(eff);
+        }
     }
 
     fn committed(&self) -> Vec<&str> {
@@ -190,4 +218,27 @@ fn late_finals_belong_to_the_correct_turn() {
     t.end(ms(7_000), Some(6.8));
     t.at(ms(9_000));
     assert_eq!(t.committed(), ["utterance a", "utterance b", "utterance c"]);
+}
+
+// Catches (seed 127): a committed turn's words stayed in the accumulator until the driver's
+// verdict, which waits on `on_user_turn_completed`. What the person said meanwhile joined them and
+// was cleared with them; and a turn whose verdict never matched the phase left its words for the
+// next turn, which repeated them. A turn's words leave the accumulator when it commits.
+#[test]
+fn a_committed_turn_owns_its_words() {
+    let mut t = Turns::stt_only(Ts::ZERO);
+    let min_delay = t.r.min_delay();
+    t.withholding = true;
+    t.start(ms(100), None);
+    t.final_(ms(900), "okay thanks bye", 0.8);
+    t.end(ms(1_000), Some(0.8));
+    t.at(ms(1_000).saturating_add(min_delay));
+    assert_eq!(t.committed(), ["okay thanks bye"]);
+    // The person speaks again while the turn's hook runs; its verdict comes after.
+    t.start(ms(3_000), None);
+    t.final_(ms(3_900), "can you hear me", 3.8);
+    t.end(ms(4_000), Some(3.8));
+    t.give_verdicts();
+    t.at(ms(9_000));
+    assert_eq!(t.committed(), ["okay thanks bye", "can you hear me"]);
 }

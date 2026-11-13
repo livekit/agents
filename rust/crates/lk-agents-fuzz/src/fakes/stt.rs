@@ -203,6 +203,7 @@ pub(super) fn deliver(
     use lk_agents_abi::SpeechEventType as T;
     if let Input::SttFail { .. } = what {
         let error = ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+            lk_agents_abi::errors::ErrorKind::Server,
             "recogniser failed mid-stream",
         ));
         return sender.send(Err(error)).is_ok();

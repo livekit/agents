@@ -106,23 +106,23 @@ trait HttpError {
 
 impl HttpError for ApiError {
     fn invalid(message: impl std::fmt::Display) -> Self {
-        Self::status(message.to_string(), 400, None, Some(false))
+        Self::status(message.to_string(), 400, None)
     }
 
     fn unauthorized(message: impl Into<String>) -> Self {
-        Self::status(message, 401, None, Some(false))
+        Self::status(message, 401, None)
     }
 
     fn forbidden(message: impl Into<String>) -> Self {
-        Self::status(message, 403, None, Some(false))
+        Self::status(message, 403, None)
     }
 
     fn not_found(message: impl Into<String>) -> Self {
-        Self::status(message, 404, None, Some(false))
+        Self::status(message, 404, None)
     }
 
     fn internal(_error: impl std::fmt::Display) -> Self {
-        Self::status("storage request failed", 500, None, Some(false))
+        Self::status("storage request failed", 500, None).into_final()
     }
 }
 

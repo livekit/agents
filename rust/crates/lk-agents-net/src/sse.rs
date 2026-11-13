@@ -265,7 +265,7 @@ impl EventStream {
 
     pub async fn next(&mut self) -> Result<Option<SseEvent>, lk_agents_abi::errors::ApiError> {
         use crate::http::exchange::HttpEvent;
-        use lk_agents_abi::errors::ApiError;
+        use lk_agents_abi::errors::{ApiError, ErrorKind};
 
         loop {
             if self.ended {
@@ -300,7 +300,7 @@ impl EventStream {
                     self.pending.extend(events.into_iter().map(Ok));
                     if let Err(error) = result {
                         self.pending
-                            .push_back(Err(ApiError::new(error.to_string()).with_retryable(false)));
+                            .push_back(Err(ApiError::new(ErrorKind::Protocol, error.to_string())));
                     }
                 }
                 Ok(HttpEvent::End) => {
@@ -309,7 +309,7 @@ impl EventStream {
                         .decoder
                         .finish()
                         .map(|()| None)
-                        .map_err(|error| ApiError::new(error.to_string()).with_retryable(false));
+                        .map_err(|error| ApiError::new(ErrorKind::Protocol, error.to_string()));
                 }
                 Err(error) => {
                     self.ended = true;

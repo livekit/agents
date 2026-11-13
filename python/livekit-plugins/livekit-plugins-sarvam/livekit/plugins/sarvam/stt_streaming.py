@@ -32,6 +32,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     __version__ as livekit_version,
@@ -39,7 +40,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 
 from ._utils import looks_like_error_text
@@ -917,13 +918,15 @@ class RealtimeSpeechStream(stt.RecognizeStream):
                     await self._handle_message(RealtimeMessage.model_validate_json(msg.data))
                 except ValidationError as e:
                     if any(error["type"] != "json_invalid" for error in e.errors()):
-                        raise APIConnectionError(
-                            "Sarvam realtime STT sent an invalid event", retryable=False
+                        raise APIError(
+                            "Sarvam realtime STT sent an invalid event",
+                            kind="protocol",
+                            detail=msg.text,
                         ) from e
                     if looks_like_error_text(msg.data):
-                        raise APIStatusError(
+                        raise APIError(
                             "Sarvam realtime STT sent a non-JSON error",
-                            request_id=self._request_id or None,
+                            kind="invalid_request",
                             body={"raw_message": msg.data},
                             detail=msg.text,
                         ) from e
@@ -1211,12 +1214,20 @@ class RealtimeSpeechStream(stt.RecognizeStream):
 
         code = data.code if "code" in data.model_fields_set else "unknown"
         error_message = data.message if "message" in data.model_fields_set else code
-        status_code = data.status_code if data.status_code is not None else -1
+        # an unavailable model may come back; without a status the frame refused the request
+        kind: ErrorKind | None = "server" if code == "model_unavailable" else None
+        if data.status_code is None:
+            raise APIError(
+                "Sarvam realtime STT error",
+                kind=kind or "invalid_request",
+                body=data.model_dump(exclude_unset=True),
+                detail=str(error_message),
+            )
         raise APIStatusError(
             "Sarvam realtime STT error",
-            status_code=status_code,
+            status_code=data.status_code,
+            kind=kind,
             request_id=self._request_id or None,
             body=data.model_dump(exclude_unset=True),
-            retryable=code == "model_unavailable",
             detail=str(error_message),
         )

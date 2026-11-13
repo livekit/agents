@@ -259,7 +259,7 @@ async def test_provider_failure_while_phrasing_keeps_the_tools_input_requirement
     from livekit.agents.llm import FunctionToolCall
     from tests.fakes import FakeLLM
 
-    failure = APIStatusError("phrasing failed", status_code=401, retryable=False)
+    failure = APIStatusError("phrasing failed", status_code=401)
     model = FakeLLM([FunctionToolCall(name="ask", arguments="{}", call_id="city-call"), failure])
     agent = Agent(name="desk", instructions="Ask for the missing city.", llm=model)
 

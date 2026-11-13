@@ -25,8 +25,8 @@ from typing_extensions import TypedDict
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     http,
@@ -447,7 +447,9 @@ class SpeechStream(stt.RecognizeStream):
                 try:
                     data = _TRANSCRIPT.validate_json(msg.data)
                 except ValidationError as error:
-                    raise APIConnectionError("Malformed RTZR response", retryable=False) from error
+                    raise APIError(
+                        "Malformed RTZR response", kind="protocol", detail=str(msg.data)
+                    ) from error
 
                 self._check_error_response(data)
 

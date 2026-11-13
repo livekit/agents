@@ -193,7 +193,6 @@ python/                 # The Python SDK
 └── livekit-plugins/    # Provider plugins (openai, anthropic, google, deepgram, etc.)
 tests/                  # host, plugins, smoke and e2e suites over the shared fakes.py
 examples/               # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
-otel/                   # Generated OTel registry and consumer schema (never edited)
 docs/                   # The 2.0 design, one feature per page
 bench/                  # Startup, IPC, host-boundary and sentence benchmarks
 ```
@@ -231,6 +230,7 @@ rust/crates/            # The Rust core, built into livekit.agents._core
 ├── lk-agents-runtime   # The I/O layer of voice and text: executors, room I/O, drivers, HostInvoker
 ├── lk-agents-py        # Module registration, generated bindings; the only crate with pyo3
 └── lk-agents-fuzz      # DST: sans-I/O crates and the runtime's real executors over port fakes
+rust/otel/              # Generated OTel registry and consumer schema (never edited)
 rust/ai_slop/           # Build tools: lk-agents-bindgen, lk-agents-host-derive, lk-agents-codegen
                         # (declarations IR, markers, generation); only their generated output is reviewed
 ```
@@ -441,6 +441,8 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 
 ### Layout and tests
 - Handwritten `.rs` files stay within 1,250 lines; split by responsibility. [check]
+- Code states the rule or contract it follows and never points at a docs page (`docs/<path>.md`):
+  the pointer drifts. Covers Rust sources, `Cargo.toml` and Python. [check]
 - Out-of-line tests live in sibling `*_tests.rs` files named for their subject; keep small tests
   inline. [review]
 - Python binding contracts live beside their implementation in `lk-agents-py/src/*_tests.py`

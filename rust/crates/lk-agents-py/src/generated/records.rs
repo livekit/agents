@@ -7268,6 +7268,19 @@ pub mod host_errors {
                 .ok()
             })
             .flatten();
+        let kind = obj
+            .getattr("kind")
+            .ok()
+            .and_then(|v| {
+                let v = &v;
+                (if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::types::error_kind_from_py(v)).map(Some)
+                })
+                .ok()
+            })
+            .flatten();
         let retryable = obj
             .getattr("retryable")
             .ok()
@@ -7308,6 +7321,7 @@ pub mod host_errors {
             .flatten();
         let value = ::lk_agents_abi::errors::ProviderErrorMetadata {
             status_code,
+            kind,
             retryable,
             detail,
             retry_after,
@@ -16328,6 +16342,255 @@ pub mod simulation {
     }
 }
 
+pub mod socket {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/utils/socket.rs.
+
+    pub fn ws_frame_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::utils::socket::WsFrame> {
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::utils::socket::WsFrame::Text(
+                obj.extract::<::std::string::String>()?,
+            ));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyBytes>()
+            || obj.is_instance_of::<::pyo3::types::PyByteArray>()
+            || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
+        {
+            return Ok(::lk_agents_abi::utils::socket::WsFrame::Binary(if obj
+                .is_instance_of::<::pyo3::types::PyBytes>()
+                || obj.is_instance_of::<::pyo3::types::PyByteArray>()
+                || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
+            {
+                crate::py_values::owned_bytes(obj.as_any(), "WsFrame.Binary")
+            } else {
+                obj.try_iter().and_then(|items| {
+                    items
+                        .map(|item| {
+                            let item = item?;
+                            crate::py_values::number_from_py::<u8>(item.as_any(), "WsFrame.Binary")
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                })
+            }?));
+        }
+        Err(super::not_a(obj, "WsFrame"))
+    }
+
+    pub fn ws_frame_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::utils::socket::WsFrame,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::utils::socket::WsFrame::Text(x) => {
+                ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?
+            }
+            ::lk_agents_abi::utils::socket::WsFrame::Binary(x) => {
+                ::pyo3::types::PyBytes::new(py, &x).into_any()
+            }
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/utils/socket.rs.
+    static SOCKET_TARGET: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn socket_target_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::utils::socket::SocketTarget> {
+        let py = obj.py();
+        if !obj.is_instance(SOCKET_TARGET.import(
+            py,
+            "livekit.agents._generated.socket",
+            "SocketTarget",
+        )?)? {
+            return Err(super::not_a(obj, "SocketTarget"));
+        }
+        Ok(::lk_agents_abi::utils::socket::SocketTarget {
+            url: crate::py_values::attr_with(obj, "SocketTarget", "url", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            headers: crate::py_values::attr_with(obj, "SocketTarget", "headers", |v| {
+                v.cast::<::pyo3::types::PyDict>()?
+                    .iter()
+                    .map(|(key, item)| {
+                        let (key, item) = (&key, &item);
+                        Ok((
+                            key.extract::<::std::string::String>()?,
+                            item.extract::<::std::string::String>()?,
+                        ))
+                    })
+                    .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+            })?,
+            params: crate::py_values::attr_with(obj, "SocketTarget", "params", |v| {
+                v.cast::<::pyo3::types::PyDict>()?
+                    .iter()
+                    .map(|(key, item)| {
+                        let (key, item) = (&key, &item);
+                        Ok((
+                            key.extract::<::std::string::String>()?,
+                            item.extract::<::std::string::String>()?,
+                        ))
+                    })
+                    .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+            })?,
+            protocols: crate::py_values::attr_with(obj, "SocketTarget", "protocols", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            item.extract::<::std::string::String>()
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "SocketTarget.protocols: expected a list or tuple",
+                    ))
+                }
+            })?,
+            request_id_header: crate::py_values::attr_with(
+                obj,
+                "SocketTarget",
+                "request_id_header",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (v.extract::<::std::string::String>()).map(Some)
+                    }
+                },
+            )?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/utils/socket.rs.
+    static KEEPALIVE_FRAME: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn keepalive_frame_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::utils::socket::KeepaliveFrame> {
+        let py = obj.py();
+        if !obj.is_instance(KEEPALIVE_FRAME.import(
+            py,
+            "livekit.agents._generated.socket",
+            "KeepaliveFrame",
+        )?)? {
+            return Err(super::not_a(obj, "KeepaliveFrame"));
+        }
+        Ok(::lk_agents_abi::utils::socket::KeepaliveFrame {
+            interval: crate::py_values::attr_with(obj, "KeepaliveFrame", "interval", |v| {
+                crate::py_values::number_from_py::<f64>(v, "KeepaliveFrame.interval")
+            })?,
+            frame: crate::py_values::attr_with(obj, "KeepaliveFrame", "frame", |v| {
+                crate::generated::records::socket::ws_frame_from_py(v)
+            })?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/utils/socket.rs.
+    static SOCKET_CONNECTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn socket_connection_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::utils::socket::SocketConnection> {
+        let py = obj.py();
+        if !obj.is_instance(SOCKET_CONNECTION.import(
+            py,
+            "livekit.agents._generated.socket",
+            "SocketConnection",
+        )?)? {
+            return Err(super::not_a(obj, "SocketConnection"));
+        }
+        Ok(::lk_agents_abi::utils::socket::SocketConnection {
+            target: crate::py_values::attr_with(obj, "SocketConnection", "target", |v| {
+                crate::generated::records::socket::socket_target_from_py(v)
+            })?,
+            keepalive: crate::py_values::attr_with(obj, "SocketConnection", "keepalive", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::socket::keepalive_frame_from_py(v)).map(Some)
+                }
+            })?,
+            goodbye: crate::py_values::attr_with(obj, "SocketConnection", "goodbye", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::socket::ws_frame_from_py(v)).map(Some)
+                }
+            })?,
+            max_session_duration: crate::py_values::attr_with(
+                obj,
+                "SocketConnection",
+                "max_session_duration",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (crate::py_values::number_from_py::<f64>(
+                            v,
+                            "SocketConnection.max_session_duration",
+                        ))
+                        .map(Some)
+                    }
+                },
+            )?,
+            proxy: crate::py_values::attr_with(obj, "SocketConnection", "proxy", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/utils/socket.rs.
+    static SOCKET_SEND: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn socket_send_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::utils::socket::SocketSend> {
+        let py = obj.py();
+        if !obj.is_instance(SOCKET_SEND.import(
+            py,
+            "livekit.agents._generated.socket",
+            "SocketSend",
+        )?)? {
+            return Err(super::not_a(obj, "SocketSend"));
+        }
+        Ok(::lk_agents_abi::utils::socket::SocketSend {
+            frames: crate::py_values::attr_with(obj, "SocketSend", "frames", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::socket::ws_frame_from_py(item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "SocketSend.frames: expected a list or tuple",
+                    ))
+                }
+            })?,
+            boundary: crate::py_values::attr_with(obj, "SocketSend", "boundary", |v| {
+                v.extract::<bool>()
+            })?,
+            end: crate::py_values::attr_with(obj, "SocketSend", "end", |v| v.extract::<bool>())?,
+        })
+    }
+}
+
 pub mod storage_class {
     use pyo3::prelude::*;
 
@@ -23976,14 +24239,38 @@ pub mod types {
 
     // Declared in rust/crates/lk-agents-abi/src/errors/api.rs.
 
-    pub fn close_kind_to_py<'py>(
+    pub fn error_kind_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::errors::ErrorKind> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "auth" => Ok(::lk_agents_abi::errors::ErrorKind::Auth),
+            "quota" => Ok(::lk_agents_abi::errors::ErrorKind::Quota),
+            "invalid_request" => Ok(::lk_agents_abi::errors::ErrorKind::InvalidRequest),
+            "rate_limit" => Ok(::lk_agents_abi::errors::ErrorKind::RateLimit),
+            "server" => Ok(::lk_agents_abi::errors::ErrorKind::Server),
+            "connection" => Ok(::lk_agents_abi::errors::ErrorKind::Connection),
+            "timeout" => Ok(::lk_agents_abi::errors::ErrorKind::Timeout),
+            "protocol" => Ok(::lk_agents_abi::errors::ErrorKind::Protocol),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "ErrorKind: {other:?} is not one of 'auth', 'quota', 'invalid_request', 'rate_limit', 'server', 'connection', 'timeout', 'protocol'"
+            ))),
+        }
+    }
+
+    pub fn error_kind_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::errors::CloseKind,
+        value: ::lk_agents_abi::errors::ErrorKind,
     ) -> PyResult<Bound<'py, PyAny>> {
         let value = match value {
-            ::lk_agents_abi::errors::CloseKind::Normal => "normal",
-            ::lk_agents_abi::errors::CloseKind::Final => "final",
-            ::lk_agents_abi::errors::CloseKind::Retryable => "retryable",
+            ::lk_agents_abi::errors::ErrorKind::Auth => "auth",
+            ::lk_agents_abi::errors::ErrorKind::Quota => "quota",
+            ::lk_agents_abi::errors::ErrorKind::InvalidRequest => "invalid_request",
+            ::lk_agents_abi::errors::ErrorKind::RateLimit => "rate_limit",
+            ::lk_agents_abi::errors::ErrorKind::Server => "server",
+            ::lk_agents_abi::errors::ErrorKind::Connection => "connection",
+            ::lk_agents_abi::errors::ErrorKind::Timeout => "timeout",
+            ::lk_agents_abi::errors::ErrorKind::Protocol => "protocol",
         };
         ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }

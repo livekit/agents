@@ -22,7 +22,7 @@ import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -52,7 +52,7 @@ class _SynthesisResponse(BaseModel):
 
 
 class _WebSocketMessage(BaseModel):
-    type: str
+    type: str = ""
     audio_content: str | None = None
     request_id: int | str | None = None
 
@@ -235,11 +235,18 @@ class ChunkedStream(tts.ChunkedStream):
                 conn_options=self._conn_options,
             ) as resp:
                 await resp.raise_for_status()
-                response = _SynthesisResponse.model_validate(await resp.json())
+                text = await resp.text()
+                try:
+                    response = _SynthesisResponse.model_validate_json(text)
+                except ValidationError as e:
+                    raise APIError(
+                        "Resemble returned an invalid response", kind="protocol", detail=text
+                    ) from e
 
                 if not response.success:
                     raise APIError(
                         "Resemble API returned failure",
+                        kind="invalid_request",
                         body=response.model_dump_json(exclude_unset=True),
                         detail="; ".join(response.issues),
                     )
@@ -365,7 +372,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("Unexpected Resemble message type %s", msg.type)
                     continue
 
-                data = _WebSocketMessage.model_validate_json(msg.data)
+                try:
+                    data = _WebSocketMessage.model_validate_json(msg.data)
+                except ValidationError as e:
+                    raise APIError(
+                        "Resemble sent a malformed message", kind="protocol", detail=str(msg.data)
+                    ) from e
                 if data.type == "audio":
                     if data.audio_content:
                         b64data = base64.b64decode(data.audio_content)

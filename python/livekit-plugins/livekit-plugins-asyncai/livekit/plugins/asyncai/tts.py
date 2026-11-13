@@ -317,7 +317,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     try:
                         b64data = base64.b64decode(audio, validate=True)
                     except binascii.Error as e:
-                        raise APIError("Async sent malformed audio", retryable=False) from e
+                        raise APIError(
+                            "Async sent malformed audio", kind="protocol", detail=str(audio)
+                        ) from e
                     read_deadline.audio_received()
                     output_emitter.push(b64data)
                 else:

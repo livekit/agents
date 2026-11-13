@@ -276,7 +276,7 @@ pub struct ResumeAgentActivity {
     pub agent_label: String,
 }
 
-/// A synchronous stall of the event loop (docs/internals/telemetry.md "Event-loop stalls"), under
+/// A synchronous stall of the event loop, under
 /// the job's first `agent_session`, else the span current when the loop's watch opened. Error
 /// status at the `error` severity; at most 30 per minute.
 #[span(name = "event_loop_blocked", parent = Current)]

@@ -20,7 +20,7 @@ everything to Rust.
    string literal.
 3. **Consumers see no accidental change.** LiveKit Cloud reads exact names,
    types, units, parents and record shapes. A change to any of them shows up as a
-   generated schema diff (`otel/schema.json`) in review.
+   generated schema diff (`rust/otel/schema.json`) in review.
 4. **Telemetry is spelled `telemetry::`.** Outside the telemetry modules, every
    telemetry touchpoint is a path that starts with `telemetry::`: no telemetry
    item is imported under a short name. A reader who cares only about the logic
@@ -828,11 +828,11 @@ Rules:
 
 | Output | Path | Reader |
 | --- | --- | --- |
-| Weaver registry | `otel/registry/` and `otel/manifest.yaml` | `weaver registry check` in CI |
-| Consumer schema | `otel/schema.json` | Cloud consumers; review of every wire change |
+| Weaver registry | `rust/otel/registry/` and `rust/otel/manifest.yaml` | `weaver registry check` in CI |
+| Consumer schema | `rust/otel/schema.json` | Cloud consumers; review of every wire change |
 | Python constants | `livekit/agents/_generated/semconv.py` | the framework's Python code |
 
-The agents registry depends on three registries, each pinned by git ref in `otel/manifest.yaml`:
+The agents registry depends on three registries, each pinned by git ref in `rust/otel/manifest.yaml`:
 
 | Registry | Pin | Owns |
 | --- | --- | --- |
@@ -845,7 +845,7 @@ redeclared here. Everything else, every agents span, attribute, event, metric
 and record, is owned here. Adding one needs no change outside this repository.
 The generated registry references every `semconv` constant (the
 `registry.livekit.agents.semconv` group), and the `Telemetry registry` workflow runs
-`weaver registry check -r otel` against the pins: a mistyped constant, or a key
+`weaver registry check -r rust/otel` against the pins: a mistyped constant, or a key
 a pinned registry no longer defines, fails CI. `lk-agents-codegen --check` keeps the
 registry in sync with the declarations.
 A key moves to protocol only when a second producer emits it.

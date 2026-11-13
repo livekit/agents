@@ -1,5 +1,5 @@
-"""Local storage, and the contract of a handler the native turn runs (docs/server.md
-"Progress, checkpoints and cancellation")."""
+"""Local storage, and the contract of a handler the native turn runs: its progress,
+checkpoints and cancellation."""
 
 import asyncio
 import contextvars

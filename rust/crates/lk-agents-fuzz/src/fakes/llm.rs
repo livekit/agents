@@ -171,6 +171,7 @@ pub(super) fn deliver(
         }
         Input::LlmFail { .. } => sender
             .send(Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::Server,
                 "injected provider failure",
             ))))
             .is_ok(),

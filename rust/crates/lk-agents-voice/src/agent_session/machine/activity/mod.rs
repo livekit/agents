@@ -791,13 +791,6 @@ impl AgentActivity {
     pub(crate) fn finish_step(&mut self) {
         self.live_speech_at_final = false;
     }
-    /// When the earliest call still running of a reply released at its interruption was made.
-    pub(crate) fn outliving_since(&self) -> Option<std::time::SystemTime> {
-        (self.outliving_tools.iter())
-            .flat_map(|speech| self.tools.live(*speech))
-            .map(|running| running.call.created_at)
-            .min()
-    }
     pub(crate) fn retire_speech_later(&mut self, speech: SpeechId) {
         self.speech_scheduler.retire_later(speech);
     }

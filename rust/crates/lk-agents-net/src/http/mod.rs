@@ -9,6 +9,7 @@ use std::task::{Context, Poll};
 use crate::signal;
 use crate::transport::{Headers, HttpRequest};
 use futures_util::StreamExt;
+use lk_agents_abi::errors::ErrorKind;
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_core::request::AttemptFailure;
 use tokio::sync::mpsc;
@@ -28,7 +29,8 @@ pub fn gzip(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The host's `APIError` helpers: an HTTP status's message as the native client words it.
+/// The host's `APIError` helpers: an HTTP status's message as the native client words it, and
+/// the kind a status or a kind's retry decision.
 pub struct HttpErrors;
 
 impl lk_agents_abi::errors::ApiErrorFunctions for HttpErrors {
@@ -36,8 +38,12 @@ impl lk_agents_abi::errors::ApiErrorFunctions for HttpErrors {
         lk_agents_abi::errors::http_error_message(message, status, reason.as_deref())
     }
 
-    fn retryable_for_status(status_code: i64, retryable: Option<bool>) -> bool {
-        lk_agents_abi::errors::retryable_for_status(status_code, retryable)
+    fn error_kind_for_status(status_code: i64, kind: Option<ErrorKind>) -> ErrorKind {
+        kind.unwrap_or_else(|| ErrorKind::for_status(status_code))
+    }
+
+    fn error_kind_retryable(kind: ErrorKind) -> bool {
+        kind.retryable()
     }
 }
 

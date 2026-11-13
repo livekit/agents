@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Literal, TypedDict
 from urllib.parse import quote
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
@@ -40,13 +40,22 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.stt import SpeechEventType, STTCapabilities
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
 from ._utils import TRACE_ID_HEADER, trace_id_from_headers
 from .log import logger
 from .models import STTBatchResponse, STTRealtimeSampleRates, STTResponse, STTWord
+
+# ElevenLabs STT error messages by what failed
+_ERROR_KINDS: dict[str, ErrorKind] = {
+    "auth_error": "auth",
+    "quota_exceeded": "quota",
+    "transcriber_error": "server",
+    "input_error": "invalid_request",
+    "error": "server",
+}
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
@@ -593,7 +602,14 @@ class SpeechStream(stt.RecognizeStream):
                     logger.warning("unexpected ElevenLabs STT message type %s", msg.type)
                     continue
 
-                self._process_stream_event(json.loads(msg.data))
+                try:
+                    event = json.loads(msg.data)
+                    response = STTResponse.model_validate(event)
+                except (json.JSONDecodeError, ValidationError):
+                    raise APIError(
+                        "ElevenLabs STT sent a malformed message", kind="protocol", detail=msg.text
+                    ) from None
+                self._process_stream_event(event, response)
 
         ws: http.WebSocket | None = None
 
@@ -687,9 +703,8 @@ class SpeechStream(stt.RecognizeStream):
             conn_options=self._conn_options,
         )
 
-    def _process_stream_event(self, data: object) -> None:
+    def _process_stream_event(self, data: object, response: STTResponse) -> None:
         """Process incoming WebSocket messages from ElevenLabs"""
-        response = STTResponse.model_validate(data)
         message_type = response.message_type
         text = response.text
         words = response.words or []
@@ -775,19 +790,12 @@ class SpeechStream(stt.RecognizeStream):
             logger.debug("Session started with ID: %s", session_id)
 
         # Error handling for known ElevenLabs error types
-        elif message_type in (
-            "auth_error",
-            "quota_exceeded",
-            "transcriber_error",
-            "input_error",
-            "error",
-        ):
-            details_suffix = " - " + response.details if response.details else ""
-            # a rejected key, an exhausted quota or bad input fail the same way on a retry
+        elif message_type in _ERROR_KINDS:
+            details_suffix = f" - {response.details}" if response.details else ""
             raise APIError(
                 f"ElevenLabs STT {message_type}",
+                kind=_ERROR_KINDS[message_type],
                 body=data,
-                retryable=message_type in ("transcriber_error", "error"),
                 detail=f"{response.message}{details_suffix}",
             )
         else:

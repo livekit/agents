@@ -465,7 +465,11 @@ fn cancellation_retains_a_reported_question_before_its_sibling_settles() {
 #[test]
 fn model_failure_retains_a_reported_question_before_the_stream_ends() {
     let (mut driver, request, sibling, call_id) = a_reported_question_with_a_pending_sibling(true);
-    let error = lk_agents_abi::errors::ApiError::new("provider failed").into();
+    let error = lk_agents_abi::errors::ApiError::new(
+        lk_agents_abi::errors::ErrorKind::Server,
+        "provider failed",
+    )
+    .into();
     driver.send(AgentRunEvent::LlmFailed { request, error });
     let effects =
         driver.send(AgentRunEvent::ToolSettled { call: sibling, outcome: ToolOutcome::Cancelled });

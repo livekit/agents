@@ -99,6 +99,9 @@ pub struct AlignedTranscript {
     /// Stamps that found no word yet (a voice that expanded "$5" to "five dollars"): the words
     /// the next matching stamp skips over take their time.
     held: Vec<TranscriptChunk>,
+    /// Where the last word shown started: silent text after it (an emoji, closing markup) shows
+    /// with it at the end.
+    last_start: Option<f64>,
 }
 
 /// How far ahead a stamp may find its word: a voice that read "$5" as "five dollars" stamps words
@@ -225,6 +228,7 @@ impl AlignedTranscript {
             // the voice is ahead of the transcript it was given: show what it said
             None if words.is_empty() => {
                 self.words.push_str(&stamp.text);
+                self.last_start = stamp.start_time;
                 return vec![AlignedTranscriptEffect::CaptureTimed(stamp.clone())];
             }
             None if self.held.len() < LOOKAHEAD || unfinished(words[0]) => {
@@ -265,6 +269,7 @@ impl AlignedTranscript {
                 None => (skipped.start_time, skipped.start_time),
             };
             (self.chunk, self.byte) = piece.next;
+            self.last_start = start_time;
             for chunk in piece.chunks {
                 self.words.push_str(&chunk.text);
                 // syntax glued to its word shows when the word starts, at no cost
@@ -287,12 +292,22 @@ impl AlignedTranscript {
         }
         let mut effects = Vec::new();
         if self.stamped {
-            let rest: Vec<TranscriptChunk> = self
-                .pending(said)
-                .into_iter()
-                .flat_map(|p| p.chunks)
-                .filter(|c| !c.text.is_empty())
-                .collect();
+            let mut pending = self.pending(said).into_iter().peekable();
+            // silent text after the last word shown is the voice's too: it shows with that word
+            while let Some(start_time) = self.last_start
+                && let Some(piece) = pending.next_if(|p| p.word.is_none())
+            {
+                for chunk in piece.chunks.into_iter().filter(|c| !c.text.is_empty()) {
+                    self.words.push_str(&chunk.text);
+                    effects.push(AlignedTranscriptEffect::CaptureTimed(TranscriptChunk {
+                        start_time: Some(start_time),
+                        end_time: Some(start_time),
+                        ..chunk
+                    }));
+                }
+            }
+            let rest: Vec<TranscriptChunk> =
+                pending.flat_map(|p| p.chunks).filter(|c| !c.text.is_empty()).collect();
             for chunk in &rest {
                 self.words.push_str(&chunk.text);
             }

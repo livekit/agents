@@ -331,17 +331,17 @@ def _decode_audio(audio: str) -> bytes:
     try:
         return base64.b64decode(audio, validate=True)
     except binascii.Error as e:
-        raise APIConnectionError("NeuPhonic sent malformed audio", retryable=False) from e
+        raise APIError("NeuPhonic sent malformed audio", kind="protocol") from e
 
 
-def _error(resp: _Response) -> APIStatusError:
+def _error(resp: _Response) -> APIError:
     # the status code decides retrying: auth, quota and invalid requests are 4xx
-    return APIStatusError(
-        "NeuPhonic returned an error",
-        status_code=resp.get("status_code") or -1,
-        body=resp,
-        detail=str(resp.get("errors")),
-    )
+    detail = str(resp.get("errors"))
+    if status_code := resp.get("status_code"):
+        return APIStatusError(
+            "NeuPhonic returned an error", status_code=status_code, body=resp, detail=detail
+        )
+    return APIError("NeuPhonic returned an error", kind="invalid_request", body=resp, detail=detail)
 
 
 def _parse_sse_message(message: str) -> _Response | None:
@@ -362,7 +362,7 @@ def _parse_sse_message(message: str) -> _Response | None:
     try:
         message_dict = _RESPONSE.validate_json(value)
     except ValidationError as error:
-        raise APIConnectionError("Malformed Neuphonic response", retryable=False) from error
+        raise APIError("Malformed Neuphonic response", kind="protocol", detail=value) from error
 
     if message_dict.get("errors") is not None:
         raise _error(message_dict)
@@ -451,8 +451,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     try:
                         resp = _RESPONSE.validate_json(msg.data)
                     except ValidationError as error:
-                        raise APIConnectionError(
-                            "Malformed Neuphonic response", retryable=False
+                        raise APIError(
+                            "Malformed Neuphonic response", kind="protocol", detail=msg.text
                         ) from error
 
                     if resp.get("type") == "error":

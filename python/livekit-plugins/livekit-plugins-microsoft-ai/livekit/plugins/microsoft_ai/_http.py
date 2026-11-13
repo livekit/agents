@@ -59,12 +59,8 @@ def positive_timeout(value: float, name: str) -> None:
 def status_error(service: str, status: int) -> APIError:
     # Core TTS treats 499 as local cancellation. A remote HTTP 499 is still a failure.
     if status == 499:
-        return APIError(f"Microsoft AI {service} returned HTTP 499", retryable=False)
-    return APIStatusError(
-        f"Microsoft AI {service} request failed",
-        status_code=status,
-        retryable=status in (408, 429) or 500 <= status < 600,
-    )
+        return APIError(f"Microsoft AI {service} returned HTTP 499", kind="invalid_request")
+    return APIStatusError(f"Microsoft AI {service} request failed", status_code=status)
 
 
 class HTTPClient:

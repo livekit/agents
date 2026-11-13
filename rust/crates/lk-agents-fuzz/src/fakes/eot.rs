@@ -68,6 +68,7 @@ impl EotDetector for FakeEot {
             match waited {
                 Ok(Ok(answer)) => answer,
                 _ => Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Server,
                     "end-of-turn prediction did not arrive",
                 ))),
             }
@@ -88,6 +89,7 @@ pub(super) fn deliver(
             Ok(prediction)
         }
         Input::EotFail { .. } => Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+            lk_agents_abi::errors::ErrorKind::Server,
             "end-of-turn predictor failed",
         ))),
         _ => return false,

@@ -50,7 +50,7 @@ impl StreamOutput<SynthesizedAudio> for VecSource {
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
         Box::pin(async move {
             if self.fail_after == Some(self.emitted) {
-                return Err(ApiError::status("rate limited", 429, None, None).into());
+                return Err(ApiError::status("rate limited", 429, None).into());
             }
             match self.frames.pop_front() {
                 Some(a) => {

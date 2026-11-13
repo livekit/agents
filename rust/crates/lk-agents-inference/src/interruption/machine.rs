@@ -6,7 +6,7 @@ use crate::interruption::event::{
 use crate::interruption::options::InterruptionOptions;
 use crate::interruption::proto::{ServerMessage, Verdict};
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::{ApiError, ProviderSaid};
+use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderSaid};
 use lk_agents_abi::turn::detector::ReqId;
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -108,17 +108,9 @@ impl StreamError {
                 format!("LiveKit Adaptive Interruption connection closed unexpectedly: {data}"),
                 status,
                 None,
-                None,
             ),
         }
         .with_body(format!("ws_msg.data={data:?} ws_msg.extra={extra:?}"))
-    }
-
-    fn status(message: String, status_code: i64, retryable: Option<bool>) -> Self {
-        StreamError {
-            request: None,
-            error: ApiError::status(message, status_code, None, retryable),
-        }
     }
 }
 
@@ -218,7 +210,7 @@ impl InterruptionMachine {
         let request = self.overlap_request;
         let outcome = self.on_input(input, wall).map_err(|error| StreamError {
             request: None,
-            error: ApiError::new(error.to_string()).with_retryable(false),
+            error: ApiError::new(ErrorKind::InvalidRequest, error.to_string()),
         })?;
         match outcome {
             Some(InputOutcome::Infer(samples)) => self.admit_inference(samples, now),
@@ -282,7 +274,7 @@ impl InterruptionMachine {
     fn abandon(&mut self, message: &str) -> StreamError {
         let request = self.overlap_request;
         self.reset_state();
-        StreamError { request, error: ApiError::new(message.to_owned()).with_retryable(false) }
+        StreamError { request, error: ApiError::new(ErrorKind::InvalidRequest, message.to_owned()) }
     }
 
     pub fn overlap_request(&self) -> Option<ReqId> {
@@ -430,13 +422,17 @@ impl InterruptionMachine {
 
     pub fn check_inflight_timeout(&self, now: Ts) -> Result<(), StreamError> {
         if self.next_deadline().is_some_and(|deadline| now >= deadline) {
-            return Err(StreamError::status(
-                format!(
-                    "interruption inference timed out after {:.1}s (ws)",
-                    self.inference_timeout.as_secs_f64()
-                ),
-                408,
-                Some(false),
+            // the session's own deadline: a late answer is useless, never waited for again
+            return Err(StreamError::from(
+                ApiError::status(
+                    format!(
+                        "interruption inference timed out after {:.1}s (ws)",
+                        self.inference_timeout.as_secs_f64()
+                    ),
+                    408,
+                    None,
+                )
+                .into_final(),
             ));
         }
         Ok(())
@@ -488,19 +484,18 @@ impl InterruptionMachine {
             ServerMessage::SessionCreated { default_threshold } => {
                 // #6034: "error when no interruption threshold is known".
                 if self.threshold.is_none() && default_threshold.is_none() {
-                    return Err(StreamError::status(
+                    return Err(StreamError::from(ApiError::new(
+                        ErrorKind::Protocol,
                         "adaptive interruption session created without a threshold: no user \
-                         override and the server did not report a default_threshold"
-                            .to_owned(),
-                        500,
-                        Some(false),
-                    ));
+                         override and the server did not report a default_threshold",
+                    )));
                 }
                 Ok(None)
             }
             ServerMessage::SessionClosed
-            | ServerMessage::EchoedSessionCreate { .. }
-            | ServerMessage::EchoedSessionClose => Ok(None),
+            | ServerMessage::EchoedSessionCreate
+            | ServerMessage::EchoedSessionClose
+            | ServerMessage::Unknown => Ok(None),
             ServerMessage::Detected(v) => {
                 let Some(started_at) = self.open_overlap() else {
                     return Ok(None);
@@ -533,7 +528,6 @@ impl InterruptionMachine {
                 error: ApiError::status(
                     format!("LiveKit Adaptive Interruption returned error: {code}"),
                     code,
-                    None,
                     None,
                 ),
             }

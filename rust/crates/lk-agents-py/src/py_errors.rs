@@ -129,11 +129,11 @@ pub fn capture_value(value: &Bound<'_, PyAny>) -> ProviderError {
     let status_code = metadata.status_code;
     let matches = taxonomy_matches(value);
     let api_kind = matches.and_then(|m| ApiErrorKind::from_matches(m, status_code));
-    let declared = metadata.retryable;
-    let retryable = host_retryable(api_kind, matches.is_some(), declared);
+    let retryable = host_retryable(api_kind, matches.is_some(), metadata.kind, metadata.retryable);
     ProviderError::Host {
         error: capture_host_value(value),
         api_kind,
+        error_kind: metadata.kind,
         retryable,
         status_code,
         said: lk_agents_abi::errors::ProviderSaid::boxed(

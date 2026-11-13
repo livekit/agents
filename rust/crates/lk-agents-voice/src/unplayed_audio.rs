@@ -3,7 +3,7 @@
 
 use lk_agents_abi::voice::io::{PlaybackEvent, PlaybackSegment};
 use lk_agents_abi::{AudioFrame, Ts};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
 #[derive(Debug, Default)]
@@ -13,6 +13,9 @@ pub struct UnplayedAudio {
     /// Where each segment joined by the attached recorder began for it: its events are told
     /// from there.
     joined: BTreeMap<PlaybackSegment, Duration>,
+    /// The attachments whose sink reports its progress: a segment of theirs with no report yet
+    /// has played nothing, however long ago it started.
+    reporting: BTreeSet<u64>,
 }
 
 #[derive(Debug)]
@@ -67,6 +70,9 @@ impl UnplayedAudio {
             PlaybackEvent::Progressed(e) => e.segment,
             PlaybackEvent::Finished { segment, .. } => *segment,
         };
+        if let PlaybackEvent::Progressed(_) = ev {
+            self.reporting.insert(segment.attachment);
+        }
         if let PlaybackEvent::Finished { .. } = ev {
             self.segments.retain(|u| u.segment != segment);
             self.joined.remove(&segment);
@@ -88,17 +94,19 @@ impl UnplayedAudio {
     }
 
     /// A recorder attaches at `now`: each unfinished segment's audio from its playout position on.
-    /// A sink that reported no progress has played since it started.
+    /// A sink that never reports progress has played since it started; one that does has played
+    /// what it reported.
     pub fn join(&mut self, now: Ts) -> Vec<Replay> {
         self.joined.clear();
         let mut replay = Vec::new();
         for unplayed in &self.segments {
             let captured: Duration =
                 unplayed.frames.iter().map(|f| Duration::from_secs_f64(f.duration())).sum();
+            let reporting = self.reporting.contains(&unplayed.segment.attachment);
             let position = match (unplayed.started, unplayed.heard) {
                 (_, Some(heard)) => heard,
-                (Some(started), None) => now.saturating_duration_since(started),
-                (None, None) => Duration::ZERO,
+                (Some(started), None) if !reporting => now.saturating_duration_since(started),
+                (_, None) => Duration::ZERO,
             }
             .min(captured);
             if position >= captured {

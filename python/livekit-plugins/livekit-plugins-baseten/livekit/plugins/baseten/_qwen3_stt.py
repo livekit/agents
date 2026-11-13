@@ -336,7 +336,12 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
 
                 event = decode_transcript(msg.text)
                 if event.type == "error":
-                    raise APIError("Baseten STT error", body=msg.text, detail=event.message)
+                    raise APIError(
+                        "Baseten STT error",
+                        kind="invalid_request",
+                        body=msg.text,
+                        detail=event.message,
+                    )
                 if event.type != "transcription":
                     continue
 

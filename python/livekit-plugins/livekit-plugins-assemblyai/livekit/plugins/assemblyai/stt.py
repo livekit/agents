@@ -32,6 +32,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APITimeoutError,
     LanguageCode,
     http,
@@ -40,6 +41,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import (
     NOT_GIVEN,
+    ErrorKind,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
@@ -60,7 +62,7 @@ class _Word(BaseModel):
 class _StreamEvent(BaseModel):
     model_config = ConfigDict(strict=True)
 
-    type: str
+    type: str = ""
     id: str | None = None
     expires_at: int | None = None
     timestamp: float | None = None
@@ -116,6 +118,9 @@ class STTOptions:
 # interruption_delay, voice_focus, voice_focus_threshold) and connect-time
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
 _U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro")
+
+# AssemblyAI's own close codes: 3005 follows an in-band error, the request it refused.
+_CLOSE_CODES: dict[int, ErrorKind] = {3005: "invalid_request"}
 
 # Server-side cap on the number of steering codes, mirrored client-side so bad
 # input fails at construction/update time instead of as a websocket error.
@@ -702,7 +707,8 @@ class SpeechStream(stt.RecognizeStream):
                         return
 
                     raise ws.close_error(
-                        f"AssemblyAI connection closed unexpectedly session={self._session_id}"
+                        f"AssemblyAI connection closed unexpectedly session={self._session_id}",
+                        _CLOSE_CODES,
                     )
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
@@ -713,10 +719,18 @@ class SpeechStream(stt.RecognizeStream):
                     )
                     continue
 
-                data = json.loads(msg.data)
-                if isinstance(data, dict) and "error" in data:
-                    continue  # the close that follows carries it as its reason
-                self._process_stream_event(data)
+                try:
+                    data = json.loads(msg.data)
+                    if isinstance(data, dict) and "error" in data:
+                        continue  # the close that follows carries it as its reason
+                    event = _StreamEvent.model_validate(data)
+                except ValueError as e:
+                    raise APIError(
+                        "AssemblyAI sent a malformed message",
+                        kind="protocol",
+                        detail=str(msg.data),
+                    ) from e
+                self._process_stream_event(event)
 
         async def send_config_task(ws: http.WebSocket) -> None:
             """Send config updates and control messages immediately, independent of audio."""
@@ -834,8 +848,7 @@ class SpeechStream(stt.RecognizeStream):
         )
         return ws
 
-    def _process_stream_event(self, data: object) -> None:
-        event = _StreamEvent.model_validate(data)
+    def _process_stream_event(self, event: _StreamEvent) -> None:
         message_type = event.type
 
         if message_type == "Begin":

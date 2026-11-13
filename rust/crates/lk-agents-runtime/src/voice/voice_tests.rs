@@ -258,7 +258,11 @@ impl lk_agents_abi::Vad for StartupVad {
     > {
         Box::pin(async move {
             if self.0 {
-                return Err(lk_agents_abi::errors::ApiError::new("VAD startup failed").into());
+                return Err(lk_agents_abi::errors::ApiError::new(
+                    lk_agents_abi::errors::ErrorKind::Server,
+                    "VAD startup failed",
+                )
+                .into());
             }
             std::future::pending().await
         })

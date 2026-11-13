@@ -18,6 +18,7 @@ from livekit.agents import (
     NOT_GIVEN,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     NotGivenOr,
@@ -194,14 +195,16 @@ async def test_thought_summaries_are_never_spoken(gemini: GeminiPeer) -> None:
     assert (await chat(gemini.llm())).text == "Done."
 
 
-async def test_a_call_without_a_name_is_a_non_retryable_error(gemini: GeminiPeer) -> None:
-    """A nameless function call fails the turn for good instead of being retried."""
+async def test_a_call_without_a_name_fails_the_turn_once(gemini: GeminiPeer) -> None:
+    """A nameless function call breaks the provider's contract: the turn fails once, never
+    retried."""
     gemini.payloads = [{"candidates": [{"content": {"parts": [{"functionCall": {"args": {}}}]}}]}]
 
-    with pytest.raises(APIConnectionError) as failure:
+    with pytest.raises(APIError) as failure:
         await chat(gemini.llm())
 
-    assert not failure.value.retryable
+    assert failure.value.kind == "protocol"
+    assert len(gemini.requests) == 1
 
 
 @pytest.mark.parametrize("empty", [False, True, "thoughts"])
@@ -222,7 +225,7 @@ async def test_metadata_and_empty_chunks_do_not_replace_a_completion(
     gemini.payloads.append({"candidates": [{"finishReason": "STOP"}]})
 
     if empty:
-        with pytest.raises(APIStatusError, match="no response generated") as failure:
+        with pytest.raises(APIError, match="no response generated") as failure:
             await chat(gemini.llm(), user_says("Hi"))
         assert failure.value.retryable
     else:
@@ -231,27 +234,27 @@ async def test_metadata_and_empty_chunks_do_not_replace_a_completion(
 
 
 @pytest.mark.parametrize(
-    "status, payload, retryable",
+    "status, payload, kind",
     [
-        (200, {"candidates": [{"finishReason": "SAFETY"}]}, False),
-        (200, {"promptFeedback": {"blockReason": "SAFETY"}}, False),
-        (400, {}, False),
-        (503, {}, True),
+        (200, {"candidates": [{"finishReason": "SAFETY"}]}, "invalid_request"),
+        (200, {"promptFeedback": {"blockReason": "SAFETY"}}, "invalid_request"),
+        (400, {}, "invalid_request"),
+        (503, {}, "server"),
     ],
 )
 async def test_provider_rejections_are_typed_and_keep_retry_policy(
-    gemini: GeminiPeer, status: int, payload: dict[str, object], retryable: bool
+    gemini: GeminiPeer, status: int, payload: dict[str, object], kind: str
 ) -> None:
-    """Blocks and HTTP rejections surface as APIStatusError with the right retry policy.
+    """Blocks and HTTP rejections surface with the kind that decides their retry.
 
     https://github.com/livekit/agents/pull/4637 https://github.com/livekit/agents/pull/4917
     """
     gemini.payloads, gemini.status = [payload], status
 
-    with pytest.raises(APIStatusError) as failure:
+    with pytest.raises(APIStatusError if status != 200 else APIError) as failure:
         await chat(gemini.llm())
 
-    assert failure.value.retryable is retryable
+    assert failure.value.kind == kind
     if status != 200:
         assert failure.value.status_code == status
         assert "recorded rejection" in str(failure.value.body)
@@ -284,13 +287,13 @@ async def test_fragmented_sse_is_reassembled_and_bad_json_is_a_framework_error(
             async for chunk in stream:
                 if chunk.delta and chunk.delta.content:
                     received.append(chunk.delta.content)
-        except APIConnectionError as error:
+        except APIConnectionError:
             assert malformed
-            assert not error.retryable, "a partial answer cannot be retried"
         else:
             assert not malformed
 
     assert received == (["first"] if malformed else ["first", " last"])
+    assert len(gemini.requests) == 1, "a partial answer is never repeated"
 
 
 @pytest.mark.parametrize(

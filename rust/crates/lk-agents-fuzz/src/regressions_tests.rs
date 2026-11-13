@@ -72,8 +72,6 @@ mod end_of_turn;
 mod input;
 #[path = "interruption_tests.rs"]
 mod interruption;
-#[path = "legacy_transcription_tests.rs"]
-mod legacy_transcription;
 #[path = "metrics_tests.rs"]
 mod metrics;
 #[path = "output_failure_tests.rs"]

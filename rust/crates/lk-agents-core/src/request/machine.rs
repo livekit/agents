@@ -68,7 +68,7 @@ impl Request {
             open: BTreeMap::new(),
         };
         if attempts.total_deadline.is_some_and(|deadline| deadline <= now) {
-            steps.push(Step::GiveUp(ApiError::timed_out(Timeout::Total).with_retryable(false)));
+            steps.push(Step::GiveUp(ApiError::timed_out(Timeout::Total).into_final()));
         } else {
             attempts.launch(0, now, steps);
         }
@@ -310,7 +310,7 @@ impl Request {
             steps.push(if self.retiring {
                 Step::Unresolved
             } else {
-                Step::GiveUp(ApiError::timed_out(Timeout::Total).with_retryable(false))
+                Step::GiveUp(ApiError::timed_out(Timeout::Total).into_final())
             });
             return;
         }
@@ -382,7 +382,7 @@ impl Request {
         } else {
             self.phase = Phase::Settled;
             error.log_detail();
-            steps.push(Step::GiveUp(error.with_retryable(retryable)));
+            steps.push(Step::GiveUp(if retryable { error } else { error.into_final() }));
         }
     }
 
@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn cancellation_kind_stops_even_when_marked_retryable() {
         let mut request = Request::retrying(&ApiConnectOptions::default(), Ts::ZERO);
-        let error = ApiError::cancelled("cancelled").with_retryable(true);
+        let error = ApiError { retryable: true, ..ApiError::cancelled("cancelled") };
         assert!(matches!(
             request.attempt_failed(error, Ts::ZERO),
             Retry::GiveUp(ApiError { kind: ApiErrorKind::Cancelled, retryable: false, .. })
@@ -442,7 +442,7 @@ mod tests {
                     None,
                     Some(std::time::Duration::from_secs_f64(asked)),
                 ),
-                ..ApiError::status("busy", 429, None, None)
+                ..ApiError::status("busy", 429, None)
             };
             let Retry::At(backoff) = request.attempt_failed(error, Ts::ZERO) else {
                 panic!("a 429 is retried")

@@ -74,13 +74,21 @@ impl AttemptHost for Host {
                     self.cancelled.notified().await;
                     tokio::time::sleep(cleanup).await;
                     self.log.lock().cleaned += 1;
-                    Err(ApiError::new("cancelled").with_retryable(false).into())
+                    Err(ApiError::new(
+                        lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                        "cancelled",
+                    )
+                    .into())
                 }
                 Step::Silent => {
                     attempts.expect("attempts installed").expect_response(false);
                     cancel.cancelled().await;
                     self.log.lock().cleaned += 1;
-                    Err(ApiError::new("cancelled").with_retryable(false).into())
+                    Err(ApiError::new(
+                        lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                        "cancelled",
+                    )
+                    .into())
                 }
             }
         })
@@ -120,7 +128,7 @@ fn attempts(kind: RequestKind, max_retry: u32, host: &Arc<Host>) -> Arc<Provider
 }
 
 fn transient() -> ApiError {
-    ApiError::new("transient")
+    ApiError::new(lk_agents_abi::errors::ErrorKind::Server, "transient")
 }
 
 // Catches: a retryable failure ending the request, a retry that does not rewind, or the
@@ -138,7 +146,7 @@ async fn a_retryable_failure_runs_the_attempt_again_after_reporting_it() {
 // Catches: a non-retryable failure being retried, or raised as anything but its own error.
 #[tokio::test(start_paused = true)]
 async fn a_non_retryable_failure_raises_the_attempts_own_error() {
-    let fatal = ApiError::new("fatal").with_retryable(false);
+    let fatal = ApiError::new(lk_agents_abi::errors::ErrorKind::InvalidRequest, "fatal");
     let host = Host::new([Step::Fail(fatal)], false);
     let error = attempts(RequestKind::Llm, 2, &host)
         .run(lk_agents_abi::telemetry::Cx::NONE)

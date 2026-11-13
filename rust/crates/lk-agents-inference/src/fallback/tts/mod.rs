@@ -11,7 +11,7 @@ use crate::tts::stage::{Stage, one_shot};
 use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::errors::Invalid;
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderError};
 use lk_agents_abi::llm::fallback as port;
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::utils::stream::{Entry, ProviderStream};
@@ -469,8 +469,13 @@ impl TtsLeg {
         }
         if slot.as_ref().is_none_or(|(rate, _)| *rate != from) {
             let format = AudioFormat::new(from, self.channels);
-            let resampler = AudioResampler::fixed(format, self.target, Quality::Medium)
-                .map_err(|e| ProviderError::Local(ApiError::new(format!("resampler: {e}"))))?;
+            let resampler =
+                AudioResampler::fixed(format, self.target, Quality::Medium).map_err(|e| {
+                    ProviderError::Local(ApiError::new(
+                        ErrorKind::InvalidRequest,
+                        format!("resampler: {e}"),
+                    ))
+                })?;
             *slot = Some((from, resampler));
         }
         Ok(slot.as_mut().map(|(_, resampler)| resampler))
@@ -529,9 +534,10 @@ impl TtsLeg {
         let ready = match resampler.push_frame(&audio.frame) {
             Ok(ready) => ready,
             Err(e) => {
-                return Delivery::Failed(ProviderError::Local(ApiError::new(format!(
-                    "resample: {e}"
-                ))));
+                return Delivery::Failed(ProviderError::Local(ApiError::new(
+                    ErrorKind::InvalidRequest,
+                    format!("resample: {e}"),
+                )));
             }
         };
         let with_frame = |frame| SynthesizedAudio { frame, ..audio.clone() };

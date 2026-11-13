@@ -11,7 +11,7 @@ use crate::interruption::proto::{
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::Clock;
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{OwnedTask, Spawner, SpawnerExt, TaskError};
@@ -228,7 +228,9 @@ impl InterruptionInput {
                 queue.push(frame);
             }
             event => queue.event(event).map_err(|stuck| {
-                self.0.failure.modify(|failure| *failure = Some(ApiError::new(stuck.to_string())));
+                self.0.failure.modify(|failure| {
+                    *failure = Some(ApiError::new(ErrorKind::InvalidRequest, stuck.to_string()))
+                });
                 StreamClosed::Stuck
             })?,
         }
@@ -299,7 +301,7 @@ pub enum StreamClosed {
 
 impl From<StreamClosed> for lk_agents_abi::errors::ProviderError {
     fn from(error: StreamClosed) -> Self {
-        ApiError::new(error.to_string()).with_retryable(false).into()
+        ApiError::new(ErrorKind::InvalidRequest, error.to_string()).into()
     }
 }
 
@@ -375,7 +377,10 @@ async fn join_task(
     match task.await {
         Ok(result) => Ok(result),
         Err(TaskError::Cancelled) => Ok(Ok(())),
-        Err(error) => Err(ApiError::new(format!("interruption stream task panicked: {error}"))),
+        Err(error) => Err(ApiError::new(
+            ErrorKind::InvalidRequest,
+            format!("interruption stream task panicked: {error}"),
+        )),
     }
 }
 
@@ -575,7 +580,11 @@ fn send_outcome(
     match joined {
         Ok(Ok(())) => Ok(ConnectionEnd::InputEnded),
         Ok(Err(e)) => Err(e),
-        Err(e) => Err(ApiError::new(format!("interruption send task panicked: {e}")).into()),
+        Err(e) => Err(ApiError::new(
+            ErrorKind::InvalidRequest,
+            format!("interruption send task panicked: {e}"),
+        )
+        .into()),
     }
 }
 
@@ -612,13 +621,13 @@ fn handle_incoming(
         }
     };
 
-    // An unknown `type` is a `ValidationError` in the reference and takes the connection down.
+    // A known message whose fields this client reads does not match them: the server broke
+    // the protocol.
     let parsed: ServerMessage = serde_json::from_str(&msg).map_err(|e| {
-        StreamError::from(
-            ApiError::new(format!("failed to parse LiveKit Adaptive Interruption message: {e}"))
-                .with_retryable(false),
-        )
-        .with_body(msg.to_string())
+        StreamError::from(ApiError::protocol(
+            format!("failed to parse LiveKit Adaptive Interruption message: {e}"),
+            msg.to_string(),
+        ))
     })?;
 
     let now = ctx.clock.now();
@@ -688,17 +697,18 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
         Duration::from_secs(ctx.config.token_ttl_secs),
     )
     .map_err(|e| {
-        ApiError::new(format!("failed to mint an inference access token: {e}"))
-            .with_retryable(false)
+        ApiError::new(ErrorKind::Auth, format!("failed to mint an inference access token: {e}"))
     })?;
 
     // An unusable URL is the caller's mistake, which no retry fixes.
     {
         use lk_agents_net::websocket::tungstenite::client::IntoClientRequest as _;
         if let Err(e) = url.as_str().into_client_request() {
-            return Err(ApiError::new(format!("invalid inference base_url {url:?}: {e}"))
-                .with_retryable(false)
-                .into());
+            return Err(ApiError::new(
+                ErrorKind::InvalidRequest,
+                format!("invalid inference base_url {url:?}: {e}"),
+            )
+            .into());
         }
     }
     let headers = gateway_headers(&ctx.cx, None, None, &token);

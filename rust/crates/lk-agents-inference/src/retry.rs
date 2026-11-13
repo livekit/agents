@@ -55,7 +55,7 @@ pub async fn stream<T: Send + 'static>(
             None,
             Some(
                 lk_agents_abi::errors::ApiError::timed_out(lk_agents_abi::errors::Timeout::Total)
-                    .with_retryable(false)
+                    .into_final()
                     .into(),
             ),
         ),
@@ -117,7 +117,7 @@ impl<T: Send + 'static> State<T> {
                 let error: ProviderError = lk_agents_abi::errors::ApiError::timed_out(
                     lk_agents_abi::errors::Timeout::Total,
                 )
-                .with_retryable(false)
+                .into_final()
                 .into();
                 (self.observer)(&error, None, self.request.retries());
                 Err(error)
@@ -286,11 +286,11 @@ impl<T> Drop for Output<T> {
 #[path = "retry_tests.rs"]
 mod tests;
 
-/// The host's websocket helpers: a provider's close code as a retry decision.
+/// The host's websocket helpers: a provider's close code as the kind of its failure.
 pub struct WebSocketCloses;
 
 impl lk_agents_abi::errors::WebSocketFunctions for WebSocketCloses {
-    fn websocket_close_kind(code: Option<u16>) -> lk_agents_abi::errors::CloseKind {
-        lk_agents_abi::errors::CloseKind::of(code)
+    fn websocket_close_kind(code: Option<u16>) -> Option<lk_agents_abi::errors::ErrorKind> {
+        lk_agents_abi::errors::ErrorKind::for_close(code)
     }
 }

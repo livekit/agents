@@ -27,7 +27,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     APITimeoutError,
     http,
     tokenize,
@@ -50,6 +49,17 @@ DEFAULT_VOICES: dict[str, str] = {
     "/public/tts/en-rt": "samantha",
     "/public/tts/ua-rt": "olesia-conversation",
 }
+
+
+def _decode(raw: str | bytes) -> dict[str, Any]:
+    """A provider message, which must be a JSON object."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("Respeecher sent a malformed message", kind="protocol", detail=str(raw))
+    return data
 
 
 @dataclass
@@ -94,7 +104,7 @@ async def list_voices(
         data = cast(list[dict[str, Any]], await resp.json())
         voices = [Voice(voice_data) for voice_data in data]
         if not voices:
-            raise APIError("No voices are available")
+            raise APIError("No voices are available", kind="invalid_request")
         return voices
 
 
@@ -303,7 +313,7 @@ class ChunkedStream(tts.ChunkedStream):
                 output_emitter.flush()
         except TimeoutError:
             raise APITimeoutError() from None
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -393,7 +403,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("Unexpected Respeecher message type %s", msg.type)
                     continue
 
-                data = json.loads(msg.data)
+                data = _decode(msg.data)
 
                 if data.get("context_id") != context_id:
                     logger.warning(
@@ -407,7 +417,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # in-band errors reject the request (voice, format, quota): retrying repeats it
                     raise APIError(
                         "Respeecher returned an error",
-                        retryable=False,
+                        kind="invalid_request",
                         detail=str(data.get("error")),
                     )
 

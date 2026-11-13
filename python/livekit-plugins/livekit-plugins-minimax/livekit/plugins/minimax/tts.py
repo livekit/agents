@@ -18,7 +18,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 
 from .log import logger
 
@@ -140,6 +140,17 @@ TTSBitRate = Literal[32000, 64000, 128000, 256000]  # only for mp3 format
 DEFAULT_BASE_URL = (
     "https://api-uw.minimax.io"  # or "https://api.minimaxi.chat or https://api.minimax.io"
 )
+
+
+def _decode(raw: str | bytes) -> dict[str, Any]:
+    """A provider message, which must be a JSON object."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise APIError("MiniMax sent a malformed message", kind="protocol", detail=str(raw))
+    return data
 
 
 @dataclass
@@ -450,7 +461,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected Minimax message type %s", msg.type)
                     continue
 
-                data: dict[str, Any] = json.loads(msg.data)
+                data = _decode(msg.data)
 
                 # Extract trace_id (priority: root.trace_id > base_resp.trace_id)
                 # api.minimax.io returns trace_id in root.trace_id, api.minimaxi.com may return in base_resp.trace_id
@@ -497,7 +508,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("event") == "task_failed":
                     raise APIError(
                         f"MiniMax returned task failed (trace_id: {current_trace_id})",
-                        detail=msg.data,
+                        kind="invalid_request",
+                        detail=str(msg.data),
                     )
 
                 else:
@@ -593,7 +605,7 @@ class ChunkedStream(tts.ChunkedStream):
                         logger.warning("unexpected Minimax message", extra={"lk.pii.data": line})
                         continue
 
-                    data = json.loads(line[5:])
+                    data = _decode(line[5:])
 
                     # api.minimax.io returns trace_id in response body root level
                     body_trace_id = data.get("trace_id")
@@ -622,9 +634,20 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError(f"Connection failed: {type(e).__name__}: {e}") from e
 
 
-# MiniMax status codes worth retrying: unknown/internal errors, timeouts and rate limits;
-# auth, balance, content and parameter errors are not
-_RETRYABLE_STATUS_CODES = frozenset((1000, 1001, 1002, 1024, 1033, 1039, 1041, 2045))
+# MiniMax status codes by what failed; content and parameter errors refused the request
+_STATUS_KINDS: dict[int, ErrorKind] = {
+    1000: "server",  # unknown error
+    1001: "timeout",
+    1002: "rate_limit",
+    1004: "auth",
+    1008: "quota",  # insufficient balance
+    1024: "server",  # internal error
+    1033: "server",  # system error
+    1039: "rate_limit",  # token rate limit
+    1041: "rate_limit",  # connection limit
+    2045: "rate_limit",  # rate growth limit
+    2049: "auth",  # invalid api key
+}
 
 
 def _status_error(
@@ -635,7 +658,7 @@ def _status_error(
         request_id=trace_id,
         status_code=status_code,
         body=body,
-        retryable=status_code in _RETRYABLE_STATUS_CODES,
+        kind=_STATUS_KINDS.get(status_code, "invalid_request"),
         detail=status_msg,
     )
 

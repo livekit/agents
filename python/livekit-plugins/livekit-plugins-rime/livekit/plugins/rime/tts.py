@@ -667,7 +667,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 if not resp.content_type.startswith("audio"):
                     raise APIError(
-                        "Rime returned non-audio data", retryable=False, detail=await resp.text()
+                        "Rime returned non-audio data", kind="protocol", detail=await resp.text()
                     )
 
                 output_emitter.initialize(

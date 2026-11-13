@@ -102,8 +102,8 @@ pub enum MultiprocessingContext {
     Forkserver,
 }
 
-/// `AgentServer(listeners=)`: public traffic and operational information never share a port
-/// (docs/server.md "Listeners"). A listener left out keeps its default.
+/// `AgentServer(listeners=)`: public traffic and operational information never share a port.
+/// A listener left out keeps its default.
 #[crate::host(record(
     module = "worker_options",
     path = "livekit.agents",
@@ -175,7 +175,7 @@ pub struct ServerOptions {
     /// The agent's name, its partition in a thread and the first segment of its endpoints; default
     /// `LIVEKIT_AGENT_NAME`. `LIVEKIT_AGENT_NAME_OVERRIDE` wins over it.
     pub agent_name: crate::Maybe<String>,
-    /// The worker's `public`, `health` and `prometheus` listeners (docs/server.md "Listeners").
+    /// The worker's `public`, `health` and `prometheus` listeners.
     pub listeners: crate::Maybe<Listeners>,
     /// Load at which the worker stops taking jobs; 0.7 in production.
     pub load_threshold: crate::Maybe<f64>,

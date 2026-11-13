@@ -262,7 +262,7 @@ class BosonAvatarAPI:
                     raise APIStatusError(
                         "Boson Avatar API returned an unexpected status",
                         status_code=response.status,
-                        retryable=False,
+                        kind="protocol",
                     )
                 payload = await _read_payload(response)
                 if payload is None and allow_empty and response.status == 204:
@@ -272,7 +272,8 @@ class BosonAvatarAPI:
                         "Boson Avatar API returned a non-object JSON response",
                         status_code=response.status,
                         body=payload,
-                        retryable=False,
+                        kind="protocol",
+                        detail=str(payload),
                     )
                 return response.status, payload
 

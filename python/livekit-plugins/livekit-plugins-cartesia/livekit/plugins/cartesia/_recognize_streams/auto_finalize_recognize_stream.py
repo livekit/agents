@@ -273,8 +273,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 if self._closing_ws or self._session.closed:
                     return
                 raise APIConnectionError(
-                    message="Cartesia STT connection closed unexpectedly",
-                    retryable=True,
+                    message="Cartesia STT connection closed unexpectedly"
                 ) from e
 
         async def recv_task(ws: http.WebSocket) -> None:

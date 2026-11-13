@@ -4,7 +4,7 @@ use livekit_token::{
     AccessToken, AccessTokenError, AgentDatabaseGrants, AgentThreadGrants, Claims, InferenceGrants,
     ObservabilityGrants, TokenVerifier, VideoGrants,
 };
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 
 // Token extension preserves claims modelled by `livekit-token`; unknown claims are dropped.
 
@@ -16,12 +16,12 @@ pub const DATABASE_TOKEN_TTL: Duration = Duration::from_secs(3600);
 
 /// A credential that cannot be signed or read: retrying does not help.
 fn refused(error: AccessTokenError) -> ApiError {
-    ApiError::new(error.to_string()).with_retryable(false)
+    ApiError::new(ErrorKind::Auth, error.to_string())
 }
 
 fn require(api_key: &str, api_secret: &str) -> Result<(), ApiError> {
     if api_key.is_empty() || api_secret.is_empty() {
-        return Err(ApiError::new("api key and api secret are required").with_retryable(false));
+        return Err(ApiError::new(ErrorKind::Auth, "api key and api secret are required"));
     }
     Ok(())
 }
@@ -142,15 +142,15 @@ pub fn inference_bearer_with_ttl(
 ) -> Result<String, ApiError> {
     if api_key.is_empty() {
         return Err(ApiError::new(
+            ErrorKind::Auth,
             "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable",
-        )
-        .with_retryable(false));
+        ));
     }
     if api_secret.is_empty() {
         return Err(ApiError::new(
+            ErrorKind::Auth,
             "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable",
-        )
-        .with_retryable(false));
+        ));
     }
     AccessToken::with_api_key(api_key, api_secret)
         .with_identity("agent")
@@ -158,8 +158,10 @@ pub fn inference_bearer_with_ttl(
         .with_ttl(ttl)
         .to_jwt()
         .map_err(|e| {
-            ApiError::new(format!("failed to sign the inference access token: {e}"))
-                .with_retryable(false)
+            ApiError::new(
+                ErrorKind::Auth,
+                format!("failed to sign the inference access token: {e}"),
+            )
         })
 }
 
@@ -167,17 +169,19 @@ pub fn inference_bearer_with_ttl(
 pub fn observability_bearer(api_key: &str, api_secret: &str) -> Result<String, ApiError> {
     if api_key.is_empty() || api_secret.is_empty() {
         return Err(ApiError::new(
+            ErrorKind::Auth,
             "LIVEKIT_API_KEY and LIVEKIT_API_SECRET are required for observability",
-        )
-        .with_retryable(false));
+        ));
     }
     AccessToken::with_api_key(api_key, api_secret)
         .with_observability_grants(ObservabilityGrants::default().with_write())
         .with_ttl(Duration::from_secs(6 * 60 * 60))
         .to_jwt()
         .map_err(|err| {
-            ApiError::new(format!("failed to sign observability credential: {err}"))
-                .with_retryable(false)
+            ApiError::new(
+                ErrorKind::Auth,
+                format!("failed to sign observability credential: {err}"),
+            )
         })
 }
 

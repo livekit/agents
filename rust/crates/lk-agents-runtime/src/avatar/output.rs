@@ -536,8 +536,12 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
                 })
             })
             .transpose()?;
-        let spawner = (env.spawner)()
-            .map_err(|error| ProviderError::from(ApiError::new(error.to_string())))?;
+        let spawner = (env.spawner)().map_err(|error| {
+            ProviderError::from(ApiError::new(
+                lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                error.to_string(),
+            ))
+        })?;
         Ok(Self::new(
             room,
             destination_identity,

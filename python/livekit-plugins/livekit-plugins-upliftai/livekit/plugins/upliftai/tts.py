@@ -393,7 +393,9 @@ class WebSocketClient:
             self.audio_callbacks.clear()
             self.active_requests.clear()
             for pending_queue in queues:
-                error = APIConnectionError("Uplift returned an invalid message", retryable=False)
+                error = APIError(
+                    "Uplift returned an invalid message", kind="protocol", detail=str(data)
+                )
                 error.__cause__ = exc
                 await pending_queue.put(error)
             return
@@ -417,8 +419,8 @@ class WebSocketClient:
             await queue.put(
                 APIError(
                     "Uplift rejected the synthesis request",
+                    kind="invalid_request",
                     body=message.model_dump(exclude_none=True),
-                    retryable=False,
                 )
             )
             self.audio_callbacks.pop(request_id, None)
@@ -559,4 +561,4 @@ class SynthesizeStream(tts.SynthesizeStream):
         except APIError:
             raise
         except Exception as e:
-            raise APIError("Uplift segment synthesis failed") from e
+            raise APIError("Uplift segment synthesis failed", kind="server") from e

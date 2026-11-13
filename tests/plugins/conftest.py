@@ -9,7 +9,7 @@ import ipaddress
 import json
 import ssl
 import sys
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from aiohttp import web
+from aiohttp.test_utils import TestServer
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -25,7 +26,7 @@ from google.genai import types
 from google.oauth2.credentials import Credentials
 
 from livekit import rtc
-from livekit.agents import VoiceSession, llm
+from livekit.agents import VoiceSession, http, llm
 from livekit.agents.voice.avatar import AvatarSession
 from livekit.plugins.google.realtime import RealtimeModel
 from livekit.plugins.google.realtime.realtime_api import RealtimeSession
@@ -249,3 +250,107 @@ async def open_session(gemini_live: LivePeer) -> AsyncIterator[Callable[..., Rea
     yield open_
     for session in sessions:
         await session.aclose()
+
+
+@dataclass
+class Close:
+    """A close the provider sends: ``code`` None drops the connection without a close frame."""
+
+    code: int | None = 1011
+    reason: str = ""
+
+
+# what a provider sends: JSON, text, binary, or a close
+Frame = Wire | str | bytes | Close
+
+
+@dataclass
+class Connection:
+    """One socket a plugin opened on a WsPeer, and every message it sent on it."""
+
+    request: web.Request
+    socket: web.WebSocketResponse
+    received: list[str | bytes] = field(default_factory=list)
+
+    @property
+    def audio(self) -> int:
+        """The bytes of every binary message received."""
+        return sum(len(m) for m in self.received if isinstance(m, bytes))
+
+    @property
+    def texts(self) -> list[str]:
+        return [m for m in self.received if isinstance(m, str)]
+
+
+class WsPeer:
+    """A provider on a local server. Every GET on any path opens a websocket: ``hello`` is sent
+    on accept, then ``reply(connection, message)``'s frames answer each message the plugin sends.
+    Any other request is answered by ``http(request)`` (404 when unset)."""
+
+    def __init__(self) -> None:
+        self.url = ""
+        self.connections: list[Connection] = []
+        self.hello: list[Frame] = []
+        self.reply: Callable[[Connection, str | bytes], list[Frame]] = lambda _c, _m: []
+        self.http: Callable[[web.Request], Awaitable[web.StreamResponse]] | None = None
+        self.protocols: tuple[str, ...] = ()
+        """The subprotocols the peer selects from, when the plugin offers one."""
+
+    @property
+    def ws_url(self) -> str:
+        return "ws" + self.url.removeprefix("http")
+
+    async def _socket(self, request: web.Request) -> web.StreamResponse:
+        if not request.headers.get("Upgrade"):
+            return await self._other(request)
+        socket = web.WebSocketResponse(protocols=self.protocols)
+        await socket.prepare(request)
+        connection = Connection(request, socket)
+        self.connections.append(connection)
+        await self._send(connection, self.hello)
+        async for message in socket:
+            if message.type in (web.WSMsgType.TEXT, web.WSMsgType.BINARY):
+                connection.received.append(message.data)
+                await self._send(connection, self.reply(connection, message.data))
+        return socket
+
+    async def _other(self, request: web.Request) -> web.StreamResponse:
+        if self.http is None:
+            return web.Response(status=404)
+        return await self.http(request)
+
+    async def _send(self, connection: Connection, frames: list[Frame]) -> None:
+        for frame in frames:
+            if connection.socket.closed:
+                return
+            if isinstance(frame, Close):
+                if frame.code is None:
+                    assert connection.request.transport is not None
+                    connection.request.transport.close()
+                else:
+                    await connection.socket.close(code=frame.code, message=frame.reason.encode())
+            elif isinstance(frame, bytes):
+                await connection.socket.send_bytes(frame)
+            elif isinstance(frame, str):
+                await connection.socket.send_str(frame)
+            else:
+                await connection.socket.send_json(frame)
+
+    async def connected(self, count: int = 1) -> Connection:
+        """Waits for the plugin's ``count``-th connection and returns it."""
+        await until(lambda: len(self.connections) >= count, f"the plugin opens socket {count}")
+        return self.connections[count - 1]
+
+    async def send(self, *frames: Frame, connection: int = -1) -> None:
+        await self._send(self.connections[connection], list(frames))
+
+
+@pytest.fixture
+async def ws_peer() -> AsyncIterator[WsPeer]:
+    """A local provider (see WsPeer), with an HTTP session bound for the plugin."""
+    peer = WsPeer()
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", peer._socket)
+    async with TestServer(app) as server, http.open():
+        peer.url = str(server.make_url("")).rstrip("/")
+        yield peer

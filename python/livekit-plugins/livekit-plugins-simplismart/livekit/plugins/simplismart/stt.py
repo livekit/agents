@@ -368,8 +368,10 @@ class SpeechStream(stt.RecognizeStream):
                 try:
                     transcript = msg.binary.decode("utf-8")
                 except UnicodeDecodeError as e:
-                    raise APIConnectionError(
-                        "Simplismart STT sent a malformed message", retryable=False
+                    raise APIError(
+                        "Simplismart STT sent a malformed message",
+                        kind="protocol",
+                        detail=repr(msg.binary),
                     ) from e
                 self._handle_transcript_data(transcript)
 

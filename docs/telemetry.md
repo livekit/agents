@@ -162,5 +162,5 @@ see [listeners](server.md#listeners).
 
 The framework's span names, attributes, metrics and records are its telemetry
 schema, published as an OpenTelemetry semantic-conventions registry under
-`otel/`. How each signal is produced and exported is described in
+`rust/otel/`. How each signal is produced and exported is described in
 [telemetry internals](internals/telemetry.md).

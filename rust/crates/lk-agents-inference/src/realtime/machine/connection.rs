@@ -1,5 +1,5 @@
 use crate::effects::RealtimeConnectionEffect;
-use lk_agents_abi::errors::{ApiError, Timeout};
+use lk_agents_abi::errors::{ApiError, ErrorKind, Timeout};
 use lk_agents_abi::{ApiConnectOptions, Ts};
 use lk_agents_core::request::{Policy, Request, Step};
 use std::collections::BTreeMap;
@@ -146,8 +146,10 @@ impl RealtimeConnection {
             if self.retired.len() >= 32 {
                 self.phase = Phase::Closed { cleanup: None };
                 return vec![RealtimeConnectionEffect::Failed {
-                    error: ApiError::new("realtime acquisition cleanup capacity exceeded")
-                        .with_retryable(false),
+                    error: ApiError::new(
+                        ErrorKind::InvalidRequest,
+                        "realtime acquisition cleanup capacity exceeded",
+                    ),
                 }];
             }
             let mut effects = vec![RealtimeConnectionEffect::Reconnect { error }];
@@ -261,7 +263,7 @@ impl RealtimeConnection {
     fn expire(&mut self, now: Ts) -> Vec<RealtimeConnectionEffect> {
         let mut effects = self.close(now);
         effects.push(RealtimeConnectionEffect::Failed {
-            error: ApiError::timed_out(Timeout::Total).with_retryable(false),
+            error: ApiError::timed_out(Timeout::Total).into_final(),
         });
         effects
     }
@@ -419,9 +421,7 @@ mod tests {
         connection.tick(at(1000));
         assert!(!connection.connected(1, at(1000)));
         assert!(
-            connection
-                .failed(1, at(1000), ApiError::connection(None).with_retryable(false))
-                .is_empty(),
+            connection.failed(1, at(1000), ApiError::connection(None).into_final()).is_empty(),
             "a stopped acquisition's late error cannot end the retry window",
         );
         connection.released(1, at(1000));

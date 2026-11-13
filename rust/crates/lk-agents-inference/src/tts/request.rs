@@ -22,7 +22,10 @@ pub async fn synthesize(
     observer: Option<retry::Observer>,
 ) -> Result<TtsSource, ProviderError> {
     options.validate().map_err(|error| {
-        lk_agents_abi::errors::ApiError::new(error.to_string()).with_retryable(false)
+        lk_agents_abi::errors::ApiError::new(
+            lk_agents_abi::errors::ErrorKind::InvalidRequest,
+            error.to_string(),
+        )
     })?;
     let mut chunks = super::stage::one_shot(tts.as_ref(), text);
     if chunks.len() > 1 {
@@ -96,7 +99,10 @@ pub fn start(
     observer: Option<retry::Observer>,
 ) -> Result<(TextSink, BoxFuture<'static, TtsSource>), ProviderError> {
     options.validate().map_err(|error| {
-        lk_agents_abi::errors::ApiError::new(error.to_string()).with_retryable(false)
+        lk_agents_abi::errors::ApiError::new(
+            lk_agents_abi::errors::ErrorKind::InvalidRequest,
+            error.to_string(),
+        )
     })?;
     let (provider, options) = attempts(&tts, options);
     let gate = InputGate::default();

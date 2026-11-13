@@ -59,7 +59,7 @@ fn _extract_storage_get_thread_items_limit(
 }
 type StorageGetThreadItemsLimitInput = ::std::option::Option<u32>;
 
-/// Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
+/// Threads in one storage namespace: a local
 /// directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
 #[pyclass(frozen, name = "Storage", module = "livekit.agents._core")]
 pub struct Storage(pub(crate) ::std::sync::Arc<StorageImpl>);
@@ -720,7 +720,7 @@ impl CoreContextActivation {
         )
     }
 
-    /// Application SQL (docs/context.md#application-records-and-transactions): `independent`
+    /// Application SQL: `independent`
     /// commits when the transaction ends; otherwise it joins the managed turn's commit, or
     /// commits like an independent one outside a managed turn.
     #[pyo3(signature = (independent))]
@@ -1452,7 +1452,7 @@ fn _extract_thread_handle_tasks_limit(
 }
 type ThreadHandleTasksLimitInput = i64;
 
-/// `ctx.thread` (docs/threads.md): one thread of a storage namespace, as the partition_key `partition_key` reads
+/// `ctx.thread`: one thread of a storage namespace, as the partition_key `partition_key` reads
 /// it. Each read opens the thread's database for the call and releases it after; there is
 /// nothing to open or close.
 #[pyclass(frozen, name = "_core_ThreadHandle", module = "livekit.agents._core")]
@@ -1647,7 +1647,7 @@ impl CoreThreadHandle {
         })
     }
 
-    /// One page of the journal (docs/internals/storage.md#journal), every partition, in order; pass
+    /// One page of the journal, every partition, in order; pass
     /// the last `id` to read the next.
     #[pyo3(signature = (after_id = 0, limit = 100))]
     fn journal<'py>(

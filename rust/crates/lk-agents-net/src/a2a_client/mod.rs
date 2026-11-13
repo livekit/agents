@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::transport::HttpRequest;
 use a2a::{AgentCard, JsonRpcId, Message};
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderError};
 use lk_agents_abi::storage::thread::TaskReason;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, StreamOutput, Ts};
 use lk_agents_core::a2a::client::{
@@ -685,7 +685,10 @@ impl StreamOutput<TaskUpdate> for ReplyUpdates {
         Box::pin(async move {
             self.recv().await.map_err(|error| match error {
                 ClientError::Transport(error) => ProviderError::Local(error),
-                error => ApiError::new(error.to_string()).with_retryable(false).into(),
+                error @ ClientError::Protocol(_) => {
+                    ApiError::new(ErrorKind::Protocol, error.to_string()).into()
+                }
+                error => ApiError::new(ErrorKind::InvalidRequest, error.to_string()).into(),
             })
         })
     }

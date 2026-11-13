@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 import os
-from json import JSONDecodeError
 from types import TracebackType
 from typing import TypeVar
 
@@ -266,11 +265,12 @@ class LemonSliceAPI:
                 json=payload if form is None else None,
             ) as response:
                 await response.raise_for_status()
+                text = await response.text()
                 try:
-                    return response_type.model_validate(await response.json())
-                except (ValidationError, JSONDecodeError) as exc:
+                    return response_type.model_validate_json(text)
+                except ValidationError as exc:
                     raise APIError(
-                        "LemonSlice returned an invalid response", retryable=False
+                        "LemonSlice returned an invalid response", kind="protocol", detail=text
                     ) from exc
 
         try:

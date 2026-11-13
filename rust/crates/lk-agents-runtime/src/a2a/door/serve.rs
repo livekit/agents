@@ -50,7 +50,8 @@ pub async fn serve<E: HttpExchange>(
 
 /// The caller: the console's listener vouches for everyone; otherwise the claims of the token the
 /// node verified, its `Authorization` bearer else its `access_token` query parameter, and no
-/// other. The worker never verifies a signature ([auth](docs/auth.md)).
+/// other. The worker never verifies a signature: the LiveKit node in front of it
+/// did, or nobody did.
 fn caller(head: &RequestHead, serving: &TextServing) -> Result<AuthPrincipal, AuthError> {
     let request = &serving.request;
     if request.unauthenticated {

@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from typing import Self
 
+from livekit.agents.http import Multiplexer, SocketProtocol
+
 from ..types import NotGivenOr
+from .connect import APIConnectOptions
 from .rtc_frames import AudioFrame
 
 class AudioByteStream:
@@ -101,6 +104,40 @@ class AudioConverter:
         """The converted audio `frame` completes, after the tail of a stream it ends."""
     def flush(self) -> list[AudioFrame]:
         """The audio still held by the resampler, at the end of a segment or stream."""
+
+class SocketSession:
+    """`_core.SocketSession`: one provider socket stream. `run()` connects through the protocol,
+    sends its input, hands it each received frame, keeps the connection alive and rotates it;
+    failures retry under `conn_options`.
+    """
+    def __new__(
+        cls,
+        host: SocketProtocol,
+        conn_options: APIConnectOptions,
+        label: str,
+        *,
+        mux: SocketMux | None = None,
+        context_id: str | None = None,
+    ) -> Self:
+        """`label` names the provider in retries. With `mux`, the stream is the context
+        `context_id` on one of its shared sockets.
+        """
+    def reconnect(self, reason: str) -> None:
+        """Rotate the connection now: goodbye, drain, close, connect again. No retry is spent."""
+    async def run(self) -> None:
+        """Run until the input ended and the provider finished, or the failure that ended it."""
+    async def aclose(self) -> None:
+        """Stop: the socket is closed, bounded, and `run()` returns."""
+
+class SocketMux:
+    """`_core.SocketMux`: the shared sockets of a multiplexing provider, opened on demand, each
+    carrying up to `max_contexts` streams and replaced after `max_session_duration`.
+    """
+    def __new__(cls, host: Multiplexer, *, max_contexts: int | None = None) -> Self: ...
+    def invalidate(self) -> None:
+        """Options changed: idle sockets close, busy ones close once their streams end."""
+    async def aclose(self) -> None:
+        """Close every socket, bounded."""
 
 class StaleHandle(RuntimeError):
     """A handle whose originating host no longer owns a live entry."""

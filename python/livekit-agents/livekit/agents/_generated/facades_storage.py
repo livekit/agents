@@ -25,8 +25,7 @@ if TYPE_CHECKING:
 
 
 class Transaction:
-    """`storage.Transaction`: application SQL in one transaction
-    (docs/context.md#application-records-and-transactions).
+    """`storage.Transaction`: application SQL in one transaction.
 
     Reads observe committed records. Writes are staged and applied together when the
     transaction ends, so read before the first write: a read after one is refused.
@@ -49,7 +48,7 @@ class Transaction:
 
 
 class Thread:
-    """`ctx.thread`'s reads (docs/threads.md): each opens the thread's database for the call."""
+    """`ctx.thread`'s reads: each opens the thread's database for the call."""
 
     if TYPE_CHECKING:
         _native: _core._core_ThreadHandle
@@ -112,14 +111,14 @@ class Thread:
         return await self._native.task(task_id)
 
     async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
-        """One page of the journal (docs/internals/storage.md#journal), every partition, in order; pass
+        """One page of the journal, every partition, in order; pass
         the last `id` to read the next.
         """
         return await self._native.journal(after_id, limit)
 
 
 class Partition:
-    """`thread.partition(partition_key)`: one partition_key's partition of a thread (docs/threads.md), its history and its
+    """`thread.partition(partition_key)`: one partition_key's partition of a thread, its history and its
     tasks.
     """
 
