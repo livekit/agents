@@ -10,6 +10,7 @@ use lk_agents_abi::tokenize::language::{ThresholdOptions, ThresholdOverride, Tur
 use lk_agents_abi::turn::inference::{EotMetricsObserver, EotModel, EotModelFactory};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_telemetry as telemetry;
 use parking_lot::{Mutex, MutexGuard};
 use std::sync::Arc;
 
@@ -32,27 +33,22 @@ impl AudioEot {
     }
 
     /// The gateway for `turn-detector-v1`, else the linked native mini model or the host's.
-    fn transports(
-        &self,
-        headers: crate::headers::Headers,
-        conn_options: ApiConnectOptions,
-    ) -> TransportFactory {
+    fn transports(&self, cx: &telemetry::Cx, conn_options: ApiConnectOptions) -> TransportFactory {
         let cloud = CloudOptions {
             base_url: self.base_url.clone(),
             api_key: self.api_key.clone(),
             api_secret: self.api_secret.clone(),
             conn_options,
             sample_rate: self.sample_rate,
-            headers: Arc::new(move || headers.clone()),
+            cx: cx.clone(),
         };
         let thresholds = Arc::clone(&self.thresholds);
         let local_model = Arc::clone(&self.local_model);
         let clock = self.env.clock.clone();
-        // The host opens a stream without its job: drops count for the process.
-        let process = self.env.tracer.root();
         Arc::new(move |model| {
             if model == TurnDetectorModel::V1 {
-                let (cloud, clock, cx) = (cloud.clone(), clock.clone(), process.clone());
+                let (cloud, clock) = (cloud.clone(), clock.clone());
+                let cx = cloud.cx.clone();
                 return MountedTransport::mount(model.as_str(), thresholds.clone(), move |sink| {
                     let socket = Arc::new(lk_agents_net::websocket::TungsteniteTransport);
                     let transport = CloudTransport::new(cloud, sink, socket, clock);
@@ -140,7 +136,7 @@ impl lk_agents_abi::turn::inference::InferenceEot for AudioEot {
 
     fn stream(
         &self,
-        headers: crate::headers::Headers,
+        cx: telemetry::Cx,
         conn_options: ApiConnectOptions,
     ) -> Result<DetectorStream, ProviderError> {
         let spawner = (self.env.spawner)().map_err(|error| {
@@ -148,7 +144,7 @@ impl lk_agents_abi::turn::inference::InferenceEot for AudioEot {
         })?;
         let model = self.table().model();
         let session = EotSession::new(model, Arc::clone(&self.thresholds), self.local_fallback);
-        let make = self.transports(headers, conn_options);
+        let make = self.transports(&cx, conn_options);
         let on_metrics = self.on_metrics.clone();
         Ok(EotStream::open(
             session,

@@ -213,7 +213,7 @@ impl ProviderAttempts {
     /// Each attempt runs under the caller's current span.
     fn run<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <ProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::run(&this, cx)
@@ -318,6 +318,84 @@ impl ProviderAttempts {
 
 // Declared in rust/crates/lk-agents-abi/src/types/provider.rs.
 
+/// [`::lk_agents_abi::types::provider::ProviderEvents`] over a host `livekit.agents._bindings.ProviderEvents`.
+#[derive(Clone)]
+pub struct ProviderEventsProxy {
+    /// The object whose events these are: not kept alive by them.
+    host: ::std::sync::Arc<Py<::pyo3::types::PyWeakrefReference>>,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
+    /// The `notify` calls, delivered in order.
+    notifier: crate::py_calls::Notifier,
+}
+
+impl ProviderEventsProxy {
+    /// The events of `obj`, which they do not keep alive.
+    pub fn weak(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::types::provider::ProviderEvents>> {
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
+        };
+        Ok(ProviderEventsProxy {
+            host: ::std::sync::Arc::new(::pyo3::types::PyWeakrefReference::new(obj)?.unbind()),
+            context,
+            notifier: ::std::default::Default::default(),
+        })
+    }
+}
+
+impl ::lk_agents_abi::types::provider::ProviderEvents for ProviderEventsProxy {
+    fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
+        let Some(host) = ::pyo3::Python::attach(|py| {
+            self.host.bind(py).upgrade().map(|host| ::std::sync::Arc::new(host.unbind()))
+        }) else {
+            return;
+        };
+        let error_arg = error;
+        let error_arg =
+            match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+                Ok((crate::py_errors::ExceptionValue::to_exception(error_arg, py)?).unbind())
+            }) {
+                Ok(value) => value,
+                Err(error) => {
+                    log::warn!("ProviderEvents._core_failed failed: {error}");
+                    return;
+                }
+            };
+        let recoverable_arg = recoverable;
+        ::lk_agents_runtime::host::notify(
+            &self.notifier,
+            "ProviderEvents._core_failed",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            false,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    error_arg.into_bound(py),
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?,
+                ];
+                Ok((
+                    host.bind(py).getattr("_core_failed")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/types/provider.rs.
+
 /// [`::lk_agents_abi::types::provider::AttemptHost`] over a host `livekit.agents._bindings.AttemptHost`.
 #[derive(Clone)]
 pub struct AttemptHostProxy {
@@ -335,7 +413,7 @@ impl AttemptHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::types::provider::AttemptHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::types::provider::AttemptHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::types::provider::AttemptHost>(obj)?
         {
             return Ok(native);
         }
@@ -348,7 +426,7 @@ impl AttemptHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::types::provider::AttemptHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::types::provider::AttemptHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::types::provider::AttemptHost>(obj)?
         {
             return Ok(native);
         }
@@ -359,6 +437,13 @@ impl AttemptHostProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::types::provider::AttemptHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::types::provider::AttemptHost>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AttemptHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 

@@ -59,7 +59,8 @@ async fn a_gateway_that_stops_answering_pings_returns_a_retryable_connection_err
         Arc::new(TokioSpawner::current()),
         Arc::new(RealClock::new()),
     );
-    let (sink, mut source) = client.stream_native(None, 0.0).unwrap().split();
+    let (sink, mut source) =
+        client.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
     sink.push(AudioFrame::new(vec![0; 1600], 16_000, 1, 800)).unwrap();
     tokio::time::timeout(Duration::from_secs(5), audio_received)
         .await

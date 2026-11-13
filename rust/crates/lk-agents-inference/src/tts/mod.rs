@@ -1,7 +1,7 @@
 use crate::abi::{
     StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
-use crate::headers::{BoundIdentity, Headers, gateway_headers};
+use crate::headers::{Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
 use crate::telemetry;
 use futures_util::future::{Either, select};
@@ -12,7 +12,7 @@ use lk_agents_abi::inference::fallback::{TtsFallbackEntry, TtsFallbacks};
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::inference::tts_client::InferenceTts;
 use lk_agents_abi::tokenize::language::LanguageCode;
-use lk_agents_abi::types::provider::NativeLabel;
+use lk_agents_abi::types::provider::{NativeLabel, ProviderEvents};
 use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
 use lk_agents_abi::utils::stream::Entry;
 use lk_agents_abi::{ApiConnectOptions, BoxFuture, Clock, SpeechChunk, Ts};
@@ -84,15 +84,18 @@ impl Default for TtsOptions {
     }
 }
 
-/// One gateway TTS client as one session holds it: the shared client, and the identity of the
-/// job that session serves (two sessions sharing an instance bill each its own job).
+/// One gateway TTS client. Every job it is handed to shares it; each request carries the identity
+/// of the job its telemetry context runs for, so two jobs sharing an instance bill each its own.
 #[derive(Clone)]
 pub struct GatewayTts {
     shared: Arc<TtsClient>,
-    identity: Arc<BoundIdentity>,
     conn_options: Option<ApiConnectOptions>,
-    /// The host provider this view serves: its `error` event is each failure the core reports.
-    reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
+    /// The name logs and metrics give it: its host class's when its host built it.
+    label: String,
+    /// The host object it was built as, which hears each failure the core reports.
+    events: Option<Arc<dyn ProviderEvents>>,
+    /// How its text is split and paced, which every synthesis over it reads.
+    options: Arc<options::OptionsCell>,
 }
 
 impl std::ops::Deref for GatewayTts {
@@ -206,46 +209,28 @@ impl GatewayTts {
             clock,
             connections: Arc::default(),
         };
+        let options = lk_agents_abi::tts::types::TtsOptions {
+            pacing: TtsCapabilities { streaming: true, aligned_transcript: false }.default_pacing(),
+            ..Default::default()
+        };
         GatewayTts {
             shared: Arc::new(shared),
-            identity: Arc::default(),
             conn_options: None,
-            reporter: None,
+            label: NativeLabel::InferenceTts.as_str().into(),
+            events: None,
+            options: Arc::new(options::OptionsCell::native(options)),
         }
     }
 
-    /// The same client as a session serving another job holds it: its syntheses carry that job's
-    /// identification.
-    /// `reporter` is the host provider whose `error` events this view's failures are.
-    pub fn identified(
-        &self,
-        headers: Headers,
-        reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
-    ) -> Self {
-        let mut view = GatewayTts::new(
-            self.opts.lock().clone(),
-            self.ws.clone(),
-            self.spawner.clone(),
-            self.clock.clone(),
-        );
-        let shared = Arc::get_mut(&mut view.shared).expect("a newly constructed view is unshared");
-        shared.opts = self.opts.clone();
-        shared.connections = self.connections.clone();
-        view.conn_options = self.conn_options;
-        view.reporter = reporter;
-        view.identity.bind(headers);
-        view
-    }
-
-    /// `prewarm()`: a configured socket waits in the pool for the first synthesis.
-    pub fn prewarm_identified(&self, identification: Option<Headers>) {
+    /// `prewarm()`: a socket configured for the job `cx` runs for waits in the pool for its first
+    /// synthesis.
+    pub fn prewarm_for(&self, cx: &telemetry::Cx) {
         let opts = self.opts.lock().clone();
-        let identification = identification.or_else(|| self.identity.for_connection());
         let Ok(token) = lk_agents_net::token::inference_bearer(&opts.api_key, &opts.api_secret)
         else {
             return;
         };
-        let headers = gateway_headers(identification.as_ref(), None, None, &token);
+        let headers = gateway_headers(cx, None, None, &token);
         let (ws, clock, connections) =
             (self.ws.clone(), self.clock.clone(), self.connections.clone());
         let query = url::form_urlencoded::Serializer::new(String::new())
@@ -277,13 +262,12 @@ impl GatewayTts {
         });
     }
 
-    /// Identification is supplied per stream.
-    /// `None`: the identity a session bound, else no job, the native headers.
-    pub fn stream_identified(
+    /// One synthesis for the job `cx` runs for.
+    pub fn stream_for(
         &self,
-        identification: Option<Headers>,
+        cx: &telemetry::Cx,
     ) -> Result<(SynthesisInput, SynthesisOutput), ProviderError> {
-        self.open(identification.as_ref())
+        self.open(cx)
     }
 }
 
@@ -330,20 +314,12 @@ impl GatewayTts {
         }
     }
 
-    fn open(
-        &self,
-        identification: Option<&Headers>,
-    ) -> Result<(SynthesisInput, SynthesisOutput), ProviderError> {
+    fn open(&self, cx: &telemetry::Cx) -> Result<(SynthesisInput, SynthesisOutput), ProviderError> {
         let mut opts = self.opts.lock().clone();
         if let Some(conn) = self.conn_options {
             opts.conn_options = conn;
         }
         let provider = InferenceProvider::of_model(&opts.model);
-        let identification = match identification {
-            Some(headers) => Some(headers.clone()),
-            None => self.identity.for_connection(),
-        };
-        let identification = identification.as_ref();
 
         opts.conn_options.validate().map_err(|error| ApiError::new(error.to_string()))?;
         let (text_tx, text_rx) = mpsc::channel::<String>(TEXT_QUEUE_CAPACITY);
@@ -356,7 +332,7 @@ impl GatewayTts {
         let accepted_at = clock.now();
 
         let token = lk_agents_net::token::inference_bearer(&opts.api_key, &opts.api_secret)?;
-        let headers = gateway_headers(identification, None, None, &token);
+        let headers = gateway_headers(cx, None, None, &token);
         let session_id = Some(crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
 
         let query = url::form_urlencoded::Serializer::new(String::new())
@@ -408,15 +384,15 @@ impl Tts for GatewayTts {
         self.conn_options
     }
 
-    /// The provider's `error` event, on the host provider this view serves.
+    /// The provider's `error` event, on the host object it was built as.
     fn failed(&self, error: ProviderError, recoverable: bool) {
-        if let Some(reporter) = &self.reporter {
-            reporter.failed(error, recoverable);
+        if let Some(events) = &self.events {
+            events.failed(error, recoverable);
         }
     }
 
     fn label(&self) -> String {
-        NativeLabel::InferenceTts.as_str().into()
+        self.label.clone()
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
@@ -444,26 +420,23 @@ impl Tts for GatewayTts {
         wire::markup_provider(&self.model()).map_or("", |p| p.as_str()).to_owned()
     }
 
-    /// The host `inference.TTS`'s `options`, which this view reports for.
     fn options(&self) -> Arc<dyn lk_agents_abi::tts::types::SharedTtsOptions> {
-        match &self.reporter {
-            Some(host) => host.options(),
-            None => Arc::new(lk_agents_abi::tts::types::TtsOptions::default()),
-        }
+        self.options.clone()
     }
 
-    fn prewarm(&self) {
-        self.prewarm_identified(None);
+    fn prewarm(&self, cx: &telemetry::Cx) {
+        self.prewarm_for(cx);
     }
 
     /// `synthesize(text)` = `_synthesize_with_stream(text)`: the gateway has no one-shot endpoint.
     fn synthesize<'a>(
         &'a self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         chunk: &'a SpeechChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        let opened = self.open(cx);
         Box::pin(async move {
-            let (sink, source) = self.open(None)?;
+            let (sink, source) = opened?;
             if !chunk.text.trim().is_empty() {
                 sink.queue(chunk.text.clone())?;
             }
@@ -474,13 +447,14 @@ impl Tts for GatewayTts {
 
     fn stream(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
     > {
+        let opened = self.open(cx);
         Box::pin(async move {
-            self.open(None).map(|(sink, source)| {
+            opened.map(|(sink, source)| {
                 lk_agents_abi::DuplexStream::new(
                     Box::new(sink) as TtsSink,
                     Box::new(source) as TtsSource,
@@ -665,10 +639,14 @@ fn connection_configuration(frame: &serde_json::Value, headers: &Headers) -> Str
 
 impl InferenceTts for GatewayTts {
     type Env = ProcessEnv;
+    type Options = options::OptionsCell;
 
     #[allow(clippy::too_many_arguments, reason = "Preserve the public host operation signature")]
     fn new(
         env: &ProcessEnv,
+        label: String,
+        events: Arc<dyn ProviderEvents>,
+        sentence_tokenizer: lk_agents_abi::tts::types::OptionsTokenizer,
         model: String,
         voice: Option<String>,
         language: Option<String>,
@@ -705,12 +683,15 @@ impl InferenceTts for GatewayTts {
                 })
                 .collect(),
         };
-        Ok(GatewayTts::new(
+        let tts = GatewayTts::new(
             opts,
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             (env.spawner)().map_err(|e| Invalid(e.to_string()))?,
             env.clock.clone(),
-        ))
+        );
+        let capabilities = Tts::capabilities(&tts);
+        let options = options::OptionsCell::host(sentence_tokenizer, capabilities);
+        Ok(GatewayTts { label, events: Some(events), options: Arc::new(options), ..tts })
     }
 
     fn model(&self) -> String {
@@ -728,11 +709,11 @@ impl InferenceTts for GatewayTts {
     fn conn_options(&self) -> ApiConnectOptions {
         self.opts.lock().conn_options
     }
-    fn prewarm(&self, headers: Option<Headers>) {
-        self.prewarm_identified(headers);
+    fn options(&self) -> Arc<options::OptionsCell> {
+        self.options.clone()
     }
-    fn identified(&self, headers: Headers, reporter: Option<Arc<dyn Tts>>) -> Self {
-        self.identified(headers, reporter)
+    fn prewarm(&self, cx: telemetry::Cx) {
+        self.prewarm_for(&cx);
     }
     async fn aclose(&self) {
         let idle = self.connections.lock().close();

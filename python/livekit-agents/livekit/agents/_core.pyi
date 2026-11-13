@@ -65,6 +65,7 @@ from ._generated._core_inference import (
     amd_auto_select_models as amd_auto_select_models,
     amd_is_evaluated_model as amd_is_evaluated_model,
     eot_select as eot_select,
+    identify_host as identify_host,
     inference_api_key as inference_api_key,
     inference_api_secret as inference_api_secret,
     inference_credentials as inference_credentials,

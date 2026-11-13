@@ -113,6 +113,8 @@ impl Backend for LlmBackend {
 /// A host-constructed chain runs on the executor and clock its env lends.
 pub struct FallbackLlm {
     chain: Arc<FallbackChain<LlmBackend>>,
+    /// The name logs give it: its host class's when its host built it.
+    label: String,
 }
 
 impl FallbackLlm {
@@ -127,7 +129,7 @@ impl FallbackLlm {
         let entries =
             llms.into_iter().map(|llm| LlmBackend::new(llm, Arc::clone(&clock))).collect();
         let chain = FallbackChain::new(entries, policy, clock, spawner, observer)?;
-        Ok(FallbackLlm { chain: Arc::new(chain) })
+        Ok(FallbackLlm { chain: Arc::new(chain), label: NativeLabel::LlmFallback.as_str().into() })
     }
 
     /// The adapter's span for one request, under the caller's context; its entries' requests
@@ -177,12 +179,13 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
     /// and a plugin's own would multiply it (N×M attempts).
     fn new(
         env: &ProcessEnv,
+        label: String,
+        observer: Arc<dyn ChainObserver>,
         llms: Vec<Arc<dyn Llm>>,
         attempt_timeout: f64,
         max_retry_per_llm: u32,
         retry_interval: f64,
         sticky: bool,
-        on_availability: Option<Arc<dyn ChainObserver>>,
     ) -> Result<Self, Invalid> {
         let policy = ChainPolicy {
             max_retry_per_backend: max_retry_per_llm,
@@ -190,14 +193,9 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
             retry_interval: Some(retry_interval),
             sticky,
         };
-        let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
-        FallbackLlm::new(
-            llms,
-            policy,
-            env.clock.clone(),
-            (env.spawner)().map_err(|e| Invalid(e.to_string()))?,
-            observer,
-        )
+        let spawner = (env.spawner)().map_err(|e| Invalid(e.to_string()))?;
+        let chain = FallbackLlm::new(llms, policy, env.clock.clone(), spawner, observer)?;
+        Ok(FallbackLlm { label, ..chain })
     }
 
     /// Which entry most recently served, as a position in the host's list (the reference's
@@ -215,6 +213,7 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
     /// is handed, §1.11); the chain picks an entry on the first `recv()`.
     async fn chat(
         &self,
+        cx: telemetry::Cx,
         chat_ctx: HostChatContext,
         tools: Option<HostTools>,
         parallel_tool_calls: Option<bool>,
@@ -237,7 +236,7 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
             extra: extra_kwargs,
             ..ChatRequest::default()
         };
-        Llm::chat(self, &telemetry::Cx::NONE, &req).await.map(FallbackLlmChunks)
+        Llm::chat(self, &cx, &req).await.map(FallbackLlmChunks)
     }
 }
 
@@ -262,7 +261,7 @@ impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for FallbackLlmChunk
 
 impl Llm for FallbackLlm {
     fn label(&self) -> String {
-        NativeLabel::LlmFallback.as_str().into()
+        self.label.clone()
     }
 
     fn request_span(&self) -> telemetry::RequestSpan {
@@ -274,9 +273,9 @@ impl Llm for FallbackLlm {
         self.active().id()
     }
 
-    fn prewarm(&self) {
+    fn prewarm(&self, cx: &telemetry::Cx) {
         for entry in self.chain.entries() {
-            entry.inner().prewarm();
+            entry.inner().prewarm(cx);
         }
     }
 

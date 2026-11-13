@@ -512,6 +512,7 @@ mod recording {
                 .call1((path.to_str().unwrap(),))
                 .unwrap();
             let tap = _core::py_objects::native::<dyn AudioRecorder>(&object)
+                .unwrap()
                 .expect("the generated class must expose the actual native tap");
             (object.unbind(), tap)
         });

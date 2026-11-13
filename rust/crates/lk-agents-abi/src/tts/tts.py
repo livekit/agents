@@ -65,14 +65,7 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._markup = self.Markup(self)
-        tokenizer = tokenize.SentenceTokenizer()
-        self._options_cell = _core.TtsOptionsCell(
-            tokenizer, _bindings.core_leg(tokenizer), capabilities
-        )
-
-    def _core_leg(self) -> object:
-        """The Python provider implementation used by the native runtime's declared proxy."""
-        return self
+        self._options_cell = _core.TtsOptionsCell(tokenize.SentenceTokenizer(), capabilities)
 
     @property
     def label(self) -> str:
@@ -174,7 +167,7 @@ class TTS(
             else cast(tokenize.SentenceTokenizer, cell.sentence_tokenizer)
         )
         paced = pacing if is_given(pacing) else cell.pacing
-        cell.set(tokenizer, _bindings.core_leg(tokenizer), paced)
+        cell.set(tokenizer, paced)
 
     def synthesize(
         self, text: str, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
@@ -650,11 +643,10 @@ class _Synthesis(ChunkedStream):
     """
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
-        leg = _bindings.core_leg(tts)
-        self._native = _core.TtsStream(tts=leg, text=input_text, conn_options=conn_options)
+        self._native = _core.TtsStream(tts=tts, text=input_text, conn_options=conn_options)
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         # a host plugin's own attempts report the metrics; a native provider has none
-        if leg is tts:
+        if not self._native.native:
             self._metrics = None
 
     async def _main_task(self) -> None:
@@ -674,11 +666,10 @@ class _Synthesizing(SynthesizeStream):
     provider's attempts and reports each failure; this only reads its audio."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
-        leg = _bindings.core_leg(tts)
-        self._native = _core.TtsStream(tts=leg, conn_options=conn_options)
+        self._native = _core.TtsStream(tts=tts, conn_options=conn_options)
         super().__init__(tts=tts, conn_options=conn_options)
         # a host plugin's own attempts report the metrics; a native provider has none
-        if leg is tts:
+        if not self._native.native:
             self._metrics = None
 
     def push_text(self, token: str) -> None:

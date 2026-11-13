@@ -122,9 +122,10 @@ pub trait Stt: Send + Sync {
         crate::types::identity::ProviderId::of_label(self.label())
     }
 
-    /// Open the connection to the service early; a provider with nothing to warm ignores it.
+    /// Open the connection to the service early, for the job `cx` runs for; a provider with
+    /// nothing to warm ignores it.
     #[host(notify, name = "_core_prewarm")]
-    fn prewarm(&self) {}
+    fn prewarm(&self, _cx: &crate::telemetry::Cx) {}
 
     /// Set the session's keyterms: its configured ones and those confirmed in the conversation,
     /// kept apart from the user's own. Providers with the `keyterms` capability override it.

@@ -32,7 +32,7 @@ class FallbackAdapter(_facades.FallbackAdapter):
         conn_options: APIConnectOptions,
     ) -> SpeechEvent:
         frames = buffer if isinstance(buffer, list) else [buffer]
-        return await self._native.recognize(
+        return await self._core_native_recognize(
             frames, language if language else None, conn_options=conn_options
         )
 

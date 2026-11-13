@@ -46,7 +46,11 @@ fn grant_to_wire(grant: AuthGrant) -> AgentThreadGrants {
 
 /// The caller a token's claims name, endpoint and thread authority kept apart. An
 /// `agentEndpoint` grant naming another agent or deployment does not call this one.
-fn principal(claims: Claims, agent_name: &str, deployment: &str) -> Result<AuthPrincipal, AuthError> {
+fn principal(
+    claims: Claims,
+    agent_name: &str,
+    deployment: &str,
+) -> Result<AuthPrincipal, AuthError> {
     let grant = grant_from_wire(&claims.agent_thread);
     let endpoint_call = if agent_name.is_empty() {
         claims.agent_endpoint.call
@@ -208,7 +212,10 @@ mod tests {
             credentials.verify(token, "agent".into(), "prod".into()),
             Err(AuthError::Forbidden(_))
         ));
-        assert!(matches!(endpoint_caller(None, false, "agent", "prod"), Err(AuthError::Unauthorized(_))));
+        assert!(matches!(
+            endpoint_caller(None, false, "agent", "prod"),
+            Err(AuthError::Unauthorized(_))
+        ));
     }
 
     // Catches: the worker re-verifying a token the node already verified, which refuses every

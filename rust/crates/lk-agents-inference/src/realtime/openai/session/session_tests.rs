@@ -420,7 +420,6 @@ async fn livekit_inference_signs_each_connection_and_drops_the_session_model() {
             api_secret: "secret".into(),
             provider: Some("openai".into()),
             inference_class: Some(String::new()),
-            identity: Default::default(),
         },
         conn: Default::default(),
     };
@@ -434,10 +433,7 @@ async fn livekit_inference_signs_each_connection_and_drops_the_session_model() {
     let auth = headers.iter().find(|(k, _)| k == "Authorization").expect("a bearer").1.clone();
     assert!(auth.starts_with("Bearer ey"), "a JWT, not the key: {auth}");
     assert_eq!(headers.get("X-LiveKit-Inference-Provider"), Some("openai"));
-    assert_eq!(
-        headers.get("User-Agent"),
-        Some(lk_agents_inference::headers::user_agent(env!("CARGO_PKG_VERSION")).as_str())
-    );
+    assert_eq!(headers.get("User-Agent"), Some(lk_agents_net::job_identity::user_agent().as_str()));
     assert_eq!(headers.get("X-LiveKit-Inference-Priority"), None);
     session.aclose().await;
 }

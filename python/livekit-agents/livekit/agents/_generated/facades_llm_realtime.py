@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _bindings, _core
-from .._bindings import core_legs
 from ..log import logger
 from . import realtime_availability
 from .realtime import RealtimeModel
@@ -18,7 +17,7 @@ if TYPE_CHECKING:
     from .llm_fallback import AvailabilityChanged
 
 
-class RealtimeModelFallbackAdapter(RealtimeModel[Literal["realtime_availability_changed"]]):
+class RealtimeModelFallbackAdapter(_core.RealtimeFallbackModel, RealtimeModel[Literal["realtime_availability_changed"]]):
     """`llm.RealtimeModelFallbackAdapter`: falls back between realtime models (or restarts one),
     preserving chat context and handlers. A failed model is skipped until its cooldown ends, the
     conversation is replayed onto the next one, and a reply cut by the swap is asked for again.
@@ -28,6 +27,10 @@ class RealtimeModelFallbackAdapter(RealtimeModel[Literal["realtime_availability_
         _members: list[RealtimeModel]
 
         def _core_failed(self, error: BaseException, recoverable: bool) -> None: ...
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("session",), "session.llm_node")
 
     def __init__(
         self,
@@ -50,15 +53,15 @@ class RealtimeModelFallbackAdapter(RealtimeModel[Literal["realtime_availability_
         Raises:
             ValueError: If no models are given or their hard capabilities disagree.
         """
-        self._native = _core.RealtimeFallbackModel(
-            core_legs(models),
+        _core.RealtimeFallbackModel.__init__(
+            self,
+            models,
             cooldown=cooldown,
             attempt_timeout=attempt_timeout,
             regenerate_on_swap=regenerate_on_swap,
-            on_availability=self,
         )
         self._members = list(models)
-        super().__init__(capabilities=self._native.capabilities)
+        RealtimeModel.__init__(self, capabilities=self.capabilities)
 
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
@@ -71,7 +74,7 @@ class RealtimeModelFallbackAdapter(RealtimeModel[Literal["realtime_availability_
 
     @property
     def _active(self) -> RealtimeModel:
-        return self._members[self._native.active_index]
+        return self._members[self._core_active_index]
 
     @property
     def model(self) -> str:
@@ -86,7 +89,7 @@ class RealtimeModelFallbackAdapter(RealtimeModel[Literal["realtime_availability_
         return self._active.metrics_metadata
 
     async def aclose(self) -> None:
-        await super().aclose()
+        await RealtimeModel.aclose(self)
         for member in self._members:
             await member.aclose()
 
@@ -97,4 +100,4 @@ class RealtimeModelFallbackAdapter(RealtimeModel[Literal["realtime_availability_
             switch_model: Bring the new session up on the next available model instead of the
                 current one.
         """
-        await self._native.restart(switch_model=switch_model)
+        await _core.RealtimeFallbackModel._core_restart(self, switch_model=switch_model)

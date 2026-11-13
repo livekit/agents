@@ -23,8 +23,13 @@ pub trait TtsStreamAdapter: Send + Sync + Sized + 'static {
     type Env;
 
     /// `tts` synthesizes each chunk of the text pushed.
-    #[host(new)]
-    fn new(env: &Self::Env, #[host(kw)] tts: Arc<dyn Tts>) -> Self;
+    #[host(init)]
+    fn new(
+        env: &Self::Env,
+        #[host(label)] label: String,
+        events: Arc<dyn crate::types::provider::ProviderEvents>,
+        #[host(kw)] tts: Arc<dyn Tts>,
+    ) -> Self;
 
     /// Streaming, with word alignment.
     #[host(getter)]
@@ -42,7 +47,8 @@ pub trait TtsStreamAdapter: Send + Sync + Sized + 'static {
     name = "StreamAdapter",
     base = "tts.TTS",
     native = TtsStreamAdapter,
-    legs(_synthesize, _stream),
+    refuse(_synthesize, _stream),
+    node = "session.tts_node",
     base_args(capabilities, sample_rate, num_channels),
     keep(tts)
 ))]
@@ -52,6 +58,6 @@ pub trait TtsStreamAdapterFacade {
     ///
     /// Args:
     ///     tts: The non-streaming TTS.
-    #[host(new, resolve(tts = ".._bindings.core_leg"))]
+    #[host(new)]
     fn new(#[host(kw)] tts: Arc<dyn Tts>) -> Self;
 }

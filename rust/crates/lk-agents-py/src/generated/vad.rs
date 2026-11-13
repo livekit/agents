@@ -60,17 +60,26 @@ fn _extract_inference_vad_new_deactivation_threshold(
 type InferenceVadNewDeactivationThresholdInput = ::std::option::Option<f64>;
 
 /// The Silero VAD behind `inference.VAD`.
-#[pyclass(frozen, name = "InferenceVad", module = "livekit.agents._core")]
-pub struct InferenceVad(pub(crate) ::std::sync::Arc<InferenceVadImpl>);
+#[pyclass(frozen, weakref, subclass, name = "InferenceVad", module = "livekit.agents._core")]
+pub struct InferenceVad(pub(crate) ::std::sync::OnceLock<::std::sync::Arc<InferenceVadImpl>>);
 
 #[pymethods]
 impl InferenceVad {
+    #[new]
+    #[pyo3(signature = (*_args, **_kwargs))]
+    fn new(
+        _args: &Bound<'_, ::pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, ::pyo3::types::PyDict>>,
+    ) -> Self {
+        Self(::std::sync::OnceLock::new())
+    }
+
     /// `model_factory` builds the host's model when the build links no native one;
     /// `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`. Only the
     /// `"silero"` model exists.
-    #[new]
     #[pyo3(signature = (model_factory, *, model = None, min_speech_duration = 0.05, min_silence_duration = 0.25, prefix_padding_duration = 0.5, max_buffered_speech = 60.0, activation_threshold = 0.5, deactivation_threshold = None))]
-    fn new(
+    fn __init__(
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         model_factory: Bound<'_, PyAny>,
         model: Option<Bound<'_, PyAny>>,
@@ -84,9 +93,15 @@ impl InferenceVad {
         activation_threshold: InferenceVadNewActivationThresholdInput,
         #[pyo3(from_py_with = _extract_inference_vad_new_deactivation_threshold)]
         deactivation_threshold: InferenceVadNewDeactivationThresholdInput,
-    ) -> PyResult<InferenceVad> {
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let once =
+            || ::pyo3::exceptions::PyRuntimeError::new_err("InferenceVad.__init__ runs once");
+        if slf.get().0.get().is_some() {
+            return Err(once());
+        }
         let env = crate::process::env();
+        let label = crate::py_objects::class_label(slf.as_any())?;
         let model_factory =
             crate::generated::vad::VadModelsProxy::from_host(model_factory.as_any())?;
         let model = match model {
@@ -103,6 +118,7 @@ impl InferenceVad {
             .detach(|| {
                 <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::new(
                     &env,
+                    label,
                     model_factory,
                     model,
                     min_speech_duration,
@@ -116,14 +132,15 @@ impl InferenceVad {
             .map_err(|e: ::lk_agents_abi::errors::Invalid| {
                 <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
             })?;
-        ::pyo3::PyResult::Ok(InferenceVad(::std::sync::Arc::new(out)))
+        slf.get().0.set(::std::sync::Arc::new(out)).map_err(|_| once())
     }
 
     #[getter]
     fn model<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
-            <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::model(&self.0)
+            <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::model(engine)
         });
         crate::generated::records::inference_models::vad_models_to_py(py, out)
     }
@@ -131,15 +148,17 @@ impl InferenceVad {
     #[getter]
     fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
             <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::capabilities(
-                &self.0,
+                engine,
             )
         });
         crate::generated::records::vad::vad_capabilities_to_py(py, out)
     }
 
     /// The given options, applied by each running stream before its next frame.
+    #[pyo3(name = "_core_update_options")]
     #[pyo3(signature = (*, min_speech_duration = crate::py_values::Omittable::NOT_GIVEN, min_silence_duration = crate::py_values::Omittable::NOT_GIVEN, prefix_padding_duration = crate::py_values::Omittable::NOT_GIVEN, max_buffered_speech = crate::py_values::Omittable::NOT_GIVEN, activation_threshold = crate::py_values::Omittable::NOT_GIVEN, deactivation_threshold = crate::py_values::Omittable::NOT_GIVEN))]
     fn update_options(
         &self,
@@ -152,6 +171,7 @@ impl InferenceVad {
         deactivation_threshold: crate::py_values::Omittable<'_>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let min_speech_duration = min_speech_duration.map(|value| {
             crate::py_values::number_from_py::<f64>(value.as_any(), "min_speech_duration")
         })?;
@@ -172,7 +192,7 @@ impl InferenceVad {
         })?;
         py.detach(|| {
             <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::update_options(
-                &self.0,
+                engine,
                 min_speech_duration,
                 min_silence_duration,
                 prefix_padding_duration,
@@ -187,14 +207,17 @@ impl InferenceVad {
     #[getter]
     fn min_silence_duration(&self, py: Python<'_>) -> PyResult<f64> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::min_silence_duration(&self.0));
+        let engine = self.engine()?;
+        let out = py.detach(|| <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::min_silence_duration(engine));
         ::pyo3::PyResult::Ok(out)
     }
 
     /// One detection; each event carries the audio it refers to.
+    #[pyo3(name = "_core_native_stream")]
     fn stream(&self, py: Python<'_>) -> PyResult<InferenceVadStream> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::stream(&self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let engine = self.engine()?;
+        let out = py.detach(|| <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::stream(engine)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok({
             let (sink, source) = out.split();
             InferenceVadStream(
@@ -208,14 +231,23 @@ impl InferenceVad {
     }
 }
 
-// Wherever the host passes a `::lk_agents_abi::Vad`, an instance of this class is itself.
+impl InferenceVad {
+    /// The implementation its `__init__` built.
+    pub(crate) fn engine(&self) -> PyResult<&::std::sync::Arc<InferenceVadImpl>> {
+        self.0.get().ok_or_else(|| crate::py_objects::unbuilt("InferenceVad"))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Vad`, an instance of this class is itself once built.
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Vad>(),
-        read: |obj| {
-            let this = obj.cast::<InferenceVad>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Vad> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<InferenceVad>() {
+            Ok(this) => {
+                let engine = this.get().0.get().cloned().map(|engine| -> ::std::sync::Arc<dyn ::lk_agents_abi::Vad> { engine });
+                crate::py_objects::built(obj, engine, "InferenceVad")
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -281,7 +313,7 @@ impl VadModelsProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModels>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)?
         {
             return Ok(native);
         }
@@ -294,7 +326,7 @@ impl VadModelsProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModels>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)?
         {
             return Ok(native);
         }
@@ -305,6 +337,13 @@ impl VadModelsProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::vad::inference::VadModels>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `VadModels` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -364,7 +403,7 @@ impl VadModelProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModel>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)?
         {
             return Ok(native);
         }
@@ -377,7 +416,7 @@ impl VadModelProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModel>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)?
         {
             return Ok(native);
         }
@@ -388,6 +427,13 @@ impl VadModelProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::vad::inference::VadModel>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `VadModel` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -484,7 +530,7 @@ impl VadProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Vad>> {
-        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Vad>(obj) {
+        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Vad>(obj)? {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
@@ -495,7 +541,7 @@ impl VadProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Vad>> {
-        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Vad>(obj) {
+        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Vad>(obj)? {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
@@ -503,6 +549,11 @@ impl VadProxy {
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::Vad>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::Vad>(obj)?.is_some() {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `Vad` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -550,7 +601,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
         ::std::clone::Clone::clone(&self.id)
     }
 
-    fn prewarm(&self) {
+    fn prewarm(&self, _cx: &::lk_agents_abi::telemetry::Cx) {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,

@@ -310,8 +310,6 @@ class AIPlatformLLM(llm.LLM):
         return LLMStream(
             self,
             model=self._opts.model,
-            provider=None,
-            inference_class=None,
             strict_tool_schema=self._strict_tool_schema,
             client=self._client,
             chat_ctx=chat_ctx,

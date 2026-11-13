@@ -21,11 +21,12 @@ if TYPE_CHECKING:
     from .llm_provider_options import ChatCompletionOptions, ProviderEndpoint
 
 
-class LLM(BaseLLM):
+class LLM(_core.InferenceLlm, BaseLLM):
     """`inference.LLM`: the LiveKit Inference gateway's LLM, or an OpenAI-compatible provider's."""
 
-    if TYPE_CHECKING:
-        def _core_native(self) -> _core.InferenceLlm: ...
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("chat",), "session.llm_node")
 
     def __init__(
         self,
@@ -51,8 +52,8 @@ class LLM(BaseLLM):
             extra_kwargs: Request options sent with every completion.
             endpoint: A provider plugin's own endpoint in place of the gateway.
         """
-        super().__init__()
-        self._native = _core.InferenceLlm(
+        _core.InferenceLlm.__init__(
+            self,
             model,
             provider=provider if is_given(provider) else None,
             base_url=base_url if is_given(base_url) else None,
@@ -62,26 +63,23 @@ class LLM(BaseLLM):
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else None,
             endpoint=endpoint if is_given(endpoint) else None,
         )
-
-    def _core_leg(self) -> Any:
-        """This engine, unless a subclass replaces what it would bypass."""
-        replaced = _bindings.overrides(self, LLM, "chat")
-        return self if replaced else self._core_native()
-
-    @property
-    def model(self) -> str:
-        return self._native.model
+        BaseLLM.__init__(self)
 
     def update_options(
         self,
         *,
         model: NotGivenOr[LLMModels | str] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[ChatCompletionOptions | dict[str, Any]] = NOT_GIVEN,
+        endpoint: NotGivenOr[ProviderEndpoint] = NOT_GIVEN,
     ) -> None:
-        """Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs."""
-        self._native.update_options(
+        """Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs, and
+        ``endpoint`` the provider endpoint.
+        """
+        _core.InferenceLlm._core_update_options(
+            self,
             model=model if is_given(model) else None,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else None,
+            endpoint=endpoint if is_given(endpoint) else None,
         )
 
     def chat(
@@ -138,7 +136,7 @@ class GatewayLLMStream(LLMStream):
         self._extra_kwargs: dict[str, Any] | None = extra_kwargs
 
     async def _core_open(self) -> _core.InferenceLlmChunks:
-        return self._llm._core_native().chat(
+        return self._llm._core_native_chat(
             chat_ctx=self._chat_ctx,
             tools=self._tools,
             conn_options=self._conn_options,

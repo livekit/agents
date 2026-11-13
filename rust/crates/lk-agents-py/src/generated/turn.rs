@@ -146,50 +146,19 @@ impl InferenceEot {
         Ok(())
     }
 
-    /// One stream of the user's audio. `headers` (`get_inference_headers()`) identify the job on
-    /// each gateway connection.
-    #[pyo3(signature = (headers, conn_options))]
+    /// One stream of the user's audio; each gateway connection carries the identity of the job
+    /// `cx` runs for.
+    #[pyo3(signature = (conn_options))]
     fn stream(
         &self,
         py: Python<'_>,
-        headers: Bound<'_, PyAny>,
         conn_options: Bound<'_, PyAny>,
     ) -> PyResult<super::turn::TurnDetectorStream> {
         crate::py_calls::check_pid()?;
-        let headers = crate::generated::records::from_representation::<
-            ::lk_agents_abi::Headers,
-            ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-        >(if headers.as_any().is_instance_of::<::pyo3::types::PyList>()
-            || headers.as_any().is_instance_of::<::pyo3::types::PyTuple>()
-        {
-            headers
-                .as_any()
-                .try_iter()?
-                .map(|item| {
-                    let item = &item?;
-                    (|| -> ::pyo3::PyResult<_> {
-                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                        if tuple.len() != 2 {
-                            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                                "{}: expected a tuple of 2 items",
-                                "headers"
-                            )));
-                        }
-                        let item_0 = tuple.get_item(0)?;
-                        let item_1 = tuple.get_item(1)?;
-                        Ok((
-                            (item_0.extract::<::std::string::String>())?,
-                            (item_1.extract::<::std::string::String>())?,
-                        ))
-                    })()
-                })
-                .collect::<PyResult<Vec<_>>>()
-        } else {
-            Err(::pyo3::exceptions::PyTypeError::new_err("headers: expected a list or tuple"))
-        }?)?;
+        let cx = crate::py_calls::entry_cx()?;
         let conn_options =
             crate::generated::records::connect::api_connect_options_from_py(conn_options.as_any())?;
-        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::stream(&self.0, headers, conn_options)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::stream(&self.0, cx, conn_options)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(super::turn::TurnDetectorStream(::std::sync::Arc::new(out)))
     }
 }
@@ -316,10 +285,12 @@ impl TurnDetectorStream {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::EotDetector>(),
-        read: |obj| {
-            let this = obj.cast::<TurnDetectorStream>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::EotDetector> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<TurnDetectorStream>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::EotDetector> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -471,10 +442,12 @@ impl AdaptiveInterruptionDetector {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::turn::interruption::InterruptionSource>(),
-        read: |obj| {
-            let this = obj.cast::<AdaptiveInterruptionDetector>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::turn::interruption::InterruptionSource> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<AdaptiveInterruptionDetector>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::turn::interruption::InterruptionSource> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -512,7 +485,7 @@ impl EotModelFactoryProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModelFactory>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(obj)?
         {
             return Ok(native);
         }
@@ -525,7 +498,7 @@ impl EotModelFactoryProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModelFactory>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(obj)?
         {
             return Ok(native);
         }
@@ -536,6 +509,13 @@ impl EotModelFactoryProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotModelFactory>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `EotModelFactory` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -595,7 +575,7 @@ impl EotModelProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModel>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj)?
         {
             return Ok(native);
         }
@@ -608,7 +588,7 @@ impl EotModelProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModel>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj)?
         {
             return Ok(native);
         }
@@ -619,6 +599,13 @@ impl EotModelProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotModel>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `EotModel` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -679,7 +666,7 @@ impl EotMetricsObserverProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::turn::inference::EotMetricsObserver,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -693,7 +680,7 @@ impl EotMetricsObserverProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::turn::inference::EotMetricsObserver,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -704,6 +691,15 @@ impl EotMetricsObserverProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>(
+            obj,
+        )?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `EotMetricsObserver` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 

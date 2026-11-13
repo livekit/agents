@@ -49,6 +49,17 @@ pub enum NativeLabel {
     RealtimeFallback,
 }
 
+/// What a native provider reports to the host object it was built as (`inference.TTS`): the
+/// provider's `error` event. Weak: the object owns the provider, never the reverse, and once it is
+/// gone its events go nowhere.
+#[crate::host(proxy(host = "livekit.agents._bindings.ProviderEvents", weak))]
+pub trait ProviderEvents: Send + Sync {
+    /// The provider's `error` event: a failed attempt of a call the framework retries,
+    /// `recoverable` while the call is retried.
+    #[host(notify, name = "_core_failed")]
+    fn failed(&self, error: ProviderError, recoverable: bool);
+}
+
 /// One host provider request, its attempts run by the native executor.
 ///
 /// The host implements one attempt; the executor decides when an attempt may start, runs it,

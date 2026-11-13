@@ -41,6 +41,10 @@ pub mod interfaces {
         attrs(_activate, _current)
     ))]
     pub struct TelemetryModule;
+
+    /// The job the calling context runs in, read at an entry.
+    #[lk_agents_host_derive::host(interface(module = "livekit.agents.job", attrs(_current_run)))]
+    pub struct JobModule;
 }
 
 use crate::generated::accessors as access;
@@ -635,10 +639,24 @@ pub fn entered() -> lk_agents_abi::invoke::CallContext {
     lk_agents_abi::invoke::CallContext { host_context, ..Default::default() }
 }
 
-/// The caller's span at a `_core` call's entry, recording to the process tracer.
-pub fn entry_cx() -> telemetry::Cx {
-    let caller = Python::attach(current_span);
-    lk_agents_runtime::telemetry::tracer().root().continuing(caller)
+/// The caller's span and job at a `_core` call's entry, recording to the process tracer: the
+/// requests the call makes carry that job's identity.
+pub fn entry_cx() -> PyResult<telemetry::Cx> {
+    let (caller, job) = Python::attach(|py| Ok::<_, PyErr>((current_span(py), current_job(py)?)))?;
+    Ok(lk_agents_runtime::telemetry::tracer().root().continuing(caller).with_job(job))
+}
+
+/// The job of the calling context: its `JobContext`'s run, once that run started its trace.
+fn current_job(py: Python<'_>) -> PyResult<Option<telemetry::record::JobKey>> {
+    static CURRENT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    let current = CURRENT.get_or_try_init(py, || {
+        Ok::<_, PyErr>(access::JobModule::_current_run(&access::JobModule::import(py)?)?.unbind())
+    })?;
+    let run = current.bind(py).call0()?;
+    if run.is_none() {
+        return Ok(None);
+    }
+    Ok(run.cast::<crate::generated::worker::JobRun>()?.get().0.job())
 }
 
 /// Notifications waiting for the host loop past which a new lossy one is dropped (and logged).

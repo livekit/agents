@@ -277,10 +277,12 @@ impl FixedGate {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(),
-        read: |obj| {
-            let this = obj.cast::<FixedGate>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<FixedGate>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -383,10 +385,12 @@ impl AdaptiveNoiseGate {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(),
-        read: |obj| {
-            let this = obj.cast::<AdaptiveNoiseGate>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<AdaptiveNoiseGate>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -466,10 +470,12 @@ impl DuplexInput {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue>(),
-        read: |obj| {
-            let this = obj.cast::<DuplexInput>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<DuplexInput>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -486,23 +492,40 @@ fn _extract_duplex_realtime_model_new_audio_timeout(
 type DuplexRealtimeModelNewAudioTimeoutInput = f64;
 
 /// `DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it.
-#[pyclass(frozen, name = "DuplexRealtimeModel", module = "livekit.agents._core")]
-pub struct DuplexRealtimeModel(pub(crate) ::std::sync::Arc<DuplexRealtimeModelImpl>);
+#[pyclass(frozen, weakref, subclass, name = "DuplexRealtimeModel", module = "livekit.agents._core")]
+pub struct DuplexRealtimeModel(
+    pub(crate) ::std::sync::OnceLock<::std::sync::Arc<DuplexRealtimeModelImpl>>,
+);
 
 #[pymethods]
 impl DuplexRealtimeModel {
+    #[new]
+    #[pyo3(signature = (*_args, **_kwargs))]
+    fn new(
+        _args: &Bound<'_, ::pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, ::pyo3::types::PyDict>>,
+    ) -> Self {
+        Self(::std::sync::OnceLock::new())
+    }
+
     /// Each session's gate is `gate`'s, else the model's own, else the adaptive gate.
     /// `audio_timeout`: how long to wait for the next frame before the output counts as finished.
-    #[new]
     #[pyo3(signature = (duplex_model, *, gate = None, audio_timeout = 0.8))]
-    fn new(
+    fn __init__(
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         duplex_model: Bound<'_, PyAny>,
         gate: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_duplex_realtime_model_new_audio_timeout)]
         audio_timeout: DuplexRealtimeModelNewAudioTimeoutInput,
-    ) -> PyResult<DuplexRealtimeModel> {
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let once = || {
+            ::pyo3::exceptions::PyRuntimeError::new_err("DuplexRealtimeModel.__init__ runs once")
+        };
+        if slf.get().0.get().is_some() {
+            return Err(once());
+        }
         let env = crate::process::env();
         let duplex_model =
             crate::generated::llm::DuplexHostProxy::from_host(duplex_model.as_any())?;
@@ -523,26 +546,36 @@ impl DuplexRealtimeModel {
                     &e,
                 )
             })?;
-        ::pyo3::PyResult::Ok(DuplexRealtimeModel(::std::sync::Arc::new(out)))
+        slf.get().0.set(::std::sync::Arc::new(out)).map_err(|_| once())
     }
 
     /// The realtime capabilities the model runs under.
     #[getter]
     fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::capabilities(&self.0));
+        let engine = self.engine()?;
+        let out = py.detach(|| <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::capabilities(engine));
         crate::generated::records::realtime::realtime_capabilities_to_py(py, out)
     }
 }
 
-// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
+impl DuplexRealtimeModel {
+    /// The implementation its `__init__` built.
+    pub(crate) fn engine(&self) -> PyResult<&::std::sync::Arc<DuplexRealtimeModelImpl>> {
+        self.0.get().ok_or_else(|| crate::py_objects::unbuilt("DuplexRealtimeModel"))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself once built.
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
-        read: |obj| {
-            let this = obj.cast::<DuplexRealtimeModel>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<DuplexRealtimeModel>() {
+            Ok(this) => {
+                let engine = this.get().0.get().cloned().map(|engine| -> ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> { engine });
+                crate::py_objects::built(obj, engine, "DuplexRealtimeModel")
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -573,15 +606,24 @@ fn _extract_fallback_llm_new_retry_interval(
 type FallbackLlmNewRetryIntervalInput = f64;
 
 /// The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks.
-#[pyclass(frozen, name = "FallbackLlm", module = "livekit.agents._core")]
-pub struct FallbackLlm(pub(crate) ::std::sync::Arc<FallbackLlmImpl>);
+#[pyclass(frozen, weakref, subclass, name = "FallbackLlm", module = "livekit.agents._core")]
+pub struct FallbackLlm(pub(crate) ::std::sync::OnceLock<::std::sync::Arc<FallbackLlmImpl>>);
 
 #[pymethods]
 impl FallbackLlm {
-    /// `llm` in order.
     #[new]
-    #[pyo3(signature = (llm, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false, on_availability = None))]
+    #[pyo3(signature = (*_args, **_kwargs))]
     fn new(
+        _args: &Bound<'_, ::pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, ::pyo3::types::PyDict>>,
+    ) -> Self {
+        Self(::std::sync::OnceLock::new())
+    }
+
+    /// `llm` in order; `observer` hears the chain's availability and failures.
+    #[pyo3(signature = (llm, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false))]
+    fn __init__(
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         llm: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_fallback_llm_new_attempt_timeout)]
@@ -591,10 +633,15 @@ impl FallbackLlm {
         #[pyo3(from_py_with = _extract_fallback_llm_new_retry_interval)]
         retry_interval: FallbackLlmNewRetryIntervalInput,
         sticky: bool,
-        on_availability: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<FallbackLlm> {
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let once = || ::pyo3::exceptions::PyRuntimeError::new_err("FallbackLlm.__init__ runs once");
+        if slf.get().0.get().is_some() {
+            return Err(once());
+        }
         let env = crate::process::env();
+        let label = crate::py_objects::class_label(slf.as_any())?;
+        let observer = crate::generated::llm::ChainObserverProxy::weak(slf.as_any())?;
         let llm = llm.try_iter().and_then(|items| {
             items
                 .map(|item| {
@@ -603,39 +650,41 @@ impl FallbackLlm {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let on_availability = on_availability
-            .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
-            .transpose()?;
         let out = py
             .detach(|| {
                 <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::new(
                     &env,
+                    label,
+                    observer,
                     llm,
                     attempt_timeout,
                     max_retry_per_llm,
                     retry_interval,
                     sticky,
-                    on_availability,
                 )
             })
             .map_err(|e: ::lk_agents_abi::errors::Invalid| {
                 <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
             })?;
-        ::pyo3::PyResult::Ok(FallbackLlm(::std::sync::Arc::new(out)))
+        slf.get().0.set(::std::sync::Arc::new(out)).map_err(|_| once())
     }
 
+    /// Which entry most recently served, as a position in the host's list.
     #[getter]
+    #[pyo3(name = "_core_active_index")]
     fn active_index(&self, py: Python<'_>) -> PyResult<usize> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
-            <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::active_index(&self.0)
+            <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::active_index(engine)
         });
         ::pyo3::PyResult::Ok(out)
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
+        let engine = self.engine()?;
+        let this = ::std::sync::Arc::clone(engine);
         crate::py_calls::future_into_py(py, async move {
             let () =
                 <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::aclose(&this)
@@ -646,6 +695,7 @@ impl FallbackLlm {
 
     /// A completion of the host `chat_ctx`, offering `tools`; the chain picks an entry on the
     /// first pull.
+    #[pyo3(name = "_core_native_chat")]
     #[pyo3(signature = (*, chat_ctx, tools = None, parallel_tool_calls = None, tool_choice = None, extra_kwargs = None, conn_options = None))]
     fn chat<'py>(
         &self,
@@ -658,6 +708,8 @@ impl FallbackLlm {
         conn_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
+        let cx = crate::py_calls::entry_cx()?;
         let chat_ctx =
             crate::generated::records::llm_fallback::host_chat_context_from_py(chat_ctx.as_any())?;
         let tools = tools
@@ -678,9 +730,9 @@ impl FallbackLlm {
         let conn_options = conn_options
             .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
             .transpose()?;
-        let this = ::std::sync::Arc::clone(&self.0);
+        let this = ::std::sync::Arc::clone(engine);
         crate::py_calls::future_into_py(py, async move {
-            let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::chat(&this, chat_ctx, tools, parallel_tool_calls, tool_choice, extra_kwargs, conn_options)
+            let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::chat(&this, cx, chat_ctx, tools, parallel_tool_calls, tool_choice, extra_kwargs, conn_options)
                 .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -695,14 +747,23 @@ impl FallbackLlm {
     }
 }
 
-// Wherever the host passes a `::lk_agents_abi::Llm`, an instance of this class is itself.
+impl FallbackLlm {
+    /// The implementation its `__init__` built.
+    pub(crate) fn engine(&self) -> PyResult<&::std::sync::Arc<FallbackLlmImpl>> {
+        self.0.get().ok_or_else(|| crate::py_objects::unbuilt("FallbackLlm"))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Llm`, an instance of this class is itself once built.
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Llm>(),
-        read: |obj| {
-            let this = obj.cast::<FallbackLlm>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Llm> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<FallbackLlm>() {
+            Ok(this) => {
+                let engine = this.get().0.get().cloned().map(|engine| -> ::std::sync::Arc<dyn ::lk_agents_abi::Llm> { engine });
+                crate::py_objects::built(obj, engine, "FallbackLlm")
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -762,15 +823,25 @@ fn _extract_fallback_tts_new_sample_rate(
 type FallbackTtsNewSampleRateInput = ::std::option::Option<u32>;
 
 /// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
-#[pyclass(frozen, name = "FallbackTts", module = "livekit.agents._core")]
-pub struct FallbackTts(pub(crate) ::std::sync::Arc<FallbackTtsImpl>);
+#[pyclass(frozen, weakref, subclass, name = "FallbackTts", module = "livekit.agents._core")]
+pub struct FallbackTts(pub(crate) ::std::sync::OnceLock<::std::sync::Arc<FallbackTtsImpl>>);
 
 #[pymethods]
 impl FallbackTts {
-    /// `tts` in order; `sample_rate` defaults to the highest of theirs, the others resampled.
     #[new]
-    #[pyo3(signature = (tts, *, max_retry_per_tts = 2, attempt_timeout = None, sample_rate = None, on_availability = None))]
+    #[pyo3(signature = (*_args, **_kwargs))]
     fn new(
+        _args: &Bound<'_, ::pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, ::pyo3::types::PyDict>>,
+    ) -> Self {
+        Self(::std::sync::OnceLock::new())
+    }
+
+    /// `tts` in order; `sample_rate` defaults to the highest of theirs, the others resampled.
+    /// `observer` hears the chain's availability and failures.
+    #[pyo3(signature = (tts, *, max_retry_per_tts = 2, attempt_timeout = None, sample_rate = None))]
+    fn __init__(
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         tts: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_fallback_tts_new_max_retry_per_tts)]
@@ -779,10 +850,15 @@ impl FallbackTts {
         attempt_timeout: FallbackTtsNewAttemptTimeoutInput,
         #[pyo3(from_py_with = _extract_fallback_tts_new_sample_rate)]
         sample_rate: FallbackTtsNewSampleRateInput,
-        on_availability: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<FallbackTts> {
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let once = || ::pyo3::exceptions::PyRuntimeError::new_err("FallbackTts.__init__ runs once");
+        if slf.get().0.get().is_some() {
+            return Err(once());
+        }
         let env = crate::process::env();
+        let label = crate::py_objects::class_label(slf.as_any())?;
+        let observer = crate::generated::llm::ChainObserverProxy::weak(slf.as_any())?;
         let tts = tts.try_iter().and_then(|items| {
             items
                 .map(|item| {
@@ -791,31 +867,32 @@ impl FallbackTts {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let on_availability = on_availability
-            .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
-            .transpose()?;
         let out = py
             .detach(|| {
                 <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(
                     &env,
+                    label,
+                    observer,
                     tts,
                     max_retry_per_tts,
                     attempt_timeout,
                     sample_rate,
-                    on_availability,
                 )
             })
             .map_err(|e: ::lk_agents_abi::errors::Invalid| {
                 <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
             })?;
-        ::pyo3::PyResult::Ok(FallbackTts(::std::sync::Arc::new(out)))
+        slf.get().0.set(::std::sync::Arc::new(out)).map_err(|_| once())
     }
 
+    /// Which entry most recently served, as a position in the host's list.
     #[getter]
+    #[pyo3(name = "_core_active_index")]
     fn active_index(&self, py: Python<'_>) -> PyResult<usize> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
-            <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::active_index(&self.0)
+            <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::active_index(engine)
         });
         ::pyo3::PyResult::Ok(out)
     }
@@ -823,8 +900,9 @@ impl FallbackTts {
     #[getter]
     fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
-            <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::capabilities(&self.0)
+            <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::capabilities(engine)
         });
         crate::generated::records::tts::tts_capabilities_to_py(py, out)
     }
@@ -832,8 +910,9 @@ impl FallbackTts {
     #[getter]
     fn sample_rate(&self, py: Python<'_>) -> PyResult<u32> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
-            <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::sample_rate(&self.0)
+            <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::sample_rate(engine)
         });
         ::pyo3::PyResult::Ok(out)
     }
@@ -841,15 +920,17 @@ impl FallbackTts {
     #[getter]
     fn num_channels(&self, py: Python<'_>) -> PyResult<u16> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
-            <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::num_channels(&self.0)
+            <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::num_channels(engine)
         });
         ::pyo3::PyResult::Ok(out)
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
+        let engine = self.engine()?;
+        let this = ::std::sync::Arc::clone(engine);
         crate::py_calls::future_into_py(py, async move {
             let () =
                 <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::aclose(&this)
@@ -859,14 +940,23 @@ impl FallbackTts {
     }
 }
 
-// Wherever the host passes a `::lk_agents_abi::Tts`, an instance of this class is itself.
+impl FallbackTts {
+    /// The implementation its `__init__` built.
+    pub(crate) fn engine(&self) -> PyResult<&::std::sync::Arc<FallbackTtsImpl>> {
+        self.0.get().ok_or_else(|| crate::py_objects::unbuilt("FallbackTts"))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Tts`, an instance of this class is itself once built.
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Tts>(),
-        read: |obj| {
-            let this = obj.cast::<FallbackTts>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Tts> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<FallbackTts>() {
+            Ok(this) => {
+                let engine = this.get().0.get().cloned().map(|engine| -> ::std::sync::Arc<dyn ::lk_agents_abi::Tts> { engine });
+                crate::py_objects::built(obj, engine, "FallbackTts")
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -895,14 +985,32 @@ type RealtimeFallbackModelNewAttemptTimeoutInput = ::std::option::Option<f64>;
 
 /// `llm.RealtimeModelFallbackAdapter`'s engine: the generated facade holds native resources; host
 /// provider objects use the shared bridge.
-#[pyclass(frozen, name = "RealtimeFallbackModel", module = "livekit.agents._core")]
-pub struct RealtimeFallbackModel(pub(crate) ::std::sync::Arc<RealtimeFallbackModelImpl>);
+#[pyclass(
+    frozen,
+    weakref,
+    subclass,
+    name = "RealtimeFallbackModel",
+    module = "livekit.agents._core"
+)]
+pub struct RealtimeFallbackModel(
+    pub(crate) ::std::sync::OnceLock<::std::sync::Arc<RealtimeFallbackModelImpl>>,
+);
 
 #[pymethods]
 impl RealtimeFallbackModel {
     #[new]
-    #[pyo3(signature = (models, *, cooldown = 10.0, attempt_timeout = None, regenerate_on_swap = true, on_availability = None))]
+    #[pyo3(signature = (*_args, **_kwargs))]
     fn new(
+        _args: &Bound<'_, ::pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, ::pyo3::types::PyDict>>,
+    ) -> Self {
+        Self(::std::sync::OnceLock::new())
+    }
+
+    /// `models` in order; `observer` hears the chain's availability and failures.
+    #[pyo3(signature = (models, *, cooldown = 10.0, attempt_timeout = None, regenerate_on_swap = true))]
+    fn __init__(
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         models: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_realtime_fallback_model_new_cooldown)]
@@ -910,10 +1018,17 @@ impl RealtimeFallbackModel {
         #[pyo3(from_py_with = _extract_realtime_fallback_model_new_attempt_timeout)]
         attempt_timeout: RealtimeFallbackModelNewAttemptTimeoutInput,
         regenerate_on_swap: bool,
-        on_availability: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<RealtimeFallbackModel> {
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let once = || {
+            ::pyo3::exceptions::PyRuntimeError::new_err("RealtimeFallbackModel.__init__ runs once")
+        };
+        if slf.get().0.get().is_some() {
+            return Err(once());
+        }
         let env = crate::process::env();
+        let label = crate::py_objects::class_label(slf.as_any())?;
+        let observer = crate::generated::llm::ChainObserverProxy::weak(slf.as_any())?;
         let models = models.try_iter().and_then(|items| {
             items
                 .map(|item| {
@@ -922,17 +1037,17 @@ impl RealtimeFallbackModel {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let on_availability = on_availability
-            .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
-            .transpose()?;
-        let out = py.detach(|| <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::new(&env, models, cooldown, attempt_timeout, regenerate_on_swap, on_availability)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(RealtimeFallbackModel(::std::sync::Arc::new(out)))
+        let out = py.detach(|| <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::new(&env, label, observer, models, cooldown, attempt_timeout, regenerate_on_swap)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as crate::py_errors::HostException>::to_py_err(&e))?;
+        slf.get().0.set(::std::sync::Arc::new(out)).map_err(|_| once())
     }
 
+    /// Which entry most recently served, as a position in the host's list.
     #[getter]
+    #[pyo3(name = "_core_active_index")]
     fn active_index(&self, py: Python<'_>) -> PyResult<usize> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::active_index(&self.0));
+        let engine = self.engine()?;
+        let out = py.detach(|| <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::active_index(engine));
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -940,14 +1055,17 @@ impl RealtimeFallbackModel {
     #[getter]
     fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::capabilities(&self.0));
+        let engine = self.engine()?;
+        let out = py.detach(|| <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::capabilities(engine));
         crate::generated::records::realtime::realtime_capabilities_to_py(py, out)
     }
 
+    #[pyo3(name = "_core_restart")]
     #[pyo3(signature = (*, switch_model = false))]
     fn restart<'py>(&self, py: Python<'py>, switch_model: bool) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
+        let engine = self.engine()?;
+        let this = ::std::sync::Arc::clone(engine);
         crate::py_calls::future_into_py(py, async move {
             let () = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::restart(&this, switch_model)
                 .await;
@@ -956,14 +1074,23 @@ impl RealtimeFallbackModel {
     }
 }
 
-// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
+impl RealtimeFallbackModel {
+    /// The implementation its `__init__` built.
+    pub(crate) fn engine(&self) -> PyResult<&::std::sync::Arc<RealtimeFallbackModelImpl>> {
+        self.0.get().ok_or_else(|| crate::py_objects::unbuilt("RealtimeFallbackModel"))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself once built.
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
-        read: |obj| {
-            let this = obj.cast::<RealtimeFallbackModel>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<RealtimeFallbackModel>() {
+            Ok(this) => {
+                let engine = this.get().0.get().cloned().map(|engine| -> ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> { engine });
+                crate::py_objects::built(obj, engine, "RealtimeFallbackModel")
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -973,20 +1100,29 @@ type InferenceLlmImpl =
     <crate::generated::implementations::Selected as super::Implementations>::InferenceLlm;
 type InferenceLlmInferenceClassOutput = ::std::option::Option<::std::string::String>;
 
-/// The gateway LLM behind `inference.LLM`. Its options are shared by every view
-/// (`identified`); each view's requests carry its own job's identification.
-#[pyclass(frozen, name = "InferenceLlm", module = "livekit.agents._core")]
-pub struct InferenceLlm(pub(crate) ::std::sync::Arc<InferenceLlmImpl>);
+/// The gateway LLM behind `inference.LLM`. One instance serves every job it is handed to; each
+/// request carries the identity of the job it runs for.
+#[pyclass(frozen, weakref, subclass, name = "InferenceLlm", module = "livekit.agents._core")]
+pub struct InferenceLlm(pub(crate) ::std::sync::OnceLock<::std::sync::Arc<InferenceLlmImpl>>);
 
 #[pymethods]
 impl InferenceLlm {
+    #[new]
+    #[pyo3(signature = (*_args, **_kwargs))]
+    fn new(
+        _args: &Bound<'_, ::pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, ::pyo3::types::PyDict>>,
+    ) -> Self {
+        Self(::std::sync::OnceLock::new())
+    }
+
     /// A client of `model`. Starts nothing. On the LiveKit Inference gateway by default, its
     /// URL and key pair resolved from the given values, the environment and the server's
     /// settings; with `endpoint`, an OpenAI-compatible provider called with its own key and no
     /// LiveKit header.
-    #[new]
     #[pyo3(signature = (model, *, provider = None, base_url = None, api_key = None, api_secret = None, inference_class = None, extra_kwargs = None, endpoint = None))]
-    fn new(
+    fn __init__(
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         model: ::std::string::String,
         provider: ::std::option::Option<::std::string::String>,
@@ -996,9 +1132,16 @@ impl InferenceLlm {
         inference_class: ::std::option::Option<::std::string::String>,
         extra_kwargs: Option<Bound<'_, PyAny>>,
         endpoint: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<InferenceLlm> {
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let once =
+            || ::pyo3::exceptions::PyRuntimeError::new_err("InferenceLlm.__init__ runs once");
+        if slf.get().0.get().is_some() {
+            return Err(once());
+        }
         let env = crate::process::env();
+        let label = crate::py_objects::class_label(slf.as_any())?;
+        let events = crate::generated::types::ProviderEventsProxy::weak(slf.as_any())?;
         let extra_kwargs = extra_kwargs
             .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
@@ -1019,6 +1162,8 @@ impl InferenceLlm {
             .detach(|| {
                 <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::new(
                     &env,
+                    label,
+                    events,
                     model,
                     provider,
                     base_url,
@@ -1032,77 +1177,28 @@ impl InferenceLlm {
             .map_err(|e: ::lk_agents_abi::errors::Invalid| {
                 <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
             })?;
-        ::pyo3::PyResult::Ok(InferenceLlm(::std::sync::Arc::new(out)))
-    }
-
-    /// This client as a session of the job `headers` (`get_inference_headers()`) identifies
-    /// holds it: the same options, its requests carrying that job. `reporter` is the host
-    /// `llm.LLM` whose `error` events report the attempts this view retries.
-    #[pyo3(signature = (headers, reporter = None))]
-    fn identified(
-        &self,
-        py: Python<'_>,
-        headers: Bound<'_, PyAny>,
-        reporter: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<InferenceLlm> {
-        crate::py_calls::check_pid()?;
-        let headers = crate::generated::records::from_representation::<
-            ::lk_agents_abi::Headers,
-            ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-        >(if headers.as_any().is_instance_of::<::pyo3::types::PyList>()
-            || headers.as_any().is_instance_of::<::pyo3::types::PyTuple>()
-        {
-            headers
-                .as_any()
-                .try_iter()?
-                .map(|item| {
-                    let item = &item?;
-                    (|| -> ::pyo3::PyResult<_> {
-                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                        if tuple.len() != 2 {
-                            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                                "{}: expected a tuple of 2 items",
-                                "headers"
-                            )));
-                        }
-                        let item_0 = tuple.get_item(0)?;
-                        let item_1 = tuple.get_item(1)?;
-                        Ok((
-                            (item_0.extract::<::std::string::String>())?,
-                            (item_1.extract::<::std::string::String>())?,
-                        ))
-                    })()
-                })
-                .collect::<PyResult<Vec<_>>>()
-        } else {
-            Err(::pyo3::exceptions::PyTypeError::new_err("headers: expected a list or tuple"))
-        }?)?;
-        let reporter =
-            reporter.map(|v| crate::generated::llm::LlmProxy::from_host(v.as_any())).transpose()?;
-        let out = py.detach(|| {
-            <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::identified(
-                &self.0, headers, reporter,
-            )
-        });
-        ::pyo3::PyResult::Ok(InferenceLlm(::std::sync::Arc::new(out)))
+        slf.get().0.set(::std::sync::Arc::new(out)).map_err(|_| once())
     }
 
     #[getter]
     fn model(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
-            <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::model(&self.0)
+            <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::model(engine)
         });
         ::pyo3::PyResult::Ok(out)
     }
 
     /// The persistent request options, a copy.
     #[getter]
+    #[pyo3(name = "_core_extra_kwargs")]
     fn extra_kwargs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
             <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::extra_kwargs(
-                &self.0,
+                engine,
             )
         });
         ::pyo3::PyResult::Ok(crate::py_values::extra_to_py(py, &out)?.into_any())
@@ -1110,11 +1206,13 @@ impl InferenceLlm {
 
     /// The scheduling class of its requests.
     #[getter]
+    #[pyo3(name = "_core_inference_class")]
     fn inference_class(&self, py: Python<'_>) -> PyResult<InferenceLlmInferenceClassOutput> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
             <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::inference_class(
-                &self.0,
+                engine,
             )
         });
         ::pyo3::PyResult::Ok(out)
@@ -1122,6 +1220,7 @@ impl InferenceLlm {
 
     /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs, and
     /// ``endpoint`` the provider endpoint.
+    #[pyo3(name = "_core_update_options")]
     #[pyo3(signature = (*, model = None, extra_kwargs = None, endpoint = None))]
     fn update_options(
         &self,
@@ -1131,6 +1230,7 @@ impl InferenceLlm {
         endpoint: Option<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let extra_kwargs = extra_kwargs
             .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
@@ -1149,7 +1249,7 @@ impl InferenceLlm {
             .transpose()?;
         py.detach(|| {
             <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::update_options(
-                &self.0,
+                engine,
                 model,
                 extra_kwargs,
                 endpoint,
@@ -1158,8 +1258,9 @@ impl InferenceLlm {
         Ok(())
     }
 
-    /// Opens a completion of `chat_ctx`; no I/O until the first pull. Its requests carry this
-    /// view's job identification and `inference_class`, else the client's class.
+    /// Opens a completion of `chat_ctx`; no I/O until the first pull. Its requests carry the
+    /// identity of the job `cx` runs for and `inference_class`, else the client's class.
+    #[pyo3(name = "_core_native_chat")]
     #[pyo3(signature = (*, chat_ctx, tools = None, conn_options = None, parallel_tool_calls = None, tool_choice = None, response_format = None, inference_class = None, extra_kwargs = None))]
     fn chat(
         &self,
@@ -1174,6 +1275,8 @@ impl InferenceLlm {
         extra_kwargs: Option<Bound<'_, PyAny>>,
     ) -> PyResult<InferenceLlmChunks> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
+        let cx = crate::py_calls::entry_cx()?;
         let chat_ctx =
             crate::generated::records::llm_fallback::host_chat_context_from_py(chat_ctx.as_any())?;
         let tools = tools
@@ -1207,7 +1310,8 @@ impl InferenceLlm {
         let out = py
             .detach(|| {
                 <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(
-                    &self.0,
+                    engine,
+                    cx,
                     chat_ctx,
                     tools,
                     conn_options,
@@ -1232,14 +1336,23 @@ impl InferenceLlm {
     }
 }
 
-// Wherever the host passes a `::lk_agents_abi::Llm`, an instance of this class is itself.
+impl InferenceLlm {
+    /// The implementation its `__init__` built.
+    pub(crate) fn engine(&self) -> PyResult<&::std::sync::Arc<InferenceLlmImpl>> {
+        self.0.get().ok_or_else(|| crate::py_objects::unbuilt("InferenceLlm"))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Llm`, an instance of this class is itself once built.
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Llm>(),
-        read: |obj| {
-            let this = obj.cast::<InferenceLlm>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Llm> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<InferenceLlm>() {
+            Ok(this) => {
+                let engine = this.get().0.get().cloned().map(|engine| -> ::std::sync::Arc<dyn ::lk_agents_abi::Llm> { engine });
+                crate::py_objects::built(obj, engine, "InferenceLlm")
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -1587,7 +1700,7 @@ impl CoreMcpToolsetLifecycle {
         crate::py_calls::check_pid()?;
         let host = crate::generated::llm::McpToolsetHostProxy::from_host(host.as_any())?;
         let context = crate::py_calls::entered();
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () = <CoreMcpToolsetLifecycleImpl as ::lk_agents_abi::llm::mcp::McpToolsetLifecycle>::setup(&this, host, context, cx)
@@ -1603,7 +1716,7 @@ impl CoreMcpToolsetLifecycle {
         crate::py_calls::check_pid()?;
         let host = crate::generated::llm::McpToolsetHostProxy::from_host(host.as_any())?;
         let context = crate::py_calls::entered();
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () = <CoreMcpToolsetLifecycleImpl as ::lk_agents_abi::llm::mcp::McpToolsetLifecycle>::release(&this, host, context, cx)
@@ -2001,10 +2114,12 @@ impl HostRealtimeModel {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
-        read: |obj| {
-            let this = obj.cast::<HostRealtimeModel>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<HostRealtimeModel>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -2013,19 +2128,32 @@ inventory::submit! {
 type OpenAIRealtimeModelImpl =
     <crate::generated::implementations::Selected as super::Implementations>::OpenAIRealtimeModel;
 
-#[pyclass(frozen, name = "OpenAIRealtimeModel", module = "livekit.agents._core")]
-pub struct OpenAIRealtimeModel(pub(crate) ::std::sync::Arc<OpenAIRealtimeModelImpl>);
+#[pyclass(frozen, weakref, subclass, name = "OpenAIRealtimeModel", module = "livekit.agents._core")]
+pub struct OpenAIRealtimeModel(
+    pub(crate) ::std::sync::OnceLock<::std::sync::Arc<OpenAIRealtimeModelImpl>>,
+);
 
 #[pymethods]
 impl OpenAIRealtimeModel {
+    #[new]
+    #[pyo3(signature = (*_args, **_kwargs))]
+    fn new(
+        _args: &Bound<'_, ::pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, ::pyo3::types::PyDict>>,
+    ) -> Self {
+        Self(::std::sync::OnceLock::new())
+    }
+
     /// Not given, `model`, `voice` and the session options are the dialect's defaults. The key
     /// and base URL fall back to the dialect's environment: for Azure (`azure_deployment` or
     /// `entra_token`), `AZURE_OPENAI_API_KEY` and `{azure_endpoint}/openai`, `azure_endpoint`
     /// else `AZURE_OPENAI_ENDPOINT`; for OpenAI, `OPENAI_API_KEY` and `OPENAI_BASE_URL`, else
-    /// OpenAI's. `dialect`, `label` and `gateway` are the provider class's own.
-    #[new]
+    /// OpenAI's. `dialect`, `label` and `gateway` are the provider class's own. One instance
+    /// serves every job it is handed to; a LiveKit Inference connection carries the identity of
+    /// the job it runs for.
     #[pyo3(signature = (*, model = None, voice = None, modalities = None, tool_choice = crate::py_values::Omittable::NOT_GIVEN, base_url = None, input_audio_transcription = crate::py_values::Omittable::NOT_GIVEN, input_audio_noise_reduction = crate::py_values::Omittable::NOT_GIVEN, turn_detection = crate::py_values::Omittable::NOT_GIVEN, speed = crate::py_values::Omittable::NOT_GIVEN, tracing = crate::py_values::Omittable::NOT_GIVEN, truncation = crate::py_values::Omittable::NOT_GIVEN, reasoning = crate::py_values::Omittable::NOT_GIVEN, max_response_output_tokens = crate::py_values::Omittable::NOT_GIVEN, api_key = None, azure_deployment = None, azure_endpoint = None, entra_token = None, max_session_duration = crate::py_values::Omittable::NOT_GIVEN, conn_options = None, dialect = None, label = None, gateway = None))]
-    fn new(
+    fn __init__(
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         model: ::std::option::Option<::std::string::String>,
         voice: Option<Bound<'_, PyAny>>,
@@ -2049,8 +2177,14 @@ impl OpenAIRealtimeModel {
         dialect: Option<Bound<'_, PyAny>>,
         label: ::std::option::Option<::std::string::String>,
         gateway: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<OpenAIRealtimeModel> {
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let once = || {
+            ::pyo3::exceptions::PyRuntimeError::new_err("OpenAIRealtimeModel.__init__ runs once")
+        };
+        if slf.get().0.get().is_some() {
+            return Err(once());
+        }
         let env = crate::process::env();
         let voice = voice
             .map(|v| crate::generated::records::realtime_options::voice_from_py(v.as_any()))
@@ -2172,22 +2306,24 @@ impl OpenAIRealtimeModel {
             })
             .transpose()?;
         let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::new(&env, model, voice, modalities, tool_choice, base_url, input_audio_transcription, input_audio_noise_reduction, turn_detection, speed, tracing, truncation, reasoning, max_response_output_tokens, api_key, azure_deployment, azure_endpoint, entra_token, max_session_duration, conn_options, dialect, label, gateway)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(OpenAIRealtimeModel(::std::sync::Arc::new(out)))
+        slf.get().0.set(::std::sync::Arc::new(out)).map_err(|_| once())
     }
 
     #[getter]
     fn provider(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::provider(&self.0));
+        let engine = self.engine()?;
+        let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::provider(engine));
         ::pyo3::PyResult::Ok(out)
     }
 
     #[getter]
     fn model(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
             <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::model(
-                &self.0,
+                engine,
             )
         });
         ::pyo3::PyResult::Ok(out)
@@ -2196,9 +2332,10 @@ impl OpenAIRealtimeModel {
     #[getter]
     fn label(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let out = py.detach(|| {
             <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::label(
-                &self.0,
+                engine,
             )
         });
         ::pyo3::PyResult::Ok(out)
@@ -2207,11 +2344,13 @@ impl OpenAIRealtimeModel {
     #[getter]
     fn capabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::capabilities(&self.0));
+        let engine = self.engine()?;
+        let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::capabilities(engine));
         crate::generated::records::realtime::realtime_capabilities_to_py(py, out)
     }
 
     /// The given options; every live session sends what changed.
+    #[pyo3(name = "_core_update_options")]
     #[pyo3(signature = (*, voice = crate::py_values::Omittable::NOT_GIVEN, turn_detection = crate::py_values::Omittable::NOT_GIVEN, tool_choice = crate::py_values::Omittable::NOT_GIVEN, input_audio_transcription = crate::py_values::Omittable::NOT_GIVEN, input_audio_noise_reduction = crate::py_values::Omittable::NOT_GIVEN, max_response_output_tokens = crate::py_values::Omittable::NOT_GIVEN, speed = crate::py_values::Omittable::NOT_GIVEN, tracing = crate::py_values::Omittable::NOT_GIVEN, truncation = crate::py_values::Omittable::NOT_GIVEN, reasoning = crate::py_values::Omittable::NOT_GIVEN))]
     fn update_options(
         &self,
@@ -2228,6 +2367,7 @@ impl OpenAIRealtimeModel {
         reasoning: crate::py_values::Omittable<'_>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let engine = self.engine()?;
         let voice = voice.map(|value| {
             crate::generated::records::realtime_options::voice_from_py(value.as_any())
         })?;
@@ -2309,57 +2449,28 @@ impl OpenAIRealtimeModel {
                     .map(Some)
             }
         })?;
-        py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::update_options(&self.0, voice, turn_detection, tool_choice, input_audio_transcription, input_audio_noise_reduction, max_response_output_tokens, speed, tracing, truncation, reasoning));
-        Ok(())
-    }
-
-    #[pyo3(signature = (headers))]
-    fn bind_identification(&self, py: Python<'_>, headers: Bound<'_, PyAny>) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        let headers = crate::generated::records::from_representation::<
-            ::lk_agents_abi::Headers,
-            ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-        >(if headers.as_any().is_instance_of::<::pyo3::types::PyList>()
-            || headers.as_any().is_instance_of::<::pyo3::types::PyTuple>()
-        {
-            headers
-                .as_any()
-                .try_iter()?
-                .map(|item| {
-                    let item = &item?;
-                    (|| -> ::pyo3::PyResult<_> {
-                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                        if tuple.len() != 2 {
-                            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                                "{}: expected a tuple of 2 items",
-                                "headers"
-                            )));
-                        }
-                        let item_0 = tuple.get_item(0)?;
-                        let item_1 = tuple.get_item(1)?;
-                        Ok((
-                            (item_0.extract::<::std::string::String>())?,
-                            (item_1.extract::<::std::string::String>())?,
-                        ))
-                    })()
-                })
-                .collect::<PyResult<Vec<_>>>()
-        } else {
-            Err(::pyo3::exceptions::PyTypeError::new_err("headers: expected a list or tuple"))
-        }?)?;
-        py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::bind_identification(&self.0, headers));
+        py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::update_options(engine, voice, turn_detection, tool_choice, input_audio_transcription, input_audio_noise_reduction, max_response_output_tokens, speed, tracing, truncation, reasoning));
         Ok(())
     }
 }
 
-// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
+impl OpenAIRealtimeModel {
+    /// The implementation its `__init__` built.
+    pub(crate) fn engine(&self) -> PyResult<&::std::sync::Arc<OpenAIRealtimeModelImpl>> {
+        self.0.get().ok_or_else(|| crate::py_objects::unbuilt("OpenAIRealtimeModel"))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself once built.
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
-        read: |obj| {
-            let this = obj.cast::<OpenAIRealtimeModel>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<OpenAIRealtimeModel>() {
+            Ok(this) => {
+                let engine = this.get().0.get().cloned().map(|engine| -> ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> { engine });
+                crate::py_objects::built(obj, engine, "OpenAIRealtimeModel")
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -2619,10 +2730,12 @@ impl CoreToolsetLifetime {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::toolsets::Lifetime>(),
-        read: |obj| {
-            let this = obj.cast::<CoreToolsetLifetime>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::Lifetime> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreToolsetLifetime>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::Lifetime> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -2689,10 +2802,12 @@ impl CoreToolsetGroup {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::toolsets::LeaseGroup>(),
-        read: |obj| {
-            let this = obj.cast::<CoreToolsetGroup>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::LeaseGroup> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreToolsetGroup>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::LeaseGroup> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -2782,10 +2897,12 @@ impl CoreToolsetScopes {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::toolsets::ScopesPort>(),
-        read: |obj| {
-            let this = obj.cast::<CoreToolsetScopes>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::ScopesPort> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreToolsetScopes>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::ScopesPort> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -2804,7 +2921,7 @@ impl AudioGateProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(obj)?
         {
             return Ok(native);
         }
@@ -2817,7 +2934,7 @@ impl AudioGateProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(obj)?
         {
             return Ok(native);
         }
@@ -2828,6 +2945,12 @@ impl AudioGateProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::AudioGate>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(obj)?.is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AudioGate` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -2924,7 +3047,7 @@ impl DuplexHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(obj)?
         {
             return Ok(native);
         }
@@ -2937,7 +3060,7 @@ impl DuplexHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(obj)?
         {
             return Ok(native);
         }
@@ -2948,6 +3071,12 @@ impl DuplexHostProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::DuplexHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(obj)?.is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `DuplexHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -3176,7 +3305,7 @@ impl DuplexSessionProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexSession>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(obj)?
         {
             return Ok(native);
         }
@@ -3189,7 +3318,7 @@ impl DuplexSessionProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexSession>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(obj)?
         {
             return Ok(native);
         }
@@ -3200,6 +3329,13 @@ impl DuplexSessionProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::DuplexSession>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `DuplexSession` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -3216,11 +3352,13 @@ impl DuplexSessionProxy {
             crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue>(
                 v.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "DuplexSession.plugin._input",
-                    ": expected a native DuplexInput"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "DuplexSession.plugin._input",
+                        ": expected a native DuplexInput"
+                    ))
+                })
             })?
         };
         Ok(DuplexSessionProxy {
@@ -3643,7 +3781,7 @@ impl AudioGateFactoryProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>(obj)?
         {
             return Ok(native);
         }
@@ -3656,7 +3794,7 @@ impl AudioGateFactoryProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>(obj)?
         {
             return Ok(native);
         }
@@ -3667,6 +3805,13 @@ impl AudioGateFactoryProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::AudioGateFactory>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AudioGateFactory` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -3717,7 +3862,8 @@ impl ::lk_agents_abi::llm::duplex::AudioGateFactory for AudioGateFactoryProxy {
 /// [`::lk_agents_abi::llm::fallback::ChainObserver`] over a host `livekit.agents._bindings.FallbackListener`.
 #[derive(Clone)]
 pub struct ChainObserverProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The object whose events these are: not kept alive by them.
+    host: ::std::sync::Arc<Py<::pyo3::types::PyWeakrefReference>>,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -3726,36 +3872,11 @@ pub struct ChainObserverProxy {
 }
 
 impl ChainObserverProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(
+    /// The events of `obj`, which they do not keep alive.
+    pub fn weak(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::fallback::ChainObserver>> {
-        if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::fallback::ChainObserver>(obj)
-        {
-            return Ok(native);
-        }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::fallback::ChainObserver>> {
-        if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::fallback::ChainObserver>(obj)
-        {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
-    }
-
-    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::fallback::ChainObserver>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
     fn take(
@@ -3767,7 +3888,7 @@ impl ChainObserverProxy {
             None => crate::py_calls::proxy_context(obj.py()),
         };
         Ok(ChainObserverProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            host: ::std::sync::Arc::new(::pyo3::types::PyWeakrefReference::new(obj)?.unbind()),
             context,
             notifier: ::std::default::Default::default(),
         })
@@ -3776,7 +3897,11 @@ impl ChainObserverProxy {
 
 impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
     fn availability_changed(&self, ev: ::lk_agents_abi::llm::fallback::AvailabilityChanged) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let Some(host) = ::pyo3::Python::attach(|py| {
+            self.host.bind(py).upgrade().map(|host| ::std::sync::Arc::new(host.unbind()))
+        }) else {
+            return;
+        };
         let ev_arg = ev;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -3799,7 +3924,11 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
     }
 
     fn all_unavailable(&self) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let Some(host) = ::pyo3::Python::attach(|py| {
+            self.host.bind(py).upgrade().map(|host| ::std::sync::Arc::new(host.unbind()))
+        }) else {
+            return;
+        };
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "ChainObserver._core_all_unavailable",
@@ -3818,7 +3947,11 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
     }
 
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let Some(host) = ::pyo3::Python::attach(|py| {
+            self.host.bind(py).upgrade().map(|host| ::std::sync::Arc::new(host.unbind()))
+        }) else {
+            return;
+        };
         let error_arg = error;
         let error_arg =
             match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
@@ -3866,7 +3999,7 @@ impl McpProgressProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpProgress>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)?
         {
             return Ok(native);
         }
@@ -3879,7 +4012,7 @@ impl McpProgressProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpProgress>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)?
         {
             return Ok(native);
         }
@@ -3890,6 +4023,11 @@ impl McpProgressProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::mcp::McpProgress>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)?.is_some() {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `McpProgress` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -3955,7 +4093,7 @@ impl McpToolsetHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>(obj)?
         {
             return Ok(native);
         }
@@ -3968,7 +4106,7 @@ impl McpToolsetHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>(obj)?
         {
             return Ok(native);
         }
@@ -3979,6 +4117,13 @@ impl McpToolsetHostProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `McpToolsetHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -4092,7 +4237,7 @@ impl HostRealtimeProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::realtime::HostRealtime>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtime>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtime>(obj)?
         {
             return Ok(native);
         }
@@ -4105,7 +4250,7 @@ impl HostRealtimeProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::realtime::HostRealtime>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtime>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtime>(obj)?
         {
             return Ok(native);
         }
@@ -4116,6 +4261,13 @@ impl HostRealtimeProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::realtime::HostRealtime>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtime>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `HostRealtime` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -4260,7 +4412,7 @@ impl HostRealtimeSessionProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -4274,7 +4426,7 @@ impl HostRealtimeSessionProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -4285,6 +4437,15 @@ impl HostRealtimeSessionProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>(
+            obj,
+        )?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `HostRealtimeSession` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -4753,7 +4914,7 @@ impl LlmProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Llm>> {
-        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Llm>(obj) {
+        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Llm>(obj)? {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
@@ -4764,7 +4925,7 @@ impl LlmProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Llm>> {
-        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Llm>(obj) {
+        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Llm>(obj)? {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
@@ -4772,6 +4933,11 @@ impl LlmProxy {
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::Llm>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::Llm>(obj)?.is_some() {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `Llm` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -4834,7 +5000,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         ::std::clone::Clone::clone(&self.id)
     }
 
-    fn prewarm(&self) {
+    fn prewarm(&self, _cx: &::lk_agents_abi::telemetry::Cx) {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -4979,7 +5145,7 @@ impl ToolsetHooksProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>(obj)?
         {
             return Ok(native);
         }
@@ -4992,7 +5158,7 @@ impl ToolsetHooksProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>(obj)?
         {
             return Ok(native);
         }
@@ -5003,6 +5169,13 @@ impl ToolsetHooksProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `ToolsetHooks` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -5017,11 +5190,13 @@ impl ToolsetHooksProxy {
         let lifetime = {
             let v = obj.getattr("_lifetime")?;
             crate::py_objects::native::<dyn ::lk_agents_abi::llm::toolsets::Lifetime>(v.as_any())
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "ToolsetHooks._lifetime",
-                        ": expected a native toolset lifetime"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "ToolsetHooks._lifetime",
+                            ": expected a native toolset lifetime"
+                        ))
+                    })
                 })?
         };
         Ok(ToolsetHooksProxy {
@@ -5140,11 +5315,13 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
                 (crate::py_objects::native::<dyn ::lk_agents_abi::llm::toolsets::LeaseGroup>(
                     o.as_any(),
                 )
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "ToolsetHooks._children",
-                        ": expected a native toolset lease group"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "ToolsetHooks._children",
+                            ": expected a native toolset lease group"
+                        ))
+                    })
                 }))
                 .map(Some)
             })

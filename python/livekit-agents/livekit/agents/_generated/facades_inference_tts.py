@@ -6,24 +6,24 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .. import _bindings, _core
+from ..tokenize import SentenceTokenizer
 from ..types import NOT_GIVEN
 from ..utils import is_given
 from .tts import TTS as BaseTTS
 
 if TYPE_CHECKING:
-    from ..tokenize import SentenceTokenizer
     from ..types import NotGivenOr
     from .connect import APIConnectOptions
     from .inference_tts import FallbackModels, TTSEncoding, TTSModels
     from .stream_pacer import SentenceStreamPacer
-    from .tts import TTSCapabilities
 
 
-class TTS(BaseTTS):
+class TTS(_core.InferenceTts, BaseTTS):
     """`inference.TTS`: the LiveKit Inference gateway's TTS."""
 
-    if TYPE_CHECKING:
-        def _core_native(self) -> _core.InferenceTts: ...
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("_synthesize", "_stream"), "session.tts_node")
 
     def __init__(
         self,
@@ -55,7 +55,9 @@ class TTS(BaseTTS):
             fallback: Fallback models, names or ``FallbackModel`` entries, run by the gateway.
             conn_options: The connection timeout, and the retries the gateway runs server-side.
         """
-        self._native = _core.InferenceTts(
+        _core.InferenceTts.__init__(
+            self,
+            SentenceTokenizer(),
             model,
             voice=voice if is_given(voice) else None,
             language=language if is_given(language) else None,
@@ -68,28 +70,16 @@ class TTS(BaseTTS):
             fallback=fallback if is_given(fallback) else None,
             conn_options=conn_options if is_given(conn_options) else None,
         )
-        super().__init__(
-            capabilities=self._native.capabilities,
-            sample_rate=self._native.sample_rate,
-            num_channels=self._native.num_channels,
+        BaseTTS.__init__(
+            self,
+            capabilities=self.capabilities,
+            sample_rate=self.sample_rate,
+            num_channels=self.num_channels,
         )
 
-    def _core_leg(self) -> Any:
-        """This engine, unless a subclass replaces what it would bypass."""
-        replaced = _bindings.overrides(self, TTS, "_synthesize", "_stream")
-        return self if replaced else self._core_native()
-
     async def aclose(self) -> None:
-        await super().aclose()
-        await self._native.aclose()
-
-    @property
-    def model(self) -> str:
-        return self._native.model
-
-    @property
-    def capabilities(self) -> TTSCapabilities:
-        return self._native.capabilities
+        await BaseTTS.aclose(self)
+        await _core.InferenceTts.aclose(self)
 
     def update_options(
         self,
@@ -104,10 +94,11 @@ class TTS(BaseTTS):
         """Update the options the next synthesis uses: the gateway's, and how the framework prepares
         the text (``tts.TTS.update_options``).
         """
-        self._native.update_options(
+        _core.InferenceTts._core_update_options(
+            self,
             voice=voice if is_given(voice) else None,
             model=model if is_given(model) else None,
             language=language if is_given(language) else None,
             extra_kwargs=extra_kwargs if is_given(extra_kwargs) else None,
         )
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
+        BaseTTS.update_options(self, sentence_tokenizer=sentence_tokenizer, pacing=pacing)

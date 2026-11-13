@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
@@ -41,7 +42,11 @@ def _supports_inline_instructions(model: str) -> bool:
     return model.lower() in _INLINE_INSTRUCTIONS_MODELS_LOWER
 
 
-class LLM(OpenAILLM):
+class LLM(llm.LLM):
+    """Baseten's OpenAI-compatible chat completions: the OpenAI plugin's client, its requests'
+    mid-conversation instructions rewritten first for the models that need it. Its events come
+    from this object."""
+
     def __init__(
         self,
         *,
@@ -87,7 +92,8 @@ class LLM(OpenAILLM):
             inline_mid_conversation_instructions = _supports_inline_instructions(model)
         self._inline_mid_conversation_instructions = inline_mid_conversation_instructions
 
-        super().__init__(
+        super().__init__()
+        self._client = OpenAILLM(
             model=model,
             api_key=api_key,
             base_url=base_url,
@@ -100,10 +106,31 @@ class LLM(OpenAILLM):
             tool_choice=tool_choice,
             reasoning_effort=reasoning_effort,
         )
+        self._client.on("error", lambda ev: self.emit("error", ev))
+        self._client.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
+
+    @property
+    def model(self) -> str:
+        return self._client.model
 
     @property
     def provider(self) -> str:
         return "Baseten"
+
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[str] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> None:
+        """Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs."""
+        self._client.update_options(model=model, extra_kwargs=extra_kwargs)
+
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self._client.prewarm(loop=loop)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     def chat(
         self,
@@ -124,7 +151,7 @@ class LLM(OpenAILLM):
             # Returns a new ChatContext; the caller's context is left untouched.
             chat_ctx = convert_mid_conversation_instructions(chat_ctx)
 
-        return super().chat(
+        return self._client.chat(
             chat_ctx=chat_ctx,
             tools=tools,
             conn_options=conn_options,

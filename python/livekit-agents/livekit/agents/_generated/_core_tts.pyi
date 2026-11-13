@@ -16,8 +16,8 @@ from .stream_pacer import SentenceStreamPacer
 from .tts import (
     MarkupInfo,
     MarkupSplit,
+    OptionsTokenizer,
     SegmentCount,
-    SentenceTokenizerLeg,
     SynthesizedAudio,
     TTSCapabilities,
 )
@@ -59,7 +59,7 @@ class TtsStreamAdapter:
     """`tts.StreamAdapter`'s engine: a non-streaming TTS as a streaming one, each chunk of its input
     synthesized on its own.
     """
-    def __new__(cls, *, tts: TTS[Any]) -> Self:
+    def __init__(self, *, tts: TTS[Any]) -> None:
         """`tts` synthesizes each chunk of the text pushed."""
     @property
     def capabilities(self) -> TTSCapabilities:
@@ -82,8 +82,12 @@ class TtsStream:
     ) -> Self:
         """A synthesis by `tts` of `text`, or, without it, of the text pushed. Its text goes through
         the TTS's stage (split, paced, lowered to its syntax) and its attempts are retried within
-        `conn_options`; the first opens when its audio is first read.
+        `conn_options`; the first opens when its audio is first read. Its requests carry the
+        identity of the job `cx` runs for.
         """
+    @property
+    def native(self) -> bool:
+        """Whether its TTS runs natively; a host plugin's own attempts report their metrics."""
     def push_text(self, text: str) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
@@ -103,24 +107,12 @@ class TtsOptionsCell:
     """`_core.TtsOptionsCell`: the options a `tts.TTS` owns (`tts.options`), shared with every
     synthesis over it. A synthesis reads them when its stage opens; one already open keeps them.
     """
-    def __new__(
-        cls,
-        sentence_tokenizer: object,
-        leg: SentenceTokenizerLeg,
-        capabilities: TTSCapabilities,
-    ) -> Self:
-        """Split by `sentence_tokenizer` (through `leg`, its core leg), paced as a TTS with
-        `capabilities` is by default.
-        """
+    def __new__(cls, sentence_tokenizer: OptionsTokenizer, capabilities: TTSCapabilities) -> Self:
+        """Split by `sentence_tokenizer`, paced as a TTS with `capabilities` is by default."""
     @property
-    def sentence_tokenizer(self) -> object:
-        """The tokenizer as it was given."""
+    def sentence_tokenizer(self) -> object | None:
+        """The tokenizer as it was given; `None` only for the options of a TTS no host built."""
     @property
     def pacing(self) -> SentenceStreamPacer | None: ...
-    def set(
-        self,
-        sentence_tokenizer: object,
-        leg: SentenceTokenizerLeg,
-        pacing: SentenceStreamPacer | None,
-    ) -> None:
+    def set(self, sentence_tokenizer: OptionsTokenizer, pacing: SentenceStreamPacer | None) -> None:
         """Replace both at once."""

@@ -48,13 +48,9 @@ class InferenceEot:
     def backchannel_overrides(self) -> ThresholdOverride | None: ...
     def update_overrides(self, overrides: ThresholdOverride | None = None) -> None: ...
     def update_backchannel_overrides(self, overrides: ThresholdOverride | None = None) -> None: ...
-    def stream(
-        self,
-        headers: list[tuple[str, str]],
-        conn_options: APIConnectOptions,
-    ) -> TurnDetectorStream:
-        """One stream of the user's audio. `headers` (`get_inference_headers()`) identify the job on
-        each gateway connection.
+    def stream(self, conn_options: APIConnectOptions) -> TurnDetectorStream:
+        """One stream of the user's audio; each gateway connection carries the identity of the job
+        `cx` runs for.
         """
 
 class TurnDetectorStream:

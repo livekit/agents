@@ -19,26 +19,34 @@ pub trait SttStreamAdapter: Send + Sync + Sized + 'static {
     type Events: StreamOutput<SpeechEvent> + 'static;
 
     /// The wrapped STT and VAD; each stream binds its own recognition policy.
-    #[host(new)]
-    fn new(env: &Self::Env, #[host(kw)] stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self;
+    #[host(init)]
+    fn new(
+        env: &Self::Env,
+        #[host(label)] label: String,
+        events: Arc<dyn crate::types::provider::ProviderEvents>,
+        #[host(kw)] stt: Arc<dyn Stt>,
+        vad: Arc<dyn Vad>,
+    ) -> Self;
 
     /// Streaming, with the wrapped STT's keyterms and chat context support.
     #[host(getter)]
     fn capabilities(&self) -> crate::SttCapabilities;
 
     /// `_recognize_impl`: the wrapped STT's batch path.
-    #[host(await)]
+    #[host(await, name = "_core_native_recognize")]
     async fn recognize(
         &self,
+        cx: crate::telemetry::Cx,
         frames: Vec<AudioFrame>,
         #[host(default = None)] language: Option<LanguageCode>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
     ) -> Result<SpeechEvent, ProviderError>;
 
     /// Audio into the VAD, its utterances recognized.
-    #[host(await)]
+    #[host(await, name = "_core_native_stream")]
     async fn stream(
         &self,
+        cx: crate::telemetry::Cx,
         #[host(kw, default = None)] language: Option<LanguageCode>,
         #[host(default = None)] start_time_offset: Option<f64>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
@@ -52,7 +60,8 @@ pub trait SttStreamAdapter: Send + Sync + Sized + 'static {
     name = "StreamAdapter",
     base = "stt.STT",
     native = SttStreamAdapter,
-    legs(stream, recognize),
+    refuse(stream, recognize, _recognize_impl),
+    node = "session.stt_node",
     base_args(capabilities),
     keep(stt, vad)
 ))]
@@ -63,7 +72,7 @@ pub trait SttStreamAdapterFacade {
     /// Args:
     ///     stt: The recognize-only STT.
     ///     vad: What cuts the audio into utterances.
-    #[host(new, resolve(stt = ".._bindings.core_leg", vad = ".._bindings.core_leg"))]
+    #[host(new)]
     fn new(#[host(kw)] stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self;
 }
 

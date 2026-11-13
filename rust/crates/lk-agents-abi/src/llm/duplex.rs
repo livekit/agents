@@ -311,7 +311,7 @@ pub trait DuplexRealtimeModel: Send + Sync + Sized + 'static {
 
     /// Each session's gate is `gate`'s, else the model's own, else the adaptive gate.
     /// `audio_timeout`: how long to wait for the next frame before the output counts as finished.
-    #[host(new)]
+    #[host(init)]
     fn new(
         env: &Self::Env,
         duplex_model: Arc<dyn DuplexHost>,
@@ -333,7 +333,8 @@ pub trait DuplexRealtimeModel: Send + Sync + Sized + 'static {
     name = "DuplexRealtimeAdapter",
     base = "llm.realtime.RealtimeModel",
     native = DuplexRealtimeModel,
-    legs(session),
+    refuse(session),
+    node = "session.llm_node",
     base_args(capabilities)
 ))]
 pub trait DuplexRealtimeAdapterFacade {

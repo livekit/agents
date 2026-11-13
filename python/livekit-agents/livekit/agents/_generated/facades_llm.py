@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .. import _bindings, _core
-from .._bindings import core_legs
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN
 from ..utils import is_given
@@ -25,13 +24,17 @@ if TYPE_CHECKING:
     from .llm_fallback import AvailabilityChanged
 
 
-class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
+class FallbackAdapter(_core.FallbackLlm, LLM[Literal["llm_availability_changed"]]):
     """`llm.FallbackAdapter`: several LLMs behind one; a failed one is skipped until it recovers."""
 
     if TYPE_CHECKING:
         _members: list[LLM[Any]]
 
         def _core_failed(self, error: BaseException, recoverable: bool) -> None: ...
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("chat",), "session.llm_node")
 
     def __init__(
         self,
@@ -52,21 +55,16 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             sticky: Keep the LLM that last served until it fails, even once a preferred one
                 recovers; on failure the rest are tried in order.
         """
-        super().__init__()
-        self._native = _core.FallbackLlm(
-            core_legs(llm),
+        _core.FallbackLlm.__init__(
+            self,
+            llm,
             attempt_timeout=attempt_timeout,
             max_retry_per_llm=max_retry_per_llm,
             retry_interval=retry_interval,
             sticky=sticky,
-            on_availability=self,
         )
         self._members = list(llm)
-
-    def _core_leg(self) -> Any:
-        """This engine, unless a subclass replaces what it would bypass."""
-        replaced = _bindings.overrides(self, FallbackAdapter, "chat")
-        return self if replaced else self._native
+        LLM.__init__(self)
 
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
@@ -79,7 +77,7 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
 
     @property
     def _active(self) -> LLM[Any]:
-        return self._members[self._native.active_index]
+        return self._members[self._core_active_index]
 
     @property
     def model(self) -> str:
@@ -94,8 +92,8 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
         return self._active.metrics_metadata
 
     async def aclose(self) -> None:
-        await super().aclose()
-        await self._native.aclose()
+        await LLM.aclose(self)
+        await _core.FallbackLlm.aclose(self)
 
     def chat(
         self,
@@ -141,7 +139,7 @@ class FallbackLLMStream(LLMStream):
         self._extra_kwargs: dict[str, Any] | None = extra_kwargs
 
     async def _core_open(self) -> _core.FallbackLlmChunks:
-        return await self._llm._native.chat(
+        return await self._llm._core_native_chat(
             chat_ctx=self._chat_ctx,
             tools=self._tools,
             parallel_tool_calls=self._parallel_tool_calls,

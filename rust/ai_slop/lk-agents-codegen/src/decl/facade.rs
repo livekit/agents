@@ -26,10 +26,14 @@ pub struct FacadeClass {
     /// `from_native`: the constructor takes the native object, then its `#[host(new)]`
     /// parameters, kept as `self._<param>`.
     pub from_native: bool,
-    /// The provider methods whose override keeps the host object as the leg.
-    pub legs: Vec<String>,
-    /// The host method whose value is the leg, in place of `_native`.
-    pub leg: Option<String>,
+    /// `refuse(m, ..)`: the hooks the native class runs itself; a host subclass overriding one is
+    /// refused when it is defined, pointed to `node`.
+    pub refused: Vec<String>,
+    /// `node = "session.tts_node"`: where a refused override's behaviour belongs.
+    pub node: Option<String>,
+    /// `proxied(m, ..)`: overridable hooks; a host subclass overriding one runs through the host
+    /// (`_core_proxied`), decided when it is defined.
+    pub proxied: Vec<String>,
     pub availability: Option<Availability>,
     /// `base_args(a, ..)`: the base constructor's arguments, read from the native getters of the
     /// same name once the native object is built.

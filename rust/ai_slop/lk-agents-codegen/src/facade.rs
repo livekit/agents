@@ -26,6 +26,7 @@ pub fn emit(declared: &Declarations, bases: &[crate::bases::Bases]) -> Result<Ve
             stdlib: std::collections::BTreeSet::new(),
             casts: false,
             known: Vec::new(),
+            extends: None,
         };
         let mut body = String::new();
         let mut identities = String::new();
@@ -89,6 +90,15 @@ struct Module<'a> {
     casts: bool,
     /// The attributes the class itself declares, which a bound path may start from.
     known: Vec<String>,
+    /// The class being emitted extends its `init` native class (`class TTS(_core.InferenceTts,
+    /// BaseTTS)`): its base's runtime name, called explicitly (`super()` reaches the native).
+    extends: Option<Extends>,
+}
+
+/// What a facade extending its `init` native class calls explicitly.
+struct Extends {
+    native: String,
+    base: Option<String>,
 }
 
 /// A method's signature parameters, and the value each named parameter sends on.
@@ -129,7 +139,7 @@ impl Module<'_> {
         (source, name.to_owned())
     }
 
-    /// A host callable `module.fn` written relative to `_generated` (`.._bindings.core_legs`).
+    /// A host callable `module.fn` written relative to `_generated` (`.._bindings.silero_model`).
     fn callable(&mut self, dotted: &str) -> Result<String, String> {
         if let Some(public) = dotted.strip_prefix("..") {
             let (source, name) = self.placed_source(public);
@@ -171,7 +181,17 @@ impl Module<'_> {
             *b = format!("{b}[Literal[{:?}]]", availability.event);
         }
         let mut text = String::new();
-        let mut bases: Vec<String> = base.iter().cloned().collect();
+        // A provider facade is its native object: the native class first, so its getters
+        // (`capabilities`, `sample_rate`) win over the base's.
+        self.extends = (native.init && facade.stream.is_none()).then(|| Extends {
+            native: native.name.clone(),
+            base: base.as_ref().map(|b| b.split('[').next().unwrap_or(b).to_owned()),
+        });
+        let mut bases: Vec<String> = match &self.extends {
+            Some(extends) => vec![format!("_core.{}", extends.native)],
+            None => Vec::new(),
+        };
+        bases.extend(base.iter().cloned());
         if let Some(t) = &facade.generic {
             self.runtime.add("typing", "Generic");
             self.runtime.add("typing", "TypeVar");
@@ -217,6 +237,9 @@ impl Module<'_> {
             body.push('\n');
         }
         let mut members = Vec::new();
+        if self.extends.is_some() {
+            members.extend(self.subclassing(facade));
+        }
         if facade.from_native {
             members.push(self.init_from_native(facade, &native, new)?);
         } else if let Some(new) = new {
@@ -224,10 +247,12 @@ impl Module<'_> {
         }
         members.extend(build);
         for method in facade.methods.iter().filter(|m| m.method.kind != MethodKind::New) {
-            members.push(
-                self.method(&native, method)
-                    .map_err(|e| format!("{}.{}: {e}", facade.name, method.method.name))?,
-            );
+            let text = self
+                .method(&native, method)
+                .map_err(|e| format!("{}.{}: {e}", facade.name, method.method.name))?;
+            if !text.is_empty() {
+                members.push(text);
+            }
         }
         let declared = self.declared;
         let owned = |f: &&FacadeClass| !f.native.is_empty() && f.native == facade.native;
@@ -283,24 +308,9 @@ impl Module<'_> {
     ) -> Result<Vec<String>, String> {
         let name = &native.name;
         let mut members = Vec::new();
-        if !has_new {
+        if !has_new && self.extends.is_none() {
             // The handwritten subclass sets it.
             declared.push(format!("_native: _core.{name}\n"));
-        }
-        if !facade.legs.is_empty() {
-            let leg = match &facade.leg {
-                Some(leg) => {
-                    declared.push(format!("def {leg}(self) -> _core.{name}: ...\n"));
-                    format!("self.{leg}()")
-                }
-                None => "self._native".to_owned(),
-            };
-            let mut arguments = vec!["self".to_owned(), facade.name.clone()];
-            arguments.extend(facade.legs.iter().map(|l| format!("{l:?}")));
-            members.push(format!(
-                "    def _core_leg(self) -> Any:\n        \"\"\"This engine, unless a subclass replaces what it would bypass.\"\"\"\n{}        return self if replaced else {leg}\n",
-                call("replaced = _bindings.overrides", &arguments, 8)
-            ));
         }
         if let Some(availability) = &facade.availability {
             members.extend(self.availability(facade, native, availability, declared)?);
@@ -313,11 +323,20 @@ impl Module<'_> {
             && !declares_close
             && (native_closes || facade.availability.is_some())
         {
-            let mut close = "        await super().aclose()\n".to_owned();
-            close.push_str(match native_closes {
-                true => "        await self._native.aclose()\n",
-                false => {
+            let mut close = match &self.extends {
+                Some(Extends { base: Some(base), .. }) => {
+                    format!("        await {base}.aclose(self)\n")
+                }
+                _ => "        await super().aclose()\n".to_owned(),
+            };
+            close.push_str(&match (native_closes, &self.extends) {
+                (true, Some(extends)) => {
+                    format!("        await _core.{}.aclose(self)\n", extends.native)
+                }
+                (true, None) => "        await self._native.aclose()\n".to_owned(),
+                (false, _) => {
                     "        for member in self._members:\n            await member.aclose()\n"
+                        .to_owned()
                 }
             });
             members.push(format!("    async def aclose(self) -> None:\n{close}"));
@@ -387,7 +406,11 @@ impl Module<'_> {
             availability.kind
         ));
         members.push(format!(
-            "    @property\n    def _active(self) -> {entry}:\n        return self._members[self._native.active_index]\n"
+            "    @property\n    def _active(self) -> {entry}:\n        return self._members[{}]\n",
+            match &self.extends {
+                Some(_) => "self._core_active_index",
+                None => "self._native.active_index",
+            }
         ));
         for (property, ty) in
             [("model", "str"), ("provider", "str"), ("metrics_metadata", "MetricsMetadata")]
@@ -435,8 +458,10 @@ impl Module<'_> {
     ) -> Result<String, String> {
         let (signature, values) = self.parameters(native, new)?;
         let mut body = String::new();
-        // A base built from the native object's getters is built after it.
-        let base_first = facade.base.is_some() && facade.base_args.is_empty();
+        // A base built from the native object's getters is built after it; a native object the
+        // class extends is always built first, its base's from what it built.
+        let base_first =
+            facade.base.is_some() && facade.base_args.is_empty() && self.extends.is_none();
         if base_first {
             body.push_str("        super().__init__()\n");
         }
@@ -453,8 +478,13 @@ impl Module<'_> {
             .ok_or_else(|| format!("_core.{} has no #[host(new)]", native.name))?;
         let mut facade = facade.clone();
         for (_, object) in &mut facade.host_args {
-            if !object.starts_with("self.") {
-                *object = self.callable(object)?;
+            // `module.Class()`: a fresh instance per object built.
+            let (path, called) = match object.strip_suffix("()") {
+                Some(path) => (path.to_owned(), "()"),
+                None => (object.clone(), ""),
+            };
+            if !path.starts_with("self.") {
+                *object = format!("{}{called}", self.callable(&path)?);
             }
         }
         let facade = &facade;
@@ -469,7 +499,15 @@ impl Module<'_> {
             }
             values.iter().find(|(v, _)| v == n).map(|(_, value)| value.clone())
         })?;
-        body.push_str(&call(&format!("self._native = _core.{}", native.name), &arguments, 8));
+        let built = match &self.extends {
+            Some(_) => {
+                let mut arguments = arguments;
+                arguments.insert(0, "self".to_owned());
+                call(&format!("_core.{}.__init__", native.name), &arguments, 8)
+            }
+            None => call(&format!("self._native = _core.{}", native.name), &arguments, 8),
+        };
+        body.push_str(&built);
         for n in &facade.keep {
             body.push_str(&format!("        self._{n} = {n}\n"));
         }
@@ -484,9 +522,14 @@ impl Module<'_> {
                     .find(|m| &m.name == n && m.kind == MethodKind::Getter)
                     .ok_or_else(|| format!("_core.{} has no getter {n}", native.name))?;
             }
-            let arguments: Vec<String> =
-                facade.base_args.iter().map(|n| format!("{n}=self._native.{n}")).collect();
-            body.push_str(&call("super().__init__", &arguments, 8));
+            let (head, owner, mut arguments) = match &self.extends {
+                Some(Extends { base: Some(base), .. }) => {
+                    (format!("{base}.__init__"), "self", vec!["self".to_owned()])
+                }
+                _ => ("super().__init__".to_owned(), "self._native", Vec::new()),
+            };
+            arguments.extend(facade.base_args.iter().map(|n| format!("{n}={owner}.{n}")));
+            body.push_str(&call(&head, &arguments, 8));
         }
         let mut text = def("__init__", false, &signature, "None");
         crate::python::docstring(&mut text, &new.method.doc, 8);
@@ -592,10 +635,9 @@ impl Module<'_> {
                 let called = native.methods.iter().find(wanted).cloned().ok_or_else(|| {
                     format!("_core.{} has no method {}", native.name, method.native)
                 })?;
-                let target = if m.kind == MethodKind::StaticCall {
-                    format!("_core.{}", native.name)
-                } else {
-                    "self._native".to_owned()
+                let target = match (&self.extends, m.kind) {
+                    (_, MethodKind::StaticCall) | (Some(_), _) => format!("_core.{}", native.name),
+                    (None, _) => "self._native".to_owned(),
                 };
                 (target, Some(called))
             }
@@ -640,7 +682,19 @@ impl Module<'_> {
         }
         let getter =
             called.as_ref().map_or(m.kind == MethodKind::Getter, |c| c.kind == MethodKind::Getter);
-        let head = format!("{target}.{}", method.native);
+        let extended = self.extends.is_some() && method.via.is_none();
+        if extended && getter && m.kind == MethodKind::Getter && m.name == method.native {
+            // The native getter is the class's own, ahead of its base's.
+            return Ok(String::new());
+        }
+        let mut arguments = arguments;
+        if extended && m.kind != MethodKind::StaticCall && !getter {
+            arguments.insert(0, "self".to_owned());
+        }
+        let head = match (extended, getter) {
+            (true, true) => format!("{target}.{}.__get__(self)", method.native),
+            _ => format!("{target}.{}", method.native),
+        };
         let invocation = |indent: usize| {
             if getter { head.clone() } else { inline_call(&head, &arguments, indent) }
         };
@@ -654,6 +708,9 @@ impl Module<'_> {
             return self.context_manager(native, method, called, exit, &signature, &target, &enter);
         }
         if let Some(property) = &adapt.setter {
+            if extended {
+                return Err("a facade extending its native class assigns no native property".into());
+            }
             let (value, _) = values.first().ok_or("a setter takes the new value")?;
             let text =
                 format!("    @{property}.setter\n{}", def(property, false, &signature, "None"));
@@ -739,7 +796,13 @@ impl Module<'_> {
                 .filter(|(n, _)| adapt.base.contains(n))
                 .map(|(n, value)| format!("{n}={value}"))
                 .collect();
-            body.push_str(&call(&format!("super().{}", m.name), &passed, 8));
+            let (head, passed) = match &self.extends {
+                Some(Extends { base: Some(base), .. }) => {
+                    (format!("{base}.{}", m.name), [vec!["self".to_owned()], passed].concat())
+                }
+                _ => (format!("super().{}", m.name), passed),
+            };
+            body.push_str(&call(&head, &passed, 8));
         }
         let asynchronous = awaited && !adapt.future;
         let mut text = def(&m.name, asynchronous, &signature, &ret);
@@ -810,7 +873,8 @@ impl Module<'_> {
                     self.typing.add("..types", "NotGivenOr");
                     self.runtime.add("..utils", "is_given");
                     let a = shown(self, inner);
-                    let value = format!("{n} if is_given({n}) else self._native.{n}");
+                    let provided = self.provided(&n)?;
+                    let value = format!("{n} if is_given({n}) else {provided}");
                     (format!("{n}: NotGivenOr[{a}] = NOT_GIVEN"), a, value)
                 }
                 (Ty::Optional(inner), Some((_, value))) => {
@@ -854,6 +918,47 @@ impl Module<'_> {
         Ok(out)
     }
 
+    /// The value of the owner's native getter (or call) `n`, a parameter's provider default.
+    fn provided(&self, n: &str) -> Result<String, String> {
+        let Some(extends) = &self.extends else { return Ok(format!("self._native.{n}")) };
+        let native = self.native(&extends.native)?;
+        let m = native
+            .methods
+            .iter()
+            .find(|m| m.rust_name == n)
+            .ok_or_else(|| format!("_core.{} provides no {n}", native.name))?;
+        Ok(match m.kind {
+            MethodKind::Getter => format!("self.{}", m.name),
+            _ => format!("self.{}()", m.name),
+        })
+    }
+
+    /// `__init_subclass__` of a facade extending its native class: a host subclass overriding a
+    /// hook the native runs itself is refused, or runs through the host (`proxied`).
+    fn subclassing(&mut self, facade: &FacadeClass) -> Option<String> {
+        let hooks = |names: &[String]| {
+            let quoted: Vec<String> = names.iter().map(|n| format!("{n:?}")).collect();
+            match quoted.len() {
+                1 => format!("({},)", quoted[0]),
+                _ => format!("({})", quoted.join(", ")),
+            }
+        };
+        let decided = match (&facade.node, facade.proxied.is_empty()) {
+            (Some(node), _) => call(
+                "_bindings.refuse_overrides",
+                &["cls".into(), hooks(&facade.refused), format!("{node:?}")],
+                8,
+            ),
+            (None, false) => {
+                call("_bindings.proxy_overrides", &["cls".into(), hooks(&facade.proxied)], 8)
+            }
+            (None, true) => return None,
+        };
+        Some(format!(
+            "    def __init_subclass__(cls, **kwargs: Any) -> None:\n        super().__init_subclass__(**kwargs)\n{decided}"
+        ))
+    }
+
     /// The owner's provider method (`stream()`, `chat()`) that opens the stream facade `opened`.
     fn provider_method(
         &mut self,
@@ -868,7 +973,7 @@ impl Module<'_> {
         let op = native
             .methods
             .iter()
-            .find(|m| m.name == stream.op)
+            .find(|m| m.rust_name == stream.op)
             .ok_or_else(|| format!("_core.{} has no operation {}", native.name, stream.op))?
             .clone();
         let owner_param = stream.owner.trim_start_matches('_');
@@ -924,7 +1029,7 @@ impl Module<'_> {
         let op = native
             .methods
             .iter()
-            .find(|m| m.name == stream.op)
+            .find(|m| m.rust_name == stream.op)
             .ok_or_else(|| format!("_core.{} has no operation {}", native.name, stream.op))?;
         let mut arguments = Vec::new();
         let mut keyword = false;
@@ -938,9 +1043,10 @@ impl Module<'_> {
             arguments.push(if keyword { format!("{n}={value}") } else { value });
         }
         let opened = annotation(&op.ret.ok, Dir::Out, &mut self.typing);
-        let target = match &owner.leg {
-            Some(leg) => format!("self.{}.{leg}()", stream.owner),
-            None => format!("self.{}._native", stream.owner),
+        // The owner is its native object; a host subclass of it never overrides the operation.
+        let target = match native.init {
+            true => format!("self.{}", stream.owner),
+            false => format!("self.{}._native", stream.owner),
         };
         let awaited = if op.kind == MethodKind::Await { "await " } else { "" };
         let mut text = String::new();
@@ -970,7 +1076,7 @@ impl Module<'_> {
             text.push('\n');
         }
         text.push_str(&format!("    async def _core_open(self) -> {opened}:\n"));
-        text.push_str(&call(&format!("return {awaited}{target}.{}", stream.op), &arguments, 8));
+        text.push_str(&call(&format!("return {awaited}{target}.{}", op.name), &arguments, 8));
         text.push_str(&format!("\n    _run = {base}._core_run_native\n"));
         Ok(text)
     }
@@ -1063,181 +1169,4 @@ fn call(head: &str, arguments: &[String], indent: usize) -> String {
     }
     let lines: String = arguments.iter().map(|a| format!("{pad}    {a},\n")).collect();
     format!("{pad}{head}(\n{lines}{pad})\n")
-}
-
-#[cfg(test)]
-mod tests {
-    fn emit(source: &str) -> Result<String, String> {
-        let declarations = crate::decl::tests::read(source)?;
-        Ok(super::emit(&declarations, &[])?.remove(0).text)
-    }
-
-    const PACER: &str = r#"
-        use std::sync::Arc;
-        #[crate::host(proxy(host = "livekit.agents.tokenize.SentenceStream"))]
-        pub trait Sentences: Send + Sync {
-            #[host(notify, name = "push_text")]
-            fn push_text(&self, text: String);
-        }
-        #[crate::host(record(module = "tokenizer", extract, emit))]
-        pub struct Token { pub token: String }
-        #[crate::host(class(name = "_core_Paced"))]
-        pub trait Paced: Sized {
-            #[host(env)]
-            type Env;
-            #[host(new)]
-            fn new(env: &Self::Env, sent_stream: Arc<dyn Sentences>, #[host(kw, default = 300)] limit: u32) -> Self;
-            #[host(await)]
-            async fn next(&self) -> Result<Option<String>, crate::errors::ApiError>;
-            #[host(await)]
-            async fn aclose(&self);
-            #[host(call)]
-            fn begin(&self, text: String) -> u64;
-            #[host(call)]
-            fn end(&self, token: u64);
-        }
-        /// A paced stream.
-        #[crate::host(facade(path = "livekit.agents.tts", base = "tokenize.SentenceStream", native = Paced))]
-        pub trait Wrapper {
-            #[host(delegate)]
-            type SentStream: Sentences;
-            #[host(new)]
-            fn new(sent_stream: Self::SentStream, #[host(kw, default = 300)] limit: u32) -> Self;
-            #[host(via = SentStream)]
-            fn push_text(&self, text: String);
-            #[host(none_ends_iteration, wrap = Token::token)]
-            async fn __anext__(&self) -> Option<Token>;
-            async fn aclose(&self);
-            #[host(native = begin, exit = end)]
-            fn hold(&self, text: String) -> u64;
-        }
-    "#;
-
-    // Catches: the constructor's ABI default retyped, the delegate not kept, or the native built
-    // from positional arguments past a keyword.
-    #[test]
-    fn the_constructor_takes_the_abi_defaults_keeps_the_delegate_and_builds_the_native() {
-        let text = emit(PACER).unwrap();
-        assert!(text.contains("class Wrapper(SentenceStream):\n    \"\"\"A paced stream.\"\"\""));
-        assert!(text.contains("from ..tokenize import SentenceStream\n"));
-        assert!(text.contains(
-            "    def __init__(self, sent_stream: SentenceStream, *, limit: int = 300) -> None:\n        super().__init__()\n        self._sent_stream = sent_stream\n        self._native = _core._core_Paced(sent_stream, limit=limit)\n"
-        ));
-    }
-
-    #[test]
-    fn a_delegate_method_forwards_and_none_ends_iteration_wraps_the_value() {
-        let text = emit(PACER).unwrap();
-        assert!(text.contains(
-            "    def push_text(self, text: str) -> None:\n        self._sent_stream.push_text(text)\n"
-        ));
-        assert!(text.contains(
-            "    async def __anext__(self) -> Token:\n        if (value := await self._native.next()) is None:\n            raise StopAsyncIteration\n        return Token(token=value)\n"
-        ));
-        assert!(text.contains("from .tokenizer import Token\n"));
-        assert!(text.contains(
-            "    async def aclose(self) -> None:\n        await self._native.aclose()\n"
-        ));
-    }
-
-    #[test]
-    fn a_begin_end_pair_is_an_async_with() {
-        let text = emit(PACER).unwrap();
-        assert!(text.contains(
-            "    @contextlib.asynccontextmanager\n    async def hold(self, text: str) -> AsyncIterator[int]:\n        value = self._native.begin(text)\n        try:\n            yield value\n        finally:\n            self._native.end(value)\n"
-        ));
-        assert!(text.contains("import contextlib\n"));
-    }
-
-    #[test]
-    fn a_facade_method_the_native_lacks_is_refused() {
-        let source = PACER.replace(
-            "async fn aclose(&self);\n            #[host(native",
-            "async fn close(&self);\n            #[host(native",
-        );
-        assert!(emit(&source).unwrap_err().contains("has no method close"));
-    }
-
-    const STREAM: &str = r#"
-        #[crate::host(class(name = "Chain"))]
-        pub trait Chain: Sized {
-            #[host(env)]
-            type Env;
-            #[host(new)]
-            fn new(env: &Self::Env, members: Vec<String>, #[host(kw, default = 1.0)] timeout: f64) -> Self;
-            #[host(getter)]
-            fn model(&self) -> String;
-            #[host(await)]
-            async fn synthesize(&self, input_text: String, #[host(default = None)] conn_options: Option<u32>) -> Result<u64, crate::errors::ApiError>;
-        }
-        #[crate::host(facade(path = "livekit.agents.tts", extended, native = Chain, legs(synthesize), keep(members)))]
-        pub trait Adapter {
-            #[host(new, resolve(members = ".._bindings.core_legs"))]
-            fn new(members: Vec<String>, #[host(kw, default = 1.0)] timeout: f64) -> Self;
-            #[host(getter)]
-            fn model(&self) -> String;
-        }
-        #[crate::host(facade(path = "livekit.agents.tts", base = "tts.ChunkedStream", native = Chain, stream(op = synthesize, owner = "_tts", native_retries)))]
-        pub trait AdapterStream {}
-    "#;
-
-    // Catches: an engine not built by the constructor, or a stream retried on top of a native
-    // chain.
-    #[test]
-    fn a_stream_opens_its_owners_native_operation_and_the_base_pumps_it() {
-        let text = emit(STREAM).unwrap();
-        assert!(text.contains(
-            "class AdapterStream(ChunkedStream):\n    _core_native_retries = True\n    _tts: tts.Adapter\n\n    async def _core_open(self) -> int:\n        return await self._tts._native.synthesize(self._input_text, self._conn_options)\n\n    _run = ChunkedStream._core_run_native\n"
-        ));
-        assert!(text.contains("    from .. import tts\n"));
-        assert!(text.contains(
-            "    def __init__(self, members: Sequence[str], *, timeout: float = 1.0) -> None:\n        self._native = _core.Chain(core_legs(members), timeout=timeout)\n        self._members = members\n"
-        ));
-        assert!(text.contains("replaced = _bindings.overrides(self, Adapter, \"synthesize\")\n"));
-        assert!(text.contains(
-            "    @property\n    def model(self) -> str:\n        return self._native.model\n"
-        ));
-    }
-
-    // Catches: a per-call argument retyped beside its native operation, or a stream retried on
-    // top of a native operation that retries itself.
-    #[test]
-    fn a_provider_method_takes_the_operations_per_call_arguments_and_the_stream_keeps_them() {
-        let source = STREAM.replace(
-            "async fn synthesize(&self, input_text: String,",
-            "async fn listen(&self, #[host(kw, default = None)] language: Option<String>, #[host(default = None)] offset: Option<f64>, #[host(default = None)] conn_options: Option<u32>) -> Result<u64, crate::errors::ApiError>;\n            #[host(await)]\n            async fn synthesize(&self, input_text: String,",
-        ) + r#"
-        #[crate::host(facade(path = "livekit.agents.tts", base = "tts.ChunkedStream", native = Chain, stream(op = listen, owner = "_tts", native_retries, method = "listen", base_args(conn_options), state(offset), default(conn_options = "..types.DEFAULT"), not_given)))]
-        pub trait Listening {}
-        "#;
-        let text = emit(&source).unwrap();
-        assert!(text.contains(
-            "    def listen(\n        self,\n        *,\n        language: NotGivenOr[str] = NOT_GIVEN,\n        conn_options: int = DEFAULT,\n    ) -> ChunkedStream:\n        return Listening(\n            tts=cast(\"tts.Adapter\", self),\n            language=language if is_given(language) else None,\n            conn_options=conn_options,\n        )\n"
-        ));
-        assert!(text.contains(
-            "    def __init__(self, *, tts: tts.Adapter, language: str | None, conn_options: int) -> None:\n        super().__init__(tts=tts, conn_options=conn_options)\n        self._language: str | None = language\n"
-        ));
-        assert!(text.contains(
-            "return await self._tts._native.listen(\n            language=self._language,\n            offset=self._offset,\n            conn_options=self._conn_options,\n        )\n"
-        ));
-        assert!(text.contains("from typing import TYPE_CHECKING, Any, cast\n"));
-    }
-
-    // Catches: the provider method taking the operation's name for a renamed parameter, a
-    // parameter not given defaulting to `None` rather than the owner's policy, or a facade named
-    // as its base subclassing itself.
-    #[test]
-    fn a_provider_method_renames_and_takes_the_owners_default() {
-        let source = STREAM
-            .replace("extended, native = Chain", "extended, name = \"TTS\", base = \"tts.TTS\", native = Chain")
-            .replace(
-                "stream(op = synthesize, owner = \"_tts\", native_retries)",
-                "stream(op = synthesize, owner = \"_tts\", method = \"synthesize\", base_args(input_text, conn_options), rename(input_text = \"text\"), provider_default(conn_options))",
-            );
-        let text = emit(&source).unwrap();
-        assert!(text.contains("class TTS(BaseTTS):\n"));
-        assert!(text.contains(
-            "    def synthesize(self, text: str, conn_options: NotGivenOr[int] = NOT_GIVEN) -> ChunkedStream:\n        return AdapterStream(\n            tts=cast(\"tts.TTS\", self),\n            input_text=text,\n            conn_options=conn_options if is_given(conn_options) else self._native.conn_options,\n        )\n"
-        ));
-    }
 }

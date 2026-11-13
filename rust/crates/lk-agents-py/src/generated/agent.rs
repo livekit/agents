@@ -58,10 +58,12 @@ impl VoiceAgent {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::agent::AgentFrame>(),
-        read: |obj| {
-            let this = obj.cast::<VoiceAgent>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::agent::AgentFrame> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<VoiceAgent>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::agent::AgentFrame> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -970,7 +972,7 @@ impl AgentCallbacksProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::AgentCallbacks>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::agent::AgentCallbacks>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::agent::AgentCallbacks>(obj)?
         {
             return Ok(native);
         }
@@ -983,7 +985,7 @@ impl AgentCallbacksProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::AgentCallbacks>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::agent::AgentCallbacks>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::agent::AgentCallbacks>(obj)?
         {
             return Ok(native);
         }
@@ -994,6 +996,11 @@ impl AgentCallbacksProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::AgentCallbacks>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::agent::AgentCallbacks>(obj)?.is_some() {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AgentCallbacks` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -1517,7 +1524,7 @@ impl HostInstructionsProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::HostInstructions>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::agent::HostInstructions>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::agent::HostInstructions>(obj)?
         {
             return Ok(native);
         }
@@ -1530,7 +1537,7 @@ impl HostInstructionsProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::HostInstructions>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::agent::HostInstructions>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::agent::HostInstructions>(obj)?
         {
             return Ok(native);
         }
@@ -1541,6 +1548,12 @@ impl HostInstructionsProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::HostInstructions>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::agent::HostInstructions>(obj)?.is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `HostInstructions` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -1614,7 +1627,7 @@ impl ContextHydrationProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::resources::ContextHydration>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::agent::resources::ContextHydration,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -1628,7 +1641,7 @@ impl ContextHydrationProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::resources::ContextHydration>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::agent::resources::ContextHydration,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -1639,6 +1652,15 @@ impl ContextHydrationProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::resources::ContextHydration>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::agent::resources::ContextHydration>(
+            obj,
+        )?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `ContextHydration` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -1701,7 +1723,7 @@ impl BindingCleanupProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::resources::BindingCleanup>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::agent::resources::BindingCleanup>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::agent::resources::BindingCleanup>(obj)?
         {
             return Ok(native);
         }
@@ -1714,7 +1736,7 @@ impl BindingCleanupProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::resources::BindingCleanup>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::agent::resources::BindingCleanup>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::agent::resources::BindingCleanup>(obj)?
         {
             return Ok(native);
         }
@@ -1725,6 +1747,13 @@ impl BindingCleanupProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::resources::BindingCleanup>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::agent::resources::BindingCleanup>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `BindingCleanup` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 

@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use crate::errors::{ApiError, Invalid};
 use crate::llm::fallback::{HostChatContext, HostTools};
-use crate::llm::types::{Llm, ToolChoice};
+use crate::llm::types::ToolChoice;
 use crate::utils::stream::StreamOutput;
 use crate::{ApiConnectOptions, Extra, LlmChunk};
 
-/// The gateway LLM behind `inference.LLM`. Its options are shared by every view
-/// (`identified`); each view's requests carry its own job's identification.
-#[crate::host(class(name = "InferenceLlm", native = Llm))]
+/// The gateway LLM behind `inference.LLM`. One instance serves every job it is handed to; each
+/// request carries the identity of the job it runs for.
+#[crate::host(class(name = "InferenceLlm", native = crate::Llm))]
 pub trait InferenceLlm: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
@@ -22,13 +22,15 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     /// URL and key pair resolved from the given values, the environment and the server's
     /// settings; with `endpoint`, an OpenAI-compatible provider called with its own key and no
     /// LiveKit header.
-    #[host(new)]
+    #[host(init)]
     #[allow(
         clippy::too_many_arguments,
         reason = "mirrors the Python constructor's keyword arguments"
     )]
     fn new(
         env: &Self::Env,
+        #[host(label)] label: String,
+        events: Arc<dyn crate::types::provider::ProviderEvents>,
         model: String,
         #[host(kw, default = None)] provider: Option<String>,
         #[host(default = None)] base_url: Option<String>,
@@ -39,30 +41,20 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
         #[host(default = None)] endpoint: Option<ProviderEndpoint>,
     ) -> Result<Self, Invalid>;
 
-    /// This client as a session of the job `headers` (`get_inference_headers()`) identifies
-    /// holds it: the same options, its requests carrying that job. `reporter` is the host
-    /// `llm.LLM` whose `error` events report the attempts this view retries.
-    #[host(call)]
-    fn identified(
-        &self,
-        headers: crate::Headers,
-        #[host(default = None)] reporter: Option<Arc<dyn Llm>>,
-    ) -> Self;
-
     #[host(getter)]
     fn model(&self) -> String;
 
     /// The persistent request options, a copy.
-    #[host(getter)]
+    #[host(getter, name = "_core_extra_kwargs")]
     fn extra_kwargs(&self) -> Extra;
 
     /// The scheduling class of its requests.
-    #[host(getter)]
+    #[host(getter, name = "_core_inference_class")]
     fn inference_class(&self) -> Option<String>;
 
     /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs, and
     /// ``endpoint`` the provider endpoint.
-    #[host(call)]
+    #[host(call, name = "_core_update_options")]
     fn update_options(
         &self,
         #[host(kw, default = None)] model: Option<String>,
@@ -70,12 +62,13 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
         #[host(default = None)] endpoint: Option<ProviderEndpoint>,
     );
 
-    /// Opens a completion of `chat_ctx`; no I/O until the first pull. Its requests carry this
-    /// view's job identification and `inference_class`, else the client's class.
-    #[host(call)]
+    /// Opens a completion of `chat_ctx`; no I/O until the first pull. Its requests carry the
+    /// identity of the job `cx` runs for and `inference_class`, else the client's class.
+    #[host(call, name = "_core_native_chat")]
     #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn chat(
         &self,
+        cx: crate::telemetry::Cx,
         #[host(kw)] chat_ctx: HostChatContext,
         #[host(default = None)] tools: Option<HostTools>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
@@ -132,8 +125,8 @@ pub struct ProviderEndpoint {
     name = "LLM",
     base = "llm.LLM",
     native = InferenceLlm,
-    legs(chat),
-    leg = "_core_native"
+    refuse(chat),
+    node = "session.llm_node"
 ))]
 pub trait InferenceLlmFacade {
     /// A LiveKit Inference LLM.
@@ -175,19 +168,22 @@ pub trait InferenceLlmFacade {
     #[host(getter)]
     fn model(&self) -> String;
 
-    /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs.
+    /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs, and
+    /// ``endpoint`` the provider endpoint.
     #[host(
         not_given,
         annotation(
             model = ".inference_llm.LLMModels | str",
             extra_kwargs = ".llm_provider_options.ChatCompletionOptions | dict[str, Any]"
         ),
-        resolve(extra_kwargs = "builtins.dict")
+        resolve(extra_kwargs = "builtins.dict"),
+        native = _core_update_options
     )]
     fn update_options(
         &self,
         #[host(kw, default = None)] model: Option<String>,
         #[host(default = None)] extra_kwargs: Option<Extra>,
+        #[host(default = None)] endpoint: Option<ProviderEndpoint>,
     );
 }
 

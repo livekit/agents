@@ -74,7 +74,7 @@ pub trait Implementations: 'static {
     type InferenceCredentials: ::lk_agents_abi::inference::InferenceCredentials;
     type InferenceModels: ::lk_agents_abi::inference::InferenceModels;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
-    type InferenceTts: ::lk_agents_abi::inference::tts_client::InferenceTts;
+    type InferenceTts: ::lk_agents_abi::inference::tts_client::InferenceTts<Options = Self::TtsOptionsCell>;
     type Logging: ::lk_agents_abi::invoke::Logging;
     type ChatContextPlans: ::lk_agents_abi::llm::chat_context::ChatContextPlans;
     type ChatContextDiffs: ::lk_agents_abi::llm::chat_context::ChatContextDiffs;
@@ -300,6 +300,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::inference_api_secret, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_url, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_credentials, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::identify_host, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_identity_headers, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_quota_usage, m)?)?;
     m.add_function(wrap_pyfunction!(inference::local_models_init, m)?)?;

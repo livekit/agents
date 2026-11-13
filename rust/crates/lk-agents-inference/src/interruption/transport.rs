@@ -1,5 +1,5 @@
 use crate::effects::InterruptionEffect;
-use crate::headers::{HeaderProvider, Headers, gateway_headers};
+use crate::headers::gateway_headers;
 use crate::interruption::event::OverlappingSpeechEvent;
 use crate::interruption::machine::{
     InputEvent, InterruptionEvent, InterruptionMachine, RequestIdentity, StreamError,
@@ -45,8 +45,6 @@ pub struct ConnectionConfig {
     /// The socket: the native one, or the caller's own (`AdaptiveInterruptionDetector(
     /// http_session=..)`, whose `ws_connect` the reference dials through).
     pub transport: Arc<dyn WsTransport>,
-    /// Job identification, read per connection. Authentication is added by the gateway builder.
-    pub headers: HeaderProvider,
     pub token_ttl_secs: u64,
 }
 
@@ -55,7 +53,6 @@ impl Default for ConnectionConfig {
         ConnectionConfig {
             conn_options: ApiConnectOptions::default(),
             transport: Arc::new(lk_agents_net::websocket::TungsteniteTransport),
-            headers: Arc::new(Headers::new),
             token_ttl_secs: INFERENCE_TOKEN_TTL.as_secs(),
         }
     }
@@ -95,8 +92,9 @@ impl AdaptiveInterruptionDetector {
         });
     }
 
-    /// `stream(conn_options=...)`: its verdicts and errors reach only this stream's reader.
-    pub fn stream(&self) -> InterruptionStream {
+    /// `stream(conn_options=...)`: its verdicts and errors reach only this stream's reader; its
+    /// connections carry the identity of the job `cx` runs for.
+    pub fn stream(&self, cx: &telemetry::Cx) -> InterruptionStream {
         let reconnect = Arc::new(Reconnect(signal::Shared::new(0)));
         self.streams.lock().push(Arc::downgrade(&reconnect));
 
@@ -117,6 +115,7 @@ impl AdaptiveInterruptionDetector {
             reconnect: reconnect.clone(),
             closed: closed.clone(),
             input_failure: input_failure.clone(),
+            cx: cx.clone(),
         };
         let input_tx = InterruptionInput(Arc::new(InputShared {
             queue: Mutex::new(Some(queue)),
@@ -144,6 +143,8 @@ struct StreamContext {
     reconnect: Arc<Reconnect>,
     closed: Arc<AtomicBool>,
     input_failure: Arc<signal::Shared<Option<ApiError>>>,
+    /// The context the stream was opened under: its connections carry its job's identity.
+    cx: telemetry::Cx,
 }
 
 /// Reconnect requests, counted; a connection ends once one arrives after the last it served.
@@ -684,7 +685,7 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
                 .into());
         }
     }
-    let headers = gateway_headers(Some(&(ctx.config.headers)()), None, None, &token);
+    let headers = gateway_headers(&ctx.cx, None, None, &token);
 
     let deadline = ctx.config.conn_options.connect_deadline(ctx.clock.now());
     let connect = ctx.config.transport.connect(&url, headers);
@@ -754,7 +755,7 @@ mod tests {
     #[tokio::test]
     async fn a_stalled_stream_keeps_current_audio_and_fails_only_once_its_sentinels_pile_up() {
         let detector = detector(Arc::new(FakeWs::hanging()));
-        let mut stream = detector.stream();
+        let mut stream = detector.stream(&telemetry::Cx::NONE);
         let audio = InputEvent::Audio(lk_agents_abi::AudioFrame {
             data: vec![0; 3200].into(),
             sample_rate: 16_000,
@@ -786,7 +787,7 @@ mod tests {
     #[tokio::test]
     async fn a_ten_second_head_drains_far_faster_than_real_time() {
         let detector = detector(Arc::new(FakeWs::new(Vec::new()).keep_open()));
-        let mut stream = detector.stream();
+        let mut stream = detector.stream(&telemetry::Cx::NONE);
         let input = stream.sender().unwrap();
         let measurements = crate::testkit::Measurements::default();
         input.observe(measurements.cx());
@@ -819,7 +820,7 @@ mod tests {
     async fn end_input_sends_accepted_audio_before_session_close() {
         let peer = Arc::new(FakeWs::new(Vec::new()).keep_open());
         let detector = detector(peer.clone());
-        let mut stream = detector.stream();
+        let mut stream = detector.stream(&telemetry::Cx::NONE);
         stream.push(InputEvent::AgentSpeechStarted).unwrap();
         stream
             .push(InputEvent::OverlapSpeechStarted(OverlapStart {

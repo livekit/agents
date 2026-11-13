@@ -19,7 +19,6 @@ from livekit import api
 from livekit.agents import Agent, JobContext, Plugin, VoiceSession, _core
 from livekit.agents.beta import EndCallTool, ToolCalledEvent
 from livekit.agents.http import client as http
-from livekit.agents.inference import get_inference_headers
 from livekit.agents.ipc import load_preload_modules
 from livekit.agents.job import get_job_context
 from livekit.agents.voice import CloseEvent
@@ -161,7 +160,9 @@ async def test_inference_headers_name_the_room_and_job_but_no_unconnected_partic
     received: list[object] = []
 
     async def entrypoint(ctx: JobContext) -> None:
-        async with http.http_session().get(f"{url}/headers", headers=get_inference_headers()) as r:
+        # the identity the job's inference requests carry, as the core reads it
+        headers = dict(_core.inference_identity_headers())
+        async with http.http_session().get(f"{url}/headers", headers=headers) as r:
             received.append(await r.json())
         ctx.shutdown("sent")
 

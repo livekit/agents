@@ -40,7 +40,7 @@ pub fn tool_schemas(tools: &[ToolSpec], strict: bool) -> Result<Vec<Map<String, 
 /// pin, and `bearer`.
 pub fn build_request(
     opts: &LlmOptions,
-    identification: Option<&Headers>,
+    cx: &lk_agents_abi::telemetry::Cx,
     images: &(dyn ImageResolver + Send + Sync),
     chat_ctx: &ChatContext,
     tools: &[ToolSpec],
@@ -71,12 +71,10 @@ pub fn build_request(
     };
     if let Auth::Gateway { .. } = opts.auth {
         let class = args.inference_class.as_deref().or(opts.inference_class.as_deref());
-        for (name, value) in
-            gateway_headers(identification, class, opts.provider.as_deref(), bearer)
-        {
+        for (name, value) in gateway_headers(cx, class, opts.provider.as_deref(), bearer) {
             headers.insert(name, value);
         }
-        // The call's own class overrides the one the identification was read with.
+        // The call's own class overrides the job's.
         if let Some(class) = args.inference_class.as_deref().filter(|class| !class.is_empty()) {
             headers.insert(crate::headers::HEADER_INFERENCE_PRIORITY, class);
         }

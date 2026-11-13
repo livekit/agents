@@ -169,27 +169,32 @@ impl SharedTtsOptions for TtsOptions {
 /// synthesis over it. A synthesis reads them when its stage opens; one already open keeps them.
 #[crate::host(class(name = "TtsOptionsCell", native = SharedTtsOptions))]
 pub trait TtsOptionsCell: SharedTtsOptions + Sized + 'static {
-    /// Split by `sentence_tokenizer` (through `leg`, its core leg), paced as a TTS with
-    /// `capabilities` is by default.
+    /// Split by `sentence_tokenizer`, paced as a TTS with `capabilities` is by default.
     #[host(new)]
-    fn new(
-        sentence_tokenizer: crate::HostRef,
-        leg: crate::tokenize::bindings::SentenceTokenizerLeg,
-        capabilities: TtsCapabilities,
-    ) -> Self;
-    /// The tokenizer as it was given.
+    fn new(sentence_tokenizer: OptionsTokenizer, capabilities: TtsCapabilities) -> Self;
+    /// The tokenizer as it was given; `None` only for the options of a TTS no host built.
     #[host(getter)]
-    fn sentence_tokenizer(&self) -> crate::HostRef;
+    fn sentence_tokenizer(&self) -> Option<crate::HostRef>;
     #[host(getter)]
     fn pacing(&self) -> Option<crate::tts::stream_pacer::SentenceStreamPacer>;
     /// Replace both at once.
     #[host(call)]
     fn set(
         &self,
-        sentence_tokenizer: crate::HostRef,
-        leg: crate::tokenize::bindings::SentenceTokenizerLeg,
+        sentence_tokenizer: OptionsTokenizer,
         pacing: Option<crate::tts::stream_pacer::SentenceStreamPacer>,
     );
+}
+
+/// A host `tokenize.SentenceTokenizer` as a TTS's options hold it: the object itself, read back as
+/// `options.sentence_tokenizer`, and how the stage splits by it.
+#[crate::host(record(module = "tts", host_type = "builtins.object", boundary, extract))]
+#[derive(Clone)]
+pub struct OptionsTokenizer {
+    #[host(own_value, extract_with = "py_values::host_ref")]
+    pub host: crate::HostRef,
+    #[host(own_value)]
+    pub leg: crate::tokenize::bindings::SentenceTokenizerLeg,
 }
 
 /// What each chunk of a TTS stream's input holds.
@@ -286,9 +291,10 @@ pub trait Tts: Send + Sync {
         crate::types::identity::ProviderId::of_label(self.label())
     }
 
-    /// Open the connection to the service early; a provider with nothing to warm ignores it.
+    /// Open the connection to the service early, for the job `cx` runs for; a provider with
+    /// nothing to warm ignores it.
     #[host(notify, name = "_core_prewarm")]
-    fn prewarm(&self) {}
+    fn prewarm(&self, _cx: &crate::telemetry::Cx) {}
 
     /// The rate of the audio the provider produces, which the framework resamples from.
     #[host(read_once, name = "_core_sample_rate")]

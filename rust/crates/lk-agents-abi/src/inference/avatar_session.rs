@@ -82,7 +82,8 @@ pub trait InferenceAvatar: Send + Sync + Sized + 'static {
     /// Creates the provider session for the agent `agent_identity` in `room_name` and returns the
     /// audio sample rate the avatar takes. A second call while one runs, or once a session was
     /// created, is refused. Cancelling the call stops creating; a session created anyway is
-    /// terminated. `livekit_url` defaults to `LIVEKIT_URL`; `headers` are `get_inference_headers()`.
+    /// terminated. `livekit_url` defaults to `LIVEKIT_URL`; its requests carry the identity of the
+    /// job `cx` runs for.
     #[host(await)]
     async fn create(
         &self,
@@ -90,14 +91,14 @@ pub trait InferenceAvatar: Send + Sync + Sized + 'static {
         room_sid: String,
         #[host(default = None)] livekit_url: Option<String>,
         agent_identity: String,
-        headers: crate::Headers,
+        cx: crate::telemetry::Cx,
     ) -> Result<u32, AvatarError>;
 
     /// Stops creating and terminates every held session so it stops billing now. Returns once
     /// that cleanup settled or its deadline passed (then logged); a failed terminate keeps the
     /// session held, so a second call retries.
     #[host(await)]
-    async fn aclose(&self, headers: crate::Headers);
+    async fn aclose(&self, cx: crate::telemetry::Cx);
 }
 
 // Public data contracts. Python behavior remains in its adapters.

@@ -246,3 +246,175 @@ fn a_base_parameter_goes_to_the_base_method_not_the_native() {
         "        self._native.configure(voice=voice)\n        super().configure(note=note)\n"
     ));
 }
+
+const PACER: &str = r#"
+    use std::sync::Arc;
+    #[crate::host(proxy(host = "livekit.agents.tokenize.SentenceStream"))]
+    pub trait Sentences: Send + Sync {
+        #[host(notify, name = "push_text")]
+        fn push_text(&self, text: String);
+    }
+    #[crate::host(record(module = "tokenizer", extract, emit))]
+    pub struct Token { pub token: String }
+    #[crate::host(class(name = "_core_Paced"))]
+    pub trait Paced: Sized {
+        #[host(env)]
+        type Env;
+        #[host(new)]
+        fn new(env: &Self::Env, sent_stream: Arc<dyn Sentences>, #[host(kw, default = 300)] limit: u32) -> Self;
+        #[host(await)]
+        async fn next(&self) -> Result<Option<String>, crate::errors::ApiError>;
+        #[host(await)]
+        async fn aclose(&self);
+        #[host(call)]
+        fn begin(&self, text: String) -> u64;
+        #[host(call)]
+        fn end(&self, token: u64);
+    }
+    /// A paced stream.
+    #[crate::host(facade(path = "livekit.agents.tts", base = "tokenize.SentenceStream", native = Paced))]
+    pub trait Wrapper {
+        #[host(delegate)]
+        type SentStream: Sentences;
+        #[host(new)]
+        fn new(sent_stream: Self::SentStream, #[host(kw, default = 300)] limit: u32) -> Self;
+        #[host(via = SentStream)]
+        fn push_text(&self, text: String);
+        #[host(none_ends_iteration, wrap = Token::token)]
+        async fn __anext__(&self) -> Option<Token>;
+        async fn aclose(&self);
+        #[host(native = begin, exit = end)]
+        fn hold(&self, text: String) -> u64;
+    }
+"#;
+
+// Catches: the constructor's ABI default retyped, the delegate not kept, or the native built
+// from positional arguments past a keyword.
+#[test]
+fn the_constructor_takes_the_abi_defaults_keeps_the_delegate_and_builds_the_native() {
+    let text = emit(PACER).unwrap();
+    assert!(text.contains("class Wrapper(SentenceStream):\n    \"\"\"A paced stream.\"\"\""));
+    assert!(text.contains("from ..tokenize import SentenceStream\n"));
+    assert!(text.contains(
+        "    def __init__(self, sent_stream: SentenceStream, *, limit: int = 300) -> None:\n        super().__init__()\n        self._sent_stream = sent_stream\n        self._native = _core._core_Paced(sent_stream, limit=limit)\n"
+    ));
+}
+
+#[test]
+fn a_delegate_method_forwards_and_none_ends_iteration_wraps_the_value() {
+    let text = emit(PACER).unwrap();
+    assert!(text.contains(
+        "    def push_text(self, text: str) -> None:\n        self._sent_stream.push_text(text)\n"
+    ));
+    assert!(text.contains(
+        "    async def __anext__(self) -> Token:\n        if (value := await self._native.next()) is None:\n            raise StopAsyncIteration\n        return Token(token=value)\n"
+    ));
+    assert!(text.contains("from .tokenizer import Token\n"));
+    assert!(
+        text.contains("    async def aclose(self) -> None:\n        await self._native.aclose()\n")
+    );
+}
+
+#[test]
+fn a_begin_end_pair_is_an_async_with() {
+    let text = emit(PACER).unwrap();
+    assert!(text.contains(
+        "    @contextlib.asynccontextmanager\n    async def hold(self, text: str) -> AsyncIterator[int]:\n        value = self._native.begin(text)\n        try:\n            yield value\n        finally:\n            self._native.end(value)\n"
+    ));
+    assert!(text.contains("import contextlib\n"));
+}
+
+#[test]
+fn a_facade_method_the_native_lacks_is_refused() {
+    let source = PACER.replace(
+        "async fn aclose(&self);\n        #[host(native",
+        "async fn close(&self);\n        #[host(native",
+    );
+    assert!(emit(&source).unwrap_err().contains("has no method close"));
+}
+
+const STREAM: &str = r#"
+    #[crate::host(class(name = "Chain"))]
+    pub trait Chain: Sized {
+        #[host(env)]
+        type Env;
+        #[host(init)]
+        fn new(env: &Self::Env, members: Vec<String>, #[host(kw, default = 1.0)] timeout: f64) -> Self;
+        #[host(getter)]
+        fn model(&self) -> String;
+        #[host(call, name = "_core_conn_options")]
+        fn conn_options(&self) -> u32;
+        #[host(await, name = "_core_native_synthesize")]
+        async fn synthesize(&self, input_text: String, #[host(default = None)] conn_options: Option<u32>) -> Result<u64, crate::errors::ApiError>;
+    }
+    #[crate::host(facade(path = "livekit.agents.tts", extended, native = Chain, refuse(synthesize), node = "session.tts_node", keep(members)))]
+    pub trait Adapter {
+        #[host(new)]
+        fn new(members: Vec<String>, #[host(kw, default = 1.0)] timeout: f64) -> Self;
+        #[host(getter)]
+        fn model(&self) -> String;
+    }
+    #[crate::host(facade(path = "livekit.agents.tts", base = "tts.ChunkedStream", native = Chain, stream(op = synthesize, owner = "_tts", native_retries)))]
+    pub trait AdapterStream {}
+"#;
+
+// Catches: an engine not built by the constructor, a stream retried on top of a native
+// chain, a hook the native runs left overridable, or a native getter shadowed by a forward.
+#[test]
+fn a_stream_opens_its_owners_native_operation_and_the_base_pumps_it() {
+    let text = emit(STREAM).unwrap();
+    assert!(text.contains(
+        "class AdapterStream(ChunkedStream):\n    _core_native_retries = True\n    _tts: tts.Adapter\n\n    async def _core_open(self) -> int:\n        return await self._tts._core_native_synthesize(self._input_text, self._conn_options)\n\n    _run = ChunkedStream._core_run_native\n"
+    ));
+    assert!(text.contains("    from .. import tts\n"));
+    assert!(text.contains("class Adapter(_core.Chain):\n"));
+    assert!(text.contains(
+        "    def __init__(self, members: Sequence[str], *, timeout: float = 1.0) -> None:\n        _core.Chain.__init__(self, members, timeout=timeout)\n        self._members = members\n"
+    ));
+    assert!(text.contains(
+        "    def __init_subclass__(cls, **kwargs: Any) -> None:\n        super().__init_subclass__(**kwargs)\n        _bindings.refuse_overrides(cls, (\"synthesize\",), \"session.tts_node\")\n"
+    ));
+    assert!(!text.contains("def model"), "the native getter is the class's own");
+}
+
+// Catches: a per-call argument retyped beside its native operation, or a stream retried on
+// top of a native operation that retries itself.
+#[test]
+fn a_provider_method_takes_the_operations_per_call_arguments_and_the_stream_keeps_them() {
+    let source = STREAM.replace(
+        "#[host(await, name = \"_core_native_synthesize\")]",
+        "#[host(await, name = \"_core_native_listen\")]\n            async fn listen(&self, #[host(kw, default = None)] language: Option<String>, #[host(default = None)] offset: Option<f64>, #[host(default = None)] conn_options: Option<u32>) -> Result<u64, crate::errors::ApiError>;\n            #[host(await, name = \"_core_native_synthesize\")]",
+    ) + r#"
+    #[crate::host(facade(path = "livekit.agents.tts", base = "tts.ChunkedStream", native = Chain, stream(op = listen, owner = "_tts", native_retries, method = "listen", base_args(conn_options), state(offset), default(conn_options = "..types.DEFAULT"), not_given)))]
+    pub trait Listening {}
+    "#;
+    let text = emit(&source).unwrap();
+    assert!(text.contains(
+        "    def listen(\n        self,\n        *,\n        language: NotGivenOr[str] = NOT_GIVEN,\n        conn_options: int = DEFAULT,\n    ) -> ChunkedStream:\n        return Listening(\n            tts=cast(\"tts.Adapter\", self),\n            language=language if is_given(language) else None,\n            conn_options=conn_options,\n        )\n"
+    ));
+    assert!(text.contains(
+        "    def __init__(self, *, tts: tts.Adapter, language: str | None, conn_options: int) -> None:\n        super().__init__(tts=tts, conn_options=conn_options)\n        self._language: str | None = language\n"
+    ));
+    assert!(text.contains(
+        "return await self._tts._core_native_listen(\n            language=self._language,\n            offset=self._offset,\n            conn_options=self._conn_options,\n        )\n"
+    ));
+    assert!(text.contains("from typing import TYPE_CHECKING, Any, cast\n"));
+}
+
+// Catches: the provider method taking the operation's name for a renamed parameter, a
+// parameter not given defaulting to `None` rather than the owner's policy, or a facade named
+// as its base subclassing itself.
+#[test]
+fn a_provider_method_renames_and_takes_the_owners_default() {
+    let source = STREAM
+        .replace("extended, native = Chain", "extended, name = \"TTS\", base = \"tts.TTS\", native = Chain")
+        .replace(
+            "stream(op = synthesize, owner = \"_tts\", native_retries)",
+            "stream(op = synthesize, owner = \"_tts\", method = \"synthesize\", base_args(input_text, conn_options), rename(input_text = \"text\"), provider_default(conn_options))",
+        );
+    let text = emit(&source).unwrap();
+    assert!(text.contains("class TTS(_core.Chain, BaseTTS):\n"));
+    assert!(text.contains(
+        "    def synthesize(self, text: str, conn_options: NotGivenOr[int] = NOT_GIVEN) -> ChunkedStream:\n        return AdapterStream(\n            tts=cast(\"tts.TTS\", self),\n            input_text=text,\n            conn_options=conn_options if is_given(conn_options) else self._core_conn_options(),\n        )\n"
+    ));
+}

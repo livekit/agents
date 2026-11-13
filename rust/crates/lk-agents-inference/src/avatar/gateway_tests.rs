@@ -4,10 +4,10 @@ use std::time::Duration;
 use lk_agents_abi::Closed;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::inference::avatar_session::AvatarError;
+use lk_agents_abi::telemetry::Cx;
 use lk_agents_core::request::Policy;
 use lk_agents_inference::avatar::gateway::GatewayAvatar;
 use lk_agents_inference::avatar::{AvatarOptions, AvatarRoom};
-use lk_agents_inference::headers::Headers;
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::http::GatewayHttp;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -148,13 +148,13 @@ async fn a_retried_create_keeps_one_idempotency_key_and_close_terminates_it() {
         peer(vec![Reply::Answer { delay_ms: 0, status: 503, body: "busy" }, ok(CREATED), ok("")])
             .await;
     let avatar = avatar(url, 5_000);
-    assert_eq!(avatar.create(room(), Headers::new()).await.unwrap(), 24_000);
+    assert_eq!(avatar.create(room(), Cx::NONE).await.unwrap(), 24_000);
     use lk_agents_abi::inference::avatar_session::InferenceAvatar as _;
     assert_eq!(
         (avatar.session_id(), avatar.provider_session_id()),
         (Some("s".into()), Some("p".into()))
     );
-    assert_eq!(avatar.close(Headers::new()).await, Closed::Clean);
+    assert_eq!(avatar.close(Cx::NONE).await, Closed::Clean);
     assert_eq!(avatar.provider_session_id(), None);
     let seen = requests(&received, 3).await;
     let (first, second, terminate) = (&seen[0].0, &seen[1].0, &seen[2]);
@@ -183,9 +183,9 @@ async fn a_concurrent_second_start_is_refused_and_the_first_completes() {
     let (url, received) =
         peer(vec![Reply::Answer { delay_ms: 200, status: 200, body: CREATED }]).await;
     let avatar = avatar(url, 5_000);
-    let (first, second) = tokio::join!(avatar.create(room(), Headers::new()), async {
+    let (first, second) = tokio::join!(avatar.create(room(), Cx::NONE), async {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        avatar.create(room(), Headers::new()).await
+        avatar.create(room(), Cx::NONE).await
     });
     assert!(matches!(second, Err(AvatarError::AlreadyStarted)), "{second:?}");
     assert_eq!(first.unwrap(), 24_000);
@@ -199,11 +199,11 @@ async fn a_rejected_create_is_raised_unretried_and_the_avatar_can_start_again() 
         peer(vec![Reply::Answer { delay_ms: 0, status: 400, body: "bad image" }, ok(CREATED)])
             .await;
     let avatar = avatar(url, 5_000);
-    let err = avatar.create(room(), Headers::new()).await.unwrap_err();
+    let err = avatar.create(room(), Cx::NONE).await.unwrap_err();
     let AvatarError::Api(ProviderError::Local(err)) = err else { panic!("{err:?}") };
     assert_eq!(err.status_code, Some(400));
     assert_eq!(received.lock().await.len(), 1);
-    assert_eq!(avatar.create(room(), Headers::new()).await.unwrap(), 24_000);
+    assert_eq!(avatar.create(room(), Cx::NONE).await.unwrap(), 24_000);
 }
 
 // Catches: a start cancelled while the gateway is creating leaking the session the gateway
@@ -214,15 +214,14 @@ async fn a_session_created_after_its_start_was_cancelled_is_terminated() {
         peer(vec![Reply::Answer { delay_ms: 300, status: 200, body: CREATED }, ok("")]).await;
     let avatar = avatar(url, 5_000);
     let cancelled =
-        tokio::time::timeout(Duration::from_millis(50), avatar.create(room(), Headers::new()))
-            .await;
+        tokio::time::timeout(Duration::from_millis(50), avatar.create(room(), Cx::NONE)).await;
     assert!(cancelled.is_err());
     let seen = requests(&received, 2).await;
     assert_eq!(seen.len(), 2, "the late session is terminated");
     assert!(seen[1].0.starts_with("POST /v1/avatar/sessions/terminate "));
     use lk_agents_abi::inference::avatar_session::InferenceAvatar as _;
     assert_eq!(avatar.session_id(), None, "never adopted");
-    assert_eq!(avatar.close(Headers::new()).await, Closed::Clean);
+    assert_eq!(avatar.close(Cx::NONE).await, Closed::Clean);
 }
 
 // Catches (regression, DST avatar_sessions_are_never_leaked): a create the gateway received,
@@ -233,11 +232,11 @@ async fn close_during_a_received_create_asks_again_under_its_key_and_terminates(
     let avatar = Arc::new(avatar(url, 200));
     let creating = tokio::spawn({
         let avatar = avatar.clone();
-        async move { avatar.create(room(), Headers::new()).await }
+        async move { avatar.create(room(), Cx::NONE).await }
     });
     requests(&received, 1).await;
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(avatar.close(Headers::new()).await, Closed::Clean);
+    assert_eq!(avatar.close(Cx::NONE).await, Closed::Clean);
     assert!(matches!(creating.await.unwrap(), Err(AvatarError::Closed)));
     let seen = requests(&received, 3).await;
     assert_eq!(header(&seen[0].0, "idempotency-key"), header(&seen[1].0, "idempotency-key"));
@@ -253,11 +252,11 @@ async fn close_reports_incomplete_cleanup_when_a_creation_never_answers() {
     let avatar = Arc::new(avatar(url, 60_000));
     let creating = tokio::spawn({
         let avatar = avatar.clone();
-        async move { avatar.create(room(), Headers::new()).await }
+        async move { avatar.create(room(), Cx::NONE).await }
     });
     requests(&received, 1).await;
     tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(avatar.close(Headers::new()).await, Closed::TimedOut);
+    assert_eq!(avatar.close(Cx::NONE).await, Closed::TimedOut);
     assert!(matches!(creating.await.unwrap(), Err(AvatarError::Closed)));
 }
 
@@ -269,10 +268,10 @@ mod stepped {
 
     use super::super::{Driver, Event, Input, RETIREMENT_TIMEOUT, RequestId, View};
     use lk_agents_abi::inference::avatar_session::AvatarError;
+    use lk_agents_abi::telemetry::Cx;
     use lk_agents_abi::{Closed, HOST_TEARDOWN_TIMEOUT, Ts, VirtualClock};
     use lk_agents_core::request::{AttemptFailure, Policy};
     use lk_agents_inference::avatar::{AvatarOptions, ProviderSession};
-    use lk_agents_inference::headers::Headers;
     use lk_agents_net::http::GatewayHttp;
     use tokio::sync::oneshot;
 
@@ -325,14 +324,14 @@ mod stepped {
 
     fn create(d: &mut Driver, caller: u64, now: Ts) -> Answer {
         let (reply, answer) = oneshot::channel();
-        let input = Input::Create { caller, room: super::room(), headers: Headers::new(), reply };
+        let input = Input::Create { caller, room: super::room(), cx: Cx::NONE, reply };
         d.input(input, now);
         answer
     }
 
     fn close(d: &mut Driver, now: Ts) -> oneshot::Receiver<Closed> {
         let (reply, settled) = oneshot::channel();
-        d.input(Input::Close { headers: Headers::new(), reply }, now);
+        d.input(Input::Close { cx: Cx::NONE, reply }, now);
         settled
     }
 

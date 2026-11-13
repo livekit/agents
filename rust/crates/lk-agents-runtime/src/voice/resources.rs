@@ -242,13 +242,13 @@ impl Resources {
 
     /// The provider is called after the table lock is released: a host provider's `prewarm` is
     /// a host call.
-    pub fn prewarm(&self, id: ResourceId) {
+    pub fn prewarm(&self, id: ResourceId, cx: &crate::telemetry::Cx) {
         let resource = self.0.lock().live.get(&id).cloned();
         match resource {
-            Some(Resource::Stt(s)) => s.prewarm(),
-            Some(Resource::Vad(v)) => v.prewarm(),
-            Some(Resource::Llm(l)) => l.prewarm(),
-            Some(Resource::Tts(t)) => t.prewarm(),
+            Some(Resource::Stt(s)) => s.prewarm(cx),
+            Some(Resource::Vad(v)) => v.prewarm(cx),
+            Some(Resource::Llm(l)) => l.prewarm(cx),
+            Some(Resource::Tts(t)) => t.prewarm(cx),
             Some(
                 Resource::Recorder(_)
                 | Resource::Instructions(_)

@@ -6,9 +6,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any, Self
+from typing import Any
 
-from livekit.agents._bindings import FallbackListener
 from livekit.agents.stt import STT
 from livekit.agents.vad import VAD
 from livekit.local_inference import VAD as HostVAD
@@ -20,19 +19,20 @@ from .stt import SpeechEvent, STTCapabilities
 
 class FallbackStt:
     """`stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
-    def __new__(
-        cls,
+    def __init__(
+        self,
         stt: Sequence[STT[Any]],
         *,
         vad: VAD[Any] | None = None,
         attempt_timeout: float = 10.0,
         max_retry_per_stt: int = 1,
         retry_interval: float = 5.0,
-        on_availability: FallbackListener | None = None,
-    ) -> Self:
-        """`stt` in order; a recognize-only one streams over `vad` (`stt.StreamAdapter`)."""
+    ) -> None:
+        """`stt` in order; a recognize-only one streams over `vad` (`stt.StreamAdapter`).
+        `observer` hears the chain's availability and failures.
+        """
     @property
-    def active_index(self) -> int:
+    def _core_active_index(self) -> int:
         """Which entry most recently served, as a position in the host's list."""
     @property
     def capabilities(self) -> STTCapabilities:
@@ -41,14 +41,14 @@ class FallbackStt:
         """
     async def aclose(self) -> None:
         """Every recovery probe in flight closes its stream, awaited (bounded)."""
-    async def recognize(
+    async def _core_native_recognize(
         self,
         frames: Sequence[AudioFrame],
         language: str | None = None,
         conn_options: APIConnectOptions | None = None,
     ) -> SpeechEvent:
         """`_recognize_impl`: the batch path, over whichever entry answers."""
-    async def stream(
+    async def _core_native_stream(
         self,
         *,
         language: str | None = None,
@@ -65,12 +65,12 @@ class FallbackRecognizeStream:
     async def aclose(self) -> None: ...
 
 class InferenceStt:
-    """The gateway STT behind `inference.STT`. Its options, keyterms and open streams are shared by
-    every view (`identified`); each view's connections carry its own job's identification. As the
-    session's STT it implements the keyterm and conversation hooks.
+    """The gateway STT behind `inference.STT`. One instance serves every job it is handed to; each
+    connection carries the identity of the job it runs for. As the session's STT it implements the
+    keyterm and conversation hooks.
     """
-    def __new__(
-        cls,
+    def __init__(
+        self,
         vad_models: Callable[[], HostVAD],
         model: str | None = None,
         *,
@@ -84,7 +84,7 @@ class InferenceStt:
         fallback: FallbackModels | None = None,
         conn_options: APIConnectOptions | None = None,
         vad: VAD[Any] | None = None,
-    ) -> Self:
+    ) -> None:
         """A client of `model` (``"provider/model[:language]"``) on the gateway. Starts nothing. The
         gateway's URL and key pair resolve from the given values, the environment and the
         server's settings. `vad`'s end of speech finalizes the transcript of a model that
@@ -97,19 +97,9 @@ class InferenceStt:
     @property
     def capabilities(self) -> STTCapabilities:
         """Recomputed from the model, its fallbacks and the extra kwargs."""
-    @property
-    def conn_options(self) -> APIConnectOptions:
+    def _core_conn_options(self) -> APIConnectOptions:
         """The policy this client was given, which a session or run that supplies none keeps."""
-    def identified(
-        self,
-        headers: list[tuple[str, str]],
-        reporter: STT[Any] | None = None,
-    ) -> InferenceStt:
-        """This client as a session of the job `headers` (`get_inference_headers()`) identifies holds
-        it: the same options, keyterms and open streams, its connections carrying that job.
-        `reporter` is the host `stt.STT` whose `error` events report this view's failures.
-        """
-    def update_options(
+    def _core_update_options(
         self,
         *,
         model: str | None = None,
@@ -119,15 +109,15 @@ class InferenceStt:
         """Read by later streams, and sent to the open ones as a mid-stream `session.update`. A new
         model resolves its VAD again.
         """
-    def update_keyterms(self, keyterms: Sequence[str]) -> None:
+    def _core_update_keyterms(self, keyterms: Sequence[str]) -> None:
         """The session's keyterms: a warning once for a model without keyterm prompting, else every
         open stream applies them (now if the user is silent, at end of speech if not).
         """
-    def push_conversation_item(self, role: str, text: str) -> None:
+    def _core_push_conversation_item(self, role: str, text: str) -> None:
         """An assistant turn's text, its tail, biases recognition as `agent_context` on a model that
         carries it.
         """
-    def stream(
+    def _core_native_stream(
         self,
         *,
         language: str | None = None,
@@ -147,19 +137,19 @@ class InferenceSttStream:
 
 class SttStreamAdapter:
     """`stt.StreamAdapter`'s engine as the host builds it; the public class stays Python."""
-    def __new__(cls, *, stt: STT[Any], vad: VAD[Any]) -> Self:
+    def __init__(self, *, stt: STT[Any], vad: VAD[Any]) -> None:
         """The wrapped STT and VAD; each stream binds its own recognition policy."""
     @property
     def capabilities(self) -> STTCapabilities:
         """Streaming, with the wrapped STT's keyterms and chat context support."""
-    async def recognize(
+    async def _core_native_recognize(
         self,
         frames: Sequence[AudioFrame],
         language: str | None = None,
         conn_options: APIConnectOptions | None = None,
     ) -> SpeechEvent:
         """`_recognize_impl`: the wrapped STT's batch path."""
-    async def stream(
+    async def _core_native_stream(
         self,
         *,
         language: str | None = None,

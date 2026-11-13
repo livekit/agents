@@ -108,10 +108,12 @@ impl HttpExchange {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::http::EndpointExchange>(),
-        read: |obj| {
-            let this = obj.cast::<HttpExchange>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::http::EndpointExchange> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<HttpExchange>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::http::EndpointExchange> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -191,10 +193,12 @@ impl ProcessLaunch {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::LaunchReport>(),
-        read: |obj| {
-            let this = obj.cast::<ProcessLaunch>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::LaunchReport> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<ProcessLaunch>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::LaunchReport> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -225,10 +229,12 @@ impl ThreadLaunch {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::LaunchReport>(),
-        read: |obj| {
-            let this = obj.cast::<ThreadLaunch>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::LaunchReport> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<ThreadLaunch>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::LaunchReport> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -430,7 +436,7 @@ impl JobSupervisor {
         crate::py_calls::check_pid()?;
         let info = crate::generated::records::job_records::running_job_info_from_py(info.as_any())?;
         let context = crate::py_calls::entered();
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () = <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::launch_job(&this, info, context, cx)
@@ -486,10 +492,12 @@ impl JobSupervisor {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob>(),
-        read: |obj| {
-            let this = obj.cast::<JobSupervisor>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<JobSupervisor>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -634,7 +642,7 @@ impl ProcPool {
         crate::py_calls::check_pid()?;
         let info = crate::generated::records::job_records::running_job_info_from_py(info.as_any())?;
         let context = crate::py_calls::entered();
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () = <ProcPoolImpl as ::lk_agents_abi::worker::ipc_host::ProcessPool>::launch_job(&this, info, context, cx)
@@ -794,7 +802,7 @@ impl JobRun {
         crate::py_calls::check_pid()?;
         let connect = crate::generated::worker::JobCallProxy::from_host(connect.as_any())?;
         let context = crate::py_calls::entered();
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::connect(&this, connect, context, cx)
@@ -833,7 +841,7 @@ impl JobRun {
         let call = crate::generated::worker::JobCallProxy::from_host(call.as_any())?;
         let console_result = crate::py_objects::object_ref_from_py(console_result.as_any())?;
         let context = crate::py_calls::entered();
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::api_call(&this, call, name, console_result, context, cx)
@@ -891,10 +899,12 @@ impl JobRun {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(),
-        read: |obj| {
-            let this = obj.cast::<JobRun>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobExecution> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<JobRun>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobExecution> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -1134,10 +1144,12 @@ impl ServerConfig {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::server_host::ServerConfiguration>(),
-        read: |obj| {
-            let this = obj.cast::<ServerConfig>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::server_host::ServerConfiguration> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<ServerConfig>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::server_host::ServerConfiguration> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -1200,11 +1212,13 @@ impl ServerRuntime {
         let config = crate::py_objects::native::<
             dyn ::lk_agents_abi::worker::server_host::ServerConfiguration,
         >(config.as_any())
-        .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "config",
-                ": expected a native ServerConfig"
-            ))
+        .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "config",
+                    ": expected a native ServerConfig"
+                ))
+            })
         })?;
         let host = crate::generated::worker::ServerHostProxy::from_host(host.as_any())?;
         let out = py.detach(|| <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::new(&env, config, host)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
@@ -1302,11 +1316,13 @@ impl ServerRuntime {
                     crate::py_objects::native::<dyn ::lk_agents_abi::a2a::door::TextEndpoint>(
                         item.as_any(),
                     )
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "text_doors",
-                            ": expected a native A2A door"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "text_doors",
+                                ": expected a native A2A door"
+                            ))
+                        })
                     })
                 })
                 .collect::<PyResult<Vec<_>>>()
@@ -1373,10 +1389,12 @@ impl ServerRuntime {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::server_host::ServerJobs>(),
-        read: |obj| {
-            let this = obj.cast::<ServerRuntime>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::server_host::ServerJobs> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<ServerRuntime>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::server_host::ServerJobs> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -1398,7 +1416,7 @@ impl EndpointHandlerProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::http::EndpointHandler>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::http::EndpointHandler>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::http::EndpointHandler>(obj)?
         {
             return Ok(native);
         }
@@ -1411,7 +1429,7 @@ impl EndpointHandlerProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::http::EndpointHandler>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::http::EndpointHandler>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::http::EndpointHandler>(obj)?
         {
             return Ok(native);
         }
@@ -1422,6 +1440,13 @@ impl EndpointHandlerProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::http::EndpointHandler>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::worker::http::EndpointHandler>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `EndpointHandler` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -1498,7 +1523,7 @@ impl SessionJobProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::job::SessionJob>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj)?
         {
             return Ok(native);
         }
@@ -1511,7 +1536,7 @@ impl SessionJobProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::job::SessionJob>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj)?
         {
             return Ok(native);
         }
@@ -1522,6 +1547,12 @@ impl SessionJobProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::job::SessionJob>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj)?.is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `SessionJob` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -1538,11 +1569,13 @@ impl SessionJobProxy {
             crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(
                 v.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "SessionJob._run",
-                    ": expected a native JobRun"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "SessionJob._run",
+                        ": expected a native JobRun"
+                    ))
+                })
             })?
         };
         Ok(SessionJobProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, run })
@@ -1803,7 +1836,7 @@ impl SessionPortProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::remote_session::SessionPort>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::worker::remote_session::SessionPort,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -1817,7 +1850,7 @@ impl SessionPortProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::remote_session::SessionPort>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::worker::remote_session::SessionPort,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -1828,6 +1861,15 @@ impl SessionPortProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::remote_session::SessionPort>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::worker::remote_session::SessionPort>(
+            obj,
+        )?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `SessionPort` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -2245,7 +2287,7 @@ impl JobLauncherProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobLauncher>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobLauncher>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobLauncher>(obj)?
         {
             return Ok(native);
         }
@@ -2258,7 +2300,7 @@ impl JobLauncherProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobLauncher>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobLauncher>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobLauncher>(obj)?
         {
             return Ok(native);
         }
@@ -2269,6 +2311,13 @@ impl JobLauncherProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobLauncher>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobLauncher>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `JobLauncher` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -2386,7 +2435,7 @@ impl JobLaunchersProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobLaunchers>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobLaunchers>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobLaunchers>(obj)?
         {
             return Ok(native);
         }
@@ -2399,7 +2448,7 @@ impl JobLaunchersProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobLaunchers>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobLaunchers>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobLaunchers>(obj)?
         {
             return Ok(native);
         }
@@ -2410,6 +2459,13 @@ impl JobLaunchersProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobLaunchers>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobLaunchers>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `JobLaunchers` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -2490,8 +2546,9 @@ impl ChildInitializeProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>> {
-        if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>(obj)
+        if let Some(native) = crate::py_objects::native::<
+            dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize,
+        >(obj)?
         {
             return Ok(native);
         }
@@ -2503,8 +2560,9 @@ impl ChildInitializeProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>> {
-        if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>(obj)
+        if let Some(native) = crate::py_objects::native::<
+            dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize,
+        >(obj)?
         {
             return Ok(native);
         }
@@ -2515,6 +2573,13 @@ impl ChildInitializeProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `ChildInitialize` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -2582,7 +2647,7 @@ impl JobTaskProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobTask>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobTask>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobTask>(obj)?
         {
             return Ok(native);
         }
@@ -2595,7 +2660,7 @@ impl JobTaskProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobTask>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobTask>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobTask>(obj)?
         {
             return Ok(native);
         }
@@ -2606,6 +2671,13 @@ impl JobTaskProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobTask>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobTask>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `JobTask` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -2713,7 +2785,7 @@ impl JobProcessProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>(obj)?
         {
             return Ok(native);
         }
@@ -2726,7 +2798,7 @@ impl JobProcessProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>(obj)?
         {
             return Ok(native);
         }
@@ -2737,6 +2809,13 @@ impl JobProcessProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `JobProcess` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -2829,7 +2908,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(o.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("JobProcess._core_start_job", ": expected a native JobRun")))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(o.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("JobProcess._core_start_job", ": expected a native JobRun"))))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -3101,7 +3180,7 @@ impl JobCallProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobCall>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj)?
         {
             return Ok(native);
         }
@@ -3114,7 +3193,7 @@ impl JobCallProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobCall>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj)?
         {
             return Ok(native);
         }
@@ -3125,6 +3204,13 @@ impl JobCallProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobCall>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `JobCall` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -3197,7 +3283,7 @@ impl ServerHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::server_host::ServerHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::server_host::ServerHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::server_host::ServerHost>(obj)?
         {
             return Ok(native);
         }
@@ -3210,7 +3296,7 @@ impl ServerHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::server_host::ServerHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::worker::server_host::ServerHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::worker::server_host::ServerHost>(obj)?
         {
             return Ok(native);
         }
@@ -3221,6 +3307,13 @@ impl ServerHostProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::server_host::ServerHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::worker::server_host::ServerHost>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `ServerHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 

@@ -468,7 +468,7 @@ impl AmdSystem {
 
     /// `_run_stt`'s `stt.stream()`, off the loop; the stream comes back as `Msg::SttOpened`.
     fn open_tap(&self, stt: Arc<dyn Stt>) {
-        stt.prewarm();
+        stt.prewarm(&self.cx);
         let tx = self.tx.clone();
         let peer = self.peer.clone();
         let tasks = self.tasks.clone();

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import platform
 from typing import Any
@@ -140,8 +141,9 @@ def _has_image_content(chat_ctx: ChatContext) -> bool:
     return False
 
 
-class LLM(OpenAILLM):
-    """Sarvam LLM service — OpenAI-compatible chat completions.
+class LLM(llm.LLM):
+    """Sarvam LLM service — OpenAI-compatible chat completions, on the OpenAI plugin's client.
+    Its events come from this object.
 
     Supports four models:
 
@@ -226,7 +228,8 @@ class LLM(OpenAILLM):
                 effective_reasoning_effort = reasoning_effort
             # silently drop for unsupported models
 
-        super().__init__(
+        super().__init__()
+        self._client = OpenAILLM(
             model=validated_model,
             api_key=sarvam_api_key,
             base_url=resolved_base_url,
@@ -239,6 +242,9 @@ class LLM(OpenAILLM):
             extra_body=filtered_body if filtered_body else NOT_GIVEN,
         )
 
+        self._client.on("error", lambda ev: self.emit("error", ev))
+        self._client.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
+
         # Track the API key and version for runtime model switching
         self._sarvam_api_key = sarvam_api_key
         self._sarvam_api_version = _api_version(validated_model)
@@ -248,8 +254,18 @@ class LLM(OpenAILLM):
     # ------------------------------------------------------------------
 
     @property
+    def model(self) -> str:
+        return self._client.model
+
+    @property
     def provider(self) -> str:
         return "Sarvam"
+
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self._client.prewarm(loop=loop)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     def update_options(
         self,
@@ -263,7 +279,7 @@ class LLM(OpenAILLM):
         API version changes (``/v1`` to ``/v2``).
         """
         if is_given(extra_kwargs):
-            super().update_options(extra_kwargs=extra_kwargs)
+            self._client.update_options(extra_kwargs=extra_kwargs)
         if not is_given(model):
             return
 
@@ -271,14 +287,15 @@ class LLM(OpenAILLM):
         new_version = _api_version(new_model)
 
         if new_version == self._sarvam_api_version:
-            super().update_options(model=new_model)
+            self._client.update_options(model=new_model)
             return
         # Endpoint changed: the new URL, keeping the persistent kwargs
-        self._base_url = _resolve_base_url(new_model)
         self._sarvam_api_version = new_version
-        self._native.update_options(
+        self._client.update_options(
             model=new_model,
-            endpoint=ProviderEndpoint(base_url=self._base_url, api_key=self._sarvam_api_key),
+            endpoint=ProviderEndpoint(
+                base_url=_resolve_base_url(new_model), api_key=self._sarvam_api_key
+            ),
         )
 
     def chat(
@@ -317,7 +334,7 @@ class LLM(OpenAILLM):
         effective_tool_choice = (
             tool_choice
             if is_given(tool_choice)
-            else self._native.extra_kwargs.get("tool_choice", NOT_GIVEN)
+            else self._client._core_extra_kwargs.get("tool_choice", NOT_GIVEN)
         )
         effective_tools = tools or []
         if is_given(effective_tool_choice) and not effective_tools:
@@ -347,7 +364,7 @@ class LLM(OpenAILLM):
         if model not in _REASONING_EFFORT_MODELS:
             merged_extra.pop("reasoning_effort", None)
 
-        return super().chat(
+        return self._client.chat(
             chat_ctx=chat_ctx,
             tools=tools,
             conn_options=conn_options,

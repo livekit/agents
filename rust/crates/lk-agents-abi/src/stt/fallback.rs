@@ -21,19 +21,22 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
     type Events: StreamOutput<SpeechEvent> + 'static;
 
     /// `stt` in order; a recognize-only one streams over `vad` (`stt.StreamAdapter`).
-    #[host(new)]
+    /// `observer` hears the chain's availability and failures.
+    #[host(init)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python constructor's arguments")]
     fn new(
         env: &Self::Env,
+        #[host(label)] label: String,
+        observer: Arc<dyn ChainObserver>,
         stt: Vec<Arc<dyn Stt>>,
         #[host(kw, default = None)] vad: Option<Arc<dyn Vad>>,
         #[host(default = 10.0)] attempt_timeout: f64,
         #[host(default = 1)] max_retry_per_stt: u32,
         #[host(default = 5.0)] retry_interval: f64,
-        #[host(default = None)] on_availability: Option<Arc<dyn ChainObserver>>,
     ) -> Result<Self, Invalid>;
 
     /// Which entry most recently served, as a position in the host's list.
-    #[host(getter)]
+    #[host(getter, name = "_core_active_index")]
     fn active_index(&self) -> usize;
 
     /// The merged capabilities, not the primary's: a caller must not wait for interim results a
@@ -46,18 +49,20 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
     async fn aclose(&self);
 
     /// `_recognize_impl`: the batch path, over whichever entry answers.
-    #[host(await)]
+    #[host(await, name = "_core_native_recognize")]
     async fn recognize(
         &self,
+        cx: crate::telemetry::Cx,
         frames: Vec<AudioFrame>,
         #[host(default = None)] language: Option<LanguageCode>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
     ) -> Result<SpeechEvent, ProviderError>;
 
     /// Audio in, tee'd to the serving stream and every recovery probe; events out.
-    #[host(await)]
+    #[host(await, name = "_core_native_stream")]
     async fn stream(
         &self,
+        cx: crate::telemetry::Cx,
         #[host(kw, default = None)] language: Option<LanguageCode>,
         #[host(default = None)] start_time_offset: Option<f64>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
@@ -71,10 +76,11 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
     name = "FallbackAdapter",
     base = "stt.STT",
     native = FallbackStt,
-    legs(stream, recognize, _recognize_impl),
+    refuse(stream, recognize, _recognize_impl),
+    node = "session.stt_node",
     base_args(capabilities),
     availability(
-        observer = "on_availability",
+        observer = "observer",
         members = "stt",
         kind = "STT",
         event = "stt_availability_changed",
@@ -90,7 +96,7 @@ pub trait FallbackSttAdapter {
     ///     attempt_timeout: The timeout of one attempt.
     ///     max_retry_per_stt: Retries of each before moving to the next.
     ///     retry_interval: The wait between retries.
-    #[host(new, resolve(stt = ".._bindings.core_legs", vad = ".._bindings.core_leg"))]
+    #[host(new)]
     fn new(
         stt: Vec<Arc<dyn Stt>>,
         #[host(kw, default = None)] vad: Option<Arc<dyn Vad>>,

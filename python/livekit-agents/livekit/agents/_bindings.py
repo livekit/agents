@@ -80,18 +80,6 @@ def auth_grant_post_init(grant: AgentThreadGrant) -> None:
     object.__setattr__(grant, "thread_ids", list(grant.thread_ids))
 
 
-class _Provider(Protocol):
-    def _core_leg(self) -> Any: ...
-
-
-def core_leg(provider: _Provider | None) -> Any:
-    return None if provider is None else provider._core_leg()
-
-
-def core_legs(providers: Sequence[_Provider]) -> list[Any]:
-    return [provider._core_leg() for provider in providers]
-
-
 def silero_model() -> Any:
     # requested only when the build links no native Silero
     from livekit.local_inference import VAD
@@ -99,12 +87,38 @@ def silero_model() -> Any:
     return VAD()
 
 
-def overrides(provider: object, host: type, *names: str) -> bool:
-    """Whether ``provider``'s class overrides any of ``names`` defined by the class that mixes
-    in the generated ``host`` (the class just before it in the MRO)."""
-    mro = type(provider).__mro__
-    owner = mro[mro.index(host) - 1]
-    return any(getattr(type(provider), name) is not getattr(owner, name) for name in names)
+def refuse_overrides(cls: type, hooks: tuple[str, ...], node: str) -> None:
+    """Refuses, as ``cls`` is defined, an override of a hook its native class runs itself: the
+    core would never call it. The framework's own subclasses are exempt."""
+    if _framework(cls):
+        return
+    owner = next(base for base in cls.__mro__ if _framework(base))
+    for name in hooks:
+        if getattr(cls, name) is not getattr(owner, name):
+            raise TypeError(
+                f"{cls.__qualname__} overrides {name}, which {owner.__qualname__} runs natively;"
+                f" customize its output in {node} instead"
+            )
+
+
+def proxy_overrides(cls: type, hooks: tuple[str, ...]) -> None:
+    """Marks ``cls``, as it is defined, to run through the host wherever it reaches the core when
+    it overrides one of ``hooks``. The framework's own subclasses are exempt."""
+    if _framework(cls):
+        return
+    owner = next(base for base in cls.__mro__ if _framework(base))
+    if any(getattr(cls, name) is not getattr(owner, name) for name in hooks):
+        cls._core_proxied = True  # type: ignore[attr-defined]
+
+
+def _framework(cls: type) -> bool:
+    return cls.__module__ == "livekit.agents" or cls.__module__.startswith("livekit.agents.")
+
+
+class ProviderEvents(Protocol):
+    """What a native provider reports to the object it was built as."""
+
+    def _core_failed(self, error: Exception, recoverable: bool) -> None: ...
 
 
 class AttemptHost(Protocol):

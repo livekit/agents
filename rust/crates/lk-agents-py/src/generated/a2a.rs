@@ -401,7 +401,7 @@ impl AgentClient {
                 })
             })
             .transpose()?;
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx, cx)
@@ -423,7 +423,7 @@ impl AgentClient {
         thread_id: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::_core_subscribe(&this, task_id, thread_id, cx)
@@ -495,11 +495,13 @@ impl CoreA2ADoor {
         let storage = crate::py_objects::native::<dyn ::lk_agents_abi::storage::StorageNamespace>(
             storage.as_any(),
         )
-        .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "storage",
-                ": expected a native Storage"
-            ))
+        .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "storage",
+                    ": expected a native Storage"
+                ))
+            })
         })?;
         let config = crate::generated::records::a2a_door::door_config_from_py(config.as_any())?;
         let host = crate::generated::a2a::TurnHostProxy::from_host(host.as_any())?;
@@ -508,11 +510,13 @@ impl CoreA2ADoor {
                 crate::py_objects::native::<
                     dyn ::lk_agents_abi::worker::server_host::ServerConfiguration,
                 >(v.as_any())
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "server",
-                        ": expected a native ServerConfig"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "server",
+                            ": expected a native ServerConfig"
+                        ))
+                    })
                 })
             })
             .transpose()?;
@@ -543,10 +547,12 @@ impl CoreA2ADoor {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::a2a::door::TextEndpoint>(),
-        read: |obj| {
-            let this = obj.cast::<CoreA2ADoor>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::a2a::door::TextEndpoint> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreA2ADoor>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::a2a::door::TextEndpoint> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -669,7 +675,7 @@ impl CoreRemoteInteraction {
             .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
             .transpose()?;
         let context = crate::py_calls::entered();
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::run(&this, &env, host, arguments, structured, history, token, thread_id, conn_options, live, context, cx)
@@ -864,10 +870,12 @@ impl CoreHandlerTurn {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::a2a::turn::HandlerPort>(),
-        read: |obj| {
-            let this = obj.cast::<CoreHandlerTurn>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::a2a::turn::HandlerPort> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreHandlerTurn>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::a2a::turn::HandlerPort> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -998,7 +1006,7 @@ impl DelegationHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::a2a::remote::DelegationHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::remote::DelegationHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::remote::DelegationHost>(obj)?
         {
             return Ok(native);
         }
@@ -1011,7 +1019,7 @@ impl DelegationHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::a2a::remote::DelegationHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::remote::DelegationHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::remote::DelegationHost>(obj)?
         {
             return Ok(native);
         }
@@ -1022,6 +1030,13 @@ impl DelegationHostProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::a2a::remote::DelegationHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::a2a::remote::DelegationHost>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `DelegationHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -1180,7 +1195,7 @@ impl TurnHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::a2a::turn::TurnHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(obj)?
         {
             return Ok(native);
         }
@@ -1193,7 +1208,7 @@ impl TurnHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::a2a::turn::TurnHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(obj)?
         {
             return Ok(native);
         }
@@ -1204,6 +1219,11 @@ impl TurnHostProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::a2a::turn::TurnHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(obj)?.is_some() {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `TurnHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 

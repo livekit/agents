@@ -9,6 +9,7 @@ pub mod dns;
 pub mod env;
 pub mod export;
 pub mod http;
+pub mod job_identity;
 pub mod owned;
 pub mod room_service;
 pub mod signal;

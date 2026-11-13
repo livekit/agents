@@ -439,8 +439,11 @@ fn cloud_options() -> CloudOptions {
         api_secret: "secret".to_owned(),
         conn_options: ApiConnectOptions::default(),
         sample_rate: 16_000,
-        headers: Arc::new(|| {
-            [("X-LiveKit-Session-ID".to_owned(), "inference_abc".to_owned())].into_iter().collect()
+        cx: crate::testkit::job_cx(lk_agents_net::job_identity::JobIdentity {
+            headers: [("X-LiveKit-Session-ID".to_owned(), "inference_abc".to_owned())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
         }),
     }
 }

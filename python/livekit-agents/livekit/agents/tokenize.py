@@ -3,7 +3,7 @@ from __future__ import annotations
 import functools
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
-from typing import overload
+from typing import TYPE_CHECKING, overload
 
 from . import _core, _generated
 from ._generated.tokenizer import TokenData, TokenSpan
@@ -212,26 +212,25 @@ class _SentenceTokenizerBase:
     """What `SentenceTokenizer` streams with: its own native stream, or the `tokenize` of a
     subclass that overrides it."""
 
-    _native: _core.SpeechSentenceTokenizer
+    if TYPE_CHECKING:
+        # `SentenceTokenizer` is its native tokenizer (`_core.SpeechSentenceTokenizer`)
+        @property
+        def _core_max_token_len(self) -> int | None: ...
 
-    def _core_leg(self) -> object:
-        """What a TTS's stage splits with: the built-in natively, with its settings; a subclass
-        deciding its own sentences through the host."""
-        custom = _overrides_tokenize(self) or type(self).stream is not _SentenceTokenizerBase.stream
-        return self if custom else self._native
+        def _core_stream(self) -> _core.SpeechSentenceStream: ...
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         raise NotImplementedError
 
     def stream(self, *, language: str | None = None) -> SentenceStream:
         if not _overrides_tokenize(self):
-            return _SpeechSentenceStream(self._native._core_stream())
+            return _SpeechSentenceStream(self._core_stream())
         # each of the subclass's sentences goes out once the next one starts
         return BufferedSentenceStream(
             tokenizer=functools.partial(self.tokenize, language=language),
             min_token_len=1,
             min_ctx_len=1,
-            max_token_len=self._native._core_max_token_len,
+            max_token_len=self._core_max_token_len,
         )
 
 
@@ -243,14 +242,16 @@ class _WordTokenizerBase:
     """What `WordTokenizer` streams with: its own native stream, or the `tokenize` of a
     subclass that overrides it."""
 
-    _native: _core.SpeechWordTokenizer
+    if TYPE_CHECKING:
+        # `WordTokenizer` is its native tokenizer (`_core.SpeechWordTokenizer`)
+        def _core_stream(self) -> _core.SpeechWordStream: ...
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         raise NotImplementedError
 
     def stream(self, *, language: str | None = None) -> WordStream:
         if not _overrides_tokenize(self):
-            return _SpeechWordStream(self._native._core_stream())
+            return _SpeechWordStream(self._core_stream())
         # each of the subclass's words goes out once the next one starts
         return BufferedWordStream(
             tokenizer=functools.partial(self.tokenize, language=language),

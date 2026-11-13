@@ -64,18 +64,19 @@ pub trait InferenceCredentials {
         #[host(default = None)] api_secret: Option<String>,
     ) -> Result<GatewayCredentials, Invalid>;
 
-    /// An inference request's identification headers, in order: `user_agent`, the priority of a
-    /// nonempty `inference_class`, and in a job (`job_headers` given) its nonempty room, job and
-    /// agent ids, `LIVEKIT_WORKER_TOKEN` when set, the job's `job_headers` (overriding any of
-    /// these) and a fresh session id.
+    /// Names the host SDK on every inference request this process makes (`User-Agent`); the
+    /// first name given holds.
+    #[host(function)]
+    fn identify_host(user_agent: String);
+
+    /// The identification headers an inference request made here carries, in order: this
+    /// process's `User-Agent`, the priority of a nonempty `inference_class`, and in a job its
+    /// nonempty room, job and agent ids, `LIVEKIT_WORKER_TOKEN` when set and the job's own
+    /// headers (overriding any of these).
     #[host(function)]
     fn inference_identity_headers(
-        user_agent: String,
+        cx: crate::telemetry::Cx,
         #[host(default = None)] inference_class: Option<String>,
-        #[host(default = None)] room_sid: Option<String>,
-        #[host(default = None)] job_id: Option<String>,
-        #[host(default = None)] agent_sid: Option<String>,
-        #[host(default = None)] job_headers: Option<crate::Headers>,
     ) -> crate::Headers;
 }
 /// The gateway's model tables, request headers and local model registry the host reads: pure

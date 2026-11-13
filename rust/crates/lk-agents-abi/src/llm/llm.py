@@ -47,10 +47,6 @@ class LLM(
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._prewarm_task: asyncio.Task[None] | None = None
 
-    def _core_leg(self) -> object:
-        """The Python provider implementation used by the native runtime's declared proxy."""
-        return self
-
     @property
     def label(self) -> str:
         """The name logs and metrics give this instance: its class path."""

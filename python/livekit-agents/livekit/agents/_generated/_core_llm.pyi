@@ -9,7 +9,6 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
 from typing import Any, Self
 
-from livekit.agents._bindings import FallbackListener
 from livekit.agents.llm import LLM, AudioGate, Toolset
 from livekit.agents.llm.duplex import DuplexModel
 from livekit.agents.llm.mcp import MCPToolset
@@ -131,13 +130,13 @@ class DuplexInput:
 
 class DuplexRealtimeModel:
     """`DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it."""
-    def __new__(
-        cls,
+    def __init__(
+        self,
         duplex_model: DuplexModel,
         *,
         gate: Callable[[], AudioGate] | None = None,
         audio_timeout: float = 0.8,
-    ) -> Self:
+    ) -> None:
         """Each session's gate is `gate`'s, else the model's own, else the adaptive gate.
         `audio_timeout`: how long to wait for the next frame before the output counts as finished.
         """
@@ -147,21 +146,21 @@ class DuplexRealtimeModel:
 
 class FallbackLlm:
     """The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks."""
-    def __new__(
-        cls,
+    def __init__(
+        self,
         llm: Sequence[LLM[Any]],
         *,
         attempt_timeout: float = 5.0,
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
         sticky: bool = False,
-        on_availability: FallbackListener | None = None,
-    ) -> Self:
-        """`llm` in order."""
+    ) -> None:
+        """`llm` in order; `observer` hears the chain's availability and failures."""
     @property
-    def active_index(self) -> int: ...
+    def _core_active_index(self) -> int:
+        """Which entry most recently served, as a position in the host's list."""
     async def aclose(self) -> None: ...
-    async def chat(
+    async def _core_native_chat(
         self,
         *,
         chat_ctx: HostChatContext,
@@ -181,18 +180,20 @@ class FallbackLlmChunks:
 
 class FallbackTts:
     """`tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
-    def __new__(
-        cls,
+    def __init__(
+        self,
         tts: Sequence[TTS[Any]],
         *,
         max_retry_per_tts: int = 2,
         attempt_timeout: float | None = None,
         sample_rate: int | None = None,
-        on_availability: FallbackListener | None = None,
-    ) -> Self:
-        """`tts` in order; `sample_rate` defaults to the highest of theirs, the others resampled."""
+    ) -> None:
+        """`tts` in order; `sample_rate` defaults to the highest of theirs, the others resampled.
+        `observer` hears the chain's availability and failures.
+        """
     @property
-    def active_index(self) -> int: ...
+    def _core_active_index(self) -> int:
+        """Which entry most recently served, as a position in the host's list."""
     @property
     def capabilities(self) -> TTSCapabilities: ...
     @property
@@ -205,28 +206,29 @@ class RealtimeFallbackModel:
     """`llm.RealtimeModelFallbackAdapter`'s engine: the generated facade holds native resources; host
     provider objects use the shared bridge.
     """
-    def __new__(
-        cls,
+    def __init__(
+        self,
         models: Sequence[RealtimeLeg],
         *,
         cooldown: float = 10.0,
         attempt_timeout: float | None = None,
         regenerate_on_swap: bool = True,
-        on_availability: FallbackListener | None = None,
-    ) -> Self: ...
+    ) -> None:
+        """`models` in order; `observer` hears the chain's availability and failures."""
     @property
-    def active_index(self) -> int: ...
+    def _core_active_index(self) -> int:
+        """Which entry most recently served, as a position in the host's list."""
     @property
     def capabilities(self) -> RealtimeCapabilities:
         """The members' capabilities, merged: the pipeline-shaping ones agree, the others are ANDed."""
-    async def restart(self, *, switch_model: bool = False) -> None: ...
+    async def _core_restart(self, *, switch_model: bool = False) -> None: ...
 
 class InferenceLlm:
-    """The gateway LLM behind `inference.LLM`. Its options are shared by every view
-    (`identified`); each view's requests carry its own job's identification.
+    """The gateway LLM behind `inference.LLM`. One instance serves every job it is handed to; each
+    request carries the identity of the job it runs for.
     """
-    def __new__(
-        cls,
+    def __init__(
+        self,
         model: str,
         *,
         provider: str | None = None,
@@ -236,30 +238,21 @@ class InferenceLlm:
         inference_class: str | None = None,
         extra_kwargs: dict[str, object] | None = None,
         endpoint: ProviderEndpoint | None = None,
-    ) -> Self:
+    ) -> None:
         """A client of `model`. Starts nothing. On the LiveKit Inference gateway by default, its
         URL and key pair resolved from the given values, the environment and the server's
         settings; with `endpoint`, an OpenAI-compatible provider called with its own key and no
         LiveKit header.
         """
-    def identified(
-        self,
-        headers: list[tuple[str, str]],
-        reporter: LLM[Any] | None = None,
-    ) -> InferenceLlm:
-        """This client as a session of the job `headers` (`get_inference_headers()`) identifies
-        holds it: the same options, its requests carrying that job. `reporter` is the host
-        `llm.LLM` whose `error` events report the attempts this view retries.
-        """
     @property
     def model(self) -> str: ...
     @property
-    def extra_kwargs(self) -> dict[str, object]:
+    def _core_extra_kwargs(self) -> dict[str, object]:
         """The persistent request options, a copy."""
     @property
-    def inference_class(self) -> str | None:
+    def _core_inference_class(self) -> str | None:
         """The scheduling class of its requests."""
-    def update_options(
+    def _core_update_options(
         self,
         *,
         model: str | None = None,
@@ -269,7 +262,7 @@ class InferenceLlm:
         """Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs, and
         ``endpoint`` the provider endpoint.
         """
-    def chat(
+    def _core_native_chat(
         self,
         *,
         chat_ctx: HostChatContext,
@@ -281,8 +274,8 @@ class InferenceLlm:
         inference_class: str | None = None,
         extra_kwargs: dict[str, object] | None = None,
     ) -> InferenceLlmChunks:
-        """Opens a completion of `chat_ctx`; no I/O until the first pull. Its requests carry this
-        view's job identification and `inference_class`, else the client's class.
+        """Opens a completion of `chat_ctx`; no I/O until the first pull. Its requests carry the
+        identity of the job `cx` runs for and `inference_class`, else the client's class.
         """
 
 class InferenceLlmChunks:
@@ -441,8 +434,8 @@ class HostRealtimeModel:
     def __new__(cls, model: RealtimeModel) -> Self: ...
 
 class OpenAIRealtimeModel:
-    def __new__(
-        cls,
+    def __init__(
+        self,
         *,
         model: str | None = None,
         voice: Voice | None = None,
@@ -466,12 +459,14 @@ class OpenAIRealtimeModel:
         dialect: RealtimeProvider | None = None,
         label: str | None = None,
         gateway: InferenceGateway | None = None,
-    ) -> Self:
+    ) -> None:
         """Not given, `model`, `voice` and the session options are the dialect's defaults. The key
         and base URL fall back to the dialect's environment: for Azure (`azure_deployment` or
         `entra_token`), `AZURE_OPENAI_API_KEY` and `{azure_endpoint}/openai`, `azure_endpoint`
         else `AZURE_OPENAI_ENDPOINT`; for OpenAI, `OPENAI_API_KEY` and `OPENAI_BASE_URL`, else
-        OpenAI's. `dialect`, `label` and `gateway` are the provider class's own.
+        OpenAI's. `dialect`, `label` and `gateway` are the provider class's own. One instance
+        serves every job it is handed to; a LiveKit Inference connection carries the identity of
+        the job it runs for.
         """
     @property
     def provider(self) -> str: ...
@@ -481,7 +476,7 @@ class OpenAIRealtimeModel:
     def label(self) -> str: ...
     @property
     def capabilities(self) -> RealtimeCapabilities: ...
-    def update_options(
+    def _core_update_options(
         self,
         *,
         voice: NotGivenOr[Voice] = ...,
@@ -496,7 +491,6 @@ class OpenAIRealtimeModel:
         reasoning: NotGivenOr[Reasoning | None] = ...,
     ) -> None:
         """The given options; every live session sends what changed."""
-    def bind_identification(self, headers: list[tuple[str, str]]) -> None: ...
 
 def chat_ctx_to_dict(
     items: Sequence[ChatItem],

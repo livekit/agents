@@ -711,8 +711,8 @@ impl Llm for Node<dyn Llm> {
         self.below.id()
     }
 
-    fn prewarm(&self) {
-        self.below.prewarm();
+    fn prewarm(&self, cx: &telemetry::Cx) {
+        self.below.prewarm(cx);
     }
 
     fn failed(&self, error: ProviderError, recoverable: bool) {
@@ -749,8 +749,8 @@ impl Tts for Node<dyn Tts> {
         self.below.id()
     }
 
-    fn prewarm(&self) {
-        self.below.prewarm();
+    fn prewarm(&self, cx: &telemetry::Cx) {
+        self.below.prewarm(cx);
     }
 
     fn failed(&self, error: ProviderError, recoverable: bool) {
@@ -847,8 +847,8 @@ impl Stt for Node<dyn Stt> {
         self.below.id()
     }
 
-    fn prewarm(&self) {
-        self.below.prewarm();
+    fn prewarm(&self, cx: &telemetry::Cx) {
+        self.below.prewarm(cx);
     }
 
     fn failed(&self, error: ProviderError, recoverable: bool) {

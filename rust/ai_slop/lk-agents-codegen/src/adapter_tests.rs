@@ -838,3 +838,84 @@ fn annotated_aliases_keep_their_boundary_contract_instead_of_expanding_private_s
     };
     assert_eq!(record.rust, "::lk_agents_abi::llm::class::Payload");
 }
+
+// Catches: an `init` class built in `__new__` (a host subclass could not extend it), a second
+// `__init__` rebuilding the engine, a method or the native registration reaching an engine that was
+// never built, the label or the events crossing as arguments, or the events held strongly.
+#[test]
+fn an_init_class_is_built_once_by_init_and_its_events_are_a_weak_proxy() {
+    let declarations = read(
+        r#"
+        #[crate::host(proxy(host = "livekit.agents._bindings.ProviderEvents", weak))]
+        pub trait Events: Send + Sync {
+            #[host(notify, name = "_core_failed")]
+            fn failed(&self, message: String);
+        }
+        #[crate::host(proxy(host = "livekit.agents.llm.LLM"))]
+        pub trait Provider: Send + Sync {
+            #[host(read_once, name = "_core_label")]
+            fn label(&self) -> String;
+        }
+        #[crate::host(class(name = "Engine", native = Provider))]
+        pub trait Engine: Send + Sync + Sized + 'static {
+            #[host(init)]
+            fn new(#[host(label)] label: String, events: std::sync::Arc<dyn Events>, model: String) -> Self;
+            #[host(getter)]
+            fn model(&self) -> String;
+        }
+    "#,
+    )
+    .unwrap();
+    assert!(declarations.classes[0].init);
+    let out = crate::adapter::emit(&declarations).unwrap();
+    let llm = &out.iter().find(|o| o.path == "llm.rs").unwrap().text;
+    for expected in [
+        "#[pyclass(frozen, weakref, subclass, name = \"Engine\"",
+        "pub struct Engine(pub(crate) ::std::sync::OnceLock<::std::sync::Arc<EngineImpl>>);",
+        "#[pyo3(signature = (*_args, **_kwargs))]",
+        "#[pyo3(signature = (model))]",
+        "fn __init__(slf: &Bound<'_, Self>, py: Python<'_>, model: ::std::string::String) -> PyResult<()>",
+        "let label = crate::py_objects::class_label(slf.as_any())?;",
+        "let events = crate::generated::llm::EventsProxy::weak(slf.as_any())?;",
+        "Engine.__init__ runs once",
+        "let engine = self.engine()?;",
+        "crate::py_objects::built(obj, engine, \"Engine\")",
+        "host: ::std::sync::Arc<Py<::pyo3::types::PyWeakrefReference>>,",
+        "self.host.bind(py).upgrade()",
+    ] {
+        assert!(llm.contains(expected), "missing {expected}:\n{llm}");
+    }
+    assert!(
+        !llm.contains("EventsProxy {\n    /// A registered native"),
+        "a weak proxy is never taken"
+    );
+    let stubs = crate::class_stub::emit(&declarations).unwrap();
+    let text = stubs.iter().map(|stub| stub.out.text.as_str()).collect::<String>();
+    assert!(text.contains("def __init__(self, model: str) -> None"), "{text}");
+}
+
+// Catches: a native object handed over to be owned behind a proxy that calls hooks it never runs.
+#[test]
+fn an_owned_proxy_refuses_a_native_object() {
+    let declarations = read(
+        r#"
+        #[crate::host(proxy(host = "livekit.agents.io.Writer"))]
+        pub trait Writer: Send + Sync {
+            #[host(notify, name = "write")]
+            fn write(&self, text: String);
+        }
+        #[crate::host(class(name = "Sink"))]
+        pub trait Sink: Sized {
+            #[host(new)]
+            fn new(writer: Box<dyn Writer>) -> Self;
+        }
+    "#,
+    )
+    .unwrap();
+    let text = crate::proxy::proxy(&declarations.proxies[0]).unwrap();
+    let owned = &text[text.find("pub fn owned(").unwrap()..];
+    assert!(
+        owned.contains("if crate::py_objects::native::<dyn ::lk_agents_abi::llm::class::Writer>(obj)?.is_some()"),
+        "{owned}"
+    );
+}

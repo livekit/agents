@@ -129,6 +129,11 @@ impl JobExecution for JobRun {
 }
 
 impl JobRun {
+    /// The job it runs, once its trace started.
+    pub fn job(&self) -> Option<telemetry::JobKey> {
+        self.inner.job.get().map(|job| job.key.clone())
+    }
+
     /// The job ends with `reason`; the first reason given is the one kept.
     pub(crate) fn end(&self, reason: String, cause: ShutdownCause) {
         self.inner.end(reason, cause);
@@ -226,6 +231,9 @@ impl Inner {
             telemetry::end(span, error);
         } else {
             telemetry::end(span, ());
+        }
+        if let Some(job) = self.job.get() {
+            lk_agents_net::job_identity::close(&job.key);
         }
         if let (Some(exporter), Some(job)) = (telemetry::exporter(), self.job.get()) {
             exporter.close_job(&job.key, secs(telemetry::SHUTDOWN_TIMEOUT_SECONDS)).await;

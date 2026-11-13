@@ -39,13 +39,14 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     /// `model_factory` builds the host's model when the build links no native one;
     /// `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`. Only the
     /// `"silero"` model exists.
-    #[host(new)]
+    #[host(init)]
     #[allow(
         clippy::too_many_arguments,
         reason = "mirrors the Python constructor's keyword arguments"
     )]
     fn new(
         env: &Self::Env,
+        #[host(label)] label: String,
         model_factory: Arc<dyn VadModels>,
         #[host(kw, default = "silero")] model: crate::inference::models::VadModelName,
         #[host(default = 0.05)] min_speech_duration: f64,
@@ -63,7 +64,7 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     fn capabilities(&self) -> crate::VadCapabilities;
 
     /// The given options, applied by each running stream before its next frame.
-    #[host(call)]
+    #[host(call, name = "_core_update_options")]
     fn update_options(
         &self,
         #[host(kw)] min_speech_duration: Maybe<f64>,
@@ -78,7 +79,7 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     fn min_silence_duration(&self) -> f64;
 
     /// One detection; each event carries the audio it refers to.
-    #[host(call)]
+    #[host(call, name = "_core_native_stream")]
     fn stream(&self) -> Result<crate::DuplexStream<Self::Audio, Self::Events>, ProviderError>;
 }
 
@@ -90,7 +91,8 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     name = "VAD",
     base = "vad.VAD",
     native = InferenceVad,
-    legs(stream),
+    refuse(stream),
+    node = "session.stt_node",
     base_args(capabilities),
     host_args(model_factory = ".._bindings.silero_model")
 ))]
@@ -124,6 +126,7 @@ pub trait InferenceVadFacade {
     fn min_silence_duration(&self) -> f64;
 
     /// Update the options; running streams apply them before their next frame.
+    #[host(native = _core_update_options)]
     fn update_options(
         &self,
         #[host(kw)] min_speech_duration: Maybe<f64>,

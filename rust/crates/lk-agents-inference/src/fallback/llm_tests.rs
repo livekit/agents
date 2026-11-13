@@ -76,24 +76,26 @@ async fn declared_fallback_keeps_native_dispatch_and_cancels_its_open_stream() {
     use lk_agents_abi::llm::fallback::FallbackLlm as DeclaredFallback;
     let empty = <FallbackLlm as DeclaredFallback>::new(
         &ProcessEnv::current_runtime(),
+        "llm.FallbackAdapter".into(),
+        Arc::new(crate::fallback::IgnoreEvents),
         vec![],
         5.0,
         0,
         0.5,
         false,
-        None,
     );
     assert!(empty.is_err());
 
     let closed = Arc::new(AtomicBool::new(false));
     let fallback = <FallbackLlm as DeclaredFallback>::new(
         &ProcessEnv::current_runtime(),
+        "llm.FallbackAdapter".into(),
+        Arc::new(crate::fallback::IgnoreEvents),
         vec![Arc::new(Provider(closed.clone()))],
         5.0,
         0,
         0.5,
         false,
-        None,
     )
     .expect("native provider accepted");
     assert_eq!(fallback.model(), "native-model");

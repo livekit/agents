@@ -11,15 +11,20 @@ pub trait TtsStream: Send + Sync + Sized + 'static {
 
     /// A synthesis by `tts` of `text`, or, without it, of the text pushed. Its text goes through
     /// the TTS's stage (split, paced, lowered to its syntax) and its attempts are retried within
-    /// `conn_options`; the first opens when its audio is first read.
+    /// `conn_options`; the first opens when its audio is first read. Its requests carry the
+    /// identity of the job `cx` runs for.
     #[host(new)]
     fn new(
         env: &Self::Env,
+        cx: crate::telemetry::Cx,
         #[host(kw)] tts: std::sync::Arc<dyn crate::Tts>,
         #[host(kw, default = None)] text: Option<String>,
         #[host(kw, default = None)] conn_options: Option<crate::ApiConnectOptions>,
     ) -> Self;
 
+    /// Whether its TTS runs natively; a host plugin's own attempts report their metrics.
+    #[host(getter)]
+    fn native(&self) -> bool;
     #[host(call)]
     fn push_text(&self, text: String) -> Result<(), ProviderError>;
     #[host(call)]

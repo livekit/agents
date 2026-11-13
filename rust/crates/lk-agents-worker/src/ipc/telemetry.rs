@@ -61,6 +61,22 @@ fn simulation(job: &livekit_protocol::Job) -> Option<Simulation> {
     Some(Simulation { run_id: Some(run_id), job_id: field("jobId", "job_id") })
 }
 
+/// The headers a job puts on every inference request: a text simulation is batch load, at low
+/// priority so it never competes with live traffic; an audio one keeps production's latency.
+fn inference_headers(job: &livekit_protocol::Job) -> lk_agents_abi::Headers {
+    let mut headers = lk_agents_abi::Headers::new();
+    let audio = job
+        .attributes
+        .get(ATTRIBUTE_SIMULATOR_DISPATCH)
+        .and_then(|dispatch| serde_json::from_str::<serde_json::Value>(dispatch).ok())
+        .and_then(|dispatch| dispatch.get("mode").and_then(|m| m.as_str()).map(str::to_owned))
+        .is_some_and(|mode| mode == "SIMULATION_MODE_AUDIO");
+    if simulation(job).is_some() && !audio {
+        headers.insert(lk_agents_abi::inference::HEADER_INFERENCE_PRIORITY, "low");
+    }
+    headers
+}
+
 /// A protocol string field: empty is unset.
 fn known(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
@@ -100,6 +116,16 @@ pub(crate) fn start_job(
             },
         );
     }
+    lk_agents_net::job_identity::open(
+        key.clone(),
+        lk_agents_net::job_identity::JobIdentity {
+            room_sid: known(&room.sid),
+            job_id: known(&job.id),
+            agent_sid: None,
+            worker_token: std::env::var("LIVEKIT_WORKER_TOKEN").ok(),
+            headers: inference_headers(job),
+        },
+    );
     let parent = start.traceparent.as_deref().and_then(SpanContext::parse_traceparent);
     let cx = tracer.root().continuing(parent).with_job(Some(key.clone())).with_conversation(thread);
     let started = tracer.now_nanos() as f64 / 1e9;
@@ -166,6 +192,33 @@ mod tests {
         assert_eq!(traced.span.cx().conversation(), Some("AT_1"));
         let traced = start_job(&tracer, None, &start, None);
         assert_eq!(traced.span.cx().conversation(), None);
+    }
+
+    // Catches: a text simulation's requests at normal priority (they compete with live calls), or
+    // an audio one's, or an ordinary job's, lowered.
+    #[test]
+    fn only_a_text_simulation_asks_for_low_priority() {
+        let mut job = livekit_protocol::Job::default();
+        assert!(inference_headers(&job).iter().next().is_none());
+        for (mode, low) in [("SIMULATION_MODE_AUDIO", false), ("SIMULATION_MODE_TEXT", true)] {
+            job.attributes.insert(
+                ATTRIBUTE_SIMULATOR_DISPATCH.to_owned(),
+                format!(r#"{{"simulationRunId":"SR_1","mode":"{mode}"}}"#),
+            );
+            let priority = inference_headers(&job)
+                .get(lk_agents_abi::inference::HEADER_INFERENCE_PRIORITY)
+                .map(str::to_owned);
+            assert_eq!(priority.as_deref(), low.then_some("low"), "{mode}");
+        }
+        job.attributes.insert(
+            ATTRIBUTE_SIMULATOR_DISPATCH.to_owned(),
+            r#"{"simulationRunId":"SR_1"}"#.to_owned(),
+        );
+        assert!(
+            inference_headers(&job)
+                .get(lk_agents_abi::inference::HEADER_INFERENCE_PRIORITY)
+                .is_some()
+        );
     }
 
     // Catches: an unknown stage counted as an instant.

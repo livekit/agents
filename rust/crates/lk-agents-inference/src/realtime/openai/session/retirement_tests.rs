@@ -70,6 +70,7 @@ fn pump() -> (Pump, Arc<Shared>, queue::EventReceiver) {
         events,
         images: Arc::new(NoImages),
         spawner: Arc::new(TokioSpawner::current()),
+        cx: lk_agents_abi::telemetry::Cx::NONE,
     };
     (pump, shared, receiver)
 }

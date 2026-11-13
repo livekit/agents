@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 
-from livekit.agents import AgentServer, JobContext, cli, inference, utils
+from livekit.agents import AgentServer, JobContext, _core, cli, inference, utils
 
 POD_DIR = Path(os.environ.get("POD_DIR", "."))
 
@@ -29,7 +29,8 @@ async def entrypoint(ctx: JobContext) -> None:
     seen = {
         "pid": os.getpid(),
         "env": {name: os.environ.get(name) for name in os.environ if name.startswith("LIVEKIT_")},
-        "inference_headers": inference.get_inference_headers(),
+        # what the job's inference requests carry, as the core reads its identity
+        "inference_headers": dict(_core.inference_identity_headers()),
         "inference_url": inference.get_default_inference_url(),
         "hosted": utils.is_hosted(),
     }

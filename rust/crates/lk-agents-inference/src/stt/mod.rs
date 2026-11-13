@@ -13,7 +13,7 @@ mod transcript;
 pub mod wire;
 
 use crate::abi::{AudioFrame, StreamInput, StreamOutput, Stt, SttCapabilities};
-use crate::headers::{BoundIdentity, Headers, gateway_headers};
+use crate::headers::{Headers, gateway_headers};
 use crate::telemetry;
 use lk_agents_core::request::{Policy, Request, Step};
 use lk_agents_net::task::TaskSet;
@@ -30,7 +30,7 @@ use lk_agents_abi::errors::{ApiError, Invalid, ProviderError};
 use lk_agents_abi::inference::fallback::{SttFallbackEntry, SttFallbacks};
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::tokenize::language::LanguageCode;
-use lk_agents_abi::types::provider::NativeLabel;
+use lk_agents_abi::types::provider::{NativeLabel, ProviderEvents};
 use lk_agents_abi::vad::inference::VadModels;
 use lk_agents_abi::{ApiConnectOptions, Clock, SpeechEvent};
 use lk_agents_media::AudioByteStream;
@@ -94,26 +94,17 @@ impl Default for SttOptions {
     }
 }
 
-/// One gateway STT client as one session holds it: the shared client, and the identity of the
-/// job that session serves (two sessions sharing an instance bill each its own job). `E` is the
-/// hosting process a host-constructed client takes its executor and clock from.
+/// One gateway STT client. Every job it is handed to shares it; each connection carries the
+/// identity of the job its stream was opened for, so two jobs sharing an instance bill each its
+/// own.
+#[derive(Clone)]
 pub struct GatewayStt {
     shared: Arc<SttClient>,
-    identity: Arc<BoundIdentity>,
     conn_options: Option<ApiConnectOptions>,
-    /// The host provider this view serves: its `error` event is each failure the core reports.
-    reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
-}
-
-impl Clone for GatewayStt {
-    fn clone(&self) -> Self {
-        GatewayStt {
-            shared: Arc::clone(&self.shared),
-            identity: Arc::clone(&self.identity),
-            conn_options: self.conn_options,
-            reporter: self.reporter.clone(),
-        }
-    }
+    /// The name logs and metrics give it: its host class's when its host built it.
+    label: String,
+    /// The host object it was built as, which hears each failure the core reports.
+    events: Option<Arc<dyn ProviderEvents>>,
 }
 
 /// What every session's view of one client shares: its options, connections and open streams.
@@ -164,35 +155,10 @@ impl GatewayStt {
         };
         GatewayStt {
             shared: Arc::new(shared),
-            identity: Arc::default(),
             conn_options: None,
-            reporter: None,
+            label: NativeLabel::InferenceStt.as_str().into(),
+            events: None,
         }
-    }
-
-    /// The same client as a session serving another job holds it: its connections carry that
-    /// job's identification.
-    /// `reporter` is the host provider whose `error` events this view's failures are.
-    pub fn identified(
-        &self,
-        headers: Headers,
-        reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
-    ) -> Self {
-        let view = GatewayStt {
-            shared: Arc::clone(&self.shared),
-            identity: Arc::default(),
-            conn_options: self.conn_options,
-            reporter,
-        };
-        view.identity.bind(headers);
-        view
-    }
-
-    /// `get_inference_headers()`: the job's `X-LiveKit-*` identity; each connection gets a fresh
-    /// session id.
-    pub fn with_identification(self, headers: Headers) -> Self {
-        self.identity.bind(headers);
-        self
     }
 
     /// Before the client is shared.
@@ -344,9 +310,11 @@ impl GatewayStt {
         opts
     }
 
-    /// The unboxed pair, for callers that need the live stream's `update_options`.
+    /// The unboxed pair, for callers that need the live stream's `update_options`; its
+    /// connections carry the identity of the job `cx` runs for.
     pub fn stream_native(
         &self,
+        cx: &telemetry::Cx,
         language: Option<&str>,
         start_time_offset: f64,
     ) -> Result<lk_agents_abi::DuplexStream<RecognitionInput, RecognitionOutput>, ProviderError>
@@ -398,7 +366,7 @@ impl GatewayStt {
 
         let executor = SttStreamExecutor {
             ws: self.shared.ws.clone(),
-            identification: self.identity.for_connection(),
+            cx: cx.clone(),
             clock: self.shared.clock.clone(),
             keyterms,
             vad: self.shared.vad.lock().clone(),
@@ -440,6 +408,8 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
 
     fn new(
         env: &ProcessEnv,
+        label: String,
+        events: Arc<dyn ProviderEvents>,
         vad_models: Arc<dyn VadModels>,
         model: Option<String>,
         language: Option<String>,
@@ -503,7 +473,7 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
         });
         let _ = stt.shared.default_vad.set(default_vad);
         stt.resolve_vad(vad);
-        Ok(stt)
+        Ok(GatewayStt { label, events: Some(events), ..stt })
     }
 
     fn model(&self) -> String {
@@ -516,10 +486,6 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
 
     fn conn_options(&self) -> ApiConnectOptions {
         self.shared.opts.lock().conn_options
-    }
-
-    fn identified(&self, headers: Headers, reporter: Option<Arc<dyn Stt>>) -> Self {
-        GatewayStt::identified(self, headers, reporter)
     }
 
     fn update_options(
@@ -537,13 +503,17 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
 
     fn stream(
         &self,
+        cx: telemetry::Cx,
         language: Option<String>,
         start_time_offset: Option<f64>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<lk_agents_abi::DuplexStream<RecognitionInput, RecognitionOutput>, ProviderError>
     {
-        self.configured(conn_options)
-            .stream_native(language.as_deref(), start_time_offset.unwrap_or(0.0))
+        self.configured(conn_options).stream_native(
+            &cx,
+            language.as_deref(),
+            start_time_offset.unwrap_or(0.0),
+        )
     }
 }
 
@@ -556,15 +526,15 @@ impl Stt for GatewayStt {
         self.conn_options
     }
 
-    /// The provider's `error` event, on the host provider this view serves.
+    /// The provider's `error` event, on the host object it was built as.
     fn failed(&self, error: ProviderError, recoverable: bool) {
-        if let Some(reporter) = &self.reporter {
-            reporter.failed(error, recoverable);
+        if let Some(events) = &self.events {
+            events.failed(error, recoverable);
         }
     }
 
     fn label(&self) -> String {
-        NativeLabel::InferenceStt.as_str().into()
+        self.label.clone()
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
@@ -651,7 +621,8 @@ impl Stt for GatewayStt {
             let offset = start_time_offset.unwrap_or(0.0);
             let options = self.conn_options.unwrap_or_else(|| self.shared.opts.lock().conn_options);
             let provider = self.configured(Some(ApiConnectOptions { max_retry: 0, ..options }));
-            provider.stream_native(language.as_ref().map(|l| l.as_str()), offset).map(|stream| {
+            let language = language.as_ref().map(|l| l.as_str());
+            provider.stream_native(&cx, language, offset).map(|stream| {
                 let (sink, source) = stream.split();
                 sink.audio.observe(cx);
                 Some(lk_agents_abi::DuplexStream::new(

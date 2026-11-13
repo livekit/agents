@@ -9,7 +9,7 @@ from .. import _bindings, _core
 from ..tokenize import _SentenceTokenizerBase, _WordTokenizerBase
 
 
-class WordTokenizer(_WordTokenizerBase):
+class WordTokenizer(_core.SpeechWordTokenizer, _WordTokenizerBase):
     """Splits text into words: at whitespace, with each Chinese or Japanese character a word of its
     own. Thai, Lao, Khmer and Burmese split only at whitespace.
 
@@ -23,18 +23,23 @@ class WordTokenizer(_WordTokenizerBase):
         retain_format: keep the whitespace before each word, so the words join back to the text.
     """
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.proxy_overrides(cls, ("tokenize", "stream"))
+
     def __init__(self, *, ignore_punctuation: bool = True, retain_format: bool = False) -> None:
-        super().__init__()
-        self._native = _core.SpeechWordTokenizer(
+        _core.SpeechWordTokenizer.__init__(
+            self,
             ignore_punctuation=ignore_punctuation,
             retain_format=retain_format,
         )
+        _WordTokenizerBase.__init__(self)
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        return self._native.tokenize(text, language=language)
+        return _core.SpeechWordTokenizer.tokenize(self, text, language=language)
 
 
-class SentenceTokenizer(_SentenceTokenizerBase):
+class SentenceTokenizer(_core.SpeechSentenceTokenizer, _SentenceTokenizerBase):
     """Splits text into sentences for speech, batched so short ones are not spoken alone.
 
     The stream emits a sentence as soon as no text to come could change where it ends. Subclass
@@ -53,6 +58,10 @@ class SentenceTokenizer(_SentenceTokenizerBase):
             boundary before the cap (1000 characters when unset).
     """
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.proxy_overrides(cls, ("tokenize", "stream"))
+
     def __init__(
         self,
         *,
@@ -61,17 +70,18 @@ class SentenceTokenizer(_SentenceTokenizerBase):
         retain_format: bool = False,
         max_token_len: int | None = None,
     ) -> None:
-        super().__init__()
-        self._native = _core.SpeechSentenceTokenizer(
+        _core.SpeechSentenceTokenizer.__init__(
+            self,
             min_words=min_words,
             clause_words=clause_words,
             retain_format=retain_format,
             max_token_len=max_token_len,
         )
+        _SentenceTokenizerBase.__init__(self)
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         """The sentences of `text`, batched as the stream batches them."""
-        return self._native.tokenize(text, language=language)
+        return _core.SpeechSentenceTokenizer.tokenize(self, text, language=language)
 
 
 WordTokenizer.__module__ = "livekit.agents.tokenize"

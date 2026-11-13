@@ -15,7 +15,7 @@ from ..types import (
 )
 from ..utils import is_given
 from ..voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
-from . import _resolve_credentials, get_inference_headers
+from . import _resolve_credentials
 
 if TYPE_CHECKING:
     from ..voice import VoiceSession
@@ -127,7 +127,6 @@ class AvatarSession(BaseAvatarSession):
             room_sid=room_sid,
             livekit_url=livekit_url or _server_setting("LIVEKIT_URL"),
             agent_identity=agent_identity,
-            headers=list(get_inference_headers().items()),
         )
         await super().start(agent_session, room)
         # at the gateway's rate; avatar.start() normally runs before session.start(), so no audio
@@ -148,6 +147,6 @@ class AvatarSession(BaseAvatarSession):
         """Terminate the provider session so it stops billing now, then leave. A failed
         terminate is logged and retried by the next ``aclose()``."""
         try:
-            await self._native.aclose(list(get_inference_headers().items()))
+            await self._native.aclose()
         finally:
             await super().aclose()

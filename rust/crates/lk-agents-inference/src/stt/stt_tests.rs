@@ -55,7 +55,8 @@ async fn invalid_gateway_audio_is_reported_once_without_retry_or_customer_text()
         Arc::new(TokioSpawner::current()),
         Arc::new(lk_agents_net::clock::RealClock::new()),
     );
-    let (_sink, mut source) = client.stream_native(None, 0.0).unwrap().split();
+    let (_sink, mut source) =
+        client.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
     let error = source.next().await.expect_err("invalid input must reach the caller");
     let ProviderError::Local(error) = error else { panic!("native error") };
     assert_eq!(error.status_code, Some(2004));
@@ -75,7 +76,10 @@ async fn rejected_updates_and_truncated_transcripts_reach_the_caller() {
         let ws = Arc::new(
             FakeWs::new(vec![text(json!({"type":"session.created"})), text(frame)]).keep_open(),
         );
-        let (_sink, mut source) = stt(ws.clone()).stream_native(None, 0.0).unwrap().split();
+        let (_sink, mut source) = stt(ws.clone())
+            .stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0)
+            .unwrap()
+            .split();
         let error = source.next().await.expect_err("server refusal must reach the caller");
         assert!(error.message().contains(diagnostic), "{}", error.message());
         assert!(!error.retryable());
@@ -87,7 +91,10 @@ async fn rejected_updates_and_truncated_transcripts_reach_the_caller() {
 #[tokio::test]
 async fn closing_recognition_sends_the_gateway_close_frame_before_socket_close() {
     let ws = Arc::new(FakeWs::new(vec![text(json!({"type":"session.created"}))]).keep_open());
-    let (_sink, source) = stt(ws.clone()).stream_native(None, 0.0).unwrap().split();
+    let (_sink, source) = stt(ws.clone())
+        .stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0)
+        .unwrap()
+        .split();
     until("created the gateway session", || ws.connect_count() == 1 && !ws.sent_json().is_empty())
         .await;
     Box::new(source).close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
@@ -107,7 +114,7 @@ fn openai_stt_refuses_a_rate_the_server_cannot_accept_before_connecting() {
         Arc::new(TokioSpawner::current()),
         Arc::new(lk_agents_net::clock::RealClock::new()),
     );
-    let Err(error) = client.stream_native(None, 0.0) else {
+    let Err(error) = client.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0) else {
         panic!("invalid OpenAI rate accepted")
     };
     assert!(error.message().contains("24000"));
@@ -130,7 +137,8 @@ async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
         spawner,
         Arc::new(lk_agents_net::clock::RealClock::new()),
     );
-    let (_sink, mut source) = stt.stream_native(None, 0.0).unwrap().split();
+    let (_sink, mut source) =
+        stt.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
     let err = lk_agents_abi::timeout(
         &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(5),
@@ -352,25 +360,20 @@ async fn the_handshake_carries_the_model_in_the_url_and_a_bearer_token() {
     assert!(auth.1.starts_with("Bearer ey"), "{}", auth.1);
 }
 
-// Catches: job identification missing from the socket, or the unused session header leaking.
+// Catches: the identity of the job the stream runs for missing from the socket, or a session
+// header among the job's own leaking.
 #[tokio::test]
-async fn the_hosts_identification_headers_ride_on_the_handshake() {
+async fn the_jobs_identity_rides_on_the_handshake() {
     let ws = Arc::new(FakeWs::new(vec![]));
-    let ident: Headers = [
-        ("X-LiveKit-Room-ID", "RM_1"),
-        ("X-LiveKit-Job-ID", "AJ_1"),
-        ("X-LiveKit-Session-ID", "inference_abc"),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-    .collect();
-    let client = stt(ws.clone()).with_identification(ident);
-    let (_sink, _source) = client
-        .stream(&lk_agents_abi::telemetry::Cx::NONE, None, None)
-        .await
-        .unwrap()
-        .unwrap()
-        .split();
+    let cx = crate::testkit::job_cx(lk_agents_net::job_identity::JobIdentity {
+        room_sid: Some("RM_1".into()),
+        job_id: Some("AJ_1".into()),
+        headers: [("X-LiveKit-Session-ID".to_owned(), "inference_abc".to_owned())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    });
+    let (_sink, _source) = stt(ws.clone()).stream(&cx, None, None).await.unwrap().unwrap().split();
     tokio::task::yield_now().await;
     let (_, headers) = ws.last_connect().expect("connected");
     let get = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
@@ -648,7 +651,8 @@ async fn the_gateway_stt_reports_no_batch_recognition() {
 async fn a_session_update_is_not_starved_by_the_audio_stream() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let stt = stt(ws.clone());
-    let (sink, _source) = stt.stream_native(None, 0.0).unwrap().split();
+    let (sink, _source) =
+        stt.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
     for _ in 0..50 {
         sink.push(frame(800)).unwrap();
     }
@@ -669,7 +673,8 @@ async fn a_session_update_is_not_starved_by_the_audio_stream() {
 async fn a_keyterm_change_mid_utterance_waits_for_the_end_of_speech() {
     let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "start_of_speech"}))]).keep_open());
     let stt = stt(ws.clone());
-    let (sink, mut source) = stt.stream_native(None, 0.0).unwrap().split();
+    let (sink, mut source) =
+        stt.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
 
     // Let the start_of_speech land, then change the keyterms.
     assert_eq!(source.next().await.unwrap().unwrap().kind, SpeechEventType::StartOfSpeech);
@@ -893,7 +898,8 @@ async fn a_session_dropped_before_the_input_ends_reconnects_after_delivered_tran
     for drop in dropped {
         let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
         let stt = stt(ws.clone());
-        let (sink, source) = stt.stream_native(None, 0.0).unwrap().split();
+        let (sink, source) =
+            stt.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
         let mut source: crate::abi::SttSource = Box::new(source);
         sink.push(frame(800)).unwrap();
         ws.feed(text(json!({"type": "final_transcript", "transcript": "first"})));
@@ -963,7 +969,8 @@ async fn a_session_failing_after_its_input_ended_is_not_retried() {
 async fn a_burst_past_the_bound_drops_a_gap_and_later_words_stay_on_call_time() {
     let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
     let stt = stt(ws.clone());
-    let (sink, mut source) = stt.stream_native(None, 0.0).unwrap().split();
+    let (sink, mut source) =
+        stt.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
     for _ in 0..5 {
         sink.push(frame(1600)).unwrap();
     }
@@ -1123,7 +1130,8 @@ mod live_gateway {
 async fn a_reconnect_opens_with_the_options_updated_so_far() {
     let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
     let stt = stt(ws.clone());
-    let (sink, _source) = stt.stream_native(None, 0.0).unwrap().split();
+    let (sink, _source) =
+        stt.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
     let sent = |ws: &FakeWs, kind: &str| {
         ws.sent_json().into_iter().filter(|f| f["type"] == json!(kind)).collect::<Vec<_>>()
     };

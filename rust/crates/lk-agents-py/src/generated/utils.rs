@@ -526,7 +526,7 @@ impl RtcVideoFrameProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>(obj)?
         {
             return Ok(native);
         }
@@ -539,7 +539,7 @@ impl RtcVideoFrameProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>(obj)?
         {
             return Ok(native);
         }
@@ -550,6 +550,13 @@ impl RtcVideoFrameProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `RtcVideoFrame` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 

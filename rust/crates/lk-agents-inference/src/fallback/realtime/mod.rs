@@ -114,6 +114,8 @@ pub struct RealtimeFallbackModel {
     sessions: Mutex<Vec<std::sync::Weak<FallbackSession>>>,
     /// The model serving the newest session, for the metrics label.
     active: Arc<std::sync::atomic::AtomicUsize>,
+    /// The name logs give it: its host class's when its host built it.
+    label: String,
 }
 
 impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallbackModel {
@@ -121,11 +123,12 @@ impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallbackMod
 
     fn new(
         env: &Self::Env,
+        label: String,
+        observer: Arc<dyn ChainObserver>,
         models: Vec<lk_agents_abi::llm::fallback::RealtimeLeg>,
         cooldown: f64,
         attempt_timeout: Option<f64>,
         regenerate_on_swap: bool,
-        on_availability: Option<Arc<dyn ChainObserver>>,
     ) -> Result<Self, RealtimeConfigurationError> {
         use lk_agents_abi::llm::fallback::RealtimeLeg;
         let children = models
@@ -135,14 +138,10 @@ impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallbackMod
                 RealtimeLeg::Host(model) => ChainModel::Host(model, env.spawner),
             })
             .collect();
-        Self::new(
-            children,
-            cooldown,
-            attempt_timeout,
-            regenerate_on_swap,
-            on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents)),
-            env.clock.clone(),
-        )
+        let clock = env.clock.clone();
+        let chain =
+            Self::new(children, cooldown, attempt_timeout, regenerate_on_swap, observer, clock)?;
+        Ok(RealtimeFallbackModel { label, ..chain })
     }
 
     fn active_index(&self) -> usize {
@@ -195,6 +194,7 @@ impl RealtimeFallbackModel {
             clock,
             sessions: Mutex::new(Vec::new()),
             active: Arc::default(),
+            label: NativeLabel::RealtimeFallback.as_str().to_owned(),
         })
     }
 
@@ -215,7 +215,7 @@ impl RealtimeFallbackModel {
 
 impl Realtime for RealtimeFallbackModel {
     fn label(&self) -> String {
-        NativeLabel::RealtimeFallback.as_str().to_owned()
+        self.label.clone()
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {

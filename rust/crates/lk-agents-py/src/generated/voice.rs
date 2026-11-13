@@ -108,15 +108,17 @@ impl HostAudioReceiver {
                 crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AvatarAudio>(
                     v.as_any(),
                 )
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "audio",
-                        ": expected a native avatar audio source"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "audio",
+                            ": expected a native avatar audio source"
+                        ))
+                    })
                 })
             })
             .transpose()?;
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let out = py.detach(|| <HostAudioReceiverImpl as ::lk_agents_abi::voice::avatar::HostAudioReceiver>::new(&env, receiver, audio, cx)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(HostAudioReceiver(::std::sync::Arc::new(out)))
     }
@@ -133,10 +135,12 @@ impl HostAudioReceiver {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver>(),
-        read: |obj| {
-            let this = obj.cast::<HostAudioReceiver>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<HostAudioReceiver>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -360,10 +364,12 @@ impl DataStreamAudioOutput {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::io::AudioOutput>(),
-        read: |obj| {
-            let this = obj.cast::<DataStreamAudioOutput>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::AudioOutput> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<DataStreamAudioOutput>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::AudioOutput> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -481,10 +487,12 @@ impl DataStreamAudioReceiver {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver>(),
-        read: |obj| {
-            let this = obj.cast::<DataStreamAudioReceiver>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<DataStreamAudioReceiver>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -524,20 +532,24 @@ impl AvatarRunner {
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
                 room.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "room",
-                    ": expected a native room session"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "room",
+                        ": expected a native room session"
+                    ))
+                })
             })?;
         let receiver = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver,
         >(receiver.as_any())
-        .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "receiver",
-                ": expected a DataStreamAudioReceiver or a HostAudioReceiver"
-            ))
+        .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "receiver",
+                    ": expected a DataStreamAudioReceiver or a HostAudioReceiver"
+                ))
+            })
         })?;
         let generator =
             crate::generated::voice::AvatarVideoGeneratorProxy::from_host(generator.as_any())?;
@@ -824,10 +836,12 @@ impl CoreQueueAudio {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::avatar::AvatarAudio>(),
-        read: |obj| {
-            let this = obj.cast::<CoreQueueAudio>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarAudio> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreQueueAudio>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarAudio> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -1003,11 +1017,13 @@ impl BackgroundAudioPlayer {
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
                 room.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "room",
-                    ": expected a native room session"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "room",
+                        ": expected a native room session"
+                    ))
+                })
             })?;
         let ambient = ambient
             .map(|v| crate::generated::records::background_audio_wire::sounds_from_py(v.as_any()))
@@ -1143,10 +1159,12 @@ impl PlaybackTracker {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(),
-        read: |obj| {
-            let this = obj.cast::<PlaybackTracker>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::PlaybackTracker> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<PlaybackTracker>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::PlaybackTracker> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -1201,11 +1219,13 @@ pub fn _core_playback_begin(
     let tracker = crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(
         tracker.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "tracker",
-            ": expected a `_core.PlaybackTracker`"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "tracker",
+                ": expected a `_core.PlaybackTracker`"
+            ))
+        })
     })?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(segment.as_any())?;
     let out = py.detach(|| {
@@ -1226,11 +1246,13 @@ pub fn _core_playback_current_segment<'py>(
     let tracker = crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(
         tracker.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "tracker",
-            ": expected a `_core.PlaybackTracker`"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "tracker",
+                ": expected a `_core.PlaybackTracker`"
+            ))
+        })
     })?;
     let out = py.detach(|| {
         <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::current_segment(
@@ -1251,11 +1273,13 @@ pub fn _core_playback_note_capture<'py>(
     let tracker = crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(
         tracker.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "tracker",
-            ": expected a `_core.PlaybackTracker`"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "tracker",
+                ": expected a `_core.PlaybackTracker`"
+            ))
+        })
     })?;
     let out = py.detach(|| {
         <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::note_capture(tracker)
@@ -1270,11 +1294,13 @@ pub fn _core_playback_withdraw_capture(py: Python<'_>, tracker: Bound<'_, PyAny>
     let tracker = crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(
         tracker.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "tracker",
-            ": expected a `_core.PlaybackTracker`"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "tracker",
+                ": expected a `_core.PlaybackTracker`"
+            ))
+        })
     })?;
     py.detach(|| {
         <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::withdraw_capture(
@@ -1297,11 +1323,13 @@ pub fn _core_playback_started(
     let tracker = crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(
         tracker.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "tracker",
-            ": expected a `_core.PlaybackTracker`"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "tracker",
+                ": expected a `_core.PlaybackTracker`"
+            ))
+        })
     })?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(segment.as_any())?;
     let out = py.detach(|| {
@@ -1330,11 +1358,13 @@ pub fn _core_playback_progressed(
     let tracker = crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(
         tracker.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "tracker",
-            ": expected a `_core.PlaybackTracker`"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "tracker",
+                ": expected a `_core.PlaybackTracker`"
+            ))
+        })
     })?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(segment.as_any())?;
     let out = py.detach(|| <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::progressed(tracker, segment, started_at, offset, duration)).map_err(|e: ::lk_agents_abi::voice::io::InvalidPlaybackTime| <::lk_agents_abi::voice::io::InvalidPlaybackTime as crate::py_errors::HostException>::to_py_err(&e))?;
@@ -1355,11 +1385,13 @@ pub fn _core_playback_finished(
     let tracker = crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(
         tracker.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "tracker",
-            ": expected a `_core.PlaybackTracker`"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "tracker",
+                ": expected a `_core.PlaybackTracker`"
+            ))
+        })
     })?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(segment.as_any())?;
     let out = py.detach(|| <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::finished(tracker, segment, playback_position, interrupted, synchronized_transcript)).map_err(|e: ::lk_agents_abi::voice::io::InvalidPlaybackTime| <::lk_agents_abi::voice::io::InvalidPlaybackTime as crate::py_errors::HostException>::to_py_err(&e))?;
@@ -1394,10 +1426,12 @@ impl AgentNodes {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(),
-        read: |obj| {
-            let this = obj.cast::<AgentNodes>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::NodeFactory> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<AgentNodes>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::NodeFactory> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -1416,10 +1450,12 @@ impl CoreNodeCalls {}
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(),
-        read: |obj| {
-            let this = obj.cast::<CoreNodeCalls>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::ProviderCalls> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreNodeCalls>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::ProviderCalls> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -1560,15 +1596,17 @@ pub fn llm_node(
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(
                 v.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "calls",
-                    ": expected the calls of a registered tts_node"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "calls",
+                        ": expected the calls of a registered tts_node"
+                    ))
+                })
             })
         })
         .transpose()?;
-    let cx = crate::py_calls::entry_cx();
+    let cx = crate::py_calls::entry_cx()?;
     let out = py
         .detach(|| {
             <DefaultNodesImpl as ::lk_agents_abi::voice::nodes::DefaultNodes>::llm_node(
@@ -1628,15 +1666,17 @@ pub fn tts_node(
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(
                 v.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "calls",
-                    ": expected the calls of a registered tts_node"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "calls",
+                        ": expected the calls of a registered tts_node"
+                    ))
+                })
             })
         })
         .transpose()?;
-    let cx = crate::py_calls::entry_cx();
+    let cx = crate::py_calls::entry_cx()?;
     let out = py
         .detach(|| {
             <DefaultNodesImpl as ::lk_agents_abi::voice::nodes::DefaultNodes>::tts_node(
@@ -1692,11 +1732,13 @@ pub fn stt_node(
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(
                 v.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "calls",
-                    ": expected the calls of a registered tts_node"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "calls",
+                        ": expected the calls of a registered tts_node"
+                    ))
+                })
             })
         })
         .transpose()?;
@@ -1741,10 +1783,12 @@ impl RoomEventBus {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(),
-        read: |obj| {
-            let this = obj.cast::<RoomEventBus>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RoomEventSink> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<RoomEventBus>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RoomEventSink> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -1764,11 +1808,13 @@ pub fn _core_room_track_subscribed(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let participant =
         crate::generated::voice::RemoteParticipantProxy::from_host(participant.as_any())?;
@@ -1795,11 +1841,13 @@ pub fn _core_room_track_unsubscribed(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let participant =
         crate::generated::voice::RemoteParticipantProxy::from_host(participant.as_any())?;
@@ -1826,11 +1874,13 @@ pub fn _core_room_track_published(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let participant =
         crate::generated::voice::RemoteParticipantProxy::from_host(participant.as_any())?;
@@ -1857,11 +1907,13 @@ pub fn _core_room_track_unpublished(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let participant =
         crate::generated::voice::RemoteParticipantProxy::from_host(participant.as_any())?;
@@ -1887,11 +1939,13 @@ pub fn _core_room_local_track_published(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let publication =
         crate::generated::voice::TrackPublicationProxy::from_host(publication.as_any())?;
@@ -1914,11 +1968,13 @@ pub fn _core_room_participant_connected(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let participant =
         crate::generated::voice::RemoteParticipantProxy::from_host(participant.as_any())?;
@@ -1941,11 +1997,13 @@ pub fn _core_room_participant_active(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let participant =
         crate::generated::voice::RemoteParticipantProxy::from_host(participant.as_any())?;
@@ -1968,11 +2026,13 @@ pub fn _core_room_participant_attributes_changed(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let participant =
         crate::generated::voice::RemoteParticipantProxy::from_host(participant.as_any())?;
@@ -1991,11 +2051,13 @@ pub fn _core_room_participant_disconnected(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let participant =
         crate::generated::voice::RemoteParticipantProxy::from_host(participant.as_any())?;
@@ -2014,11 +2076,13 @@ pub fn _core_room_connection_state_changed(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let state = state.extract::<i32>().map(|v| <::lk_agents_abi::voice::rtc::ConnectionState as ::std::convert::TryFrom<i32>>::try_from(v).unwrap_or_default())?;
     py.detach(|| <RtcRuntimeImpl as ::lk_agents_abi::voice::rtc::events::RtcRuntime>::connection_state_changed(bus, state));
@@ -2035,11 +2099,13 @@ pub fn _core_room_disconnected(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let reason = reason.extract::<i32>().map(|v| <::lk_agents_abi::voice::room_io::DisconnectReason as ::std::convert::TryFrom<i32>>::try_from(v).unwrap_or_default())?;
     py.detach(|| {
@@ -2061,11 +2127,13 @@ pub fn _core_room_sip_dtmf_received(
     crate::py_calls::check_pid()?;
     let bus =
         crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(bus.as_any())
-            .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "bus",
-                ": expected a _core.RoomEventBus"
-            ))
+            .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "bus",
+                    ": expected a _core.RoomEventBus"
+                ))
+            })
         })?;
     let participant = participant.map(|v| crate::py_values::str_from_py(v.as_any())).transpose()?;
     py.detach(|| {
@@ -2353,10 +2421,12 @@ impl ByteStreamSender {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::rtc::ByteStreamIngress>(),
-        read: |obj| {
-            let this = obj.cast::<ByteStreamSender>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ByteStreamIngress> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<ByteStreamSender>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ByteStreamIngress> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -2408,10 +2478,12 @@ impl TextStreamSender {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::rtc::TextStreamIngress>(),
-        read: |obj| {
-            let this = obj.cast::<TextStreamSender>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::TextStreamIngress> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<TextStreamSender>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::TextStreamIngress> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -2449,10 +2521,12 @@ impl RpcHandler {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::rtc::RpcCallback>(),
-        read: |obj| {
-            let this = obj.cast::<RpcHandler>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RpcCallback> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<RpcHandler>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RpcCallback> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -2481,10 +2555,12 @@ impl CoreRoomRpcRouter {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes>(),
-        read: |obj| {
-            let this = obj.cast::<CoreRoomRpcRouter>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreRoomRpcRouter>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -2511,8 +2587,13 @@ impl CoreRpcTracing {
         let job = crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(
             job.as_any(),
         )
-        .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!("job", ": expected a native JobRun"))
+        .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "job",
+                    ": expected a native JobRun"
+                ))
+            })
         })?;
         let out = py.detach(|| {
             <CoreRpcTracingImpl as ::lk_agents_abi::voice::rtc::rpc::RpcTracing>::new(&env, job)
@@ -2530,7 +2611,7 @@ impl CoreRpcTracing {
         crate::py_calls::check_pid()?;
         let call = crate::generated::records::rtc_rpc::rpc_call_info_from_py(call.as_any())?;
         let next = crate::generated::voice::OutgoingRpcProxy::from_host(next.as_any())?;
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <CoreRpcTracingImpl as ::lk_agents_abi::voice::rtc::rpc::RpcTracing>::intercept_outgoing(&this, call, next, cx)
@@ -2550,7 +2631,7 @@ impl CoreRpcTracing {
         let invocation =
             crate::generated::voice::RpcInvocationProxy::from_host(invocation.as_any())?;
         let next = crate::generated::voice::IncomingRpcProxy::from_host(next.as_any())?;
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <CoreRpcTracingImpl as ::lk_agents_abi::voice::rtc::rpc::RpcTracing>::intercept_incoming(&this, invocation, next, cx)
@@ -3019,11 +3100,13 @@ impl VoiceSession {
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
                 room.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "room",
-                    ": expected a native room session"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "room",
+                        ": expected a native room session"
+                    ))
+                })
             })?;
         let args =
             crate::generated::records::voice_session::voice_session_args_from_py(args.as_any())?;
@@ -3138,11 +3221,13 @@ impl VoiceSession {
                 crate::py_objects::native::<dyn ::lk_agents_abi::recorder::AudioRecorder>(
                     v.as_any(),
                 )
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "recorder",
-                        ": expected a native SessionRecorder"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "recorder",
+                            ": expected a native SessionRecorder"
+                        ))
+                    })
                 })
             })
             .transpose()?;
@@ -3203,11 +3288,13 @@ impl VoiceSession {
                 crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                     v.as_any(),
                 )
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "llm_node",
-                        ": expected the session's nodes (`_core.AgentNodes`)"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "llm_node",
+                            ": expected the session's nodes (`_core.AgentNodes`)"
+                        ))
+                    })
                 })
             })
             .transpose()?;
@@ -3216,11 +3303,13 @@ impl VoiceSession {
                 crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                     v.as_any(),
                 )
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "tts_node",
-                        ": expected the session's nodes (`_core.AgentNodes`)"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "tts_node",
+                            ": expected the session's nodes (`_core.AgentNodes`)"
+                        ))
+                    })
                 })
             })
             .transpose()?;
@@ -3229,11 +3318,13 @@ impl VoiceSession {
                 crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                     v.as_any(),
                 )
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "stt_node",
-                        ": expected the session's nodes (`_core.AgentNodes`)"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "stt_node",
+                            ": expected the session's nodes (`_core.AgentNodes`)"
+                        ))
+                    })
                 })
             })
             .transpose()?;
@@ -3415,11 +3506,13 @@ impl VoiceSession {
         let voice_agent = voice_agent
             .map(|v| {
                 crate::py_objects::native::<dyn ::lk_agents_abi::agent::AgentFrame>(v.as_any())
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "voice_agent",
-                            ": expected an agent's voice frame (`_core.VoiceAgent`)"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "voice_agent",
+                                ": expected an agent's voice frame (`_core.VoiceAgent`)"
+                            ))
+                        })
                     })
             })
             .transpose()?;
@@ -4114,10 +4207,12 @@ impl CoreSessionState {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::session_effects::DeliveredState>(),
-        read: |obj| {
-            let this = obj.cast::<CoreSessionState>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::session_effects::DeliveredState> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreSessionState>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::session_effects::DeliveredState> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -4205,11 +4300,13 @@ impl CoreSessionBindings {
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
                 room.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "room",
-                    ": expected a native room session"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "room",
+                        ": expected a native room session"
+                    ))
+                })
             })?;
         let args =
             crate::generated::records::voice_session::voice_session_args_from_py(args.as_any())?;
@@ -4222,10 +4319,12 @@ impl CoreSessionBindings {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::session_owner::SessionBindingsPort>(),
-        read: |obj| {
-            let this = obj.cast::<CoreSessionBindings>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::session_owner::SessionBindingsPort> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreSessionBindings>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::session_owner::SessionBindingsPort> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -4292,7 +4391,7 @@ impl CoreSessionOwner {
         let job = job
             .map(|v| crate::generated::records::session_owner::session_job_info_from_py(v.as_any()))
             .transpose()?;
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let call = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::start(&self.0, storage, host, job, cx)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
             let () = call.await.map_err(|e: ::lk_agents_abi::voice::session::StartFailed| <::lk_agents_abi::voice::session::StartFailed as crate::py_errors::HostException>::to_py_err(&e))?;
@@ -5176,10 +5275,12 @@ impl SpeechHandle {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::speech_handle::Speech>(),
-        read: |obj| {
-            let this = obj.cast::<SpeechHandle>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::speech_handle::Speech> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<SpeechHandle>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::speech_handle::Speech> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -5367,11 +5468,13 @@ pub fn send_dtmf_events<'py>(
     let room = crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
         room.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "room",
-            ": expected a native room session"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "room",
+                ": expected a native room session"
+            ))
+        })
     })?;
     let events = events.try_iter().and_then(|items| {
         items
@@ -5406,11 +5509,13 @@ pub fn receive_dtmf<'py>(
     let room = crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
         room.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "room",
-            ": expected a native room session"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "room",
+                ": expected a native room session"
+            ))
+        })
     })?;
     let stop_event = crate::generated::records::workflows::dtmf_event_from_py(stop_event.as_any())?;
     crate::py_calls::future_into_py(py, async move {
@@ -5566,11 +5671,13 @@ impl WarmTransfer {
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
                 caller.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "caller",
-                    ": expected a native room session"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "caller",
+                        ": expected a native room session"
+                    ))
+                })
             })?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
@@ -5624,10 +5731,12 @@ impl ConsoleIo {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::console::ConsolePort>(),
-        read: |obj| {
-            let this = obj.cast::<ConsoleIo>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::console::ConsolePort> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<ConsoleIo>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::console::ConsolePort> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -5688,10 +5797,12 @@ impl RoomAudioInput {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::io::AudioInput>(),
-        read: |obj| {
-            let this = obj.cast::<RoomAudioInput>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::AudioInput> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<RoomAudioInput>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::AudioInput> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -5752,10 +5863,12 @@ impl RoomVideoInput {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::io::VideoInput>(),
-        read: |obj| {
-            let this = obj.cast::<RoomVideoInput>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::VideoInput> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<RoomVideoInput>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::VideoInput> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -5776,10 +5889,12 @@ impl CoreRoomSession {}
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(),
-        read: |obj| {
-            let this = obj.cast::<CoreRoomSession>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::room_owner::SessionRoom> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreRoomSession>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::room_owner::SessionRoom> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -5858,11 +5973,13 @@ pub fn wait_for_participant<'py>(
     let room = crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
         room.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "room",
-            ": expected a native room session"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "room",
+                ": expected a native room session"
+            ))
+        })
     })?;
     crate::py_calls::future_into_py(py, async move {
         let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::wait_for_participant(room, identity, kinds, include_local).await.map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::HostException>::to_py_err(&e))?;
@@ -5887,11 +6004,13 @@ pub fn wait_for_agent<'py>(
     let room = crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
         room.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "room",
-            ": expected a native room session"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "room",
+                ": expected a native room session"
+            ))
+        })
     })?;
     crate::py_calls::future_into_py(py, async move {
         let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::wait_for_agent(room, name).await.map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::HostException>::to_py_err(&e))?;
@@ -5916,11 +6035,13 @@ pub fn wait_for_track_publication<'py>(
     let room = crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
         room.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "room",
-            ": expected a native room session"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "room",
+                ": expected a native room session"
+            ))
+        })
     })?;
     crate::py_calls::future_into_py(py, async move {
         let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::wait_for_track_publication(room, identity, kinds, include_local, subscribed).await.map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::HostException>::to_py_err(&e))?;
@@ -5953,7 +6074,7 @@ impl ClearBufferListenerProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::ClearBufferListener>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::avatar::ClearBufferListener,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -5967,7 +6088,7 @@ impl ClearBufferListenerProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::ClearBufferListener>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::avatar::ClearBufferListener,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -5978,6 +6099,15 @@ impl ClearBufferListenerProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::avatar::ClearBufferListener>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::ClearBufferListener>(
+            obj,
+        )?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `ClearBufferListener` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -6034,7 +6164,7 @@ impl AudioReceiverHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AudioReceiverHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AudioReceiverHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AudioReceiverHost>(obj)?
         {
             return Ok(native);
         }
@@ -6047,7 +6177,7 @@ impl AudioReceiverHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AudioReceiverHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AudioReceiverHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AudioReceiverHost>(obj)?
         {
             return Ok(native);
         }
@@ -6058,6 +6188,13 @@ impl AudioReceiverHostProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::avatar::AudioReceiverHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AudioReceiverHost>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AudioReceiverHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -6303,7 +6440,7 @@ impl AvatarVideoGeneratorProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarVideoGenerator>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::avatar::AvatarVideoGenerator,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -6317,7 +6454,7 @@ impl AvatarVideoGeneratorProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarVideoGenerator>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::avatar::AvatarVideoGenerator,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -6328,6 +6465,15 @@ impl AvatarVideoGeneratorProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::avatar::AvatarVideoGenerator>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AvatarVideoGenerator>(
+            obj,
+        )?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AvatarVideoGenerator` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -6509,7 +6655,7 @@ impl AvatarHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AvatarHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AvatarHost>(obj)?
         {
             return Ok(native);
         }
@@ -6522,7 +6668,7 @@ impl AvatarHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AvatarHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AvatarHost>(obj)?
         {
             return Ok(native);
         }
@@ -6533,6 +6679,13 @@ impl AvatarHostProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::avatar::AvatarHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AvatarHost>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AvatarHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -6639,7 +6792,7 @@ impl FrameStreamProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::background_audio::FrameStream>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::background_audio::FrameStream,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -6653,7 +6806,7 @@ impl FrameStreamProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::background_audio::FrameStream>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::background_audio::FrameStream,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -6665,6 +6818,15 @@ impl FrameStreamProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::background_audio::FrameStream>>
     {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::background_audio::FrameStream>(
+            obj,
+        )?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `FrameStream` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -6768,7 +6930,7 @@ impl PlaybackListenerProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::PlaybackListener>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackListener>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackListener>(obj)?
         {
             return Ok(native);
         }
@@ -6781,7 +6943,7 @@ impl PlaybackListenerProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::PlaybackListener>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackListener>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackListener>(obj)?
         {
             return Ok(native);
         }
@@ -6792,6 +6954,13 @@ impl PlaybackListenerProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::PlaybackListener>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackListener>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `PlaybackListener` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -6806,11 +6975,13 @@ impl PlaybackListenerProxy {
         let tracker = {
             let v = obj.getattr("_tracker")?;
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(v.as_any())
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "PlaybackListener._tracker",
-                        ": expected a `_core.PlaybackTracker`"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "PlaybackListener._tracker",
+                            ": expected a `_core.PlaybackTracker`"
+                        ))
+                    })
                 })?
         };
         Ok(PlaybackListenerProxy {
@@ -6992,7 +7163,7 @@ impl AudioInputProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::AudioInput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::AudioInput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::AudioInput>(obj)?
         {
             return Ok(native);
         }
@@ -7005,7 +7176,7 @@ impl AudioInputProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::AudioInput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::AudioInput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::AudioInput>(obj)?
         {
             return Ok(native);
         }
@@ -7016,6 +7187,11 @@ impl AudioInputProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::AudioInput>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::AudioInput>(obj)?.is_some() {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AudioInput` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -7152,7 +7328,7 @@ impl VideoInputProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::VideoInput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::VideoInput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::VideoInput>(obj)?
         {
             return Ok(native);
         }
@@ -7165,7 +7341,7 @@ impl VideoInputProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::VideoInput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::VideoInput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::VideoInput>(obj)?
         {
             return Ok(native);
         }
@@ -7176,6 +7352,11 @@ impl VideoInputProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::VideoInput>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::VideoInput>(obj)?.is_some() {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `VideoInput` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -7328,7 +7509,7 @@ impl AudioOutputProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::AudioOutput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::AudioOutput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::AudioOutput>(obj)?
         {
             return Ok(native);
         }
@@ -7341,7 +7522,7 @@ impl AudioOutputProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::AudioOutput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::AudioOutput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::AudioOutput>(obj)?
         {
             return Ok(native);
         }
@@ -7352,6 +7533,12 @@ impl AudioOutputProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::AudioOutput>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::AudioOutput>(obj)?.is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AudioOutput` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -7370,11 +7557,13 @@ impl AudioOutputProxy {
         let tracker = {
             let v = obj.getattr("_tracker")?;
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(v.as_any())
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "AudioOutput._tracker",
-                        ": expected a `_core.PlaybackTracker`"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "AudioOutput._tracker",
+                            ": expected a `_core.PlaybackTracker`"
+                        ))
+                    })
                 })?
         };
         let capabilities = {
@@ -7666,7 +7855,7 @@ impl TranscriptionOutputProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>(obj)?
         {
             return Ok(native);
         }
@@ -7679,7 +7868,7 @@ impl TranscriptionOutputProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>(obj)?
         {
             return Ok(native);
         }
@@ -7690,6 +7879,13 @@ impl TranscriptionOutputProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::TranscriptionOutput>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `TranscriptionOutput` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -7874,7 +8070,7 @@ impl SessionNodesProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::SessionNodes>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::SessionNodes>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::SessionNodes>(obj)?
         {
             return Ok(native);
         }
@@ -7887,7 +8083,7 @@ impl SessionNodesProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::SessionNodes>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::SessionNodes>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::SessionNodes>(obj)?
         {
             return Ok(native);
         }
@@ -7898,6 +8094,13 @@ impl SessionNodesProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::nodes::SessionNodes>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::SessionNodes>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `SessionNodes` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -8209,7 +8412,7 @@ impl RtcRoomProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RtcRoom>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RtcRoom>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RtcRoom>(obj)?
         {
             return Ok(native);
         }
@@ -8222,7 +8425,7 @@ impl RtcRoomProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RtcRoom>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RtcRoom>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RtcRoom>(obj)?
         {
             return Ok(native);
         }
@@ -8233,6 +8436,11 @@ impl RtcRoomProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::RtcRoom>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RtcRoom>(obj)?.is_some() {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `RtcRoom` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -8257,11 +8465,13 @@ impl RtcRoomProxy {
         let event_bus = {
             let v = obj.getattr("bus")?;
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(v.as_any())
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "RtcRoom.bus",
-                        ": expected a _core.RoomEventBus"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "RtcRoom.bus",
+                            ": expected a _core.RoomEventBus"
+                        ))
+                    })
                 })?
         };
         let rpc_router = {
@@ -8269,11 +8479,13 @@ impl RtcRoomProxy {
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes>(
                 v.as_any(),
             )
-            .ok_or_else(|| {
-                ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "RtcRoom.rpc_router",
-                    ": expected the room's native RPC router"
-                ))
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "RtcRoom.rpc_router",
+                        ": expected the room's native RPC router"
+                    ))
+                })
             })?
         };
         Ok(RtcRoomProxy {
@@ -8748,7 +8960,7 @@ impl LocalParticipantProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>(obj)?
         {
             return Ok(native);
         }
@@ -8761,7 +8973,7 @@ impl LocalParticipantProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>(obj)?
         {
             return Ok(native);
         }
@@ -8772,6 +8984,13 @@ impl LocalParticipantProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `LocalParticipant` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -9605,7 +9824,7 @@ impl ByteStreamWriterProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>(obj)?
         {
             return Ok(native);
         }
@@ -9618,7 +9837,7 @@ impl ByteStreamWriterProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>(obj)?
         {
             return Ok(native);
         }
@@ -9629,6 +9848,13 @@ impl ByteStreamWriterProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `ByteStreamWriter` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -9637,6 +9863,13 @@ impl ByteStreamWriterProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `ByteStreamWriter` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
@@ -9752,7 +9985,7 @@ impl TextStreamWriterProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>(obj)?
         {
             return Ok(native);
         }
@@ -9765,7 +9998,7 @@ impl TextStreamWriterProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>(obj)?
         {
             return Ok(native);
         }
@@ -9776,6 +10009,13 @@ impl TextStreamWriterProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `TextStreamWriter` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -9784,6 +10024,13 @@ impl TextStreamWriterProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `TextStreamWriter` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
@@ -9906,7 +10153,7 @@ impl AudioSourceProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::AudioSource>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::AudioSource>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::AudioSource>(obj)?
         {
             return Ok(native);
         }
@@ -9919,7 +10166,7 @@ impl AudioSourceProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::AudioSource>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::AudioSource>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::AudioSource>(obj)?
         {
             return Ok(native);
         }
@@ -9930,6 +10177,12 @@ impl AudioSourceProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::AudioSource>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::AudioSource>(obj)?.is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AudioSource` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -10230,7 +10483,7 @@ impl RemoteParticipantProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RemoteParticipant>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RemoteParticipant>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RemoteParticipant>(obj)?
         {
             return Ok(native);
         }
@@ -10243,7 +10496,7 @@ impl RemoteParticipantProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RemoteParticipant>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RemoteParticipant>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RemoteParticipant>(obj)?
         {
             return Ok(native);
         }
@@ -10254,6 +10507,13 @@ impl RemoteParticipantProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::RemoteParticipant>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RemoteParticipant>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `RemoteParticipant` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -10462,7 +10722,7 @@ impl TrackPublicationProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::TrackPublication>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TrackPublication>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TrackPublication>(obj)?
         {
             return Ok(native);
         }
@@ -10475,7 +10735,7 @@ impl TrackPublicationProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::TrackPublication>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TrackPublication>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TrackPublication>(obj)?
         {
             return Ok(native);
         }
@@ -10486,6 +10746,13 @@ impl TrackPublicationProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::TrackPublication>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::TrackPublication>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `TrackPublication` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -10794,7 +11061,7 @@ impl AudioInputStreamProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::AudioInputStream>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::AudioInputStream>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::AudioInputStream>(obj)?
         {
             return Ok(native);
         }
@@ -10807,7 +11074,7 @@ impl AudioInputStreamProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::AudioInputStream>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::AudioInputStream>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::AudioInputStream>(obj)?
         {
             return Ok(native);
         }
@@ -10818,6 +11085,13 @@ impl AudioInputStreamProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::AudioInputStream>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::AudioInputStream>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AudioInputStream` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -10973,7 +11247,7 @@ impl VideoSourceProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::VideoSource>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::VideoSource>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::VideoSource>(obj)?
         {
             return Ok(native);
         }
@@ -10986,7 +11260,7 @@ impl VideoSourceProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::VideoSource>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::VideoSource>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::VideoSource>(obj)?
         {
             return Ok(native);
         }
@@ -10997,6 +11271,12 @@ impl VideoSourceProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::VideoSource>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::VideoSource>(obj)?.is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `VideoSource` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -11129,7 +11409,7 @@ impl RpcInvocationProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::rpc::RpcInvocation>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::RpcInvocation>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::RpcInvocation>(obj)?
         {
             return Ok(native);
         }
@@ -11142,7 +11422,7 @@ impl RpcInvocationProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::rpc::RpcInvocation>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::RpcInvocation>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::RpcInvocation>(obj)?
         {
             return Ok(native);
         }
@@ -11153,6 +11433,13 @@ impl RpcInvocationProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::rpc::RpcInvocation>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::RpcInvocation>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `RpcInvocation` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -11295,7 +11582,7 @@ impl OutgoingRpcProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::rpc::OutgoingRpc>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::OutgoingRpc>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::OutgoingRpc>(obj)?
         {
             return Ok(native);
         }
@@ -11308,7 +11595,7 @@ impl OutgoingRpcProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::rpc::OutgoingRpc>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::OutgoingRpc>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::OutgoingRpc>(obj)?
         {
             return Ok(native);
         }
@@ -11319,6 +11606,13 @@ impl OutgoingRpcProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::rpc::OutgoingRpc>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::OutgoingRpc>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `OutgoingRpc` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -11395,7 +11689,7 @@ impl IncomingRpcProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::rpc::IncomingRpc>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::IncomingRpc>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::IncomingRpc>(obj)?
         {
             return Ok(native);
         }
@@ -11408,7 +11702,7 @@ impl IncomingRpcProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::rpc::IncomingRpc>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::IncomingRpc>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::IncomingRpc>(obj)?
         {
             return Ok(native);
         }
@@ -11419,6 +11713,13 @@ impl IncomingRpcProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::rpc::IncomingRpc>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::rpc::IncomingRpc>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `IncomingRpc` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -11505,7 +11806,7 @@ impl SessionHooksProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::session_effects::SessionHooks,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -11519,7 +11820,7 @@ impl SessionHooksProxy {
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>> {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::session_effects::SessionHooks,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -11531,6 +11832,15 @@ impl SessionHooksProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>>
     {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>(
+            obj,
+        )?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `SessionHooks` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -11545,11 +11855,13 @@ impl SessionHooksProxy {
         let toolset_scopes = {
             let v = obj.getattr("_toolsets")?;
             crate::py_objects::native::<dyn ::lk_agents_abi::llm::toolsets::ScopesPort>(v.as_any())
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "SessionHooks._toolsets",
-                        ": expected a native toolset scope registry"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "SessionHooks._toolsets",
+                            ": expected a native toolset scope registry"
+                        ))
+                    })
                 })?
         };
         Ok(SessionHooksProxy {
@@ -12055,7 +12367,7 @@ impl SessionEventsProxy {
     {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::session_effects::SessionEvents,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -12070,7 +12382,7 @@ impl SessionEventsProxy {
     {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::session_effects::SessionEvents,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -12082,6 +12394,15 @@ impl SessionEventsProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::session_effects::SessionEvents>>
     {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::session_effects::SessionEvents>(
+            obj,
+        )?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `SessionEvents` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -12264,8 +12585,9 @@ impl SessionHostProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::session_owner::SessionHost>> {
-        if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::session_owner::SessionHost>(obj)
+        if let Some(native) = crate::py_objects::native::<
+            dyn ::lk_agents_abi::voice::session_owner::SessionHost,
+        >(obj)?
         {
             return Ok(native);
         }
@@ -12277,8 +12599,9 @@ impl SessionHostProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::session_owner::SessionHost>> {
-        if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::voice::session_owner::SessionHost>(obj)
+        if let Some(native) = crate::py_objects::native::<
+            dyn ::lk_agents_abi::voice::session_owner::SessionHost,
+        >(obj)?
         {
             return Ok(native);
         }
@@ -12289,6 +12612,13 @@ impl SessionHostProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::session_owner::SessionHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::session_owner::SessionHost>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `SessionHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -12387,7 +12717,7 @@ impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::py_objects::native::<dyn ::lk_agents_abi::voice::session_owner::SessionBindingsPort>(o.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("SessionHost.prepare", ": expected native session bindings")))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::py_objects::native::<dyn ::lk_agents_abi::voice::session_owner::SessionBindingsPort>(o.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("SessionHost.prepare", ": expected native session bindings"))))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -12539,7 +12869,7 @@ impl HoldMusicProxy {
     {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::workflows::warm_transfer::HoldMusic,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -12554,7 +12884,7 @@ impl HoldMusicProxy {
     {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::workflows::warm_transfer::HoldMusic,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -12566,6 +12896,15 @@ impl HoldMusicProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::workflows::warm_transfer::HoldMusic>>
     {
+        if crate::py_objects::native::<
+            dyn ::lk_agents_abi::voice::workflows::warm_transfer::HoldMusic,
+        >(obj)?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `HoldMusic` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -12625,7 +12964,7 @@ impl TransferHostProxy {
     > {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -12641,7 +12980,7 @@ impl TransferHostProxy {
     > {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -12654,6 +12993,15 @@ impl TransferHostProxy {
     ) -> PyResult<
         ::std::boxed::Box<dyn ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost>,
     > {
+        if crate::py_objects::native::<
+            dyn ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost,
+        >(obj)?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `TransferHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -12799,7 +13147,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(o.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("TransferHost._core_connect_human", ": expected a native room session")))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(o.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("TransferHost._core_connect_human", ": expected a native room session"))))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

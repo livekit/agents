@@ -79,6 +79,25 @@ impl Resolver<'_> {
                 }
             }
         }
+        // `#[host(init)]`: the constructor runs as the host object's `__init__`.
+        let init = tr.items.iter().any(|inner| {
+            matches!(inner, syn::TraitItem::Fn(f) if voc::read(&f.attrs).is_ok_and(|e| voc::find(&e, "init").is_some()))
+        });
+        for m in &methods {
+            let filled = m
+                .params
+                .iter()
+                .any(|p| matches!(p.ty, Ty::ClassLabel | Ty::Proxy { weak: true, .. }));
+            if filled && !(init && m.kind == MethodKind::New) {
+                return Err(format!(
+                    "{at}::{}: a label or a weak proxy is filled from the object an `init` constructor builds",
+                    m.rust_name
+                ));
+            }
+        }
+        if init && subclass {
+            return Err(format!("{at}: an `init` class is subclassable by construction"));
+        }
         for sink in &sinks {
             let paired = |ty: &Ty| matches!(ty, Ty::Duplex { class, .. } if *class == sink.class);
             if !methods.iter().any(|m| paired(&m.ret.ok)) {
@@ -122,6 +141,7 @@ impl Resolver<'_> {
             pid,
             host_module,
             subclass,
+            init,
             implements,
             name,
             rust_name: tr.ident.to_string(),

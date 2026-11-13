@@ -154,6 +154,19 @@ impl TelemetryModule {
     }
 }
 
+/// Python interface: `livekit.agents.job`.
+pub use crate::py_calls::interfaces::JobModule;
+impl JobModule {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
+        py.import("livekit.agents.job")
+    }
+    pub fn _current_run<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("_current_run")
+    }
+}
+
 /// Python interface: `builtins.BaseException`.
 pub use crate::py_errors::interfaces::BaseException;
 impl BaseException {

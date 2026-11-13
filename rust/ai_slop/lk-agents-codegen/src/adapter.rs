@@ -236,10 +236,14 @@ fn native_to_host(decls: &Declarations) -> Result<String, String> {
         for (i, c) in classes.iter().enumerate().rev() {
             let rest = if i + 1 == classes.len() { "_" } else { "native" };
             body = format!(
-                "match native.downcast::<<crate::generated::implementations::Selected as Implementations>::{}>() {{\n            Ok(native) => Ok(Py::new(py, {}::{}(native))?.into_bound(py).into_any()),\n            Err({rest}) => {body},\n        }}",
+                "match native.downcast::<<crate::generated::implementations::Selected as Implementations>::{}>() {{\n            Ok(native) => Ok(Py::new(py, {}::{}({held}))?.into_bound(py).into_any()),\n            Err({rest}) => {body},\n        }}",
                 c.rust_name,
                 c.family,
-                class_ident(&c.name)
+                class_ident(&c.name),
+                held = match c.init {
+                    true => "::std::sync::OnceLock::from(native)",
+                    false => "native",
+                },
             );
         }
         s.push_str(&format!(
@@ -269,22 +273,36 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
     s.push_str(&doc(&c.doc, ""));
     let (frozen, held) = match c.form {
         Form::MutableClass => ("", format!("{name}Impl")),
+        // Built by `__init__`, once.
+        _ if c.init => {
+            ("frozen, weakref, ", format!("::std::sync::OnceLock<::std::sync::Arc<{name}Impl>>"))
+        }
         _ => ("frozen, ", format!("::std::sync::Arc<{name}Impl>")),
     };
     // Associated class factories can construct a wrapper from another generated family.
     // Held fields are crate-wide: another family wraps or reads instances of this class.
     let visibility = "pub(crate) ";
     let host_module = &c.host_module;
-    let subclass = if c.subclass { "subclass, " } else { "" };
+    let subclass = if c.subclass || c.init { "subclass, " } else { "" };
     s.push_str(&format!(
         "#[pyclass({frozen}{subclass}name = \"{host_name}\", module = \"{host_module}\")]\npub struct {name}({visibility}{held});\n\n#[pymethods]\nimpl {name} {{\n"
     ));
     let methods = c.methods.iter().map(|m| method(decls, c, m)).collect::<Result<Vec<_>, _>>()?;
     s.push_str(&methods.join("\n"));
     s.push_str("}\n");
-    for tr in &c.native {
+    if c.init {
         s.push_str(&format!(
-            "\n// Wherever the host passes a `{tr}`, an instance of this class is itself.\ninventory::submit! {{\n    crate::py_objects::HostNative {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        read: |obj| {{\n            let this = obj.cast::<{name}>().ok()?;\n            let native: ::std::sync::Arc<dyn {tr}> = this.get().0.clone();\n            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)\n        }},\n    }}\n}}\n"
+            "\nimpl {name} {{\n    /// The implementation its `__init__` built.\n    pub(crate) fn engine(&self) -> PyResult<&::std::sync::Arc<{name}Impl>> {{\n        self.0.get().ok_or_else(|| crate::py_objects::unbuilt({host_name:?}))\n    }}\n}}\n"
+        ));
+    }
+    for tr in c.native.iter().filter(|_| c.init) {
+        s.push_str(&format!(
+            "\n// Wherever the host passes a `{tr}`, an instance of this class is itself once built.\ninventory::submit! {{\n    crate::py_objects::HostNative {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        read: |obj| match obj.cast::<{name}>() {{\n            Ok(this) => {{\n                let engine = this.get().0.get().cloned().map(|engine| -> ::std::sync::Arc<dyn {tr}> {{ engine }});\n                crate::py_objects::built(obj, engine, {host_name:?})\n            }}\n            Err(_) => Ok(crate::py_objects::Taken::Other),\n        }},\n    }}\n}}\n"
+        ));
+    }
+    for tr in c.native.iter().filter(|_| !c.init) {
+        s.push_str(&format!(
+            "\n// Wherever the host passes a `{tr}`, an instance of this class is itself.\ninventory::submit! {{\n    crate::py_objects::HostNative {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        read: |obj| match obj.cast::<{name}>() {{\n            Ok(this) => {{\n                let native: ::std::sync::Arc<dyn {tr}> = this.get().0.clone();\n                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))\n            }}\n            Err(_) => Ok(crate::py_objects::Taken::Other),\n        }},\n    }}\n}}\n"
         ));
     }
     Ok(s)
@@ -364,6 +382,9 @@ fn numeric_extractors(c: &Class) -> Result<String, String> {
 }
 
 fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String> {
+    if c.init && m.kind == MethodKind::New {
+        return init(c, m);
+    }
     let at = format!("{}::{}", c.trait_path, m.rust_name);
     let call = format!("<{}Impl as {}>::{}", class_ident(&c.name), c.trait_path, m.rust_name);
     // Functions are module items, methods are indented in their `impl`.
@@ -407,6 +428,14 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
     }
     let mut args = Vec::new();
     let mut prelude = String::new();
+    // An `init` class's implementation, refused until its `__init__` ran.
+    let (this_ref, this_arc) = match c.init {
+        true if !matches!(m.kind, MethodKind::StaticCall) => {
+            prelude.push_str(&format!("{ind}    let engine = self.engine()?;\n"));
+            ("engine", "::std::sync::Arc::clone(engine)")
+        }
+        _ => ("&self.0", "::std::sync::Arc::clone(&self.0)"),
+    };
     for p in &m.params {
         // Captured synchronously at the call's entry, before any native work is scheduled.
         if p.ty == Ty::CallContext {
@@ -415,7 +444,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         }
         // The caller's span, read at the call's entry: only where the function takes it.
         if p.ty == Ty::Cx {
-            prelude.push_str(&format!("{ind}    let {} = crate::py_calls::entry_cx();\n", p.name));
+            prelude.push_str(&format!("{ind}    let {} = crate::py_calls::entry_cx()?;\n", p.name));
             continue;
         }
         // The runtime's, never the host's.
@@ -426,7 +455,11 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         let (ty, convert) = if p.ty == Ty::This {
             // Borrowed out of its `PyRef` before the GIL is released.
             let deref = if c.form == Form::MutableClass { "" } else { "*" };
-            (format!("PyRef<'_, {}>", class_ident(&c.name)), Some(format!("&{deref}{}.0", p.name)))
+            let borrowed = match c.init {
+                true => format!("{}.engine()?", p.name),
+                false => format!("&{deref}{}.0", p.name),
+            };
+            (format!("PyRef<'_, {}>", class_ident(&c.name)), Some(borrowed))
         } else {
             input(&at, p)?
         };
@@ -486,7 +519,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
                 }
             };
             s.push_str(&format!(
-                "    fn __aiter__(slf: Py<Self>) -> Py<Self> {{\n        slf\n    }}\n\n    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        let this = ::std::sync::Arc::clone(&self.0);\n        crate::py_calls::future_into_py(py, async move {{\n            match {call}(&this).await{err} {{\n                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py)),\n                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),\n            }}\n        }})\n    }}\n",
+                "    fn __aiter__(slf: Py<Self>) -> Py<Self> {{\n        slf\n    }}\n\n    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let this = {this_arc};\n        crate::py_calls::future_into_py(py, async move {{\n            match {call}(&this).await{err} {{\n                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py)),\n                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),\n            }}\n        }})\n    }}\n",
                 item.replace("{}", "out").replace("{py}", "py")
             ));
         }
@@ -502,7 +535,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             let refused =
                 m.refused.as_ref().map(|e| format!(".map_err({})?", e.with)).unwrap_or_default();
             s.push_str(&format!(
-                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let call = py.detach(|| {call}(&self.0, {})){refused};\n        crate::py_calls::future_into_py(py, async move {{\n            let {binding} = call.await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
+                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let call = py.detach(|| {call}({this_ref}, {})){refused};\n        crate::py_calls::future_into_py(py, async move {{\n            let {binding} = call.await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
                 ["&self".to_owned(), "py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
                 passed.join(", "),
                 wrap.replace("{}", binding).replace("{py}", "py")
@@ -510,7 +543,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         }
         MethodKind::Await => {
             s.push_str(&format!(
-                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let this = ::std::sync::Arc::clone(&self.0);\n        crate::py_calls::future_into_py(py, async move {{\n            let {binding} = {call}(&this, {})\n                .await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
+                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let this = {this_arc};\n        crate::py_calls::future_into_py(py, async move {{\n            let {binding} = {call}(&this, {})\n                .await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
                 ["&self".to_owned(), "py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
                 passed.join(", "),
                 wrap.replace("{}", binding).replace("{py}", "py")
@@ -535,7 +568,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
                 | MethodKind::AsyncFunction
                 | MethodKind::StaticCall => None,
                 _ if m.mutable => Some("&mut self.0".to_owned()),
-                _ => Some("&self.0".to_owned()),
+                _ => Some(this_ref.to_owned()),
             };
             let all_args = receiver
                 .map(str::to_owned)
@@ -955,7 +988,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             )
         }
         Ty::Native { rust, refused, .. } => format!(
-            "crate::py_objects::native::<dyn {rust}>({v}.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!({path}, {message:?})))",
+            "crate::py_objects::native::<dyn {rust}>({v}.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!({path}, {message:?}))))",
             message = format!(": {refused}"),
         ),
         Ty::Proxy { declared: Some((family, name)), boxed: true, .. } => {
@@ -1186,6 +1219,10 @@ pub fn rust_names(text: &str) -> String {
     }
     out
 }
+
+#[path = "adapter_init.rs"]
+mod init;
+use init::init;
 
 #[cfg(test)]
 #[path = "adapter_tests.rs"]

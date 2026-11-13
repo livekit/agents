@@ -27,7 +27,7 @@ impl InterruptionLeg {
         anchor: WallAnchor,
         cx: &telemetry::Cx,
     ) -> Arc<Self> {
-        let stream = detector.stream();
+        let stream = detector.stream(cx);
         // Taken before the stream is parked behind the mutex, so pushes never wait on verdicts.
         let input = stream.sender().expect("a fresh stream still has its input half");
         input.observe(cx.clone());

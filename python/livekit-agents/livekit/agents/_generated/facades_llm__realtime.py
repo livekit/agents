@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
     from ..types import NotGivenOr
     from .connect import APIConnectOptions
-    from .realtime import RealtimeCapabilities
     from .realtime_options import (
         AudioTranscription,
         InferenceGateway,
@@ -33,7 +32,7 @@ if TYPE_CHECKING:
     from .realtime_wire import Modalities
 
 
-class RealtimeModel(BaseRealtimeModel):
+class RealtimeModel(_core.OpenAIRealtimeModel, BaseRealtimeModel):
     """`RealtimeModel` over the OpenAI Realtime protocol: OpenAI, Azure OpenAI and every provider
     speaking it. A provider subclass sets `_dialect`, `_provider_label` (the name logs and metrics
     give it) and, for LiveKit Inference, `_gateway`.
@@ -42,6 +41,10 @@ class RealtimeModel(BaseRealtimeModel):
     _dialect: RealtimeProvider | None = None
     _provider_label: str | None = None
     _gateway: InferenceGateway | None = None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("session",), "session.llm_node")
 
     def __init__(
         self,
@@ -96,7 +99,8 @@ class RealtimeModel(BaseRealtimeModel):
         Raises:
             ValueError: If the credentials or the Azure endpoint are missing.
         """
-        self._native = _core.OpenAIRealtimeModel(
+        _core.OpenAIRealtimeModel.__init__(
+            self,
             model=model,
             voice=voice,
             modalities=modalities,
@@ -120,25 +124,7 @@ class RealtimeModel(BaseRealtimeModel):
             label=self._provider_label,
             gateway=self._gateway,
         )
-        super().__init__(capabilities=self._native.capabilities)
-
-    @property
-    def model(self) -> str:
-        return self._native.model
-
-    @property
-    def provider(self) -> str:
-        return self._native.provider
-
-    @property
-    def label(self) -> str:
-        """The name logs and metrics give this instance."""
-        return self._native.label
-
-    @property
-    def capabilities(self) -> RealtimeCapabilities:
-        """What its sessions support; options set later may change it."""
-        return self._native.capabilities
+        BaseRealtimeModel.__init__(self, capabilities=self.capabilities)
 
     def _update_options(
         self,
@@ -157,7 +143,8 @@ class RealtimeModel(BaseRealtimeModel):
         """Change the model's options; every live session sends what changed. Each provider's model
         declares `update_options` with the options its session carries.
         """
-        self._native.update_options(
+        _core.OpenAIRealtimeModel._core_update_options(
+            self,
             voice=voice,
             turn_detection=turn_detection,
             tool_choice=tool_choice,

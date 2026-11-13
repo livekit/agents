@@ -288,7 +288,7 @@ impl CoreLocalInteraction {
         let conn_options =
             crate::generated::records::connect::api_connect_options_from_py(conn_options.as_any())?;
         let context = crate::py_calls::entered();
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::run(&this, &env, host, arguments, history, live, conn_options, context, cx)

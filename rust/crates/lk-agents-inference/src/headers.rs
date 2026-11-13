@@ -1,4 +1,4 @@
-pub type HeaderProvider = std::sync::Arc<dyn Fn() -> Headers + Send + Sync>;
+pub use lk_agents_net::job_identity::JobIdentity;
 pub use lk_agents_net::transport::Headers;
 
 pub const DEFAULT_INFERENCE_URL: &str = "https://agent-gateway.livekit.cloud/v1";
@@ -49,21 +49,7 @@ fn native_headers(user_agent: &str, inference_class: Option<&str>) -> Headers {
     headers
 }
 
-/// The job an inference request is made for, as the host reads its context.
-#[derive(Debug, Clone, Default)]
-pub struct JobIdentity {
-    pub room_sid: Option<String>,
-    pub job_id: Option<String>,
-    /// The agent participant's sid, once the room is connected.
-    pub agent_sid: Option<String>,
-    /// `LIVEKIT_WORKER_TOKEN`.
-    pub worker_token: Option<String>,
-    /// The job's `inference_headers`, which override the ones above.
-    pub headers: Headers,
-}
-
-/// `get_inference_headers()`: [`native_headers`] under the host's `user_agent`, then in a job its
-/// identity and its own headers.
+/// [`native_headers`] under `user_agent`, then in a job its identity and its own headers.
 pub fn identity_headers(
     user_agent: &str,
     inference_class: Option<&str>,
@@ -90,50 +76,26 @@ pub fn identity_headers(
     headers
 }
 
-/// Identification (finished by the host from the job context, else [`native_headers`]) and the
-/// pinned provider.
-pub fn identification_headers(
-    identification: Option<&Headers>,
-    inference_class: Option<&str>,
-    provider: Option<&str>,
-) -> Headers {
-    let base = match identification.filter(|headers| headers.iter().next().is_some()) {
-        Some(headers) => headers.clone(),
-        None => native_headers(&user_agent(env!("CARGO_PKG_VERSION")), inference_class),
-    };
-    crate::llm::request::request_headers(base, provider)
+/// The identity of the job `cx` runs for, as a gateway request carries it: [`identity_headers`]
+/// under this process's `User-Agent`, outside any job the native headers alone.
+pub fn job_headers(cx: &lk_agents_abi::telemetry::Cx, inference_class: Option<&str>) -> Headers {
+    use lk_agents_net::job_identity;
+    identity_headers(&job_identity::user_agent(), inference_class, job_identity::of(cx.job()))
 }
 
-/// All gateway clients use the same identification and bearer headers.
+/// What every gateway request carries: the identity of the job `cx` runs for, the pinned
+/// provider and the bearer.
 pub fn gateway_headers(
-    identification: Option<&Headers>,
+    cx: &lk_agents_abi::telemetry::Cx,
     inference_class: Option<&str>,
     provider: Option<&str>,
     bearer: &str,
 ) -> Headers {
-    let mut headers = identification_headers(identification, inference_class, provider);
-    headers.remove("X-LiveKit-Session-ID");
+    let mut headers =
+        crate::llm::request::request_headers(job_headers(cx, inference_class), provider);
+    headers.remove(HEADER_SESSION_ID);
     headers.insert("Authorization", format!("Bearer {bearer}"));
     headers
-}
-
-/// The job's identification headers (`get_inference_headers()`), bound once by the host that
-/// hands the client to a session. Unbound clients use the native headers.
-#[derive(Debug, Default)]
-pub struct BoundIdentity(parking_lot::Mutex<Option<Headers>>);
-
-impl BoundIdentity {
-    pub fn bind(&self, headers: Headers) {
-        *self.0.lock() = Some(headers);
-    }
-
-    pub fn for_connection(&self) -> Option<Headers> {
-        self.0.lock().clone()
-    }
-}
-
-pub fn user_agent(version: &str) -> String {
-    format!("LiveKit Agents/{version} (rust)")
 }
 
 #[cfg(test)]

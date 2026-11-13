@@ -225,6 +225,7 @@
     "format_log_record",
     "host_log_level",
     "http_error_display",
+    "identify_host",
     "inference_api_key",
     "inference_api_secret",
     "inference_credentials",

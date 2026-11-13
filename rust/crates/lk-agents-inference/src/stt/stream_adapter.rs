@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::tokenize::language::LanguageCode;
+use lk_agents_abi::types::provider::ProviderEvents;
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, Clock, Closed, ProviderId, SpeechEvent, SpeechEventType,
     StreamOutput, Stt, SttCapabilities, SttSink, SttSource, Ts, Vad, VadEventType, VadSource,
@@ -13,13 +14,21 @@ use lk_agents_net::env::ProcessEnv;
 pub struct StreamAdapter {
     stt: Arc<dyn Stt>,
     vad: Arc<dyn Vad>,
+    /// The host object it was built as: its name, and its `error` events; else it names and
+    /// reports through the STT it wraps.
+    host: Option<(String, Arc<dyn ProviderEvents>)>,
     /// What an utterance's `speech_end_time` is read off.
     clock: Arc<dyn Clock>,
 }
 
 impl Clone for StreamAdapter {
     fn clone(&self) -> Self {
-        StreamAdapter::new(Arc::clone(&self.stt), Arc::clone(&self.vad), Arc::clone(&self.clock))
+        let adapter = StreamAdapter::new(
+            Arc::clone(&self.stt),
+            Arc::clone(&self.vad),
+            Arc::clone(&self.clock),
+        );
+        StreamAdapter { host: self.host.clone(), ..adapter }
     }
 }
 
@@ -32,7 +41,7 @@ impl StreamAdapter {
     }
 
     pub fn new(stt: Arc<dyn Stt>, vad: Arc<dyn Vad>, clock: Arc<dyn Clock>) -> Self {
-        StreamAdapter { stt, vad, clock }
+        StreamAdapter { stt, vad, host: None, clock }
     }
 }
 
@@ -59,8 +68,17 @@ impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
     type Events = SttSource;
     type Env = ProcessEnv;
 
-    fn new(env: &ProcessEnv, stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self {
-        StreamAdapter::new(stt, vad, env.clock.clone())
+    fn new(
+        env: &ProcessEnv,
+        label: String,
+        events: Arc<dyn ProviderEvents>,
+        stt: Arc<dyn Stt>,
+        vad: Arc<dyn Vad>,
+    ) -> Self {
+        StreamAdapter {
+            host: Some((label, events)),
+            ..StreamAdapter::new(stt, vad, env.clock.clone())
+        }
     }
 
     fn capabilities(&self) -> SttCapabilities {
@@ -69,6 +87,7 @@ impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
 
     async fn recognize(
         &self,
+        cx: telemetry::Cx,
         frames: Vec<AudioFrame>,
         language: Option<LanguageCode>,
         conn_options: Option<ApiConnectOptions>,
@@ -78,7 +97,7 @@ impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
             view.stt.clone(),
             view.stt.conn_options().unwrap_or_default(),
             view.clock.clone(),
-            &telemetry::Cx::NONE,
+            &cx,
             &frames,
             language.as_ref(),
         )
@@ -87,25 +106,23 @@ impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
 
     async fn stream(
         &self,
+        cx: telemetry::Cx,
         language: Option<LanguageCode>,
         start_time_offset: Option<f64>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError> {
-        // Python's own call: no framework span is current to open under.
-        Stt::stream(
-            &self.configured(conn_options),
-            &telemetry::Cx::NONE,
-            language.as_ref(),
-            start_time_offset,
-        )
-        .await
-        .map(|opened| opened.expect("the adapter's `stream` is always duplex"))
+        Stt::stream(&self.configured(conn_options), &cx, language.as_ref(), start_time_offset)
+            .await
+            .map(|opened| opened.expect("the adapter's `stream` is always duplex"))
     }
 }
 
 impl Stt for StreamAdapter {
     fn label(&self) -> String {
-        format!("StreamAdapter[{}]", self.stt.label())
+        match &self.host {
+            Some((label, _)) => label.clone(),
+            None => format!("StreamAdapter[{}]", self.stt.label()),
+        }
     }
 
     /// The adapter is transparent to the metrics.
@@ -126,12 +143,15 @@ impl Stt for StreamAdapter {
         }
     }
 
-    fn prewarm(&self) {
-        self.stt.prewarm();
+    fn prewarm(&self, cx: &telemetry::Cx) {
+        self.stt.prewarm(cx);
     }
 
     fn failed(&self, error: ProviderError, recoverable: bool) {
-        self.stt.failed(error, recoverable);
+        match &self.host {
+            Some((_, events)) => events.failed(error, recoverable),
+            None => self.stt.failed(error, recoverable),
+        }
     }
 
     fn update_keyterms(&self, keyterms: &[String]) {
@@ -365,7 +385,7 @@ mod tests {
         fn capabilities(&self) -> SttCapabilities {
             SttCapabilities { keyterms: true, ..SttCapabilities::default() }
         }
-        fn prewarm(&self) {
+        fn prewarm(&self, _cx: &telemetry::Cx) {
             self.loaded.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         fn recognize(
@@ -508,7 +528,7 @@ mod tests {
             observer,
         )
         .unwrap();
-        fallback.prewarm();
+        fallback.prewarm(&telemetry::Cx::NONE);
         let (sink, mut source) =
             fallback.stream(&telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
         sink.end_input();

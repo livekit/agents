@@ -325,6 +325,8 @@ pub struct FallbackTts {
     caller_conn: ApiConnectOptions,
     /// The adapter that built the chain: a request's failures are its `error` events.
     observer: Arc<dyn ChainObserver>,
+    /// The name logs give it: its host class's when its host built it.
+    label: String,
 }
 
 impl FallbackTts {
@@ -365,6 +367,7 @@ impl FallbackTts {
             entry_rates: Arc::new(entry_rates),
             caller_conn: crate::fallback::caller_default(),
             observer,
+            label: NativeLabel::TtsFallback.as_str().into(),
         })
     }
 
@@ -569,7 +572,7 @@ impl Tts for FallbackTts {
     }
 
     fn label(&self) -> String {
-        NativeLabel::TtsFallback.as_str().into()
+        self.label.clone()
     }
 
     fn request_span(&self) -> telemetry::RequestSpan {
@@ -581,9 +584,9 @@ impl Tts for FallbackTts {
         self.active().id()
     }
 
-    fn prewarm(&self) {
+    fn prewarm(&self, cx: &telemetry::Cx) {
         for entry in self.chain.entries() {
-            entry.inner().prewarm();
+            entry.inner().prewarm(cx);
         }
     }
 
@@ -639,11 +642,12 @@ impl port::FallbackTts for FallbackTts {
 
     fn new(
         env: &ProcessEnv,
+        label: String,
+        observer: Arc<dyn ChainObserver>,
         ttss: Vec<Arc<dyn Tts>>,
         max_retry_per_tts: u32,
         attempt_timeout: Option<f64>,
         sample_rate: Option<u32>,
-        on_availability: Option<Arc<dyn ChainObserver>>,
     ) -> Result<Self, Invalid> {
         // `sample_rate = None` takes the maximum of the entries' rates and upsamples the rest.
         let policy = ChainPolicy {
@@ -651,9 +655,10 @@ impl port::FallbackTts for FallbackTts {
             attempt_timeout,
             ..ChainPolicy::tts_defaults()
         };
-        let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
         let spawner = (env.spawner)().map_err(|e| Invalid(e.to_string()))?;
-        FallbackTts::new(ttss, sample_rate, policy, env.clock.clone(), spawner, observer)
+        let chain =
+            FallbackTts::new(ttss, sample_rate, policy, env.clock.clone(), spawner, observer)?;
+        Ok(FallbackTts { label, ..chain })
     }
     fn active_index(&self) -> usize {
         self.chain.active_index()

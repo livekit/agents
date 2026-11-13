@@ -100,22 +100,15 @@ impl lk_agents_abi::inference::InferenceCredentials for Credentials {
         Ok(GatewayCredentials { base_url: url, api_key: key, api_secret: secret })
     }
 
+    fn identify_host(user_agent: String) {
+        lk_agents_net::job_identity::set_user_agent(user_agent);
+    }
+
     fn inference_identity_headers(
-        user_agent: String,
+        cx: lk_agents_abi::telemetry::Cx,
         inference_class: Option<String>,
-        room_sid: Option<String>,
-        job_id: Option<String>,
-        agent_sid: Option<String>,
-        job_headers: Option<crate::headers::Headers>,
     ) -> crate::headers::Headers {
-        let job = job_headers.map(|headers| crate::headers::JobIdentity {
-            room_sid,
-            job_id,
-            agent_sid,
-            worker_token: env("LIVEKIT_WORKER_TOKEN"),
-            headers,
-        });
-        crate::headers::identity_headers(&user_agent, inference_class.as_deref(), job)
+        crate::headers::job_headers(&cx, inference_class.as_deref())
     }
 }
 

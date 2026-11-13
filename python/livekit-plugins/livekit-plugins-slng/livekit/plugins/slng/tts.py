@@ -240,7 +240,9 @@ def _elapsed_ms(started_at: float) -> float:
     return (time.perf_counter() - started_at) * 1000
 
 
-class TTS(tts.TTS[Literal["slng_event"]]):
+class _Connection(tts.TTS[Literal["slng_event"]]):
+    """One SLNG bridge connection; ``TTS`` chains them."""
+
     def __bool__(self) -> bool:
         # LiveKit Agents code may use truthiness checks like `tts or None`.
         # Some EventEmitter-style bases can be falsy when they have no listeners,
@@ -394,12 +396,8 @@ class TTS(tts.TTS[Literal["slng_event"]]):
             phrase_max_chars=phrase_max_chars,
         )
         self._session = http_session
-        self._candidate_tts: list[TTS] = [self]
-        self._fallback: tts.FallbackAdapter | None = None
-        # Set by the parent chain on the candidates it constructs: a
-        # candidate's voice is only updated at runtime when it was inherited
-        # from the chain-level default rather than set explicitly per
-        # candidate.
+        # Set by the chain: a connection's voice is only updated at runtime when it was inherited
+        # from the chain-level default rather than set explicitly per connection.
         self._inherits_voice = False
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._ws_connection_timings: dict[int, _WsConnectionTiming] = {}
@@ -412,62 +410,9 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         # garbage-collect them mid-run before the socket is actually closed.
         self._standby_close_tasks: set[asyncio.Task[None]] = set()
 
-        if len(raw_connections) > 1:
-            self._candidate_tts = []
-            for fallback in raw_connections:
-                config = (
-                    fallback
-                    if isinstance(fallback, TTSConnectionConfig)
-                    else TTSConnectionConfig(
-                        endpoint=(
-                            fallback
-                            if "://" in fallback
-                            else bridge_endpoint(slng_base_url, "tts", fallback)
-                        )
-                    )
-                )
-                candidate = TTS(
-                    api_key=resolved_key,
-                    connections=[config],
-                    model=None,
-                    provider_api_key=provider_api_key,
-                    voice=config.voice or voice,
-                    slng_base_url=slng_base_url,
-                    region_override=region_override,
-                    world_part_override=world_part_override,
-                    external_agent_id=external_agent_id,
-                    external_session_id=external_session_id,
-                    language=language,
-                    sample_rate=sample_rate,
-                    speed=speed,
-                    http_session=http_session,
-                    extra_headers=extra_headers,
-                    runtime_init=runtime_init,
-                    warm_standby_enabled=warm_standby_enabled,
-                    text_chunking=text_chunking,
-                    phrase_max_chars=phrase_max_chars,
-                    **model_options,
-                )
-                candidate._inherits_voice = config.voice is None
-                if (
-                    candidate.sample_rate != self.sample_rate
-                    or candidate.num_channels != self.num_channels
-                ):
-                    raise ValueError("all TTS candidates must use the same audio format")
-                self._candidate_tts.append(candidate)
-                candidate.on("metrics_collected", self._forward_metrics)
-                candidate.on("slng_event", self._forward_plugin_event)
-            self._fallback = tts.FallbackAdapter(list(self._candidate_tts), sample_rate=sample_rate)
-
-    def _forward_metrics(self, metrics: TTSMetrics) -> None:
-        self.emit("metrics_collected", metrics)
-
-    def _forward_plugin_event(self, event: PluginEvent) -> None:
-        self.emit("slng_event", event)
-
     @property
     def model(self) -> str:
-        return self._fallback.model if self._fallback is not None else self._opts.model
+        return self._opts.model
 
     @property
     def provider(self) -> str:
@@ -678,21 +623,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
                 self._standby_close_tasks.add(close_task)
                 close_task.add_done_callback(self._standby_close_tasks.discard)
 
-        # Keep fallback candidates consistent with the primary so a later
-        # failover does not synthesize with construction-time settings. A
-        # candidate with an explicit per-candidate voice keeps it.
-        if self._fallback is not None:
-            for candidate in self._candidate_tts:
-                candidate.update_options(
-                    voice=voice if is_given(voice) and candidate._inherits_voice else NOT_GIVEN,
-                    language=language,
-                    speed=speed,
-                )
-
-    def _core_leg(self) -> object:
-        # a connection chain is served by its fallback adapter
-        return self._fallback._core_leg() if self._fallback is not None else self
-
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
@@ -719,17 +649,10 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         return stream
 
     def prewarm(self) -> None:
-        if self._fallback is not None:
-            self._fallback.prewarm()
-        elif self.warm_standby_enabled:
+        if self.warm_standby_enabled:
             self._start_standby_replenish(conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
     async def aclose(self) -> None:
-        if self._fallback is not None:
-            await self._fallback.aclose()
-            for candidate in self._candidate_tts:
-                await candidate.aclose()
-
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
@@ -741,13 +664,171 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         await self._close_standby()
 
 
+class TTS(tts.FallbackAdapter):
+    """SLNG TTS over one or more bridge connections, in order of preference: a failed one is
+    skipped until it recovers. Its events (``error``, ``tts_availability_changed``,
+    ``metrics_collected``, ``slng_event``) come from this object."""
+
+    def __bool__(self) -> bool:
+        # LiveKit Agents code may use truthiness checks like `tts or None`.
+        return True
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        model: str | None = None,
+        connections: list[str | TTSConnectionConfig] | None = None,
+        provider_api_key: str | None = None,
+        voice: str,
+        slng_base_url: str = "api.slng.ai",
+        region_override: str | list[str] | None = None,
+        world_part_override: str | None = None,
+        external_agent_id: str | None = None,
+        external_session_id: str | None = None,
+        language: str = "en",
+        sample_rate: int = 24000,
+        speed: float = 1.0,
+        http_session: http.HttpSession | None = None,
+        extra_headers: dict[str, str] | None = None,
+        runtime_init: dict[str, JsonValue] | None = None,
+        warm_standby_enabled: bool = False,
+        text_chunking: Literal["auto", "word", "phrase"] = "auto",
+        phrase_max_chars: int = 60,
+        **model_options: JsonValue,
+    ) -> None:
+        """
+        Create a new instance of SLNG TTS.
+
+        Args:
+            api_key (str): SLNG API key. Falls back to the ``SLNG_API_KEY`` env var.
+            model: Unmute Bridge model identifier, e.g. "deepgram/aura:2".
+            connections: Ordered model, endpoint, typed config, or SLNG TTS candidates.
+            provider_api_key: Optional BYOK provider credential, sent as the
+                ``X-Slng-Provider-Key`` header (external providers only).
+            slng_base_url (str): Gateway host. Defaults to "api.slng.ai".
+            region_override: Optional gateway region override, sent as the
+                ``X-Region-Override`` header. Accepts a single region or a list
+                of preferred regions in priority order.
+            world_part_override: Optional gateway world-part override, sent as
+                the ``X-World-Part-Override`` header.
+            external_agent_id: Optional tracking ID attached to usage events as
+                the ``X-SLNG-Agent-Id`` header (max 128 chars).
+            external_session_id: Optional tracking ID attached to usage events as
+                the ``X-SLNG-Session-Id`` header (max 128 chars).
+            voice: Required voice identifier.
+            language (str): Language code. Defaults to "en".
+            sample_rate (int): Sample rate of audio. Defaults to 24000.
+            http_session (http.HttpSession): Optional HttpSession to use for requests.
+        """
+        if model is not None and connections:
+            raise ValueError("use model or connections, not both")
+        raw_connections: list[str | TTSConnectionConfig]
+        if connections:
+            raw_connections = connections
+        elif model is not None:
+            raw_connections = [model]
+        else:
+            raise ValueError("model or connections is required")
+
+        self._connections: list[_Connection] = []
+        for connection in raw_connections:
+            config = (
+                connection
+                if isinstance(connection, TTSConnectionConfig)
+                else TTSConnectionConfig(
+                    endpoint=(
+                        connection
+                        if "://" in connection
+                        else bridge_endpoint(slng_base_url, "tts", connection)
+                    )
+                )
+            )
+            candidate = _Connection(
+                api_key=api_key,
+                model=None,
+                connections=[config],
+                provider_api_key=provider_api_key,
+                voice=config.voice or voice,
+                slng_base_url=slng_base_url,
+                region_override=region_override,
+                world_part_override=world_part_override,
+                external_agent_id=external_agent_id,
+                external_session_id=external_session_id,
+                language=language,
+                sample_rate=sample_rate,
+                speed=speed,
+                http_session=http_session,
+                extra_headers=extra_headers,
+                runtime_init=runtime_init,
+                warm_standby_enabled=warm_standby_enabled,
+                text_chunking=text_chunking,
+                phrase_max_chars=phrase_max_chars,
+                **model_options,
+            )
+            candidate._inherits_voice = config.voice is None
+            self._connections.append(candidate)
+        super().__init__(list(self._connections), sample_rate=sample_rate)
+        for candidate in self._connections:
+            candidate.on("metrics_collected", self._forward_metrics)
+            candidate.on("slng_event", self._forward_plugin_event)
+
+    def _forward_metrics(self, metrics: TTSMetrics) -> None:
+        self.emit("metrics_collected", metrics)
+
+    def _forward_plugin_event(self, event: PluginEvent) -> None:
+        self.emit("slng_event", event)  # type: ignore[arg-type]  # the plugin's own event
+
+    @property
+    def provider(self) -> str:
+        return "SLNG"
+
+    @property
+    def warm_standby_enabled(self) -> bool:
+        return self._connections[0].warm_standby_enabled
+
+    def update_options(
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
+    ) -> None:
+        """Update every connection, so a later failover does not synthesize with
+        construction-time settings; a connection with its own voice keeps it.
+
+        Args:
+            voice (str): Voice to use.
+            language (str): Language code.
+            speed (float): Playback speed multiplier.
+            sentence_tokenizer (SentenceTokenizer): What splits the text into the chunks the TTS
+                is sent.
+            pacing (SentenceStreamPacer | None): A ``SentenceStreamPacer``, or ``None`` to send each
+                chunk as soon as it is split.
+        """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
+        for candidate in self._connections:
+            candidate.update_options(
+                voice=voice if is_given(voice) and candidate._inherits_voice else NOT_GIVEN,
+                language=language,
+                speed=speed,
+            )
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        for candidate in self._connections:
+            await candidate.aclose()
+
+
 class ChunkedStream(tts.ChunkedStream):
     """Non-streaming synthesis: send the full text once over the SLNG WebSocket."""
 
     def __init__(
         self,
         *,
-        tts: TTS,
+        tts: _Connection,
         input_text: str,
         conn_options: APIConnectOptions,
         options: _TTSOptions,
@@ -878,7 +959,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
         self,
         *,
-        tts: TTS,
+        tts: _Connection,
         conn_options: APIConnectOptions,
         options: _TTSOptions,
         connect: Callable[[APIConnectOptions], Awaitable[http.WebSocket]],
@@ -890,7 +971,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         logger.debug("[TTS] SynthesizeStream.__init__ STARTING")
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
+        self._tts: _Connection = tts
         self._connect = connect
         self._connection_timings = connection_timings
         self._checkout_standby = checkout_standby

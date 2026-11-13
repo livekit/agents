@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from .. import _bindings, _core
-from .._bindings import core_leg, silero_model
+from .._bindings import silero_model
 from ..types import NOT_GIVEN
 from ..utils import is_given
 from .stt import RecognizeStream, STT as BaseSTT
@@ -18,14 +18,18 @@ if TYPE_CHECKING:
     from ..types import NotGivenOr
     from .connect import APIConnectOptions
     from .inference_stt import FallbackModels, STTEncoding, STTLanguages, STTModels
-    from .stt import STTCapabilities
 
 
-class STT(BaseSTT):
+class STT(_core.InferenceStt, BaseSTT):
     """`inference.STT`: the LiveKit Inference gateway's STT."""
 
-    if TYPE_CHECKING:
-        def _core_native(self) -> _core.InferenceStt: ...
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(
+            cls,
+            ("stream", "recognize", "_recognize_impl"),
+            "session.stt_node",
+        )
 
     def __init__(
         self,
@@ -58,7 +62,8 @@ class STT(BaseSTT):
             conn_options: The connection timeout, and the retries the gateway runs server-side.
             vad: A VAD whose end of speech finalizes the transcript (Speechmatics and OpenAI).
         """
-        self._native = _core.InferenceStt(
+        _core.InferenceStt.__init__(
+            self,
             silero_model,
             model if is_given(model) else None,
             language=language if is_given(language) else None,
@@ -70,22 +75,9 @@ class STT(BaseSTT):
             extra_kwargs=extra_kwargs if is_given(extra_kwargs) else None,
             fallback=fallback if is_given(fallback) else None,
             conn_options=conn_options if is_given(conn_options) else None,
-            vad=core_leg(vad) if is_given(vad) else None,
+            vad=vad if is_given(vad) else None,
         )
-        super().__init__(capabilities=self._native.capabilities)
-
-    def _core_leg(self) -> Any:
-        """This engine, unless a subclass replaces what it would bypass."""
-        replaced = _bindings.overrides(self, STT, "stream")
-        return self if replaced else self._core_native()
-
-    @property
-    def model(self) -> str:
-        return self._native.model
-
-    @property
-    def capabilities(self) -> STTCapabilities:
-        return self._native.capabilities
+        BaseSTT.__init__(self, capabilities=self.capabilities)
 
     def update_options(
         self,
@@ -95,7 +87,8 @@ class STT(BaseSTT):
         extra: NotGivenOr[dict[str, object]] = NOT_GIVEN,
     ) -> None:
         """Update the options; open streams get them as a mid-stream ``session.update``."""
-        self._native.update_options(
+        _core.InferenceStt._core_update_options(
+            self,
             model=model if is_given(model) else None,
             language=language if is_given(language) else None,
             extra=extra if is_given(extra) else None,
@@ -110,7 +103,7 @@ class STT(BaseSTT):
         return SpeechStream(
             stt=cast("stt.STT", self),
             language=language if is_given(language) else None,
-            conn_options=conn_options if is_given(conn_options) else self._native.conn_options,
+            conn_options=conn_options if is_given(conn_options) else self._core_conn_options(),
         )
 
 
@@ -133,7 +126,7 @@ class SpeechStream(RecognizeStream):
         self._language: STTLanguages | str | None = language
 
     async def _core_open(self) -> _core.InferenceSttStream:
-        return self._stt._core_native().stream(
+        return self._stt._core_native_stream(
             language=self._language,
             start_time_offset=self._start_time_offset,
             conn_options=self._conn_options,

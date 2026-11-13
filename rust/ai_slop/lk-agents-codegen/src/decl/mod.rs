@@ -514,6 +514,9 @@ pub struct Proxy {
     pub returned_context: bool,
     /// Some host call returns it for the core to own (`Box<dyn ..>`), run in that call's context.
     pub returned_owned: bool,
+    /// `weak`: an object's events, held through a weak reference so the object it is filled from
+    /// owns the implementation without a cycle; a call once the object is gone does nothing.
+    pub weak: bool,
 }
 
 impl RecordDecl {
@@ -656,6 +659,10 @@ pub struct Class {
     /// Python identity and subclass support declared by the class contract.
     pub host_module: String,
     pub subclass: bool,
+    /// Its constructor is `#[host(init)]`: an empty object (`__new__`) whose `__init__` builds the
+    /// implementation once, so a host class extends it (`class TTS(_core.InferenceTts, tts.TTS)`).
+    /// Its events reach the host object through a weak proxy and its label is its host class's.
+    pub init: bool,
     /// `class(.., implements = "module.Class")`: the host interface the class satisfies; its stub
     /// subclasses it so type checkers accept it where the host expects one.
     pub implements: Option<String>,
@@ -862,6 +869,9 @@ pub enum Ty {
     Env,
     /// The declaring class itself (`Self`).
     This,
+    /// `#[host(label)] label: String` of an `init` constructor: the host class path of the object
+    /// being built (`module.Name` of `type(self)`). Never crosses.
+    ClassLabel,
     /// `Arc<dyn Trait>` of a `#[host(proxy)]` trait: a native class as itself, any other host
     /// object behind the generated proxy.
     Proxy {
@@ -876,6 +886,9 @@ pub enum Ty {
         /// `Box<dyn Trait>`: an object the host hands over for the core to own (and consume, as a
         /// writer's `self: Box<Self>` close does); always behind the declared proxy.
         boxed: bool,
+        /// `proxy(.., weak)`: the events an `init` constructor's object emits, through a weak
+        /// reference to it, filled by the binding and never crossing.
+        weak: bool,
     },
     /// `Arc<dyn Trait>` of a `#[host(native)]` trait: an instance of one of the registered host
     /// `classes` (dotted) implementing it, as itself; any other host object is refused with
@@ -1033,7 +1046,15 @@ impl Ty {
 
     /// A parameter the binding supplies itself, absent from the host's signature.
     pub fn hidden(&self) -> bool {
-        matches!(self, Ty::CallContext | Ty::Cx | Ty::Cancellation | Ty::Env)
+        matches!(
+            self,
+            Ty::CallContext
+                | Ty::Cx
+                | Ty::Cancellation
+                | Ty::Env
+                | Ty::ClassLabel
+                | Ty::Proxy { weak: true, .. }
+        )
     }
 
     /// The Rust type, written from outside the ABI crate.
@@ -1071,6 +1092,7 @@ impl Ty {
             Ty::Shared { rust, value: true, .. } => rust.clone(),
             Ty::Shared { rust, .. } => format!("::std::sync::Arc<{rust}>"),
             Ty::This => "Self".into(),
+            Ty::ClassLabel => "::std::string::String".into(),
             Ty::Proxy { rust, boxed: true, .. } => format!("::std::boxed::Box<dyn {rust}>"),
             Ty::Proxy { rust, .. } | Ty::Native { rust, .. } => {
                 format!("::std::sync::Arc<dyn {rust}>")

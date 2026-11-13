@@ -20,7 +20,8 @@ pub(super) const FINAL_TRANSCRIPT_QUIET: Duration = Duration::from_secs(3);
 
 pub(super) struct SttStreamExecutor {
     pub(super) ws: Arc<dyn WsTransport>,
-    pub(super) identification: Option<Headers>,
+    /// The context the stream was opened under: its connections carry the identity of its job.
+    pub(super) cx: telemetry::Cx,
     pub(super) clock: Arc<dyn Clock>,
     /// The session keyterms when the stream opened; later ones arrive merged into `extra`.
     pub(super) keyterms: Vec<String>,
@@ -268,7 +269,7 @@ impl SttStreamExecutor {
     fn connection_headers(&self) -> Result<(Headers, String), ApiError> {
         let token =
             lk_agents_net::token::inference_bearer(&self.opts.api_key, &self.opts.api_secret)?;
-        let headers = gateway_headers(self.identification.as_ref(), None, None, &token);
+        let headers = gateway_headers(&self.cx, None, None, &token);
         let request_id = crate::ids::shortuuid(crate::ids::STT_REQUEST_ID_PREFIX);
         Ok((headers, request_id))
     }

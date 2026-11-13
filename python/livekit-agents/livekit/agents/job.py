@@ -59,6 +59,12 @@ if TYPE_CHECKING:
     from .voice.agent_session import RecordingOptions, VoiceSession
 
 
+def _current_run() -> _core.JobRun | None:
+    """The run of the job the calling context runs in: what a ``_core`` call made here is for."""
+    ctx = _JobContextVar.get(None)
+    return None if ctx is None else ctx._run
+
+
 @overload
 def get_job_context(*, required: Literal[True] = True) -> JobContext: ...
 

@@ -1,5 +1,7 @@
 use super::*;
-use crate::testkit::NoImages;
+use crate::testkit::{NoImages, job_cx};
+use lk_agents_abi::telemetry::Cx;
+use lk_agents_net::job_identity::{JobIdentity, user_agent};
 
 fn opts() -> LlmOptions {
     LlmOptions {
@@ -24,7 +26,7 @@ fn header<'a>(request: &'a HttpRequest, name: &str) -> Option<&'a str> {
 fn with_no_job_the_request_carries_no_livekit_job_headers() {
     let request = build_request(
         &opts(),
-        None,
+        &Cx::NONE,
         &NoImages,
         &ChatContext::default(),
         &[],
@@ -43,29 +45,25 @@ fn with_no_job_the_request_carries_no_livekit_job_headers() {
     assert!(request.url.ends_with("/v1/chat/completions"), "{}", request.url);
 }
 
-// Catches: the host's identification headers (the job's `X-LiveKit-*` identity, read where
-// `chat()` runs) not reaching the request, or the native priority/User-Agent leaking in beside
-// them. The pinned provider and the bearer are still ours.
+// Catches: the identity of the job the request runs for (its context's job) not reaching the
+// request, a session id leaking in, or the client's priority dropped. The pinned provider and the
+// bearer are still ours.
 #[test]
-fn the_hosts_identification_headers_ride_on_the_request() {
+fn the_requests_job_identity_rides_on_it() {
     let opts = LlmOptions {
         provider: Some("openai".into()),
         inference_class: Some("low".into()),
         ..opts()
     };
-    let ident: Headers = [
-        ("User-Agent", "LiveKit Agents/1 (python 3)"),
-        ("X-LiveKit-Room-ID", "RM_1"),
-        ("X-LiveKit-Job-ID", "AJ_1"),
-        ("X-LiveKit-Agent-ID", "PA_1"),
-        ("X-LiveKit-Session-ID", "inference_abc"),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-    .collect();
+    let cx = job_cx(JobIdentity {
+        room_sid: Some("RM_1".into()),
+        job_id: Some("AJ_1".into()),
+        agent_sid: Some("PA_1".into()),
+        ..Default::default()
+    });
     let request = build_request(
         &opts,
-        Some(&ident),
+        &cx,
         &NoImages,
         &ChatContext::default(),
         &[],
@@ -77,27 +75,20 @@ fn the_hosts_identification_headers_ride_on_the_request() {
     assert_eq!(header(&request, "X-LiveKit-Job-ID"), Some("AJ_1"));
     assert_eq!(header(&request, "X-LiveKit-Agent-ID"), Some("PA_1"));
     assert_eq!(header(&request, "X-LiveKit-Session-ID"), None);
-    assert_eq!(header(&request, "User-Agent"), Some("LiveKit Agents/1 (python 3)"));
-    assert_eq!(
-        header(&request, "X-LiveKit-Inference-Priority"),
-        None,
-        "the host's map already decided it"
-    );
+    assert_eq!(header(&request, "User-Agent"), Some(user_agent().as_str()));
+    assert_eq!(header(&request, "X-LiveKit-Inference-Priority"), Some("low"));
     assert_eq!(header(&request, "X-LiveKit-Inference-Provider"), Some("openai"));
 }
 
-// Catches: a call's own `inference_class` dropped because the job's identification already
-// carried the client's priority.
+// Catches: a call's own `inference_class` dropped because the job's own headers already carry
+// a priority.
 #[test]
-fn the_calls_inference_class_overrides_the_identifications() {
-    let ident: Headers = [("User-Agent", "ua"), ("X-LiveKit-Inference-Priority", "high")]
-        .into_iter()
-        .map(|(k, v)| (k.to_owned(), v.to_owned()))
-        .collect();
+fn the_calls_inference_class_overrides_the_jobs() {
+    let headers = [("X-LiveKit-Inference-Priority".to_owned(), "high".to_owned())];
+    let cx = job_cx(JobIdentity { headers: headers.into_iter().collect(), ..Default::default() });
     let args = ChatArgs { inference_class: Some("low".into()), ..ChatArgs::default() };
     let request =
-        build_request(&opts(), Some(&ident), &NoImages, &ChatContext::default(), &[], args, "t")
-            .unwrap();
+        build_request(&opts(), &cx, &NoImages, &ChatContext::default(), &[], args, "t").unwrap();
     assert_eq!(header(&request, "X-LiveKit-Inference-Priority"), Some("low"));
 }
 
@@ -119,7 +110,7 @@ fn a_provider_key_request_is_plain_chat_completions() {
         .collect(),
         ..opts()
     };
-    let ident: Headers = [("X-LiveKit-Job-ID".to_owned(), "AJ_1".to_owned())].into_iter().collect();
+    let cx = job_cx(JobIdentity { job_id: Some("AJ_1".into()), ..Default::default() });
     let tool = ToolSpec {
         provider_tool: None,
         name: "lookup".into(),
@@ -129,7 +120,7 @@ fn a_provider_key_request_is_plain_chat_completions() {
     };
     let request = build_request(
         &opts,
-        Some(&ident),
+        &cx,
         &NoImages,
         &ChatContext::default(),
         &[tool],
@@ -154,7 +145,7 @@ fn an_encoded_body_names_its_encoding_and_round_trips() {
     let opts = LlmOptions { body: BodyEncoding { msgpack: true, gzip: true }, ..opts() };
     let request = build_request(
         &opts,
-        None,
+        &Cx::NONE,
         &NoImages,
         &ChatContext::default(),
         &[],

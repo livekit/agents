@@ -77,6 +77,8 @@ pub struct RoomIo {
     chat_registered: Mutex<bool>,
     /// The session's startup spans, under its `session_start`; ended with the first link.
     startup: Mutex<Option<Startup>>,
+    /// The job the session runs for: once the room connects, its requests name the agent.
+    job: std::sync::OnceLock<telemetry::JobKey>,
 }
 
 struct Startup {
@@ -183,6 +185,7 @@ impl RoomIo {
             agent_state: signal::signal(None).0,
             chat_registered: Mutex::new(false),
             startup: Mutex::new(None),
+            job: std::sync::OnceLock::new(),
         })
     }
 
@@ -418,10 +421,14 @@ impl RoomIo {
         if state != ConnectionState::Connected {
             return Ok(());
         }
-        // Connected or reconnected: the agent's own identity for the session's spans.
+        // Connected or reconnected: the agent's own identity for the session's spans and for the
+        // job's inference requests.
         let local = self.room.local();
         let participant =
             ParticipantInfo { identity: local.identity()?, sid: local.sid()?, kind: local.kind()? };
+        if let Some(job) = self.job.get() {
+            lk_agents_net::job_identity::agent_joined(job, participant.sid.clone());
+        }
         self.emit(RoomIoEvent::ParticipantInfo { participant, local: true })
     }
 
@@ -825,6 +832,9 @@ impl room_owner::RoomIo for RoomIo {
     fn start(self: Arc<Self>, startup: telemetry::Cx) {
         if !self.transition(RoomIoState::start) {
             return;
+        }
+        if let Some(job) = startup.job() {
+            let _ = self.job.set(job.clone());
         }
         if let Some(input) = &self.audio_input {
             input.observe(startup.clone().continuing(None));

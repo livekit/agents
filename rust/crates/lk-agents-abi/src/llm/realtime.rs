@@ -819,8 +819,10 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     /// and base URL fall back to the dialect's environment: for Azure (`azure_deployment` or
     /// `entra_token`), `AZURE_OPENAI_API_KEY` and `{azure_endpoint}/openai`, `azure_endpoint`
     /// else `AZURE_OPENAI_ENDPOINT`; for OpenAI, `OPENAI_API_KEY` and `OPENAI_BASE_URL`, else
-    /// OpenAI's. `dialect`, `label` and `gateway` are the provider class's own.
-    #[host(new)]
+    /// OpenAI's. `dialect`, `label` and `gateway` are the provider class's own. One instance
+    /// serves every job it is handed to; a LiveKit Inference connection carries the identity of
+    /// the job it runs for.
+    #[host(init)]
     #[allow(
         clippy::too_many_arguments,
         reason = "mirrors the Python constructor's keyword arguments"
@@ -859,7 +861,7 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn capabilities(&self) -> RealtimeCapabilities;
     /// The given options; every live session sends what changed.
-    #[host(call)]
+    #[host(call, name = "_core_update_options")]
     #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn update_options(
         &self,
@@ -874,8 +876,6 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
         truncation: Maybe<Option<Truncation>>,
         reasoning: Maybe<Option<Reasoning>>,
     );
-    #[host(call)]
-    fn bind_identification(&self, headers: crate::Headers);
 }
 
 /// `RealtimeModel` over the OpenAI Realtime protocol: OpenAI, Azure OpenAI and every provider
@@ -887,6 +887,8 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     name = "RealtimeModel",
     base = "llm.realtime.RealtimeModel",
     native = OpenAIRealtimeModel,
+    refuse(session),
+    node = "session.llm_node",
     base_args(capabilities),
     host_args(dialect = "self._dialect", label = "self._provider_label", gateway = "self._gateway")
 ))]
@@ -960,7 +962,7 @@ pub trait OpenAIRealtimeModelFacade {
 
     /// Change the model's options; every live session sends what changed. Each provider's model
     /// declares `update_options` with the options its session carries.
-    #[host(native = update_options)]
+    #[host(native = _core_update_options)]
     #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     fn _update_options(
         &self,

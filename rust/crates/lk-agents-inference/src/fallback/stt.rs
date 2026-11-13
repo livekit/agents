@@ -417,6 +417,8 @@ pub struct FallbackStt {
     spawner: Arc<dyn Spawner>,
     capabilities: SttCapabilities,
     caller_conn: ApiConnectOptions,
+    /// The name logs give it: its host class's when its host built it.
+    label: String,
 }
 
 impl Clone for FallbackStt {
@@ -426,6 +428,7 @@ impl Clone for FallbackStt {
             spawner: Arc::clone(&self.spawner),
             capabilities: self.capabilities,
             caller_conn: self.caller_conn,
+            label: self.label.clone(),
         }
     }
 }
@@ -464,6 +467,7 @@ impl FallbackStt {
             spawner,
             capabilities,
             caller_conn: crate::fallback::caller_default(),
+            label: NativeLabel::SttFallback.as_str().into(),
         })
     }
 
@@ -489,12 +493,13 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
 
     fn new(
         env: &ProcessEnv,
+        label: String,
+        observer: Arc<dyn ChainObserver>,
         stts: Vec<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
         attempt_timeout: f64,
         max_retry_per_stt: u32,
         retry_interval: f64,
-        on_availability: Option<Arc<dyn ChainObserver>>,
     ) -> Result<Self, Invalid> {
         // A repeated STT is adapted once, so its entries keep one health.
         let mut adapted: Vec<(usize, Arc<dyn Stt>)> = Vec::new();
@@ -525,14 +530,9 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
             retry_interval: Some(retry_interval),
             ..ChainPolicy::stt_defaults()
         };
-        let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
-        FallbackStt::new(
-            stts,
-            policy,
-            env.clock.clone(),
-            (env.spawner)().map_err(|e| Invalid(e.to_string()))?,
-            observer,
-        )
+        let spawner = (env.spawner)().map_err(|e| Invalid(e.to_string()))?;
+        let chain = FallbackStt::new(stts, policy, env.clock.clone(), spawner, observer)?;
+        Ok(FallbackStt { label, ..chain })
     }
 
     fn active_index(&self) -> usize {
@@ -549,34 +549,24 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
 
     async fn recognize(
         &self,
+        cx: telemetry::Cx,
         frames: Vec<AudioFrame>,
         language: Option<LanguageCode>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<SpeechEvent, ProviderError> {
-        Stt::recognize(
-            &self.configured(conn_options),
-            &telemetry::Cx::NONE,
-            &frames,
-            language.as_ref(),
-        )
-        .await
+        Stt::recognize(&self.configured(conn_options), &cx, &frames, language.as_ref()).await
     }
 
     async fn stream(
         &self,
+        cx: telemetry::Cx,
         language: Option<LanguageCode>,
         start_time_offset: Option<f64>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError> {
-        // Python's own call: no framework span is current to open under.
-        Stt::stream(
-            &self.configured(conn_options),
-            &telemetry::Cx::NONE,
-            language.as_ref(),
-            start_time_offset,
-        )
-        .await
-        .map(|opened| opened.expect("the chain's `stream` is always duplex"))
+        Stt::stream(&self.configured(conn_options), &cx, language.as_ref(), start_time_offset)
+            .await
+            .map(|opened| opened.expect("the chain's `stream` is always duplex"))
     }
 }
 
@@ -586,7 +576,7 @@ impl Stt for FallbackStt {
     }
 
     fn label(&self) -> String {
-        NativeLabel::SttFallback.as_str().into()
+        self.label.clone()
     }
 
     /// The **active** member's identity (L-25: adapters are transparent to the metrics).
@@ -594,9 +584,9 @@ impl Stt for FallbackStt {
         self.active().id()
     }
 
-    fn prewarm(&self) {
+    fn prewarm(&self, cx: &telemetry::Cx) {
         for entry in self.chain.entries() {
-            entry.inner().prewarm();
+            entry.inner().prewarm(cx);
         }
     }
 

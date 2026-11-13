@@ -57,7 +57,7 @@ fn each_reply_pays_only_the_voice() {
                 Arc::new(SimClock::new())
             );
             // The session prewarms its voice as it starts; the greeting comes a moment later.
-            voice.prewarm();
+            voice.prewarm(&lk_agents_abi::telemetry::Cx::NONE);
             tokio::time::sleep(Duration::from_millis(500)).await;
             for reply in 0..5 {
                 let asked = tokio::time::Instant::now();
@@ -599,29 +599,28 @@ async fn a_synthesis_sends_the_models_markup() {
     assert_eq!(transcript, "say [whisper] this now ", "converted to the provider's markup");
 }
 
-// Catches: the host's identification headers (the job's `X-LiveKit-*` identity) not reaching
-// the socket, or the request id not derived from the host's session id.
+// Catches: the identity of the job the stream runs for (its `X-LiveKit-*` headers) not reaching
+// the socket, or a session header among the job's own leaking.
 #[tokio::test]
-async fn a_stream_opened_with_identification_connects_with_those_headers() {
+async fn a_stream_for_a_job_connects_with_its_identity() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let client = tts(ws.clone());
-    let ident: Headers = [
-        ("User-Agent", "LiveKit Agents/1 (python 3)"),
-        ("X-LiveKit-Room-ID", "RM_1"),
-        ("X-LiveKit-Job-ID", "AJ_1"),
-        ("X-LiveKit-Session-ID", "inference_abc"),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-    .collect();
-    let (_sink, _source) = client.stream_identified(Some(ident)).unwrap();
+    let cx = crate::testkit::job_cx(lk_agents_net::job_identity::JobIdentity {
+        room_sid: Some("RM_1".into()),
+        job_id: Some("AJ_1".into()),
+        headers: [("X-LiveKit-Session-ID".to_owned(), "inference_abc".to_owned())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    });
+    let (_sink, _source) = client.stream_for(&cx).unwrap();
     until_sent(&ws, 1).await;
     let (_, headers) = ws.last_connect().expect("connected");
     let get = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
     assert_eq!(get("X-LiveKit-Room-ID"), Some("RM_1"));
     assert_eq!(get("X-LiveKit-Job-ID"), Some("AJ_1"));
     assert_eq!(get("X-LiveKit-Session-ID"), None);
-    assert_eq!(get("User-Agent"), Some("LiveKit Agents/1 (python 3)"), "the host's, not ours");
+    assert_eq!(get("User-Agent"), Some(lk_agents_net::job_identity::user_agent().as_str()));
     assert!(get("Authorization").is_some_and(|v| v.starts_with("Bearer ")));
 
     // Without identification (no job): no `X-LiveKit-*` header at all.
@@ -683,10 +682,7 @@ async fn cartesia_words_keep_their_separators_through_a_stream() {
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
     let client =
         GatewayTts::new(opts, ws, spawner, Arc::new(lk_agents_net::clock::RealClock::new()));
-    let ident: Headers = [("X-LiveKit-Session-ID".to_owned(), "inference_connection".to_owned())]
-        .into_iter()
-        .collect();
-    let (sink, mut source) = client.stream_identified(Some(ident)).unwrap();
+    let (sink, mut source) = client.stream_for(&lk_agents_abi::telemetry::Cx::NONE).unwrap();
     sink.push(chunk("hello world.")).unwrap();
     sink.end_input();
     let mut words = Vec::new();
@@ -934,7 +930,7 @@ async fn a_prewarm_after_a_failed_one_pools_the_socket_the_first_synthesis_reuse
         Arc::new(lk_agents_net::clock::RealClock::new()),
     );
     for _ in 0..2 {
-        tts.prewarm();
+        tts.prewarm(&lk_agents_abi::telemetry::Cx::NONE);
         for _ in 0..64 {
             tokio::task::yield_now().await;
         }

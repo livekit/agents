@@ -28,14 +28,14 @@ def replace_words(
 
 class SpeechSentenceTokenizer:
     """`tokenize.SentenceTokenizer`'s engine."""
-    def __new__(
-        cls,
+    def __init__(
+        self,
         *,
         min_words: int = 4,
         clause_words: int | None = None,
         retain_format: bool = False,
         max_token_len: int | None = None,
-    ) -> Self: ...
+    ) -> None: ...
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         """The sentences of `text`, batched as the stream batches them."""
     def _core_stream(self) -> SpeechSentenceStream: ...
@@ -52,7 +52,7 @@ class SpeechSentenceStream:
 
 class SpeechWordTokenizer:
     """`tokenize.WordTokenizer`'s engine."""
-    def __new__(cls, *, ignore_punctuation: bool = True, retain_format: bool = False) -> Self: ...
+    def __init__(self, *, ignore_punctuation: bool = True, retain_format: bool = False) -> None: ...
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]: ...
     def _core_stream(self) -> SpeechWordStream: ...
 

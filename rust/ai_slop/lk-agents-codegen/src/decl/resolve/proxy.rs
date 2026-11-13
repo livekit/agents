@@ -13,7 +13,12 @@ impl Resolver<'_> {
     /// A declaration-model proxy: every method declares its call and its context parameter.
     pub(super) fn proxy_trait(&self, tr: &syn::ItemTrait, proxy: &Entry) -> Result<Proxy, String> {
         let at = self.at;
-        voc::only(at, &proxy.nested, &["host", "view", "base", "generic", "sdk", "events"])?;
+        voc::only(
+            at,
+            &proxy.nested,
+            &["host", "view", "base", "generic", "sdk", "events", "weak"],
+        )?;
+        let weak = voc::find(&proxy.nested, "weak").is_some();
         let host = voc::text(at, &proxy.nested, "host")?.ok_or_else(|| {
             format!("{at}: proxy(host = \"module.Class\") names the class it calls")
         })?;
@@ -59,6 +64,9 @@ impl Resolver<'_> {
         if methods.iter().filter(|m| m.kind == ProxyCall::Bind).count() > 1 {
             return Err(format!("{at}: a proxy binds one value"));
         }
+        if weak && methods.iter().any(|m| m.kind != ProxyCall::Notify) {
+            return Err(format!("{at}: a weak proxy carries events: every method is a `notify`"));
+        }
         let async_trait = tr
             .attrs
             .iter()
@@ -91,6 +99,7 @@ impl Resolver<'_> {
             methods,
             returned_context: false,
             returned_owned: false,
+            weak,
         })
     }
 
@@ -220,14 +229,16 @@ impl Resolver<'_> {
                 });
                 continue;
             }
+            // A notice takes one too, for a native implementation's work; the host's runs in the
+            // context its proxy captured.
             if span_context(&pt.ty) {
-                if kind != ProxyCall::Await
+                if !matches!(kind, ProxyCall::Await | ProxyCall::Notify)
                     || !entries.is_empty()
                     || !matches!(&*pt.ty, syn::Type::Reference(_))
                     || params.iter().any(|p: &Param| p.ty == Ty::Cx)
                 {
                     return Err(format!(
-                        "{pat}: one `cx: &telemetry::Cx` parameter belongs to an awaited proxy call"
+                        "{pat}: one `cx: &telemetry::Cx` parameter belongs to an awaited or notified proxy call"
                     ));
                 }
                 params.push(Param {

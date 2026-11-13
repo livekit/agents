@@ -11,7 +11,7 @@ from typing_extensions import TypeVar
 
 from livekit import rtc
 
-from .. import _bindings, _core, inference, llm, stt, tts
+from .. import _core, inference, llm, stt, tts
 from .._bindings import tool_specs
 from .._generated.connect import SessionConnectOptions as SessionConnectOptions
 from .._generated.keyterms import STTContextOptions
@@ -261,13 +261,14 @@ class SessionAdapter:
             agent_host=agent,
             tools_host=self._pool(agent),
             voice_agent=self._voice_agent(agent, task=task),
-            stt=_bindings.core_leg(binding.stt),
+            stt=binding.stt,
             llm=(
-                _bindings.core_leg(model)
-                if is_given(agent._llm) or not isinstance(model, llm.RealtimeModel)
-                else NOT_GIVEN
+                NOT_GIVEN
+                if isinstance(model, llm.RealtimeModel) and not is_given(agent._llm)
+                # an agent's own model reaches the core as it is, whatever its kind
+                else cast("llm.LLM | None", model)
             ),
-            tts=_bindings.core_leg(binding.tts),
+            tts=binding.tts,
             **self._nodes(agent),
         )
 
@@ -412,7 +413,7 @@ class SessionHost:
         hooks = _AgentHooks(session)
         frame = session._frame(agent)
         model = frame.llm if is_given(frame.llm) else session._llm
-        realtime = model._core_leg() if isinstance(model, llm.RealtimeModel) else None
+        realtime = model if isinstance(model, llm.RealtimeModel) else None
         keyterm_llm = _detection_llm(session._stt_context)
         session._room = room
         args = VoiceSessionArgs(
@@ -423,7 +424,7 @@ class SessionHost:
             # None: a stored call starts on its partition's history
             chat_ctx=chat_ctx.items if chat_ctx is not None else None,
             stt=frame.stt if is_given(frame.stt) else None,
-            vad=_bindings.core_leg(session.vad),
+            vad=session.vad,
             llm=None if isinstance(model, llm.RealtimeModel) else model,
             realtime=realtime,
             realtime_tools=lambda: session._adapter._pool(session.current_agent),
@@ -445,7 +446,7 @@ class SessionHost:
             max_unrecoverable_errors=session._conn_options.max_unrecoverable_errors,
             interruption_detector=session._adapter._interruption_detector(agent, model),
             stt_context=session._stt_context,
-            keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
+            keyterm_llm=keyterm_llm,
             keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
             llm_node=frame.llm_node,
             tts_node=frame.tts_node,
@@ -468,7 +469,7 @@ class SessionHost:
         nodes = session._adapter._nodes(session.current_agent)
 
         def leg(slot: str) -> Any:
-            return _bindings.core_leg(providers[slot]) if slot in providers else NOT_GIVEN
+            return providers[slot] if slot in providers else NOT_GIVEN
 
         return ProviderBindings(
             stt=leg("stt"),

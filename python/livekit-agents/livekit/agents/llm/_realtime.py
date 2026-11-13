@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
-from .. import _core
 from .._generated import facades_llm__realtime as _facades, public_llm__realtime as _public
 from .._generated.public_llm__realtime import *  # noqa: F403
 from ..types import NOT_GIVEN, NotGivenOr
@@ -25,9 +24,6 @@ class _OpenAIProtocolModel(_facades.RealtimeModel):
         raise NotImplementedError(
             f"{type(self).__name__} sessions run in the core; give the model to a VoiceSession"
         )
-
-    def _core_leg(self) -> _core.OpenAIRealtimeModel:
-        return self._native
 
     async def aclose(self) -> None:
         pass

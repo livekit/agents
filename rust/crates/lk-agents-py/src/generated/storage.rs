@@ -444,10 +444,12 @@ impl Storage {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::storage::StorageNamespace>(),
-        read: |obj| {
-            let this = obj.cast::<Storage>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::storage::StorageNamespace> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<Storage>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::storage::StorageNamespace> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -630,11 +632,13 @@ impl CoreContextActivation {
         crate::py_calls::check_pid()?;
         let sink =
             crate::py_objects::native::<dyn ::lk_agents_abi::a2a::turn::HandlerPort>(sink.as_any())
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "sink",
-                        ": expected a native handler turn"
-                    ))
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "sink",
+                            ": expected a native handler turn"
+                        ))
+                    })
                 })?;
         py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::set_session_sink(&self.0, sink)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
@@ -2035,10 +2039,12 @@ impl CoreSessionBinding {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::text_session::SessionStateSink>(),
-        read: |obj| {
-            let this = obj.cast::<CoreSessionBinding>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::text_session::SessionStateSink> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreSessionBinding>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::text_session::SessionStateSink> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -2104,10 +2110,12 @@ impl CoreVoiceStore {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::storage::voice::VoiceStorage>(),
-        read: |obj| {
-            let this = obj.cast::<CoreVoiceStore>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::storage::voice::VoiceStorage> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<CoreVoiceStore>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::storage::voice::VoiceStorage> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }

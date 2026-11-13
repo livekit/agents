@@ -193,8 +193,9 @@ fn field_read(r: &RecordDecl, f: &Field, owner: &str) -> Result<String, String> 
     } else if c.flatten {
         format!("({})?", convert("obj")?)
     } else if c.own_value {
-        // A string subclass's value is distinct from any of its attributes.
-        if c.extract_with.is_some() {
+        // A string subclass's value is distinct from any of its attributes; any other kind is
+        // the object itself, read by its declared conversion.
+        if c.extract_with.is_some() || f.ty != Ty::Str {
             format!("({})?", convert("obj")?)
         } else {
             "obj.str()?.extract::<String>()?".into()

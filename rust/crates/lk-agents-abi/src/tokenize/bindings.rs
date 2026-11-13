@@ -89,7 +89,7 @@ pub enum SentenceTokenizerLeg {
 pub trait SpeechSentenceTokenizer: Send + Sized + 'static {
     #[host(class(name = "SpeechSentenceStream"))]
     type Stream;
-    #[host(new)]
+    #[host(init)]
     fn new(
         #[host(kw, default = 4)] min_words: usize,
         #[host(default = None)] clause_words: Option<usize>,
@@ -125,7 +125,7 @@ pub trait SpeechSentenceStream: Send + Sized + 'static {
 pub trait SpeechWordTokenizer: Send + Sized + 'static {
     #[host(class(name = "SpeechWordStream"))]
     type Stream;
-    #[host(new)]
+    #[host(init)]
     fn new(
         #[host(kw, default = true)] ignore_punctuation: bool,
         #[host(default = false)] retain_format: bool,
@@ -165,7 +165,8 @@ pub trait SpeechWordStream: Send + Sized + 'static {
     path = "livekit.agents.tokenize",
     name = "WordTokenizer",
     base = "tokenize._WordTokenizerBase",
-    native = SpeechWordTokenizer
+    native = SpeechWordTokenizer,
+    proxied(tokenize, stream)
 ))]
 pub trait SpeechWords {
     #[host(new)]
@@ -200,7 +201,8 @@ pub trait SpeechWords {
     path = "livekit.agents.tokenize",
     name = "SentenceTokenizer",
     base = "tokenize._SentenceTokenizerBase",
-    native = SpeechSentenceTokenizer
+    native = SpeechSentenceTokenizer,
+    proxied(tokenize, stream)
 ))]
 pub trait SpeechSentences {
     #[host(new)]

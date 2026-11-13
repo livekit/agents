@@ -5,7 +5,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::headers::{Headers, gateway_headers};
+use crate::headers::gateway_headers;
+use lk_agents_abi::telemetry::Cx;
 use lk_agents_core::request::AttemptFailure;
 use lk_agents_net::transport::HttpRequest;
 
@@ -175,12 +176,12 @@ pub struct AvatarRoom {
 }
 
 /// The create exchange of one operation: `idempotency_key` names the operation, so every attempt
-/// replays its first result rather than paying for a second provider session. `headers` are the
-/// job's identification; `bearer` the gateway token the runtime signed.
+/// replays its first result rather than paying for a second provider session. It carries the
+/// identity of the job `cx` runs for; `bearer` is the gateway token the runtime signed.
 pub fn create_request(
     opts: &AvatarOptions,
     room: &AvatarRoom,
-    headers: Headers,
+    cx: &Cx,
     bearer: &str,
     idempotency_key: &str,
 ) -> HttpRequest {
@@ -195,16 +196,16 @@ pub fn create_request(
         avatar_id: opts.avatar_id.as_deref().filter(|id| !id.is_empty()),
         options: &opts.options,
     };
-    let mut headers = headers;
-    headers.insert("Idempotency-Key", idempotency_key);
-    request(opts, "/avatar/sessions", &body, headers, bearer)
+    let mut request = request(opts, "/avatar/sessions", &body, cx, bearer);
+    request.headers.insert("Idempotency-Key", idempotency_key);
+    request
 }
 
 /// The terminate exchange of `session`; `None` when it carries no terminable identity.
 pub fn terminate_request(
     opts: &AvatarOptions,
     session: &ProviderSession,
-    headers: Headers,
+    cx: &Cx,
     bearer: &str,
 ) -> Option<HttpRequest> {
     let body = TerminateBody {
@@ -212,17 +213,17 @@ pub fn terminate_request(
         provider_session_id: session.provider_session_id.as_deref()?,
         terminate_token: session.terminate_token.as_deref()?,
     };
-    Some(request(opts, "/avatar/sessions/terminate", &body, headers, bearer))
+    Some(request(opts, "/avatar/sessions/terminate", &body, cx, bearer))
 }
 
 fn request(
     opts: &AvatarOptions,
     path: &str,
     body: &impl Serialize,
-    mut headers: Headers,
+    cx: &Cx,
     bearer: &str,
 ) -> HttpRequest {
-    headers = gateway_headers(Some(&headers), None, Some(&opts.provider), bearer);
+    let mut headers = gateway_headers(cx, None, Some(&opts.provider), bearer);
     headers.insert("Content-Type", "application/json");
     HttpRequest {
         url: format!("{}{path}", opts.base_url.trim_end_matches('/')),
@@ -308,7 +309,7 @@ mod tests {
             "u".into(),
         )
         .unwrap();
-        let request = create_request(&opts, &room, Headers::new(), "t", "k");
+        let request = create_request(&opts, &room, &Cx::NONE, "t", "k");
         let body: Value = serde_json::from_slice(&request.body).unwrap();
         assert_eq!(
             body,

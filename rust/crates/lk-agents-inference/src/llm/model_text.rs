@@ -44,8 +44,8 @@ impl Llm for ModelText {
         self.inner.id()
     }
 
-    fn prewarm(&self) {
-        self.inner.prewarm();
+    fn prewarm(&self, cx: &lk_agents_abi::telemetry::Cx) {
+        self.inner.prewarm(cx);
     }
 
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Llm>> {

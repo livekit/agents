@@ -64,11 +64,13 @@ pub fn dev_channel<'py>(
     let server = crate::py_objects::native::<dyn ::lk_agents_abi::worker::server_host::ServerJobs>(
         server.as_any(),
     )
-    .ok_or_else(|| {
-        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "server",
-            ": expected a native ServerRuntime"
-        ))
+    .and_then(|native| {
+        native.ok_or_else(|| {
+            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                "server",
+                ": expected a native ServerRuntime"
+            ))
+        })
     })?;
     crate::py_calls::future_into_py(py, async move {
         let () = <CliImpl as ::lk_agents_abi::cli::Cli>::dev_channel(

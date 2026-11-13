@@ -95,14 +95,31 @@ type SpeechSentenceTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::Stri
 type SpeechSentenceTokenizerMaxTokenLenOutput = ::std::option::Option<usize>;
 
 /// `tokenize.SentenceTokenizer`'s engine.
-#[pyclass(frozen, name = "SpeechSentenceTokenizer", module = "livekit.agents._core")]
-pub struct SpeechSentenceTokenizer(pub(crate) ::std::sync::Arc<SpeechSentenceTokenizerImpl>);
+#[pyclass(
+    frozen,
+    weakref,
+    subclass,
+    name = "SpeechSentenceTokenizer",
+    module = "livekit.agents._core"
+)]
+pub struct SpeechSentenceTokenizer(
+    pub(crate) ::std::sync::OnceLock<::std::sync::Arc<SpeechSentenceTokenizerImpl>>,
+);
 
 #[pymethods]
 impl SpeechSentenceTokenizer {
     #[new]
-    #[pyo3(signature = (*, min_words = 4, clause_words = None, retain_format = false, max_token_len = None))]
+    #[pyo3(signature = (*_args, **_kwargs))]
     fn new(
+        _args: &Bound<'_, ::pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, ::pyo3::types::PyDict>>,
+    ) -> Self {
+        Self(::std::sync::OnceLock::new())
+    }
+
+    #[pyo3(signature = (*, min_words = 4, clause_words = None, retain_format = false, max_token_len = None))]
+    fn __init__(
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         #[pyo3(from_py_with = _extract_speech_sentence_tokenizer_new_min_words)]
         min_words: SpeechSentenceTokenizerNewMinWordsInput,
@@ -110,9 +127,17 @@ impl SpeechSentenceTokenizer {
         clause_words: SpeechSentenceTokenizerNewClauseWordsInput,
         retain_format: bool,
         #[pyo3(from_py_with = _extract_speech_sentence_tokenizer_new_max_token_len)] max_token_len: SpeechSentenceTokenizerNewMaxTokenLenInput,
-    ) -> PyResult<SpeechSentenceTokenizer> {
+    ) -> PyResult<()> {
+        let once = || {
+            ::pyo3::exceptions::PyRuntimeError::new_err(
+                "SpeechSentenceTokenizer.__init__ runs once",
+            )
+        };
+        if slf.get().0.get().is_some() {
+            return Err(once());
+        }
         let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::new(min_words, clause_words, retain_format, max_token_len));
-        ::pyo3::PyResult::Ok(SpeechSentenceTokenizer(::std::sync::Arc::new(out)))
+        slf.get().0.set(::std::sync::Arc::new(out)).map_err(|_| once())
     }
 
     /// The sentences of `text`, batched as the stream batches them.
@@ -123,32 +148,44 @@ impl SpeechSentenceTokenizer {
         text: ::std::string::String,
         language: ::std::option::Option<::std::string::String>,
     ) -> PyResult<SpeechSentenceTokenizerTokenizeOutput> {
-        let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::tokenize(&self.0, text, language));
+        let engine = self.engine()?;
+        let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::tokenize(engine, text, language));
         ::pyo3::PyResult::Ok(out)
     }
 
     #[pyo3(name = "_core_stream")]
     fn stream(&self, py: Python<'_>) -> PyResult<super::tokenize::SpeechSentenceStream> {
-        let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::stream(&self.0));
+        let engine = self.engine()?;
+        let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::stream(engine));
         ::pyo3::PyResult::Ok(super::tokenize::SpeechSentenceStream(out))
     }
 
     #[getter]
     #[pyo3(name = "_core_max_token_len")]
     fn max_token_len(&self, py: Python<'_>) -> PyResult<SpeechSentenceTokenizerMaxTokenLenOutput> {
-        let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::max_token_len(&self.0));
+        let engine = self.engine()?;
+        let out = py.detach(|| <SpeechSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechSentenceTokenizer>::max_token_len(engine));
         ::pyo3::PyResult::Ok(out)
     }
 }
 
-// Wherever the host passes a `::lk_agents_abi::tokenize::bindings::NativeSentences`, an instance of this class is itself.
+impl SpeechSentenceTokenizer {
+    /// The implementation its `__init__` built.
+    pub(crate) fn engine(&self) -> PyResult<&::std::sync::Arc<SpeechSentenceTokenizerImpl>> {
+        self.0.get().ok_or_else(|| crate::py_objects::unbuilt("SpeechSentenceTokenizer"))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::tokenize::bindings::NativeSentences`, an instance of this class is itself once built.
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::tokenize::bindings::NativeSentences>(),
-        read: |obj| {
-            let this = obj.cast::<SpeechSentenceTokenizer>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::tokenize::bindings::NativeSentences> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<SpeechSentenceTokenizer>() {
+            Ok(this) => {
+                let engine = this.get().0.get().cloned().map(|engine| -> ::std::sync::Arc<dyn ::lk_agents_abi::tokenize::bindings::NativeSentences> { engine });
+                crate::py_objects::built(obj, engine, "SpeechSentenceTokenizer")
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -185,20 +222,37 @@ type SpeechWordTokenizerImpl =
 type SpeechWordTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::String>;
 
 /// `tokenize.WordTokenizer`'s engine.
-#[pyclass(frozen, name = "SpeechWordTokenizer", module = "livekit.agents._core")]
-pub struct SpeechWordTokenizer(pub(crate) ::std::sync::Arc<SpeechWordTokenizerImpl>);
+#[pyclass(frozen, weakref, subclass, name = "SpeechWordTokenizer", module = "livekit.agents._core")]
+pub struct SpeechWordTokenizer(
+    pub(crate) ::std::sync::OnceLock<::std::sync::Arc<SpeechWordTokenizerImpl>>,
+);
 
 #[pymethods]
 impl SpeechWordTokenizer {
     #[new]
-    #[pyo3(signature = (*, ignore_punctuation = true, retain_format = false))]
+    #[pyo3(signature = (*_args, **_kwargs))]
     fn new(
+        _args: &Bound<'_, ::pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, ::pyo3::types::PyDict>>,
+    ) -> Self {
+        Self(::std::sync::OnceLock::new())
+    }
+
+    #[pyo3(signature = (*, ignore_punctuation = true, retain_format = false))]
+    fn __init__(
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         ignore_punctuation: bool,
         retain_format: bool,
-    ) -> PyResult<SpeechWordTokenizer> {
+    ) -> PyResult<()> {
+        let once = || {
+            ::pyo3::exceptions::PyRuntimeError::new_err("SpeechWordTokenizer.__init__ runs once")
+        };
+        if slf.get().0.get().is_some() {
+            return Err(once());
+        }
         let out = py.detach(|| <SpeechWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechWordTokenizer>::new(ignore_punctuation, retain_format));
-        ::pyo3::PyResult::Ok(SpeechWordTokenizer(::std::sync::Arc::new(out)))
+        slf.get().0.set(::std::sync::Arc::new(out)).map_err(|_| once())
     }
 
     #[pyo3(signature = (text, *, language = None))]
@@ -208,14 +262,23 @@ impl SpeechWordTokenizer {
         text: ::std::string::String,
         language: ::std::option::Option<::std::string::String>,
     ) -> PyResult<SpeechWordTokenizerTokenizeOutput> {
-        let out = py.detach(|| <SpeechWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechWordTokenizer>::tokenize(&self.0, text, language));
+        let engine = self.engine()?;
+        let out = py.detach(|| <SpeechWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechWordTokenizer>::tokenize(engine, text, language));
         ::pyo3::PyResult::Ok(out)
     }
 
     #[pyo3(name = "_core_stream")]
     fn stream(&self, py: Python<'_>) -> PyResult<super::tokenize::SpeechWordStream> {
-        let out = py.detach(|| <SpeechWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechWordTokenizer>::stream(&self.0));
+        let engine = self.engine()?;
+        let out = py.detach(|| <SpeechWordTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SpeechWordTokenizer>::stream(engine));
         ::pyo3::PyResult::Ok(super::tokenize::SpeechWordStream(out))
+    }
+}
+
+impl SpeechWordTokenizer {
+    /// The implementation its `__init__` built.
+    pub(crate) fn engine(&self) -> PyResult<&::std::sync::Arc<SpeechWordTokenizerImpl>> {
+        self.0.get().ok_or_else(|| crate::py_objects::unbuilt("SpeechWordTokenizer"))
     }
 }
 
@@ -667,7 +730,7 @@ impl TokenizerCallbackProxy {
     {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -682,7 +745,7 @@ impl TokenizerCallbackProxy {
     {
         if let Some(native) = crate::py_objects::native::<
             dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback,
-        >(obj)
+        >(obj)?
         {
             return Ok(native);
         }
@@ -694,6 +757,15 @@ impl TokenizerCallbackProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback>>
     {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback>(
+            obj,
+        )?
+        .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `TokenizerCallback` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 

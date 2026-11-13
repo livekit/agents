@@ -29,7 +29,6 @@ from .types import ProviderId
 if TYPE_CHECKING:
     from ..llm.realtime import GenerationCreatedEvent
     from ..llm.tool_context import Tool, ToolChoice, ToolContext, Toolset
-    from .llm_fallback import RealtimeLeg
 
 
 # Record declarations:
@@ -102,11 +101,6 @@ class RealtimeModel(ABC, rtc.EventEmitter[TEvent], Generic[TEvent]):
         super().__init__()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._capabilities = capabilities
-
-    def _core_leg(self) -> RealtimeLeg:
-        """The model as the core takes it: a plugin is itself, a host provider; a model the core
-        runs returns its native model."""
-        return self
 
     @property
     def label(self) -> str:

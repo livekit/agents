@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _bindings, _core
-from .._bindings import core_leg, core_legs
 from ..log import logger
 from . import tts_availability
 from .tts import TTS
@@ -18,13 +17,17 @@ if TYPE_CHECKING:
     from .llm_fallback import AvailabilityChanged
 
 
-class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
+class FallbackAdapter(_core.FallbackTts, TTS[Literal["tts_availability_changed"]]):
     """`tts.FallbackAdapter`: several TTS behind one; a failed one is skipped until it recovers."""
 
     if TYPE_CHECKING:
         _members: list[TTS[Any]]
 
         def _core_failed(self, error: BaseException, recoverable: bool) -> None: ...
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("_synthesize", "_stream"), "session.tts_node")
 
     def __init__(
         self,
@@ -44,24 +47,20 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
             sample_rate: The output rate; the highest of the TTS by default, the others
                 resampled.
         """
-        self._native = _core.FallbackTts(
-            core_legs(tts),
+        _core.FallbackTts.__init__(
+            self,
+            tts,
             max_retry_per_tts=max_retry_per_tts,
             attempt_timeout=attempt_timeout,
             sample_rate=sample_rate,
-            on_availability=self,
         )
         self._members = list(tts)
-        super().__init__(
-            capabilities=self._native.capabilities,
-            sample_rate=self._native.sample_rate,
-            num_channels=self._native.num_channels,
+        TTS.__init__(
+            self,
+            capabilities=self.capabilities,
+            sample_rate=self.sample_rate,
+            num_channels=self.num_channels,
         )
-
-    def _core_leg(self) -> Any:
-        """This engine, unless a subclass replaces what it would bypass."""
-        replaced = _bindings.overrides(self, FallbackAdapter, "_synthesize", "_stream")
-        return self if replaced else self._native
 
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
@@ -74,7 +73,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
 
     @property
     def _active(self) -> TTS[Any]:
-        return self._members[self._native.active_index]
+        return self._members[self._core_active_index]
 
     @property
     def model(self) -> str:
@@ -89,12 +88,16 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         return self._active.metrics_metadata
 
     async def aclose(self) -> None:
-        await super().aclose()
-        await self._native.aclose()
+        await TTS.aclose(self)
+        await _core.FallbackTts.aclose(self)
 
 
-class StreamAdapter(TTS):
+class StreamAdapter(_core.TtsStreamAdapter, TTS):
     """`tts.StreamAdapter`: a non-streaming TTS as a streaming one."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("_synthesize", "_stream"), "session.tts_node")
 
     def __init__(self, *, tts: TTS[Any]) -> None:
         """A non-streaming TTS as a streaming one: each chunk of the text, as its stage splits it,
@@ -103,15 +106,11 @@ class StreamAdapter(TTS):
         Args:
             tts: The non-streaming TTS.
         """
-        self._native = _core.TtsStreamAdapter(tts=core_leg(tts))
+        _core.TtsStreamAdapter.__init__(self, tts=tts)
         self._tts = tts
-        super().__init__(
-            capabilities=self._native.capabilities,
-            sample_rate=self._native.sample_rate,
-            num_channels=self._native.num_channels,
+        TTS.__init__(
+            self,
+            capabilities=self.capabilities,
+            sample_rate=self.sample_rate,
+            num_channels=self.num_channels,
         )
-
-    def _core_leg(self) -> Any:
-        """This engine, unless a subclass replaces what it would bypass."""
-        replaced = _bindings.overrides(self, StreamAdapter, "_synthesize", "_stream")
-        return self if replaced else self._native

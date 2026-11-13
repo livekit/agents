@@ -368,7 +368,7 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
         MethodKind::Function | MethodKind::AsyncFunction | MethodKind::StaticCall
     ) {
         Vec::new()
-    } else if m.kind == MethodKind::New {
+    } else if m.kind == MethodKind::New && !c.init {
         vec!["cls".to_owned()]
     } else {
         vec!["self".to_owned()]
@@ -406,6 +406,8 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
             ("def", m.name.as_str(), ret)
         }
         MethodKind::Await | MethodKind::AsyncFunction => ("async def", m.name.as_str(), ret),
+        // An `init` class is built in `__init__`, which a Python subclass calls.
+        MethodKind::New if c.init => ("def", "__init__", "None".to_owned()),
         // pyo3 builds the object in `__new__`: a Python subclass overrides that, not `__init__`.
         MethodKind::New => {
             imports.add("typing", "Self");
@@ -512,7 +514,7 @@ pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -
     match ty {
         Ty::Unit => "None".into(),
         // Hidden from the host's signature: the binding captures it.
-        Ty::CallContext | Ty::Cx | Ty::Cancellation | Ty::Env => "object".into(),
+        Ty::CallContext | Ty::Cx | Ty::Cancellation | Ty::Env | Ty::ClassLabel => "object".into(),
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
         Ty::Float | Ty::Timestamp => "float".into(),

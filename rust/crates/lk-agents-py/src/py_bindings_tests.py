@@ -20,12 +20,15 @@ pytestmark = pytest.mark.unit
 
 
 def test_inference_headers_keep_the_public_list_of_pairs_interface() -> None:
-    headers = _core.inference_identity_headers(
-        "agent",
-        job_headers=[("User-Agent", "override"), ("X-Request", "first"), ("X-Request", "last")],
-    )
+    """Outside any job a request names only the SDK, and the scheduling class it asks for."""
+    headers = _core.inference_identity_headers()
     assert isinstance(headers, list)
-    assert headers == [("User-Agent", "override"), ("X-Request", "last")]
+    [(name, agent)] = headers
+    assert name == "User-Agent" and agent.startswith("LiveKit Agents/")
+    assert _core.inference_identity_headers(inference_class="low")[1] == (
+        "X-LiveKit-Inference-Priority",
+        "low",
+    )
 
 
 def test_provider_updates_bind_only_the_changed_legs_and_their_nodes() -> None:
@@ -39,133 +42,97 @@ def test_provider_updates_bind_only_the_changed_legs_and_their_nodes() -> None:
     host = SessionHost.__new__(SessionHost)
     host.session = SimpleNamespace(current_agent=object(), _adapter=adapter)
 
-    class Provider:
-        def __init__(self) -> None:
-            self.native = object()
-            self.resolutions = 0
-
-        def _core_leg(self) -> object:
-            self.resolutions += 1
-            return self.native
-
     first = host.bind_providers({"stt": None})
     assert first.stt is None and first.tts is NOT_GIVEN and first.vad is NOT_GIVEN
     assert first.stt_node is stt_node and first.tts_node is None
 
-    speaker, detector = Provider(), Provider()
+    speaker, detector = object(), object()
     second = host.bind_providers({"tts": speaker, "vad": detector})
-    assert second.stt is NOT_GIVEN and second.tts is speaker.native
-    assert second.vad is detector.native
+    assert second.stt is NOT_GIVEN and second.tts is speaker and second.vad is detector
     assert second.stt_node is None and second.tts_node is tts_node
-    assert speaker.resolutions == detector.resolutions == 1
 
 
-def test_provider_bridge_preserves_authored_overrides_and_inherited_native_paths(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from livekit.agents import _bindings, inference, stt, tts
-    from livekit.agents.llm import LLM, FallbackAdapter
+def _native_facades() -> list[tuple[type, tuple[str, ...], str]]:
+    """Every native provider facade, the hooks it runs itself and where their behaviour belongs."""
+    from livekit.agents import inference, llm, stt, tts
+    from livekit.agents.llm import _realtime, duplex, realtime
 
-    class PythonLLM(LLM):
-        def chat(self, **kwargs: object) -> NoReturn:
-            raise AssertionError("resolving a provider must not start a request")
-
-    python_provider = PythonLLM()
-    assert _bindings.core_leg(python_provider) is python_provider
-    assert _bindings.core_leg(None) is None
-
-    class PythonRealtime(RealtimeModel):
-        def session(self, **kwargs: object) -> NoReturn:
-            raise AssertionError("resolving a realtime provider must not start a session")
-
-    realtime_provider = PythonRealtime(
-        capabilities=RealtimeCapabilities(
-            message_truncation=False,
-            turn_detection=False,
-            user_transcription=False,
-            auto_tool_reply_generation=False,
-            audio_output=False,
-            manual_function_calls=False,
-        )
-    )
-    assert _bindings.core_leg(realtime_provider) is realtime_provider
-
-    class LlmChat(FallbackAdapter):
-        chat = PythonLLM.chat
-
-    class SttStream(stt.FallbackAdapter):
-        def stream(self, **kwargs: object) -> NoReturn:
-            raise AssertionError("stream override must remain behind the host proxy")
-
-    class SttRecognize(stt.FallbackAdapter):
-        async def recognize(self, *args: object, **kwargs: object) -> NoReturn:
-            raise AssertionError("recognize override must remain behind the host proxy")
-
-    class SttRecognizeImpl(stt.FallbackAdapter):
-        async def _recognize_impl(self, *args: object, **kwargs: object) -> NoReturn:
-            raise AssertionError("recognize override must remain behind the host proxy")
-
-    class AdaptedSttStream(stt.StreamAdapter):
-        stream = SttStream.stream
-
-    class AdaptedSttRecognize(stt.StreamAdapter):
-        recognize = SttRecognize.recognize
-
-    # a TTS's provider attempt is `_synthesize` / `_stream`; the framework owns the public ones
-    class TtsSynthesize(tts.FallbackAdapter):
-        def _synthesize(self, *args: object, **kwargs: object) -> NoReturn:
-            raise AssertionError("synthesis override must remain behind the host proxy")
-
-    class TtsStream(tts.FallbackAdapter):
-        def _stream(self, **kwargs: object) -> NoReturn:
-            raise AssertionError("stream override must remain behind the host proxy")
-
-    class InferenceLlmChat(inference.LLM):
-        chat = PythonLLM.chat
-
-    class InferenceSttStream(inference.STT):
-        stream = SttStream.stream
-
-    class InferenceTtsSynthesize(inference.TTS):
-        _synthesize = TtsSynthesize._synthesize
-
-    class InferenceTtsStream(inference.TTS):
-        _stream = TtsStream._stream
-
-    class InferenceVadStream(inference.VAD):
-        def stream(self, **kwargs: object) -> NoReturn:
-            raise AssertionError("detector override must remain behind the host proxy")
-
-    cases = [
-        (FallbackAdapter, LlmChat),
-        (stt.FallbackAdapter, SttStream),
-        (stt.FallbackAdapter, SttRecognize),
-        (stt.FallbackAdapter, SttRecognizeImpl),
-        (stt.StreamAdapter, AdaptedSttStream),
-        (stt.StreamAdapter, AdaptedSttRecognize),
-        (tts.FallbackAdapter, TtsSynthesize),
-        (tts.FallbackAdapter, TtsStream),
-        (inference.LLM, InferenceLlmChat),
-        (inference.STT, InferenceSttStream),
-        (inference.TTS, InferenceTtsSynthesize),
-        (inference.TTS, InferenceTtsStream),
-        (inference.VAD, InferenceVadStream),
+    tts_hooks, stt_hooks = ("_synthesize", "_stream"), ("stream", "recognize", "_recognize_impl")
+    return [
+        (inference.TTS, tts_hooks, "session.tts_node"),
+        (tts.StreamAdapter, tts_hooks, "session.tts_node"),
+        (tts.FallbackAdapter, tts_hooks, "session.tts_node"),
+        (inference.STT, stt_hooks, "session.stt_node"),
+        (stt.StreamAdapter, stt_hooks, "session.stt_node"),
+        (stt.FallbackAdapter, stt_hooks, "session.stt_node"),
+        (inference.LLM, ("chat",), "session.llm_node"),
+        (llm.FallbackAdapter, ("chat",), "session.llm_node"),
+        (inference.VAD, ("stream",), "session.stt_node"),
+        (_realtime.RealtimeModel, ("session",), "session.llm_node"),
+        (realtime.RealtimeModelFallbackAdapter, ("session",), "session.llm_node"),
+        (duplex.DuplexRealtimeAdapter, ("session",), "session.llm_node"),
     ]
-    for wrapper, authored in cases:
-        native = object()
-        monkeypatch.setattr(
-            wrapper, "_native", property(lambda self, result=native: result), raising=False
-        )
-        monkeypatch.setattr(
-            wrapper, "_core_native", lambda self, result=native: result, raising=False
-        )
 
-        # Construct only the adapter shell: bridge resolution must not create SDK connections,
-        # load inference models or invoke authored provider methods.
-        inherited = type("Inherited", (wrapper,), {})
-        assert _bindings.core_leg(object.__new__(inherited)) is native
-        override = object.__new__(authored)
-        assert _bindings.core_leg(override) is override
+
+def test_a_hook_override_on_a_native_facade_is_refused_where_the_class_is_defined() -> None:
+    """The core runs a native facade itself: a subclass replacing a hook it would bypass is
+    refused as it is defined, with the same words for every kind; one that keeps them is not."""
+    for facade, hooks, node in _native_facades():
+        type("Inherited", (facade,), {"__module__": "app"})
+        for hook in hooks:
+            with pytest.raises(TypeError) as refused:
+                type("Replacing", (facade,), {"__module__": "app", hook: lambda *_a, **_k: None})
+            assert str(refused.value) == (
+                f"Replacing overrides {hook}, which {facade.__qualname__} runs natively;"
+                f" customize its output in {node} instead"
+            )
+
+
+def test_a_native_facade_whose_init_never_ran_is_refused_where_it_reaches_the_core() -> None:
+    from livekit.agents import APIConnectOptions, inference
+
+    class Unbuilt(inference.TTS):
+        def __init__(self) -> None:
+            pass
+
+    with pytest.raises(TypeError, match=r"InferenceTts was never initialized"):
+        _core.TtsStream(tts=Unbuilt(), conn_options=APIConnectOptions(max_retry=0))
+
+
+def test_conversion_runs_no_host_code_of_the_facade() -> None:
+    """Taking a facade as the core's provider reads only its native state: a class whose every
+    host hook raises is still taken, and natively."""
+    from livekit.agents import APIConnectOptions, tts
+
+    def never(*_a: object, **_k: object) -> NoReturn:
+        raise AssertionError("conversion called the host")
+
+    class Guarded(tts.StreamAdapter):
+        pass
+
+    for name in dir(tts.TTS):
+        if name.startswith("_core_") and callable(getattr(tts.TTS, name)):
+            setattr(Guarded, name, never)
+    from tests.fakes import FakeTTS
+
+    adapter = Guarded(tts=FakeTTS(streaming=False))
+    stream = _core.TtsStream(tts=adapter, conn_options=APIConnectOptions(max_retry=0))
+    assert stream.native
+
+
+def test_a_facade_passing_itself_to_the_core_while_it_is_built_does_not_recurse() -> None:
+    from livekit.agents import APIConnectOptions, tts
+    from tests.fakes import FakeTTS
+
+    taken: list[bool] = []
+
+    class Eager(tts.StreamAdapter):
+        def __init__(self) -> None:
+            super().__init__(tts=FakeTTS(streaming=False))
+            taken.append(_core.TtsStream(tts=self, conn_options=APIConnectOptions()).native)
+
+    Eager()
+    assert taken == [True]
 
 
 @pytest.mark.parametrize("mutable", [False, True])
@@ -398,11 +365,11 @@ async def test_avatar_output_keeps_sdk_room_and_validation_contract() -> None:
     await output.aclose()
 
 
-async def test_a_provider_wrapper_reaches_the_core_as_its_native_engine(
+async def test_a_provider_facade_reaches_the_core_as_its_native_engine(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Wherever a Python provider reaches the core, the core runs what its `_core_leg()` names:
-    the gateway TTS's engine, never the wrapper as a plugin (which has no provider hooks)."""
+    """Wherever a provider facade reaches the core, the core runs the native object it is: the
+    gateway TTS's engine, never the facade as a plugin (whose provider hooks it never calls)."""
     from livekit.agents import APIConnectOptions, APIError, inference
 
     proxied: list[str] = []
@@ -425,6 +392,33 @@ async def test_a_provider_wrapper_reaches_the_core_as_its_native_engine(
     assert proxied == [], "the core ran the wrapper as a plugin"
 
 
+async def test_a_tokenizer_subclass_replacing_tokenize_still_runs_through_python() -> None:
+    """A tokenizer subclass deciding its own sentences is taken behind the host's proxy, decided
+    when its class was defined: the core splits by its `tokenize`, the built-in natively."""
+    from livekit.agents import APIConnectOptions, tokenize
+    from tests.fakes import FakeTTS
+
+    calls: list[str] = []
+
+    class Pipes(tokenize.SentenceTokenizer):
+        def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+            calls.append(text)
+            return [part for part in text.split("|") if part]
+
+    assert getattr(Pipes, "_core_proxied", False)
+    assert not getattr(tokenize.SentenceTokenizer, "_core_proxied", False)
+    provider = FakeTTS(streaming=False)
+    provider.update_options(sentence_tokenizer=Pipes(), pacing=None)
+    stream = _core.TtsStream(tts=provider, conn_options=APIConnectOptions(max_retry=0))
+    stream.push_text("one two|three")
+    stream.end_input()
+    while await stream.recv() is not None:
+        pass
+    await stream.aclose()
+    assert calls, "the core split natively"
+    assert provider.texts and all("|" not in text for text in provider.texts)
+
+
 async def test_realtime_chain_accepts_host_and_native_members() -> None:
     class Provider(RealtimeModel):
         def session(self, *, turn_detection_disabled: bool = False) -> NoReturn:
@@ -441,9 +435,9 @@ async def test_realtime_chain_accepts_host_and_native_members() -> None:
     provider = Provider(capabilities=capabilities)
     first = _core.RealtimeFallbackModel([provider])
     chain = _core.RealtimeFallbackModel([first, provider])
-    assert chain.active_index == 0
+    assert chain._core_active_index == 0
     assert chain.capabilities == capabilities
-    await chain.restart(switch_model=True)
+    await chain._core_restart(switch_model=True)
 
 
 async def test_http_route_kind_is_validated_before_the_host_runs() -> None:

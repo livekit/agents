@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::testkit::fallback::within;
 use futures_util::{SinkExt, StreamExt};
@@ -48,7 +47,7 @@ async fn recording_gateway() -> (u16, mpsc::UnboundedReceiver<(String, String)>)
                 let record = |req: &Request, resp| {
                     session_id = req
                         .headers()
-                        .get("X-Test-Connection")
+                        .get("X-LiveKit-Agent-ID")
                         .map(|v| v.to_str().unwrap().to_owned())
                         .unwrap_or_default();
                     Ok(resp)
@@ -94,34 +93,29 @@ async fn dead_port() -> u16 {
 // between the detector and every stream, so the *only* way a new threshold gets to the gateway is
 // the reconnect -- drop the notify (or invert `run`'s "reconnect or finish" branch) and the
 // session keeps running at the old sensitivity for the rest of the call, silently. Also catches
-// headers read once rather than per connection (`_connect_ws`): every reconnect would reuse the
-// first connection marker.
+// the job's identity read once rather than per connection (`_connect_ws`): every reconnect would
+// miss the agent that joined after the first.
 #[tokio::test]
 async fn update_options_forces_a_reconnect_that_carries_the_new_settings() {
     let (port, mut creates) = recording_gateway().await;
-    let connections = Arc::new(AtomicUsize::new(0));
-    let config = ConnectionConfig {
-        headers: Arc::new(move || {
-            let n = connections.fetch_add(1, Ordering::SeqCst);
-            [("X-Test-Connection".to_owned(), format!("inference_{n}"))].into_iter().collect()
-        }),
-        ..Default::default()
-    };
+    let cx = crate::testkit::job_cx(Default::default());
+    let job = cx.job().cloned().unwrap();
     let detector = AdaptiveInterruptionDetector::new(
         options(format!("ws://127.0.0.1:{port}"), Some(0.4)),
-        config,
+        ConnectionConfig::default(),
         Arc::new(RealClock::new()),
     );
-    let _stream = detector.stream();
+    let _stream = detector.stream(&cx);
 
     let (sid, first) = within("the first session.create", creates.recv()).await.unwrap();
-    assert_eq!(sid, "inference_0");
+    assert_eq!(sid, "", "the agent had not joined yet");
     assert!(first.contains(r#""threshold":0.4"#), "{first}");
     assert!(first.contains(r#""min_frames":2"#), "{first}");
 
+    lk_agents_net::job_identity::agent_joined(&job, "PA_1".into());
     detector.update_options(Some(0.85), Some(0.25));
     let (sid, second) = within("a reconnect after update_options", creates.recv()).await.unwrap();
-    assert_eq!(sid, "inference_1", "each connection reads the headers again");
+    assert_eq!(sid, "PA_1", "each connection reads the job's identity again");
     assert!(second.contains(r#""threshold":0.85"#), "{second}");
     assert!(second.contains(r#""min_frames":10"#), "0.25s at 40 frames/s: {second}");
 
@@ -129,7 +123,7 @@ async fn update_options_forces_a_reconnect_that_carries_the_new_settings() {
     // reaches live streams through exactly this.
     _stream.request_reconnect();
     let (sid, third) = within("a reconnect after request_reconnect", creates.recv()).await.unwrap();
-    assert_eq!(sid, "inference_2");
+    assert_eq!(sid, "PA_1");
     assert_eq!(third, second, "a bare reconnect must re-send the current settings");
 }
 
@@ -154,7 +148,7 @@ async fn an_unreachable_gateway_climbs_the_ladder_and_then_gives_up() {
         config,
         Arc::new(RealClock::new()),
     );
-    let mut stream = detector.stream();
+    let mut stream = detector.stream(&lk_agents_abi::telemetry::Cx::NONE);
 
     let mut recoverable = 0;
     let mut fatal = 0;
@@ -191,7 +185,7 @@ async fn end_input_closes_the_input_and_further_pushes_are_rejected() {
         ConnectionConfig::default(),
         Arc::new(RealClock::new()),
     );
-    let mut stream = detector.stream();
+    let mut stream = detector.stream(&lk_agents_abi::telemetry::Cx::NONE);
 
     stream.push(InputEvent::AgentSpeechStarted).unwrap();
     stream.end_input();
@@ -324,7 +318,7 @@ mod websocket {
     async fn a_verdict_from_a_real_socket_reaches_the_consumer_as_an_event() {
         let (port, gateway) = fake_gateway().await;
         let detector = detector(port);
-        let mut stream = detector.stream();
+        let mut stream = detector.stream(&lk_agents_abi::telemetry::Cx::NONE);
         push_one_overlap(&stream);
 
         let event = within("the verdict to reach the consumer", stream.recv())

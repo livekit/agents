@@ -9,8 +9,21 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     let name = format!("{}Proxy", p.rust_name);
     let tr = &p.trait_path;
     let mut s = format!("// Declared in {}.\n\n", p.source);
-    let mut fields = vec!["    host: ::std::sync::Arc<Py<PyAny>>,\n".to_owned()];
-    let mut inits = vec!["host: ::std::sync::Arc::new(obj.clone().unbind())".to_owned()];
+    if p.weak && (p.handed_back || p.view.is_some() || p.returned_owned) {
+        return Err(format!(
+            "{tr}: a weak proxy is only the events of the object it was filled from"
+        ));
+    }
+    let (mut fields, mut inits) = match p.weak {
+        true => (
+            vec!["    /// The object whose events these are: not kept alive by them.\n    host: ::std::sync::Arc<Py<::pyo3::types::PyWeakrefReference>>,\n".to_owned()],
+            vec!["host: ::std::sync::Arc::new(::pyo3::types::PyWeakrefReference::new(obj)?.unbind())".to_owned()],
+        ),
+        false => (
+            vec!["    host: ::std::sync::Arc<Py<PyAny>>,\n".to_owned()],
+            vec!["host: ::std::sync::Arc::new(obj.clone().unbind())".to_owned()],
+        ),
+    };
     let mut reads = match &p.view {
         Some((module, class)) => format!(
             "        let view = crate::py_calls::call(&obj.py().import({module:?})?.getattr({class:?})?, (obj,), None)?;\n        let obj = &view;\n"
@@ -88,15 +101,30 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         ));
         inits.push(format!("{}: None", bound.name));
     }
+    // The core owns only a host implementation: a native one is shared, never handed over.
+    let refuse_native = format!(
+        "        if crate::py_objects::native::<dyn {tr}>(obj)?.is_some() {{\n            return Err(::pyo3::exceptions::PyTypeError::new_err(\"a native `{}` is shared, never handed over to be owned\"));\n        }}\n",
+        p.rust_name
+    );
+    let constructors = match p.weak {
+        true => format!(
+            "    /// The events of `obj`, which they do not keep alive.\n    pub fn weak(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        Ok(::std::sync::Arc::new(Self::take(obj, None)?))\n    }}\n\n"
+        ),
+        false => format!(
+            "    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::py_objects::native::<dyn {tr}>(obj)? {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, None)?))\n    }}\n\n    /// A host object a call returned, its calls run in a copy of the context that call ran in.\n    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::py_objects::native::<dyn {tr}>(obj)? {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n{refuse_native}        Ok(::std::boxed::Box::new(Self::take(obj, None)?))\n    }}\n\n{owned_in_context}",
+            owned_in_context = if p.returned_owned {
+                format!(
+                    "    /// A host object a call returned for the core to own, run in a copy of that call's context.\n    pub fn owned_in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n{refuse_native}        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))\n    }}\n\n"
+                )
+            } else {
+                String::new()
+            },
+        ),
+    };
     s.push_str(&format!(
-        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::py_objects::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, None)?))\n    }}\n\n    /// A host object a call returned, its calls run in a copy of the context that call ran in.\n    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::py_objects::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n        Ok(::std::boxed::Box::new(Self::take(obj, None)?))\n    }}\n\n{owned_in_context}    fn take(obj: &Bound<'_, PyAny>, {context_arg}) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
+        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n{constructors}    fn take(obj: &Bound<'_, PyAny>, {context_arg}) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
         fields.concat(),
         inits.join(", "),
-        owned_in_context = if p.returned_owned {
-            format!("    /// A host object a call returned for the core to own, run in a copy of that call's context.\n    pub fn owned_in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))\n    }}\n\n")
-        } else {
-            String::new()
-        },
         host = p.host,
     ));
     if p.handed_back {
@@ -122,8 +150,13 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
 fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     let at = format!("{}::{}", p.trait_path, m.rust_name);
     let label = format!("{}.{}", p.rust_name, m.name);
-    let params: Vec<String> =
-        m.params.iter().map(|q| format!("{}: {}", q.name, param_type(q))).collect();
+    // A notice runs in the context its proxy captured: its span is a native implementation's.
+    let unused = |q: &Param| m.kind == ProxyCall::Notify && q.ty == Ty::Cx;
+    let params: Vec<String> = m
+        .params
+        .iter()
+        .map(|q| format!("{}{}: {}", if unused(q) { "_" } else { "" }, q.name, param_type(q)))
+        .collect();
     // A future named by the method's own lifetime (`fn m<'a>(&'a self, ..) -> BoxFuture<'a, _>`)
     // keeps it: the proxy's future borrows nothing, so its parameters need not carry it.
     let named = m.boxed.as_deref().filter(|l| *l != "'_" && *l != "'static");
@@ -318,7 +351,13 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         ),
         false => String::new(),
     };
-    let host = "        let host = ::std::sync::Arc::clone(&self.host);\n";
+    let host = match p.weak {
+        // Once the object is gone, its events go nowhere.
+        true => {
+            "        let Some(host) = ::pyo3::Python::attach(|py| self.host.bind(py).upgrade().map(|host| ::std::sync::Arc::new(host.unbind()))) else {\n            return;\n        };\n"
+        }
+        false => "        let host = ::std::sync::Arc::clone(&self.host);\n",
+    };
     if m.kind == ProxyCall::Call {
         let (ret, refused, wrap, err) = result_shape(m, &at)?;
         let binding = if m.ret.ok == Ty::Unit { "()" } else { "out" };
@@ -334,7 +373,8 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             None if returns_record => returning(&from_host("o", &m.ret.ok, &label, &at)?),
             None => from_host("o", &m.ret.ok, &label, &at)?,
         };
-        let unpack = if context.is_empty() || returns_record { String::new() } else { stream_context(&err) };
+        let unpack =
+            if context.is_empty() || returns_record { String::new() } else { stream_context(&err) };
         return Ok(format!(
             "    {sig} -> {ret} {{\n{host}{moved}{context}        let out = ::lk_agents_runtime::host::call_now(&crate::py_calls::Entry, {host_call});\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.value.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n"
         ));
@@ -380,7 +420,11 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
                 None if returns_record => returning(&from_host("o", &m.ret.ok, &label, &at)?),
                 None => returned_value("o", &m.ret.ok, &label, &at)?,
             };
-            let unpack = if context.is_empty() || returns_record { String::new() } else { stream_context(&err) };
+            let unpack = if context.is_empty() || returns_record {
+                String::new()
+            } else {
+                stream_context(&err)
+            };
             // `await(wrap = T)`: wrapped once the GIL is released, under the call's span.
             let (head, read_out, wrapped) = match &m.wrap {
                 None => (head, "", String::new()),

@@ -9,7 +9,7 @@ from pydantic import JsonValue
 
 from livekit.protocol import agent_simulation as proto
 
-from . import _bindings, _core
+from . import _core
 from ._generated import public_evals as _public
 from ._generated.evals import (
     IntentJudgment,
@@ -215,7 +215,7 @@ async def _judge_intent(llm: LLM, intent: str, message: str) -> IntentJudgment:
 
 
 def _runner(llm: LLM | None, host: _Evaluation) -> _core._core_JudgeRunner:
-    return _core._core_JudgeRunner(None if llm is None else _bindings.core_leg(llm), host)
+    return _core._core_JudgeRunner(llm, host)
 
 
 ScenarioUserdata: TypeAlias = dict[str, JsonValue]

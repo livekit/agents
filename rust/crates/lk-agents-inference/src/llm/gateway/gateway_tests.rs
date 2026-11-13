@@ -162,7 +162,14 @@ fn llm(peer: &Peer) -> GatewayLlm {
 }
 
 fn open(llm: &GatewayLlm, policy: Policy) -> LlmChunks {
-    llm.chat(&ChatContext::new(Vec::new()), &[], Default::default(), policy, None).unwrap()
+    llm.chat(
+        &lk_agents_abi::telemetry::Cx::NONE,
+        &ChatContext::new(Vec::new()),
+        &[],
+        Default::default(),
+        policy,
+    )
+    .unwrap()
 }
 
 async fn text(chunks: &mut LlmChunks) -> Result<String, lk_agents_abi::errors::ApiError> {
@@ -300,10 +307,13 @@ async fn requests_omit_the_unused_gateway_session_header() {
     )]);
     let peer = Peer::start(vec![busy.clone(), busy, ok]).await;
     let llm = llm(&peer);
-    let job: lk_agents_inference::headers::Headers =
-        [("X-LiveKit-Session-ID".to_owned(), "inference_job".to_owned())].into_iter().collect();
+    let headers = [("X-LiveKit-Session-ID".to_owned(), "inference_job".to_owned())];
+    let job = lk_agents_inference::testkit::job_cx(lk_agents_net::job_identity::JobIdentity {
+        headers: headers.into_iter().collect(),
+        ..Default::default()
+    });
     let mut chunks = llm
-        .chat(&ChatContext::new(Vec::new()), &[], Default::default(), policy(2, 2_000), Some(&job))
+        .chat(&job, &ChatContext::new(Vec::new()), &[], Default::default(), policy(2, 2_000))
         .unwrap();
     assert_eq!(text(&mut chunks).await.unwrap(), "hi");
     let sessions = peer.sessions.lock().clone();
@@ -512,7 +522,13 @@ mod live {
             return eprintln!("skipped: no credentials");
         };
         let mut chunks = llm
-            .chat(&chat_ctx("Say the single word: pong."), &[], Default::default(), policy(), None)
+            .chat(
+                &lk_agents_abi::telemetry::Cx::NONE,
+                &chat_ctx("Say the single word: pong."),
+                &[],
+                Default::default(),
+                policy(),
+            )
             .unwrap();
         let (mut text, mut usage) = (String::new(), None);
         while let Some(chunk) = chunks.next().await.expect("the gateway answered") {
@@ -534,8 +550,15 @@ mod live {
         let Some(llm) = llm("openai/definitely-not-a-model") else {
             return eprintln!("skipped: no credentials");
         };
-        let mut chunks =
-            llm.chat(&chat_ctx("hi"), &[], Default::default(), policy(), None).unwrap();
+        let mut chunks = llm
+            .chat(
+                &lk_agents_abi::telemetry::Cx::NONE,
+                &chat_ctx("hi"),
+                &[],
+                Default::default(),
+                policy(),
+            )
+            .unwrap();
         let err = chunks.next().await.expect_err("an unknown model fails");
         eprintln!("live 4xx: {err:?}");
         assert!(err.status_code.is_some_and(|s| (400..500).contains(&s)), "{err:?}");

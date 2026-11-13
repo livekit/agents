@@ -6,16 +6,15 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Self
+from typing import Self
 
-from livekit.agents.tts import TTS
-
+from .._core import TtsOptionsCell
 from .connect import APIConnectOptions
 from .inference_credentials import Credentials
 from .inference_models import EotSelection
 from .inference_tts import FallbackModels
 from .stt import STTCapabilities
-from .tts import TTSCapabilities
+from .tts import OptionsTokenizer, TTSCapabilities
 
 def inference_api_key(explicit: str | None = None) -> str:
     """`explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else the server's `LIVEKIT_API_KEY`; `""`
@@ -39,18 +38,16 @@ def inference_credentials(
     ladders above); a `ValueError` when the key or the secret does not resolve.
     """
 
-def inference_identity_headers(
-    user_agent: str,
-    inference_class: str | None = None,
-    room_sid: str | None = None,
-    job_id: str | None = None,
-    agent_sid: str | None = None,
-    job_headers: list[tuple[str, str]] | None = None,
-) -> list[tuple[str, str]]:
-    """An inference request's identification headers, in order: `user_agent`, the priority of a
-    nonempty `inference_class`, and in a job (`job_headers` given) its nonempty room, job and
-    agent ids, `LIVEKIT_WORKER_TOKEN` when set, the job's `job_headers` (overriding any of
-    these) and a fresh session id.
+def identify_host(user_agent: str) -> None:
+    """Names the host SDK on every inference request this process makes (`User-Agent`); the
+    first name given holds.
+    """
+
+def inference_identity_headers(inference_class: str | None = None) -> list[tuple[str, str]]:
+    """The identification headers an inference request made here carries, in order: this
+    process's `User-Agent`, the priority of a nonempty `inference_class`, and in a job its
+    nonempty room, job and agent ids, `LIVEKIT_WORKER_TOKEN` when set and the job's own
+    headers (overriding any of these).
     """
 
 def inference_quota_usage(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -138,23 +135,26 @@ class InferenceAvatar:
         room_sid: str,
         livekit_url: str | None = None,
         agent_identity: str,
-        headers: list[tuple[str, str]],
     ) -> int:
         """Creates the provider session for the agent `agent_identity` in `room_name` and returns the
         audio sample rate the avatar takes. A second call while one runs, or once a session was
         created, is refused. Cancelling the call stops creating; a session created anyway is
-        terminated. `livekit_url` defaults to `LIVEKIT_URL`; `headers` are `get_inference_headers()`.
+        terminated. `livekit_url` defaults to `LIVEKIT_URL`; its requests carry the identity of the
+        job `cx` runs for.
         """
-    async def aclose(self, headers: list[tuple[str, str]]) -> None:
+    async def aclose(self) -> None:
         """Stops creating and terminates every held session so it stops billing now. Returns once
         that cleanup settled or its deadline passed (then logged); a failed terminate keeps the
         session held, so a second call retries.
         """
 
 class InferenceTts:
-    """`inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`."""
-    def __new__(
-        cls,
+    """`inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`. One instance
+    serves every job it is handed to; each request carries the identity of the job it runs for.
+    """
+    def __init__(
+        self,
+        sentence_tokenizer: OptionsTokenizer,
         model: str,
         *,
         voice: str | None = None,
@@ -167,10 +167,10 @@ class InferenceTts:
         extra_kwargs: dict[str, object] | None = None,
         fallback: FallbackModels | None = None,
         conn_options: APIConnectOptions | None = None,
-    ) -> Self:
+    ) -> None:
         """A client of `model` (``"provider/model[:voice]"``) on the gateway. Starts nothing. The
         gateway's URL and key pair resolve from the given values, the environment and the server's
-        settings.
+        settings. Its text is split by `sentence_tokenizer` until `update_options` changes it.
         """
     @property
     def model(self) -> str: ...
@@ -180,17 +180,14 @@ class InferenceTts:
     @property
     def num_channels(self) -> int: ...
     @property
-    def conn_options(self) -> APIConnectOptions:
-        """The policy this client was given, which a session or run that supplies none keeps."""
-    @property
     def sample_rate(self) -> int: ...
-    def prewarm(self, *, headers: list[tuple[str, str]] | None = None) -> None: ...
-    def identified(
-        self,
-        headers: list[tuple[str, str]],
-        reporter: TTS[Any] | None = None,
-    ) -> InferenceTts: ...
-    def update_options(
+    def _core_conn_options(self) -> APIConnectOptions:
+        """The policy this client was given, which a session or run that supplies none keeps."""
+    def _core_options(self) -> TtsOptionsCell:
+        """The options it owns, which every synthesis over it reads."""
+    def prewarm(self) -> None:
+        """A configured socket waits in the pool for the first synthesis."""
+    def _core_update_options(
         self,
         *,
         voice: str | None = None,
@@ -200,6 +197,6 @@ class InferenceTts:
     ) -> None:
         """Read by the next synthesis; ``extra_kwargs`` merges into the persistent kwargs."""
     async def aclose(self) -> None:
-        """Closes the pooled sockets every session's view shares; a synthesis still running
-        finishes, its socket closed instead of pooled.
+        """Closes the pooled sockets; a synthesis still running finishes, its socket closed instead
+        of pooled.
         """

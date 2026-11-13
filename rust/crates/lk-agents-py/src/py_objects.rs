@@ -173,37 +173,81 @@ mod tests {
 pub struct HostNative {
     /// A fn: a `TypeId` is not const-constructible.
     pub trait_id: fn() -> std::any::TypeId,
-    pub read: fn(&Bound<'_, PyAny>) -> Option<Box<dyn std::any::Any>>,
+    pub read: fn(&Bound<'_, PyAny>) -> PyResult<Taken>,
 }
 
 inventory::collect!(HostNative);
 
-/// The native value the core runs for `obj`: `obj` itself when it is a registered native class,
-/// else the native its `_core_leg()` names. A host facade over a native engine (`inference.TTS`)
-/// names that engine, so wherever a provider reaches the core, it runs as the session would run
-/// it; a plugin, or a facade subclass replacing what the engine would bypass, names itself and is
-/// proxied.
-pub fn native<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> Option<std::sync::Arc<T>> {
-    if let Some(native) = registered::<T>(obj) {
-        return Some(native);
-    }
-    let leg = obj.call_method0(pyo3::intern!(obj.py(), "_core_leg")).ok()?;
-    if leg.is(obj) { None } else { registered::<T>(&leg) }
+/// How a registered native class takes a host object.
+pub enum Taken {
+    /// Not an instance of the class.
+    Other,
+    /// Its implementation, an `Arc<dyn Trait>` of the trait the registration names.
+    Native(Box<dyn std::any::Any>),
+    /// An instance of a host subclass that runs the class's hooks itself (`_core_proxied`, set
+    /// when the subclass was defined): taken behind the trait's proxy.
+    Proxied,
 }
 
-fn registered<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> Option<std::sync::Arc<T>> {
+/// How an `init` class registered for a trait takes its instance `obj`: behind the proxy when its
+/// class runs the hooks itself, else the implementation its `__init__` built, refused when that
+/// never ran.
+pub fn built<T: ?Sized + 'static>(
+    obj: &Bound<'_, PyAny>,
+    engine: Option<Arc<T>>,
+    class: &str,
+) -> PyResult<Taken> {
+    if proxied(obj)? {
+        return Ok(Taken::Proxied);
+    }
+    let engine = engine.ok_or_else(|| unbuilt(class))?;
+    Ok(Taken::Native(Box::new(engine)))
+}
+
+/// The refusal of a native object whose `__init__` never ran.
+pub fn unbuilt(class: &str) -> PyErr {
+    pyo3::exceptions::PyTypeError::new_err(format!(
+        "this {class} was never initialized: its __init__ did not run (a subclass's __init__ must call super().__init__())"
+    ))
+}
+
+/// The host class path of `obj`: `module.Name` of its type, what logs and metrics name it by.
+pub fn class_label(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    let ty = obj.get_type();
+    Ok(format!("{}.{}", ty.module()?, ty.name()?))
+}
+
+/// Whether the class of `obj` runs the hooks it overrides in the host: the `_core_proxied`
+/// class attribute its definition set.
+fn proxied(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
+    match obj.get_type().getattr_opt(pyo3::intern!(obj.py(), "_core_proxied"))? {
+        Some(flag) => flag.is_truthy(),
+        None => Ok(false),
+    }
+}
+
+/// The native value the core runs for `obj`: its implementation when it is an instance of a
+/// registered native class, `None` for any other host object (proxied). A type check, reading
+/// only what the class and its `__init__` recorded: no host code runs, so a provider can pass
+/// itself to the core while it is being built.
+pub fn native<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> PyResult<Option<Arc<T>>> {
     let id = std::any::TypeId::of::<T>();
     for n in inventory::iter::<HostNative> {
         if (n.trait_id)() != id {
             continue;
         }
-        if let Some(b) = (n.read)(obj)
-            && let Ok(arc) = b.downcast::<std::sync::Arc<T>>()
-        {
-            return Some(*arc);
+        match (n.read)(obj)? {
+            Taken::Other => continue,
+            Taken::Proxied => return Ok(None),
+            Taken::Native(native) => {
+                let native = native
+                    .downcast::<Arc<T>>()
+                    .expect("a registration reads the trait it is registered for");
+                return Ok(Some(*native));
+            }
         }
     }
-    None
+    Ok(None)
 }
 
 // Two tables, counted separately so neither hides a leak in the other. Dropping a `Py<PyAny>`

@@ -1,20 +1,27 @@
 use super::fallback::TtsFallbacks;
-use crate::{ApiConnectOptions, Tts};
+use crate::ApiConnectOptions;
 
-/// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`.
-#[crate::host(class(name = "InferenceTts", native = Tts))]
+/// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`. One instance
+/// serves every job it is handed to; each request carries the identity of the job it runs for.
+#[crate::host(class(name = "InferenceTts", native = crate::Tts))]
 pub trait InferenceTts: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
+    /// The text options it owns: `tts.options`.
+    #[host(class(name = "TtsOptionsCell"))]
+    type Options;
 
     /// A client of `model` (``"provider/model[:voice]"``) on the gateway. Starts nothing. The
     /// gateway's URL and key pair resolve from the given values, the environment and the server's
-    /// settings.
-    #[host(new)]
+    /// settings. Its text is split by `sentence_tokenizer` until `update_options` changes it.
+    #[host(init)]
     #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,
+        #[host(label)] label: String,
+        events: std::sync::Arc<dyn crate::types::provider::ProviderEvents>,
+        sentence_tokenizer: crate::tts::types::OptionsTokenizer,
         model: String,
         #[host(kw, default = None)] voice: Option<String>,
         #[host(default = None)] language: Option<String>,
@@ -35,21 +42,19 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
     fn capabilities(&self) -> crate::TtsCapabilities;
     #[host(getter)]
     fn num_channels(&self) -> u16;
-    /// The policy this client was given, which a session or run that supplies none keeps.
-    #[host(getter)]
-    fn conn_options(&self) -> ApiConnectOptions;
     #[host(getter)]
     fn sample_rate(&self) -> u32;
+    /// The policy this client was given, which a session or run that supplies none keeps.
+    #[host(call, name = "_core_conn_options")]
+    fn conn_options(&self) -> ApiConnectOptions;
+    /// The options it owns, which every synthesis over it reads.
+    #[host(call, name = "_core_options")]
+    fn options(&self) -> std::sync::Arc<Self::Options>;
+    /// A configured socket waits in the pool for the first synthesis.
     #[host(call)]
-    fn prewarm(&self, #[host(kw, default = None)] headers: Option<crate::Headers>);
-    #[host(call)]
-    fn identified(
-        &self,
-        headers: crate::Headers,
-        #[host(default = None)] reporter: Option<std::sync::Arc<dyn Tts>>,
-    ) -> Self;
+    fn prewarm(&self, cx: crate::telemetry::Cx);
     /// Read by the next synthesis; ``extra_kwargs`` merges into the persistent kwargs.
-    #[host(call)]
+    #[host(call, name = "_core_update_options")]
     fn update_options(
         &self,
         #[host(kw, default = None)] voice: Option<String>,
@@ -58,8 +63,8 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
         #[host(default = None, shape_error(kind = "ValueError", message = "expected a dict of extra kwargs, got {value}"))]
         extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
     );
-    /// Closes the pooled sockets every session's view shares; a synthesis still running
-    /// finishes, its socket closed instead of pooled.
+    /// Closes the pooled sockets; a synthesis still running finishes, its socket closed instead
+    /// of pooled.
     #[host(await)]
     async fn aclose(&self);
 }
@@ -71,9 +76,10 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
     name = "TTS",
     base = "tts.TTS",
     native = InferenceTts,
-    legs(_synthesize, _stream),
-    leg = "_core_native",
-    base_args(capabilities, sample_rate, num_channels)
+    refuse(_synthesize, _stream),
+    node = "session.tts_node",
+    base_args(capabilities, sample_rate, num_channels),
+    host_args(sentence_tokenizer = "..tokenize.SentenceTokenizer()")
 ))]
 pub trait InferenceTtsFacade {
     /// LiveKit Inference TTS.
@@ -130,7 +136,8 @@ pub trait InferenceTtsFacade {
             model = ".inference_tts.TTSModels | str",
             sentence_tokenizer = "..tokenize.SentenceTokenizer"
         ),
-        base(sentence_tokenizer, pacing)
+        base(sentence_tokenizer, pacing),
+        native = _core_update_options
     )]
     fn update_options(
         &self,

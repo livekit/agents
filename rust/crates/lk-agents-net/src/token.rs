@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use livekit_token::{
-    AccessToken, AccessTokenError, AgentDatabaseGrants, AgentThreadGrants, Claims,
-    InferenceGrants, ObservabilityGrants, TokenVerifier, VideoGrants,
+    AccessToken, AccessTokenError, AgentDatabaseGrants, AgentThreadGrants, Claims, InferenceGrants,
+    ObservabilityGrants, TokenVerifier, VideoGrants,
 };
 use lk_agents_abi::errors::ApiError;
 
@@ -99,7 +99,6 @@ pub fn extend_job_token(token: &str, api_key: &str, api_secret: &str) -> Result<
 pub fn token_identity(token: &str) -> Result<String, ApiError> {
     Ok(Claims::from_unverified(token).map_err(refused)?.sub)
 }
-
 
 /// A data-plane token for one database: a thread's (`AT_...`) through its thread grant's `sql`,
 /// a standalone one (`DB_...`) through `agentDatabase`.

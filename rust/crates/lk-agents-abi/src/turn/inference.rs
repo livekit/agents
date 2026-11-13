@@ -82,12 +82,12 @@ pub trait InferenceEot: Send + Sync + Sized + 'static {
         #[host(default = None)] overrides: Option<ThresholdOverride>,
     );
 
-    /// One stream of the user's audio. `headers` (`get_inference_headers()`) identify the job on
-    /// each gateway connection.
+    /// One stream of the user's audio; each gateway connection carries the identity of the job
+    /// `cx` runs for.
     #[host(call)]
     fn stream(
         &self,
-        headers: crate::Headers,
+        cx: crate::telemetry::Cx,
         conn_options: ApiConnectOptions,
     ) -> Result<Self::Stream, ProviderError>;
 }

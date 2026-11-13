@@ -8,9 +8,9 @@ use parking_lot::Mutex;
 use crate::avatar::{
     AvatarOptions, AvatarRoom, ProviderSession, create_request, decode_created, terminate_request,
 };
-use crate::headers::Headers;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::inference::avatar_session::{AvatarError, InferenceAvatar};
+use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, Extra, Ts};
 use lk_agents_core::request::{self, AttemptFailure, Policy, Step};
 use lk_agents_net::transport::HttpRequest;
@@ -49,7 +49,7 @@ enum Input {
     Create {
         caller: u64,
         room: AvatarRoom,
-        headers: Headers,
+        cx: Cx,
         reply: oneshot::Sender<Result<u32, AvatarError>>,
     },
     /// The create call `caller` stopped waiting.
@@ -57,7 +57,7 @@ enum Input {
         caller: u64,
     },
     Close {
-        headers: Headers,
+        cx: Cx,
         reply: oneshot::Sender<Closed>,
     },
 }
@@ -97,11 +97,12 @@ impl GatewayAvatar {
         GatewayAvatar { opts, view, inputs, callers: AtomicU64::new(1), _driver: tasks }
     }
 
-    /// Creates the provider session and returns the sample rate the avatar takes.
-    pub async fn create(&self, room: AvatarRoom, headers: Headers) -> Result<u32, AvatarError> {
+    /// Creates the provider session for the job `cx` runs for and returns the sample rate the
+    /// avatar takes.
+    pub async fn create(&self, room: AvatarRoom, cx: Cx) -> Result<u32, AvatarError> {
         let caller = self.callers.fetch_add(1, Ordering::Relaxed);
         let (reply, answer) = oneshot::channel();
-        self.send(Input::Create { caller, room, headers, reply });
+        self.send(Input::Create { caller, room, cx, reply });
         let mut waiting = CancelOnDrop { inputs: &self.inputs, caller, armed: true };
         let outcome = answer.await;
         waiting.armed = false;
@@ -110,9 +111,9 @@ impl GatewayAvatar {
 
     /// Stops creating and terminates every held session; `TimedOut` when an attempt missed its
     /// cleanup deadline (it was reported and the runtime still owns it).
-    pub async fn close(&self, headers: Headers) -> Closed {
+    pub async fn close(&self, cx: Cx) -> Closed {
         let (reply, settled) = oneshot::channel();
-        self.send(Input::Close { headers, reply });
+        self.send(Input::Close { cx, reply });
         settled.await.unwrap_or(Closed::Clean)
     }
 
@@ -197,17 +198,17 @@ impl InferenceAvatar for GatewayAvatar {
         room_sid: String,
         livekit_url: Option<String>,
         agent_identity: String,
-        headers: Headers,
+        cx: Cx,
     ) -> Result<u32, AvatarError> {
         let livekit_url =
             livekit_url.filter(|url| !url.is_empty()).ok_or(AvatarError::MissingUrl)?;
         let room = AvatarRoom { livekit_url, room_name, room_sid, agent_identity };
-        GatewayAvatar::create(self, room, headers).await
+        GatewayAvatar::create(self, room, cx).await
     }
 
-    async fn aclose(&self, headers: Headers) {
+    async fn aclose(&self, cx: Cx) {
         // Decision 14: a missed cleanup deadline was logged and reported; close returns.
-        let _ = self.close(headers).await;
+        let _ = self.close(cx).await;
     }
 }
 
@@ -313,8 +314,8 @@ struct Driver {
     arriving: Option<Caller>,
     /// The accepted create's room, read when its first attempt launches.
     pending_create: Option<AvatarRoom>,
-    /// The latest identification headers a host call supplied.
-    headers: Headers,
+    /// The context of the latest host call: its requests carry the identity of its job.
+    cx: Cx,
     /// Each request's exchange, built once: every attempt sends the same operation.
     exchanges: BTreeMap<RequestId, Arc<HttpRequest>>,
     tasks: BTreeMap<(RequestId, u32), OwnedTask>,
@@ -358,7 +359,7 @@ impl Driver {
             caller: None,
             arriving: None,
             pending_create: None,
-            headers: Headers::new(),
+            cx: Cx::NONE,
             exchanges: BTreeMap::new(),
             tasks: BTreeMap::new(),
             closers: Vec::new(),
@@ -405,8 +406,8 @@ impl Driver {
 
     fn input(&mut self, input: Input, at: Ts) {
         match input {
-            Input::Create { caller, room, headers, reply } => {
-                self.headers = headers;
+            Input::Create { caller, room, cx, reply } => {
+                self.cx = cx;
                 self.pending_create = Some(room);
                 self.arriving = Some(Caller { id: caller, reply });
                 self.step(Event::Create, at);
@@ -418,8 +419,8 @@ impl Driver {
                     self.step(Event::Cancel, at);
                 }
             }
-            Input::Close { headers, reply } => {
-                self.headers = headers;
+            Input::Close { cx, reply } => {
+                self.cx = cx;
                 self.closers.push(reply);
                 self.step(Event::Close, at);
             }
@@ -817,11 +818,11 @@ impl Driver {
                 let room = self.pending_create.as_ref()?;
                 let key: [u8; 16] = rand::random();
                 let key: String = key.iter().map(|b| format!("{b:02x}")).collect();
-                create_request(&self.opts, room, self.headers.clone(), &bearer, &key)
+                create_request(&self.opts, room, &self.cx, &bearer, &key)
             }
             (Kind::Terminate, Ok(bearer)) => {
                 let session = &self.terminating[&request];
-                terminate_request(&self.opts, session, self.headers.clone(), &bearer)?
+                terminate_request(&self.opts, session, &self.cx, &bearer)?
             }
         };
         let exchange = Arc::new(exchange);

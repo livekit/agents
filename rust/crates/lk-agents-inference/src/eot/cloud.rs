@@ -23,8 +23,6 @@ use crate::eot::{EotRequestId, EotWarning};
 /// A prediction on old audio is a wrong one: past 500 ms of lag the gateway restarts on the newest.
 const INPUT_POLICY: Policy = Policy::Now(std::time::Duration::from_millis(500));
 
-pub use crate::headers::HeaderProvider;
-
 /// `_CloudTransportOptions` (`transports.py:63`), apart so the local transport never sees them.
 #[derive(Clone)]
 pub struct CloudOptions {
@@ -33,7 +31,9 @@ pub struct CloudOptions {
     pub api_secret: String,
     pub conn_options: ApiConnectOptions,
     pub sample_rate: u32,
-    pub headers: HeaderProvider,
+    /// The context its streams run under: each connection carries the identity of its job, and
+    /// its input drops count for it.
+    pub cx: lk_agents_abi::telemetry::Cx,
 }
 
 /// Every socket failure is non-retryable, as in `_connect_ws`: the cloud->local fallback is the
@@ -197,10 +197,9 @@ impl CloudTransport {
     }
 
     async fn connect(&self) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), ApiError> {
-        let identification = (self.opts.headers)();
         let token =
             lk_agents_net::token::inference_bearer(&self.opts.api_key, &self.opts.api_secret)?;
-        let headers = crate::headers::gateway_headers(Some(&identification), None, None, &token);
+        let headers = crate::headers::gateway_headers(&self.opts.cx, None, None, &token);
         let session_id = Some(crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
 
         let url = eot_url(&self.opts.base_url);

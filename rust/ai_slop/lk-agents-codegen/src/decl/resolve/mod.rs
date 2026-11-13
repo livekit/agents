@@ -267,12 +267,13 @@ impl Resolver<'_> {
             &at,
             &entries,
             &[
-                "new", "call", "await", "getter", "setter", "function", "next", "name", "pid",
-                "attached", "future", "path",
+                "new", "init", "call", "await", "getter", "setter", "function", "next", "name",
+                "pid", "attached", "future", "path",
             ],
         )?;
         let kinds: Vec<MethodKind> = [
             ("new", MethodKind::New),
+            ("init", MethodKind::New),
             ("call", MethodKind::Call),
             ("await", MethodKind::Await),
             ("getter", MethodKind::Getter),
@@ -286,7 +287,7 @@ impl Resolver<'_> {
         .collect();
         let [kind] = kinds[..] else {
             return Err(format!(
-                "{at}: declare exactly one of new, call, await, getter, setter, function, next"
+                "{at}: declare exactly one of new, init, call, await, getter, setter, function, next"
             ));
         };
         self.method_of(f, kind, &entries, &at)
@@ -358,9 +359,28 @@ impl Resolver<'_> {
             voc::only(
                 &pat,
                 &entries,
-                &["kw", "default", "context", "shape_error", "one_or_many", "pcm", "sdk"],
+                &["kw", "default", "context", "shape_error", "one_or_many", "pcm", "sdk", "label"],
             )?;
             kw_only |= voc::find(&entries, "kw").is_some();
+            // The host class path of the object an `init` constructor builds.
+            if voc::find(&entries, "label").is_some() {
+                if entries.len() != 1 || self.ty(&pt.ty, &pat)? != Ty::Str {
+                    return Err(format!("{pat}: a #[host(label)] parameter is a plain `String`"));
+                }
+                params.push(Param {
+                    name: ident.ident.to_string(),
+                    ty: Ty::ClassLabel,
+                    shape_error: None,
+                    one_or_many: false,
+                    pcm: false,
+                    sdk: false,
+                    kwargs: false,
+                    by_ref: false,
+                    kw_only: false,
+                    default: None,
+                });
+                continue;
+            }
             // The caller's span, read at the call's entry (`telemetry::Cx::entry`).
             if span_context(&pt.ty) {
                 if matches!(&*pt.ty, syn::Type::Reference(_)) || !entries.is_empty() {
@@ -873,6 +893,10 @@ impl Resolver<'_> {
             .ok_or_else(|| format!("{at}: proxy `{}` names no host class", tr.ident))?;
         // A plugin base class that is an `EventEmitter` generic over the plugin's own events.
         let generic = voc::find(&proxy.nested, "generic").is_some();
+        let weak = voc::find(&proxy.nested, "weak").is_some();
+        if weak && boxed {
+            return Err(format!("{at}: a weak proxy is shared, never owned"));
+        }
         let declared = declares_calls(tr).then(|| {
             (k.modules[module].path.first().cloned().unwrap_or_default(), tr.ident.to_string())
         });
@@ -888,6 +912,7 @@ impl Resolver<'_> {
             generic,
             declared,
             boxed,
+            weak,
         })
     }
 

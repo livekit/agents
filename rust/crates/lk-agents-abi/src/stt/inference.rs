@@ -9,9 +9,9 @@ use crate::vad::inference::VadModels;
 use crate::vad::types::Vad;
 use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt};
 
-/// The gateway STT behind `inference.STT`. Its options, keyterms and open streams are shared by
-/// every view (`identified`); each view's connections carry its own job's identification. As the
-/// session's STT it implements the keyterm and conversation hooks.
+/// The gateway STT behind `inference.STT`. One instance serves every job it is handed to; each
+/// connection carries the identity of the job it runs for. As the session's STT it implements the
+/// keyterm and conversation hooks.
 #[crate::host(class(name = "InferenceStt", native = Stt))]
 pub trait InferenceStt: Stt + Sized + 'static {
     /// What the hosting process lends the class.
@@ -28,13 +28,15 @@ pub trait InferenceStt: Stt + Sized + 'static {
     /// server's settings. `vad`'s end of speech finalizes the transcript of a model that
     /// endpoints client-side (Speechmatics, OpenAI), which gets a default one from
     /// `vad_models` when none is given; a model that endpoints server-side ignores it.
-    #[host(new)]
+    #[host(init)]
     #[allow(
         clippy::too_many_arguments,
         reason = "mirrors the Python constructor's keyword arguments"
     )]
     fn new(
         env: &Self::Env,
+        #[host(label)] label: String,
+        events: Arc<dyn crate::types::provider::ProviderEvents>,
         vad_models: Arc<dyn VadModels>,
         #[host(default = None)] model: Option<String>,
         #[host(kw, default = None)] language: Option<String>,
@@ -59,22 +61,12 @@ pub trait InferenceStt: Stt + Sized + 'static {
     fn capabilities(&self) -> crate::SttCapabilities;
 
     /// The policy this client was given, which a session or run that supplies none keeps.
-    #[host(getter)]
+    #[host(call, name = "_core_conn_options")]
     fn conn_options(&self) -> ApiConnectOptions;
-
-    /// This client as a session of the job `headers` (`get_inference_headers()`) identifies holds
-    /// it: the same options, keyterms and open streams, its connections carrying that job.
-    /// `reporter` is the host `stt.STT` whose `error` events report this view's failures.
-    #[host(call)]
-    fn identified(
-        &self,
-        headers: crate::Headers,
-        #[host(default = None)] reporter: Option<Arc<dyn Stt>>,
-    ) -> Self;
 
     /// Read by later streams, and sent to the open ones as a mid-stream `session.update`. A new
     /// model resolves its VAD again.
-    #[host(call)]
+    #[host(call, name = "_core_update_options")]
     fn update_options(
         &self,
         #[host(kw, default = None)] model: Option<String>,
@@ -85,23 +77,24 @@ pub trait InferenceStt: Stt + Sized + 'static {
 
     /// The session's keyterms: a warning once for a model without keyterm prompting, else every
     /// open stream applies them (now if the user is silent, at end of speech if not).
-    #[host(call)]
+    #[host(call, name = "_core_update_keyterms")]
     fn update_keyterms(&self, keyterms: Vec<String>) {
         Stt::update_keyterms(self, &keyterms);
     }
 
     /// An assistant turn's text, its tail, biases recognition as `agent_context` on a model that
     /// carries it.
-    #[host(call)]
+    #[host(call, name = "_core_push_conversation_item")]
     fn push_conversation_item(&self, role: &str, text: &str) {
         Stt::push_conversation_item(self, role, text);
     }
 
     /// Opens a stream; its pump opens the socket. `start_time_offset` shifts its timestamps onto
     /// the caller's input timeline.
-    #[host(call)]
+    #[host(call, name = "_core_native_stream")]
     fn stream(
         &self,
+        cx: crate::telemetry::Cx,
         #[host(kw, default = None)] language: Option<String>,
         #[host(default = None)] start_time_offset: Option<f64>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
@@ -115,8 +108,8 @@ pub trait InferenceStt: Stt + Sized + 'static {
     name = "STT",
     base = "stt.STT",
     native = InferenceStt,
-    legs(stream),
-    leg = "_core_native",
+    refuse(stream, recognize, _recognize_impl),
+    node = "session.stt_node",
     base_args(capabilities),
     host_args(vad_models = ".._bindings.silero_model")
 ))]
@@ -142,8 +135,7 @@ pub trait InferenceSttFacade {
         annotation(
             model = ".inference_stt.STTModels | str",
             encoding = ".inference_stt.STTEncoding"
-        ),
-        resolve(vad = ".._bindings.core_leg")
+        )
     )]
     #[allow(
         clippy::too_many_arguments,
@@ -175,7 +167,8 @@ pub trait InferenceSttFacade {
         annotation(
             model = ".inference_stt.STTModels | str",
             language = ".inference_stt.STTLanguages | str"
-        )
+        ),
+        native = _core_update_options
     )]
     fn update_options(
         &self,

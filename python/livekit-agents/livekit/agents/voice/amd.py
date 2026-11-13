@@ -4,7 +4,7 @@ import asyncio
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal
 
-from .. import _bindings, _core, inference
+from .. import _core, inference
 from .._generated import public_voice_amd as _public
 from .._generated.amd import DEFAULT_LLM_MODEL, DEFAULT_STT_MODEL, AMDConfig, AMDPredictionEvent
 from .._generated.public_voice_amd import *  # noqa: F403
@@ -181,9 +181,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         }
         accepted = session._running.attach_amd(
             config,
-            _bindings.core_leg(llm),
+            llm,
             tools=CLASSIFIER_TOOLS,
-            stt=_bindings.core_leg(self._stt) if self._stt is not None else None,
+            stt=self._stt,
             participant_identity=self._participant_identity,
         )
         if not accepted:

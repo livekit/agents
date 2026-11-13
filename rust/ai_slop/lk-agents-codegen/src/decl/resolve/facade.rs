@@ -47,8 +47,9 @@ impl Resolver<'_> {
                 "generic",
                 "native",
                 "from_native",
-                "legs",
-                "leg",
+                "refuse",
+                "node",
+                "proxied",
                 "availability",
                 "base_args",
                 "keep",
@@ -176,6 +177,14 @@ impl Resolver<'_> {
                 return Err(format!("{at}: keep({n}) names no constructor parameter"));
             }
         }
+        let (refused, proxied, node) =
+            (names("refuse"), names("proxied"), voc::text(at, nested, "node")?);
+        if refused.is_empty() != node.is_none() {
+            return Err(format!("{at}: refused overrides name the `node` they belong in"));
+        }
+        if !refused.is_empty() && !proxied.is_empty() {
+            return Err(format!("{at}: overrides are refused or proxied, not both"));
+        }
         let name = voc::text(at, nested, "name")?.unwrap_or_else(|| tr.ident.to_string());
         let path = voc::text(at, nested, "path")?
             .ok_or_else(|| format!("{at}: a facade names its public module: `path = \"..\"`"))?;
@@ -192,9 +201,9 @@ impl Resolver<'_> {
             generic: voc::text(at, nested, "generic")?,
             native,
             from_native: flag("from_native"),
-            legs: voc::find(nested, "legs")
-                .map_or(Vec::new(), |legs| legs.nested.iter().map(|l| l.key.clone()).collect()),
-            leg: voc::text(at, nested, "leg")?,
+            refused,
+            node,
+            proxied,
             availability: voc::find(nested, "availability")
                 .map(|a| {
                     let keys = ["observer", "members", "kind", "event", "record"];

@@ -151,10 +151,12 @@ impl SessionRecorder {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::recorder::AudioRecorder>(),
-        read: |obj| {
-            let this = obj.cast::<SessionRecorder>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::recorder::AudioRecorder> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<SessionRecorder>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::recorder::AudioRecorder> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }

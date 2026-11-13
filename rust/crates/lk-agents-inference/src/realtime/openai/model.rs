@@ -149,7 +149,6 @@ fn build(env: &ProcessEnv, config: Config) -> Result<OpenAIRealtime, RealtimeCon
             api_secret: gateway.api_secret.unwrap_or_default(),
             provider: gateway.provider,
             inference_class: gateway.inference_class,
-            identity: Default::default(),
         }
     } else if is_azure {
         Auth::Azure { api_key, entra_token: config.entra_token }
@@ -277,9 +276,6 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
             reasoning,
             max_output_tokens: max_response_output_tokens,
         });
-    }
-    fn bind_identification(&self, headers: crate::headers::Headers) {
-        self.bind_identification(headers);
     }
 }
 

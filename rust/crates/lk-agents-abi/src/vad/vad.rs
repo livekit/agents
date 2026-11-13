@@ -50,7 +50,7 @@ pub trait Vad: Send + Sync {
 
     /// Load the model early; a detector with nothing to warm ignores it.
     #[host(notify, name = "_core_prewarm")]
-    fn prewarm(&self) {}
+    fn prewarm(&self, _cx: &crate::telemetry::Cx) {}
 
     /// Open a stream detecting speech in the audio pushed into it.
     // `Err` is a construction failure. `async` as on [`Tts`](crate::Tts). The core queues its

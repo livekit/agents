@@ -58,7 +58,12 @@ def test_update_options_takes_the_text_options(cls: type[tts.TTS[Any]]) -> None:
 
 @pytest.mark.parametrize(
     "cls",
-    [c for c in CLASSES if c.__module__.startswith("livekit.plugins.")],
+    # a chain's options are its serving member's, which `FallbackAdapter`'s own tests cover
+    [
+        c
+        for c in CLASSES
+        if c.__module__.startswith("livekit.plugins.") and not issubclass(c, tts.FallbackAdapter)
+    ],
     ids=lambda c: f"{c.__module__}.{c.__qualname__}",
 )
 def test_update_options_passes_the_text_options_on(cls: type[tts.TTS[Any]]) -> None:

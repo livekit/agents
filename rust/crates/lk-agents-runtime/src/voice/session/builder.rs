@@ -620,7 +620,7 @@ pub(super) fn prepare_opening_legs(
 ) -> Result<(), DriverError> {
     builder.toolset.refuse_unrunnable()?;
     if let Some(llm) = &builder.llm {
-        llm.prewarm();
+        llm.prewarm(&builder.trace);
     }
     let clock = builder.time.clock();
     let (vad, conn) = (builder.vad.clone(), builder.conn.stt);
@@ -629,7 +629,7 @@ pub(super) fn prepare_opening_legs(
         .take()
         .map(|stt| nodes.stt(stt_leg(stt, stt_adapter, vad, clock.clone(), conn)));
     if let Some(stt) = &builder.stt {
-        stt.prewarm();
+        stt.prewarm(&builder.trace);
     }
     // The engine's TTS budget: the session's, else the TTS's own policy.
     builder.conn.tts =
@@ -637,7 +637,7 @@ pub(super) fn prepare_opening_legs(
     let conn = builder.conn.tts;
     builder.tts = builder.tts.take().map(|tts| nodes.tts(tts_leg(tts, tts_adapter, clock, conn)));
     if let Some(tts) = &builder.tts {
-        tts.prewarm();
+        tts.prewarm(&builder.trace);
     }
     Ok(())
 }

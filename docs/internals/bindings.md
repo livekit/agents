@@ -255,7 +255,7 @@ typed associated item that the constructor receives, and a method forwarding to 
 /// `llm.DuplexRealtimeAdapter`: runs a `DuplexModel` inside a `VoiceSession`.
 #[host(facade(path = "livekit.agents.llm.duplex", extended, name = "DuplexRealtimeAdapter",
               base = "llm.realtime.RealtimeModel", native = DuplexRealtimeModel,
-              legs(session), base_args(capabilities)))]
+              refuse(session), node = "session.llm_node", base_args(capabilities)))]
 pub trait DuplexRealtimeAdapterFacade {
     /// The wrapped plugin model.
     #[host(delegate)]
@@ -280,7 +280,28 @@ of the same names, and `keep(..)` keeps parameters as `self._<param>` for an ext
 does not take with a host object (`inference.VAD`'s Silero model factory). A facade named as its
 base binds the base as `Base<Name>`, and a `base` with no module names a top-level
 `livekit.agents` class (`VAD`). A facade with no `#[host(new)]` declares `_native`, which its
-handwritten subclass sets. A chain
+handwritten subclass sets.
+
+A provider's native class is built in two steps (`#[host(init)]` on its constructor): its
+`__new__` makes an empty object and its `__init__` builds the engine once. The facade over it
+*is* that native object, `class TTS(_core.InferenceTts, BaseTTS)`, the native class first so its
+getters (`capabilities`, `sample_rate`) win over the base's. The facade's `__init__` calls
+`_core.InferenceTts.__init__(self, ..)` and then the base's; its forwards call
+`_core.InferenceTts.m(self, ..)`, and `super()` is never used, since it reaches the native class.
+A user subclass that calls `super().__init__(..)` keeps working. The core takes such an object as
+itself by a type check that reads what its class and its `__init__` recorded, never calling it;
+one whose `__init__` never ran is refused with a `TypeError`. The engine's events go back to the
+object through a weak proxy (`proxy(.., weak)`, `ProviderEvents` or a chain's `ChainObserver`),
+and its label is the object's class path (`#[host(label)]`), both filled by `__init__`; whatever
+else it reads from its host object it owns (a TTS's options cell, `_core_options`). Its gateway
+requests carry the identity of the job their telemetry context runs for (`cx.job()`), which the
+worker records as the job starts and the room session completes with the agent's participant.
+`refuse(hook, ..)` with `node` refuses, as a host subclass is defined, an override of a hook the
+native runs itself (`_synthesize`, `stream`, `chat`, `session`), pointing to the session node
+that customizes it; `proxied(hook, ..)` instead runs such a subclass behind the trait's proxy (a
+tokenizer deciding its own sentences). The framework's own subclasses are exempt.
+
+A chain
 facade declares `availability(observer, members, kind, event, record)`: it is its chain's
 observer, keeps `members` (as its `#[host(new)]` takes them) as `_members`, emits each
 availability change as `record`, names the serving member's `model`, `provider` and
@@ -331,8 +352,8 @@ taking every parameter but those read from the base stream's `state(..)`, and th
 constructor passes `base_args(..)` to its base and keeps the rest. `rename(op_param = "name")`
 gives an operation parameter the provider method's own name (`synthesize(text)` passing
 `input_text`), `provider_default(p)` makes a parameter not given take the owner's native getter
-`p` (a provider's own `conn_options`), and the stream opens the operation on the owner's `leg`
-when it declares one (the job's view of an inference client):
+`p` (a provider's own `conn_options`), and over a two-step native class the stream opens the
+operation on its owner itself:
 
 ```rust
 #[host(facade(path = "livekit.agents.stt", base = "stt.RecognizeStream", native = FallbackStt,
@@ -346,7 +367,7 @@ pub trait FallbackRecognizeStream {}
 Logic a facade cannot declare goes in a handwritten subclass of the generated class when it is
 specific to Python (SDK objects, user callbacks, reflection): the facade is then `extended`, not
 re-exported, and the handwritten class of its name in `path` subclasses it, setting `_native` when
-no `#[host(new)]` builds it. Logic that Rust can own cleanly moves to Rust instead, and the facade
+no `#[host(new)]` builds it and the native class is not its own. Logic that Rust can own cleanly moves to Rust instead, and the facade
 stays fully generated.
 
 ### Generation

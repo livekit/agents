@@ -495,10 +495,12 @@ impl AudioEmitter {
 inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::tts::stream_pacer::PushedAudio>(),
-        read: |obj| {
-            let this = obj.cast::<AudioEmitter>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::tts::stream_pacer::PushedAudio> = this.get().0.clone();
-            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        read: |obj| match obj.cast::<AudioEmitter>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::tts::stream_pacer::PushedAudio> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
         },
     }
 }
@@ -666,7 +668,7 @@ impl EmitterOutputProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::emitter::EmitterOutput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::media::emitter::EmitterOutput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::media::emitter::EmitterOutput>(obj)?
         {
             return Ok(native);
         }
@@ -679,7 +681,7 @@ impl EmitterOutputProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::emitter::EmitterOutput>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::media::emitter::EmitterOutput>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::media::emitter::EmitterOutput>(obj)?
         {
             return Ok(native);
         }
@@ -690,6 +692,13 @@ impl EmitterOutputProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::media::emitter::EmitterOutput>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::media::emitter::EmitterOutput>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `EmitterOutput` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 

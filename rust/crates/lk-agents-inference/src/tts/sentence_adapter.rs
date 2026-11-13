@@ -10,6 +10,7 @@ use lk_agents_abi::tts::types::{
     TtsSource,
 };
 use lk_agents_abi::types::identity::ProviderId;
+use lk_agents_abi::types::provider::ProviderEvents;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
 use lk_agents_core::metrics::provider::TtsMetricState;
@@ -27,6 +28,9 @@ use tokio::sync::mpsc;
 #[derive(Clone)]
 pub struct StreamAdapter {
     tts: Arc<dyn Tts>,
+    /// The host object it was built as: its name, and its `error` events; else it names and
+    /// reports through the TTS it wraps.
+    host: Option<(String, Arc<dyn ProviderEvents>)>,
     /// Bounds the per-sentence inner closes done inside `next()`.
     clock: Arc<dyn Clock>,
     /// Each sentence's retries (`ChunkedStream`'s own loop in the reference): a sentence failing
@@ -41,7 +45,7 @@ impl StreamAdapter {
             max_retry: 0,
             ..lk_agents_abi::ApiConnectOptions::default()
         };
-        StreamAdapter { tts, clock, budget }
+        StreamAdapter { tts, host: None, clock, budget }
     }
 
     /// Each sentence retried within `budget`.
@@ -66,7 +70,10 @@ impl StreamAdapter {
 
 impl Tts for StreamAdapter {
     fn label(&self) -> String {
-        format!("StreamAdapter[{}]", self.tts.label())
+        match &self.host {
+            Some((label, _)) => label.clone(),
+            None => format!("StreamAdapter[{}]", self.tts.label()),
+        }
     }
 
     fn request_span(&self) -> telemetry::RequestSpan {
@@ -78,12 +85,15 @@ impl Tts for StreamAdapter {
         self.tts.id()
     }
 
-    fn prewarm(&self) {
-        self.tts.prewarm();
+    fn prewarm(&self, cx: &telemetry::Cx) {
+        self.tts.prewarm(cx);
     }
 
     fn failed(&self, error: ProviderError, recoverable: bool) {
-        self.tts.failed(error, recoverable);
+        match &self.host {
+            Some((_, events)) => events.failed(error, recoverable),
+            None => self.tts.failed(error, recoverable),
+        }
     }
 
     /// Verbatim from `stream_adapter.py:33`.
@@ -119,7 +129,8 @@ impl Tts for StreamAdapter {
 
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
         let tts = self.tts.with_conn_options(conn).unwrap_or_else(|| self.tts.clone());
-        Some(Arc::new(StreamAdapter { tts, budget: *conn, clock: self.clock.clone() }))
+        let (host, clock) = (self.host.clone(), self.clock.clone());
+        Some(Arc::new(StreamAdapter { tts, host, budget: *conn, clock }))
     }
 
     fn options(&self) -> Arc<dyn SharedTtsOptions> {
@@ -477,8 +488,13 @@ impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for AdapterS
 impl TtsStreamAdapter for StreamAdapter {
     type Env = ProcessEnv;
 
-    fn new(env: &ProcessEnv, tts: Arc<dyn Tts>) -> Self {
-        StreamAdapter::new(tts, env.clock.clone())
+    fn new(
+        env: &ProcessEnv,
+        label: String,
+        events: Arc<dyn ProviderEvents>,
+        tts: Arc<dyn Tts>,
+    ) -> Self {
+        StreamAdapter { host: Some((label, events)), ..StreamAdapter::new(tts, env.clock.clone()) }
     }
 
     fn capabilities(&self) -> TtsCapabilities {

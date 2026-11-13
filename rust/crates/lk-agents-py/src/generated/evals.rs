@@ -54,7 +54,7 @@ impl CoreJudgeRunner {
                 .collect::<PyResult<Vec<_>>>()
         })?;
         let context = crate::py_calls::entered();
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(
@@ -85,7 +85,7 @@ impl CoreJudgeRunner {
         message: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let cx = crate::py_calls::entry_cx();
+        let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message, cx)
@@ -167,7 +167,7 @@ impl EvaluationHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::evals::EvaluationHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)?
         {
             return Ok(native);
         }
@@ -180,7 +180,7 @@ impl EvaluationHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::evals::EvaluationHost>> {
         if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)?
         {
             return Ok(native);
         }
@@ -191,6 +191,11 @@ impl EvaluationHostProxy {
     pub fn owned(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::evals::EvaluationHost>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)?.is_some() {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `EvaluationHost` is shared, never handed over to be owned",
+            ));
+        }
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 

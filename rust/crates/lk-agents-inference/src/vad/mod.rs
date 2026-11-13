@@ -33,11 +33,18 @@ pub struct LocalVad {
     opts: lk_agents_net::signal::Producer<VadOptions>,
     models: Arc<dyn VadModelFactory>,
     env: ProcessEnv,
+    /// The name logs give it: its host class's when its host built it.
+    label: String,
 }
 
 impl LocalVad {
     pub fn new(opts: VadOptions, models: Arc<dyn VadModelFactory>, env: &ProcessEnv) -> Self {
-        LocalVad { opts: lk_agents_net::signal::signal(opts).0, models, env: env.clone() }
+        LocalVad {
+            opts: lk_agents_net::signal::signal(opts).0,
+            models,
+            env: env.clone(),
+            label: NativeLabel::Vad.as_str().into(),
+        }
     }
 
     /// A detector whose model is the linked native one, else one `models` builds per stream.
@@ -83,6 +90,7 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
 
     fn new(
         env: &ProcessEnv,
+        label: String,
         model_factory: Arc<dyn VadModels>,
         _model: VadModelName,
         min_speech_duration: f64,
@@ -105,7 +113,7 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
             deactivation_threshold: deactivation_threshold
                 .unwrap_or((activation_threshold - 0.15).max(0.01)),
         };
-        Ok(LocalVad::with_host_models(opts, model_factory, env))
+        Ok(LocalVad { label, ..LocalVad::with_host_models(opts, model_factory, env) })
     }
 
     fn model(&self) -> VadModelName {
@@ -199,7 +207,7 @@ impl VadModel for HostModel {
 
 impl Vad for LocalVad {
     fn label(&self) -> String {
-        NativeLabel::Vad.as_str().into()
+        self.label.clone()
     }
 
     fn capabilities(&self) -> VadCapabilities {

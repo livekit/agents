@@ -496,3 +496,13 @@ impl Measurements {
         measured.iter().filter(|(name, _)| *name == instrument).map(|(_, v)| *v).collect()
     }
 }
+
+/// A context running for a job of `identity`, registered under a key of its own: what a gateway
+/// request made under it carries.
+pub fn job_cx(identity: lk_agents_net::job_identity::JobIdentity) -> lk_agents_abi::telemetry::Cx {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let key = lk_agents_abi::telemetry::record::JobKey(format!("AJ_testkit_{n}"));
+    lk_agents_net::job_identity::open(key.clone(), identity);
+    lk_agents_abi::telemetry::Cx::NONE.with_job(Some(key))
+}

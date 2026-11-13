@@ -14,7 +14,7 @@ use lk_agents_net::transport::{TransportError, WsMessage, WsTransport};
 use lk_agents_telemetry as telemetry;
 use tokio::sync::{Mutex, mpsc};
 
-use crate::headers::{BoundIdentity, Headers, gateway_headers};
+use crate::headers::{Headers, gateway_headers};
 use crate::realtime::dialect::{Dialect, Protocol};
 use crate::realtime::machine::connection::RealtimeConnection;
 use crate::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
@@ -29,14 +29,13 @@ pub enum Auth {
     Bearer(String),
     /// Azure: `api-key`, and an Entra token as the bearer.
     Azure { api_key: Option<String>, entra_token: Option<String> },
-    /// LiveKit Inference: a fresh gateway JWT per connection, the job's identification headers,
-    /// and the provider the gateway routes to.
+    /// LiveKit Inference: a fresh gateway JWT per connection, the identity of the job the
+    /// session runs for, and the provider the gateway routes to.
     Inference {
         api_key: String,
         api_secret: String,
         provider: Option<String>,
         inference_class: Option<String>,
-        identity: BoundIdentity,
     },
 }
 
@@ -66,8 +65,8 @@ impl Connect {
         }
     }
 
-    /// `_create_ws_url_and_headers`.
-    fn headers(&self) -> Result<Headers, ApiError> {
+    /// `_create_ws_url_and_headers`, for a connection of a session `cx` opened.
+    fn headers(&self, cx: &telemetry::Cx) -> Result<Headers, ApiError> {
         Ok(match &self.auth {
             Auth::Bearer(key) => {
                 let mut headers = Headers::new();
@@ -86,14 +85,9 @@ impl Connect {
                 }
                 h
             }
-            Auth::Inference { api_key, api_secret, provider, inference_class, identity } => {
+            Auth::Inference { api_key, api_secret, provider, inference_class } => {
                 let token = lk_agents_net::token::inference_bearer(api_key, api_secret)?;
-                gateway_headers(
-                    identity.for_connection().as_ref(),
-                    inference_class.as_deref(),
-                    provider.as_deref(),
-                    &token,
-                )
+                gateway_headers(cx, inference_class.as_deref(), provider.as_deref(), &token)
             }
         })
     }
@@ -169,14 +163,6 @@ impl OpenAIRealtime {
 
     fn options(&self) -> parking_lot::MutexGuard<'_, SessionOptions> {
         self.opts.lock()
-    }
-
-    /// `get_inference_headers()` of the job the model now serves; every later connection carries
-    /// them. A no-op off the gateway.
-    pub fn bind_identification(&self, headers: crate::headers::Headers) {
-        if let Auth::Inference { identity, .. } = &self.connect.auth {
-            identity.bind(headers);
-        }
     }
 
     /// `RealtimeModel.update_options`: the model keeps the values for its next sessions, and every
@@ -266,9 +252,18 @@ impl OpenAIRealtime {
         )
     }
 
-    /// `session(turn_detection_disabled=...)`. Applied to the session's copy of the options; the
-    /// model stays reusable.
+    /// A session outside any job.
     pub async fn session(&self, turn_detection_disabled: bool) -> OpenAIRealtimeSession {
+        self.session_for(&telemetry::Cx::NONE, turn_detection_disabled).await
+    }
+
+    /// `session(turn_detection_disabled=...)`. Applied to the session's copy of the options; the
+    /// model stays reusable. Its connections carry the identity of the job `cx` runs for.
+    pub async fn session_for(
+        &self,
+        cx: &telemetry::Cx,
+        turn_detection_disabled: bool,
+    ) -> OpenAIRealtimeSession {
         let mut opts = self.options().clone();
         if turn_detection_disabled && self.dialect.supports_turn_detection_disabled {
             opts.turn_detection = None;
@@ -331,6 +326,7 @@ impl OpenAIRealtime {
             events: ev_tx,
             images: self.images.clone(),
             spawner: self.spawner.clone(),
+            cx: cx.clone(),
         };
         let pump = self.spawner.spawn(pump.run(input_rx));
 
@@ -471,6 +467,8 @@ struct Pump {
     events: super::queue::Delivery,
     images: Arc<dyn ImageResolver + Send + Sync>,
     spawner: Arc<dyn Spawner>,
+    /// The context the session was opened under: its connections carry its job's identity.
+    cx: telemetry::Cx,
 }
 
 impl Pump {
@@ -598,7 +596,7 @@ impl Pump {
         generation: u64,
     ) -> Result<Outcome, ApiError> {
         let t0 = self.clock.now();
-        let headers = self.connect.headers()?;
+        let headers = self.connect.headers(&self.cx)?;
         let connect = self.transport.connect(&self.url, headers);
         tokio::pin!(connect);
         let (sender, receiver) = loop {
@@ -965,7 +963,7 @@ impl lk_agents_abi::Realtime for OpenAIRealtime {
     > {
         Box::pin(async move {
             // Infallible: a connect failure arrives as `Event::Error`, like a reconnect failure.
-            let session = OpenAIRealtime::session(self, turn_detection_disabled).await;
+            let session = OpenAIRealtime::session_for(self, &cx, turn_detection_disabled).await;
             session.commands.input.observe(cx);
             Ok(Arc::new(session) as Arc<dyn lk_agents_abi::RealtimeSession>)
         })

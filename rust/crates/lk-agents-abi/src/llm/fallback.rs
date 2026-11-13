@@ -10,7 +10,7 @@ pub struct AvailabilityChanged {
 
 /// What a fallback chain reports to the adapter that built it (each host `FallbackAdapter`, the
 /// realtime one included): the adapter maps the index back to its instance.
-#[crate::host(proxy(host = "livekit.agents._bindings.FallbackListener"))]
+#[crate::host(proxy(host = "livekit.agents._bindings.FallbackListener", weak))]
 pub trait ChainObserver: Send + Sync {
     #[host(notify, name = "_core_availability_changed")]
     fn availability_changed(&self, ev: AvailabilityChanged);
@@ -36,19 +36,22 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
     #[host(source(item = crate::LlmChunk, class = "FallbackLlmChunks"))]
     type Chunks: crate::StreamOutput<crate::LlmChunk> + 'static;
 
-    /// `llm` in order.
-    #[host(new)]
+    /// `llm` in order; `observer` hears the chain's availability and failures.
+    #[host(init)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python constructor's arguments")]
     fn new(
         env: &Self::Env,
+        #[host(label)] label: String,
+        observer: std::sync::Arc<dyn ChainObserver>,
         llm: Vec<std::sync::Arc<dyn crate::Llm>>,
         #[host(kw, default = 5.0)] attempt_timeout: f64,
         #[host(default = 0)] max_retry_per_llm: u32,
         #[host(default = 0.5)] retry_interval: f64,
         #[host(default = false)] sticky: bool,
-        #[host(default = None)] on_availability: Option<std::sync::Arc<dyn ChainObserver>>,
     ) -> Result<Self, crate::errors::Invalid>;
 
-    #[host(getter)]
+    /// Which entry most recently served, as a position in the host's list.
+    #[host(getter, name = "_core_active_index")]
     fn active_index(&self) -> usize;
 
     #[host(await)]
@@ -56,9 +59,11 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
 
     /// A completion of the host `chat_ctx`, offering `tools`; the chain picks an entry on the
     /// first pull.
-    #[host(await)]
+    #[host(await, name = "_core_native_chat")]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the Python method's keyword arguments")]
     async fn chat(
         &self,
+        cx: crate::telemetry::Cx,
         #[host(kw)] chat_ctx: HostChatContext,
         #[host(default = None)] tools: Option<HostTools>,
         #[host(default = None)] parallel_tool_calls: Option<bool>,
@@ -96,9 +101,10 @@ pub struct HostChatContext {
     name = "FallbackAdapter",
     base = "llm.LLM",
     native = FallbackLlm,
-    legs(chat),
+    refuse(chat),
+    node = "session.llm_node",
     availability(
-        observer = "on_availability",
+        observer = "observer",
         members = "llm",
         kind = "LLM",
         event = "llm_availability_changed",
@@ -115,7 +121,7 @@ pub trait FallbackLlmAdapter {
     ///     retry_interval: The wait between retries.
     ///     sticky: Keep the LLM that last served until it fails, even once a preferred one
     ///         recovers; on failure the rest are tried in order.
-    #[host(new, resolve(llm = ".._bindings.core_legs"))]
+    #[host(new)]
     fn new(
         llm: Vec<std::sync::Arc<dyn crate::Llm>>,
         #[host(kw, default = 5.0)] attempt_timeout: f64,
@@ -156,16 +162,19 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     type Env;
 
     /// `tts` in order; `sample_rate` defaults to the highest of theirs, the others resampled.
-    #[host(new)]
+    /// `observer` hears the chain's availability and failures.
+    #[host(init)]
     fn new(
         env: &Self::Env,
+        #[host(label)] label: String,
+        observer: std::sync::Arc<dyn ChainObserver>,
         tts: Vec<std::sync::Arc<dyn crate::Tts>>,
         #[host(kw, default = 2)] max_retry_per_tts: u32,
         #[host(default = None)] attempt_timeout: Option<f64>,
         #[host(default = None)] sample_rate: Option<u32>,
-        #[host(default = None)] on_availability: Option<std::sync::Arc<dyn ChainObserver>>,
     ) -> Result<Self, crate::errors::Invalid>;
-    #[host(getter)]
+    /// Which entry most recently served, as a position in the host's list.
+    #[host(getter, name = "_core_active_index")]
     fn active_index(&self) -> usize;
     #[host(getter)]
     fn capabilities(&self) -> crate::TtsCapabilities;
@@ -184,10 +193,11 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     name = "FallbackAdapter",
     base = "tts.TTS",
     native = FallbackTts,
-    legs(_synthesize, _stream),
+    refuse(_synthesize, _stream),
+    node = "session.tts_node",
     base_args(capabilities, sample_rate, num_channels),
     availability(
-        observer = "on_availability",
+        observer = "observer",
         members = "tts",
         kind = "TTS",
         event = "tts_availability_changed",
@@ -204,7 +214,7 @@ pub trait FallbackTtsAdapter {
     ///         ``conn_options`` limits.
     ///     sample_rate: The output rate; the highest of the TTS by default, the others
     ///         resampled.
-    #[host(new, resolve(tts = ".._bindings.core_legs"))]
+    #[host(new)]
     fn new(
         tts: Vec<std::sync::Arc<dyn crate::Tts>>,
         #[host(kw, default = 2)] max_retry_per_tts: u32,
@@ -239,21 +249,24 @@ pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
-    #[host(new)]
+    /// `models` in order; `observer` hears the chain's availability and failures.
+    #[host(init)]
     fn new(
         env: &Self::Env,
+        #[host(label)] label: String,
+        observer: std::sync::Arc<dyn ChainObserver>,
         models: Vec<RealtimeLeg>,
         #[host(kw, default = 10.0)] cooldown: f64,
         #[host(default = None)] attempt_timeout: Option<f64>,
         #[host(default = true)] regenerate_on_swap: bool,
-        #[host(default = None)] on_availability: Option<std::sync::Arc<dyn ChainObserver>>,
     ) -> Result<Self, crate::llm::realtime::RealtimeConfigurationError>;
-    #[host(getter)]
+    /// Which entry most recently served, as a position in the host's list.
+    #[host(getter, name = "_core_active_index")]
     fn active_index(&self) -> usize;
     /// The members' capabilities, merged: the pipeline-shaping ones agree, the others are ANDed.
     #[host(getter)]
     fn capabilities(&self) -> crate::llm::realtime::RealtimeCapabilities;
-    #[host(await)]
+    #[host(await, name = "_core_restart")]
     async fn restart(&self, #[host(kw, default = false)] switch_model: bool);
 }
 
@@ -266,9 +279,11 @@ pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
     name = "RealtimeModelFallbackAdapter",
     base = "llm.realtime.RealtimeModel",
     native = RealtimeFallbackModel,
+    refuse(session),
+    node = "session.llm_node",
     base_args(capabilities),
     availability(
-        observer = "on_availability",
+        observer = "observer",
         members = "models",
         kind = "RealtimeModel",
         event = "realtime_availability_changed",
@@ -288,7 +303,7 @@ pub trait RealtimeFallbackAdapter {
     ///
     /// Raises:
     ///     ValueError: If no models are given or their hard capabilities disagree.
-    #[host(new, resolve(models = ".._bindings.core_legs"))]
+    #[host(new)]
     fn new(
         models: Vec<std::sync::Arc<dyn crate::llm::realtime::HostRealtime>>,
         #[host(kw, default = 10.0)] cooldown: f64,
@@ -301,7 +316,7 @@ pub trait RealtimeFallbackAdapter {
     /// Args:
     ///     switch_model: Bring the new session up on the next available model instead of the
     ///         current one.
-    #[host(native = restart)]
+    #[host(native = _core_restart)]
     async fn restart_session(&self, #[host(kw, default = false)] switch_model: bool);
 }
 

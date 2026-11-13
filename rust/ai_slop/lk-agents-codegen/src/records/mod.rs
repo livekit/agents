@@ -792,7 +792,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                 ("", is_a(module, name))
             }
             Ty::Native { rust, .. } => (
-                "", format!("crate::py_objects::native::<dyn {rust}>(obj).is_some()"),
+                "", format!("crate::py_objects::native::<dyn {rust}>(obj)?.is_some()"),
             ),
             Ty::Proxy { host, .. } => {
                 let (module, name) = host.rsplit_once('.').ok_or_else(||

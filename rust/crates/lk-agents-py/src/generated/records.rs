@@ -8560,15 +8560,18 @@ pub mod llm_fallback {
     pub fn realtime_leg_from_py(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::lk_agents_abi::llm::fallback::RealtimeLeg> {
-        if crate::py_objects::native::<dyn ::lk_agents_abi::Realtime>(obj).is_some() {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::Realtime>(obj)?.is_some() {
             return Ok(::lk_agents_abi::llm::fallback::RealtimeLeg::Native(
-                crate::py_objects::native::<dyn ::lk_agents_abi::Realtime>(obj.as_any())
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "RealtimeLeg.Native",
-                            ": expected OpenAIRealtimeModel"
-                        ))
-                    })?,
+                crate::py_objects::native::<dyn ::lk_agents_abi::Realtime>(obj.as_any()).and_then(
+                    |native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "RealtimeLeg.Native",
+                                ": expected OpenAIRealtimeModel"
+                            ))
+                        })
+                    },
+                )?,
             ));
         }
         if obj.is_instance(
@@ -15265,11 +15268,13 @@ pub mod session_owner {
                     (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                         v.as_any(),
                     )
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "ProviderBindings.stt_node",
-                            ": expected the session's nodes (`_core.AgentNodes`)"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "ProviderBindings.stt_node",
+                                ": expected the session's nodes (`_core.AgentNodes`)"
+                            ))
+                        })
                     }))
                     .map(Some)
                 }
@@ -15281,11 +15286,13 @@ pub mod session_owner {
                     (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                         v.as_any(),
                     )
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "ProviderBindings.tts_node",
-                            ": expected the session's nodes (`_core.AgentNodes`)"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "ProviderBindings.tts_node",
+                                ": expected the session's nodes (`_core.AgentNodes`)"
+                            ))
+                        })
                     }))
                     .map(Some)
                 }
@@ -21106,11 +21113,13 @@ pub mod text_session {
                         (crate::py_objects::native::<
                             dyn ::lk_agents_abi::text_session::SessionStateSink,
                         >(v.as_any())
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "TextSessionRequest.session_sink",
-                                ": expected a native session binding"
-                            ))
+                        .and_then(|native| {
+                            native.ok_or_else(|| {
+                                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                    "TextSessionRequest.session_sink",
+                                    ": expected a native session binding"
+                                ))
+                            })
                         }))
                         .map(Some)
                     }
@@ -22830,7 +22839,7 @@ pub mod tts {
     ) -> PyResult<::lk_agents_abi::tokenize::bindings::SentenceTokenizerLeg> {
         if crate::py_objects::native::<dyn ::lk_agents_abi::tokenize::bindings::NativeSentences>(
             obj,
-        )
+        )?
         .is_some()
         {
             return Ok(
@@ -22838,11 +22847,13 @@ pub mod tts {
                     crate::py_objects::native::<
                         dyn ::lk_agents_abi::tokenize::bindings::NativeSentences,
                     >(obj.as_any())
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "SentenceTokenizerLeg.Native",
-                            ": expected a tokenize.SentenceTokenizer"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "SentenceTokenizerLeg.Native",
+                                ": expected a tokenize.SentenceTokenizer"
+                            ))
+                        })
                     })?,
                 ),
             );
@@ -23269,6 +23280,16 @@ pub mod tts {
                 }
             })?,
         })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/tts.rs.
+    pub fn options_tokenizer_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::tts::types::OptionsTokenizer> {
+        let host = (crate::py_values::host_ref(obj, "OptionsTokenizer.host"))?;
+        let leg = (crate::generated::records::tts::sentence_tokenizer_leg_from_py(obj))?;
+        let value = ::lk_agents_abi::tts::types::OptionsTokenizer { host, leg };
+        Ok(value)
     }
 
     // Declared in rust/crates/lk-agents-abi/src/tts/tts.rs.
@@ -25661,11 +25682,13 @@ pub mod voice_session {
             })?,
             voice_agent: crate::py_values::attr_with(obj, "UpdateAgentArgs", "voice_agent", |v| {
                 crate::py_objects::native::<dyn ::lk_agents_abi::agent::AgentFrame>(v.as_any())
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "UpdateAgentArgs.voice_agent",
-                            ": expected an agent's voice frame (`_core.VoiceAgent`)"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "UpdateAgentArgs.voice_agent",
+                                ": expected an agent's voice frame (`_core.VoiceAgent`)"
+                            ))
+                        })
                     })
             })?,
             chat_ctx: crate::py_values::attr_with(obj, "UpdateAgentArgs", "chat_ctx", |v| {
@@ -25780,11 +25803,13 @@ pub mod voice_session {
                     (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                         v.as_any(),
                     )
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "UpdateAgentArgs.llm_node",
-                            ": expected the session's nodes (`_core.AgentNodes`)"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "UpdateAgentArgs.llm_node",
+                                ": expected the session's nodes (`_core.AgentNodes`)"
+                            ))
+                        })
                     }))
                     .map(Some)
                 }
@@ -25796,11 +25821,13 @@ pub mod voice_session {
                     (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                         v.as_any(),
                     )
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "UpdateAgentArgs.tts_node",
-                            ": expected the session's nodes (`_core.AgentNodes`)"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "UpdateAgentArgs.tts_node",
+                                ": expected the session's nodes (`_core.AgentNodes`)"
+                            ))
+                        })
                     }))
                     .map(Some)
                 }
@@ -25812,11 +25839,13 @@ pub mod voice_session {
                     (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                         v.as_any(),
                     )
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "UpdateAgentArgs.stt_node",
-                            ": expected the session's nodes (`_core.AgentNodes`)"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "UpdateAgentArgs.stt_node",
+                                ": expected the session's nodes (`_core.AgentNodes`)"
+                            ))
+                        })
                     }))
                     .map(Some)
                 }
@@ -25829,7 +25858,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(v.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("UpdateAgentArgs.transcription_node", ": expected the session's nodes (`_core.AgentNodes`)")))).map(Some)
+                        (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(v.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("UpdateAgentArgs.transcription_node", ": expected the session's nodes (`_core.AgentNodes`)"))))).map(Some)
                     }
                 },
             )?,
@@ -25912,7 +25941,7 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::py_objects::native::<dyn ::lk_agents_abi::storage::voice::VoiceStorage>(v.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.storage", ": expected a native voice storage manager")))).map(Some)
+                    (crate::py_objects::native::<dyn ::lk_agents_abi::storage::voice::VoiceStorage>(v.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.storage", ": expected a native voice storage manager"))))).map(Some)
                 }
             })?,
             stt: crate::py_values::attr_with(obj, "VoiceSessionArgs", "stt", |v| {
@@ -26013,7 +26042,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::py_objects::native::<dyn ::lk_agents_abi::EotDetector>(v.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.turn_detector", ": turn_detection must be a turn detection mode or an `inference.TurnDetector`")))).map(Some)
+                        (crate::py_objects::native::<dyn ::lk_agents_abi::EotDetector>(v.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.turn_detector", ": turn_detection must be a turn detection mode or an `inference.TurnDetector`"))))).map(Some)
                     }
                 },
             )?,
@@ -26025,7 +26054,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::py_objects::native::<dyn ::lk_agents_abi::turn::interruption::InterruptionSource>(v.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.interruption_detector", ": interruption_detector must be an `inference.AdaptiveInterruptionDetector`")))).map(Some)
+                        (crate::py_objects::native::<dyn ::lk_agents_abi::turn::interruption::InterruptionSource>(v.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.interruption_detector", ": interruption_detector must be an `inference.AdaptiveInterruptionDetector`"))))).map(Some)
                     }
                 },
             )?,
@@ -26104,11 +26133,13 @@ pub mod voice_session {
                         (crate::py_objects::native::<dyn ::lk_agents_abi::agent::AgentFrame>(
                             v.as_any(),
                         )
-                        .ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "VoiceSessionArgs.voice_agent",
-                                ": expected an agent's voice frame (`_core.VoiceAgent`)"
-                            ))
+                        .and_then(|native| {
+                            native.ok_or_else(|| {
+                                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                    "VoiceSessionArgs.voice_agent",
+                                    ": expected an agent's voice frame (`_core.VoiceAgent`)"
+                                ))
+                            })
                         }))
                         .map(Some)
                     }
@@ -26122,7 +26153,7 @@ pub mod voice_session {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(v.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.transcription_node", ": expected the session's nodes (`_core.AgentNodes`)")))).map(Some)
+                        (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(v.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.transcription_node", ": expected the session's nodes (`_core.AgentNodes`)"))))).map(Some)
                     }
                 },
             )?,
@@ -26133,11 +26164,13 @@ pub mod voice_session {
                     (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                         v.as_any(),
                     )
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "VoiceSessionArgs.llm_node",
-                            ": expected the session's nodes (`_core.AgentNodes`)"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "VoiceSessionArgs.llm_node",
+                                ": expected the session's nodes (`_core.AgentNodes`)"
+                            ))
+                        })
                     }))
                     .map(Some)
                 }
@@ -26149,11 +26182,13 @@ pub mod voice_session {
                     (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                         v.as_any(),
                     )
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "VoiceSessionArgs.tts_node",
-                            ": expected the session's nodes (`_core.AgentNodes`)"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "VoiceSessionArgs.tts_node",
+                                ": expected the session's nodes (`_core.AgentNodes`)"
+                            ))
+                        })
                     }))
                     .map(Some)
                 }
@@ -26165,11 +26200,13 @@ pub mod voice_session {
                     (crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(
                         v.as_any(),
                     )
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "VoiceSessionArgs.stt_node",
-                            ": expected the session's nodes (`_core.AgentNodes`)"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "VoiceSessionArgs.stt_node",
+                                ": expected the session's nodes (`_core.AgentNodes`)"
+                            ))
+                        })
                     }))
                     .map(Some)
                 }
@@ -26350,11 +26387,13 @@ pub mod voice_session {
                     (crate::py_objects::native::<dyn ::lk_agents_abi::voice::console::ConsolePort>(
                         v.as_any(),
                     )
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "VoiceSessionArgs.console",
-                            ": expected a native ConsoleIo"
-                        ))
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "VoiceSessionArgs.console",
+                                ": expected a native ConsoleIo"
+                            ))
+                        })
                     }))
                     .map(Some)
                 }
@@ -26370,7 +26409,7 @@ pub mod voice_session {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(v.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.job_run", ": expected a native JobRun")))).map(Some)
+                    (crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(v.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.job_run", ": expected a native JobRun"))))).map(Some)
                 }
             })?,
         })

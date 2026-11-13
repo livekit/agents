@@ -264,7 +264,7 @@ impl VoiceRuntime {
                 let cx = self.shared.trace.clone();
                 self.open_stream(open, StreamKind::Vad, vad.map(|vad| PendingOpen::Vad(vad, cx)));
             }
-            E::ProviderPrewarm(id) => self.shared.resources.prewarm(id),
+            E::ProviderPrewarm(id) => self.shared.resources.prewarm(id, &self.shared.trace),
             E::ProviderRelease(id) => self.shared.resources.release(id),
             E::CloseRealtimeSession(id) => self.close_realtime_session(id),
             E::EotClose => self.predictions.clear(),

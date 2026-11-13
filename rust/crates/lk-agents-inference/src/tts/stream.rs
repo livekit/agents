@@ -16,6 +16,8 @@ use std::sync::Arc;
 pub struct TtsStream {
     sink: Option<Arc<dyn StreamInput<String>>>,
     source: SharedStream<SynthesizedAudio>,
+    /// Its TTS runs natively, not behind the host's proxy.
+    native: bool,
 }
 
 impl TtsStream {
@@ -24,7 +26,7 @@ impl TtsStream {
         source: TtsSource,
         clock: Arc<dyn lk_agents_abi::Clock>,
     ) -> Self {
-        Self { sink: sink.map(Arc::from), source: SharedStream::new(source, clock) }
+        Self { sink: sink.map(Arc::from), source: SharedStream::new(source, clock), native: true }
     }
 
     /// Where text goes; `None` once the synthesis has ended, its audio or its failure being what
@@ -99,12 +101,15 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
 
     fn new(
         env: &Self::Env,
+        cx: crate::telemetry::Cx,
         tts: Arc<dyn Tts>,
         text: Option<String>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Self {
         let options = conn_options.unwrap_or(lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS);
-        let (cx, clock) = (crate::telemetry::Cx::NONE, env.clock.clone());
+        // A host plugin has an identity of its own; a native provider none.
+        let native = tts.instance_id().is_none();
+        let clock = env.clock.clone();
         let (sink, opening): (_, BoxFuture<'static, Result<TtsSource, ProviderError>>) = match text
         {
             Some(text) => {
@@ -119,7 +124,11 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
                 Err(error) => (None, Box::pin(std::future::ready(Err(error)))),
             },
         };
-        TtsStream::new(sink, Box::new(Opening::Pending(opening)), clock)
+        TtsStream { native, ..TtsStream::new(sink, Box::new(Opening::Pending(opening)), clock) }
+    }
+
+    fn native(&self) -> bool {
+        self.native
     }
 
     fn push_text(&self, text: String) -> Result<(), ProviderError> {

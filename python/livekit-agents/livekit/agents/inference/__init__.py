@@ -10,7 +10,6 @@ from .. import _core
 from .._generated import facades_inference as _facades, public_inference as _public
 from .._generated.language import LanguageCode
 from .._generated.public_inference import *  # noqa: F403
-from ..job import get_job_context
 from ..log import logger
 from ..metrics import EOTInferenceMetrics
 from ..types import (
@@ -65,26 +64,8 @@ def _resolve_credentials(
     return _core.inference_credentials(*given)
 
 
-_USER_AGENT = f"LiveKit Agents/{__version__} (python {platform.python_version()})"
-
-
-def get_inference_headers(*, inference_class: str | None = None) -> dict[str, str]:
-    """The identification headers of an inference request: the SDK, and in a job its room, job,
-    agent, worker token, the job's ``inference_headers`` and a fresh session id."""
-    ctx = get_job_context(required=False)
-    if ctx is None:
-        return dict(_core.inference_identity_headers(_USER_AGENT, inference_class))
-    return dict(
-        _core.inference_identity_headers(
-            _USER_AGENT,
-            inference_class,
-            ctx.job.room.sid,
-            ctx.job.id,
-            # the local participant exists only once the room is connected
-            ctx.agent.sid if ctx.room.isconnected() else None,
-            list(ctx.inference_headers.items()),
-        )
-    )
+# every inference request this process makes names the Python SDK
+_core.identify_host(f"LiveKit Agents/{__version__} (python {platform.python_version()})")
 
 
 class VAD(_facades.VAD):
@@ -211,7 +192,7 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
     ) -> TurnDetectorStream:
         resolved = conn_options if is_given(conn_options) else self._conn_options
-        return self._detector.stream(list(get_inference_headers().items()), resolved)
+        return self._detector.stream(resolved)
 
     def _emit_metrics(self, ev: EOTInferenceMetrics) -> None:
         self.emit("metrics_collected", ev)
@@ -247,7 +228,6 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "extract_quota_usage",
     "get_default_inference_url",
-    "get_inference_headers",
     "resolve_credentials",
     "VAD",
     "TurnDetector",

@@ -11,7 +11,7 @@ use crate::llm::{Auth, BodyEncoding, LlmOptions, models};
 use lk_agents_abi::errors::{ApiError, Invalid, ProviderError};
 use lk_agents_abi::llm::fallback::{HostChatContext, HostTools};
 use lk_agents_abi::llm::inference::{ProviderEndpoint, ResponseFormat};
-use lk_agents_abi::types::provider::NativeLabel;
+use lk_agents_abi::types::provider::{NativeLabel, ProviderEvents};
 use lk_agents_abi::{
     ApiConnectOptions, ChatContext, ChatRequest, Clock, Closed, Extra, Llm, LlmChunk, LlmStream,
     StreamOutput, ToolChoice, ToolSpec, Ts,
@@ -40,19 +40,19 @@ use lk_agents_net::task::TokioSpawner;
 /// Transport observations an attempt may report ahead of the consumer before it stops reading.
 const OBSERVATION_QUEUE: usize = 32;
 
-/// One `inference.LLM` and its views per job identity: the options are shared, each view stamps
-/// its own job's headers on its requests.
+/// One `inference.LLM`. Every job it is handed to shares it; each request carries the identity
+/// of the job its telemetry context runs for.
 pub struct GatewayLlm {
-    /// The host class it reports as: its reporter's, else `opts.label`.
+    /// The name logs and metrics give it: its host class's when its host built it, else
+    /// `opts.label`.
     label: String,
     opts: Arc<Mutex<LlmOptions>>,
     http: Arc<GatewayHttp>,
     runtime: tokio::runtime::Handle,
     clock: Arc<dyn Clock>,
-    identity: Option<Headers>,
     requests: Arc<AtomicU64>,
-    /// The host provider whose `error` events report the attempts this view retries.
-    reporter: Option<Arc<dyn Llm>>,
+    /// The host object it was built as, which hears the attempts it retries fail.
+    events: Option<Arc<dyn ProviderEvents>>,
     prewarm: Mutex<Option<OwnedTask>>,
 }
 
@@ -69,25 +69,8 @@ impl GatewayLlm {
             http,
             runtime,
             clock,
-            identity: None,
             requests: Arc::new(AtomicU64::new(1)),
-            reporter: None,
-            prewarm: Mutex::new(None),
-        }
-    }
-
-    /// The same client as a session of the job `identity` names holds it.
-    /// A view reports as its reporter's class.
-    pub fn view(&self, identity: Headers, reporter: Option<Arc<dyn Llm>>) -> Self {
-        GatewayLlm {
-            label: reporter.as_ref().map_or_else(|| self.label.clone(), |r| r.label()),
-            opts: self.opts.clone(),
-            http: self.http.clone(),
-            runtime: self.runtime.clone(),
-            clock: self.clock.clone(),
-            identity: Some(identity),
-            requests: self.requests.clone(),
-            reporter,
+            events: None,
             prewarm: Mutex::new(None),
         }
     }
@@ -101,24 +84,21 @@ impl GatewayLlm {
         update(&mut self.opts.lock());
     }
 
-    /// Opens a completion. No I/O until the first pull, which accepts the request: its total
-    /// limit runs from there.
-    /// `identification` is the caller's job identity, read where it called; else this view's.
+    /// Opens a completion for the job `cx` runs for. No I/O until the first pull, which accepts
+    /// the request: its total limit runs from there.
     pub fn chat(
         &self,
+        cx: &telemetry::Cx,
         chat_ctx: &ChatContext,
         tools: &[ToolSpec],
         args: ChatArgs,
         policy: Policy,
-        identification: Option<&Headers>,
     ) -> Result<LlmChunks, ApiError> {
         let opts = self.options();
         // The host serialized every image onto its item already.
         let images = PreResolved::from_pairs(Vec::<(String, _)>::new());
-        let identification = identification.or(self.identity.as_ref());
         let bearer = opts.auth.bearer()?;
-        let request =
-            build_request(&opts, identification, &images, chat_ctx, tools, args, &bearer)?;
+        let request = build_request(&opts, cx, &images, chat_ctx, tools, args, &bearer)?;
         let (tx, rx) = mpsc::channel(OBSERVATION_QUEUE);
         Ok(LlmChunks {
             id: self.requests.fetch_add(1, Ordering::Relaxed),
@@ -134,7 +114,7 @@ impl GatewayLlm {
             ended: false,
             cleanup_incomplete: false,
             now: self.clock.now(),
-            host: self.reporter.clone(),
+            host: self.events.clone(),
         })
     }
 }
@@ -146,6 +126,8 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
 
     fn new(
         env: &ProcessEnv,
+        label: String,
+        events: Arc<dyn ProviderEvents>,
         model: String,
         provider: Option<String>,
         base_url: Option<String>,
@@ -185,11 +167,8 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
             label: NativeLabel::InferenceLlm.as_str().into(),
             extra_kwargs: extra_kwargs.unwrap_or_default(),
         };
-        Ok(GatewayLlm::new(opts, http, runtime, env.clock.clone()))
-    }
-
-    fn identified(&self, headers: Headers, reporter: Option<Arc<dyn Llm>>) -> Self {
-        self.view(headers, reporter)
+        let llm = GatewayLlm::new(opts, http, runtime, env.clock.clone());
+        Ok(GatewayLlm { label, events: Some(events), ..llm })
     }
 
     fn model(&self) -> String {
@@ -228,6 +207,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
 
     fn chat(
         &self,
+        cx: telemetry::Cx,
         chat_ctx: HostChatContext,
         tools: Option<HostTools>,
         conn_options: Option<ApiConnectOptions>,
@@ -248,14 +228,14 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         };
         let specs = tools.map(|t| t.specs).unwrap_or_default();
         let policy = Policy::from_options(&conn_options);
-        GatewayLlm::chat(self, &ChatContext::new(chat_ctx.items), &specs, args, policy, None)
+        GatewayLlm::chat(self, &cx, &ChatContext::new(chat_ctx.items), &specs, args, policy)
     }
 }
 
 impl Llm for GatewayLlm {
     fn failed(&self, error: ProviderError, recoverable: bool) {
-        if let Some(reporter) = &self.reporter {
-            reporter.failed(error, recoverable);
+        if let Some(events) = &self.events {
+            events.failed(error, recoverable);
         }
     }
 
@@ -283,13 +263,13 @@ impl Llm for GatewayLlm {
     }
 
     /// Opens a connection in the background so the first request finds it pooled.
-    fn prewarm(&self) {
+    fn prewarm(&self, cx: &telemetry::Cx) {
         let opts = self.options();
         let Ok(bearer) = opts.auth.bearer() else {
             return;
         };
         let headers = match opts.auth {
-            Auth::Gateway { .. } => gateway_headers(self.identity.as_ref(), None, None, &bearer),
+            Auth::Gateway { .. } => gateway_headers(cx, None, None, &bearer),
             Auth::ProviderKey(_) => {
                 let mut headers = Headers::new();
                 headers.insert("Authorization", format!("Bearer {bearer}"));
@@ -307,9 +287,10 @@ impl Llm for GatewayLlm {
     /// request core, so each call here is one attempt under the session's phase limits.
     fn chat<'a>(
         &'a self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        let cx = cx.clone();
         Box::pin(async move {
             req.conn_options
                 .validate()
@@ -322,7 +303,7 @@ impl Llm for GatewayLlm {
                 response_format: None,
                 inference_class: req.inference_class.clone(),
             };
-            Ok(Box::new(GatewayLlm::chat(self, &req.chat_ctx, &req.tools, args, policy, None)?)
+            Ok(Box::new(GatewayLlm::chat(self, &cx, &req.chat_ctx, &req.tools, args, policy)?)
                 as LlmStream)
         })
     }
@@ -405,7 +386,8 @@ pub struct LlmChunks {
     cleanup_incomplete: bool,
     /// The instant the request was last stepped at; supplied time never goes back.
     now: Ts,
-    host: Option<Arc<dyn Llm>>,
+    /// The host object the client was built as, which hears each retried attempt fail.
+    host: Option<Arc<dyn ProviderEvents>>,
 }
 
 impl LlmChunks {

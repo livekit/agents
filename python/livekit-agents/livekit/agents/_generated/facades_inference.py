@@ -17,10 +17,14 @@ if TYPE_CHECKING:
     from .inference_models import VADModels
 
 
-class VAD(BaseVAD):
+class VAD(_core.InferenceVad, BaseVAD):
     """`inference.VAD`: Silero voice activity detection, the model native to the core when the build
     links it, else `livekit-local-inference`'s.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("stream",), "session.stt_node")
 
     def __init__(
         self,
@@ -45,7 +49,8 @@ class VAD(BaseVAD):
             deactivation_threshold: The probability below which speech ends;
                 ``activation_threshold - 0.15`` by default.
         """
-        self._native = _core.InferenceVad(
+        _core.InferenceVad.__init__(
+            self,
             silero_model,
             model=model,
             min_speech_duration=min_speech_duration,
@@ -55,20 +60,7 @@ class VAD(BaseVAD):
             activation_threshold=activation_threshold,
             deactivation_threshold=deactivation_threshold if is_given(deactivation_threshold) else None,
         )
-        super().__init__(capabilities=self._native.capabilities)
-
-    def _core_leg(self) -> Any:
-        """This engine, unless a subclass replaces what it would bypass."""
-        replaced = _bindings.overrides(self, VAD, "stream")
-        return self if replaced else self._native
-
-    @property
-    def model(self) -> VADModels:
-        return self._native.model
-
-    @property
-    def min_silence_duration(self) -> float:
-        return self._native.min_silence_duration
+        BaseVAD.__init__(self, capabilities=self.capabilities)
 
     def update_options(
         self,
@@ -81,7 +73,8 @@ class VAD(BaseVAD):
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """Update the options; running streams apply them before their next frame."""
-        self._native.update_options(
+        _core.InferenceVad._core_update_options(
+            self,
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
             prefix_padding_duration=prefix_padding_duration,
@@ -103,7 +96,7 @@ class _VADStream(VADStream):
         super().__init__(vad=vad)
 
     async def _core_open(self) -> _core.InferenceVadStream:
-        return self._vad._native.stream()
+        return self._vad._core_native_stream()
 
     _run = VADStream._core_run_native
 

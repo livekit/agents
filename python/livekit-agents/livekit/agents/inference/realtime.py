@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
-from .. import _core
 from .._generated.realtime_options import InferenceGateway
 from ..llm._realtime import (
     AudioTranscription,
@@ -18,12 +17,7 @@ from ..llm._realtime import (
 )
 from ..llm.tool_context import ToolChoice
 from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
-from . import (
-    InferenceClass,
-    get_default_inference_url,
-    get_inference_headers,
-    resolve_credentials,
-)
+from . import InferenceClass, get_default_inference_url, resolve_credentials
 
 if TYPE_CHECKING:
     from .._generated.realtime_wire import Modalities
@@ -66,7 +60,6 @@ class RealtimeModel(_RealtimeModel):
         if "/" not in model:
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-realtime'")
         api_key, api_secret = resolve_credentials(api_key, api_secret)
-        self._inference_class = inference_class
         self._gateway = InferenceGateway(
             api_secret=api_secret, provider=provider, inference_class=inference_class
         )
@@ -97,8 +90,3 @@ class RealtimeModel(_RealtimeModel):
     @property
     def provider(self) -> str:
         return "livekit"
-
-    def _core_leg(self) -> _core.OpenAIRealtimeModel:
-        headers = get_inference_headers(inference_class=self._inference_class)
-        self._native.bind_identification(list(headers.items()))
-        return self._native

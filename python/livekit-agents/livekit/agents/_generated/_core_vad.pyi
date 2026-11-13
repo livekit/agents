@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Self
 
 from livekit.local_inference import VAD
 
@@ -17,8 +16,8 @@ from .vad import VADCapabilities, VADEvent
 
 class InferenceVad:
     """The Silero VAD behind `inference.VAD`."""
-    def __new__(
-        cls,
+    def __init__(
+        self,
         model_factory: Callable[[], VAD],
         *,
         model: VADModels = "silero",
@@ -28,7 +27,7 @@ class InferenceVad:
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
         deactivation_threshold: float | None = None,
-    ) -> Self:
+    ) -> None:
         """`model_factory` builds the host's model when the build links no native one;
         `deactivation_threshold` is `max(activation_threshold - 0.15, 0.01)` when `None`. Only the
         `"silero"` model exists.
@@ -37,7 +36,7 @@ class InferenceVad:
     def model(self) -> VADModels: ...
     @property
     def capabilities(self) -> VADCapabilities: ...
-    def update_options(
+    def _core_update_options(
         self,
         *,
         min_speech_duration: NotGivenOr[float] = ...,
@@ -50,7 +49,7 @@ class InferenceVad:
         """The given options, applied by each running stream before its next frame."""
     @property
     def min_silence_duration(self) -> float: ...
-    def stream(self) -> InferenceVadStream:
+    def _core_native_stream(self) -> InferenceVadStream:
         """One detection; each event carries the audio it refers to."""
 
 class InferenceVadStream:

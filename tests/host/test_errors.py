@@ -711,60 +711,25 @@ async def test_an_adapter_over_the_native_tts_runs_it_natively(wrap: str) -> Non
     assert requests, "the gateway TTS never made a request"
 
 
-class _CountedLLM(inference.LLM):
-    calls = 0
-
-    def chat(self, **kwargs: Any) -> Any:
-        type(self).calls += 1
-        return super().chat(**kwargs)
-
-
-async def test_an_inference_llm_subclass_replacing_chat_runs_it_and_the_gateway(
-    rejecting_gateway: str,
+@pytest.mark.parametrize(
+    ("base", "hook", "node"),
+    [
+        (inference.LLM, "chat", "session.llm_node"),
+        (inference.STT, "stream", "session.stt_node"),
+        (inference.TTS, "_stream", "session.tts_node"),
+    ],
+)
+def test_a_native_provider_subclass_replacing_a_hook_the_core_bypasses_is_refused(
+    base: type, hook: str, node: str
 ) -> None:
-    model = _CountedLLM(
-        "openai/gpt-4.1-mini", base_url=rejecting_gateway, api_key="key", api_secret="secret"
-    )
-    errors: list[llm.LLMError] = []
-    model.on("error", errors.append)
+    """The core runs a native provider itself: a subclass replacing a hook it would never call
+    is refused as the class is defined, pointed to the node that customizes it."""
 
-    async with VoiceSession(llm=model, vad=None) as session:
-        await session.start(Agent(instructions="Help."))
-        await session.generate_reply(user_input="hello")
-    await model.aclose()
+    def replaced(self: object, **kwargs: Any) -> Any:
+        raise AssertionError("never called")
 
-    assert _CountedLLM.calls >= 1, "the subclass's chat was bypassed"
-    assert errors
-    assert all(isinstance(e.error, APIStatusError) and e.error.status_code == 401 for e in errors)
-
-
-class _CountedSTT(inference.STT):
-    calls = 0
-
-    def stream(self, **kwargs: Any) -> Any:
-        type(self).calls += 1
-        return super().stream(**kwargs)
-
-
-async def test_an_inference_stt_subclass_replacing_stream_runs_it_and_the_gateway(
-    rejecting_gateway: str,
-) -> None:
-    model = _CountedSTT(
-        "deepgram/nova-3", base_url=rejecting_gateway, api_key="key", api_secret="secret"
-    )
-    errors: list[stt.STTError] = []
-    model.on("error", errors.append)
-    microphone = FakeAudioInput()
-
-    async with VoiceSession(stt=model, llm=FakeLLM(["Hi!"])) as session:
-        session.input.audio = microphone
-        await session.start(Agent(instructions="Help."))
-        microphone.speak(0.5)
-        await until(lambda: any(not e.recoverable for e in errors), "no unrecoverable STT error")
-    await model.aclose()
-
-    assert _CountedSTT.calls >= 1, "the subclass's stream was bypassed"
-    assert all(isinstance(e.error, APIStatusError) and e.error.status_code == 401 for e in errors)
+    with pytest.raises(TypeError, match=node):
+        type("Replacing", (base,), {hook: replaced})
 
 
 async def test_an_stt_node_over_the_default_runs_the_native_stt(rejecting_gateway: str) -> None:

@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .. import _bindings, _core
-from .._bindings import core_leg, core_legs
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN
 from ..utils import is_given
@@ -25,13 +24,21 @@ if TYPE_CHECKING:
     from .llm_fallback import AvailabilityChanged
 
 
-class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
+class FallbackAdapter(_core.FallbackStt, STT[Literal["stt_availability_changed"]]):
     """`stt.FallbackAdapter`: several STT behind one; a failed one is skipped until it recovers."""
 
     if TYPE_CHECKING:
         _members: list[STT[Any]]
 
         def _core_failed(self, error: BaseException, recoverable: bool) -> None: ...
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(
+            cls,
+            ("stream", "recognize", "_recognize_impl"),
+            "session.stt_node",
+        )
 
     def __init__(
         self,
@@ -51,27 +58,16 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
             max_retry_per_stt: Retries of each before moving to the next.
             retry_interval: The wait between retries.
         """
-        self._native = _core.FallbackStt(
-            core_legs(stt),
-            vad=core_leg(vad),
+        _core.FallbackStt.__init__(
+            self,
+            stt,
+            vad=vad,
             attempt_timeout=attempt_timeout,
             max_retry_per_stt=max_retry_per_stt,
             retry_interval=retry_interval,
-            on_availability=self,
         )
         self._members = list(stt)
-        super().__init__(capabilities=self._native.capabilities)
-
-    def _core_leg(self) -> Any:
-        """This engine, unless a subclass replaces what it would bypass."""
-        replaced = _bindings.overrides(
-            self,
-            FallbackAdapter,
-            "stream",
-            "recognize",
-            "_recognize_impl",
-        )
-        return self if replaced else self._native
+        STT.__init__(self, capabilities=self.capabilities)
 
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
@@ -84,7 +80,7 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
 
     @property
     def _active(self) -> STT[Any]:
-        return self._members[self._native.active_index]
+        return self._members[self._core_active_index]
 
     @property
     def model(self) -> str:
@@ -99,8 +95,8 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         return self._active.metrics_metadata
 
     async def aclose(self) -> None:
-        await super().aclose()
-        await self._native.aclose()
+        await STT.aclose(self)
+        await _core.FallbackStt.aclose(self)
 
     def stream(
         self,
@@ -132,7 +128,7 @@ class FallbackRecognizeStream(RecognizeStream):
         self._language: str | None = language
 
     async def _core_open(self) -> _core.FallbackRecognizeStream:
-        return await self._stt._native.stream(
+        return await self._stt._core_native_stream(
             language=self._language,
             start_time_offset=self._start_time_offset,
             conn_options=self._conn_options,
@@ -141,8 +137,16 @@ class FallbackRecognizeStream(RecognizeStream):
     _run = RecognizeStream._core_run_native
 
 
-class StreamAdapter(STT):
+class StreamAdapter(_core.SttStreamAdapter, STT):
     """`stt.StreamAdapter`: a recognize-only STT as a streaming one."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(
+            cls,
+            ("stream", "recognize", "_recognize_impl"),
+            "session.stt_node",
+        )
 
     def __init__(self, *, stt: STT[Any], vad: VAD[Any]) -> None:
         """A recognize-only STT as a streaming one: the VAD cuts the audio into utterances, each
@@ -152,15 +156,10 @@ class StreamAdapter(STT):
             stt: The recognize-only STT.
             vad: What cuts the audio into utterances.
         """
-        self._native = _core.SttStreamAdapter(stt=core_leg(stt), vad=core_leg(vad))
+        _core.SttStreamAdapter.__init__(self, stt=stt, vad=vad)
         self._stt = stt
         self._vad = vad
-        super().__init__(capabilities=self._native.capabilities)
-
-    def _core_leg(self) -> Any:
-        """This engine, unless a subclass replaces what it would bypass."""
-        replaced = _bindings.overrides(self, StreamAdapter, "stream", "recognize")
-        return self if replaced else self._native
+        STT.__init__(self, capabilities=self.capabilities)
 
     def stream(
         self,
@@ -194,7 +193,7 @@ class StreamAdapterWrapper(RecognizeStream):
         self._language: str | None = language
 
     async def _core_open(self) -> _core.SttAdapterStream:
-        return await self._stt._native.stream(
+        return await self._stt._core_native_stream(
             language=self._language,
             start_time_offset=self._start_time_offset,
             conn_options=self._conn_options,
