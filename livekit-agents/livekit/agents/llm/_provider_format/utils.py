@@ -10,8 +10,9 @@ from livekit.agents.log import logger
 
 _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE = "<instructions>\n{content}\n</instructions>"
 
-TOOL_UPDATE_NOTE = "Your earlier {name} call: {output}"
-"""How a model reads a tool's later update or result."""
+TOOL_UPDATE_NOTE = "Your earlier {name} call ({call_id}): {output}"
+"""How a model reads a tool's later update or result: by its call id, which a reply's
+instructions name."""
 
 
 def tool_updates_as_notes(chat_ctx: llm.ChatContext) -> llm.ChatContext:
@@ -30,7 +31,9 @@ def tool_updates_as_notes(chat_ctx: llm.ChatContext) -> llm.ChatContext:
         if item.type == "function_call" and item.call_id in updates:
             continue
         if item.type == "function_call_output" and item.call_id in updates:
-            note = TOOL_UPDATE_NOTE.format(name=updates[item.call_id], output=item.output)
+            note = TOOL_UPDATE_NOTE.format(
+                name=updates[item.call_id], call_id=item.call_id, output=item.output
+            )
             item = llm.ChatMessage(
                 id=item.id, role="system", content=[note], created_at=item.created_at
             )

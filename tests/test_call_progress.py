@@ -196,7 +196,7 @@ async def test_a_result_after_only_the_persons_words_is_told_as_new() -> None:
         await soon(lambda: any(told("b1_final")(r) for r in model.requests), "the result")
 
     telling = next(r for r in model.requests if told("b1_final")(r))
-    assert instructed(telling) == REPLY_INSTRUCTIONS_AT_TAIL.format(call_ids=["b1_final"])
+    assert instructed(telling) == REPLY_INSTRUCTIONS_AT_TAIL.format(call_ids_text="b1_final")
 
 
 @pytest.mark.rule("B5")

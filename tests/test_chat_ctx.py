@@ -177,10 +177,10 @@ def test_a_later_result_reaches_the_model_as_a_note_in_its_place():
     messages, _ = _ctx_with_a_later_result().to_provider_format(format="openai")
 
     assert [m["role"] for m in messages] == ["user", "assistant", "tool", "system", "user"]
-    assert messages[3]["content"] == "Your earlier flights call: booked"
+    assert messages[3]["content"] == "Your earlier flights call (c1_final): booked"
     # a provider that lifts system messages to the top keeps the note where it was
     turns, _ = _ctx_with_a_later_result().to_provider_format(format="anthropic")
-    assert "Your earlier flights call: booked" in str(turns[-1])
+    assert "Your earlier flights call (c1_final): booked" in str(turns[-1])
 
 
 def test_mistralai_format_converts_mid_conversation_instructions():

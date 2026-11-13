@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import Agent, LiveSession, RunContext, function_tool
+from livekit.agents import Agent, InputRequired, LiveSession, RunContext, function_tool
 from livekit.agents.llm import ChatContext, FunctionCall, ToolResult
 
 from .a2a_driver import Reply, ScriptedLLM, call
@@ -141,6 +141,42 @@ async def test_a_progress_reply_not_yet_playing_gives_way_to_the_result() -> Non
     spoken = await call_desk(model, book, list(durations.items()))
 
     assert spoken == ["Let me check.", CODE, "It is booked."]
+
+
+@pytest.mark.rule("R37")
+async def test_a_question_reaches_a_reply_only_after_its_ask_played() -> None:
+    """A progress reply and the ask of a question start at the same idle: the progress reply
+    never reads the question, which the person has not heard."""
+    seen: list[tuple[bool, bool]] = []
+
+    def reading(ctx: ChatContext) -> bool:
+        question = any(
+            i.type == "function_call_output" and "Which day?" in i.output for i in ctx.items
+        )
+        asked = any(
+            i.type == "message" and i.text_content == "What day works for you?" for i in ctx.items
+        )
+        seen.append((question, asked))
+        return False
+
+    model = ScriptedLLM(
+        Reply("", when=reading),
+        Reply("Let me check.", [call("book", "1")], when=last_text("Book me in")),
+        Reply("Found a slot.", when=last_text("1_update_1")),
+        Reply("What day works for you?", when=last_text("Which day?")),
+    )
+
+    async def book(ctx: RunContext) -> InputRequired:
+        """Book."""
+        await ctx.update("checking")
+        await ctx.update("found a slot")
+        return InputRequired("Which day?")
+
+    replies = ["Let me check.", "Found a slot.", "What day works for you?"]
+    spoken = await call_desk(model, book, [(text, 1.0) for text in replies])
+
+    assert "What day works for you?" in spoken
+    assert all(asked for question, asked in seen if question), "read only once it was said"
 
 
 @pytest.mark.rule("R22", "R23")

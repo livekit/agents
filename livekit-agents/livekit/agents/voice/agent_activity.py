@@ -350,6 +350,9 @@ class _Question:
     asked: bool = False
     asked_at: float = 0.0
     """When it was put to the person on this call; only what they say after it answers it."""
+    heard: bool = False
+    """Its ask played, in whole or in part: from then on it is in the history and the note on
+    open questions, so no reply reads a question the person has not heard."""
     passed: bool = False
     """The person spoke after it was asked: it is no longer in front of them, and the next
     question may be asked. A delegate's question stays open until a call answers it."""
@@ -357,7 +360,7 @@ class _Question:
     """The lane's task of a question asked by another door, which completes once answered."""
     pair: list[llm.ChatItem] | None = None
     """The call and output that ask it, when they came after the call's first output: out of the
-    history until it is asked, so no reply asks it first."""
+    history until it is heard."""
 
     def answered_by(self, message: llm.ChatMessage) -> bool:
         """Only a turn that started after the question was asked answers it."""
@@ -3417,16 +3420,17 @@ class AgentActivity(RecognitionHooks):
         """Puts a question to the person: as written when verbatim, else in the model's words."""
         request = question.request
         question.asked_at = time.time()
-        if question.pair is not None:
-            self._show_items(question.pair, True)
         try:
             if request.verbatim:
                 handle = self._say_exactly(request.question)
             else:
-                # the model asks in its own words, with no tool to call
+                # the model asks in its own words, with no tool to call; the question is not in
+                # the history yet, so the instruction says whom it is for
+                asked = request.question
+                if question.relays and question.output is not None:
+                    asked = f"{asked} (for {question.output.name})"
                 handle = self._generate_reply(
-                    instructions=ASK_IN_OWN_WORDS.format(question=request.question),
-                    tool_choice="none",
+                    instructions=ASK_IN_OWN_WORDS.format(question=asked), tool_choice="none"
                 )
         except Exception as e:
             # it stays unasked; nothing awaits it, so the failure is on the call's lane
@@ -3442,11 +3446,14 @@ class AgentActivity(RecognitionHooks):
                 item.type == "message" and item.role == "assistant" and item.text_content
                 for item in speech.chat_items
             )
-            if unheard and question.asked and question in self._questions:
+            if not unheard:
+                question.heard = True
+                if question.pair is not None:
+                    # placed where it was asked: the desk's question, then the words asking it
+                    self._show_items(question.pair, at=question.asked_at)
+            elif question.asked and question in self._questions:
                 # cut off before any of it played: it is unasked, and asked at the next idle
                 question.asked = False
-                if question.pair is not None:
-                    self._show_items(question.pair, False)
                 self._turn_after_question.set()
                 self._ask_at_idle()
 
@@ -3456,17 +3463,13 @@ class AgentActivity(RecognitionHooks):
         if (run_state := self._session._global_run_state) is not None and not run_state.done():
             run_state._watch_handle(handle)
 
-    def _show_items(self, items: list[llm.ChatItem], shown: bool) -> None:
-        """Puts tool items held out of the history in it, stamped now, or takes them out again:
-        a question as it is asked, exact text once it played."""
-        ids = {item.id for item in items}
-        now = time.time()
+    def _show_items(self, items: list[llm.ChatItem], *, at: float) -> None:
+        """Puts tool items held out of the history in it once the person heard them, stamped
+        ``at``: a question once its ask played, exact text once it was said."""
         for item in items:
-            item.created_at = now
+            item.created_at = at
         for chat_ctx in (self._chat_ctx, self._session.history):
-            chat_ctx.items[:] = [item for item in chat_ctx.items if item.id not in ids]
-            if shown:
-                chat_ctx.insert(items)
+            chat_ctx.insert(items)
         if self._rt_session is not None:
             task = asyncio.create_task(self.update_chat_ctx(self._chat_ctx.copy()))
             self._question_tasks.add(task)
@@ -4059,7 +4062,7 @@ class AgentActivity(RecognitionHooks):
         relayed = [
             (q.request.question, q.output.name)
             for q in self._questions
-            if q.relays and q.asked and q.output
+            if q.relays and q.heard and q.output
         ]
         if (note := open_questions_note(relayed)) is not None:
             chat_ctx.add_message(role="system", content=[note])

@@ -257,7 +257,7 @@ async def test_a_relayed_answer_to_a_question_still_in_line_closes_it(
 
 
 @pytest.mark.rule("R37")
-async def test_a_question_in_line_stays_out_of_the_history_until_it_is_asked(
+async def test_a_question_in_line_stays_out_of_the_history_until_it_is_heard(
     expert: Callable[..., A2ADelegate],
 ) -> None:
     gate = asyncio.Event()
@@ -295,7 +295,13 @@ async def test_a_question_in_line_stays_out_of_the_history_until_it_is_asked(
         await soon(lambda: "Which seat?" in spoken(session), "the next question")
 
     assert not in_line, "no reply reads it before it is asked"
-    assert ASKED_FOR.format(name="seats", question="Which seat?") in outputs(session.history)
+    texts = [
+        i.output if i.type == "function_call_output" else i.text_content
+        for i in session.history.items
+        if i.type in ("function_call_output", "message")
+    ]
+    asked = texts.index(ASKED_FOR.format(name="seats", question="Which seat?"))
+    assert asked < texts.index("Which seat?"), "the desk's question, then the words asking it"
 
 
 @pytest.mark.rule("R38")

@@ -79,15 +79,15 @@ DUPLICATE_NOT_CANCELLABLE = (
 
 # used when the pending update is the most recent item in chat_ctx — the agent
 # can't have already talked about it.
-REPLY_INSTRUCTIONS_AT_TAIL = """New results arrived from background tool calls (call_ids: {call_ids}).
+REPLY_INSTRUCTIONS_AT_TAIL = """New results arrived from background tool calls (call_ids: {call_ids_text}).
 Tell each call's newest result naturally. Do NOT repeat what you already told the user."""
 
 # used when newer items have been appended after the pending update — the agent
 # may have already verbalized the result in its most recent turn.
-REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {call_ids}).
+REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {call_ids_text}).
 You may have already mentioned them in your most recent replies.
 If you already told the user everything in these results, reply with an empty response (no text at all).
-Otherwise, tell what each call's newest result adds, with a natural transition.
+Otherwise, tell only what the newest results of these call ids add, with a natural transition.
 Never repeat information you have already told the user."""
 
 
@@ -120,6 +120,8 @@ class ReplyPromptArgs(TypedDict):
     """Args for the ``reply_at_tail`` / ``reply_maybe_covered`` templates."""
 
     call_ids: list[str]
+    call_ids_text: str
+    """``call_ids`` joined by commas — what the default string templates use."""
 
 
 class AsyncToolOptions(TypedDict, total=False):
@@ -228,7 +230,7 @@ def _reply_instructions(options: AsyncToolOptions, *, at_tail: bool, call_ids: l
     template = (
         options["reply_at_tail_template"] if at_tail else options["reply_maybe_covered_template"]
     )
-    return _render(template, {"call_ids": call_ids})
+    return _render(template, {"call_ids": call_ids, "call_ids_text": ", ".join(call_ids)})
 
 
 def has_cancellable_tool(tools: Sequence[Tool | Toolset]) -> bool:
@@ -1032,7 +1034,7 @@ class _CallSink:
                     return
                 if not _asks_reply(update.items):
                     # held out of the history until it played
-                    target_activity._show_items(update.items, True)
+                    target_activity._show_items(update.items, at=time.time())
                 if update.result:
                     tool_replied(update.ctx, speech.chat_items)
 
