@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Protocol, cast
+from typing import Protocol, cast, get_args
 
 import aiohttp
 import pytest
@@ -30,6 +30,7 @@ from livekit.plugins.reson8 import stt as reson8_stt
 from livekit.plugins.reson8._utils import (
     ERROR_MESSAGE_HEADER,
     INTEGRATION_HEADER,
+    MODEL_LANGUAGES,
     PRERECORDED_PATH,
     TURNS_PATH,
     _confidence,
@@ -353,9 +354,28 @@ def test_the_aligned_transcript_capability_follows_the_options(words: bool) -> N
     assert instance.capabilities.aligned_transcript == ("word" if words else False)
 
 
-def test_the_model_is_the_custom_model_id() -> None:
-    assert reson8.STT(api_key="k").model == "default"
-    assert reson8.STT(api_key="k", biasing=BiasingOptions(custom_model_id="m1")).model == "m1"
+def test_model_and_provider() -> None:
+    assert reson8.STT(api_key="k").provider == "Reson8"
+    assert reson8.STT(api_key="k").model == "resonant-1"
+    assert reson8.STT(api_key="k", model="rumble-2").model == "rumble-2"
+
+    biasing = BiasingOptions(custom_model_id="m1")
+    assert reson8.STT(api_key="k", biasing=biasing).model == "resonant-1"
+
+
+def test_an_unlisted_model_is_sent_without_local_checks() -> None:
+    """A model newer than the plugin is left for Reson8 to check."""
+
+    biasing = BiasingOptions(patterns=["AMZ[0-9]{6}"], strength=1.2)
+    instance = reson8.STT(api_key="k", model="rumble-3", language="xx", biasing=biasing)
+    assert instance.model == "rumble-3"
+
+    params = STTOptions(model="rumble-3", language="XX", biasing=biasing).query_params(
+        streaming=True
+    )
+    assert params["model"] == "rumble-3"
+    assert params["language"] == "xx"
+    assert params["patterns"] == "AMZ[0-9]{6}"
 
 
 @pytest.mark.parametrize(
@@ -369,17 +389,60 @@ def test_the_model_is_the_custom_model_id() -> None:
         (["nl", "de"], "nl,de"),
         (" nl , de ", "nl,de"),
         (["nl", "", "de"], "nl,de"),
-        *((code, code) for code in reson8.SUPPORTED_LANGUAGES),
+        ("ja,yue", "ja,yue"),
     ],
 )
 def test_normalize_languages(value: str | list[str] | None, expected: str | None) -> None:
-    assert normalize_languages(value) == expected
+    assert normalize_languages(value, "rumble-2") == expected
 
 
 @pytest.mark.parametrize("value", ["xx", "nl,xx", ["nl", "xx"], "english"])
 def test_an_unsupported_language_raises(value: str | list[str]) -> None:
     with pytest.raises(ValueError, match="unsupported language"):
         reson8.STT(api_key="k", language=value)
+
+
+def test_every_listed_language_is_accepted() -> None:
+    for model, languages in MODEL_LANGUAGES.items():
+        for code in languages:
+            assert normalize_languages(code, model) == code
+
+
+def test_every_model_language_is_advertised() -> None:
+    """A listed model missing from the table would skip its language check."""
+
+    assert set(MODEL_LANGUAGES) == set(get_args(reson8.STTModel))
+    for languages in MODEL_LANGUAGES.values():
+        assert set(languages) <= set(reson8.SUPPORTED_LANGUAGES)
+
+
+@pytest.mark.parametrize("model", [None, "resonant-1"])
+def test_resonant_1_rejects_a_rumble_2_only_language(model: reson8.STTModel | None) -> None:
+    """Reson8 uses resonant-1 when no model is sent."""
+
+    with pytest.raises(ValueError, match="resonant-1 supports"):
+        reson8.STT(api_key="k", model=model, language="ja")
+
+
+def test_rumble_2_accepts_its_own_languages() -> None:
+    reson8.STT(api_key="k", model="rumble-2", language="ja")
+
+
+def test_a_language_override_is_checked_against_the_model() -> None:
+    instance = reson8.STT(api_key="k", model="resonant-1")
+
+    with pytest.raises(ValueError, match="unsupported language"):
+        instance.update_options(language="ja")
+
+    with pytest.raises(ValueError, match="unsupported language"):
+        instance.stream(language="ja")
+
+
+async def test_a_recognize_language_is_checked_before_any_request() -> None:
+    instance = reson8.STT(api_key="k", model="resonant-1")
+
+    with pytest.raises(ValueError, match="unsupported language"):
+        await instance.recognize(_frame(), language="ja", conn_options=NO_RETRY)
 
 
 @pytest.mark.parametrize(
@@ -398,8 +461,6 @@ def test_an_unsupported_language_raises(value: str | list[str]) -> None:
         (lambda: TurnOptions(final_probability=1.1), "must be between 0 and 1"),
         (lambda: TurnOptions(eager_probability=0.5, final_probability=0.4), "must be below"),
         (lambda: TurnOptions(eager_probability=0.9, final_probability=0.7), "must be below"),
-        # above the server's 0.92 default final
-        (lambda: TurnOptions(eager_probability=0.95), "must be below"),
         (lambda: BiasingOptions(phrases=[f"p{i}" for i in range(251)]), "at most 250 entries"),
         (lambda: BiasingOptions(phrases=["fine", "not,fine"]), "cannot contain a comma"),
         (lambda: BiasingOptions(phrases=["ok", "  "]), "empty entry"),
@@ -438,9 +499,12 @@ def test_boundary_options_are_accepted(build: Callable[[], object]) -> None:
     ("eager", "final", "warns"),
     [
         (0.5, 0.5, True),
-        (None, 0.5, True),  # 0.5 is the server's default eager
         (None, None, False),
         (0.35, 0.7, False),
+        # defaults differ per model, so a lone threshold is not checked against one
+        (0.95, None, False),
+        (None, 0.4, False),
+        (None, 0.5, False),
     ],
 )
 def test_equal_thresholds_warn(
@@ -469,6 +533,35 @@ def test_rejected_vocabulary_is_not_quoted_back(build: Callable[[str], BiasingOp
     assert "phrases" in message or "patterns" in message
 
 
+@pytest.mark.parametrize(
+    ("biasing", "message"),
+    [
+        pytest.param(BiasingOptions(patterns=["AMZ[0-9]{6}"]), "patterns", id="patterns"),
+        pytest.param(BiasingOptions(strength=1.2), "at most 1", id="strength"),
+    ],
+)
+def test_rumble_2_rejects_biasing_it_cannot_apply(biasing: BiasingOptions, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        reson8.STT(api_key="k", model="rumble-2", biasing=biasing)
+
+    instance = reson8.STT(api_key="k", model="rumble-2")
+    with pytest.raises(ValueError, match=message):
+        instance.update_options(biasing=biasing)
+
+    with pytest.raises(ValueError, match=message):
+        STTOptions(model="rumble-2", biasing=biasing)
+
+
+def test_rumble_2_accepts_a_strength_of_1() -> None:
+    reson8.STT(api_key="k", model="rumble-2", biasing=BiasingOptions(strength=1))
+
+
+@pytest.mark.parametrize("model", [None, "resonant-1"])
+def test_patterns_and_a_strong_bias_pass_without_rumble_2(model: reson8.STTModel | None) -> None:
+    biasing = BiasingOptions(patterns=["AMZ[0-9]{6}"], strength=1.2)
+    reson8.STT(api_key="k", model=model, biasing=biasing)
+
+
 # ---------------------------------------------------------------------------
 # query string and payload mapping
 # ---------------------------------------------------------------------------
@@ -482,6 +575,12 @@ def test_query_params_defaults() -> None:
         "include_timestamps": "true",
         "include_language": "true",
     }
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+def test_the_model_reaches_both_endpoints(streaming: bool) -> None:
+    params = STTOptions(model="rumble-2").query_params(streaming=streaming)
+    assert params["model"] == "rumble-2"
 
 
 def test_query_params_by_endpoint() -> None:

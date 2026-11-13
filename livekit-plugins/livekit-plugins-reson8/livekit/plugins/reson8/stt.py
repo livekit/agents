@@ -22,7 +22,7 @@ import uuid
 import weakref
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 import aiohttp
 
@@ -40,6 +40,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from ._utils import (
+    DEFAULT_MODEL,
     ENCODINGS,
     ERROR_MESSAGE_HEADER,
     FILLER_MODES,
@@ -48,6 +49,7 @@ from ._utils import (
     TURNS_PATH,
     Encoding,
     FillerMode,
+    STTModel,
     auth_headers,
     build_speech_data,
     build_url,
@@ -73,25 +75,17 @@ _SEND_CHUNK_MS = 100
 @dataclass(frozen=True)
 class TurnOptions:
     """
-    When Reson8 ends a turn, the main lever on end-of-turn latency.
+    When Reson8 ends a turn.
 
-    ``None`` leaves the server's default. See
+    ``None`` leaves the model's default. See
     https://docs.reson8.dev/speech-to-text/turns/.
 
     Args:
         eager_probability: Confidence at which the preflight transcript is
-            emitted, so the agent can start generating speculatively.
-        final_probability: Confidence at which the turn commits. The server
-            default is tuned for conversational speech and is slow to commit a
-            one-word answer; lower it to commit sooner, at the risk of cutting
-            off longer utterances.
+            emitted, so the agent can start generating speculatively. Keep it
+            below ``final_probability``, or no preflight transcript is sent.
+        final_probability: Confidence at which the turn commits.
     """
-
-    # /turns does not report its effective config, so the defaults are mirrored
-    # here to check one threshold when only the other is set. Keep in sync with
-    # https://docs.reson8.dev/api/speech-to-text/turns/
-    SERVER_DEFAULT_EAGER: ClassVar[float] = 0.5
-    SERVER_DEFAULT_FINAL: ClassVar[float] = 0.92
 
     eager_probability: float | None = None
     final_probability: float | None = None
@@ -102,8 +96,8 @@ class TurnOptions:
 
         eager = self.eager_probability
         final = self.final_probability
-        eager = self.SERVER_DEFAULT_EAGER if eager is None else eager
-        final = self.SERVER_DEFAULT_FINAL if final is None else final
+        if eager is None or final is None:
+            return
 
         if eager > final:
             raise ValueError(
@@ -235,14 +229,15 @@ class BiasingOptions:
             model in Reson8 and pass its id here.
         phrases: Terms to bias toward, at most 250.
         strength: Additive boost on top of the model's trained calibration,
-            non-negative and unbounded. The server default suits most
-            requests; raise it only when expected terminology is not being
-            recovered.
+            non-negative; ``rumble-2`` accepts at most 1. The server default
+            suits most requests; raise it only when expected terminology is
+            not being recovered.
         patterns: Regex-style shapes for short alphanumeric tokens to recover,
             such as ``"AMZ[0-9]{6}"`` for an order code,
             ``"[0-9]{4,6}"`` for a variable-length one, or
             ``"[A-Z]{2}[0-9]{2} [A-Z]{3}"`` for a licence plate. Set these only
-            when the token is likely to be spoken.
+            when the token is likely to be spoken. Not supported by
+            ``rumble-2``.
     """
 
     custom_model_id: str | None = None
@@ -285,11 +280,23 @@ class BiasingOptions:
 class STTOptions:
     """The resolved configuration behind an ``STT`` instance."""
 
+    model: STTModel | str | None = None
     language: str | None = None
     turn: TurnOptions = field(default_factory=TurnOptions)
     audio: AudioOptions = field(default_factory=AudioOptions)
     transcript: TranscriptOptions = field(default_factory=TranscriptOptions)
     biasing: BiasingOptions = field(default_factory=BiasingOptions)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "language", normalize_languages(self.language, self.model))
+
+        if self.model == "rumble-2":
+            if self.biasing.patterns:
+                raise ValueError("patterns are not supported by rumble-2")
+
+            strength = self.biasing.strength
+            if strength is not None and strength > 1:
+                raise ValueError(f"rumble-2 accepts a strength of at most 1, got {strength}")
 
     def merged(
         self,
@@ -308,7 +315,7 @@ class STTOptions:
 
         changes: dict[str, Any] = {}
         if is_given(language):
-            changes["language"] = normalize_languages(language)
+            changes["language"] = normalize_languages(language, self.model)
 
         if is_given(turn):
             changes["turn"] = turn
@@ -328,6 +335,9 @@ class STTOptions:
             **self.biasing.query_params(),
         }
 
+        if self.model:
+            params["model"] = self.model
+
         # When omitted, Reson8 auto-detects the spoken language; otherwise this
         # pins recognition to the given code(s) (comma-joined for multiple).
         if self.language:
@@ -343,7 +353,7 @@ class STT(stt.STT):
     """
     Reson8 speech-to-text.
 
-    A single model that adapts to how LiveKit uses it:
+    One STT that adapts to how LiveKit uses it:
 
     * **Streaming** (:meth:`stream`) connects to the turn-aware
       ``/v1/speech-to-text/turns`` endpoint. Reson8 detects conversational turn
@@ -359,14 +369,10 @@ class STT(stt.STT):
     language, or pass one or more :data:`SupportedLanguage` codes to pin
     recognition.
 
-    :class:`TurnOptions` is the main lever on end-of-turn latency, and a
-    stream can commit a turn on demand without touching it::
+    A stream can commit a turn on demand, when you already know the speaker is
+    done::
 
-        # the server's 0.92 default is tuned for conversational speech and is
-        # slow to commit a one-word answer
-        stt = reson8.STT(language="es", turn=reson8.TurnOptions(final_probability=0.7))
-
-        # or leave it alone and commit when you already know they are done
+        stt = reson8.STT(model="rumble-2")
         stream = stt.stream()
         stream.flush()
 
@@ -374,7 +380,7 @@ class STT(stt.STT):
     letting LiveKit run its own detector::
 
         session = AgentSession(
-            stt=reson8.STT(),
+            stt=reson8.STT(model="rumble-2"),
             llm=openai.LLM(),
             tts=openai.TTS(),
             turn_handling={
@@ -391,6 +397,7 @@ class STT(stt.STT):
         *,
         api_key: str | None = None,
         base_url: str | None = None,
+        model: STTModel | str | None = None,
         language: str | Sequence[str] | None = None,
         turn: TurnOptions | None = None,
         audio: AudioOptions | None = None,
@@ -403,6 +410,11 @@ class STT(stt.STT):
             api_key: Reson8 API key. Falls back to the ``RESON8_API_KEY`` env var.
             base_url: Reson8 API base URL. Falls back to ``RESON8_BASE_URL``,
                 then ``https://api.reson8.dev``.
+            model: Reson8 model, e.g. ``"rumble-2"``. Fixed for the lifetime of
+                the instance. Leave as ``None`` for Reson8's default, ``resonant-1``.
+                For an :data:`STTModel`, a language or biasing
+                option the model does not support raises ``ValueError``, here
+                and in :meth:`update_options`; any other name is sent as is.
             language: One or more :data:`SupportedLanguage` codes to pin
                 recognition to. Pass a single code (``"nl"``), a comma-string
                 (``"nl,de"``), or a list (``["nl", "de"]``). Leave as ``None`` to
@@ -437,7 +449,8 @@ class STT(stt.STT):
         self._api_key = api_key
         self._base_url = resolve_base_url(base_url)
         self._opts = STTOptions(
-            language=normalize_languages(language),
+            model=model,
+            language=normalize_languages(language, model),
             turn=turn or TurnOptions(),
             audio=audio or AudioOptions(),
             transcript=transcript,
@@ -454,7 +467,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return self._opts.biasing.custom_model_id or "default"
+        return self._opts.model or DEFAULT_MODEL
 
     @property
     def provider(self) -> str:
@@ -543,7 +556,11 @@ class STT(stt.STT):
         language: NotGivenOr[str | Sequence[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        lang = normalize_languages(language) if is_given(language) else self._opts.language
+        lang = (
+            normalize_languages(language, self._opts.model)
+            if is_given(language)
+            else self._opts.language
+        )
         frames = rtc.combine_audio_frames(buffer)
 
         opts = replace(
