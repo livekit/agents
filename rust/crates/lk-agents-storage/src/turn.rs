@@ -39,7 +39,7 @@ pub use step::{
 };
 
 use crate::StorageError;
-use crate::run::{BACKGROUND_KEY, CHANNEL_KEY, KIND_DELIVERY, KIND_KEY};
+use crate::run::{BACKGROUND_KEY, CALLER_LANE_KEY, CHANNEL_KEY, KIND_DELIVERY, KIND_KEY};
 use crate::run::{
     LEASE_POLL_MAX, LEASE_POLL_MIN, LEASE_WAIT_TIMEOUT, Lane, Run, RunOptions, RunOutcome,
     TaskRecord, TaskState, Thread, shortuuid,
@@ -555,7 +555,17 @@ impl Turn {
         // that is this holder's, waiting on its work in the background
         let mut taken = true;
         loop {
-            let rows = db.inbox_pending(&self.lane).await?;
+            // one sender's messages share a turn: a person's burst, or one agent's requests, so
+            // a later one can change an earlier one; another sender's wait for a turn of their own
+            let mut rows = db.inbox_pending(&self.lane).await?;
+            let sender = |m: &Value| {
+                let caller = m.get("metadata").and_then(|d| d.get(CALLER_LANE_KEY)).cloned();
+                (channel_of(m), caller)
+            };
+            if let Some(first) = rows.first().map(|r| sender(&r.message)) {
+                let same = rows.iter().take_while(|r| sender(&r.message) == first).count();
+                rows.truncate(same);
+            }
             let Some(last) = rows.last() else {
                 if live
                     && let Some(token) = lease_token.clone()

@@ -255,8 +255,8 @@ class DelegateQuestion(NamedTuple):
 
 @dataclass(frozen=True, eq=False)
 class AskedQuestion:
-    """A delegate's question the person was asked and may have answered since: the tool's next
-    call may continue its task with the answer."""
+    """A delegate's open question the person may have answered since: the tool's next call may
+    continue its task with the answer."""
 
     question: str
     ref: str
@@ -397,7 +397,7 @@ _approval_scope: ContextVar[_ApprovalScope | None] = ContextVar(
 
 
 ASK_IN_OWN_WORDS = (
-    "Ask the person this, in your own words, as your whole reply, and add nothing else: {question}"
+    "Ask the person this in your own words, saying what it is for, as your whole reply: {question}"
 )
 """How the agent facing the person is told to ask a question that is not verbatim."""
 
@@ -492,9 +492,22 @@ WAITING_PREFIX = "waiting for the person's answer to: "
 """The output of a call that asked the person: its question. The answer is the person's next
 message, never this output."""
 
-RELAY_ANSWER = "\n\nWhen they answer it, call {name} with their answer."
-"""After a delegate's question in its call's output: the answer continues the delegate's task
-only when the model sends it."""
+ASKED_FOR = "asked the person for {name}: {question}"
+"""The output of a call whose expert asked the person: a fact, whether still open or answered;
+``OPEN_QUESTIONS`` says which are open."""
+
+OPEN_QUESTIONS = (
+    "When the person answers one of these, call its expert with their answer: {questions}"
+)
+"""Told last in each request while delegates' questions put to the person are open, never stored:
+the answer continues an expert's task only when the model sends it."""
+
+
+def open_questions_note(questions: Sequence[tuple[str, str]]) -> str | None:
+    """The note on the open ``(question, expert)`` pairs, or ``None`` when none is open."""
+    if not questions:
+        return None
+    return OPEN_QUESTIONS.format(questions="; ".join(f'"{q}" ({name})' for q, name in questions))
 
 
 class AnsweredReadBack(NamedTuple):

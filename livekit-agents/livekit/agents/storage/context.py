@@ -228,13 +228,6 @@ class TurnHost(Generic[S]):
             delegated=bool(ctx.batch) and all(m.channel == "delegation" for m in ctx.batch),
             lane=ctx.lane,
             task_id=ctx.task_id,
-            open_tasks=frozenset(
-                r.id
-                for r in ctx.tasks
-                if r.id != ctx.task_id
-                and r.id not in {m.task_id for m in ctx.batch}  # a delivery's other tasks
-                and r.status not in TERMINAL_TASK_STATES
-            ),
             tools=self._tools if ctx.live else None,
             canceled=lambda: boundary.client_canceled,
         )

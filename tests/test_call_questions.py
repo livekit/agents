@@ -14,10 +14,13 @@ import pytest
 from livekit.agents import Agent, InputRequired, LiveSession, RunContext
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.delegation import A2ADelegate, InputRequiredCheck
+from livekit.agents.delegation.a2a import DISPATCHED
+from livekit.agents.delegation.input_required import InputRequiredVerdict
 from livekit.agents.llm import InputSpeechStartedEvent
-from livekit.agents.llm.tool_context import SAY_EXACTLY
+from livekit.agents.llm.tool_context import ASKED_FOR, SAY_EXACTLY, open_questions_note
 from livekit.agents.storage import AgentDBStorage
 from livekit.agents.storage.resolve import Thread
+from livekit.agents.voice.agent_activity import _Question
 from livekit.agents.voice.audio_recognition import (
     _EndOfTurnInfo,
     _EndOfTurnMetrics,
@@ -66,20 +69,48 @@ async def test_the_models_call_of_the_delegate_that_asked_continues_its_task(
     model = ScriptedLLM(
         Reply(tool_calls=[call("ask", "a1", request="change my visit")]),
         RELAYS,
-        Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items[-1])),
+        Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items)),
     )
     delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
     async with LiveSession(llm=model) as session:
         await session.start(Agent(instructions="front desk", tools=[delegate]))
         await session.run(user_input="change my visit")
         await soon(lambda: "Which day?" in spoken(session), "the question")
-        assert "call ask with their answer" in str(outputs(session.history)), "the model is told"
         await session.run(user_input="tuesday")
+        await soon(lambda: "You are booked for Tuesday." in spoken(session), "the answer")
 
     (asked, _), (answered, text) = heard
     assert answered == asked and text == "tuesday"
+    note = open_questions_note([("Which day?", "ask")])
+    answer = next(r for r in model.requests if said("tuesday")(r))
+    assert answer.items[-1].text_content == note, "the model is told last, while it is open"
+    assert note not in str(model.requests[-1].items), "and no more once a call answered it"
+    assert "their answer" not in str(outputs(session.history)), "the history keeps no instruction"
     assert not isinstance(model.tool_choices[-2], dict), "the model is not forced"
     assert spoken(session) == ["Which day?", "You are booked for Tuesday."]
+
+
+@pytest.mark.rule("R38")
+async def test_an_answer_is_acknowledged_like_a_request(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    """The expert's next question is then a later output of the call, out of the history until
+    it is asked."""
+    model = ScriptedLLM(Reply(tool_calls=[call("ask", "a1", request="change my visit")]), RELAYS)
+    delegate = expert(asking("Which day?", "Which time?", answer="Booked.", heard=[]))
+    async with LiveSession(llm=model) as session:
+        await session.start(Agent(instructions="front desk", tools=[delegate]))
+        await session.run(user_input="change my visit")
+        await soon(lambda: "Which day?" in spoken(session), "the first question")
+        await session.run(user_input="tuesday")
+        await soon(lambda: "Which time?" in spoken(session), "the next question")
+
+    relayed = [
+        i.output
+        for i in session.history.items
+        if i.type == "function_call_output" and i.call_id == "a2"
+    ]
+    assert len(relayed) == 1 and DISPATCHED in relayed[0], "its only output in the history"
 
 
 @pytest.mark.rule("R38")
@@ -91,7 +122,7 @@ async def test_a_turn_the_model_does_not_relay_leaves_the_question_open(
         Reply(tool_calls=[call("ask", "a1", request="change my visit")]),
         Reply("We open at nine.", when=said("when do you open?")),
         RELAYS,
-        Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items[-1])),
+        Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items)),
     )
     delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
     async with LiveSession(llm=model) as session:
@@ -103,6 +134,23 @@ async def test_a_turn_the_model_does_not_relay_leaves_the_question_open(
 
     (asked, _), (answered, text) = heard
     assert answered == asked and text == "tuesday"
+
+
+@pytest.mark.rule("R37")
+async def test_a_follow_up_waits_while_another_question_is_in_front() -> None:
+    async with LiveSession(llm=ScriptedLLM()) as session:
+        await session.start(Agent(instructions="front desk"))
+        activity = session._activity
+        assert activity is not None
+        # the queued seat question was asked after the person's turn, before the fare desk's
+        # answer came back with its follow-up
+        activity._questions.append(_Question(InputRequired("Which seat?"), None, asked=True))
+        activity._floor = "AST_fares"
+        follow_up = InputRequired("Which class?", verbatim=True, _answer_ref="AST_fares")
+        activity._put_question(_Question(follow_up, None))
+        await asyncio.sleep(0.3)
+
+    assert "Which class?" not in spoken(session), "one question per turn of the person"
 
 
 @pytest.mark.rule("R37")
@@ -149,6 +197,105 @@ async def test_a_question_the_person_passes_over_lets_the_next_be_asked(
 
     (asked, _), (answered, text) = fares_heard
     assert answered == asked and text == "tuesday", "the passed question still takes its answer"
+
+
+async def slowly(check: InputRequiredCheck) -> InputRequiredVerdict:
+    """A detector that takes a while, then picks the first question."""
+    await asyncio.sleep(0.3)
+    return check.questions[0]
+
+
+@pytest.mark.rule("R37")
+@pytest.mark.parametrize("detector", [None, Judge(slowly)], ids=["first", "detected"])
+async def test_a_relayed_answer_to_a_question_still_in_line_closes_it(
+    expert: Callable[..., A2ADelegate], detector: Judge | None
+) -> None:
+    gate = asyncio.Event()
+    seats_heard: list[tuple[str, str]] = []
+    model = ScriptedLLM(
+        Reply(
+            tool_calls=[
+                call("fares", "f1", request="a flight"),
+                call("seats", "s1", request="a seat"),
+            ]
+        ),
+        Reply(
+            tool_calls=[
+                call("fares", "f2", request="tuesday"),
+                call("seats", "s2", request="a window seat"),
+            ],
+            when=said("tuesday, by the window"),
+        ),
+    )
+    fares = asking("Which date?", answer="Fare booked.", heard=[])
+    seats_agent = asking("Which seat?", answer="Seat booked.", heard=seats_heard)
+
+    async def seats(ctx: A2ASessionContext[Any]) -> Any:
+        await gate.wait()  # its question waits behind the date
+        return await seats_agent(ctx)
+
+    desk = Agent(
+        instructions="front desk",
+        tools=[
+            expert(fares, "fares", tool="fares", announce=False, answer_detector=detector),
+            expert(seats, "seats", tool="seats", announce=False, answer_detector=detector),
+        ],
+    )
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        await session.run(user_input="book a flight and a seat")
+        await soon(lambda: "Which date?" in spoken(session), "the first question")
+        gate.set()
+        await asyncio.sleep(0.3)
+        await session.run(user_input="tuesday, by the window")
+        await soon(lambda: len(seats_heard) > 1, "the relayed answer")
+        await asyncio.sleep(0.3)
+
+    (asked, _), (answered, text) = seats_heard
+    assert answered == asked and text == "a window seat", "it continues the seat task"
+    assert "Which seat?" not in spoken(session), "an answered question is not asked"
+
+
+@pytest.mark.rule("R37")
+async def test_a_question_in_line_stays_out_of_the_history_until_it_is_asked(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    gate = asyncio.Event()
+    model = ScriptedLLM(
+        Reply(
+            tool_calls=[
+                call("fares", "f1", request="a flight"),
+                call("seats", "s1", request="a seat"),
+            ]
+        ),
+        Reply("We open at nine.", when=said("when do you open?")),
+    )
+    seats_agent = asking("Which seat?", answer="Seat booked.", heard=[])
+
+    async def seats(ctx: A2ASessionContext[Any]) -> Any:
+        await gate.wait()  # its question comes second
+        return await seats_agent(ctx)
+
+    desk = Agent(
+        instructions="front desk",
+        tools=[
+            expert(asking("Which date?", answer="Fare booked.", heard=[]), "fares", tool="fares"),
+            expert(seats, "seats", tool="seats", announce=False),
+        ],
+    )
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        await session.run(user_input="book a flight and a seat")
+        await soon(lambda: "Which date?" in spoken(session), "the first question")
+        gate.set()
+        activity = session._activity
+        await soon(lambda: len(activity._questions) == 2, "in line")
+        in_line = [o for o in outputs(session.history) if "Which seat?" in o]
+        await session.run(user_input="when do you open?")
+        await soon(lambda: "Which seat?" in spoken(session), "the next question")
+
+    assert not in_line, "no reply reads it before it is asked"
+    assert ASKED_FOR.format(name="seats", question="Which seat?") in outputs(session.history)
 
 
 @pytest.mark.rule("R38")
@@ -224,7 +371,7 @@ async def test_a_spoken_answer_on_a_pipeline_call_is_one_turn(
     model = ScriptedLLM(
         Reply(tool_calls=[call("ask", "a1", request="change my visit")]),
         RELAYS,
-        Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items[-1])),
+        Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items)),
     )
     delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
     async with LiveSession(llm=model) as session:
@@ -252,8 +399,8 @@ async def test_a_spoken_answer_on_a_pipeline_call_is_one_turn(
 async def test_a_follow_up_of_the_answered_task_goes_before_the_queue(
     expert: Callable[..., A2ADelegate], progress: bool
 ) -> None:
-    """Then its result is told before the queued question, also when progress lets the
-    answer's call run on in the background."""
+    """A follow-up that is the answer's next output goes first; a desk that reports its work
+    first lets the queued question go."""
     gate = asyncio.Event()
     fares_heard: list[tuple[str, str]] = []
     seats_heard: list[tuple[str, str]] = []
@@ -262,7 +409,7 @@ async def test_a_follow_up_of_the_answered_task_goes_before_the_queue(
     )
 
     async def fares(ctx: A2ASessionContext[Any]) -> Any:
-        if progress and fares_heard:
+        if progress and len(fares_heard) == 1:
             await ctx.update("Checking fares.")
             await asyncio.sleep(0.3)
         return await fares_agent(ctx)
@@ -301,6 +448,11 @@ async def test_a_follow_up_of_the_answered_task_goes_before_the_queue(
         await soon(lambda: seats_heard, "the seats expert")
         await asyncio.sleep(0.5)  # its question waits behind the one in front
         await session.run(user_input="tuesday")
+        if progress:
+            await soon(lambda: "Which seat?" in spoken(session), "the queued question")
+            assert "Morning or evening?" not in spoken(session), "it waits behind the seat"
+            return
+        await soon(lambda: "Morning or evening?" in spoken(session), "the follow-up")
         await session.run(user_input="morning")
         await soon(lambda: "Which seat?" in spoken(session), "the queued question")
 

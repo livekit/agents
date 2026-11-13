@@ -31,8 +31,9 @@ chat = Agent(
 
 voice = Agent(
     instructions=PERSONA + " On the phone: one short sentence at a time, one question per "
-    "turn, plain speech. Say times the way a person does, Friday at two, no AM or PM. While a "
-    "desk works, keep the traveler company in one line.",
+    "turn, plain speech, a desk's question with what it is for, \"and the hotel, how many "
+    'nights?". Say times the way a person does, Friday at two, no AM or PM. While a desk works, '
+    "a few words, never the same twice, asking nothing.",
     tools=[flight_desk, hotel_desk],
 )
 

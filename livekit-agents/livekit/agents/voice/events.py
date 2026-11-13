@@ -352,6 +352,11 @@ class RunContext(Generic[Deps_T, State_T]):
         if self._executor is not None:
             self._executor._sink.answering(self, question)
 
+    def _decided(self) -> None:
+        """This call said whether it answers one of its tool's questions."""
+        if self._executor is not None:
+            self._executor._sink.decided(self)
+
     async def _record(self) -> None:
         """The conversation so far is stored before another agent reads it."""
         if self._executor is not None:

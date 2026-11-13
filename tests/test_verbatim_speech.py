@@ -93,6 +93,57 @@ async def test_says_and_updates_are_spoken_in_call_order_and_a_say_is_never_merg
 
 
 @pytest.mark.rule("R22", "R23")
+async def test_exact_text_is_out_of_the_history_until_it_played() -> None:
+    """A reply written while a queued say waits does not read it, so it never words it too."""
+    read: list[str] = []
+
+    def result(ctx: ChatContext) -> bool:
+        read.append(str(ctx.items))  # the items change once the say is spoken
+        return last_text("1_final")(ctx)
+
+    model = ScriptedLLM(
+        Reply("Let me check.", [call("book", "1")], when=last_text("Book me in")),
+        Reply("It is booked.", when=result),
+    )
+
+    async def book(ctx: RunContext) -> str:
+        """Book."""
+        await ctx.update("checking")
+        await ctx.say(CODE)  # type: ignore[attr-defined]
+        return "booked Tuesday"
+
+    replies = ["Let me check.", CODE, "It is booked."]
+    spoken = await call_desk(model, book, [(text, 1.0) for text in replies])
+
+    assert spoken == replies
+    assert CODE not in read[-1]
+
+
+@pytest.mark.rule("R22", "R23")
+async def test_a_progress_reply_not_yet_playing_gives_way_to_the_result() -> None:
+    """The result lands while the call's progress reply waits behind exact text: only the
+    result is told."""
+    model = ScriptedLLM(
+        Reply("Let me check.", [call("book", "1")], when=last_text("Book me in")),
+        Reply("Reserving it.", when=last_text("1_update_2")),
+        Reply("It is booked.", when=last_text("1_final")),
+    )
+
+    async def book(ctx: RunContext) -> str:
+        """Book."""
+        await ctx.update("checking")
+        await ctx.say(CODE)  # type: ignore[attr-defined]
+        await ctx.update("reserving")
+        await asyncio.sleep(3.0)  # while the code plays
+        return "booked Tuesday"
+
+    durations = {"Let me check.": 1.0, CODE: 3.0, "Reserving it.": 1.0, "It is booked.": 1.0}
+    spoken = await call_desk(model, book, list(durations.items()))
+
+    assert spoken == ["Let me check.", CODE, "It is booked."]
+
+
+@pytest.mark.rule("R22", "R23")
 async def test_a_say_cut_off_before_it_played_is_spoken_at_the_next_idle() -> None:
     """The person speaks over a reply with a say queued behind it: the reply is cut, the say
     is not lost, and it is spoken once the agent is idle again."""

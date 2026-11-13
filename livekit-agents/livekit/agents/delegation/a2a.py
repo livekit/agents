@@ -82,6 +82,9 @@ DISPATCHED_SILENTLY = (
 )
 """What the model reads on a call while the expert works under ``announce=False``, unanswered."""
 
+MERGED = "Taken up with your later request to this expert, whose answer covers both."
+"""What a call reads when the expert answered its request in one turn with a later one."""
+
 UNCLEAR = (
     "Not sent: the person's reply could answer more than one of the expert's open questions: "
     "{questions}. Ask them which one they meant, or whether it answers each."
@@ -221,33 +224,42 @@ class A2ADelegate(Delegate, Toolset):
             history = ctx._run.chat_ctx
         # the reply to a question the expert asked continues its task
         answered: AskedQuestion | None = None
-        if asked := await ctx._asked_questions():
-            # without a detector, or when it fails, the question asked last takes the reply
-            last = max(asked, key=lambda q: q.asked_at)
-            verdict: InputRequiredVerdict = last
-            if self._answer_detector is not None:
-                check = InputRequiredCheck(request, asked, history, usage=ctx.usage)
-                try:
-                    verdict = await self._answer_detector.detect(check)
-                except Exception as e:
-                    logger.warning("the answer detector failed", extra={"error": str(e)})
-            if verdict == "unclear":
-                return UNCLEAR.format(questions="; ".join(f'"{q.question}"' for q in asked))
-            if verdict != "new":
-                answered = verdict
-                ctx._answering(answered)
+        try:
+            if asked := await ctx._asked_questions():
+                # without a detector, or when it fails, the question asked last takes the reply
+                last = max(asked, key=lambda q: q.asked_at)
+                verdict: InputRequiredVerdict = last
+                if self._answer_detector is not None:
+                    check = InputRequiredCheck(request, asked, history, usage=ctx.usage)
+                    try:
+                        verdict = await self._answer_detector.detect(check)
+                    except Exception as e:
+                        logger.warning("the answer detector failed", extra={"error": str(e)})
+                if verdict == "unclear":
+                    return UNCLEAR.format(questions="; ".join(f'"{q.question}"' for q in asked))
+                if verdict != "new":
+                    answered = verdict
+                    ctx._answering(answered)
+        finally:
+            ctx._decided()
         # the expert reads the person's own words in the thread
         await ctx._record()
-        if session is not None and answered is None:
-            # a barge-in drops the calls of the speech it cuts, so on a call the turn goes on
+        if session is not None:
+            # a barge-in drops the calls of the speech it cuts, so on a call the turn goes on;
+            # an answer too, so the expert's next question is a later output, out of the
+            # history until it is asked
             if self._announce:
                 ctx.update(DISPATCHED)
             else:
                 ctx.update(DISPATCHED_SILENTLY, silent=True)
+        # a desk another agent asked keeps its expert's progress: its own updates speak for it,
+        # and only exact text goes through every desk to the person
+        hooks = current_run_hooks()
+        delegated = hooks is not None and hooks.delegated
         try:
             result = await self.run(
                 request,
-                progress=ctx.update,
+                progress=None if delegated else ctx.update,
                 say=ctx.say,
                 context_id=session.thread.id if session and session.thread else None,
                 message_history=history,
@@ -327,6 +339,10 @@ class A2ADelegate(Delegate, Toolset):
 
         if update.state == "failed":
             raise DelegationFailed(text or "the delegation failed")
+        from ..a2a.extension import MERGED_INTO
+
+        if update.state == "completed" and not text and update.metadata.get(MERGED_INTO):
+            text = MERGED
         # with no text there is no question: the task gives an empty answer
         asked = update.state == "input-required" and bool(text)
 

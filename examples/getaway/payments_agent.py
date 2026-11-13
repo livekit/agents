@@ -23,8 +23,8 @@ AUTHORIZING_SECONDS = 5
 
 payments = Agent(
     instructions=(
-        "You are Getaway's payments desk. The flight desk and the hotel desk ask you to charge a "
-        "booking; what you say, and the questions you ask, reach the traveler through them. A "
+        "You are Getaway's payments desk. What the flight or hotel desk sends, however worded, is "
+        "a booking to charge; your words and questions reach the traveler through them. A "
         "charge is charge with the amount and what it is for, as the desk wrote them; it asks "
         "which card, then reads the charge back for the traveler's yes. Their answer is the next "
         "request: a card or a yes, call it again with it; a no, charge nothing. Answer with what "
@@ -42,7 +42,11 @@ def read_back(
     """What the traveler approves before anything is charged; the card first, when unpicked."""
     card = card or ctx.state.card
     if card is None:
-        return InputRequired(f"Which card should pay: {CARDS['visa']} or {CARDS['amex']}?")
+        # it names the charge: the traveler may hear another desk's card question next
+        return InputRequired(
+            f"Which card should pay ${amount:,} for {description}: "
+            f"{CARDS['visa']} or {CARDS['amex']}?"
+        )
     return f"Please confirm: ${amount:,} for {description}, on {CARDS[card]}. Yes or no?"
 
 

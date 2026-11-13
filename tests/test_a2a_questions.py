@@ -35,22 +35,13 @@ from .a2a_driver import (
     wire,
 )
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
+from .test_live_inbox import said
 
 pytestmark = [pytest.mark.unit]
 
 QUESTION = "What email address?"
 EMAIL = "ana@example.com"
 DELEGATION = {KIND: KIND_DELEGATION}
-
-
-def said(text: str) -> Callable[[ChatContext], bool]:
-    """A request whose last item is the person's message ``text``."""
-
-    def matches(ctx: ChatContext) -> bool:
-        last = ctx.items[-1] if ctx.items else None
-        return isinstance(last, ChatMessage) and last.role == "user" and last.text_content == text
-
-    return matches
 
 
 def user_texts(ctx: ChatContext) -> list[str]:
@@ -396,14 +387,14 @@ async def test_a_read_back_is_answered_only_by_a_message_of_its_task(
 
 
 @pytest.mark.rule("R31", "R34", "R54")
-async def test_a_continued_task_does_not_read_what_other_open_tasks_added(
+async def test_a_continued_task_reads_what_other_open_tasks_added(
     door: Callable[..., Door],
 ) -> None:
+    """One conversation with one person: what another open task did is part of it."""
     agent = asking(
         Reply(tool_calls=[call("book", "b1")], when=said("book me in")),
         Reply(tool_calls=[call("book", "b2")], when=said("book another")),
         Reply("Booked.", when=said(EMAIL)),
-        Reply("Nothing else is open.", when=said("anything else?")),
     )
     desk = door(runs(agent))
     thread = await desk.thread()
@@ -413,7 +404,4 @@ async def test_a_continued_task_does_not_read_what_other_open_tasks_added(
     assert other.task["id"] != booking.task["id"] and other.status_text == QUESTION
 
     await desk.send(EMAIL, context_id=thread, task_id=booking.task["id"])
-    assert user_texts(model_of(agent).requests[-1]) == ["book me in", EMAIL]
-    # a new task reads everything the lane holds
-    await desk.send("anything else?", context_id=thread, **DELEGATION)
-    assert "book another" in user_texts(model_of(agent).requests[-1])
+    assert user_texts(model_of(agent).requests[-1]) == ["book me in", "book another", EMAIL]

@@ -279,3 +279,40 @@ async def test_a_verbatim_result_on_a_typed_agent_is_said_and_the_output_keeps_i
 
     assert result.output == Booking(day="Tuesday")
     assert tool_outputs(model.requests[-1]) == [DELIVERED.format(text=NOTICE)]
+
+
+@pytest.mark.rule("R22")
+async def test_a_desk_two_hops_away_reaches_the_person_only_by_exact_text(
+    door: Callable[..., Door], expert: Callable[..., A2ADelegate]
+) -> None:
+    """The progress of a desk's own delegate stays with that desk; its exact text goes through."""
+    payments = Agent(
+        instructions="payments", llm=ScriptedLLM(Reply(tool_calls=[call("charge", "p1")]))
+    )
+
+    @payments.tool
+    async def charge(ctx: RunContext) -> ToolResult:
+        """Charge."""
+        await ctx.update("authorizing the card")
+        await ctx.say(CODE)  # type: ignore[attr-defined]
+        return ToolResult("charged", reply_required=False)
+
+    hotels = Agent(
+        instructions="hotels",
+        tools=[expert(serving(payments), "payments", announce=False)],
+        llm=ScriptedLLM(
+            Reply(tool_calls=[call("ask", "h1", request="charge the room")]),
+            Reply("Booked.", when=output_of("h1")),
+        ),
+    )
+    front = Agent(
+        instructions="front desk",
+        tools=[expert(serving(hotels), "hotels", announce=False)],
+        llm=ScriptedLLM(
+            Reply(tool_calls=[call("ask", "c1", request="book the room")]),
+            Reply("You are booked.", when=output_of("c1")),
+        ),
+    )
+    sent = await door(serving(front)).send("book the room")
+
+    assert working(sent.frames) == [(CODE, True)]

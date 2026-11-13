@@ -18,6 +18,7 @@ from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.a2a.codec import metadata_from_wire
 from livekit.agents.a2a.extension import INTERRUPTED, MERGED_INTO
 from livekit.agents.delegation import A2ADelegate
+from livekit.agents.delegation.a2a import MERGED
 from livekit.agents.llm import (
     ChatContext,
     ChatMessage,
@@ -39,6 +40,7 @@ from . import fake_agentstore
 from .a2a_driver import (
     API_KEY,
     API_SECRET,
+    ENDPOINT,
     EXPERT,
     Door,
     Reply,
@@ -51,6 +53,7 @@ from .a2a_driver import (
     state_of,
     wire,
 )
+from .fake_llm import is_note
 
 pytestmark = [pytest.mark.unit]
 
@@ -66,10 +69,12 @@ BACKGROUND = "livekit/background"
 
 
 def said(text: str) -> Callable[[ChatContext], bool]:
-    """A request whose last item is the person's message ``text``."""
+    """A request whose last item is the person's message ``text``, but for a note on the open
+    questions told after it."""
 
     def matches(ctx: ChatContext) -> bool:
-        last = ctx.items[-1] if ctx.items else None
+        items = ctx.items[:-1] if ctx.items and is_note(ctx.items[-1]) else ctx.items
+        last = items[-1] if items else None
         return isinstance(last, ChatMessage) and last.role == "user" and last.text_content == text
 
     return matches
@@ -267,6 +272,51 @@ async def test_a_message_that_waited_answers_on_its_own_stream(door: Callable[..
     assert state_of(frames[-1]) == "TASK_STATE_COMPLETED"
     task_ids = {(f.get("statusUpdate") or f["artifactUpdate"])["taskId"] for f in frames}
     assert task_ids == {waited.task["id"]}
+
+
+@pytest.mark.rule("R2")
+async def test_waiting_requests_share_a_turn_only_with_their_own_senders(
+    door: Callable[..., Door],
+) -> None:
+    busy = Busy()
+    desk = door(busy, inbox="live")
+    thread = await desk.thread()
+    held = asyncio.create_task(desk.send("one", context_id=thread))
+    await asyncio.wait_for(busy.entered.wait(), 20)
+    sends = []
+    for count, (caller, text) in enumerate(
+        [("flights", "the flight"), ("flights", "the flight, changed"), ("hotels", "the hotel")], 2
+    ):
+        flags = {**DELEGATION, **NO_INTERRUPT, "livekit/callerLane": caller}
+        sends.append(asyncio.create_task(desk.send(text, context_id=thread, **flags)))
+        await listed(desk, thread, count)
+    busy.gate.set()
+    _, first, changed, hotel = await asyncio.wait_for(asyncio.gather(held, *sends), 30)
+
+    # one agent's requests share a turn, so the later can change the earlier; another's waits
+    assert busy.batches[1:] == [["the flight", "the flight, changed"], ["the hotel"]]
+    assert first.metadata[MERGED_INTO] == changed.task["id"]
+    assert hotel.answer == "seen the hotel" and MERGED_INTO not in hotel.metadata
+
+
+@pytest.mark.rule("R2")
+async def test_a_request_answered_with_a_later_one_says_so(door: Callable[..., Door]) -> None:
+    busy = Busy()
+    desk = door(busy, inbox="live")
+    thread = await desk.thread()
+    delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=desk.http)
+    held = asyncio.create_task(desk.send("one", context_id=thread))
+    await asyncio.wait_for(busy.entered.wait(), 20)
+    runs = []
+    for count, text in enumerate(["the flight", "the flight, changed"], 2):
+        runs.append(asyncio.create_task(delegate.run(text, context_id=thread, caller_lane="front")))
+        await listed(desk, thread, count)
+    busy.gate.set()
+    _, first, changed = await asyncio.wait_for(asyncio.gather(held, *runs), 30)
+    await delegate.aclose()
+
+    assert first.output == MERGED
+    assert changed.output == "seen the flight + the flight, changed"
 
 
 @pytest.mark.rule("R2")
