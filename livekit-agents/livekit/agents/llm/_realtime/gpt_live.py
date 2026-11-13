@@ -731,10 +731,15 @@ class GPTLiveSession(
             )
             self._report_connection_acquired(time.perf_counter() - t0)
             return ws
+        except aiohttp.ClientResponseError as e:
+            raise self._create_ws_response_error(e) from None
         except (aiohttp.ClientError, asyncio.TimeoutError):
             raise APIConnectionError(
                 f"{self._live_model._provider_label} connection error"
             ) from None
+
+    def _create_ws_response_error(self, error: aiohttp.ClientResponseError) -> APIError:
+        return APIConnectionError(f"{self._live_model._provider_label} connection error")
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False

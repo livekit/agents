@@ -18,7 +18,6 @@ from .._exceptions import (
     APIError,
     APIStatusError,
     APITimeoutError,
-    create_api_error_from_http,
 )
 from ..language import LanguageCode
 from ..log import logger
@@ -34,6 +33,7 @@ from ..utils import is_given
 from ._utils import (
     HEADER_SESSION_ID,
     create_access_token,
+    create_api_error_from_response,
     create_inference_request_id,
     get_default_inference_url,
     get_inference_headers,
@@ -574,7 +574,7 @@ class TTS(tts.TTS):
                 timeout,
             )
         except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from e
+            raise create_api_error_from_response(e) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("LiveKit Inference TTS connection timed out.") from e
         except aiohttp.ClientConnectorError as e:
@@ -846,7 +846,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APITimeoutError() from None
 
         except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from None
+            raise create_api_error_from_response(e) from None
 
         except APIError:
             raise

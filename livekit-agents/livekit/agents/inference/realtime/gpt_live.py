@@ -9,9 +9,11 @@ from openai.types.responses import ResponseTextConfigParam
 from openai.types.shared_params import Reasoning
 
 from livekit.agents import llm
+from livekit.agents._exceptions import APIStatusError
 from livekit.agents.inference._utils import (
     HEADER_INFERENCE_PROVIDER,
     create_access_token,
+    create_api_error_from_response,
     get_default_inference_url,
     get_inference_headers,
     resolve_credentials,
@@ -201,6 +203,9 @@ class DuplexSession(_GPTLiveSession):
     def __init__(self, duplex_model: DuplexModel) -> None:
         self._inference_model = duplex_model
         super().__init__(duplex_model)
+
+    def _create_ws_response_error(self, error: aiohttp.ClientResponseError) -> APIStatusError:
+        return create_api_error_from_response(error)
 
     def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
         opts = self._inference_model._inference_opts
