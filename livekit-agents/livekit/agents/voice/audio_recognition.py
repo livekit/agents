@@ -1513,7 +1513,7 @@ class AudioRecognition:
             self._turn_detector_prediction_fut = None
             self._turn_detector_flushed = False
 
-            if self._end_of_turn_task is not None:
+            if self._end_of_turn_task is not None and self._turn_detection_mode != "manual":
                 self._end_of_turn_task.cancel()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
@@ -1535,7 +1535,9 @@ class AudioRecognition:
                     self._turn_detector_stream is not None
                     and self._turn_detector_prediction_fut is None
                 ):
-                    self._turn_detector_prediction_fut = self._turn_detector_stream.predict()
+                    self._turn_detector_prediction_fut = self._turn_detector_stream.predict(
+                        chat_ctx=self._hooks.retrieve_chat_ctx()
+                    )
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             vad_speech_started = self._vad_speech_started
@@ -2228,16 +2230,18 @@ class AudioRecognition:
         if self._user_turn_span and self._user_turn_span.is_recording():
             return self._user_turn_span
 
-        if start_time is None:
+        if start_time is not None:
+            self._start_user_turn(start_time)
+        else:
             start_time = time.time()
+            # no known speech start: the turn detector keeps counting from its last flush
+            if self._user_turn_start is None:
+                self._user_turn_start = start_time
         start_time_ns = int(start_time * 1_000_000_000)
         # pinned to the session root: a turn may be created from any task (a late STT final)
         self._user_turn_span = tracer.start_span(
             "user_turn", context=self._session._root_span_context, start_time=start_time_ns
         )
-
-        if self._user_turn_start is None:
-            self._user_turn_start = start_time
 
         if (room_io := self._session._room_io) and room_io.linked_participant:
             _set_participant_attributes(self._user_turn_span, room_io.linked_participant)
@@ -2253,6 +2257,14 @@ class AudioRecognition:
             )
 
         return self._user_turn_span
+
+    def _start_user_turn(self, start_time: float) -> None:
+        """Record when the user turn started, once per turn; the turn detector counts from it."""
+        if self._user_turn_start is not None:
+            return
+        self._user_turn_start = start_time
+        if self._turn_detector_stream is not None:
+            self._turn_detector_stream.on_start_of_turn(start_time)
 
     def _end_user_turn_span(self) -> None:
         # a wait still open here never reached a decision (teardown, clear_user_turn, ...)

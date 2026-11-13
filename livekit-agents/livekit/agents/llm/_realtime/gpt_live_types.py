@@ -260,6 +260,8 @@ class DelegationInfo(BaseModel):
 class SessionDelegationCreatedEvent(BaseModel):
     type: Literal["session.delegation.created"] = "session.delegation.created"
     delegation: DelegationInfo = DelegationInfo()
+    client_event_id: str | None = None
+    """The ``response.create`` that started it, when the application did."""
 
 
 class ResponseUsage(BaseModel):

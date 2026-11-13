@@ -31,7 +31,7 @@ from livekit.plugins.openai.realtime.gpt_live_model import (
 from livekit.plugins.openai.realtime.gpt_live_types import ServiceTier
 from livekit.plugins.openai.tools import WebSearch
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 
 class _FakeWS:
@@ -196,16 +196,14 @@ async def test_a_session_awaiting_config_sends_nothing_until_it_arrives(
 async def test_closing_releases_a_session_still_waiting_for_its_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A session closed before it was ever configured has to finish closing.
-
-    Judged on elapsed time: ``aclose`` suppresses ``CancelledError``, so a deadline never fails.
-    """
+    """A session closed before it was ever configured has to finish closing."""
     _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
     await asyncio.sleep(0.05)
 
+    # judged on elapsed time: aclose suppresses CancelledError, so a deadline never fails
     started = time.perf_counter()
     with contextlib.suppress(asyncio.TimeoutError):
         await asyncio.wait_for(session.aclose(), timeout=2)  # bounds a real hang
@@ -387,51 +385,17 @@ async def test_reconnect_discards_partial_input_audio(
         await model.aclose()
 
 
-async def test_the_mute_state_survives_a_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
-    sockets = [_LifecycleWS(), _LifecycleWS()]
-    connections = iter(sockets)
-
-    async def connect(self: GPTLiveSession) -> _LifecycleWS:
-        return next(connections)
-
-    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
-    model = GPTLiveModel(
-        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
-    )
-    session = model.session()
-    try:
-        await session._update_session()
-        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
-        await session._session_started_fut
-
-        session.mute_input()
-        await asyncio.sleep(0.05)
-        assert [event["type"] for event in sockets[0].sent] == [
-            "session.start",
-            "session.input_audio.mute",
-        ]
-
-        await sockets[0].close()
-        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
-        await asyncio.sleep(0.05)
-
-        # the replacement session starts unmuted, so the mute has to be sent again, and before
-        # anything the app queued while the old connection was going away
-        assert [event["type"] for event in sockets[1].sent] == [
-            "session.start",
-            "session.input_audio.mute",
-        ]
-    finally:
-        for ws in sockets:
-            ws.emit(
-                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
-            )
-        await session.aclose()
-        await model.aclose()
-
-
-async def test_an_unmuted_session_is_not_muted_again_on_reconnect(
-    monkeypatch: pytest.MonkeyPatch,
+# the replacement session starts unmuted: a standing mute is sent again before anything queued,
+# and a mute the app already lifted is not resurrected
+@pytest.mark.parametrize(
+    "calls,resent",
+    [
+        (["mute_input"], ["session.input_audio.mute"]),
+        (["mute_input", "unmute_input"], []),
+    ],
+)
+async def test_the_mute_state_survives_a_reconnect(
+    monkeypatch: pytest.MonkeyPatch, calls: list[str], resent: list[str]
 ) -> None:
     sockets = [_LifecycleWS(), _LifecycleWS()]
     connections = iter(sockets)
@@ -449,21 +413,18 @@ async def test_an_unmuted_session_is_not_muted_again_on_reconnect(
         await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
         await session._session_started_fut
 
-        session.mute_input()
-        session.unmute_input()
+        for call in calls:
+            getattr(session, call)()
         await asyncio.sleep(0.05)
         assert [event["type"] for event in sockets[0].sent] == [
             "session.start",
-            "session.input_audio.mute",
-            "session.input_audio.unmute",
+            *(f"session.input_audio.{call.removesuffix('_input')}" for call in calls),
         ]
 
         await sockets[0].close()
         await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
         await asyncio.sleep(0.05)
-
-        # what the app asked for last wins: the reconnect must not resurrect a stale mute
-        assert [event["type"] for event in sockets[1].sent] == ["session.start"]
+        assert [event["type"] for event in sockets[1].sent] == ["session.start", *resent]
     finally:
         for ws in sockets:
             ws.emit(
@@ -797,7 +758,7 @@ async def test_client_delegation_reaches_the_application_and_is_answered(
         await asyncio.sleep(0.05)
         assert ws.sent[0]["session"]["delegation"] == {"type": "client"}
 
-        # a responses-targeted delegation is the backend's, so it must not reach the app
+        # a responses-targeted delegation is the backend's: reported, but not the app's to answer
         session._handle_event(
             {
                 "type": "session.delegation.created",
@@ -810,7 +771,8 @@ async def test_client_delegation_reaches_the_application_and_is_answered(
                 },
             }
         )
-        assert not delegations
+        assert [d.mode for d in delegations] == ["responses"]
+        delegations.clear()
 
         # the model delegates before the caller's turn closes, so the words that triggered it
         # ride on the event rather than waiting a second for the chat context
@@ -1321,6 +1283,55 @@ async def test_a_backend_function_call_is_answered_and_the_response_continued(
         await model.aclose()
 
 
+async def test_a_refused_continuation_ends_the_background_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An error for the continuation's response.create means no response is coming."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(instructions="Be concise.", tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_1"}})
+        )
+        session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
+        await session._append_items(
+            [
+                llm.FunctionCallOutput(
+                    call_id="call_1", name="_get_weather", output="rainy", is_error=False
+                )
+            ]
+        )
+        session._handle_event(_response_event("item_d1", _completed("resp_1")))
+        await asyncio.sleep(0.05)
+        create = ws.sent[-1]
+        assert create["type"] == "response.create" and session.background_work_running
+
+        session._handle_event(
+            {
+                "type": "error",
+                "error": {"code": "function_call_outputs_required", "client_event_id": "other"},
+            }
+        )
+        assert session.background_work_running
+        session._handle_event(
+            {
+                "type": "error",
+                "error": {
+                    "code": "function_call_outputs_required",
+                    "client_event_id": create["event_id"],
+                },
+            }
+        )
+        assert not session.background_work_running
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_a_response_continues_only_once_every_call_has_its_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1407,7 +1418,7 @@ async def test_a_continuation_waits_for_every_open_call_in_the_conversation(
 async def test_a_failed_response_releases_the_continuation_it_held_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A response that fails no longer blocks an answered one, and its own calls are discarded."""
+    """A response that fails does not block an answered one, and its own calls are discarded."""
     ws = _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
@@ -1448,11 +1459,20 @@ async def test_a_failed_response_releases_the_continuation_it_held_back(
         await model.aclose()
 
 
-@pytest.mark.parametrize("status", ["missing", None, "incomplete", "in_progress", "failed"])
-async def test_noncompleted_backend_calls_are_not_dispatched(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, status: str | None
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"status": None},
+        {"status": "incomplete"},
+        {"status": "in_progress"},
+        {"status": "failed"},
+        *({field: ...} for field in ("status", "call_id", "name", "arguments")),
+    ],
+)
+async def test_incomplete_backend_calls_are_not_dispatched(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, edit: dict[str, Any]
 ) -> None:
-    """An output_item.done event does not imply that its function call completed."""
+    """A call done without a completed status or a required field is skipped until a complete one."""
     _connect_hook(monkeypatch)
     caplog.set_level(logging.DEBUG, logger=gpt_live_model.logger.name)
     model = GPTLiveModel(api_key="sk-test")
@@ -1464,39 +1484,12 @@ async def test_noncompleted_backend_calls_are_not_dispatched(
         await session._session_started_fut
         session._handle_event(_response_event("item_d1", {"type": "response.created"}))
         event = _function_call_done("call_1")
-        if status == "missing":
-            del event["item"]["status"]
-        else:
-            event["item"]["status"] = status
-        session._handle_event(_response_event("item_d1", event))
-        assert not calls
-        assert not session._backend_running_responses["item_d1"]
-        assert not [item for item in session._history.items if isinstance(item, llm.FunctionCall)]
-
-        # A later completed event for the same call must still be dispatched.
-        session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
-        assert [call.call_id for call in calls] == ["call_1"]
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.parametrize("missing_field", ["call_id", "name", "arguments"])
-async def test_backend_calls_with_missing_fields_are_not_dispatched(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, missing_field: str
-) -> None:
-    _connect_hook(monkeypatch)
-    caplog.set_level(logging.DEBUG, logger=gpt_live_model.logger.name)
-    model = GPTLiveModel(api_key="sk-test")
-    session = model.session()
-    calls: list[llm.FunctionCall] = []
-    session.on("function_call", calls.append)
-    try:
-        await session._update_session()
-        await session._session_started_fut
-        session._handle_event(_response_event("item_d1", {"type": "response.created"}))
-        event = _function_call_done("call_1")
-        del event["item"][missing_field]
+        for key, value in edit.items():
+            # ellipsis drops the field
+            if value is ...:
+                del event["item"][key]
+            else:
+                event["item"][key] = value
         session._handle_event(_response_event("item_d1", event))
         assert not calls
         assert not session._backend_running_responses["item_d1"]
@@ -1868,6 +1861,7 @@ _BACKEND_REQUIRED = (
 @pytest.mark.parametrize(
     "endpoint_path", ["", "/", "/openai", "/openai/", "/openai/v1", "/openai/v1/live/sessions"]
 )
+@pytest.mark.real_time
 async def test_with_azure_connects_to_the_v1_sessions_path_with_an_api_key_header(
     endpoint_path: str,
 ) -> None:
@@ -1896,6 +1890,7 @@ async def test_with_azure_connects_to_the_v1_sessions_path_with_an_api_key_heade
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_with_azure_entra_token_is_a_bearer_and_ignores_the_env_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1916,6 +1911,7 @@ async def test_with_azure_entra_token_is_a_bearer_and_ignores_the_env_api_key(
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_with_azure_falls_back_to_the_azure_env_vars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1930,6 +1926,7 @@ async def test_with_azure_falls_back_to_the_azure_env_vars(
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_with_azure_base_url_keeps_a_gateway_path() -> None:
     async with _live_server() as (base, seen):
         model = GPTLiveModel.with_azure(
@@ -1948,6 +1945,7 @@ async def test_with_azure_base_url_keeps_a_gateway_path() -> None:
 @pytest.mark.parametrize(
     "base_path,expected_path", [("", "/live/sessions"), ("/v1", "/v1/live/sessions")]
 )
+@pytest.mark.real_time
 async def test_openai_handshake_is_unchanged_by_azure_support(
     base_path: str, expected_path: str
 ) -> None:
@@ -1965,6 +1963,7 @@ async def test_openai_handshake_is_unchanged_by_azure_support(
 
 @pytest.mark.usefixtures("_no_provider_env")
 @pytest.mark.parametrize("service_tier", ["ultrafast", "priority"])
+@pytest.mark.real_time
 async def test_a_service_tier_rides_on_the_connection_header(service_tier: ServiceTier) -> None:
     """The tier is asked for at the handshake, not in the session configuration."""
     async with _live_server() as (base, seen):
@@ -1976,6 +1975,7 @@ async def test_a_service_tier_rides_on_the_connection_header(service_tier: Servi
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_azure_carries_the_service_tier_too() -> None:
     async with _live_server() as (base, seen):
         model = GPTLiveModel.with_azure(
@@ -2116,6 +2116,7 @@ def test_inference_requires_a_model() -> None:
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_inference_connects_to_the_gateway_with_a_livekit_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2172,6 +2173,7 @@ def test_inference_accepts_only_the_default_delegation_tier() -> None:
 
 
 @pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.real_time
 async def test_inference_takes_gpt_live_options_through_extra_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2295,6 +2297,90 @@ async def test_decisions_delegation_and_manual_evaluation(
         await model.aclose()
 
 
+@pytest.mark.parametrize("azure", [False, True])
+async def test_delegate_starts_backend_work_the_service_reports(
+    monkeypatch: pytest.MonkeyPatch, azure: bool
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    model = (
+        GPTLiveModel.with_azure(
+            azure_deployment="gpt-live-1",
+            azure_endpoint="https://x.openai.azure.com",
+            api_key="k",
+            responses_options={"model": "gpt-6.1-terra"},
+        )
+        if azure
+        else GPTLiveModel(api_key="sk-test")
+    )
+    session = model.session()
+    created: list[GPTLiveDelegation] = []
+    session.on("delegation_created", created.append)
+
+    def delegation_created(client_event_id: str | None) -> None:
+        session._handle_event(
+            {
+                "type": "session.delegation.created",
+                "delegation": {"id": f"d{len(created)}", "target": "responses"},
+                "client_event_id": client_event_id,
+            }
+        )
+
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session.delegate("Cancel the caller's 3pm appointment.")
+        await asyncio.sleep(0.05)
+        note, create = ws.sent[-2:]
+        assert note["type"] == "response.item.create"
+        assert note["item"]["role"] == "developer"
+        assert create["type"] == "response.create"
+        assert session.background_work_running
+        # an id-less delegation is the model's own, except on Azure, which never echoes the id
+        delegation_created(None)
+        assert session.background_work_running is not azure
+        if not azure:
+            delegation_created(create["event_id"])
+            assert not session.background_work_running
+        assert [d.source for d in created] == (["model"] if azure else ["model", "manual"])
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_the_final_transcript_says_whether_the_turn_was_delegated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    finals: list[bool | None] = []
+    session.on(
+        "input_audio_transcription_completed",
+        lambda ev: ev.is_final and finals.append(ev.delegated),
+    )
+
+    def turn(start_ms: int, *, delegation: str | None = None) -> None:
+        session._handle_event(_transcript("user", " Cancel it.", start_ms))
+        if delegation is not None:
+            session._handle_event(
+                {"type": "session.delegation.created", "delegation": {"id": delegation}}
+            )
+        session.push_audio(_silence(1000))
+
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        turn(1000, delegation="d1")
+        turn(5000)
+        # work running when the turn begins covers it: the model starts nothing for it
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        turn(9000)
+        assert finals == [True, False, True]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 @pytest.mark.parametrize("delegation", ["client", "responses"])
 @pytest.mark.parametrize("hosted", [False, True])
 async def test_decisions_triggers_do_not_enable_manual_evaluation(
@@ -2339,8 +2425,93 @@ async def test_decisions_triggers_do_not_enable_manual_evaluation(
         await model.aclose()
 
 
+async def test_delegate_is_refused_while_a_request_waits_or_a_function_call_is_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        # running backend work is no obstacle: the service queues the delegation behind it
+        session.delegate()
+        with pytest.raises(llm.RealtimeError):
+            session.delegate()
+        # a delegation answering another request leaves this one waiting
+        session._handle_event(
+            {
+                "type": "session.delegation.created",
+                "delegation": {"id": "d0", "target": "responses"},
+                "client_event_id": "other",
+            }
+        )
+        with pytest.raises(llm.RealtimeError):
+            session.delegate()
+        session._handle_event(
+            {
+                "type": "session.delegation.created",
+                "delegation": {"id": "d2", "target": "responses"},
+            }
+        )
+        session._handle_event(_response_event("d1", _function_call_done("call_1")))
+        with pytest.raises(llm.RealtimeError):
+            session.delegate()
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize("value", [False, True, {}])
+def test_delegation_recovery_is_off_only_when_false_and_gets_the_default_detector(
+    value: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s" * 32)
+    model = GPTLiveModel(api_key="sk-test", delegation_recovery=value)  # type: ignore[arg-type]
+    opts = model._opts.delegation_recovery
+    if value is False:
+        assert opts is None
+    else:
+        assert opts is not None and isinstance(opts["detector"], llm.DelegationDetector)
+
+
+def test_delegation_recovery_is_refused_under_decisions() -> None:
+    with pytest.raises(ValueError, match="delegation_recovery"):
+        GPTLiveModel(
+            api_key="sk-test",
+            delegation="decisions",
+            decisions_options={"model": "gpt-6-luna"},
+            delegation_recovery={},
+        )
+
+
 def test_decisions_delegation_requires_configuration() -> None:
     with pytest.raises(ValueError, match="decisions_options"):
         GPTLiveModel(api_key="sk-test", delegation="decisions")
     with pytest.raises(ValueError, match="decisions_options"):
         GPTLiveModel(api_key="sk-test", decisions_options={"model": "gpt-6-luna"})
+
+
+async def test_a_client_delegate_is_answered_like_the_models_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test", delegation="client")
+    session = model.session()
+    created: list[GPTLiveDelegation] = []
+    session.on("delegation_created", created.append)
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session.delegate()
+        assert [(d.source, d.mode) for d in created] == [("manual", "client")]
+        session.append_commentary("It is cancelled.", delegation_id=created[0].id)
+        await asyncio.sleep(0.05)
+        # the service never issued the id, so the answer goes without one
+        assert ws.sent[-1]["type"] == "session.commentary.append"
+        assert ws.sent[-1].get("delegation_id") is None
+    finally:
+        await session.aclose()
+        await model.aclose()

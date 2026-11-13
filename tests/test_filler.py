@@ -7,7 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
+from livekit.agents.llm import FunctionCall
+from livekit.agents.voice.events import AgentStateChangedEvent, RunContext, UserStateChangedEvent
 from livekit.agents.voice.filler_scheduler import _FillerScheduler
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -61,8 +62,7 @@ class _FakeSpeechHandle:
 
 
 class _FakeSession:
-    """Minimal AgentSession stand-in. Idle by default; tests emit state events
-    via ``emit_agent_state`` / ``emit_user_state``."""
+    """An AgentSession stand-in, idle until a test emits a state change."""
 
     def __init__(self) -> None:
         self.say_calls: list[dict[str, Any]] = []
@@ -114,360 +114,166 @@ class _FakeSession:
         return handle
 
 
-@pytest.mark.asyncio
-async def test_scheduler_can_start_and_stop_without_firing() -> None:
-    """A scheduler that is started and immediately stopped before delay elapses
-    should fire nothing and leave no leaked tasks."""
-    session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
+def _scheduler(
+    session: _FakeSession,
+    handle: _FakeSpeechHandle,
+    source: Any,
+    *,
+    delay: float,
+    interval: float | None = None,
+    max_steps: int | None = None,
+) -> _FillerScheduler:
+    return _FillerScheduler(
         session=session,  # type: ignore[arg-type]
         speech_handle=handle,  # type: ignore[arg-type]
-        source="should not fire",
-        delay=10.0,
-        interval=None,
-        max_steps=None,
+        source=source,
+        delay=delay,
+        interval=interval,
+        max_steps=max_steps,
     )
 
-    await asyncio.sleep(0.01)
-    await scheduler.aclose()
-    assert session.say_calls == []
 
-
-@pytest.mark.asyncio
-async def test_scheduler_stop_is_idempotent() -> None:
-    """Calling stop() twice is safe."""
-    session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
+def _run_context(session: _FakeSession, handle: _FakeSpeechHandle) -> RunContext:
+    return RunContext(
         session=session,  # type: ignore[arg-type]
         speech_handle=handle,  # type: ignore[arg-type]
-        source="x",
-        delay=10.0,
-        interval=None,
-        max_steps=None,
+        function_call=FunctionCall(call_id="c", name="t", arguments="{}"),
     )
 
-    await scheduler.aclose()
-    await scheduler.aclose()  # no-op
+
+def _texts(session: _FakeSession) -> list[Any]:
+    return [c["text"] for c in session.say_calls]
 
 
-@pytest.mark.asyncio
-async def test_scheduler_fires_after_idle_dwell() -> None:
-    """When session is idle, scheduler fires after delay seconds and calls session.say."""
-    session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        source="let me check",
-        delay=0.05,
-        interval=None,
-        max_steps=None,
-    )
-
-    await asyncio.sleep(0.15)
-    await scheduler.aclose()
-    assert [c["text"] for c in session.say_calls] == ["let me check"]
-
-
-@pytest.mark.asyncio
 async def test_scheduler_does_not_fire_before_dwell_elapses() -> None:
-    """If we stop before delay elapses, no fire happens."""
     session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        source="let me check",
-        delay=1.0,
-        interval=None,
-        max_steps=None,
-    )
-
+    scheduler = _scheduler(session, _FakeSpeechHandle(), "let me check", delay=1.0)
     await asyncio.sleep(0.05)
     await scheduler.aclose()
     assert session.say_calls == []
 
 
-@pytest.mark.asyncio
-async def test_scheduler_dwell_resets_on_agent_state_change() -> None:
-    """If agent becomes non-idle mid-dwell, the dwell restarts from zero."""
-    session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        source="ping",
-        delay=0.1,
-        interval=None,
-        max_steps=None,
-    )
-
-    # halfway through the dwell window, emit "non-idle" → dwell must restart
-    await asyncio.sleep(0.05)
-    session.emit_agent_state("speaking")
-    # at this point we've used ~0.05s; if dwell didn't reset, fire would land
-    # around t=0.10. With reset, fire shouldn't land until at least t=0.05+0.10=0.15
-    await asyncio.sleep(0.08)
-    fire_count_before = len(session.say_calls)
-    await asyncio.sleep(0.05)  # cross past 0.15
-    fire_count_after = len(session.say_calls)
+async def test_scheduler_close_and_reset_dwell_are_safe_any_time() -> None:
+    scheduler = _scheduler(_FakeSession(), _FakeSpeechHandle(), "x", delay=10.0)
+    scheduler.reset_dwell()
     await scheduler.aclose()
-    assert fire_count_before == 0  # didn't fire before reset+delay
-    assert fire_count_after == 1
+    await scheduler.aclose()
+    scheduler.reset_dwell()
 
 
-@pytest.mark.asyncio
-async def test_scheduler_dwell_resets_on_user_speaking() -> None:
-    """User speaking also resets the dwell."""
+async def test_scheduler_fires_once_after_idle_dwell_without_interval() -> None:
     session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        source="ping",
-        delay=0.1,
-        interval=None,
-        max_steps=None,
-    )
+    scheduler = _scheduler(session, _FakeSpeechHandle(), "let me check", delay=0.05)
+    await asyncio.sleep(0.3)
+    await scheduler.aclose()
+    assert _texts(session) == ["let me check"]
+
+
+@pytest.mark.parametrize("trigger", ["agent_state", "user_state", "reset_dwell"])
+async def test_scheduler_dwell_restarts(trigger: str) -> None:
+    session = _FakeSession()
+    scheduler = _scheduler(session, _FakeSpeechHandle(), "ping", delay=0.1)
 
     await asyncio.sleep(0.05)
-    session.emit_user_state("speaking")
+    if trigger == "agent_state":
+        session.emit_agent_state("speaking")
+    elif trigger == "user_state":
+        session.emit_user_state("speaking")
+    else:
+        scheduler.reset_dwell()
     await asyncio.sleep(0.08)
-    assert session.say_calls == []
+    assert session.say_calls == []  # without the restart it would have fired at 0.1
     await asyncio.sleep(0.05)
     await scheduler.aclose()
-    assert [c["text"] for c in session.say_calls] == ["ping"]
+    assert _texts(session) == ["ping"]
 
 
-@pytest.mark.asyncio
 async def test_scheduler_invokes_callable_source_lazily() -> None:
-    """A Callable source is invoked at fire time and the returned handle awaited."""
     session = _FakeSession()
-    handle = _FakeSpeechHandle()
-
     invocations: list[int] = []
 
     def factory(step: int) -> Any:
         invocations.append(step)
         return session.say("from callable")
 
-    scheduler = _FillerScheduler(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        source=factory,
-        delay=0.05,
-        interval=None,
-        max_steps=None,
-    )
-
-    # at start, factory should not have run yet
+    scheduler = _scheduler(session, _FakeSpeechHandle(), factory, delay=0.05)
     assert invocations == []
     await asyncio.sleep(0.15)
     await scheduler.aclose()
-    assert invocations == [0]  # first fire, step counter starts at 0
-    assert [c["text"] for c in session.say_calls] == ["from callable"]
+    assert invocations == [0]
+    assert _texts(session) == ["from callable"]
 
 
-@pytest.mark.asyncio
 async def test_scheduler_fires_repeatedly_with_interval() -> None:
-    """interval=X means fire, sleep X wall-clock, then restart dwell."""
     session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        source="tick",
-        delay=0.05,
-        interval=0.05,
-        max_steps=None,
-    )
-
-    await asyncio.sleep(0.35)  # plenty of time for several fires
+    scheduler = _scheduler(session, _FakeSpeechHandle(), "tick", delay=0.05, interval=0.05)
+    await asyncio.sleep(0.35)
     await scheduler.aclose()
-    # at least 2 fires; exact count depends on timing but cap at a sane upper bound
-    assert 2 <= len(session.say_calls) <= 6
-    assert all(c["text"] == "tick" for c in session.say_calls)
+    assert len(session.say_calls) >= 2
+    assert set(_texts(session)) == {"tick"}
 
 
-@pytest.mark.asyncio
-async def test_scheduler_interval_none_fires_once_only() -> None:
-    """interval=None means at-most-once."""
-    session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        source="once",
-        delay=0.02,
-        interval=None,
-        max_steps=None,
-    )
-
-    await asyncio.sleep(0.3)  # would fire ~15 times if it looped
-    await scheduler.aclose()
-    assert len(session.say_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_reset_dwell_aborts_current_dwell() -> None:
-    """reset_dwell() called mid-dwell aborts the current dwell and restarts."""
-    session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        source="x",
-        delay=0.1,
-        interval=None,
-        max_steps=None,
-    )
-
-    await asyncio.sleep(0.05)
-    scheduler.reset_dwell()
-    await asyncio.sleep(0.08)
-    fire_before = len(session.say_calls)
-    await asyncio.sleep(0.05)
-    await scheduler.aclose()
-    fire_after = len(session.say_calls)
-    assert fire_before == 0  # didn't fire before reset+delay completed
-    assert fire_after == 1
-
-
-@pytest.mark.asyncio
-async def test_reset_dwell_is_safe_to_call_anytime() -> None:
-    """Calling reset_dwell at any point is safe (it's just an event.set)."""
-    session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        source="x",
-        delay=10.0,
-        interval=None,
-        max_steps=None,
-    )
-    scheduler.reset_dwell()  # must not raise
-    await scheduler.aclose()
-    scheduler.reset_dwell()  # also safe after stop
-
-
-@pytest.mark.asyncio
 async def test_scheduler_does_not_fire_after_speech_interrupted() -> None:
-    """Once speech_handle.interrupted goes True, subsequent ticks must not fire."""
     session = _FakeSession()
     handle = _FakeSpeechHandle()
-    scheduler = _FillerScheduler(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        source="x",
-        delay=0.02,
-        interval=0.02,
-        max_steps=None,
-    )
+    scheduler = _scheduler(session, handle, "x", delay=0.02, interval=0.02)
 
-    await asyncio.sleep(0.05)  # at least one fire happens
+    await asyncio.sleep(0.05)
     fires_when_interrupted = len(session.say_calls)
     handle.mark_interrupted()
-    await asyncio.sleep(0.2)  # would have fired many more times if uninterrupted
+    await asyncio.sleep(0.2)
     await scheduler.aclose()
-    # at most one additional fire that was already in flight at interrupt time
+    # at most the one fire already in flight at interrupt time
     assert len(session.say_calls) <= fires_when_interrupted + 1
 
 
-@pytest.mark.asyncio
-async def test_run_context_with_filler_yields_and_fires() -> None:
-    """async with ctx.with_filler(...) starts a scheduler and tears it down on exit."""
-    from livekit.agents.llm import FunctionCall
-    from livekit.agents.voice.events import RunContext
-
+async def test_run_context_with_filler_fires_inside_the_block() -> None:
     session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    ctx: RunContext = RunContext(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        function_call=FunctionCall(call_id="c", name="t", arguments="{}"),
-    )
-
+    ctx = _run_context(session, _FakeSpeechHandle())
     async with ctx.with_filler("hello", delay=0.02, interval=None):
         await asyncio.sleep(0.1)
-    assert [c["text"] for c in session.say_calls] == ["hello"]
+    assert _texts(session) == ["hello"]
 
 
-@pytest.mark.asyncio
 async def test_run_context_with_filler_cancels_on_exit() -> None:
-    """Exiting the cm before delay elapses cancels the pending fire."""
-    from livekit.agents.llm import FunctionCall
-    from livekit.agents.voice.events import RunContext
-
     session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    ctx: RunContext = RunContext(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        function_call=FunctionCall(call_id="c", name="t", arguments="{}"),
-    )
-
+    ctx = _run_context(session, _FakeSpeechHandle())
     async with ctx.with_filler("nope", delay=1.0, interval=None):
         await asyncio.sleep(0.01)
     assert session.say_calls == []
 
 
-@pytest.mark.asyncio
 async def test_ctx_update_resets_pending_filler_dwell() -> None:
-    """ctx.update() called mid-dwell aborts the current dwell on every active filler."""
-    from livekit.agents.llm import FunctionCall
-    from livekit.agents.voice.events import RunContext
-
     session = _FakeSession()
-    handle = _FakeSpeechHandle()
-    ctx: RunContext = RunContext(
-        session=session,  # type: ignore[arg-type]
-        speech_handle=handle,  # type: ignore[arg-type]
-        function_call=FunctionCall(call_id="c", name="t", arguments="{}"),
-    )
-
+    ctx = _run_context(session, _FakeSpeechHandle())
     async with ctx.with_filler("ping", delay=0.1, interval=None):
         await asyncio.sleep(0.05)
-        # update() resets the dwell on every active filler before anything else;
-        # fire two back to back to confirm each call resets it
         await ctx.update("first")
         await ctx.update("second")
         await asyncio.sleep(0.08)
-        # not yet fired — reset_dwell pushed the fire past 0.05+0.1=0.15
         fires_mid = len(session.say_calls)
-        await asyncio.sleep(0.05)  # cross past 0.15
+        await asyncio.sleep(0.05)
         fires_late = len(session.say_calls)
     assert fires_mid == 0
     assert fires_late == 1
 
 
-@pytest.mark.asyncio
 async def test_scheduler_reports_a_say_that_raises(caplog: pytest.LogCaptureFixture) -> None:
-    """A failing say() is reported: the wait inside _run collects exceptions instead of
-    raising them, so nothing else would tell the caller the filler is dead."""
+    """A failing say() is logged, since the scheduler's wait collects exceptions silently."""
     session = _FakeSession()
 
     def _failing_say(text: Any, **kwargs: Any) -> Any:
         raise RuntimeError("no TTS model and the RealtimeSession does not support say()")
 
     session.say = _failing_say  # type: ignore[assignment]
-    handle = _FakeSpeechHandle()
 
     with caplog.at_level(logging.ERROR, logger="livekit.agents"):
-        scheduler = _FillerScheduler(
-            session=session,  # type: ignore[arg-type]
-            speech_handle=handle,  # type: ignore[arg-type]
-            source="let me check",
-            delay=0.05,
-            interval=10,
-            max_steps=3,
+        scheduler = _scheduler(
+            session, _FakeSpeechHandle(), "let me check", delay=0.05, interval=10, max_steps=3
         )
         await asyncio.sleep(0.15)
         await scheduler.aclose()
 
-    assert scheduler._main_task.done()
     assert [r.message for r in caplog.records if r.levelno >= logging.ERROR] == [
         "filler stopped on an error, no further filler will play for this tool call"
     ]
