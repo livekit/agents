@@ -1,0 +1,19 @@
+tests/test_realtime/test_openai_realtime_model.py
+  s_93b6ba4269a7f8::t_e9147e5fb51f71 1222-1226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "97a6827b9efd1a2c56cb4764af9eb87a52123962",
+  "prompts": {},
+  "sessions": {
+    "s_93b6ba4269a7f8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1d474-88e2-78e1-b99d-3d95e6a4caa2",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
