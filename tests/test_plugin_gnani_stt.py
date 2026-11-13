@@ -1204,6 +1204,26 @@ async def test_language_list_change_keeps_the_utterance_in_progress(server):
     assert server.sessions[1].headers["format"] == "transcribe"  # other options carried over
 
 
+async def test_language_list_change_commits_audio_the_server_has_not_announced_yet(server):
+    """The server may take a while to announce speech it already received. A reconnect in
+    that window must still commit the audio (and wait for its transcript) instead of closing
+    the session on audio that is not yet an "utterance in progress"."""
+    server.reply_delay = 0.3  # speech_start and the transcript both come late
+    stt_ = _make_stt(server, model="prisma-v3.0", language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    await _utterance(stream, flush=False)
+    await _wait_for(lambda: server.sessions and server.sessions[0].audio > 0)
+
+    stt_.update_options(language=["hi-IN", "en-IN"])  # speech_start has not arrived yet
+
+    await _wait_for(lambda: len(server.sessions) >= 2)
+    stream.end_input()
+    events = await _collect(stream)
+
+    assert {"type": "commit"} in server.sessions[0].controls
+    assert FINAL in _types(events)
+
+
 async def test_repeated_language_changes_are_not_mistaken_for_a_broken_session(server):
     """Reconnecting on request must not trip the guard against sessions that keep closing
     immediately."""

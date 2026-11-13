@@ -754,9 +754,11 @@ class SpeechStream(stt.RecognizeStream):
 
         async def _reconnect() -> None:
             with contextlib.suppress(Exception):
-                if self._speaking or self._commits_pending:
-                    if self._speaking:
-                        await ws.send(json.dumps({"type": "commit"}))
+                # audio the server has received but not announced yet (no speech_start) is
+                # not "speaking" here, but closing now would still lose it: commit it too
+                if self._speaking or self._signal_unanswered or self._commits_pending:
+                    if self._speaking or self._signal_unanswered:
+                        await self._send_commit(ws)
                     deadline = time.monotonic() + min(self._conn_options.timeout, 5.0)
                     while (self._speaking or self._commits_pending) and (
                         time.monotonic() < deadline
@@ -916,16 +918,19 @@ class SpeechStream(stt.RecognizeStream):
         else:
             self._signal_unanswered = False
 
+    async def _send_commit(self, ws: Any) -> None:
+        """Close the open utterance now instead of waiting for trailing silence."""
+        if self._signal_unanswered:
+            # count it before sending, so a fast reply cannot be missed
+            self._signal_unanswered = False
+            self._commits_pending += 1
+        await ws.send(json.dumps({"type": "commit"}))
+
     async def _send_audio(self, ws: Any) -> None:
         audio_buffer = bytearray()
 
         async def commit() -> None:
-            # close the open utterance now instead of waiting for trailing silence
-            if self._signal_unanswered:
-                # count it before sending, so a fast reply cannot be missed
-                self._signal_unanswered = False
-                self._commits_pending += 1
-            await ws.send(json.dumps({"type": "commit"}))
+            await self._send_commit(ws)
 
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
