@@ -75,6 +75,9 @@ class PhonicToolConfig(TypedDict, total=False):
     allow_tool_chaining: bool
     execution_mode: Literal["sync", "async"]
     wait_for_response: bool  # async tools only
+    uninterruptible: bool  # sync tools only
+    can_run_during_user_speech: bool
+    tool_call_output_timeout_ms: int
     # Built-in tools only (set on the matching ``phonic_tools`` entry):
     respond_after_sec: float  # choose_not_to_respond: seconds to wait before a follow-up (or omit)
     speech_before_tool_call: (
@@ -687,7 +690,9 @@ class RealtimeSession(llm.RealtimeSession):
                     "tool_schema": tool_schema,
                     "execution_mode": cfg.get("execution_mode", "sync"),
                     "wait_for_response": cfg.get("wait_for_response", False),
-                    "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
+                    "tool_call_output_timeout_ms": cfg.get(
+                        "tool_call_output_timeout_ms", TOOL_CALL_OUTPUT_TIMEOUT_MS
+                    ),
                     # fixed, not configurable: the plugin does not support tool calls during
                     # agent speech
                     "wait_for_speech_before_tool_call": True,
@@ -701,6 +706,8 @@ class RealtimeSession(llm.RealtimeSession):
                     "forbid_tool_call_after_speech": cfg.get(
                         "forbid_tool_call_after_speech", False
                     ),
+                    "uninterruptible": cfg.get("uninterruptible", False),
+                    "can_run_during_user_speech": cfg.get("can_run_during_user_speech", False),
                 }
             )
         return tool_definitions
