@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
-from ... import llm
+from ... import inference, llm
+from ...inference._utils import HEADER_CLIENT_FEATURE
 from ...llm.decisions import _format_transcript
-from ...types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ...types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ._chat_context import AMDRequest
 from .events import AMDCategory, IVRMenuOption
 
@@ -113,6 +114,17 @@ class AMDIVRMenuResponse(BaseModel):
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
+# value of HEADER_CLIENT_FEATURE on the gateway requests AMD makes itself
+CLIENT_FEATURE = "AMD"
+
+
+def _reaches_only_inference(model: llm.LLM) -> bool:
+    # other plugins would forward the header to their vendor, and a FallbackAdapter
+    # passes extra_kwargs to every LLM it holds
+    if isinstance(model, llm.FallbackAdapter):
+        return all(isinstance(m, inference.LLM) for m in model._llm_instances)
+    return isinstance(model, inference.LLM)
+
 
 async def _structured_response(
     model: llm.LLM,
@@ -133,12 +145,18 @@ async def _structured_response(
         # never executed; only the schema is sent to the model
         return None
 
+    extra_kwargs: NotGivenOr[dict[str, Any]] = (
+        {"extra_headers": {HEADER_CLIENT_FEATURE: CLIENT_FEATURE}}
+        if _reaches_only_inference(model)
+        else NOT_GIVEN
+    )
     response = await model.chat(
         chat_ctx=chat_ctx,
         tools=[record_result],
         tool_choice="required",
         parallel_tool_calls=False,
         conn_options=conn_options,
+        extra_kwargs=extra_kwargs,
     ).collect()
 
     if len(response.tool_calls) != 1 or response.tool_calls[0].name != "record_result":

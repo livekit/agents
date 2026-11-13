@@ -580,6 +580,14 @@ class LLM(llm.LLM):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
         extra.update(self._opts.extra_kwargs)
+        # merge, don't replace: a turn's headers survive the model's own, and the
+        # stream stamps its headers on a copy rather than on either caller's dict
+        call_headers = extra_kwargs.get("extra_headers") if is_given(extra_kwargs) else None
+        model_headers = cast(
+            "Mapping[str, str] | None", self._opts.extra_kwargs.get("extra_headers")
+        )
+        if call_headers or model_headers:
+            extra["extra_headers"] = {**(call_headers or {}), **(model_headers or {})}
         if self._opts.reasoning_effort is not None:
             # a turn's own extra_kwargs override it, as on inference.responses.LLM
             turn = extra_kwargs if is_given(extra_kwargs) else {}

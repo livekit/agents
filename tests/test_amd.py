@@ -12,6 +12,8 @@ from types import SimpleNamespace
 from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock, Mock, PropertyMock
 
+import httpx2 as httpx
+import openai
 import pytest
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -35,6 +37,7 @@ from livekit.agents import (
     utils,
     vad,
 )
+from livekit.agents.inference._utils import HEADER_CLIENT_FEATURE
 from livekit.agents.llm.tool_context import get_raw_function_info
 from livekit.agents.types import APIConnectOptions, NotGivenOr
 from livekit.agents.voice._turn_hooks import TurnHooks
@@ -384,6 +387,125 @@ async def test_classifier_recommends_next_states_without_restricting_predictions
         await model.aclose()
 
 
+# Long enough to keep PyJWT's short-key warning out of the suite output.
+_SECRET = "f" * 32
+
+
+def _sse(choices: list[dict[str, Any]]) -> bytes:
+    payload = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "google/gemma-4-31b-it",
+        "choices": choices,
+    }
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+_RECORD_RESULT = b"".join(
+    [
+        _sse(
+            [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "record_result",
+                                    "arguments": json.dumps({"category": "human"}),
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        ),
+        _sse([{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]),
+        b"data: [DONE]\n\n",
+    ]
+)
+
+
+def _inference_llm() -> tuple[inference.LLM, list[httpx.Request]]:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_RECORD_RESULT
+        )
+
+    model = inference.LLM(model="google/gemma-4-31b-it", api_key=_SECRET, api_secret=_SECRET)
+    model._client = openai.AsyncClient(
+        api_key=_SECRET,
+        base_url="http://inference.test/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    return model, requests
+
+
+@pytest.mark.asyncio
+async def test_classifier_tags_only_its_own_request() -> None:
+    model, requests = _inference_llm()
+    model._opts.extra_kwargs["extra_headers"] = {"X-Custom": "kept"}
+
+    assert (await _inference.classify(model, REQUEST)).category == AMDCategory.HUMAN
+    async with model.chat(chat_ctx=CHAT_CTX) as stream:
+        async for _ in stream:
+            pass
+
+    amd_request, agent_request = requests
+    assert amd_request.headers[HEADER_CLIENT_FEATURE] == "AMD"
+    assert amd_request.headers["X-Custom"] == "kept"
+    # the agent's next turn on the same LLM is ordinary traffic
+    assert HEADER_CLIENT_FEATURE not in agent_request.headers
+    assert agent_request.headers["X-Custom"] == "kept"
+    # the stream stamps SDK headers on a copy, never on the model's own dict
+    assert model._opts.extra_kwargs["extra_headers"] == {"X-Custom": "kept"}
+
+
+@pytest.mark.asyncio
+async def test_plugin_llm_gets_no_header() -> None:
+    model = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="input",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    llm.FunctionToolCall(
+                        name="record_result", arguments='{"category":"human"}', call_id="r"
+                    )
+                ],
+            )
+        ]
+    )
+    chat = Mock(wraps=model.chat)
+    model.chat = chat  # type: ignore[method-assign]
+
+    await _inference.classify(model, REQUEST)
+
+    assert chat.call_args.kwargs["extra_kwargs"] is NOT_GIVEN
+
+
+def test_fallback_adapter_is_tagged_only_when_every_llm_is_inference() -> None:
+    gateway = inference.LLM(model="google/gemma-4-31b-it", api_key=_SECRET, api_secret=_SECRET)
+    plugin = FakeLLM()
+
+    assert _inference._reaches_only_inference(gateway)
+    assert _inference._reaches_only_inference(llm.FallbackAdapter([gateway, gateway]))
+    assert not _inference._reaches_only_inference(llm.FallbackAdapter([gateway, plugin]))
+    assert not _inference._reaches_only_inference(plugin)
+
+
 # endregion
 
 
@@ -673,6 +795,37 @@ async def test_stream_open_failure_keeps_session_transcript() -> None:
         model.stream.assert_called_once()
         assert amd.end_turn("Hello.") == AMDTranscript(session="Hello.", amd=None)
     await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_amd_stt_stream_is_tagged_only_for_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draining = DrainingSTT()
+    gateway = inference.STT(model="cartesia/ink-whisper", api_key=_SECRET, api_secret=_SECRET)
+    calls: list[dict[str, Any]] = []
+
+    def stream(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return draining.stream(conn_options=kwargs["conn_options"])
+
+    monkeypatch.setattr(gateway, "stream", stream)
+    frame = rtc.AudioFrame.create(16000, 1, 320)
+
+    async with aclosing(AMDTranscriber(gateway, APIConnectOptions(max_retry=0))) as amd:
+        amd.push_audio(frame)
+    assert calls[0]["extra_headers"] == {HEADER_CLIENT_FEATURE: "AMD"}
+
+    plugin = DrainingSTT()
+    plugin_stream = Mock(wraps=plugin.stream)
+    monkeypatch.setattr(plugin, "stream", plugin_stream)
+    async with aclosing(AMDTranscriber(plugin, APIConnectOptions(max_retry=0))) as amd:
+        amd.push_audio(frame)
+    assert "extra_headers" not in plugin_stream.call_args.kwargs
+
+    await draining.aclose()
+    await plugin.aclose()
+    await gateway.aclose()
 
 
 # endregion

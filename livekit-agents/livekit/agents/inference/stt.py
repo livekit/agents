@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import weakref
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, overload
 from urllib.parse import urlencode
@@ -873,14 +874,21 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        extra_headers: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
     ) -> SpeechStream:
-        """Create a streaming transcription session."""
+        """Create a streaming transcription session.
+
+        Args:
+            extra_headers: Headers sent on every connection this stream opens,
+                reconnects included. SDK identification headers take precedence.
+        """
         options = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
             opts=options,
             conn_options=conn_options,
             vad_instance=self._vad,
+            extra_headers=extra_headers if is_given(extra_headers) else None,
         )
         self._streams.add(stream)
         return stream
@@ -998,10 +1006,12 @@ class SpeechStream(stt.SpeechStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         vad_instance: vad.VAD | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._stt: STT = stt
         self._opts = opts
+        self._extra_headers: dict[str, str] = dict(extra_headers or {})
         self._request_id = str(utils.shortuuid("stt_request_"))
 
         self._speaking = False
@@ -1428,6 +1438,7 @@ class SpeechStream(stt.SpeechStream):
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
         headers = {
+            **self._extra_headers,
             **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
