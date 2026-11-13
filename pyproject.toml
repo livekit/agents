@@ -22,6 +22,7 @@ livekit-plugins-atmee = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
+livekit-plugins-boson = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-bland = { workspace = true }
