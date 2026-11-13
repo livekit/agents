@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import time
 from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
@@ -56,6 +57,7 @@ from livekit.agents.voice.turn import (
     TurnDetectionEvent,
     _StreamingTurnDetector,
     _StreamingTurnDetectorStream,
+    _TurnDetector,
 )
 
 from .fake_io import FakeAudioInput
@@ -332,6 +334,8 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
         stream_mock.flush = MagicMock()
         stream_mock.cancel_inference = MagicMock()
         stream_mock.prediction_timeout = 0.01
+        stream_mock.model = "audio"
+        stream_mock.provider = "livekit"
         ar._turn_detector_stream = stream_mock
         event = TurnDetectionEvent(
             type="eot_prediction",
@@ -510,17 +514,37 @@ async def test_not_committed_turn_keeps_waiting(span_exporter: InMemorySpanExpor
     assert wait.events == ()
 
 
-async def test_detection_nests_under_wait(span_exporter: InMemorySpanExporter) -> None:
+@pytest.mark.parametrize("streaming", [True, False])
+async def test_detection_nests_under_wait(
+    span_exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture, streaming: bool
+) -> None:
     ar = _make_recognition(min_delay=0.01, with_detector=True)
+    if not streaming:
+        detector = MagicMock(spec=_TurnDetector)
+        detector.model = "multilingual"
+        detector.provider = "livekit"
+        detector.supports_language = AsyncMock(return_value=True)
+        detector.predict_end_of_turn = AsyncMock(return_value=0.9)
+        detector.unlikely_threshold = AsyncMock(return_value=0.5)
+        ar._turn_detector = detector
+        ar._turn_detector_stream = None
+
     ar._last_speaking_time = time.time()
-    ar._run_eou_detection(llm.ChatContext(), trigger="vad")
-    await _await_bounce(ar)
+    with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+        ar._run_eou_detection(llm.ChatContext(), trigger="vad")
+        await _await_bounce(ar)
 
     [detection] = _spans(span_exporter, "eou_detection")
     [wait] = _spans(span_exporter, "eou_wait")
     assert detection.parent is not None
     assert detection.parent.span_id == wait.context.span_id
     assert (detection.attributes or {})[trace_types.ATTR_EOU_PROBABILITY] == 0.9
+    model = "audio" if streaming else "multilingual"
+    assert (detection.attributes or {})[trace_types.ATTR_EOU_MODEL] == model
+    assert (detection.attributes or {})[trace_types.ATTR_EOU_PROVIDER] == "livekit"
+    [prediction_log] = [r for r in caplog.records if r.message == "eot prediction"]
+    assert prediction_log.__dict__[trace_types.ATTR_EOU_MODEL] == model
+    assert prediction_log.__dict__[trace_types.ATTR_EOU_PROVIDER] == "livekit"
     # the delay decided by the prediction is stamped on the wait too
     assert (wait.attributes or {})[trace_types.ATTR_EOU_DELAY] == 0.01
 
@@ -543,6 +567,8 @@ async def test_resumed_speech_during_detection_keeps_the_child_inside(
 
     [wait] = _spans(span_exporter, "eou_wait")
     [detection] = _spans(span_exporter, "eou_detection")
+    assert (detection.attributes or {})[trace_types.ATTR_EOU_MODEL] == "audio"
+    assert (detection.attributes or {})[trace_types.ATTR_EOU_PROVIDER] == "livekit"
     assert detection.parent is not None and detection.parent.span_id == wait.context.span_id
     assert wait.start_time <= detection.start_time
     assert detection.end_time is not None and wait.end_time is not None

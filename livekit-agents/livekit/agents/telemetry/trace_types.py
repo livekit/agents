@@ -147,6 +147,8 @@ ATTR_TTS_LABEL = "lk.tts.label"
 ATTR_RESPONSE_TTFB = "lk.response.ttfb"
 
 # eou detection
+ATTR_EOU_MODEL = "lk.eou.model"
+ATTR_EOU_PROVIDER = "lk.eou.provider"
 ATTR_EOU_PROBABILITY = "lk.eou.probability"
 ATTR_EOU_UNLIKELY_THRESHOLD = "lk.eou.unlikely_threshold"
 ATTR_EOU_DELAY = "lk.eou.endpointing_delay"

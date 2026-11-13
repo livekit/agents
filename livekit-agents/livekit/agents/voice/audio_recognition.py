@@ -1703,7 +1703,12 @@ class AudioRecognition:
                     with (
                         tracer.use_span(eou_wait_span),
                         tracer.start_as_current_span(
-                            "eou_detection", end_on_exit=False
+                            "eou_detection",
+                            attributes={
+                                trace_types.ATTR_EOU_MODEL: turn_detector.model,
+                                trace_types.ATTR_EOU_PROVIDER: turn_detector.provider,
+                            },
+                            end_on_exit=False,
                         ) as eou_detection_span,
                         self._track_eou_detection_span(eou_detection_span),
                     ):
@@ -1791,6 +1796,8 @@ class AudioRecognition:
                         logger.debug(
                             "eot prediction",
                             extra={
+                                trace_types.ATTR_EOU_MODEL: turn_detector.model,
+                                trace_types.ATTR_EOU_PROVIDER: turn_detector.provider,
                                 "probability": end_of_turn_probability,
                                 "unlikely_threshold": unlikely_threshold,
                                 "endpointing_delay": endpointing_delay,
