@@ -116,6 +116,12 @@ class LLM(OpenAILLM):
     def provider(self) -> str:
         return "Baseten"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "inline_mid_conversation_instructions": self._inline_mid_conversation_instructions,
+        }
+
     def chat(
         self,
         *,

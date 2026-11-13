@@ -19,6 +19,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -36,10 +37,10 @@ from .models import (
 
 @dataclass
 class _TTSOptions:
-    api_key: str
+    api_key: Sensitive[str]
     voice: str
     language: str | None
-    base_url: str
+    base_url: Sensitive[str]
     sample_rate: int
 
     def get_ws_url(self) -> str:
@@ -119,6 +120,9 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
+
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), **report_options(self._opts)}
 
     @property
     def model(self) -> str:

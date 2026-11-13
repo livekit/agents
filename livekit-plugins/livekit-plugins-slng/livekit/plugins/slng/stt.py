@@ -35,6 +35,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -348,6 +349,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "SLNG"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     @property
     def session(self) -> aiohttp.ClientSession:

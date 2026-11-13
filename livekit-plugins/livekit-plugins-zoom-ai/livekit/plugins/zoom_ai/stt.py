@@ -58,6 +58,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -207,7 +208,7 @@ class STTOptions:
     silence_duration_ms: int | None
     word_time_offsets: bool
     channel_separation: bool
-    vocabulary: list[str] | None
+    vocabulary: Sensitive[list[str] | None]
     text_polishing: bool
     model: str | None
     language_detection: str | None
@@ -476,6 +477,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         """The provider name, ``"Zoom"``."""
         return "Zoom"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     @property
     def _http(self) -> aiohttp.ClientSession:

@@ -36,6 +36,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -72,8 +73,8 @@ _ERROR_STATUS = {
 class _TTSOptions:
     model: TTSModels | str
     voice: str
-    api_key: str
-    base_url: str
+    api_key: Sensitive[str]
+    base_url: Sensitive[str]
 
 
 class TTS(tts.TTS):
@@ -126,6 +127,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Kalpa"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), **report_options(self._opts)}
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         url = f"{self._opts.base_url.replace('http', 'ws', 1)}/v1/tts/{self._opts.voice}/stream"

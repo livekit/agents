@@ -35,6 +35,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -48,12 +49,12 @@ InferenceMode = Literal["online", "offline"]
 class TTSOptions:
     voice: str
     function_id: str
-    server: str
+    server: Sensitive[str]
     sample_rate: int
     use_ssl: bool
     language_code: str
     word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
-    audio_prompt_file: str | PathLike[str] | None
+    audio_prompt_file: Sensitive[str | PathLike[str] | None]
     quality: int | None
     options: dict[str, Any]
     inference_mode: InferenceMode
@@ -143,6 +144,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "NVIDIA Speech"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts, exclude=["word_tokenizer"]),
+        }
 
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:
         if not self._tts_service:

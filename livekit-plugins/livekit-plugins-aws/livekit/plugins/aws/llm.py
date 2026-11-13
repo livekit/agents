@@ -23,6 +23,7 @@ from botocore.config import Config  # type: ignore
 from botocore.exceptions import ClientError  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -89,7 +90,7 @@ class _LLMOptions:
     tool_choice: NotGivenOr[ToolChoice]
     max_output_tokens: NotGivenOr[int]
     top_p: NotGivenOr[float]
-    additional_request_fields: NotGivenOr[dict[str, Any]]
+    additional_request_fields: Sensitive[NotGivenOr[dict[str, Any]]]
     cache_system: bool
     cache_tools: bool
     cache_messages: bool
@@ -194,6 +195,12 @@ class LLM(llm.LLM):
     @property
     def provider(self) -> str:
         return "AWS Bedrock"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **report_options(self._opts),
+            "supports_sampling_params": self._supports_sampling_params,
+        }
 
     def chat(
         self,

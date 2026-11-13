@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import botocore  # type: ignore
 import botocore.exceptions  # type: ignore
@@ -27,6 +27,7 @@ from livekit.agents import (
     LanguageCode,
     tts,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -120,6 +121,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Amazon Polly"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS

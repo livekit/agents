@@ -20,7 +20,7 @@ import os
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import overload
+from typing import Any, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -34,6 +34,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -94,7 +95,7 @@ class _CodaOptions:
     top_p: NotGivenOr[float] = NOT_GIVEN
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     speed_alpha: NotGivenOr[float] = NOT_GIVEN
-    custom_lexicon: list[CustomLexiconEntry] | None = None
+    custom_lexicon: Sensitive[list[CustomLexiconEntry] | None] = None
 
 
 @dataclass
@@ -423,6 +424,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Rime"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

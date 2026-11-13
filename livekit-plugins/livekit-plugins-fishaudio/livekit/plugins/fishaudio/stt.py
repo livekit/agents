@@ -23,6 +23,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.events import ConversationItemAddedEvent
@@ -63,13 +64,13 @@ _SILENCE_TIMEOUT_RANGE_MS: dict[TurnDetectionMode, tuple[int, int]] = {
 class _STTOptions:
     model: STTModels | str
     sample_rate: int
-    base_url: str
+    base_url: Sensitive[str]
     turn_detection_mode: TurnDetectionMode
     eager_eot: bool
     silence_timeout_ms: NotGivenOr[int]
     interim_results: bool
     tag_audio_events: bool
-    keyterms: list[str]
+    keyterms: Sensitive[list[str]]
 
     def get_ws_url(self, path: str) -> str:
         return f"{self.base_url.replace('http', 'ws', 1)}{path}"
@@ -190,6 +191,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "FishAudio"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

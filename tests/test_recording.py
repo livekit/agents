@@ -17,7 +17,7 @@ import aiohttp
 import pytest
 from google.rpc import error_details_pb2, status_pb2
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, AgentSession, JobContext
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.metrics import LLMModelUsage
 from livekit.agents.observability import Tagger
@@ -79,7 +79,9 @@ def _make_mock_job_ctx(enable_recording: bool = True) -> MagicMock:
     mock_ctx.job.enable_recording = enable_recording
     mock_ctx.job.id = "test-job-id"
     mock_ctx.job.room.sid = "test-room-sid"
+    mock_ctx.job.room.name = "test-room"
     mock_ctx.job.agent_name = "test-agent"
+    mock_ctx._tagger = Tagger()
     mock_ctx.room.name = "test-room"
     mock_ctx._primary_agent_session = None
     mock_ctx.session_directory = Path("/tmp/test-session")
@@ -126,6 +128,7 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.timestamp = 1010.0
     report.options = MagicMock()
     report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
+    report.models = {}
     # a fresh dict per call: the session summary edits the one it gets
     report.to_dict.side_effect = lambda **_: {
         "job_id": "job-1",
@@ -708,6 +711,44 @@ async def test_upload_audio_only_no_file() -> None:
     mock_http.post.assert_not_called()
 
 
+async def test_session_report_models_ignore_agent_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _create_simple_session()
+    agent = Agent(
+        instructions="Test agent", vad=FakeVAD(), stt=FakeSTT(), llm=FakeLLM(), tts=FakeTTS()
+    )
+    for name in ("vad", "stt", "llm", "tts"):
+        monkeypatch.setattr(
+            getattr(session, name), "describe_options", lambda: {"configuration": "session"}
+        )
+        monkeypatch.setattr(
+            getattr(agent, name), "describe_options", lambda: {"configuration": "agent"}
+        )
+
+    await session.start(agent, record=False)
+    try:
+        session.options.recording_options = {
+            "audio": False,
+            "traces": True,
+            "logs": False,
+            "transcript": False,
+        }
+        report = JobContext.make_session_report(_make_mock_job_ctx(), session)
+        assert set(report.models) == {"vad", "stt", "llm", "tts"}
+        assert all(component["configuration"] == "session" for component in report.models.values())
+        assert report.to_dict()["models"] == report.models
+
+        with _patch_upload_deps() as mock_logger:
+            await _call_upload(report)
+        session_report_call = next(
+            c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "session report"
+        )
+        assert session_report_call.kwargs["attributes"]["session.models"] == report.models
+    finally:
+        await _cleanup(session)
+
+
 async def test_upload_evaluations_emitted_without_logs() -> None:
     """Evaluations should be emitted even when logs=False, as long as something is recorded."""
     report = _make_mock_report({"audio": True, "traces": False, "logs": False, "transcript": False})
@@ -808,6 +849,7 @@ async def test_upload_header_carries_session_summary() -> None:
     report = _make_report(
         agent_name="support",
         tags=["vip"],
+        models={"stt": {"provider": "livekit", "model": "deepgram/nova-3"}},
         chat_items=[ChatMessage(role="user", content=["hi"])],
         model_usage=[LLMModelUsage(provider="openai", model="gpt-4o", input_tokens=10)],
         events=[CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED)],
@@ -817,6 +859,7 @@ async def test_upload_header_carries_session_summary() -> None:
 
     summary = json.loads(header.session_summary)
     assert summary == _expected_summary(report)
+    assert summary["models"] == report.models
     assert "chat_history" not in summary
     assert "events" not in summary
     assert header.duration == 12500

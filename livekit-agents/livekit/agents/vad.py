@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import Literal
+from typing import Any, Literal
 
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
@@ -90,6 +90,10 @@ class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     @property
     def capabilities(self) -> VADCapabilities:
         return self._capabilities
+
+    def describe_options(self) -> Mapping[str, Any]:
+        """Return settings to include in session reports, without credentials or user content."""
+        return {}
 
     @abstractmethod
     def stream(self) -> VADStream: ...

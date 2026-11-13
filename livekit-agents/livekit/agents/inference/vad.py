@@ -19,7 +19,7 @@ import time
 import weakref
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 
@@ -27,6 +27,7 @@ from livekit import rtc
 from livekit.local_inference import VAD as _NativeVAD, VAD_WINDOW_SAMPLES
 
 from .. import utils, vad
+from .._reporting import report_options
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -94,6 +95,9 @@ class VAD(vad.VAD):
     @property
     def provider(self) -> str:
         return "livekit-local-inference"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {"sample_rate": _MODEL_SAMPLE_RATE, **report_options(self._opts)}
 
     def stream(self) -> vad.VADStream:
         # Each stream owns its own _VADOptions snapshot so that

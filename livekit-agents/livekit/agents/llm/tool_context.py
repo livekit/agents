@@ -38,6 +38,7 @@ from typing import (
 from pydantic import Field
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict
 
+from .._reporting import Sensitive
 from ..log import logger
 from . import _provider_format
 
@@ -114,7 +115,7 @@ class Function(TypedDict, total=False):
 
 class NamedToolChoice(TypedDict, total=False):
     type: Required[Literal["function"]]
-    function: Required[Function]
+    function: Required[Sensitive[Function]]
 
 
 ToolChoice = NamedToolChoice | Literal["auto", "required", "none"]

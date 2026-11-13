@@ -35,6 +35,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import aiohttp
 
@@ -49,6 +50,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
@@ -61,9 +63,9 @@ _SAMPLE_RATE = 16000
 
 @dataclass
 class _STTOptions:
-    api_key: str
+    api_key: Sensitive[str]
     language: str | None
-    base_url: str
+    base_url: Sensitive[str]
 
 
 def _api_language(language: str | None) -> str:
@@ -131,6 +133,9 @@ class STT(stt.STT):
             base_url=base_url,
         )
         self._session = http_session
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     @property
     def model(self) -> str:

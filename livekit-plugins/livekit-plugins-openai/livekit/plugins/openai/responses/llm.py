@@ -9,6 +9,7 @@ from yarl import URL
 
 import openai
 from livekit.agents import llm
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.inference.llm import (
     PromptCacheOptions,
     supports_prompt_cache_breakpoints,
@@ -50,13 +51,13 @@ Verbosity = Literal["low", "medium", "high"]
 @dataclass
 class _LLMOptions:
     model: str | ResponsesModel
-    user: NotGivenOr[str]
+    user: Sensitive[NotGivenOr[str]]
     temperature: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
     store: NotGivenOr[bool]
     reasoning: NotGivenOr[Reasoning]
-    metadata: NotGivenOr[dict[str, str]]
+    metadata: Sensitive[NotGivenOr[dict[str, str]]]
     service_tier: NotGivenOr[ServiceTier]
     verbosity: NotGivenOr[Verbosity]
     max_output_tokens: NotGivenOr[int]
@@ -219,6 +220,9 @@ class LLM(llm.LLM):
         if self._client is not None:
             return self._client._base_url.netloc.decode("utf-8")
         return ""
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def chat(
         self,

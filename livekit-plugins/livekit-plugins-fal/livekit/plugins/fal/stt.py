@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import fal_client
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode, stt
+from livekit.agents._reporting import report_options
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -50,6 +52,9 @@ class WizperSTT(stt.STT):
     @property
     def provider(self) -> str:
         return "Fal"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):

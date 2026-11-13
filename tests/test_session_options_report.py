@@ -13,11 +13,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit.agents import AgentSession, inference
+from livekit.agents._reporting import _describe_option_object, _serialize_option_value
 from livekit.agents.llm import ChatContext, ChatMessage, LLMError
 from livekit.agents.metrics import LLMModelUsage, TTSModelUsage
 from livekit.agents.telemetry.traces import (
-    _describe_option_object,
-    _serialize_option_value,
     _serialize_session_options,
 )
 from livekit.agents.tts import TTSError
@@ -226,6 +225,7 @@ def test_report_to_dict_default_keys() -> None:
         "timestamp",
         "usage",
         "sdk_version",
+        "models",
         "agent_name",
         "tags",
         "duration_ms",

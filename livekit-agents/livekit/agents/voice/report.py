@@ -3,14 +3,19 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
+from .._reporting import _serialize_option_value
 from ..llm import ChatContext
 from ..metrics import ModelUsage
 from ..version import __version__
 from .agent_session import AgentSessionOptions
 from .events import AgentEvent, CloseReason
+
+if TYPE_CHECKING:
+    from .agent_session import AgentSession
 
 # Maps an ErrorEvent's error type to its key in the report's error counts.
 _ERROR_KEYS = {
@@ -54,6 +59,8 @@ class SessionReport:
     """Name the agent was dispatched with"""
     tags: list[str] = field(default_factory=list)
     """Tags set on the job's Tagger, sorted"""
+    models: dict[str, dict[str, Any]] = field(default_factory=dict)
+    """Session VAD, STT, LLM, and TTS settings captured when the report is created."""
 
     def to_dict(self, *, include_chat_history: bool = True, include_events: bool = True) -> dict:
         """Serialize the report. A ``False`` flag omits that key from the result."""
@@ -96,6 +103,7 @@ class SessionReport:
         report["timestamp"] = self.timestamp
         report["usage"] = self._usage_to_dict() if self.model_usage else None
         report["sdk_version"] = self.sdk_version
+        report["models"] = self.models
         report["agent_name"] = self.agent_name
         report["tags"] = list(self.tags)
         report["duration_ms"] = int(self.duration * 1000) if self.duration is not None else None
@@ -137,3 +145,16 @@ class SessionReport:
             {"type": summary.type, **summary.model_dump(exclude_defaults=True)}
             for summary in self.model_usage
         ]
+
+
+def _serialize_session_models(session: AgentSession) -> dict[str, dict[str, Any]]:
+    return {
+        name: _serialize_option_value(model)
+        for name, model in (
+            ("vad", session.vad),
+            ("stt", session.stt),
+            ("llm", session.llm),
+            ("tts", session.tts),
+        )
+        if model is not None
+    }

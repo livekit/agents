@@ -27,6 +27,7 @@ import contextlib
 import os
 import weakref
 from dataclasses import dataclass, field
+from typing import Any
 
 from palabra_ai import (
     AuthError,
@@ -48,6 +49,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -147,6 +149,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         """Provider display name used in metrics."""
         return "Palabra"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def update_options(
         self,

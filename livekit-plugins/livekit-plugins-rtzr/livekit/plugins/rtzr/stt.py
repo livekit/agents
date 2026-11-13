@@ -18,6 +18,7 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, replace
+from typing import Any
 
 import aiohttp
 
@@ -32,6 +33,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -57,7 +59,7 @@ class _STTOptions:
     noise_threshold: float = 0.60
     active_threshold: float = 0.80
     use_punctuation: bool = False
-    keywords: list[str] | list[tuple[str, float]] | None = None
+    keywords: Sensitive[list[str] | list[tuple[str, float]] | None] = None
 
 
 class STT(stt.STT):
@@ -108,6 +110,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "RTZR"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._params)
 
     async def aclose(self) -> None:
         """Close the RTZR client and cleanup resources."""

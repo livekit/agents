@@ -42,6 +42,7 @@ from livekit.agents import (
     LanguageCode,
     stt,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
@@ -94,13 +95,13 @@ class STTOptions:
     language_code: LanguageCode
     sample_rate: int
     use_ssl: bool
-    server: str
+    server: Sensitive[str]
     enable_diarization: bool
     max_speaker_count: int
     interim_results: bool
     profanity_filter: bool
     verbatim_transcripts: bool
-    boosted_lm_words: list[str] | None
+    boosted_lm_words: Sensitive[list[str] | None]
     boosted_lm_score: float
     endpointing: EndpointingConfig | None
     options: dict[str, Any]
@@ -222,6 +223,9 @@ class STT(stt.STT):
     @property
     def model(self) -> str:
         return self._opts.model
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     @property
     def provider(self) -> str:

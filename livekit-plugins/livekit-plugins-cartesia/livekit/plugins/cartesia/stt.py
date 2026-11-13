@@ -18,7 +18,7 @@ import asyncio
 import os
 import weakref
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
@@ -254,6 +254,19 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Cartesia"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            "audio_chunk_duration_ms": self._audio_chunk_duration_ms,
+            "final_transcript_mode": self._final_transcript_mode,
+            "encoding": self._encoding,
+            "language": self._language,
+            "sample_rate": self._sample_rate,
+            "turn_start_threshold": self._turn_start_threshold,
+            "turn_eager_end_threshold": self._turn_eager_end_threshold,
+            "turn_end_threshold": self._turn_end_threshold,
+            "turn_end_timeout_ms": self._turn_end_timeout_ms,
+        }
 
     async def _recognize_impl(
         self,

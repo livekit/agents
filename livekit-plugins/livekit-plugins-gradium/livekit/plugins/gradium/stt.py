@@ -35,6 +35,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.rtc import AudioFrame
@@ -69,7 +70,7 @@ class STTOptions:
     # speech before any text is transcribed, which allows a faster barge-in.
     vad_start_threshold: float | None = None
     # Words or phrases to favor in the transcript, such as product names or jargon.
-    keywords: list[str] | None = None
+    keywords: Sensitive[list[str] | None] = None
     # How strongly to favor the keywords, the server defaults to 2.0.
     keyword_boost: float | None = None
 
@@ -152,6 +153,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Gradium"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     @property
     def session(self) -> aiohttp.ClientSession:

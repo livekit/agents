@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Iterator
+from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
 from datetime import datetime, timezone
 from types import TracebackType
 from typing import Any, ClassVar, Generic, Literal, TypeVar
@@ -145,6 +145,10 @@ class LLM(
             Plugins should override this property to provide their provider information.
         """
         return "unknown"
+
+    def describe_options(self) -> Mapping[str, Any]:
+        """Return settings to include in session reports, without credentials or user content."""
+        return {}
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:

@@ -19,12 +19,13 @@ from openai.types.responses import (
     response_create_params,
 )
 from openai.types.responses.response_create_params import PromptCacheOptions
-from openai.types.shared_params import Metadata
+from openai.types.shared_params import Metadata, Reasoning as ReasoningParams
 from typing_extensions import TypedDict
 from yarl import URL
 
 from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
+from .._reporting import Sensitive, report_options
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm._responses_engine import (
     _WS_HEARTBEAT,
@@ -91,36 +92,37 @@ def _terminal_denial(headers: Mapping[str, str] | None) -> bool:
 
 class ResponsesOptions(TypedDict, total=False):
     include: list[ResponseIncludable] | None
-    instructions: str | None
+    instructions: Sensitive[str | None]
     max_output_tokens: int | None
     max_tool_calls: int | None
-    metadata: Metadata | None
+    metadata: Sensitive[Metadata | None]
     parallel_tool_calls: bool | None
     prompt_cache_options: PromptCacheOptions
-    reasoning: Reasoning | dict[str, Any] | None
+    reasoning: Reasoning | ReasoningParams | None
     temperature: float | None
     text: ResponseTextConfigParam
     top_p: float | None
     truncation: Literal["auto", "disabled"] | None
-    user: str
+    user: Sensitive[str]
 
     # livekit-typed argument
     tool_choice: ToolChoice
+    extra_headers: Sensitive[dict[str, str]]
 
 
 @dataclass
 class _LLMOptions:
     model: LLMModels | str
-    provider: str | None
-    base_url: str
-    api_key: str
-    api_secret: str
+    inference_provider: str | None
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
+    api_secret: Sensitive[str]
     inference_class: InferenceClass | None
-    extra_kwargs: dict[str, Any]
+    extra_kwargs: ResponsesOptions | dict[str, Any]
     prompt_cache_breakpoints: bool | Literal["auto"]
     use_websocket: bool = False
     # Responses reasoning fields; empty when set to None
-    reasoning: NotGivenOr[dict[str, Any]] = NOT_GIVEN
+    reasoning: NotGivenOr[ReasoningParams | dict[str, Any]] = NOT_GIVEN
 
 
 class LLM(llm.LLM):
@@ -173,7 +175,7 @@ class LLM(llm.LLM):
         lk_api_key, lk_api_secret = resolve_credentials(api_key, api_secret)
         self._opts = _LLMOptions(
             model=model,
-            provider=provider,
+            inference_provider=provider,
             base_url=base_url if base_url else get_default_inference_url(),
             api_key=lk_api_key,
             api_secret=lk_api_secret,
@@ -206,7 +208,7 @@ class LLM(llm.LLM):
             model=self._opts.model,
             api_key=self._opts.api_key,
             api_secret=self._opts.api_secret,
-            provider=self._opts.provider,
+            provider=self._opts.inference_provider,
             inference_class=self._opts.inference_class,
             extra_headers=lambda: dict(self._opts.extra_kwargs.get("extra_headers") or {}),
             timeout=None,
@@ -342,6 +344,9 @@ class LLM(llm.LLM):
     def provider(self) -> str:
         return "livekit"
 
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts, exclude={"extra_kwargs": {"text": {"format"}}})
+
     def chat(
         self,
         *,
@@ -385,8 +390,8 @@ class LLM(llm.LLM):
                 **extra.get("extra_headers", {}),
                 **get_inference_headers(inference_class=effective_inference_class),
             }
-            if self._opts.provider:
-                headers[HEADER_INFERENCE_PROVIDER] = self._opts.provider
+            if self._opts.inference_provider:
+                headers[HEADER_INFERENCE_PROVIDER] = self._opts.inference_provider
             extra["extra_headers"] = headers
             self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
         else:

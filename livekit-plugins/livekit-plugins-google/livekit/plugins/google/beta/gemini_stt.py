@@ -32,6 +32,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -67,10 +68,10 @@ class _STTOptions:
     model: str
     language: LanguageCode | str | None
     language_codes: list[str] | None
-    custom_vocabulary: list[str] | None
+    custom_vocabulary: Sensitive[list[str] | None]
     sample_rate: int
     vertexai: bool | None
-    project: str | None
+    project: Sensitive[str | None]
     location: str | None
 
 
@@ -144,6 +145,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "google"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def stream(
         self,

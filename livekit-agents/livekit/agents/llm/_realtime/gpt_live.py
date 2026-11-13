@@ -18,6 +18,7 @@ from openai.types.shared_params import Reasoning
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.llm.delegation import _resolve_delegation_detection_options
 from livekit.agents.log import logger
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
@@ -91,7 +92,7 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     model: str
     """Responses model slug; ``gpt-5.6-luna`` when unset. On Azure, the name of a Responses
     deployment in the same resource, which is required there."""
-    instructions: str
+    instructions: Sensitive[str]
     """Instructions for the backend model, distinct from the voice model's."""
     tool_choice: llm.ToolChoice | None
     parallel_tool_calls: bool
@@ -108,7 +109,7 @@ class DecisionsOptions(TypedDict, total=False):
     """Decisions model and question definitions, using the upstream Decisions schema."""
 
     model: str
-    questions: list[dict[str, Any]]
+    questions: Sensitive[list[dict[str, Any]]]
 
 
 class DecisionsTrigger(TypedDict):
@@ -161,19 +162,19 @@ class _Speech:
 @dataclass
 class _LiveOptions:
     model: str
-    voice: str | dict[str, Any]
+    voice: Sensitive[str | dict[str, Any]]
     delegation: types.DelegationTarget
     responses: ResponsesDelegationOptions
     decisions: DecisionsOptions
     triggers: list[DecisionsTrigger] | None
     delegation_recovery: llm.DelegationDetectionOptions | None
     service_tier: types.ServiceTier | None
-    api_key: str | None
-    base_url: str
+    api_key: Sensitive[str | None]
+    base_url: Sensitive[str]
     conn_options: APIConnectOptions
     max_session_duration: float | None
     is_azure: bool
-    entra_token: str | None
+    entra_token: Sensitive[str | None]
 
 
 class GPTLiveModel(llm.DuplexModel):
@@ -416,6 +417,14 @@ class GPTLiveModel(llm.DuplexModel):
     @property
     def provider(self) -> str:
         return urlparse(self._opts.base_url).netloc
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **report_options(
+                self._opts, exclude={"conn_options": True, "responses": {"text": {"format"}}}
+            ),
+            "voice": self._opts.voice if isinstance(self._opts.voice, str) else None,
+        }
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if not self._http_session:

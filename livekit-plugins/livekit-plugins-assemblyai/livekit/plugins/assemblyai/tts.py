@@ -46,6 +46,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
@@ -93,8 +94,8 @@ class _TTSOptions:
     model: str
     sample_rate: int
     word_timestamps: bool
-    api_key: str
-    base_url: str
+    api_key: Sensitive[str]
+    base_url: Sensitive[str]
 
 
 class TTS(tts.TTS):
@@ -201,6 +202,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "AssemblyAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     def update_options(
         self,
