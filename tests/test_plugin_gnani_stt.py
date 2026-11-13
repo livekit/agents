@@ -621,6 +621,10 @@ class FakeVachanaSTT:
         # per-session behaviour by index: "idle" | "reject" | "quick_close"
         self.behaviours: dict[int, str] = {}
         self.utterance_errors_left = 0
+        # an `error` message sent once on the first audio, with the connection left open
+        self.fatal_error: str | None = None
+        # reply to `update_settings` with this `error` instead of `settings_updated`
+        self.update_error: str | None = None
         # seconds the server takes before it answers the audio it received (speech_start
         # and the transcript both come late), and a switch for a server that never answers
         self.reply_delay = 0.0
@@ -654,6 +658,9 @@ class FakeVachanaSTT:
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.BINARY:
                 s.audio += len(msg.data)
+                if self.fatal_error:
+                    message, self.fatal_error = self.fatal_error, None
+                    await ws.send_json({"type": "error", "message": message})
                 if mode == "idle":
                     await ws.send_json(
                         {
@@ -689,7 +696,10 @@ class FakeVachanaSTT:
                         await asyncio.sleep(self.commit_delay)
                     await ws.send_json(self._transcript(index))
                 elif body["type"] == "update_settings":
-                    await ws.send_json({"type": "settings_updated", "config": {}})
+                    if self.update_error:
+                        await ws.send_json({"type": "error", "message": self.update_error})
+                    else:
+                        await ws.send_json({"type": "settings_updated", "config": {}})
         return ws
 
     def _transcript(self, index: int) -> dict[str, Any]:
@@ -1081,6 +1091,51 @@ async def test_utterance_error_does_not_kill_the_stream(server):
 
     assert FINAL in _types(rest)
     assert len(server.sessions) == 1
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # both recorded from the live API: a rejected `update_settings` leaves the session
+        # open and working with its previous settings
+        "Invalid format. Supported values are: verbatim, transcribe (codemix and "
+        "transliterate on prisma-v3.0).",
+        "Cannot switch language to 'xx-XX': Vachana model does not support languages: xx-XX.",
+    ],
+)
+async def test_rejected_update_settings_does_not_kill_the_stream(server, message):
+    server.update_error = message
+    stt_ = _make_stt(server, model="prisma-v3.0", language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    stream.push_frame(SILENCE)  # opens the session without starting an utterance
+    await _wait_for(lambda: server.sessions and server.sessions[0].audio > 0)
+
+    stt_.update_options(format="transcribe")
+    await _wait_for(
+        lambda: any(c["type"] == "update_settings" for c in server.sessions[0].controls)
+    )
+    await asyncio.sleep(0.1)  # let the server's error reply reach the stream
+
+    await _utterance(stream)  # the session still transcribes afterwards
+    stream.end_input()
+    events = await _collect(stream)
+
+    assert FINAL in _types(events)
+    assert len(server.sessions) == 1
+
+
+async def test_unknown_stream_error_fails_loudly(server):
+    """`error` messages carry no code. One we do not know could be fatal (credits ran out)
+    with the connection left open, which would leave the stream running without ever
+    producing a transcript, so it must surface as an error."""
+    server.fatal_error = "Insufficient credits"
+    stt_ = _make_stt(server, language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    await _utterance(stream)
+
+    with pytest.raises(APIStatusError, match="Insufficient credits") as exc:
+        await _collect(stream)
+    assert exc.value.body == "Insufficient credits"
 
 
 async def test_rejected_handshake_is_a_clear_non_retryable_error(server):

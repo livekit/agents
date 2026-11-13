@@ -106,6 +106,22 @@ _SIGNAL_PEAK = 128
 _QUICK_CLOSE_S = 2.0
 _MAX_QUICK_CLOSES = 3
 
+# Mid-session ``error`` messages that leave the connection open and the session working, so
+# they are logged and the stream carries on. Matched case-insensitively as a substring.
+# Every other mid-session error is treated as fatal and raised (see ``_handle_error``).
+_NON_FATAL_ERRORS = (
+    # an utterance could not be transcribed (noisy or unclear audio)
+    "transcription failed",
+    # an ``update_settings`` was rejected; the session keeps its previous settings
+    "invalid format",
+    "cannot switch language",
+)
+
+
+def _is_non_fatal_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(known in lowered for known in _NON_FATAL_ERRORS)
+
 
 def _has_signal(pcm: bytes) -> bool:
     """True if 16-bit little-endian PCM holds anything louder than the noise floor."""
@@ -838,7 +854,7 @@ class SpeechStream(stt.RecognizeStream):
                 connected_data = json.loads(connected_msg)
                 if connected_data.get("type") == "error":
                     # e.g. an invalid header; the server closes the connection next
-                    self._handle_error(connected_data)
+                    self._handle_error(connected_data, handshake=True)
                 elif connected_data.get("type") != "connected":
                     logger.warning(
                         "Unexpected first message from Gnani STT",
@@ -960,18 +976,28 @@ class SpeechStream(stt.RecognizeStream):
             await ws.send(bytes(audio_buffer))
         await commit()
 
-    def _handle_error(self, data: dict[str, Any]) -> None:
+    def _handle_error(self, data: dict[str, Any], *, handshake: bool = False) -> None:
         message = data.get("message", "Unknown error")
         if data.get("timeout_reason"):
             # "Session closed: no speech segment received for N seconds."; the server
             # follows up with `session_end` and a normal close. Not a failure.
             logger.debug(f"Gnani STT session timeout: {message}")
             return
-        # Utterance-level problems (e.g. "Transcription failed or audio unclear") leave
-        # the connection open; handshake problems are followed by a 1008 close, where
-        # the remembered message becomes the error.
         logger.warning(f"Gnani STT error: {message}")
         self._last_error = message
+        if handshake:
+            # a rejected handshake is followed by a 1008 close, where the remembered
+            # message becomes the error
+            return
+        if not _is_non_fatal_error(message):
+            # `error` frames carry no code, so an unknown one may be fatal (for example the
+            # credits ran out) with the connection left open, and the stream would then run
+            # on without ever producing a transcript. Fail loudly instead.
+            raise APIStatusError(
+                f"Gnani STT stream error: {message}",
+                status_code=500,
+                body=message,
+            )
         self._note_reply()
         self._end_speech_nowait()
 
