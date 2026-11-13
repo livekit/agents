@@ -152,20 +152,27 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
         .unwrap_or(Err(HeadError::TimedOut));
     let (parsed, request) = match (parsed, origin) {
         (Ok(parsed), Origin::Node(request)) => (parsed, request),
-        (Ok(_), Origin::Listener { .. }) if draining => {
+        (Ok(parsed), Origin::Listener { .. }) if draining => {
+            log::debug!(target: lk_agents_abi::LOG_TARGET, path:% = String::from_utf8_lossy(&parsed.head.raw_path), status = 503; "endpoint request refused: the worker is draining");
             return refuse(write, end, 503).await;
         }
         (Ok(mut parsed), Origin::Listener { routes, peer }) => {
             match routes.resolve(&mut parsed.head, &peer) {
                 Ok(request) => (parsed, request),
-                Err(status) => return refuse(write, end, status).await,
+                Err(status) => {
+                    log::debug!(target: lk_agents_abi::LOG_TARGET, path:% = String::from_utf8_lossy(&parsed.head.raw_path), status = status; "endpoint request refused: no route");
+                    return refuse(write, end, status).await;
+                }
             }
         }
         (Err(error), Origin::Node(_)) => {
             log::debug!(target: lk_agents_abi::LOG_TARGET, "endpoint request rejected: {}", error.reason());
             return end.reset(Code::HsrProtocol);
         }
-        (Err(error), Origin::Listener { .. }) => return refuse(write, end, error.status()).await,
+        (Err(error), Origin::Listener { .. }) => {
+            log::debug!(target: lk_agents_abi::LOG_TARGET, status = error.status(); "endpoint request refused: {}", error.reason());
+            return refuse(write, end, error.status()).await;
+        }
     };
     let deadline = (request.timeout_ms > 0).then(|| Duration::from_millis(request.timeout_ms));
     // The exchange continues its caller's trace.

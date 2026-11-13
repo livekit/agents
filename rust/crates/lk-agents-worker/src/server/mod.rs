@@ -616,7 +616,7 @@ impl ServerRuntime {
         stop: &CancellationToken,
     ) -> Result<Option<OwnedTask<Result<(), ServerError>>>, ServerError> {
         let Some(address) = Bind::prometheus(&settings.listeners, local) else {
-            log::info!(target: lk_agents_abi::LOG_TARGET, "prometheus listener off: not configured");
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "prometheus listener off: not configured");
             return Ok(None);
         };
         let (listener, url) = bind(&address).await?;
@@ -648,7 +648,8 @@ impl ServerRuntime {
         let prefix = settings.endpoint_prefix();
         *start.serving.lock() = Serving::Local { base: format!("{url}{prefix}") };
         if unauthenticated {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}{prefix}"); "public listener is UNAUTHENTICATED: anything on this machine can call the agent's endpoints (console only, loopback)");
+            // The console's own: loopback only, and nothing the developer must act on.
+            log::debug!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}{prefix}"); "public listener is UNAUTHENTICATED: anything on this machine can call the agent's endpoints (console only, loopback)");
         } else {
             log::warn!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}{prefix}"); "public listener is in INSECURE mode: callers' tokens are read but their signatures are not verified; reach the agent through a LiveKit server to authenticate them");
         }

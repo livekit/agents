@@ -636,7 +636,7 @@ impl Driver {
             phase: Active::Initializing(Initialization { started: self.now(), deadline }),
             health,
         };
-        runner_log!(self.host.runner(), log::Level::Info; "initializing {}", runner_name(&self.opts));
+        runner_log!(self.host.runner(), log::Level::Debug; "initializing {}", runner_name(&self.opts));
         self.send(ToChild::Hello(hello));
     }
 
@@ -864,7 +864,7 @@ impl Driver {
             ToParent::Ready { error: Some(error) } => Err(InitError::Failed(error)),
             ToParent::Ready { error: None } => {
                 let elapsed = now.saturating_sub(started);
-                runner_log!(self.host.runner(), log::Level::Info, elapsed_time = round(elapsed.as_secs_f64(), 2); "{} initialized", runner_name(&self.opts));
+                runner_log!(self.host.runner(), log::Level::Debug, elapsed_time = round(elapsed.as_secs_f64(), 2); "{} initialized", runner_name(&self.opts));
                 Ok(elapsed)
             }
             _ => Err(InitError::Unexpected),

@@ -114,6 +114,8 @@ impl Progress {
 struct Forwarder {
     queue: Mutex<Option<Queue>>,
     dropped: AtomicU64,
+    /// Which Rust lines reach Python at all: [`DEFAULT_DIRECTIVES`], then `RUST_LOG`'s.
+    directives: env_filter::Filter,
     /// Each logger's effective level and when the drain last read it: `enabled` reads it without
     /// the GIL. A target not read yet, or read more than [`LEVEL_TTL`] ago, is enabled, so the
     /// next line refreshes a level the host raised since.
@@ -130,6 +132,7 @@ fn forwarder() -> &'static Forwarder {
     FORWARDER.get_or_init(|| Forwarder {
         queue: Mutex::new(None),
         dropped: AtomicU64::new(0),
+        directives: directives(std::env::var("RUST_LOG").ok().as_deref()),
         levels: Mutex::new(BTreeMap::new()),
     })
 }
@@ -159,7 +162,8 @@ pub fn install_logger() {
         }
     }
     if log::set_logger(&Installed).is_ok() {
-        log::set_max_level(LevelFilter::Debug);
+        // `enabled` filters: the directives first (no lock), then Python's levels.
+        log::set_max_level(LevelFilter::Trace);
     }
 }
 
@@ -198,16 +202,25 @@ pub fn flush() {
     }
 }
 
-/// The stall detector's sampler libraries (py-spy and its process reader): their own lines are
+/// LiveKit's own lines pass at any level (Python's logger levels decide); other crates' only from
+/// warnings up. The stall detector's sampler (py-spy, its process reader and binary parser) logs
 /// internals; the detector logs what matters (`event-loop stall stacks unavailable`).
-const SAMPLER_TARGETS: [&str; 2] = ["py_spy", "remoteprocess"];
+const DEFAULT_DIRECTIVES: &str =
+    "warn,livekit=trace,lk_agents=trace,py_spy=error,remoteprocess=error,goblin=error";
+
+/// The default directives, overridden by `rust_log`'s (`RUST_LOG` syntax: `rustls=debug`).
+fn directives(rust_log: Option<&str>) -> env_filter::Filter {
+    let mut builder = env_filter::Builder::new();
+    builder.parse(DEFAULT_DIRECTIVES);
+    if let Some(rust_log) = rust_log {
+        builder.parse(rust_log);
+    }
+    builder.build()
+}
 
 impl Forwarder {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        let target = metadata.target();
-        let sampler =
-            SAMPLER_TARGETS.iter().any(|crate_name| target.split("::").next() == Some(*crate_name));
-        if sampler && metadata.level() > Level::Error {
+        if !self.directives.enabled(metadata) {
             return false;
         }
         let levels = self.levels.lock();
@@ -544,17 +557,26 @@ mod logging_tests {
         });
     }
 
-    // Catches: py-spy's internal lines ("looking up thread names") reaching the application's
-    // logs on every profiled job.
+    // Catches: other crates' debug lines (py-spy's Mach-O parser, TLS handshakes) flooding the
+    // console, and `RUST_LOG` failing to bring one back or to quiet LiveKit's own.
     #[test]
-    fn the_samplers_own_lines_are_dropped_below_error() {
-        let metadata = |target: &'static str, level| {
-            log::Metadata::builder().target(target).level(level).build()
+    fn only_livekit_lines_pass_below_warn_unless_rust_log_says_otherwise() {
+        let passes = |rust_log, target, level| {
+            let metadata = log::Metadata::builder().target(target).level(level).build();
+            super::directives(rust_log).enabled(&metadata)
         };
-        let forwarder = super::forwarder();
-        assert!(!forwarder.enabled(&metadata("py_spy::python_spy", log::Level::Info)));
-        assert!(!forwarder.enabled(&metadata("remoteprocess", log::Level::Warn)));
-        assert!(forwarder.enabled(&metadata("py_spy::python_spy", log::Level::Error)));
-        assert!(forwarder.enabled(&metadata(lk_agents_abi::LOG_TARGET, log::Level::Info)));
+        use log::Level::{Debug, Error, Info, Warn};
+        assert!(passes(None, lk_agents_abi::LOG_TARGET, Debug));
+        assert!(passes(None, "livekit::room", Debug));
+        assert!(!passes(None, "goblin::mach", Debug));
+        assert!(!passes(None, "rustls::client::hs", Debug));
+        assert!(passes(None, "rustls::client::hs", Warn));
+        assert!(!passes(None, "py_spy::python_spy", Warn));
+        assert!(passes(None, "py_spy::python_spy", Error));
+
+        assert!(passes(Some("rustls=debug"), "rustls::client::hs", Debug));
+        assert!(!passes(Some("rustls=debug"), "goblin::mach", Debug));
+        assert!(!passes(Some("livekit=info"), lk_agents_abi::LOG_TARGET, Debug));
+        assert!(passes(Some("livekit=info"), lk_agents_abi::LOG_TARGET, Info));
     }
 }

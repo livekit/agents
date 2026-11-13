@@ -15,6 +15,8 @@ parking_lot.workspace = true
 # `extension-module` is off by default so `cargo test` links libpython; maturin turns it on.
 pyo3.workspace = true
 log.workspace = true
+# `RUST_LOG`'s directive syntax, over which Rust lines reach Python's `logging` (`py_logging.rs`).
+env_filter = { version = "2", default-features = false, features = ["std"] }
 lk-agents-abi = { path = "../lk-agents-abi" }
 # `#[host(interface(..))]`: the binding's own interpreter-local interfaces.
 lk-agents-host-derive = { path = "../../ai_slop/lk-agents-host-derive" }

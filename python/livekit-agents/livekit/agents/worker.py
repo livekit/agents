@@ -312,7 +312,7 @@ class _ServerCallbacks:
             "starting worker", extra={"version": __version__, "rtc-version": rtc.__version__}
         )
         for p in Plugin.registered_plugins:
-            logger.info("plugin registered", extra={"plugin": p.title, "version": p.version})
+            logger.debug("plugin registered", extra={"plugin": p.title, "version": p.version})
         door = self._server._rtc
         if not opts.job_processes or door is None:
             return None

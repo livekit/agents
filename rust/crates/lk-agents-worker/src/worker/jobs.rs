@@ -200,7 +200,7 @@ impl Worker {
             let cloud = s.edition == pb::server_info::Edition::Cloud as i32;
             (s.region, s.protocol, cloud)
         });
-        log::info!(target: lk_agents_abi::LOG_TARGET, worker_id = resp.worker_id.as_str(), deployment = self.cfg.deployment.as_str(), url = self.cfg.ws_url.as_str(), region = region.as_str(), protocol = protocol, agent_name = self.cfg.agent_name.as_str(); "registered worker");
+        log::info!(target: lk_agents_abi::LOG_TARGET, worker_id = resp.worker_id.as_str(), deployment = self.cfg.deployment.as_str(), url = self.cfg.ws_url.as_str(), transport:? = self.transport.kind(), region = region.as_str(), protocol = protocol, agent_name = self.cfg.agent_name.as_str(); "registered worker");
         self.notify(WorkerNotification::Registered(RegisteredInfo {
             worker_id: resp.worker_id,
             region,
@@ -542,8 +542,10 @@ impl Worker {
         self.refresh_capacity();
         let inputs = self.load_inputs();
         let status = inputs.worker_status();
-        if self.previous_status != Some(status) {
-            self.previous_status = Some(status);
+        // Only a change is news: a worker starts available.
+        if let Some(previous) = self.previous_status.replace(status)
+            && previous != status
+        {
             let full = status == WorkerStatus::Full;
             let message = if full {
                 "worker is at full capacity, marking as unavailable"

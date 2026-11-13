@@ -30,6 +30,7 @@ from .worker import AgentServer
 __all__ = ["run_app"]
 
 NOISY_LOGGERS = [
+    "asyncio",
     "httpx",
     "httpx2",
     "httpcore",
