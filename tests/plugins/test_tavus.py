@@ -57,7 +57,7 @@ async def _start(tavus: Tavus, avatar_host: AvatarHost) -> AvatarSession:
     avatar = AvatarSession(
         face_id="face", api_key="key", api_url=tavus.api_url, conn_options=OPTIONS
     )
-    await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+    await avatar.start(avatar_host.agent, avatar_host.room)
     return avatar
 
 

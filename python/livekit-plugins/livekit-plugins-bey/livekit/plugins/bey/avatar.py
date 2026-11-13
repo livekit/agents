@@ -2,28 +2,17 @@ from __future__ import annotations
 
 import os
 
-import livekit.rtc as rtc
-from livekit import api
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
-    VoiceSession,
-    get_job_context,
     http,
 )
-from livekit.agents.job import _server_credentials
-from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
-from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
-
-from .log import logger
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, AvatarStart
 
 EGE_STOCK_AVATAR_ID = "b9be11b8-89fb-4227-8f86-4a881393cbdb"
 _DEFAULT_API_URL = "https://api.bey.dev"
-
-_AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
-_AVATAR_AGENT_NAME = "bey-avatar-agent"
 
 
 class BeyException(Exception):
@@ -41,98 +30,42 @@ class AvatarSession(BaseAvatarSession):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            avatar_participant_identity=avatar_participant_identity,
+            avatar_participant_name=avatar_participant_name,
+            livekit_url=livekit_url,
+            livekit_api_key=livekit_api_key,
+            livekit_api_secret=livekit_api_secret,
+            conn_options=conn_options,
+        )
         self._avatar_id = avatar_id or EGE_STOCK_AVATAR_ID
         self._api_url = api_url or os.getenv("BEY_API_URL", _DEFAULT_API_URL)
-        self._api_key = api_key or os.getenv("BEY_API_KEY")
-        if self._api_key is None:
+        key = api_key or os.getenv("BEY_API_KEY")
+        if not key:
             raise BeyException(
                 "The api_key must be set either by passing api_key to the client or "
                 "by setting the BEY_API_KEY environment variable"
             )
-
-        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
-        self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-        self._http_session: http.HttpSession | None = None
-        self._conn_options = conn_options
-
-    @property
-    def avatar_identity(self) -> str:
-        return self._avatar_participant_identity
+        self._api_key = key
 
     @property
     def provider(self) -> str:
         return "bey"
 
-    def _ensure_http_session(self) -> http.HttpSession:
-        if self._http_session is None:
-            self._http_session = http.http_session()
-
-        return self._http_session
-
-    async def start(
-        self,
-        agent_session: VoiceSession,
-        room: rtc.Room,
-        *,
-        livekit_url: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
-    ) -> None:
-        await super().start(agent_session, room)
-
-        livekit_url, livekit_api_key, livekit_api_secret = _server_credentials(
-            livekit_url, livekit_api_key, livekit_api_secret
-        )
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
-            raise BeyException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
-                "by arguments or environment variables"
-            )
-
-        job_ctx = get_job_context()
-        local_participant_identity = job_ctx.local_participant_identity
-        livekit_token = (
-            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
-            .with_kind("agent")
-            .with_identity(self._avatar_participant_identity)
-            .with_name(self._avatar_participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
-            .to_jwt()
-        )
-
-        logger.debug("starting avatar session")
-        await self._start_agent(livekit_url, livekit_token)
-
-        self._attach_audio_output(
-            agent_session,
-            DataStreamAudioOutput(
-                room=room,
-                destination_identity=self._avatar_participant_identity,
-                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-            ),
-        )
-
-    async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:
-        assert self._api_key is not None
-        api_key = self._api_key
-        session = self._ensure_http_session()
-
-        async def request() -> None:
-            async with session.post(
-                f"{self._api_url}/v1/session",
-                headers={"x-api-key": api_key},
-                json={
-                    "avatar_id": self._avatar_id,
-                    "livekit_url": livekit_url,
-                    "livekit_token": livekit_token,
-                },
-                conn_options=self._conn_options,
-            ) as response:
-                await response.raise_for_status()
-
-        await http.retry_request(request, conn_options=self._conn_options)
+    async def create_session(self, ctx: AvatarStart) -> None:
+        async with http.http_session().post(
+            f"{self._api_url}/v1/session",
+            headers={"x-api-key": self._api_key},
+            json={
+                "avatar_id": self._avatar_id,
+                "livekit_url": ctx.livekit_url,
+                "livekit_token": ctx.livekit_token(),
+            },
+            conn_options=ctx.conn_options,
+        ) as response:
+            await response.raise_for_status()

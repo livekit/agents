@@ -14,42 +14,34 @@
 
 from __future__ import annotations
 
-import asyncio
-import dataclasses
-import enum
 import json
 import os
-from typing import TypeGuard
 
 from pydantic import JsonValue, TypeAdapter
 
-import livekit.rtc as rtc
 from livekit import api
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, VoiceSession, get_job_context, utils
-from livekit.agents.job import _server_credentials
-from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
-from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    APIError,
+    NotGivenOr,
+    http,
+)
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, AvatarStart
 
-from .api import SynthesiaAPI
+from .api import SESSION_PATH, parse_json, public_avatar_id, session_error
 from .errors import ErrorType, SynthesiaError
-from .log import logger
 from .types import (
     AVATAR_IDENTITY,
     AVATAR_NAME,
     DEFAULT_API_URL,
-    DEFAULT_JOIN_TIMEOUT,
     DEFAULT_SWAP_TIMEOUT,
     TOKEN_TTL,
     AvatarConfig,
-    SessionConfig,
-    StartSessionRequest,
 )
 
 _JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
-
-
-def _present(value: str | None) -> TypeGuard[str]:
-    return bool(value and value.strip())
 
 
 def _to_ws_url(url: str) -> str:
@@ -62,12 +54,6 @@ def _to_ws_url(url: str) -> str:
     return url
 
 
-class _State(enum.Enum):
-    IDLE = "idle"
-    STARTED = "started"
-    CLOSED = "closed"
-
-
 class AvatarSession(BaseAvatarSession):
     """A Synthesia interactive avatar for a LiveKit voice agent.
 
@@ -75,9 +61,6 @@ class AvatarSession(BaseAvatarSession):
     ``VoiceSession.start()``. The first id is the active avatar and the rest are
     precomputed for a future mid-session swap. Credentials fall back to the
     ``SYNTHESIA_API_KEY`` and ``SYNTHESIA_API_URL`` environment variables.
-
-    Logs when the room ends cleanly and when the avatar track drops
-    unexpectedly mid-session.
 
     Pass ``avatar_participant_identity`` to override the LiveKit identity the
     avatar joins under. It must be unique per concurrent avatar in a room, since
@@ -91,172 +74,68 @@ class AvatarSession(BaseAvatarSession):
         *,
         api_key: str | None = None,
         api_url: str | None = None,
-        join_timeout: float = DEFAULT_JOIN_TIMEOUT,
-        avatar_participant_identity: str | None = None,
-        avatar_participant_name: str | None = None,
+        avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        super().__init__()
-
-        if avatar_participant_identity is not None and not avatar_participant_identity.strip():
-            raise SynthesiaError("avatar_participant_identity must be a non-empty string")
-        if avatar_participant_name is not None and not avatar_participant_name.strip():
-            raise SynthesiaError("avatar_participant_name must be a non-empty string")
-        self._avatar_identity = avatar_participant_identity or AVATAR_IDENTITY
-        self._avatar_name = avatar_participant_name or AVATAR_NAME
-
+        super().__init__(
+            avatar_participant_identity=avatar_participant_identity or AVATAR_IDENTITY,
+            avatar_participant_name=avatar_participant_name or AVATAR_NAME,
+            livekit_url=livekit_url,
+            livekit_api_key=livekit_api_key,
+            livekit_api_secret=livekit_api_secret,
+            conn_options=conn_options,
+        )
         key = api_key or os.environ.get("SYNTHESIA_API_KEY")
         if not key:
             raise SynthesiaError(
                 "a Synthesia API key is required: pass api_key or set SYNTHESIA_API_KEY"
             )
-
-        url = api_url or os.environ.get("SYNTHESIA_API_URL") or DEFAULT_API_URL
-
-        self._config = SessionConfig(
-            avatar_ids=tuple(avatar_config.avatar_ids),
-            api_key=key,
-            api_url=url,
-            join_timeout=join_timeout,
+        self._api_key = key
+        self._api_url = (api_url or os.environ.get("SYNTHESIA_API_URL") or DEFAULT_API_URL).rstrip(
+            "/"
         )
-        self._state = _State.IDLE
-        # Guards against re-entrant start() calls. Distinct from _state: while a
-        # start is awaiting a prior teardown the lifecycle is still its old
-        # state, so this cannot be folded into _state.
-        self._starting = False
-        self._close_done = asyncio.Event()
+        self._avatar_ids = tuple(avatar_config.avatar_ids)
         self._session_id: str | None = None
-        # Holds the self-teardown, which is the close itself: aclose() and start() wait for it.
-        self._tasks = utils.aio.TaskSet()
-        self._teardown_task: asyncio.Task[None] | None = None
-        # The exact sink this session installed, tracked by identity rather than
-        # type or chain position: VoiceSession.start() can wrap it in
-        # TranscriptSynchronizer/RecorderAudioOutput, and a caller may already
-        # have their own DataStreamAudioOutput installed before start() runs.
-        self._audio_output: DataStreamAudioOutput | None = None
-
-    @property
-    def avatar_identity(self) -> str:
-        return self._avatar_identity
 
     @property
     def provider(self) -> str:
         return "synthesia"
 
-    async def start(
-        self,
-        agent_session: VoiceSession,
-        room: rtc.Room,
-        *,
-        livekit_url: str | None = None,
-        livekit_api_key: str | None = None,
-        livekit_api_secret: str | None = None,
-    ) -> None:
-        if self._starting:
-            raise SynthesiaError("start() is already in progress")
-        self._starting = True
-        try:
-            if self._teardown_task is not None:
-                teardown = self._teardown_task
-                await asyncio.shield(asyncio.gather(teardown, return_exceptions=True))
-                if not teardown.cancelled() and teardown.exception() is not None:
-                    raise SynthesiaError(
-                        "the previous avatar session did not tear down cleanly; not restarting"
-                    ) from teardown.exception()
-            if self._state is _State.CLOSED:
-                await self._close_done.wait()
-            if self._state is _State.STARTED:
-                return
-
-            url, lk_key, lk_secret = _server_credentials(
-                livekit_url, livekit_api_key, livekit_api_secret
-            )
-            # A blank key or secret still mints a syntactically valid token that
-            # Synthesia accepts, since it cannot verify a signature made with the
-            # developer's own secret. LiveKit only rejects it once the avatar
-            # tries to join, so catch it here instead.
-            if not _present(url) or not _present(lk_key) or not _present(lk_secret):
-                raise SynthesiaError(
-                    "LiveKit url, API key, and API secret are required: pass them or "
-                    "set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET"
-                )
-            url = _to_ws_url(url)
-            if not url.startswith(("ws://", "wss://")):
-                raise SynthesiaError(f"livekit_url {url!r} is not a ws:// or wss:// URL")
-
-            self._state = _State.IDLE
-            self._close_done.clear()
-            self._teardown_task = None
-
-            try:
-                await super().start(agent_session, room)
-                token = self._mint_token(room=room, lk_key=lk_key, lk_secret=lk_secret)
-                client = SynthesiaAPI(api_key=self._config.api_key, api_url=self._config.api_url)
-                launch_conn = dataclasses.replace(
-                    DEFAULT_API_CONNECT_OPTIONS,
-                    total_timeout=self._config.join_timeout,
-                    max_retry=0,
-                )
-                response = await client.start_session(
-                    StartSessionRequest(
-                        avatar_ids=list(self._config.avatar_ids),
-                        livekit_url=url,
-                        lk_token=token,
-                    ),
-                    conn_options=launch_conn,
-                )
-                self._session_id = response.session_id
-
-                # TODO: confirm the avatar worker's expected audio sample rate and
-                # pass sample_rate explicitly once it is verified against the real
-                # worker.
-                audio_output = DataStreamAudioOutput(
-                    room,
-                    destination_identity=self.avatar_identity,
-                    wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-                )
-                # replace_audio_tail keeps any wrapper VoiceSession.start() adds
-                # later (TranscriptSynchronizer, RecorderAudioOutput) attached.
-                self._attach_audio_output(agent_session, audio_output)
-
-                await self.wait_for_join(timeout=self._config.join_timeout)
-            except TimeoutError as e:
-                await self.aclose()
-                await self._discard_partial_start()
-                raise SynthesiaError(
-                    f"avatar did not join within {self._config.join_timeout}s",
-                    type=ErrorType.TIMEOUT,
-                ) from e
-            except BaseException:
-                await self.aclose()
-                await self._discard_partial_start()
-                raise
-
-            if self._ending():
-                await self._close_done.wait()
-                await self._discard_partial_start()
-                raise SynthesiaError("avatar session was closed while starting")
-
-            room.on("disconnected", self._on_room_disconnected)
-            room.on("track_unpublished", self._on_track_unpublished)
-            room.on("participant_disconnected", self._on_participant_disconnected)
-            self._state = _State.STARTED
-        finally:
-            self._starting = False
-
-    async def _discard_partial_start(self) -> None:
-        # An aclose() that ran concurrently with start() cannot see the audio
-        # output and session id that start() set after it completed, so a failed
-        # start cleans them up itself, closing the audio output's background
-        # tasks rather than just dropping the reference. Only the sink this
-        # session installed is touched: it may now be wrapped by
-        # VoiceSession.start() (TranscriptSynchronizer, RecorderAudioOutput), and
-        # the caller may have had their own DataStreamAudioOutput before this
-        # session ever ran, so neither the current chain head nor its type says
-        # what to close.
-        audio_output, self._audio_output = self._audio_output, None
-        if audio_output is not None:
-            await audio_output.aclose()
-        self._session_id = None
+    async def create_session(self, ctx: AvatarStart) -> str:
+        livekit_url = _to_ws_url(ctx.livekit_url)
+        if not livekit_url.startswith(("ws://", "wss://")):
+            raise SynthesiaError(f"livekit_url {livekit_url!r} is not a ws:// or wss:// URL")
+        grants = api.VideoGrants(
+            room_join=True,
+            room=ctx.room.name,
+            can_publish=True,
+            can_subscribe=True,
+            can_publish_data=True,
+        )
+        async with http.http_session().post(
+            self._api_url + SESSION_PATH,
+            headers={"Authorization": self._api_key},
+            json={
+                "avatarIds": [public_avatar_id(a) for a in self._avatar_ids],
+                "livekitUrl": livekit_url,
+                "livekitToken": ctx.livekit_token(ttl=TOKEN_TTL, grants=grants),
+            },
+            conn_options=ctx.conn_options,
+        ) as resp:
+            if resp.status >= 500:
+                await resp.raise_for_status()
+            body = parse_json(await resp.read())
+            if not resp.ok:
+                raise session_error(resp, body)
+        session_id = body.get("id") or body.get("session_id") if isinstance(body, dict) else None
+        if not isinstance(session_id, str) or not session_id:
+            raise APIError("Synthesia response did not contain a session id", kind="protocol")
+        self._session_id = session_id
+        return session_id
 
     async def swap_avatar(self, avatar_id: str, *, timeout: float = DEFAULT_SWAP_TIMEOUT) -> str:
         """Switch the rendered avatar mid-session.
@@ -268,9 +147,9 @@ class AvatarSession(BaseAvatarSession):
         ``CONNECTION`` if the worker cannot be reached, and no ``type`` if the
         worker rejects the swap.
         """
-        if self._state is not _State.STARTED or self._ending() or self._room is None:
+        if self._session_id is None or self._room is None:
             raise SynthesiaError("swap_avatar() requires a started avatar session")
-        if avatar_id != "default" and avatar_id not in self._config.avatar_ids:
+        if avatar_id != "default" and avatar_id not in self._avatar_ids:
             raise SynthesiaError(
                 f"avatar {avatar_id!r} was not in initial list of avatar_ids",
                 type=ErrorType.UNKNOWN_AVATAR,
@@ -300,116 +179,6 @@ class AvatarSession(BaseAvatarSession):
             raise SynthesiaError(f"avatar swap failed: {detail or raw}")
         return avatar_id_result
 
-    def _mint_token(self, *, room: rtc.Room, lk_key: str, lk_secret: str) -> str:
-        # Synthesia rejects a token whose publish-on-behalf attribute is empty,
-        # since the worker has no agent to publish the avatar's audio for. Prefer
-        # the job context over room.local_participant: inside a job, the room may
-        # not have finished connecting yet when start() runs. Standalone callers
-        # (no job context) connect the room themselves before calling start(), so
-        # room.local_participant is safe there.
-        job_ctx = get_job_context(required=False)
-        agent_identity = (
-            job_ctx.local_participant_identity
-            if job_ctx is not None
-            else room.local_participant.identity
-        )
-        if not _present(agent_identity):
-            raise SynthesiaError(
-                "the room's local participant has no identity; connect the room "
-                "before starting the avatar session"
-            )
-
-        token = (
-            api.AccessToken(lk_key, lk_secret)
-            .with_identity(self.avatar_identity)
-            .with_name(self._avatar_name)
-            .with_kind("agent")
-            .with_grants(
-                api.VideoGrants(
-                    room_join=True,
-                    room=room.name,
-                    can_publish=True,
-                    can_subscribe=True,
-                    can_publish_data=True,
-                )
-            )
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: agent_identity})
-            .with_ttl(TOKEN_TTL)
-        )
-        return token.to_jwt()
-
-    def _on_room_disconnected(self, *args: object) -> None:
-        if self._ending():
-            return
-        logger.info("avatar session ended")
-        self._begin_teardown()
-
-    def _on_track_unpublished(
-        self,
-        publication: rtc.RemoteTrackPublication,
-        participant: rtc.RemoteParticipant,
-    ) -> None:
-        if (
-            participant.identity == self.avatar_identity
-            and publication.kind == rtc.TrackKind.KIND_VIDEO
-        ):
-            self._report_avatar_lost()
-
-    def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
-        if participant.identity == self.avatar_identity:
-            self._report_avatar_lost()
-
-    def _report_avatar_lost(self) -> None:
-        if self._ending():
-            return
-        # The avatar leaving while the room is still up is a worker crash. If the
-        # room itself is going down, this is a clean end and _on_room_disconnected
-        # reports it instead.
-        if self._room is not None and not self._room.isconnected():
-            return
-        logger.warning("avatar left the room unexpectedly")
-        self._begin_teardown()
-
-    def _ending(self) -> bool:
-        return self._state is _State.CLOSED or self._teardown_task is not None
-
-    def _begin_teardown(self) -> None:
-        if self._teardown_task is None and self._state is not _State.CLOSED:
-            self._teardown_task = self._tasks.spawn(self.aclose(), name="synthesia_avatar_teardown")
-            self._teardown_task.add_done_callback(self._on_teardown_done)
-
-    def _on_teardown_done(self, task: asyncio.Task[None]) -> None:
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc is not None:
-            logger.error("avatar teardown failed", exc_info=exc)
-
     async def aclose(self) -> None:
-        if self._state is _State.CLOSED:
-            await self._close_done.wait()
-            return
-        self._state = _State.CLOSED
         self._session_id = None
-
-        try:
-            # Only the sink this session installed is closed, by identity: it may
-            # now be wrapped by VoiceSession.start() (TranscriptSynchronizer,
-            # RecorderAudioOutput), and the caller may have had their own
-            # DataStreamAudioOutput before this session ever ran, so neither the
-            # current chain head nor its type says what to close. The wrapper
-            # chain itself is left in place; there is no public API to remove a
-            # tail sink from it without supplying a replacement.
-            audio_output, self._audio_output = self._audio_output, None
-            if audio_output is not None:
-                await audio_output.aclose()
-
-        finally:
-            try:
-                if self._room is not None:
-                    self._room.off("disconnected", self._on_room_disconnected)
-                    self._room.off("track_unpublished", self._on_track_unpublished)
-                    self._room.off("participant_disconnected", self._on_participant_disconnected)
-                await super().aclose()
-            finally:
-                self._close_done.set()
+        await super().aclose()

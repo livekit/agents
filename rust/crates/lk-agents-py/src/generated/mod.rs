@@ -128,6 +128,7 @@ pub trait Implementations: 'static {
             View = Self::PersistedSessionState,
         >;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
+    type SpeechState: ::lk_agents_abi::stt::events::SpeechState;
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
     type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
     type SttStreamAdapter: ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter;
@@ -155,6 +156,7 @@ pub trait Implementations: 'static {
     type ToolSearch: ::lk_agents_abi::tokenize::search::ToolSearch<Document = Self::SearchDocument>;
     type MarkupFunctions: ::lk_agents_abi::tts::markup::MarkupFunctions;
     type MarkupClass: ::lk_agents_abi::tts::markup::MarkupClass;
+    type TtsSegments: ::lk_agents_abi::tts::segments::TtsSegments;
     type TtsStreamAdapter: ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter;
     type TtsStream: ::lk_agents_abi::tts::streams::TtsStream;
     type SynthesisChecks: ::lk_agents_abi::tts::streams::SynthesisChecks;
@@ -387,6 +389,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<storage::CorePersistedSessionState>()?;
     m.add_class::<storage::CoreSessionBinding>()?;
     m.add_class::<storage::CoreVoiceStore>()?;
+    m.add_class::<stt::SpeechState>()?;
     m.add_class::<stt::FallbackStt>()?;
     m.add_class::<stt::FallbackRecognizeStream>()?;
     m.add_class::<stt::InferenceStt>()?;
@@ -433,6 +436,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tts::split_expr_markup, m)?)?;
     m.add_function(wrap_pyfunction!(tts::to_xml, m)?)?;
     m.add_class::<tts::Markup>()?;
+    m.add_class::<tts::TtsSegments>()?;
     m.add_class::<tts::TtsStreamAdapter>()?;
     m.add_class::<tts::TtsStream>()?;
     m.add_function(wrap_pyfunction!(tts::validate_synthesis, m)?)?;

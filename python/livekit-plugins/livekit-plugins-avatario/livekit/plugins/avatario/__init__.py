@@ -1,5 +1,4 @@
-from .api import AvatarioException
-from .avatar import AvatarSession
+from .avatar import AvatarioException, AvatarSession
 from .version import __version__
 
 __all__ = [

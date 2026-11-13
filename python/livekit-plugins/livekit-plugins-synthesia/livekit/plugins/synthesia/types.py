@@ -15,11 +15,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 
 DEFAULT_API_URL = "https://developers.synthesia.io"
-DEFAULT_JOIN_TIMEOUT = 30.0
 DEFAULT_SWAP_TIMEOUT = 15.0
 AVATAR_IDENTITY = "synthesia-avatar-agent"
 AVATAR_NAME = "Synthesia avatar"
@@ -50,23 +49,3 @@ class AvatarConfig:
                 f"avatar_ids must contain between 1 and {MAX_AVATAR_IDS} ids, "
                 f"got {len(self.avatar_ids)}"
             )
-
-
-@dataclass(frozen=True)
-class SessionConfig:
-    avatar_ids: tuple[str, ...]
-    api_key: str = field(repr=False)
-    api_url: str
-    join_timeout: float
-
-
-@dataclass(frozen=True)
-class StartSessionRequest:
-    avatar_ids: list[str]
-    livekit_url: str
-    lk_token: str = field(repr=False)
-
-
-@dataclass(frozen=True)
-class StartSessionResponse:
-    session_id: str

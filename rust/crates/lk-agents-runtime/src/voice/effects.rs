@@ -133,13 +133,7 @@ impl VoiceRuntime {
                 self.shared.speeches.apply(producers, speech, update, &self.reports);
             }
             E::AttachRecorder { recorder, output: _ } => self.attach_recorder(recorder),
-            E::DetachRecorder(_) => {
-                self.recorder_observers.detach(&self.shared, None);
-                self.publications.recorder.set(None);
-                for output in self.driver.active_audio_outputs() {
-                    self.recorder_observers.attach(&self.shared, output);
-                }
-            }
+            E::DetachRecorder(_) => self.shared.recorder.detach(),
             E::FlushRecorder(at) => self.flush_recorder(at),
             E::PushKeyterms { stt, terms, warn_unsupported } => {
                 self.push_keyterms(stt, terms, warn_unsupported)
@@ -332,16 +326,11 @@ impl VoiceRuntime {
     }
 
     fn attach_recorder(&mut self, recorder: lk_agents_voice::agent_session::RecorderHandle) {
-        self.recorder_observers.detach(&self.shared, None);
         let Some(recorder) = self.shared.resources.recorder(recorder.0) else { return };
         recorder.observe(&self.peer.session);
         let tap = crate::voice::recorder::RecorderTap::new(recorder, self.shared.time.clock());
         let outputs: Vec<_> = self.driver.active_audio_outputs().collect();
-        crate::voice::recorder::join(&self.shared, &tap, &outputs);
-        self.publications.recorder.set(Some(tap));
-        for output in outputs {
-            self.recorder_observers.attach(&self.shared, output);
-        }
+        crate::voice::recorder::join(&self.shared, tap, &outputs);
     }
 
     fn flush_recorder(&self, at: f64) {

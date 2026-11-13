@@ -20,8 +20,7 @@ from aiohttp.test_utils import TestServer
 from multidict import CIMultiDict
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, CloseEvent, http
-from livekit.agents.voice.events import CloseReason
+from livekit.agents import APIConnectOptions, APIError, APIStatusError, http
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.plugins.boson_avatar import (
     AvatarInfo,
@@ -29,7 +28,6 @@ from livekit.plugins.boson_avatar import (
     BosonAvatarException,
     list_avatars,
 )
-from livekit.plugins.boson_avatar.api import AvatarSessionStartError
 from tests.fakes import until
 
 if TYPE_CHECKING:
@@ -38,7 +36,7 @@ if TYPE_CHECKING:
 # Any: decoded wire JSON, indexed by the provider's documented shape
 Wire = dict[str, Any]
 
-LOGGER = "livekit.plugins.boson_avatar"
+LOGGER = "livekit"
 PROVIDER_SECRET = "private-provider-response"
 ACTIVE = {
     "id": "avatar-session-1",
@@ -105,8 +103,8 @@ def _avatar(max_retry: int = 0) -> AvatarSession:
     )
 
 
-async def _start(avatar: AvatarSession, avatar_host: AvatarHost) -> str:
-    return await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+async def _start(avatar: AvatarSession, avatar_host: AvatarHost) -> None:
+    await avatar.start(avatar_host.agent, avatar_host.room)
 
 
 def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
@@ -129,7 +127,8 @@ async def test_start_and_close_use_the_hosted_contract(
         conn_options=APIConnectOptions(max_retry=0),
     )
 
-    session_id = await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+    await avatar.start(avatar_host.agent, avatar_host.room)
+    session_id = avatar.session_id
     await avatar.aclose()
 
     assert session_id == "avatar-session-1"
@@ -172,7 +171,7 @@ async def test_non_retryable_auth_error_preserves_status_and_request_id(
     )
 
     with pytest.raises(APIStatusError) as raised:
-        await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+        await avatar.start(avatar_host.agent, avatar_host.room)
     await avatar.aclose()
 
     assert (raised.value.status_code, raised.value.request_id) == (401, "req-1")
@@ -190,9 +189,11 @@ async def test_compensation_log_does_not_expose_provider_error(
     avatar = _avatar()
 
     with caplog.at_level(logging.WARNING, logger=LOGGER):
-        with pytest.raises(AvatarSessionStartError):
-            await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+        with pytest.raises(APIError) as raised:
+            await avatar.start(avatar_host.agent, avatar_host.room)
         await avatar.aclose()
+
+    assert raised.value.kind == "protocol"
 
     [create, *deletes] = [call[:2] for call in boson.calls]
     assert create == ("POST", "/v1/sessions")
@@ -203,34 +204,35 @@ async def test_compensation_log_does_not_expose_provider_error(
     assert PROVIDER_SECRET not in caplog.text
 
 
-async def test_close_retries_a_failed_end_and_stays_idempotent(
+async def test_close_ends_once_and_logs_a_failed_end_without_provider_text(
     avatar_host: AvatarHost, boson: Boson, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A failed end is retried by the next close; later closes send nothing."""
-    boson.outcomes = [(201, ACTIVE), (503, {"error": {"message": PROVIDER_SECRET}}), (204, None)]
+    """A close ends the session once; a failed end is logged without the provider's text and
+    later closes send nothing."""
+    boson.outcomes = [(201, ACTIVE), (503, {"error": {"message": PROVIDER_SECRET}})]
     avatar = _avatar()
-    await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+    await avatar.start(avatar_host.agent, avatar_host.room)
 
     with caplog.at_level(logging.WARNING, logger=LOGGER):
         await avatar.aclose()
         await avatar.aclose()
         await avatar.aclose()
 
-    assert [call[0] for call in boson.calls] == ["POST", "DELETE", "DELETE"]
-    assert avatar.session_id is None
-    record = _warnings(caplog)[0]
+    assert [call[0] for call in boson.calls] == ["POST", "DELETE"]
+    [record] = _warnings(caplog)
     assert record.exc_info is None
-    assert PROVIDER_SECRET not in caplog.text
+    # structured log fields are shipped too: the provider's answer stays out of them
+    assert PROVIDER_SECRET not in str(record.__dict__)
 
 
 async def test_start_twice_is_refused(avatar_host: AvatarHost, boson: Boson) -> None:
     """An AvatarSession starts once."""
     boson.outcomes = [(201, ACTIVE), (204, None)]
     avatar = _avatar()
-    await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+    await avatar.start(avatar_host.agent, avatar_host.room)
 
-    with pytest.raises(RuntimeError, match="called twice"):
-        await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+    with pytest.raises(RuntimeError, match="already started"):
+        await avatar.start(avatar_host.agent, avatar_host.room)
     await avatar.aclose()
 
 
@@ -408,9 +410,10 @@ async def test_invalid_created_session_is_refused_and_deleted(
     """A create answer that breaks the contract fails start; a session it names is deleted."""
     boson.outcomes = [(201, created), (204, None)]
 
-    with pytest.raises(BosonAvatarException):
+    with pytest.raises(APIError) as raised:
         await _start(_avatar(), avatar_host)
 
+    assert raised.value.kind == "protocol"
     assert boson.methods() == methods
 
 
@@ -422,12 +425,11 @@ async def test_start_refuses_an_avatar_identity_equal_to_the_agent(
         avatar_id="asset-1", api_key="boson-key", avatar_participant_identity="agent-1"
     )
 
-    with pytest.raises(BosonAvatarException, match="must differ"):
+    with pytest.raises(APIError, match="must differ"):
         await _start(avatar, avatar_host)
 
     assert boson.calls == []
     avatar_host.audio_tail.assert_not_called()
-    avatar_host.framework_start.assert_not_awaited()
 
 
 async def test_failed_start_after_create_deletes_the_session(
@@ -443,27 +445,6 @@ async def test_failed_start_after_create_deletes_the_session(
 
     assert boson.methods() == ["POST", "DELETE"]
     assert avatar.session_id is None
-
-
-async def test_failed_compensation_keeps_the_session_for_close(
-    avatar_host: AvatarHost, boson: Boson
-) -> None:
-    """A session whose start-time deletes failed is still deleted by the next close."""
-    boson.outcomes = [
-        (201, {**ACTIVE, "avatar_identity": "wrong-avatar"}),
-        *[(503, None)] * 2,
-        (204, None),
-    ]
-    avatar = _avatar()
-    with pytest.raises(AvatarSessionStartError):
-        await _start(avatar, avatar_host)
-    kept = avatar.session_id
-
-    await avatar.aclose()
-
-    assert kept == "avatar-session-1"
-    assert avatar.session_id is None
-    assert boson.methods() == ["POST", "DELETE", "DELETE", "DELETE"]
 
 
 @pytest.mark.parametrize(
@@ -502,7 +483,7 @@ async def test_close_during_start_deletes_the_session_being_created(
     asyncio.get_running_loop().call_soon(boson.holds["POST"].set)
     await avatar.aclose()
 
-    with pytest.raises(RuntimeError, match="closed while start"):
+    with pytest.raises(RuntimeError, match="closed while starting"):
         await start
     assert boson.methods() == ["POST", "DELETE"]
     assert avatar.session_id is None
@@ -543,7 +524,7 @@ async def test_cancelling_start_does_not_cancel_its_compensating_delete(
     await until(lambda: "DELETE" in boson.methods(), "Boson receives the delete")
 
     start.cancel()
-    with pytest.raises(RuntimeError, match="sink rejected"):
+    with pytest.raises(asyncio.CancelledError):
         await start
     boson.holds["DELETE"].set()
     await avatar.aclose()
@@ -571,17 +552,3 @@ async def test_cancelling_close_does_not_cancel_its_delete(
 
     assert boson.methods() == ["POST", "DELETE"]
     assert avatar.session_id is None
-
-
-async def test_voice_session_close_ends_the_provider_session(
-    avatar_host: AvatarHost, boson: Boson
-) -> None:
-    """When the voice session closes, the Boson session is deleted without an explicit close."""
-    boson.outcomes = [(201, ACTIVE), (204, None)]
-    avatar = _avatar()
-    await _start(avatar, avatar_host)
-
-    avatar_host.agent.emit("close", CloseEvent(reason=CloseReason.USER_INITIATED))
-    await until(lambda: avatar.session_id is None, "the Boson session is deleted")
-
-    assert boson.methods() == ["POST", "DELETE"]

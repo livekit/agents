@@ -2,33 +2,30 @@ from __future__ import annotations
 
 import os
 
-import livekit.rtc as rtc
-from livekit import api
+from pydantic import BaseModel, Field, JsonValue
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
-    VoiceSession,
-    get_job_context,
+    http,
     utils,
 )
-from livekit.agents.job import _server_credentials
-from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
-from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, AvatarStart
 
-from .api import DEFAULT_API_URL, AnamAPI
 from .errors import AnamException
-from .log import logger
 from .types import PersonaConfig, SessionOptions
 
-SAMPLE_RATE = 24000
-_AVATAR_AGENT_IDENTITY = "anam-avatar-agent"
-_AVATAR_AGENT_NAME = "anam-avatar-agent"
+DEFAULT_API_URL = "https://api.anam.ai"
+
+
+class _Session(BaseModel):
+    session_id: str | None = Field(default=None, alias="sessionId")
 
 
 class AvatarSession(BaseAvatarSession):
-    """A Anam avatar session"""
+    """An Anam avatar session"""
 
     def __init__(
         self,
@@ -39,88 +36,76 @@ class AvatarSession(BaseAvatarSession):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        super().__init__()
-        self._conn_options = conn_options
+        super().__init__(
+            avatar_participant_identity=avatar_participant_identity,
+            avatar_participant_name=avatar_participant_name,
+            livekit_url=livekit_url,
+            livekit_api_key=livekit_api_key,
+            livekit_api_secret=livekit_api_secret,
+            conn_options=conn_options,
+        )
         self.session_id: str | None = None
-        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
-        self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-        self._persona_config: PersonaConfig = persona_config
+        self._persona_config = persona_config
         self._session_options = session_options if utils.is_given(session_options) else None
-
-        api_url_val = (
+        if self._session_options is not None and (
+            (self._session_options.video_width is None)
+            != (self._session_options.video_height is None)
+        ):
+            # Anam rejects a lone width or height with a 400
+            raise ValueError("video_width and video_height must be set together (both or neither)")
+        self._api_url = (
             api_url if utils.is_given(api_url) else os.getenv("ANAM_API_URL", DEFAULT_API_URL)
         )
         api_key_val = api_key if utils.is_given(api_key) else os.getenv("ANAM_API_KEY")
-
         if not api_key_val:
             raise AnamException("ANAM_API_KEY must be set by arguments or environment variables")
-
-        self._api_url = api_url_val
         self._api_key = api_key_val
-
-    @property
-    def avatar_identity(self) -> str:
-        return self._avatar_participant_identity
 
     @property
     def provider(self) -> str:
         return "anam"
 
-    async def start(
-        self,
-        agent_session: VoiceSession,
-        room: rtc.Room,
-        *,
-        livekit_url: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
-    ) -> None:
-        await super().start(agent_session, room)
+    async def create_session(self, ctx: AvatarStart) -> str | None:
+        persona = self._persona_config
+        persona_payload: dict[str, JsonValue] = {
+            "type": "ephemeral",
+            "name": persona.name,
+            "avatarId": persona.avatarId,
+            "llmId": "CUSTOMER_CLIENT_V1",
+        }
+        if persona.avatarModel:
+            persona_payload["avatarModel"] = persona.avatarModel
+        if persona.directorNotes is not None:
+            # unset notes fall back to Anam's model and cue defaults
+            notes = {k: v for k, v in vars(persona.directorNotes).items() if v is not None}
+            if notes:
+                persona_payload["directorNotes"] = notes
 
-        livekit_url, livekit_api_key, livekit_api_secret = _server_credentials(
-            livekit_url, livekit_api_key, livekit_api_secret
-        )
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
-            raise AnamException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
-                "by arguments or environment variables"
-            )
+        payload: dict[str, JsonValue] = {
+            "personaConfig": persona_payload,
+            "environment": {"livekitUrl": ctx.livekit_url, "livekitToken": ctx.livekit_token()},
+        }
+        options: dict[str, JsonValue] = {}
+        if (session_options := self._session_options) is not None:
+            if session_options.video_width is not None:
+                options["videoWidth"] = session_options.video_width
+                options["videoHeight"] = session_options.video_height
+            if session_options.show_ai_avatar_disclosure is not None:
+                options["showAIAvatarDisclosure"] = session_options.show_ai_avatar_disclosure
+        if options:
+            payload["sessionOptions"] = options
 
-        job_ctx = get_job_context()
-        local_participant_identity = job_ctx.local_participant_identity
-        livekit_token = (
-            api.AccessToken(
-                api_key=livekit_api_key,
-                api_secret=livekit_api_secret,
-            )
-            .with_kind("agent")
-            .with_identity(self._avatar_participant_identity)
-            .with_name(self._avatar_participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
-            .to_jwt()
-        )
-        async with AnamAPI(
-            api_key=self._api_key, api_url=self._api_url, conn_options=self._conn_options
-        ) as anam_api:
-            logger.debug("Starting Anam engine session...")
-            session_details = await anam_api.start_session(
-                persona_config=self._persona_config,
-                livekit_url=livekit_url,
-                livekit_token=livekit_token,
-                session_options=self._session_options,
-            )
-            self.session_id = session_details.session_id
-
-        self._attach_audio_output(
-            agent_session,
-            DataStreamAudioOutput(
-                room=room,
-                destination_identity=self._avatar_participant_identity,
-                sample_rate=SAMPLE_RATE,
-                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-            ),
-        )
+        async with http.http_session().post(
+            f"{self._api_url}/v1/engine/session",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            json=payload,
+            conn_options=ctx.conn_options,
+        ) as response:
+            await response.raise_for_status()
+            self.session_id = _Session.model_validate_json(await response.text()).session_id
+        return self.session_id

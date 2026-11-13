@@ -15,11 +15,13 @@ from .client import (
 from .server import AgentRoutes
 from .socket import (
     DONE,
+    READY,
     Done,
     Encoded,
     EndOfInput,
     Keepalive,
     Multiplexer,
+    Ready,
     SocketProtocol,
     protocol_error,
 )
@@ -32,6 +34,8 @@ __all__ = [
     "EndOfInput",
     "Keepalive",
     "Multiplexer",
+    "READY",
+    "Ready",
     "SocketProtocol",
     "protocol_error",
     "FormData",

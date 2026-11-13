@@ -51,16 +51,29 @@ pub struct SocketConnection {
     pub max_session_duration: Option<f64>,
     /// The job's HTTP proxy, as the host's HTTP session uses it.
     pub proxy: Option<String>,
+    /// Seconds between pings; a ping unanswered for half of it fails the connection. `None`
+    /// sends none.
+    pub ping_interval: Option<f64>,
+    /// Sent first on the connection, before any input or command: the provider session's setup.
+    pub setup: Vec<WsFrame>,
+    /// The provider must say it is ready (`SocketSession.ready()`) before any input or command
+    /// is sent; it has the connect limit to say so, else the attempt fails with a timeout.
+    pub awaits_ready: bool,
 }
 
 /// The frames of the next input item, encoded. `boundary`: it ended a segment (a flush), where a
-/// due rotation may run. `end`: it was the last item.
+/// due rotation may run. `end`: it was the last item. `done`: the stream owes nothing more, so it
+/// ends once these frames went, with no goodbye or drain. `command`: the id of the command these
+/// frames carry, which belongs to the connection it was taken on: once written it is reported
+/// `sent`, and one that connection could not write is `returned` instead of sent on another.
 #[crate::host(record(module = "socket", extract))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SocketSend {
     pub frames: Vec<WsFrame>,
     pub boundary: bool,
     pub end: bool,
+    pub done: bool,
+    pub command: Option<u64>,
 }
 
 /// A plugin's socket protocol (`http.SocketProtocol`), as the executor drives one connection
@@ -93,6 +106,14 @@ pub trait SocketHost: Send + Sync {
     /// A failed attempt the session retries, as the provider's recoverable `error` event.
     #[host(notify, name = "_core_retrying")]
     fn retrying(&self, error: ProviderError);
+
+    /// The command `command` was written to its connection.
+    #[host(notify, name = "_core_sent")]
+    fn sent(&self, command: u64);
+
+    /// The command `command` was taken but its connection ended before writing it.
+    #[host(notify, name = "_core_returned")]
+    fn returned(&self, command: u64);
 }
 
 /// A plugin's `http.Multiplexer`: one provider socket carrying many streams, each a context.
@@ -159,6 +180,10 @@ pub trait SocketSession: Send + Sync + Sized + 'static {
     #[host(call)]
     fn reconnect(&self, reason: String);
 
+    /// The provider is ready for input on the current connection (see `awaits_ready`).
+    #[host(call)]
+    fn ready(&self);
+
     /// Run until the input ended and the provider finished, or the failure that ended it.
     #[host(await)]
     async fn run(&self, cx: crate::telemetry::Cx) -> Result<(), ProviderError>;
@@ -182,6 +207,10 @@ pub trait SocketMux: Send + Sync + Sized + 'static {
         host: Arc<dyn MuxHost>,
         #[host(kw, default = None)] max_contexts: Option<u32>,
     ) -> Self;
+
+    /// Open a shared socket now, unless one has room: the first stream then finds it open.
+    #[host(call)]
+    fn prewarm(&self);
 
     /// Options changed: idle sockets close, busy ones close once their streams end.
     #[host(call)]

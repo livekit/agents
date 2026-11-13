@@ -620,7 +620,7 @@ type AvatarLifecycleWaitForJoinTimeoutInput = ::std::option::Option<f64>;
 /// room was connected, `avatar_joined_time` when the video was published); a session's assistant
 /// message added with a `playback_latency` is reported as `AvatarMetrics(playback_latency=..)`
 /// until the close. Each metric reaches the avatar's `metrics_collected` and the session's
-/// metrics once it runs. Inside a job, the job's shutdown runs the avatar's `aclose`. An avatar
+/// metrics once it runs. The session's close runs the avatar's `aclose`. An avatar
 /// not joined [`JOIN_TIMEOUT`] after its start is the session's one recoverable `avatar_error`,
 /// and its attached output stops waiting for it; the join wait goes on.
 #[pyclass(frozen, name = "_core_AvatarLifecycle", module = "livekit.agents._core")]
@@ -6778,49 +6778,36 @@ impl ::lk_agents_abi::voice::avatar::AvatarHost for AvatarHostProxy {
         );
     }
 
-    fn close(
+    fn aclose(
         &self,
-    ) -> ::std::result::Result<::lk_agents_abi::HostRef, ::lk_agents_abi::errors::HostError> {
+        cx: &::lk_agents_abi::telemetry::Cx,
+    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(
-            &crate::py_calls::calling_context(&self.context),
-        )
-        .cloned();
-        let out = ::lk_agents_runtime::host::call_now(
+        let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
+            "AvatarHost.aclose",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] =
-                    [host.bind(py).clone(), ::pyo3::types::PyString::new(py, "aclose").into_any()];
-                Ok((
-                    py.import("builtins")?.getattr("getattr")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("aclose")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.value.bind(py);
-            let out = (context
-                .as_ref()
-                .map(|context| out.returned_context(py, context))
-                .transpose()
-                .and_then(|context| {
-                    crate::py_calls::returning(context, || {
-                        crate::py_objects::object_ref_from_py(o.as_any())
-                    })
-                }))
-            .map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
-                    py, &e,
-                )
-            })?;
-            Ok(out)
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
         })
     }
 }

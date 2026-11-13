@@ -95,3 +95,57 @@ mod a_recorder_attached_mid_segment {
         assert!(played, "the recorder was told the rest of the segment played");
     }
 }
+
+mod a_recorder_attached_while_a_segment_is_held {
+    //! A segment that started on an output and is held there before it reports (the output
+    //! replaced, then back) has played nothing: a recorder attached meanwhile records all of it,
+    //! where the speaker reports it played.
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
+
+    // Catches: survey seed 591. The recorder attached seconds after the held segment started was
+    // told it had played since then and given none of it, so the progress the speaker reported
+    // from offset 0 placed silence where the person heard the audio.
+    #[test]
+    fn the_held_segment_is_recorded_where_it_plays() {
+        let inputs = [
+            Input::Say {
+                text: AgentText("I'm sorry, I did not catch that at all.".into()),
+                input: SayInput::Words,
+                allow: None,
+                to_ctx: true,
+            },
+            Input::Advance { ms: Millis(100) },
+            Input::PlayoutStarted { segment: Ref::new(0) },
+            Input::SetAudioOutput { attach: false },
+            Input::Advance { ms: Millis(3_000) },
+            Input::SetAudioOutput { attach: true },
+            Input::Recorder { attach: true },
+            Input::Advance { ms: Millis(1_000) },
+            Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(500) },
+            Input::Advance { ms: Millis(500) },
+            Input::PlayoutFinished { segment: Ref::new(0) },
+            Input::Advance { ms: Millis(5_000) },
+        ];
+        let run = simulate(async {
+            let mut run = Run::start(&Setup::default(), 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            run
+        });
+        let (failures, _) = lk_agents_fuzz::check::check_all(&run.record);
+        let unheard: Vec<_> =
+            failures.iter().filter(|f| f.contract == "recording_is_what_played").collect();
+        assert!(unheard.is_empty(), "{unheard:?}");
+        let progressed = run.record.sink().iter().any(|(_, sink)| {
+            matches!(
+                sink,
+                lk_agents_fuzz::record::Sink::Recorder(
+                    lk_agents_fuzz::record::RecorderCall::PlaybackProgressed
+                )
+            )
+        });
+        assert!(progressed, "the speaker reported the held segment playing");
+    }
+}

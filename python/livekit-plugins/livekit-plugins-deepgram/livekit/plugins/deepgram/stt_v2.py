@@ -14,26 +14,22 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
-from pydantic import ValidationError
+from pydantic import Field
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
     LanguageCode,
     http,
     stt,
-    utils,
 )
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -44,7 +40,7 @@ from livekit.agents.voice.io import TranscriptChunk
 
 from ._utils import to_deepgram_url
 from .log import logger
-from .models import FluxResponse, V2Models
+from .models import V2Models
 
 FluxRedaction = Literal["numbers", "aggressive_numbers"]
 
@@ -80,7 +76,6 @@ class STTv2(stt.STT):
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        http_session: http.HttpSession | None = None,
         base_url: str = "wss://api.deepgram.com/v2/listen",
         mip_opt_out: bool = False,
         numerals: bool = False,
@@ -99,7 +94,6 @@ class STTv2(stt.STT):
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
             language_hint: List of str of language hints to bias the model for improved accuracy. Only usable with `flux-general-multi`. Defaults to NOT_GIVEN.
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
-            http_session: Optional HttpSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
             mip_opt_out: Whether to take part in the model improvement program
             numerals: Whether to convert spoken numbers into numerical formats. Applied at connection time; Flux does not support toggling it mid-stream. Defaults to False.
@@ -162,14 +156,7 @@ class STTv2(stt.STT):
         # user keyterms; _opts.keyterm holds the effective set (user + session)
         self._user_keyterm: list[str] = list(self._opts.keyterm)
         self._session_keyterms: list[str] = []
-        self._session = http_session
         self._streams = weakref.WeakSet[SpeechStreamv2]()
-
-    def _ensure_session(self) -> http.HttpSession:
-        if not self._session:
-            self._session = http.http_session()
-
-        return self._session
 
     async def _recognize_impl(
         self,
@@ -201,7 +188,6 @@ class STTv2(stt.STT):
             conn_options=conn_options,
             opts=self._opts,
             api_key=self._api_key,
-            http_session=self._ensure_session(),
             base_url=self._opts.endpoint_url,
         )
         self._streams.add(stream)
@@ -298,8 +284,53 @@ class STTv2(stt.STT):
             stream.update_options(keyterm=merged)
 
 
-class SpeechStreamv2(stt.RecognizeStream):
-    _CLOSE_MSG: str = json.dumps({"type": "CloseStream"})
+class _Word(TypedDict):
+    word: str
+    start: float
+    end: float
+    confidence: NotRequired[float]
+
+
+class _TurnInfo(TypedDict):
+    type: Literal["TurnInfo"]
+    event: str
+    transcript: NotRequired[str]
+    words: NotRequired[list[_Word]]
+    languages: NotRequired[list[str]]
+    audio_window_start: NotRequired[float]
+    audio_window_end: NotRequired[float]
+    request_id: NotRequired[str]
+
+
+class _ConfigureResult(TypedDict):
+    type: Literal["ConfigureSuccess", "ConfigureFailure"]
+
+
+class _Error(TypedDict):
+    type: Literal["Error"]
+    description: NotRequired[str]
+
+
+_Message = Annotated[_TurnInfo | _ConfigureResult | _Error, Field(discriminator="type")]
+
+
+class _CloseStream(TypedDict):
+    type: Literal["CloseStream"]
+
+
+class _Configure(TypedDict):
+    # https://developers.deepgram.com/docs/flux/configure: only the changed fields
+    type: Literal["Configure"]
+    thresholds: NotRequired[dict[str, float | int]]
+    keyterms: NotRequired[list[str]]
+    language_hints: NotRequired[list[str]]
+
+
+class SpeechStreamv2(stt.SocketStream[_Message, _CloseStream | _Configure]):
+    goodbye = _CloseStream(type="CloseStream")
+    frame_ms = 50
+    # Flux detects turns itself: StartOfTurn and EndOfTurn
+    provider_vad = True
 
     def __init__(
         self,
@@ -308,22 +339,13 @@ class SpeechStreamv2(stt.RecognizeStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: http.HttpSession,
         base_url: str,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._api_key = api_key
-        self._session = http_session
         self._opts.endpoint_url = base_url
-        self._speaking = False
-
         self._request_id = ""
-        self._reconnect_event = asyncio.Event()
-        # active connection for in-band Configure updates; None while disconnected
-        self._ws: http.WebSocket | None = None
-        self._tasks = utils.aio.TaskSet()
-        self._reconfigure_atask: asyncio.Task[None] | None = None
 
     def update_options(
         self,
@@ -386,143 +408,27 @@ class SpeechStreamv2(stt.RecognizeStream):
             )
         )
         if needs_reconnect:
-            # reconnect carries the latest options
-            self._reconnect_event.set()
+            # the next connection carries the latest options
+            self.reconnect("options changed")
             return
 
-        # send only changed fields; Flux keeps omitted ones unchanged
-        # https://developers.deepgram.com/docs/flux/configure
-        thresholds: dict[str, Any] = {}
+        configure = _Configure(type="Configure")
+        thresholds: dict[str, float | int] = {}
         if is_given(eager_eot_threshold):
             thresholds["eager_eot_threshold"] = eager_eot_threshold
         if is_given(eot_threshold):
             thresholds["eot_threshold"] = eot_threshold
         if is_given(eot_timeout_ms):
             thresholds["eot_timeout_ms"] = eot_timeout_ms
-
-        changed_options: dict[str, Any] = {}
         if thresholds:
-            changed_options["thresholds"] = thresholds
+            configure["thresholds"] = thresholds
         if is_given(keyterm):
             # keyterms replaces the whole list, so send the full effective set
-            changed_options["keyterms"] = self._opts.keyterm
+            configure["keyterms"] = list(self._opts.keyterm)
         if is_given(language_hint):
-            changed_options["language_hints"] = self._opts.language_hint
-
-        if changed_options:
-            # chain off the previous send so deltas reach the server in order
-            self._reconfigure_atask = self._tasks.spawn(
-                self._send_configure(changed_options, self._reconfigure_atask)
-            )
-
-    async def _send_configure(
-        self, options: dict[str, Any], prev: asyncio.Task[None] | None
-    ) -> None:
-        if prev is not None:
-            await asyncio.gather(prev, return_exceptions=True)
-
-        ws = self._ws
-        if ws is None or ws.closed:
-            # not connected; next connection carries the latest options
-            return
-        try:
-            await ws.send_str(json.dumps({"type": "Configure", **options}))
-        except Exception:
-            # closing; next connection carries the latest options
-            logger.debug("failed to send Configure to deepgram")
-
-    async def _run(self) -> None:
-        closing_ws = False
-
-        async def send_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-
-            # forward audio to deepgram in chunks of 50ms
-            samples_50ms = self._opts.sample_rate // 20
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_50ms,
-            )
-
-            try:
-                async for data in self.input:
-                    frames: list[rtc.AudioFrame] = []
-                    if isinstance(data, rtc.AudioFrame):
-                        frames.extend(audio_bstream.push(data.data.tobytes()))
-                    else:
-                        frames.extend(audio_bstream.flush())
-
-                    for frame in frames:
-                        await ws.send_bytes(frame.data.tobytes())
-
-                # tell deepgram we are done sending audio/inputs
-                closing_ws = True
-                await ws.send_str(SpeechStreamv2._CLOSE_MSG)
-            except APIConnectionError as e:
-                # a mid-write socket drop surfaces here as a raw connection error.
-                # if the close is expected (aclose or the http session closing) just
-                # return; otherwise re-raise as a retryable APIError so _main_task
-                # reconnects, symmetric with recv_task.
-                if closing_ws or self._session.closed:
-                    return
-                raise APIConnectionError("deepgram connection closed unexpectedly") from e
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            while True:
-                try:
-                    msg = await ws.receive()
-                except APIConnectionError:
-                    # the heartbeat closes the socket when a ping goes unanswered
-                    if closing_ws or self._session.closed:
-                        return
-                    raise
-
-                if msg.type == http.WebSocketMessageType.CLOSE:
-                    # close is expected, see SpeechStream.aclose
-                    # or when the agent session ends, the http session is closed
-                    if closing_ws or self._session.closed:
-                        return
-
-                    raise ws.close_error("deepgram connection closed unexpectedly")
-
-                if msg.type != http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected deepgram message type %s", msg.type)
-                    continue
-
-                try:
-                    event = FluxResponse.model_validate_json(msg.data)
-                except ValidationError as e:
-                    raise APIError(
-                        "deepgram sent a malformed message", kind="protocol", detail=str(msg.data)
-                    ) from e
-                self._process_stream_event(event)
-
-        ws: http.WebSocket | None = None
-
-        while True:
-            if self._speaking:  # a new connection starts outside any turn
-                self._speaking = False
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-            try:
-                ws = await self._connect_ws()
-                # expose the connection for in-band Configure updates
-                self._ws = ws
-                async with utils.aio.TaskSet() as tasks:
-                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-                    reconnect = tasks.spawn(self._reconnect_event.wait())
-                    if await tasks.first_completed(io, reconnect) is not reconnect:
-                        break
-
-                    self._reconnect_event.clear()
-            finally:
-                self._ws = None
-                if self._reconfigure_atask is not None:
-                    await utils.aio.cancel_and_wait(self._reconfigure_atask)
-                    self._reconfigure_atask = None
-                if ws is not None:
-                    await ws.close()
+            configure["language_hints"] = language_hint
+        if len(configure) > 1:
+            self.send_command(configure)
 
     def _live_config(self) -> dict[str, Any]:
         live_config: dict[str, Any] = {
@@ -561,133 +467,81 @@ class SpeechStreamv2(stt.RecognizeStream):
 
         return live_config
 
-    async def _connect_ws(self) -> http.WebSocket:
-        live_config = self._live_config()
-
-        ws = await self._session.ws_connect(
-            to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        return http.SocketTarget(
+            to_deepgram_url(self._live_config(), base_url=self._opts.endpoint_url, websocket=True),
             headers={"Authorization": f"Token {self._api_key}"},
-            heartbeat=30.0,
-            conn_options=self._conn_options,
+            request_id_header="dg-request-id",
         )
 
-        ws_headers = {k: v for k, v in ws.headers.items() if k.startswith("dg-") or k == "Date"}
-        logger.debug(
-            "Established new Deepgram STT WebSocket connection:",
-            extra={"headers": ws_headers},
-        )
-        return ws
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_CloseStream | _Configure]:
+        # Flux finds the turns itself: a flush only sends the partial chunk, which the base does
+        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
 
-    def _send_transcript_event(self, event_type: stt.SpeechEventType, data: FluxResponse) -> None:
-        alts = _parse_transcription(self._opts.language, data, self.start_time_offset)
-        if alts:
-            event = stt.SpeechEvent(
-                type=event_type,
-                request_id=self._request_id,
-                alternatives=alts,
-            )
-            self.send(event)
-
-    def _process_stream_event(self, data: FluxResponse) -> None:
-        event = data
-        assert self._opts.language is not None
-
-        if request_id := event.request_id:
-            self._request_id = request_id
-
-        if event.type == "TurnInfo":
-            event_type = event.event
-
-            if event_type == "StartOfTurn":
-                if self._speaking:
-                    return
-
-                self._speaking = True
-                start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                self.send(start_event)
-
-                self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
-
-            elif event_type == "Update":
-                if not self._speaking:
-                    return
-
-                self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
-
-            elif event_type == "EagerEndOfTurn":
-                # technically, a pause in speech is detected. for lifecycle purposes,
-                # we are assuming the user is still speaking and sending a preflight event to
-                # start preemptive synthesis.
-                if not self._speaking:
-                    return
-
-                self._send_transcript_event(stt.SpeechEventType.PREFLIGHT_TRANSCRIPT, data)
-
-            elif event_type == "TurnResumed":
-                # sending interim transcript will abort eager end of turn
-                self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
-
-            elif event_type == "EndOfTurn":
-                if not self._speaking:
-                    return
-
-                self._speaking = False
-
-                self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, data)
-
-                end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                self.send(end_event)
-
-        elif event.type == "ConfigureSuccess":
-            logger.debug(
-                "deepgram applied Configure update", extra={"lk.pii.data": data.model_dump()}
-            )
-
-        elif event.type == "ConfigureFailure":
-            logger.warning(
-                "deepgram rejected Configure update", extra={"lk.pii.data": data.model_dump()}
-            )
-
-        elif event.type == "Error":
+    def on_message(
+        self, message: _TurnInfo | _ConfigureResult | _Error
+    ) -> stt.Report | list[stt.Report] | None:
+        if message["type"] == "ConfigureSuccess":
+            logger.debug("deepgram applied Configure update", extra={"lk.pii.data": message})
+            return None
+        if message["type"] == "ConfigureFailure":
+            logger.warning("deepgram rejected Configure update", extra={"lk.pii.data": message})
+            return None
+        if message["type"] == "Error":
             raise APIError(
-                "deepgram returned an error", kind="invalid_request", detail=event.description
+                "deepgram returned an error",
+                kind="invalid_request",
+                detail=message.get("description"),
             )
 
+        if request_id := message.get("request_id"):
+            self._request_id = request_id
+        event = message["event"]
+        if event == "StartOfTurn":
+            return [stt.SpeechStarted(), *self._transcript(message)]
+        if event in ("Update", "TurnResumed"):
+            # an interim also aborts an eager end of turn
+            return self._transcript(message)
+        if event == "EagerEndOfTurn":
+            # a pause: preflight for preemptive generation, the turn still open
+            return self._transcript(message, preflight=True)
+        if event == "EndOfTurn":
+            return [*self._transcript(message, final=True), stt.SpeechEnded()]
+        return None
 
-def _parse_transcription(
-    language: str, data: FluxResponse, start_time_offset: float
-) -> list[stt.SpeechData]:
-    response = data
-    transcript = response.transcript
-    words = response.words
-    if not words:
-        return []
-    confidence = sum((word.confidence or 0.0) for word in words) / len(words) if words else 0
-
-    detected_languages = response.languages
-    primary_language = (
-        LanguageCode(detected_languages[0]) if detected_languages else LanguageCode(language)
-    )
-
-    sd = stt.SpeechData(
-        language=primary_language,
-        start_time=response.audio_window_start + start_time_offset,
-        end_time=response.audio_window_end + start_time_offset,
-        confidence=confidence,
-        text=transcript or "",
-        source_languages=[LanguageCode(lang) for lang in detected_languages] or None,
-        words=[
-            TranscriptChunk(
-                text=word.word,
-                start_time=word.start + start_time_offset,
-                end_time=word.end + start_time_offset,
-                confidence=(word.confidence or 0.0),
-                start_time_offset=start_time_offset,
+    def _transcript(
+        self, message: _TurnInfo, *, final: bool = False, preflight: bool = False
+    ) -> list[stt.Report]:
+        words = message.get("words", [])
+        if not words:
+            return []
+        offset = self.start_time_offset
+        languages = message.get("languages", [])
+        return [
+            stt.Transcript(
+                message.get("transcript", ""),
+                LanguageCode(languages[0] if languages else self._opts.language),
+                final=final,
+                preflight=preflight,
+                request_id=self._request_id,
+                start_time=message.get("audio_window_start", 0.0) + offset,
+                end_time=message.get("audio_window_end", 0.0) + offset,
+                confidence=sum(w.get("confidence", 0.0) for w in words) / len(words),
+                source_languages=[LanguageCode(lang) for lang in languages] or None,
+                words=[
+                    TranscriptChunk(
+                        text=w["word"],
+                        start_time=w["start"] + offset,
+                        end_time=w["end"] + offset,
+                        confidence=w.get("confidence", 0.0),
+                        start_time_offset=offset,
+                    )
+                    for w in words
+                ],
             )
-            for word in words
-        ],
-    )
-    return [sd]
+        ]
 
 
 def _validate_tags(tags: list[str]) -> list[str]:

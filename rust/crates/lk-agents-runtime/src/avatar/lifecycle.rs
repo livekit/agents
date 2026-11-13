@@ -42,6 +42,17 @@ impl Avatars {
         id
     }
 
+    /// The attached avatars, closed by their session's close while its room is still up.
+    pub(crate) async fn close(&self, cx: &lk_agents_abi::telemetry::Cx) {
+        let hosts: Vec<Arc<dyn AvatarHost>> =
+            self.0.lock().attached.iter().map(|(_, a)| a.host.clone()).collect();
+        for host in hosts {
+            if let Err(error) = host.aclose(cx).await {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "the avatar's close raised: {error}");
+            }
+        }
+    }
+
     fn detach(&self, id: u64) {
         let detached = {
             let mut avatars = self.0.lock();
@@ -172,17 +183,6 @@ impl AvatarLifecycle {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
     ) -> Result<Self, HostError> {
-        match &job {
-            Some(job) => job.run().add_framework_shutdown(
-                "AvatarSession.aclose".into(),
-                lk_agents_abi::worker::ipc_host::FrameworkShutdown::Host(avatar.close()?),
-            ),
-            None => log::debug!(
-                target: lk_agents_abi::LOG_TARGET,
-                "AvatarSession started outside a job context; call aclose() manually to release \
-                 resources when the job shuts down"
-            ),
-        }
         let attached =
             owner.avatars().attach(Attached { provider: provider.clone(), host: avatar.clone() });
         let (settle, joined) = signal::once();

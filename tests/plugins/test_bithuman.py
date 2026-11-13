@@ -27,7 +27,7 @@ from livekit.agents.voice.avatar import QueueAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.plugins.bithuman import AvatarSession
 from livekit.plugins.bithuman.avatar import RenderedFrame, RuntimeSettings
-from tests.fakes import until
+from tests.fakes import AgentRoom, until
 
 if TYPE_CHECKING:
     from tests.plugins.conftest import AvatarHost
@@ -75,7 +75,7 @@ async def peer(avatar_host: AvatarHost, monkeypatch: pytest.MonkeyPatch) -> Asyn
 
 
 async def _start(avatar: AvatarSession, avatar_host: AvatarHost) -> None:
-    await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+    await avatar.start(avatar_host.agent, avatar_host.room)
 
 
 @pytest.mark.parametrize("model", ["expression-2", None])
@@ -227,7 +227,7 @@ def created(monkeypatch: pytest.MonkeyPatch) -> list[_Runtime]:
 async def _start_local(avatar: AvatarSession) -> QueueAudioOutput:
     """Starts a local avatar for a voice session and returns the session's audio sink."""
     voice = VoiceSession(vad=None)
-    await avatar.start(voice, rtc.Room())
+    await avatar.start(voice, AgentRoom())
     audio = voice.output.audio
     assert isinstance(audio, QueueAudioOutput)
     return audio

@@ -435,6 +435,9 @@ impl lk_agents_abi::tts::stream_pacer::PushedAudio for AudioEmitter {
     fn end_segment(&self) -> Result<(), EmitterError> {
         lk_agents_abi::media::emitter::AudioEmitter::end_segment(self)
     }
+    fn push(&self, data: &[u8]) -> Result<(), EmitterError> {
+        lk_agents_abi::media::emitter::AudioEmitter::push(self, data)
+    }
     fn push_frame(&self, frame: AudioFrame) -> Result<(), EmitterError> {
         lk_agents_abi::media::emitter::AudioEmitter::push_frame(self, frame)
     }

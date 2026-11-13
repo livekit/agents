@@ -14,7 +14,8 @@ use lk_agents_net::transport::{TransportError, WsReceiver, WsSender};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
-use super::{Inbound, Transports, close_by, lost, open_direct, recv_direct};
+use super::liveness::{Beat, Liveness};
+use super::{Inbound, Transports, close_by, lost, open_direct, recv_heard};
 
 /// What a shared socket hands each context: its frames, then how the socket ended.
 type Routed = Result<Inbound, ProviderError>;
@@ -47,6 +48,15 @@ struct Usage {
     generation: u64,
 }
 
+impl Usage {
+    /// A current socket, not retired, with room for one more context.
+    fn room(&self, generation: u64, now: Ts, max: u32) -> bool {
+        self.generation == generation
+            && !self.retire_at.is_some_and(|at| now >= at)
+            && self.contexts < max
+    }
+}
+
 #[derive(Default)]
 struct Sockets {
     open: BTreeMap<u64, (Arc<Socket>, Usage)>,
@@ -56,7 +66,45 @@ struct Sockets {
 }
 
 /// `_core.SocketMux`: the shared sockets of a multiplexing provider, connected on demand.
-pub struct Mux {
+pub struct Mux(Arc<Shared>);
+
+impl Mux {
+    pub fn new(
+        host: Arc<dyn MuxHost>,
+        max_contexts: Option<u32>,
+        env: ProcessEnv,
+        transports: Transports,
+    ) -> Self {
+        Mux(Arc::new(Shared::new(host, max_contexts, env, transports)))
+    }
+
+    /// A context on a socket with room for it, connecting one when none has.
+    pub(super) async fn acquire(
+        &self,
+        cx: &Cx,
+        conn_options: &ApiConnectOptions,
+        context_id: String,
+    ) -> Result<Context, ProviderError> {
+        self.0.acquire(cx, conn_options, context_id).await
+    }
+
+    /// Opens a socket in the background unless one has room.
+    pub fn prewarm(&self) {
+        Shared::prewarm(&self.0);
+    }
+
+    /// Options changed: idle sockets close now, busy ones once their last stream ends.
+    pub fn invalidate(&self) {
+        self.0.invalidate();
+    }
+
+    pub async fn aclose(&self) {
+        self.0.aclose().await;
+    }
+}
+
+/// The mux's state, shared with its readers and background connects.
+pub(super) struct Shared {
     host: Arc<dyn MuxHost>,
     max_contexts: u32,
     env: ProcessEnv,
@@ -68,14 +116,14 @@ pub struct Mux {
     tasks: Arc<TaskSet>,
 }
 
-impl Mux {
-    pub fn new(
+impl Shared {
+    fn new(
         host: Arc<dyn MuxHost>,
         max_contexts: Option<u32>,
         env: ProcessEnv,
         transports: Transports,
     ) -> Self {
-        Mux {
+        Shared {
             host,
             max_contexts: max_contexts.unwrap_or(u32::MAX).max(1),
             env,
@@ -108,7 +156,7 @@ impl Mux {
             let _connecting = self.connecting.lock().await;
             match self.take_room(&background) {
                 Some(socket) => socket,
-                None => self.connect(cx, conn_options, &background).await?,
+                None => self.connect(cx, conn_options, &background, 1).await?,
             }
         };
         let (tx, rx) = mpsc::unbounded_channel();
@@ -135,18 +183,19 @@ impl Mux {
             }
         }
         let max = self.max_contexts;
-        let (socket, usage) = sockets.open.values_mut().find(|(_, usage)| {
-            usage.generation == generation && !retired(usage) && usage.contexts < max
-        })?;
+        let (socket, usage) =
+            sockets.open.values_mut().find(|(_, usage)| usage.room(generation, now, max))?;
         usage.contexts += 1;
         Some(Arc::clone(socket))
     }
 
+    /// Connects a socket holding `contexts` streams from the start.
     async fn connect(
         self: &Arc<Self>,
         cx: &Cx,
         conn_options: &ApiConnectOptions,
         background: &Background,
+        contexts: u32,
     ) -> Result<Arc<Socket>, ProviderError> {
         loop {
             let generation = self.sockets.lock().generation;
@@ -167,7 +216,7 @@ impl Mux {
                     });
                     let retire_at =
                         options.max_session_duration.map(|limit| now.saturating_add(limit));
-                    let usage = Usage { contexts: 1, retire_at, generation };
+                    let usage = Usage { contexts, retire_at, generation };
                     sockets.open.insert(socket.id, (Arc::clone(&socket), usage));
                     socket
                 })
@@ -185,11 +234,38 @@ impl Mux {
                     Arc::clone(&socket),
                     receiver,
                     options.keepalive,
+                    options.ping,
                     Arc::clone(&self.env.clock),
                 ),
             );
             return Ok(socket);
         }
+    }
+
+    /// Opens a socket in the background unless a current one has room, so the first stream finds
+    /// it open. A failure is left to that stream's own connect.
+    fn prewarm(self: &Arc<Self>) {
+        let Ok(background) = self.background() else { return };
+        let mux = Arc::clone(self);
+        let opener = background.clone();
+        background.spawn("socket mux prewarm", async move {
+            let _connecting = mux.connecting.lock().await;
+            if mux.has_room() {
+                return;
+            }
+            let options = ApiConnectOptions::default();
+            if let Err(error) = mux.connect(&Cx::NONE, &options, &opener, 0).await {
+                log::debug!(target: lk_agents_abi::LOG_TARGET, "prewarming a shared socket failed: {error}");
+            }
+        });
+    }
+
+    /// Whether a current socket has room for one more context.
+    fn has_room(&self) -> bool {
+        let now = self.clock().now();
+        let sockets = self.sockets.lock();
+        let generation = sockets.generation;
+        sockets.open.values().any(|(_, usage)| usage.room(generation, now, self.max_contexts))
     }
 
     /// A context left `socket`; once idle a stale socket closes.
@@ -252,22 +328,30 @@ impl Mux {
 }
 
 /// A shared socket's reader: each frame to the context the multiplexer routes it to, the
-/// keepalive, and the socket's end to every context on it.
+/// keepalive and the pings, and the socket's end to every context on it.
 async fn read(
-    mux: Weak<Mux>,
+    mux: Weak<Shared>,
     host: Arc<dyn MuxHost>,
     socket: Arc<Socket>,
     mut receiver: Box<dyn WsReceiver>,
     keepalive: Option<(Duration, WsFrame)>,
+    ping: Option<Duration>,
     clock: Arc<dyn Clock>,
 ) {
+    let liveness = ping.map(|interval| Mutex::new(Liveness::new(interval, clock.now())));
+    let heard = || {
+        if let Some(liveness) = &liveness {
+            liveness.lock().heard();
+        }
+    };
     let end: Routed = loop {
         let keepalive_at = keepalive
             .as_ref()
             .map(|(interval, _)| socket.last_sent.lock().saturating_add(*interval));
+        let ping_at = liveness.as_ref().map(|liveness| liveness.lock().wake_at());
         tokio::select! {
             biased;
-            inbound = recv_direct(receiver.as_mut()) => match inbound {
+            inbound = recv_heard(receiver.as_mut(), &heard) => match inbound {
                 Ok(Inbound::Frame(frame)) => match host.route(&Cx::NONE, frame.clone()).await {
                     Ok(Some(context_id)) => {
                         if let Some(route) = socket.routes.lock().get(&context_id) {
@@ -288,6 +372,22 @@ async fn read(
                     break Err(lost(error).into());
                 }
             }
+            () = crate::wait_for_deadline(clock.as_ref(), ping_at) => {
+                let beat = liveness.as_ref().map(|liveness| liveness.lock().tick(clock.now()));
+                match beat {
+                    // a write is never timed: the pong it owes is
+                    Some(Beat::Ping) => {
+                        if let Err(error) = socket.sender.ping().await {
+                            break Err(lost(error).into());
+                        }
+                    }
+                    Some(Beat::Lost) => {
+                        let error = "the provider stopped answering pings";
+                        break Err(ApiError::connection(Some(error.into())).into());
+                    }
+                    Some(Beat::Wait) | None => {}
+                }
+            }
         }
     };
     if let Some(mux) = mux.upgrade() {
@@ -302,7 +402,7 @@ async fn read(
 
 /// A stream's context on a shared socket.
 pub(super) struct Context {
-    mux: Arc<Mux>,
+    mux: Arc<Shared>,
     socket: Arc<Socket>,
     context_id: String,
     rx: mpsc::UnboundedReceiver<Routed>,

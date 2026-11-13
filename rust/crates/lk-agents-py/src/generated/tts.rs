@@ -138,6 +138,131 @@ impl Markup {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/tts/segments.rs.
+type TtsSegmentsImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::TtsSegments;
+type TtsSegmentsOpenOutput = ::std::vec::Vec<::std::string::String>;
+
+/// `_core.TtsSegments`: one attempt's segments. The input as `encode` takes it (a chunk opens a
+/// segment when none is open, a flush ends it), each segment's audio played in order into the
+/// emitter (a later segment's waits for the ones before it) and completed once, and the read
+/// deadline, run while a segment whose text ended is unanswered.
+#[pyclass(frozen, name = "TtsSegments", module = "livekit.agents._core")]
+pub struct TtsSegments(pub(crate) ::std::sync::Arc<TtsSegmentsImpl>);
+
+#[pymethods]
+impl TtsSegments {
+    /// `label` names the provider in a protocol failure.
+    #[new]
+    #[pyo3(signature = (emitter, deadline, label))]
+    fn new(
+        py: Python<'_>,
+        emitter: Bound<'_, PyAny>,
+        deadline: Bound<'_, PyAny>,
+        label: ::std::string::String,
+    ) -> PyResult<TtsSegments> {
+        crate::py_calls::check_pid()?;
+        let emitter = crate::py_objects::native::<
+            dyn ::lk_agents_abi::tts::stream_pacer::PushedAudio,
+        >(emitter.as_any())
+        .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "emitter",
+                    ": expected a tts.AudioEmitter"
+                ))
+            })
+        })?;
+        let deadline = crate::py_objects::native::<
+            dyn ::lk_agents_abi::types::provider::ReadDeadline,
+        >(deadline.as_any())
+        .and_then(|native| {
+            native.ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "deadline",
+                    ": expected a ProviderAttempts"
+                ))
+            })
+        })?;
+        let out = py.detach(|| {
+            <TtsSegmentsImpl as ::lk_agents_abi::tts::segments::TtsSegments>::new(
+                emitter, deadline, label,
+            )
+        });
+        ::pyo3::PyResult::Ok(TtsSegments(::std::sync::Arc::new(out)))
+    }
+
+    /// A chunk of the input.
+    #[pyo3(signature = (chunk))]
+    fn push(&self, py: Python<'_>, chunk: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let chunk = crate::generated::records::tts::speech_chunk_from_py(chunk.as_any())?;
+        py.detach(|| <TtsSegmentsImpl as ::lk_agents_abi::tts::segments::TtsSegments>::push(&self.0, chunk)).map_err(|e: ::lk_agents_abi::tts::segments::SegmentError| <::lk_agents_abi::tts::segments::SegmentError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// A flush: the open segment's text ended.
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <TtsSegmentsImpl as ::lk_agents_abi::tts::segments::TtsSegments>::flush(&self.0)
+        });
+        Ok(())
+    }
+
+    /// The next input `encode` takes; `None` while none is queued.
+    fn next<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <TtsSegmentsImpl as ::lk_agents_abi::tts::segments::TtsSegments>::next(&self.0)).map_err(|e: ::lk_agents_abi::tts::segments::SegmentError| <::lk_agents_abi::tts::segments::SegmentError as crate::py_errors::HostException>::to_py_err(&e))?;
+        out.map(|value| crate::generated::records::tts_segments::segment_input_to_py(py, value))
+            .transpose()
+    }
+
+    /// What `on_message` returned for a segment.
+    #[pyo3(signature = (output))]
+    fn deliver(&self, py: Python<'_>, output: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let output =
+            crate::generated::records::tts_segments::segment_output_from_py(output.as_any())?;
+        py.detach(|| <TtsSegmentsImpl as ::lk_agents_abi::tts::segments::TtsSegments>::deliver(&self.0, output)).map_err(|e: ::lk_agents_abi::tts::segments::SegmentError| <::lk_agents_abi::tts::segments::SegmentError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// Whether `segment_id` is a segment not yet done: a multiplexed stream's context.
+    #[pyo3(signature = (segment_id))]
+    fn holds(&self, py: Python<'_>, segment_id: ::std::string::String) -> PyResult<bool> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <TtsSegmentsImpl as ::lk_agents_abi::tts::segments::TtsSegments>::holds(
+                &self.0, segment_id,
+            )
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// The segments not yet done, in order.
+    #[getter]
+    fn open(&self, py: Python<'_>) -> PyResult<TtsSegmentsOpenOutput> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <TtsSegmentsImpl as ::lk_agents_abi::tts::segments::TtsSegments>::open(&self.0)
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// Waits until every segment is done.
+    fn settled<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () =
+                <TtsSegmentsImpl as ::lk_agents_abi::tts::segments::TtsSegments>::settled(&this)
+                    .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/tts/stream_adapter.rs.
 type TtsStreamAdapterImpl =
     <crate::generated::implementations::Selected as super::Implementations>::TtsStreamAdapter;
@@ -1315,6 +1440,15 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                 Ok(out)
             })
         })
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::tts::segments::SegmentError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        match self {
+            Self::Protocol(inner) => crate::py_errors::HostException::to_py_err(inner),
+            Self::Emitter(inner) => crate::py_errors::HostException::to_py_err(inner),
+        }
     }
 }
 

@@ -124,6 +124,8 @@ class SocketSession:
         """
     def reconnect(self, reason: str) -> None:
         """Rotate the connection now: goodbye, drain, close, connect again. No retry is spent."""
+    def ready(self) -> None:
+        """The provider is ready for input on the current connection (see `awaits_ready`)."""
     async def run(self) -> None:
         """Run until the input ended and the provider finished, or the failure that ended it."""
     async def aclose(self) -> None:
@@ -134,6 +136,8 @@ class SocketMux:
     carrying up to `max_contexts` streams and replaced after `max_session_duration`.
     """
     def __new__(cls, host: Multiplexer, *, max_contexts: int | None = None) -> Self: ...
+    def prewarm(self) -> None:
+        """Open a shared socket now, unless one has room: the first stream then finds it open."""
     def invalidate(self) -> None:
         """Options changed: idle sockets close, busy ones close once their streams end."""
     async def aclose(self) -> None:

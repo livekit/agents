@@ -27,6 +27,16 @@ pub async fn connect_through(
     max_message_size: Option<usize>,
     proxy: Option<&str>,
 ) -> Result<RawWebSocket, TransportError> {
+    Ok(handshake(url, headers, max_message_size, proxy).await?.0)
+}
+
+/// [`connect_through`], with the headers the handshake's response carried.
+async fn handshake(
+    url: &str,
+    headers: Headers,
+    max_message_size: Option<usize>,
+    proxy: Option<&str>,
+) -> Result<(RawWebSocket, Headers), TransportError> {
     use tungstenite::client::IntoClientRequest;
 
     let mut request =
@@ -60,11 +70,18 @@ pub async fn connect_through(
             .await
             .map_err(|error| TransportError::Connect(error.to_string()))?,
     };
-    let (socket, _response) =
+    let (socket, response) =
         tokio_tungstenite::client_async_tls_with_config(request, stream, config, connector)
             .await
             .map_err(classify_tungstenite)?;
-    Ok(socket)
+    Ok((socket, response_headers(response.headers())))
+}
+
+fn response_headers(headers: &tungstenite::http::HeaderMap) -> Headers {
+    headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_owned(), v.to_owned())))
+        .collect()
 }
 
 /// The longest proxy response head read before the proxy is refused.
@@ -173,21 +190,22 @@ pub struct ProxiedTransport {
 impl WsTransport for ProxiedTransport {
     /// Unbounded: the caller bounds it on its session clock.
     async fn connect(&self, url: &str, headers: Headers) -> Result<Halves, TransportError> {
-        split(connect_through(url, headers, None, self.proxy.as_deref()).await?)
+        let (stream, response) = handshake(url, headers, None, self.proxy.as_deref()).await?;
+        split(stream, response)
     }
 }
 
 /// A connected socket's two halves.
 type Halves = (Arc<dyn WsSender>, Box<dyn WsReceiver>);
 
-fn split(stream: RawWebSocket) -> Result<Halves, TransportError> {
+fn split(stream: RawWebSocket, response: Headers) -> Result<Halves, TransportError> {
     let (sink, source) = stream.split();
     Ok((
         Arc::new(TungsteniteSender {
             sink: tokio::sync::Mutex::new(sink),
             closed: std::sync::atomic::AtomicBool::new(false),
         }),
-        Box::new(TungsteniteReceiver { source, close_code: None, close_reason: None }),
+        Box::new(TungsteniteReceiver { source, response, close_code: None, close_reason: None }),
     ))
 }
 
@@ -199,7 +217,8 @@ impl WsTransport for TungsteniteTransport {
         url: &str,
         headers: Headers,
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
-        split(connect_with_limit(url, headers, None).await?)
+        let (stream, response) = handshake(url, headers, None, None).await?;
+        split(stream, response)
     }
 }
 
@@ -209,11 +228,7 @@ pub fn classify_tungstenite(err: tokio_tungstenite::tungstenite::Error) -> Trans
     match err {
         Error::Http(response) => {
             let status = i64::from(response.status().as_u16());
-            let headers: Headers = response
-                .headers()
-                .iter()
-                .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_owned(), v.to_owned())))
-                .collect();
+            let headers = response_headers(response.headers());
             let body = response.body().as_ref().map(|b| String::from_utf8_lossy(b).into_owned());
             TransportError::Status {
                 status,
@@ -260,6 +275,18 @@ impl WsSender for TungsteniteSender {
             .map_err(classify_tungstenite)
     }
 
+    async fn ping(&self) -> Result<(), TransportError> {
+        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(TransportError::Closed);
+        }
+        self.sink
+            .lock()
+            .await
+            .send(Message::Ping(Default::default()))
+            .await
+            .map_err(classify_tungstenite)
+    }
+
     fn is_closed(&self) -> bool {
         self.closed.load(std::sync::atomic::Ordering::SeqCst)
     }
@@ -280,6 +307,8 @@ impl WsSender for TungsteniteSender {
 
 struct TungsteniteReceiver {
     source: futures_util::stream::SplitStream<RawWebSocket>,
+    /// The handshake response's headers.
+    response: Headers,
     close_code: Option<u16>,
     close_reason: Option<String>,
 }
@@ -312,6 +341,10 @@ impl WsReceiver for TungsteniteReceiver {
 
     fn close_reason(&self) -> Option<String> {
         self.close_reason.clone()
+    }
+
+    fn response_header(&self, name: &str) -> Option<String> {
+        self.response.get(name).map(str::to_owned)
     }
 }
 

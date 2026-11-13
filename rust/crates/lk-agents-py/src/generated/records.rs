@@ -16548,6 +16548,44 @@ pub mod socket {
                     (v.extract::<::std::string::String>()).map(Some)
                 }
             })?,
+            ping_interval: crate::py_values::attr_with(
+                obj,
+                "SocketConnection",
+                "ping_interval",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (crate::py_values::number_from_py::<f64>(
+                            v,
+                            "SocketConnection.ping_interval",
+                        ))
+                        .map(Some)
+                    }
+                },
+            )?,
+            setup: crate::py_values::attr_with(obj, "SocketConnection", "setup", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::socket::ws_frame_from_py(item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "SocketConnection.setup: expected a list or tuple",
+                    ))
+                }
+            })?,
+            awaits_ready: crate::py_values::attr_with(
+                obj,
+                "SocketConnection",
+                "awaits_ready",
+                |v| v.extract::<bool>(),
+            )?,
         })
     }
 
@@ -16587,6 +16625,14 @@ pub mod socket {
                 v.extract::<bool>()
             })?,
             end: crate::py_values::attr_with(obj, "SocketSend", "end", |v| v.extract::<bool>())?,
+            done: crate::py_values::attr_with(obj, "SocketSend", "done", |v| v.extract::<bool>())?,
+            command: crate::py_values::attr_with(obj, "SocketSend", "command", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<u64>(v, "SocketSend.command")).map(Some)
+                }
+            })?,
         })
     }
 }
@@ -19656,6 +19702,118 @@ pub mod stt {
             (),
             Some(&kwargs),
         )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/stt/events.rs.
+    static TRANSCRIPT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn transcript_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::stt::events::Transcript> {
+        let py = obj.py();
+        if !obj.is_instance(TRANSCRIPT.import(
+            py,
+            "livekit.agents._generated.stt",
+            "Transcript",
+        )?)? {
+            return Err(super::not_a(obj, "Transcript"));
+        }
+        Ok(::lk_agents_abi::stt::events::Transcript {
+            text: crate::py_values::attr_with(obj, "Transcript", "text", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            language: crate::py_values::attr_with(obj, "Transcript", "language", |v| {
+                crate::py_values::str_from_py(v)
+            })?,
+            r#final: crate::py_values::attr_with(obj, "Transcript", "final", |v| {
+                v.extract::<bool>()
+            })?,
+            preflight: crate::py_values::attr_with(obj, "Transcript", "preflight", |v| {
+                v.extract::<bool>()
+            })?,
+            request_id: crate::py_values::attr_with(obj, "Transcript", "request_id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            start_time: crate::py_values::attr_with(obj, "Transcript", "start_time", |v| {
+                crate::py_values::number_from_py::<f64>(v, "Transcript.start_time")
+            })?,
+            end_time: crate::py_values::attr_with(obj, "Transcript", "end_time", |v| {
+                crate::py_values::number_from_py::<f64>(v, "Transcript.end_time")
+            })?,
+            confidence: crate::py_values::attr_with(obj, "Transcript", "confidence", |v| {
+                crate::py_values::number_from_py::<f64>(v, "Transcript.confidence")
+            })?,
+            speaker_id: crate::py_values::attr_with(obj, "Transcript", "speaker_id", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            words: crate::py_values::attr_with(obj, "Transcript", "words", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (if v.is_instance_of::<::pyo3::types::PyList>()
+                        || v.is_instance_of::<::pyo3::types::PyTuple>()
+                    {
+                        v.try_iter()?
+                            .map(|item| {
+                                let item = &item?;
+                                crate::generated::records::transcript::transcript_chunk_from_py(
+                                    item,
+                                )
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    } else {
+                        Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "Transcript.words: expected a list or tuple",
+                        ))
+                    })
+                    .map(Some)
+                }
+            })?,
+            source_languages: crate::py_values::attr_with(
+                obj,
+                "Transcript",
+                "source_languages",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (if v.is_instance_of::<::pyo3::types::PyList>()
+                            || v.is_instance_of::<::pyo3::types::PyTuple>()
+                        {
+                            v.try_iter()?
+                                .map(|item| {
+                                    let item = &item?;
+                                    crate::py_values::str_from_py(item)
+                                })
+                                .collect::<PyResult<Vec<_>>>()
+                        } else {
+                            Err(::pyo3::exceptions::PyTypeError::new_err(
+                                "Transcript.source_languages: expected a list or tuple",
+                            ))
+                        })
+                        .map(Some)
+                    }
+                },
+            )?,
+            metadata: crate::py_values::attr_with(obj, "Transcript", "metadata", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (match crate::py_values::value_from_py(v, "Transcript.metadata")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "Transcript.metadata: expected a dict",
+                        )),
+                    })
+                    .map(Some)
+                }
+            })?,
+        })
     }
 
     // Declared in rust/crates/lk-agents-abi/src/stt/stt.rs.
@@ -23637,6 +23795,25 @@ pub mod tts {
     static SPEECH_CHUNK: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
+    pub fn speech_chunk_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::SpeechChunk> {
+        let py = obj.py();
+        if !obj.is_instance(SPEECH_CHUNK.import(
+            py,
+            "livekit.agents._generated.tts",
+            "SpeechChunk",
+        )?)? {
+            return Err(super::not_a(obj, "SpeechChunk"));
+        }
+        Ok(::lk_agents_abi::SpeechChunk {
+            text: crate::py_values::attr_with(obj, "SpeechChunk", "text", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            said: crate::py_values::attr_with(obj, "SpeechChunk", "said", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+        })
+    }
+
     pub fn speech_chunk_to_py<'py>(
         py: Python<'py>,
         value: ::lk_agents_abi::SpeechChunk,
@@ -23650,6 +23827,257 @@ pub mod tts {
             (),
             Some(&kwargs),
         )
+    }
+}
+
+pub mod tts_segments {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/segments.rs.
+    static SEGMENT_START: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn segment_start_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::tts::segments::SegmentStart,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::tts::segments::SegmentStart { segment_id } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs
+            .set_item("segment_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id, py)?)?;
+        crate::py_calls::call(
+            SEGMENT_START
+                .import(py, "livekit.agents._generated.tts_segments", "SegmentStart")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/segments.rs.
+    static SEGMENT_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn segment_text_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::tts::segments::SegmentText,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::tts::segments::SegmentText { segment_id, chunk } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs
+            .set_item("segment_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id, py)?)?;
+        kwargs.set_item("chunk", crate::generated::records::tts::speech_chunk_to_py(py, chunk)?)?;
+        crate::py_calls::call(
+            SEGMENT_TEXT
+                .import(py, "livekit.agents._generated.tts_segments", "SegmentText")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/segments.rs.
+    static SEGMENT_END: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn segment_end_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::tts::segments::SegmentEnd,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::tts::segments::SegmentEnd { segment_id } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs
+            .set_item("segment_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id, py)?)?;
+        crate::py_calls::call(
+            SEGMENT_END
+                .import(py, "livekit.agents._generated.tts_segments", "SegmentEnd")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/segments.rs.
+
+    pub fn segment_input_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::tts::segments::SegmentInput,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::tts::segments::SegmentInput::Start(x) => {
+                crate::generated::records::tts_segments::segment_start_to_py(py, x)?
+            }
+            ::lk_agents_abi::tts::segments::SegmentInput::Text(x) => {
+                crate::generated::records::tts_segments::segment_text_to_py(py, x)?
+            }
+            ::lk_agents_abi::tts::segments::SegmentInput::End(x) => {
+                crate::generated::records::tts_segments::segment_end_to_py(py, x)?
+            }
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/segments.rs.
+    static SEGMENT_AUDIO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn segment_audio_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::tts::segments::SegmentAudio> {
+        let py = obj.py();
+        if !obj.is_instance(SEGMENT_AUDIO.import(
+            py,
+            "livekit.agents._generated.tts_segments",
+            "SegmentAudio",
+        )?)? {
+            return Err(super::not_a(obj, "SegmentAudio"));
+        }
+        Ok(::lk_agents_abi::tts::segments::SegmentAudio {
+            segment_id: crate::py_values::attr_with(obj, "SegmentAudio", "segment_id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            data: crate::py_values::attr_with(obj, "SegmentAudio", "data", |v| {
+                if v.is_instance_of::<::pyo3::types::PyBytes>()
+                    || v.is_instance_of::<::pyo3::types::PyByteArray>()
+                    || v.is_instance_of::<::pyo3::types::PyMemoryView>()
+                {
+                    crate::py_values::owned_bytes(v.as_any(), "SegmentAudio.data")
+                } else {
+                    v.try_iter().and_then(|items| {
+                        items
+                            .map(|item| {
+                                let item = item?;
+                                crate::py_values::number_from_py::<u8>(
+                                    item.as_any(),
+                                    "SegmentAudio.data",
+                                )
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    })
+                }
+            })?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/segments.rs.
+    static SEGMENT_WORDS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn segment_words_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::tts::segments::SegmentWords> {
+        let py = obj.py();
+        if !obj.is_instance(SEGMENT_WORDS.import(
+            py,
+            "livekit.agents._generated.tts_segments",
+            "SegmentWords",
+        )?)? {
+            return Err(super::not_a(obj, "SegmentWords"));
+        }
+        Ok(::lk_agents_abi::tts::segments::SegmentWords {
+            segment_id: crate::py_values::attr_with(obj, "SegmentWords", "segment_id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            words: crate::py_values::attr_with(obj, "SegmentWords", "words", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::transcript::transcript_chunk_from_py(item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "SegmentWords.words: expected a list or tuple",
+                    ))
+                }
+            })?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/segments.rs.
+    static SEGMENT_DONE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn segment_done_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::tts::segments::SegmentDone> {
+        let py = obj.py();
+        if !obj.is_instance(SEGMENT_DONE.import(
+            py,
+            "livekit.agents._generated.tts_segments",
+            "SegmentDone",
+        )?)? {
+            return Err(super::not_a(obj, "SegmentDone"));
+        }
+        Ok(::lk_agents_abi::tts::segments::SegmentDone {
+            segment_id: crate::py_values::attr_with(obj, "SegmentDone", "segment_id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tts/segments.rs.
+    static SEGMENT_OUTPUT__SEGMENT_AUDIO: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static SEGMENT_OUTPUT__SEGMENT_WORDS: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static SEGMENT_OUTPUT__SEGMENT_DONE: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn segment_output_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::tts::segments::SegmentOutput> {
+        if obj.is_instance(
+            SEGMENT_OUTPUT__SEGMENT_AUDIO
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tts_segments")?
+                            .getattr("SegmentAudio")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::tts::segments::SegmentOutput::Audio(
+                crate::generated::records::tts_segments::segment_audio_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance(
+            SEGMENT_OUTPUT__SEGMENT_WORDS
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tts_segments")?
+                            .getattr("SegmentWords")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::tts::segments::SegmentOutput::Words(
+                crate::generated::records::tts_segments::segment_words_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance(
+            SEGMENT_OUTPUT__SEGMENT_DONE
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.tts_segments")?
+                            .getattr("SegmentDone")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::tts::segments::SegmentOutput::Done(
+                crate::generated::records::tts_segments::segment_done_from_py(obj)?,
+            ));
+        }
+        Err(super::not_a(obj, "SegmentOutput"))
     }
 }
 

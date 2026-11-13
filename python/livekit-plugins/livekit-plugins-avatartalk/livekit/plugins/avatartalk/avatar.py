@@ -1,24 +1,42 @@
+from __future__ import annotations
+
 import os
 
-import livekit.rtc as rtc
+from pydantic import BaseModel
+
 from livekit import api
-from livekit.agents import NOT_GIVEN, NotGivenOr, VoiceSession, get_job_context
-from livekit.agents.job import _server_credentials
-from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
-from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    http,
+)
+from livekit.agents.voice.avatar import (
+    AvatarSession as BaseAvatarSession,
+    AvatarStart,
+    DataStreamAudioOutput,
+)
 
-from .api import AvatarTalkAPI, AvatarTalkException
-from .log import logger
-
-_AVATAR_AGENT_IDENTITY = "avatartalk-agent"
-_AVATAR_AGENT_NAME = "avatartalk-agent"
+DEFAULT_API_URL = "https://api.avatartalk.ai"
 DEFAULT_AVATAR_NAME = "japanese_man"
 DEFAULT_AVATAR_EMOTION = "expressive"
-SAMPLE_RATE = 16000
+# the participant the provider listens to the agent's audio as
+_LISTENER_IDENTITY = "listener"
+
+
+class AvatarTalkException(Exception):
+    """Exception for AvatarTalkAPI errors"""
+
+
+class _Session(BaseModel):
+    task_id: str | None
 
 
 class AvatarSession(BaseAvatarSession):
     """AvatarTalkAPI avatar session"""
+
+    sample_rate = 16000
 
     def __init__(
         self,
@@ -27,132 +45,70 @@ class AvatarSession(BaseAvatarSession):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         avatar: NotGivenOr[str | None] = NOT_GIVEN,
         emotion: NotGivenOr[str | None] = NOT_GIVEN,
-        avatar_participant_identity: NotGivenOr[str | None] = NOT_GIVEN,
-        avatar_participant_name: NotGivenOr[str | None] = NOT_GIVEN,
-    ):
-        super().__init__()
-        self._avatartalk_api = AvatarTalkAPI(api_url, api_secret)
-        self._avatar = avatar or (os.getenv("AVATARTALK_AVATAR") or DEFAULT_AVATAR_NAME)
-        self._emotion = emotion or (os.getenv("AVATARTALK_EMOTION") or DEFAULT_AVATAR_EMOTION)
-        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
-        self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
+        avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> None:
+        super().__init__(
+            avatar_participant_identity=avatar_participant_identity or "avatartalk-agent",
+            avatar_participant_name=avatar_participant_name,
+            livekit_url=livekit_url,
+            livekit_api_key=livekit_api_key,
+            livekit_api_secret=livekit_api_secret,
+            conn_options=conn_options,
+        )
+        self._api_url = api_url or DEFAULT_API_URL
+        api_key = api_secret or os.getenv("AVATARTALK_API_KEY")
+        if not api_key:
+            raise AvatarTalkException(
+                "AvatarTalk API key is required, either as argument or set"
+                " AVATARTALK_API_KEY environment variable"
+            )
+        self._headers = {"Authorization": f"Bearer {api_key}"}
+        self._avatar = avatar or os.getenv("AVATARTALK_AVATAR") or DEFAULT_AVATAR_NAME
+        self._emotion = emotion or os.getenv("AVATARTALK_EMOTION") or DEFAULT_AVATAR_EMOTION
         self.conversation_id: str | None = None
-
-    @property
-    def avatar_identity(self) -> str:
-        return self._avatar_participant_identity
 
     @property
     def provider(self) -> str:
         return "avatartalk"
 
-    def __generate_lk_token(
-        self,
-        livekit_api_key: str,
-        livekit_api_secret: str,
-        room: rtc.Room,
-        participant_identity: str,
-        participant_name: str,
-        as_agent: bool = True,
-        local_participant_identity: str | None = None,
-    ) -> str:
-        token = api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
-        token = token.with_identity(participant_identity)
-        token = token.with_name(participant_name)
-        token = token.with_grants(api.VideoGrants(room_join=True, room=room.name))
-
-        if as_agent:
-            token = token.with_kind("agent")
-
-        if local_participant_identity is not None:
-            token = token.with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
-
-        return token.to_jwt()
-
-    async def start(
-        self,
-        agent_session: VoiceSession,
-        room: rtc.Room,
-        *,
-        livekit_url: NotGivenOr[str | None] = NOT_GIVEN,
-        livekit_api_key: NotGivenOr[str | None] = NOT_GIVEN,
-        livekit_api_secret: NotGivenOr[str | None] = NOT_GIVEN,
-    ) -> None:
-        livekit_url, livekit_api_key, livekit_api_secret = _server_credentials(
-            livekit_url, livekit_api_key, livekit_api_secret
+    async def create_session(self, ctx: AvatarStart) -> str | None:
+        listener_token = (
+            ctx.access_token()
+            .with_identity(_LISTENER_IDENTITY)
+            .with_name(_LISTENER_IDENTITY)
+            .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name))
+            .to_jwt()
         )
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
-            raise AvatarTalkException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set by arguments or environment variables"
-            )
-
-        job_ctx = get_job_context()
-
-        local_participant_identity = job_ctx.local_participant_identity
-        livekit_token = self.__generate_lk_token(
-            livekit_api_key,
-            livekit_api_secret,
-            room,
-            self._avatar_participant_identity,
-            self._avatar_participant_name,
-            as_agent=True,
-            local_participant_identity=local_participant_identity,
-        )
-
-        livekit_listener_token = self.__generate_lk_token(
-            livekit_api_key,
-            livekit_api_secret,
-            room,
-            "listener",
-            "listener",
-            as_agent=False,
-            local_participant_identity=None,
-        )
-
-        logger.debug(
-            "Starting Avatartalk agent session",
-            extra={"avatar": self._avatar, "room_name": room.name},
-        )
-        resp = await self._avatartalk_api.start_session(
-            livekit_url=livekit_url,
-            avatar=self._avatar,
-            emotion=self._emotion,
-            room_name=room.name,
-            livekit_listener_token=livekit_listener_token,
-            livekit_room_token=livekit_token,
-            agent_identity=local_participant_identity,
-        )
-
-        self.conversation_id = resp.task_id
-        logger.debug(
-            "Avatartalk agent session started",
-            extra={
+        async with http.http_session().post(
+            f"{self._api_url}/livekit/create-session",
+            headers=self._headers,
+            json={
+                "livekit_url": ctx.livekit_url,
                 "avatar": self._avatar,
                 "emotion": self._emotion,
-                "room_name": room.name,
-                "task_id": self.conversation_id,
+                "room_name": ctx.room.name,
+                "room_token": ctx.livekit_token(),
+                "listener_token": listener_token,
+                "agent_identity": ctx.agent_identity,
             },
-        )
+            conn_options=ctx.conn_options,
+        ) as response:
+            await response.raise_for_status()
+            self.conversation_id = _Session.model_validate_json(await response.text()).task_id
+        return self.conversation_id
 
-        await super().start(agent_session, room)
-        self._attach_audio_output(
-            agent_session,
-            DataStreamAudioOutput(
-                room=room,
-                destination_identity="listener",
-                sample_rate=SAMPLE_RATE,
-                # wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-            ),
-        )
+    async def end_session(self, session_id: str) -> None:
+        async with http.http_session().delete(
+            f"{self._api_url}/livekit/delete-session/{session_id}", headers=self._headers
+        ) as response:
+            await response.raise_for_status()
 
-    async def aclose(self) -> None:
-        try:
-            if self.conversation_id is not None:
-                try:
-                    await self._avatartalk_api.stop_session(self.conversation_id)
-                except Exception:
-                    logger.warning("failed to stop AvatarTalk session", exc_info=True)
-                else:
-                    self.conversation_id = None
-        finally:
-            await super().aclose()
+    def audio_output(self, ctx: AvatarStart) -> DataStreamAudioOutput:
+        return DataStreamAudioOutput(
+            room=ctx.room, destination_identity=_LISTENER_IDENTITY, sample_rate=self.sample_rate
+        )

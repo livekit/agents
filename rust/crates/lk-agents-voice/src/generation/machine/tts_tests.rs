@@ -160,3 +160,52 @@ fn a_word_still_being_written_waits_for_the_rest_of_it() {
     got.extend(shown(state.end(&said)));
     assert_eq!(got.concat(), "Monday. Tuesday 9-5 sharp", "{got:?}");
 }
+
+// Catches (survey seed 1010): a voice that stamps each sentence whole (the sentence adapter) said
+// "Note: the office is closed on Monday." in one stamp, which matched no single word and was held,
+// so the sentence never showed while it played.
+#[test]
+fn a_sentence_stamped_whole_releases_its_words() {
+    let said =
+        Visible::of("> Note: *the office is closed* on Monday.\n- Tuesday", &Vocabulary::LiveKit);
+    let mut state = AlignedTranscript::default();
+    let effects = state.word(&stamp("Note: the office is closed on Monday.", 0.0, 1.8), &said);
+    let shown: String = effects
+        .iter()
+        .filter_map(|e| match e {
+            AlignedTranscriptEffect::CaptureTimed(c) => Some(c.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown, "> Note: *the office is closed* on Monday.\n");
+    assert!(effects.iter().all(|e| matches!(e,
+        AlignedTranscriptEffect::CaptureTimed(c) if c.start_time == Some(0.0))));
+}
+
+// Catches (survey seed 1010): a stamp that matched no word counted as accepted, so when the voice
+// was then lost the transcript kept only the stamped words (none) and dropped the whole text of a
+// speech that completed.
+#[test]
+fn a_held_stamp_never_stands_for_what_was_heard() {
+    let said = Visible::of("**Hi** there \u{2615}", &Vocabulary::LiveKit);
+    let mut state = AlignedTranscript::default();
+    assert!(state.word(&stamp("zzz", 0.0, 0.4), &said).is_empty(), "held");
+    assert!(!state.stamped);
+    let lost = Lost {
+        failure: None,
+        lost: true,
+        opening: said.clone(),
+        synchronized: None,
+        played: true,
+        heard: Heard::default(),
+    };
+    let effects = SynthesisLoss::default()
+        .handle(SynthesisLossEvent::Failed { lost: Box::new(lost), aligned: Some(state) });
+    assert!(effects.iter().any(|e| matches!(e,
+        SynthesisLossEffect::Capture(chunks) if *chunks == said.shown)));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, SynthesisLossEffect::Drain { text: DrainedText::Forward, .. }))
+    );
+}

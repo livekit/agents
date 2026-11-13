@@ -155,7 +155,10 @@ impl AttemptMachine {
     }
 
     pub fn observe(&mut self, event: SpeechEvent, now_ns: u64) {
+        let retracted = event.best_alternative().is_some_and(|a| a.text.is_empty());
         match event.kind {
+            // an empty final withdrew the interim: it answered, and nothing more is owed
+            SpeechEventType::InterimTranscript if retracted => self.response(true, now_ns),
             SpeechEventType::InterimTranscript | SpeechEventType::PreflightTranscript => {
                 self.pending_transcript = true;
                 self.response(false, now_ns);
@@ -431,6 +434,20 @@ impl Port for ProviderAttempts {
 
     fn cleanup_timeout(&self) -> f64 {
         lk_agents_abi::HOST_TEARDOWN_TIMEOUT.as_secs_f64()
+    }
+}
+
+impl lk_agents_abi::types::provider::ReadDeadline for ProviderAttempts {
+    fn expect_response(&self) {
+        Port::expect_response(self, false);
+    }
+
+    fn progress(&self) {
+        Port::progress(self);
+    }
+
+    fn complete_response(&self) {
+        Port::complete_response(self);
     }
 }
 
@@ -857,6 +874,22 @@ mod tests {
         operation.observe(SpeechEvent::new(SpeechEventType::InterimTranscript), 0);
         assert!(operation.succeeded(0).is_err());
         operation.response(true, 0);
+        assert_eq!(operation.succeeded(0), Ok(()));
+    }
+
+    // Catches: an interim the provider withdrew (an empty final after it) left owing a final, so
+    // the recognition times out or fails its completion check.
+    #[test]
+    fn a_retracted_interim_owes_no_transcript() {
+        let options = ApiConnectOptions { max_retry: 0, ..Default::default() };
+        let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
+        operation.ready(0).unwrap();
+        operation.input_ended(0);
+        let mut interim = SpeechEvent::new(SpeechEventType::InterimTranscript);
+        interim.alternatives = vec![lk_agents_abi::SpeechData::new("en", "uh")];
+        operation.observe(interim.clone(), 0);
+        interim.alternatives = vec![lk_agents_abi::SpeechData::new("en", "")];
+        operation.observe(interim, 0);
         assert_eq!(operation.succeeded(0), Ok(()));
     }
 }

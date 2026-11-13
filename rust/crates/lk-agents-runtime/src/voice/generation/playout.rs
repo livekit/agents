@@ -539,12 +539,7 @@ impl Playing<'_> {
                 Some(Ok(())) => {
                     let segment = self.out.tracker().current_segment();
                     self.state.captured(segment, frame_duration(frame));
-                    if let Some(segment) = segment {
-                        self.shared.unplayed.lock().captured(segment, frame);
-                    }
-                    if let Some(tap) = self.shared.recorder_tap() {
-                        tap.recorder.capture_frame(tap.now(), frame);
-                    }
+                    self.shared.recorder.captured(segment, frame);
                 }
                 Some(Err(error)) => {
                     // The core cuts the speech for it; the cut is that interruption's.

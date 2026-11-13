@@ -7,20 +7,16 @@ WebSocket API for full-duplex conversational AI with audio I/O.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import time
-import weakref
-from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from typing import Literal
-from urllib.parse import quote, urlencode
+from typing import Literal, TypedDict
 
 import numpy as np
 import sphn
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APITimeoutError, http, llm, utils
+from livekit.agents import APIConnectOptions, http, llm, utils
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 
@@ -39,8 +35,7 @@ MSG_TEXT = 0x02
 _SPECIAL_TOKENS = {0, 3}
 
 DEFAULT_SILENCE_THRESHOLD_MS = 500
-MAX_RETRY_DELAY = 30.0
-INITIAL_RETRY_DELAY = 1.0
+OPUS_FRAME_MS = 80  # a valid Opus frame size
 
 
 @dataclass
@@ -50,6 +45,7 @@ class _PersonaplexOptions:
     text_prompt: str
     seed: int | None
     silence_threshold_ms: int
+    conn_options: APIConnectOptions
     use_ssl: bool = False
 
 
@@ -88,7 +84,7 @@ class RealtimeModel(llm.RealtimeModel):
         text_prompt: str = "You are a helpful assistant.",
         seed: int | None = None,
         silence_threshold_ms: int = DEFAULT_SILENCE_THRESHOLD_MS,
-        http_session: http.HttpSession | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """Initialize the PersonaPlex RealtimeModel.
 
@@ -103,7 +99,7 @@ class RealtimeModel(llm.RealtimeModel):
             seed: Optional seed for reproducible generation.
             silence_threshold_ms: Duration of silence (no audio from server)
                 before finalizing a generation. Default 500ms.
-            http_session: Optional HttpSession to reuse.
+            conn_options: Connection timeouts, and the retries after a lost connection.
         """
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -131,12 +127,10 @@ class RealtimeModel(llm.RealtimeModel):
             text_prompt=text_prompt,
             seed=seed,
             silence_threshold_ms=silence_threshold_ms,
+            conn_options=conn_options,
             use_ssl=use_ssl,
         )
-
-        self._http_session = http_session
         self._label = f"personaplex-{voice}"
-        self._sessions = weakref.WeakSet[RealtimeSession]()
 
     @property
     def model(self) -> str:
@@ -146,67 +140,107 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "nvidia"
 
-    def _ensure_http_session(self) -> http.HttpSession:
-        if self._http_session is None:
-            self._http_session = http.http_session()
-        return self._http_session
-
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
-        sess = RealtimeSession(
-            realtime_model=self, options=self._opts, http_session=self._ensure_http_session
-        )
-        self._sessions.add(sess)
-        return sess
+        return RealtimeSession(realtime_model=self, options=self._opts)
 
 
-class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
-    """Manages a WebSocket connection to a PersonaPlex server.
+# the server's binary frames: a type byte, then its payload
 
-    Handles bidirectional binary audio streaming with Opus encoding,
-    generation lifecycle management, and text token handling.
-    """
 
-    def __init__(
-        self,
-        realtime_model: RealtimeModel,
-        *,
-        options: _PersonaplexOptions,
-        http_session: Callable[[], http.HttpSession],
-    ) -> None:
+class Handshake(TypedDict):
+    type: Literal["handshake"]
+
+
+class Audio(TypedDict):
+    type: Literal["audio"]
+    opus: bytes
+
+
+class Text(TypedDict):
+    type: Literal["text"]
+    text: str
+
+
+ServerMessage = Handshake | Audio | Text
+
+
+class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, bytes]):
+    """A full-duplex PersonaPlex conversation: Opus audio both ways, text tokens from the server.
+    The persona is fixed per connection, so new instructions open a new one."""
+
+    frame_ms = OPUS_FRAME_MS
+    # the server reads audio only once it sent its handshake
+    awaits_ready = True
+
+    def __init__(self, realtime_model: RealtimeModel, *, options: _PersonaplexOptions) -> None:
         super().__init__(
-            realtime_model, input_sample_rate=SAMPLE_RATE, input_num_channels=NUM_CHANNELS
+            realtime_model,
+            conn_options=options.conn_options,
+            input_sample_rate=SAMPLE_RATE,
+            input_num_channels=NUM_CHANNELS,
         )
         self._realtime_model: RealtimeModel = realtime_model
-        self._get_http_session = http_session
         self._opts = replace(options)
-
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
-        self._msg_ch = utils.aio.Chan[bytes]()
-
-        self._bstream = utils.media.AudioByteStream(
-            SAMPLE_RATE,
-            NUM_CHANNELS,
-            samples_per_channel=1920,  # 80ms — valid Opus frame size
-        )
-
+        self._current_generation: _ResponseGeneration | None = None
+        self._silence_timer_handle: asyncio.TimerHandle | None = None
         self._opus_writer = sphn.OpusStreamWriter(SAMPLE_RATE)
         self._opus_reader = sphn.OpusStreamReader(SAMPLE_RATE)
+        self._connect_started = 0.0
 
-        self._current_generation: _ResponseGeneration | None = None
-        self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
-        self._silence_timer_handle: asyncio.TimerHandle | None = None
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        self._connect_started = time.perf_counter()
+        self._opus_writer = sphn.OpusStreamWriter(SAMPLE_RATE)
+        self._opus_reader = sphn.OpusStreamReader(SAMPLE_RATE)
+        self._finalize_generation(interrupted=True)
+        params = {"voice_prompt": f"{self._opts.voice}.pt", "text_prompt": self._opts.text_prompt}
+        if self._opts.seed is not None:
+            params["seed"] = str(self._opts.seed)
+        scheme = "wss" if self._opts.use_ssl else "ws"
+        return http.SocketTarget(f"{scheme}://{self._opts.base_url}/api/chat", params=params)
 
-        self._handshake_event = asyncio.Event()
-        self._session_should_close = asyncio.Event()
-        self._closed = False
-        self._closing = False
+    def decode(self, frame: bytes | str) -> ServerMessage | None:
+        if isinstance(frame, str):
+            raise http.protocol_error(self, f"a text frame: {frame}")
+        if not frame:
+            return None
+        kind, payload = frame[0], frame[1:]
+        if kind == MSG_HANDSHAKE:
+            return Handshake(type="handshake")
+        if kind == MSG_AUDIO:
+            return Audio(type="audio", opus=payload)
+        if kind == MSG_TEXT:
+            # padding and end-of-stream markers
+            if len(payload) == 1 and payload[0] in _SPECIAL_TOKENS:
+                return None
+            try:
+                return Text(type="text", text=payload.decode("utf-8"))
+            except UnicodeDecodeError as e:
+                raise http.protocol_error(self, f"a text token that is not UTF-8: {e}") from e
+        return None
 
-        self._tasks = utils.aio.TaskSet()
-        self._tasks.spawn(self._main_task(), name="PersonaplexSession._main_task")
+    def encode(self, item: rtc.AudioFrame | http.EndOfInput) -> http.Encoded[bytes]:
+        if not isinstance(item, rtc.AudioFrame) or not item.data:
+            return None
+        pcm = np.frombuffer(item.data, dtype=np.int16).astype(np.float32) / 32768.0
+        opus = self._opus_writer.append_pcm(pcm)
+        if not opus:
+            return None
+        return bytes([MSG_AUDIO]) + opus
 
-    # -- Properties --
+    def on_message(self, message: ServerMessage) -> http.Ready | None:
+        if message["type"] == "handshake":
+            self._report_connection_acquired(time.perf_counter() - self._connect_started)
+            return http.READY
+        if message["type"] == "audio":
+            self._handle_audio_data(message["opus"])
+        elif message["type"] == "text" and message["text"]:
+            gen = self._active_generation()
+            gen.text_ch.send_nowait(message["text"])
+            gen.output_text += message["text"]
+        return None
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -216,20 +250,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     def tools(self) -> llm.ToolContext:
         return self._tools
 
-    # -- Public API: audio input --
-
-    @utils.log_exceptions(logger=logger)
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._closed:
-            return
-
-        for audio_frame in self._bstream.push(frame.data):
-            self._encode_and_send(audio_frame)
-
     def push_video(self, frame: rtc.VideoFrame) -> None:
         pass  # PersonaPlex is audio-only
-
-    # -- Public API: generation control --
 
     def generate_reply(
         self,
@@ -243,8 +265,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         )
 
     def interrupt(self) -> None:
-        if self._current_generation and not self._current_generation.done:
-            self._finalize_generation(interrupted=True)
+        self._finalize_generation(interrupted=True)
 
     def commit_audio(self) -> None:
         pass  # Full-duplex, continuous streaming
@@ -265,12 +286,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     ) -> None:
         logger.debug("truncate is not supported by PersonaPlex.")
 
-    # -- Public API: updates --
-
     async def update_instructions(self, instructions: str) -> None:
         if self._opts.text_prompt != instructions:
             self._opts.text_prompt = instructions
-            self._mark_restart_needed()
+            self.reconnect("instructions changed")
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         self._chat_ctx = chat_ctx.copy()
@@ -282,407 +301,106 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         pass
 
-    # -- Lifecycle --
-
     async def aclose(self) -> None:
-        if self._closed:
+        await super().aclose()
+        self._finalize_generation(interrupted=True)
+
+    def _handle_audio_data(self, opus: bytes) -> None:
+        pcm_float = self._opus_reader.append_bytes(opus)
+        if len(pcm_float) == 0:
             return
-
-        self._closed = True
-        self._closing = True
-        self._msg_ch.close()
-        self._session_should_close.set()
-
-        await self._tasks.aclose()
-
-        if self._pending_generation_fut and not self._pending_generation_fut.done():
-            self._pending_generation_fut.cancel("Session closed")
-
-        if self._current_generation and not self._current_generation.done:
-            self._finalize_generation(interrupted=True)
-
-    # -- Internal: connection management --
-
-    def _mark_restart_needed(self) -> None:
-        if not self._session_should_close.is_set():
-            self._session_should_close.set()
-            old_ch = self._msg_ch
-            old_ch.close()
-            self._msg_ch = utils.aio.Chan[bytes]()
-
-            if self._current_generation and not self._current_generation.done:
-                self._finalize_generation(interrupted=True)
-
-            if self._pending_generation_fut and not self._pending_generation_fut.done():
-                self._pending_generation_fut.cancel("Session restart")
-            self._pending_generation_fut = None
-
-    def _build_ws_url(self) -> str:
-        params: dict[str, str] = {
-            "voice_prompt": f"{self._opts.voice}.pt",
-            "text_prompt": self._opts.text_prompt,
-        }
-        if self._opts.seed is not None:
-            params["seed"] = str(self._opts.seed)
-
-        query = urlencode(params, quote_via=quote)
-        scheme = "wss" if self._opts.use_ssl else "ws"
-        return f"{scheme}://{self._opts.base_url}/api/chat?{query}"
-
-    @utils.log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
-        retry_delay = INITIAL_RETRY_DELAY
-
-        while not self._closed:
-            self._session_should_close.clear()
-            self._handshake_event.clear()
-
-            # Reset codec and audio buffer state for new connection
-            self._opus_writer = sphn.OpusStreamWriter(SAMPLE_RATE)
-            self._opus_reader = sphn.OpusStreamReader(SAMPLE_RATE)
-            self._bstream = utils.media.AudioByteStream(
-                SAMPLE_RATE,
-                NUM_CHANNELS,
-                samples_per_channel=1920,  # 80ms — valid Opus frame size
-            )
-
-            try:
-                ws_url = self._build_ws_url()
-                http_session = self._get_http_session()
-
-                t0 = time.perf_counter()
-                ws_conn = await http_session.ws_connect(
-                    ws_url, conn_options=DEFAULT_API_CONNECT_OPTIONS
-                )
-                self._report_connection_acquired(time.perf_counter() - t0)
-                self._closing = False
-                retry_delay = INITIAL_RETRY_DELAY  # reset on successful connect
-
-                logger.info(f"Connected to PersonaPlex server at {self._opts.base_url}")
-
-                async with utils.aio.TaskSet() as tasks:
-                    try:
-                        restart = tasks.spawn(self._session_should_close.wait(), name="_restart")
-                        winner = await tasks.first_completed(
-                            tasks.spawn(self._send_task(ws_conn), name="_send_task"),
-                            tasks.spawn(self._recv_task(ws_conn), name="_recv_task"),
-                            restart,
-                        )
-                    finally:
-                        await ws_conn.close()
-
-                if winner is not restart and self._closed:
-                    break
-
-                old_ch = self._msg_ch
-                old_ch.close()
-                self._msg_ch = utils.aio.Chan[bytes]()
-
-                if winner is restart:
-                    self.emit(
-                        "session_reconnected",
-                        llm.RealtimeSessionReconnectedEvent(),
-                    )
-
-            except Exception as e:
-                # Clean up any active generation and silence timer
-                if self._current_generation and not self._current_generation.done:
-                    self._finalize_generation(interrupted=True)
-                self._cancel_silence_timer()
-
-                # Discard stale Opus-encoded messages from the old connection
-                old_ch = self._msg_ch
-                old_ch.close()
-                self._msg_ch = utils.aio.Chan[bytes]()
-
-                is_recoverable = isinstance(e, asyncio.TimeoutError) or (
-                    isinstance(e, APIConnectionError) and e.retryable
-                )
-
-                if isinstance(e, APIConnectionError):
-                    error = e
-                else:
-                    error = APIConnectionError("PersonaPlex connection failed", detail=str(e))
-
-                self.emit(
-                    "error",
-                    llm.RealtimeModelError(
-                        timestamp=time.time(),
-                        label=self._realtime_model.label,
-                        error=error,
-                        recoverable=is_recoverable,
-                    ),
-                )
-
-                if not is_recoverable or self._closed:
-                    break
-
-                logger.debug(f"Retrying in {retry_delay:.1f}s")
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
-
-    async def _send_task(self, ws_conn: http.WebSocket) -> None:
-        # The server's is_alive() check consumes WS messages during system
-        # prompt processing without feeding them to the opus decoder.  Wait
-        # for the handshake before sending audio so nothing gets dropped.
-        # Queued frames are sent immediately — they're the first audio the
-        # server's recv_loop will see.
-        try:
-            async with asyncio.timeout(DEFAULT_API_CONNECT_OPTIONS.connect_timeout):
-                await self._handshake_event.wait()
-        except TimeoutError:
-            raise APITimeoutError("PersonaPlex handshake timed out", timeout="connect") from None
-
-        async for msg in self._msg_ch:
-            if self._session_should_close.is_set():
-                break
-            await ws_conn.send_bytes(msg)
-
-        self._closing = True
-
-    async def _recv_task(self, ws_conn: http.WebSocket) -> None:
-        while True:
-            if self._session_should_close.is_set():
-                break
-
-            msg = await ws_conn.receive()
-
-            if msg.type == http.WebSocketMessageType.BINARY:
-                data = msg.binary
-                if len(data) == 0:
-                    continue
-
-                msg_type = data[0]
-                payload = data[1:]
-
-                if msg_type == MSG_HANDSHAKE:
-                    logger.debug("PersonaPlex handshake received")
-                    self._handshake_event.set()
-                elif msg_type == MSG_AUDIO:
-                    self._handle_audio_data(payload)
-                elif msg_type == MSG_TEXT:
-                    self._handle_text_token(payload)
-                else:
-                    logger.warning(f"Unknown PersonaPlex message type: 0x{msg_type:02x}")
-
-            elif msg.type == http.WebSocketMessageType.CLOSE:
-                if self._closing:
-                    return
-
-                # Code 1000 (normal close) — finalize gracefully and reconnect
-                # rather than treating it as a retriable error.
-                if ws_conn.close_code in (1000, None):
-                    logger.debug("PersonaPlex server closed connection normally")
-                    if self._current_generation and not self._current_generation.done:
-                        self._finalize_generation(interrupted=False)
-                    return
-
-                raise ws_conn.close_error("PersonaPlex connection closed unexpectedly")
-
-    # -- Internal: audio encode/decode --
-
-    def _encode_and_send(self, audio_frame: rtc.AudioFrame) -> None:
-        """Encode a PCM audio frame to Opus and queue for sending."""
-        if not audio_frame.data or len(audio_frame.data) == 0:
-            return
-
-        try:
-            # Convert int16 PCM to float32 for sphn
-            pcm_int16 = np.frombuffer(audio_frame.data, dtype=np.int16)
-            if pcm_int16.size == 0:
-                return
-
-            pcm_float = pcm_int16.astype(np.float32) / 32768.0
-
-            # sphn >=0.2: append_pcm returns opus bytes directly
-            opus_bytes = self._opus_writer.append_pcm(pcm_float)
-
-            if opus_bytes:
-                # Prepend audio message type
-                message = bytes([MSG_AUDIO]) + opus_bytes
-                with contextlib.suppress(utils.aio.ChanClosed):
-                    self._msg_ch.send_nowait(message)
-        except (TypeError, ValueError) as e:
-            logger.warning(f"Skipping invalid audio frame in _encode_and_send: {e}")
-
-    def _handle_audio_data(self, opus_payload: bytes) -> None:
-        """Decode Opus audio from server and push to generation."""
-        try:
-            # sphn >=0.2: append_bytes returns pcm directly
-            pcm_float = self._opus_reader.append_bytes(opus_payload)
-
-            if len(pcm_float) == 0:
-                return
-
-            # Convert float32 to int16 PCM
-            pcm_int16 = np.clip(pcm_float * 32768.0, -32768, 32767).astype(np.int16)
-            pcm_bytes = pcm_int16.tobytes()
-
-            # Ensure generation exists
-            if not self._current_generation or self._current_generation.done:
-                self._start_new_generation()
-
-            gen = self._current_generation
-            assert gen is not None
-
-            if gen.first_token_timestamp is None and len(pcm_bytes) > 0:
-                gen.first_token_timestamp = time.time()
-
-            frame = rtc.AudioFrame(
-                data=pcm_bytes,
+        pcm = np.clip(pcm_float * 32768.0, -32768, 32767).astype(np.int16)
+        gen = self._active_generation()
+        if gen.first_token_timestamp is None:
+            gen.first_token_timestamp = time.time()
+        gen.audio_ch.send_nowait(
+            rtc.AudioFrame(
+                data=pcm.tobytes(),
                 sample_rate=SAMPLE_RATE,
                 num_channels=NUM_CHANNELS,
-                samples_per_channel=len(pcm_int16),
+                samples_per_channel=len(pcm),
             )
-            with contextlib.suppress(utils.aio.ChanClosed):
-                gen.audio_ch.send_nowait(frame)
+        )
+        # the model has no turn events: a generation ends after a silence
+        self._cancel_silence_timer()
+        self._silence_timer_handle = asyncio.get_running_loop().call_later(
+            self._opts.silence_threshold_ms / 1000.0, self._finalize_generation
+        )
 
-            # Reset silence timer on every audio frame
-            self._reset_silence_timer()
-
-        except Exception as e:
-            logger.error(f"Error processing audio data: {e}")
-
-    def _handle_text_token(self, payload: bytes) -> None:
-        """Handle text token from server."""
-        try:
-            # Filter special tokens by raw byte value (padding/EOS markers)
-            if len(payload) == 1 and payload[0] in _SPECIAL_TOKENS:
-                return
-
-            text = payload.decode("utf-8")
-
-            if not text:
-                return
-
-            # Ensure generation exists
-            if not self._current_generation or self._current_generation.done:
-                self._start_new_generation()
-
-            gen = self._current_generation
-            assert gen is not None
-
-            with contextlib.suppress(utils.aio.ChanClosed):
-                gen.text_ch.send_nowait(text)
-            gen.output_text += text
-
-        except Exception as e:
-            logger.error(f"Error processing text token: {e}")
-
-    # -- Internal: generation lifecycle --
-
-    def _start_new_generation(self) -> None:
-        if self._current_generation and not self._current_generation.done:
-            logger.debug("Starting new generation while another is active. Finalizing previous.")
-            self._finalize_generation(interrupted=True)
-
+    def _active_generation(self) -> _ResponseGeneration:
+        gen = self._current_generation
+        if gen is not None and not gen.done:
+            return gen
         response_id = utils.shortuuid("personaplex-turn-")
-        self._current_generation = _ResponseGeneration(
+        gen = self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
             function_ch=utils.aio.Chan[llm.FunctionCall](),
             response_id=response_id,
             text_ch=utils.aio.Chan[str](),
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
         )
-
-        msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
-        msg_modalities.set_result(["audio", "text"])
-
-        self._current_generation.message_ch.send_nowait(
+        modalities = asyncio.get_running_loop().create_future()
+        modalities.set_result(["audio", "text"])
+        gen.message_ch.send_nowait(
             llm.MessageGeneration(
                 message_id=response_id,
-                text_stream=self._current_generation.text_ch,
-                audio_stream=self._current_generation.audio_ch,
-                modalities=msg_modalities,
+                text_stream=gen.text_ch,
+                audio_stream=gen.audio_ch,
+                modalities=modalities,
             )
         )
-
-        generation_ev = llm.GenerationCreatedEvent(
-            message_stream=self._current_generation.message_ch,
-            function_stream=self._current_generation.function_ch,
-            user_initiated=False,
-            response_id=response_id,
-        )
-        self.emit("generation_created", generation_ev)
-
-        logger.debug(f"Started generation {response_id}")
-
-    def _finalize_generation(self, *, interrupted: bool = False) -> None:
-        if not self._current_generation or self._current_generation.done:
-            return
-
-        gen = self._current_generation
-        gen.completed_timestamp = time.time()
-        gen.done = True
-
-        if not gen.text_ch.closed:
-            gen.text_ch.close()
-        if not gen.audio_ch.closed:
-            gen.audio_ch.close()
-
-        gen.function_ch.close()
-        gen.message_ch.close()
-
-        self._cancel_silence_timer()
-
-        # Append assistant message to local chat context
-        if gen.output_text:
-            self._chat_ctx.add_message(
-                role="assistant",
-                content=gen.output_text,
-                id=gen.response_id,
-            )
-
-        self._emit_generation_metrics(interrupted=interrupted)
-
-    def _emit_generation_metrics(self, *, interrupted: bool) -> None:
-        if self._current_generation is None:
-            return
-
-        gen = self._current_generation
-        if gen.first_token_timestamp is None and not gen.output_text:
-            self._current_generation = None
-            return
-
-        current_time = time.time()
-        completed_ts = gen.completed_timestamp or current_time
-        created_ts = gen.created_timestamp
-        first_token_ts = gen.first_token_timestamp
-
-        ttft = first_token_ts - created_ts if first_token_ts else None
-        duration = completed_ts - created_ts
-
-        metrics = RealtimeModelMetrics(
-            timestamp=created_ts,
-            request_id=gen.response_id,
-            ttft=ttft,
-            duration=duration,
-            cancelled=interrupted,
-            label=self._realtime_model.label,
-            tokens_per_second=0,
-            metadata=Metadata(
-                model_name=self._realtime_model.model,
-                model_provider=self._realtime_model.provider,
+        self.emit(
+            "generation_created",
+            llm.GenerationCreatedEvent(
+                message_stream=gen.message_ch,
+                function_stream=gen.function_ch,
+                user_initiated=False,
+                response_id=response_id,
             ),
         )
+        return gen
 
-        self.emit("metrics_collected", metrics)
-        self._current_generation = None
-
-    # -- Internal: silence detection --
-
-    def _reset_silence_timer(self) -> None:
+    def _finalize_generation(self, *, interrupted: bool = False) -> None:
         self._cancel_silence_timer()
-        loop = asyncio.get_running_loop()
-        threshold_s = self._opts.silence_threshold_ms / 1000.0
-        self._silence_timer_handle = loop.call_later(threshold_s, self._on_silence_timeout)
+        gen = self._current_generation
+        if gen is None or gen.done:
+            return
+        gen.completed_timestamp = time.time()
+        gen.done = True
+        gen.text_ch.close()
+        gen.audio_ch.close()
+        gen.function_ch.close()
+        gen.message_ch.close()
+        if gen.output_text:
+            self._chat_ctx.add_message(
+                role="assistant", content=gen.output_text, id=gen.response_id
+            )
+        self._current_generation = None
+        # a generation that produced nothing has no metrics
+        if gen.first_token_timestamp is None and not gen.output_text:
+            return
+        self.emit(
+            "metrics_collected",
+            RealtimeModelMetrics(
+                timestamp=gen.created_timestamp,
+                request_id=gen.response_id,
+                ttft=(
+                    gen.first_token_timestamp - gen.created_timestamp
+                    if gen.first_token_timestamp
+                    else None
+                ),
+                duration=gen.completed_timestamp - gen.created_timestamp,
+                cancelled=interrupted,
+                label=self._realtime_model.label,
+                tokens_per_second=0,
+                metadata=Metadata(
+                    model_name=self._realtime_model.model,
+                    model_provider=self._realtime_model.provider,
+                ),
+            ),
+        )
 
     def _cancel_silence_timer(self) -> None:
         if self._silence_timer_handle:
             self._silence_timer_handle.cancel()
             self._silence_timer_handle = None
-
-    def _on_silence_timeout(self) -> None:
-        if self._current_generation and not self._current_generation.done:
-            logger.debug("Silence detected, finalizing generation")
-            self._finalize_generation(interrupted=False)

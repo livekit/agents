@@ -68,20 +68,15 @@ class LoopbackSttStream(stt.SocketStream[SttMessage, SttCommand]):
             return Finalize(type="finalize")
         return None
 
-    def on_message(self, message: Transcript | Finished) -> stt.SpeechEvent | http.Done:
+    def on_message(self, message: Transcript | Finished) -> stt.Transcript | http.Done:
         if message["type"] == "finished":
             return http.DONE
-        kind = (
-            stt.SpeechEventType.FINAL_TRANSCRIPT
-            if message["final"]
-            else stt.SpeechEventType.INTERIM_TRANSCRIPT
-        )
-        data = stt.SpeechData(
-            language=LanguageCode("en"),
-            text=message["text"],
+        return stt.Transcript(
+            message["text"],
+            LanguageCode("en"),
+            final=message["final"],
             confidence=message.get("confidence", 0.0),
         )
-        return stt.SpeechEvent(type=kind, alternatives=[data])
 
 
 class LoopbackStt(stt.STT):
@@ -162,19 +157,17 @@ class CodecSttStream(stt.SocketStream[CodecMessage, bytes]):
             return event_frame({":event-type": "AudioEvent"}, b"")
         return None
 
-    def on_message(self, message: CodecMessage) -> stt.SpeechEvent | http.Done:
+    def on_message(self, message: CodecMessage) -> stt.Transcript | http.Done:
         if message["type"] == "exception":
             # the provider's own failure event
             raise APIError(
                 "the provider failed the stream", kind="server", detail=message["message"]
             )
-        return stt.SpeechEvent(
-            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(language=LanguageCode("en"), text=message["text"])],
-        )
+        return stt.Transcript(message["text"], LanguageCode("en"), final=True)
 
 
-# TTS: text up, binary audio down; several streams share one socket by context id.
+# TTS: text up, binary audio down; each segment is a context, and several streams share one
+# socket by those contexts.
 
 
 class Done(TypedDict):
@@ -223,20 +216,18 @@ class LoopbackTtsStream(tts.SocketStream[TtsMessage, TtsCommand]):
         super().__init__(tts=tts, conn_options=conn_options)
         self.multiplexer = tts.mux
 
-    def encode(
-        self, item: tts.SpeechChunk | tts.SynthesizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[TtsCommand]:
-        context_id = self.context_id or ""
-        if isinstance(item, tts.SpeechChunk):
-            return Speak(context_id=context_id, text=item.text, final=False)
-        if isinstance(item, http.EndOfInput):
-            return Speak(context_id=context_id, text="", final=True)
+    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> http.Encoded[TtsCommand]:
+        if isinstance(item, tts.SegmentText):
+            return Speak(context_id=item.segment_id, text=item.chunk.text, final=False)
+        if isinstance(item, tts.SegmentEnd):
+            return Speak(context_id=item.segment_id, text="", final=True)
         return None
 
-    def on_message(self, message: Done | bytes) -> bytes | http.Done:
+    def on_message(self, message: Done | bytes) -> tts.SegmentOutput:
         if isinstance(message, bytes):
-            return message.split(b"|", 1)[1]
-        return http.DONE
+            context, audio = message.split(b"|", 1)
+            return tts.SegmentAudio(context.decode(), audio)
+        return tts.SegmentDone(message["context_id"])
 
 
 class LoopbackTts(tts.TTS):
@@ -400,4 +391,4 @@ def commands_are_typed(stream: LoopbackSttStream, realtime: LoopbackRealtimeSess
     stream.send_command({"type": "speak"})  # type: ignore[arg-type]
     realtime.send_command(Say(type="say", text="hi"))
     realtime.send_command(Finalize(type="finalize"))  # type: ignore[arg-type]
-    assert_type(stream.on_message(Finished(type="finished")), stt.SpeechEvent | http.Done)
+    assert_type(stream.on_message(Finished(type="finished")), stt.Transcript | http.Done)

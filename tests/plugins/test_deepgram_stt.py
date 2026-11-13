@@ -11,7 +11,7 @@ from aiohttp.test_utils import TestServer
 from multidict import MultiMapping
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, http, stt
+from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, _core, http, stt
 from livekit.plugins import deepgram
 from tests.fakes import until
 
@@ -67,7 +67,8 @@ def _result(**channel: object) -> dict[str, object]:
 
 
 class _Peer:
-    """Accepts every socket and queues what it receives (audio as AUDIO), KeepAlives aside."""
+    """Accepts every socket and queues what it receives (audio as AUDIO), KeepAlives aside; it
+    closes on CloseStream, as Deepgram does once it sent its last results."""
 
     def __init__(self, *, reply_to_finalize: bool = False) -> None:
         self.reply_to_finalize = reply_to_finalize
@@ -89,6 +90,8 @@ class _Peer:
                 self.received.put_nowait(data)
             if data["type"] == "Finalize" and self.reply_to_finalize:
                 await ws.send_json(_result())
+            if data["type"] == "CloseStream":
+                await ws.close()
         return ws
 
 
@@ -318,11 +321,13 @@ async def test_batch_request_carries_keyterms_and_the_opt_out(opt_out: bool) -> 
 async def test_an_idle_stream_sends_keepalives_not_audio_and_closes_its_socket() -> None:
     """https://github.com/livekit/agents/issues/736 https://github.com/livekit/agents/pull/3648"""
     received: asyncio.Queue[str] = asyncio.Queue()
+    connected = asyncio.Event()
     closed = asyncio.Event()
 
     async def peer(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
+        connected.set()
         async for message in ws:
             received.put_nowait(message.json()["type"])  # a binary frame fails here
         closed.set()
@@ -331,6 +336,8 @@ async def test_an_idle_stream_sends_keepalives_not_audio_and_closes_its_socket()
     async with _server(peer) as server, http.open():
         model = deepgram.STT(api_key="test", base_url=str(server.make_url("/listen")))
         async with model.stream():
+            await until(lambda: connected.is_set(), "the socket opened")
+            _core.skip_host_time(5)  # a keepalive once nothing was sent for 5 s
             first = await received.get()
         await closed.wait()
         await model.aclose()
@@ -369,7 +376,7 @@ def test_keywords_and_keyterms_are_refused_on_the_wrong_model_family() -> None:
         deepgram.STT(api_key="test", model="nova-2-general", keyterm=["LiveKit"])
 
 
-async def test_a_silent_handshake_fails_within_the_read_timeout() -> None:
+async def test_a_silent_handshake_fails_within_the_connect_timeout() -> None:
     """https://github.com/livekit/agents/issues/1944"""
     accepted: list[asyncio.StreamWriter] = []
 
@@ -380,7 +387,7 @@ async def test_a_silent_handshake_fails_within_the_read_timeout() -> None:
     port = server.sockets[0].getsockname()[1]
     async with http.open():
         model = deepgram.STT(api_key="test", base_url=f"ws://127.0.0.1:{port}/listen")
-        options = APIConnectOptions(max_retry=0, read_timeout=0.2)
+        options = APIConnectOptions(max_retry=0, connect_timeout=0.2)
         with pytest.raises(APITimeoutError):
             async with model.stream(conn_options=options) as stream:
                 await anext(stream)
@@ -425,3 +432,27 @@ def test_flux_eager_threshold_above_the_end_of_turn_threshold_fails_locally() ->
     model = deepgram.STTv2(api_key="test", eager_eot_threshold=0.5)
     with pytest.raises(ValueError, match="eot_threshold"):
         model.update_options(eager_eot_threshold=0.85)
+
+
+async def test_session_keyterms_set_mid_speech_reconnect_only_once_the_speech_ended() -> None:
+    """A keyterm change reconnects, which ends the speech: it waits for the speech to end."""
+    peer = _Peer()
+    async with _server(peer.handle) as server, http.open():
+        model = deepgram.STT(
+            api_key="test", model="nova-3", base_url=str(server.make_url("/listen"))
+        )
+        async with model.stream(conn_options=NO_RETRY) as stream:
+            ws = await peer.sockets.get()
+            await ws.send_json({"type": "SpeechStarted", "channel": [0, 1], "timestamp": 0.0})
+            assert (await anext(stream)).type == stt.SpeechEventType.START_OF_SPEECH
+
+            model._update_session_keyterms(["LiveKit"])
+            await ws.send_json(_result())  # speech_final: the speech ends
+            # the old socket still answers: it was not rotated while the user spoke
+            kinds = [(await anext(stream)).type for _ in range(2)]
+            await peer.sockets.get()
+        await model.aclose()
+
+    assert kinds == [stt.SpeechEventType.FINAL_TRANSCRIPT, stt.SpeechEventType.END_OF_SPEECH]
+    assert (await peer.queries.get()).getall("keyterm", []) == []
+    assert (await peer.queries.get()).getall("keyterm") == ["LiveKit"]

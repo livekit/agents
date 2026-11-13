@@ -174,6 +174,89 @@ impl SpeechEvent {
     }
 }
 
+/// What a provider heard, as a stream reports it with `RecognizeStream.report`. The stream turns
+/// it into speech events: the first words start the speech, and a final ends it unless the
+/// provider detects speech itself.
+#[crate::host(record(module = "stt", path = "livekit.agents.stt", dataclass, extract))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transcript {
+    pub text: String,
+    #[host(annotation = ".language.LanguageCode")]
+    pub language: LanguageCode,
+    /// The provider will not change it. An empty final retracts the interim it follows.
+    #[host(default = false)]
+    pub r#final: bool,
+    /// An interim stable enough for preemptive generation; dropped outside speech.
+    #[host(default = false)]
+    pub preflight: bool,
+    #[host(default = "")]
+    pub request_id: String,
+    #[host(default = 0.0)]
+    pub start_time: f64,
+    #[host(default = 0.0)]
+    pub end_time: f64,
+    #[host(default = 0.0)]
+    pub confidence: f64,
+    #[host(default = None)]
+    pub speaker_id: Option<String>,
+    #[host(default = None)]
+    pub words: Option<Vec<TranscriptChunk>>,
+    #[host(annotation = "list[.language.LanguageCode] | None", default = None)]
+    pub source_languages: Option<Vec<LanguageCode>>,
+    #[host(default = None)]
+    pub metadata: Option<Extra>,
+}
+
+impl Transcript {
+    pub fn new(language: &str, text: impl Into<String>) -> Self {
+        Transcript {
+            text: text.into(),
+            language: LanguageCode::new(language),
+            r#final: false,
+            preflight: false,
+            request_id: String::new(),
+            start_time: 0.0,
+            end_time: 0.0,
+            confidence: 0.0,
+            speaker_id: None,
+            words: None,
+            source_languages: None,
+            metadata: None,
+        }
+    }
+}
+
+/// One recognition's speech state: START_OF_SPEECH and END_OF_SPEECH are derived here from what
+/// the stream reports, the provider's own boundaries deduplicated, and open speech ends at each
+/// connection boundary.
+#[crate::host(class(name = "SpeechState", pid = false))]
+pub trait SpeechState: Send + Sized + 'static {
+    /// `provider_vad`: the provider detects speech itself, so its reported end closes the
+    /// speech and a final transcript does not.
+    #[host(new)]
+    fn new(provider_vad: bool) -> Self;
+
+    /// Whether a speech is open.
+    #[host(getter)]
+    fn speaking(&self) -> bool;
+
+    /// The events a transcript produces.
+    #[host(call)]
+    fn transcript(&mut self, transcript: Transcript) -> Vec<SpeechEvent>;
+
+    /// The provider heard speech start.
+    #[host(call)]
+    fn started(&mut self) -> Vec<SpeechEvent>;
+
+    /// The provider heard speech end.
+    #[host(call)]
+    fn ended(&mut self) -> Vec<SpeechEvent>;
+
+    /// A connection ended: the open speech ends before the next connection's events.
+    #[host(call)]
+    fn boundary(&mut self) -> Vec<SpeechEvent>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

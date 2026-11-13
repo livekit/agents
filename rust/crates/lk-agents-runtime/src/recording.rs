@@ -582,7 +582,11 @@ fn apply_command<E: OggOpusEncoder, W: Write>(
         }
         Command::Flush(now, reply) => {
             file.hold_input(timeline.held_from());
-            let outcome = file.apply(RecordingCommand::Flush(now), between).map(drop);
+            // The recording fails before the flush answers: its caller's next audio is refused.
+            let outcome = file
+                .apply(RecordingCommand::Flush(now), between)
+                .map(drop)
+                .map_err(|error| shared.fail(error));
             if let Some(reply) = reply {
                 let _ = reply.send(outcome.clone().map(|()| file.summary().clone()));
             }

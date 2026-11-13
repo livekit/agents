@@ -1,6 +1,6 @@
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 
 DeepgramModels = Literal[
     "nova-general",
@@ -198,79 +198,5 @@ class TranscriptionResults(BaseModel):
 class TranscriptionResponse(BaseModel):
     model_config = ConfigDict(strict=True)
 
-    type: str = ""
     metadata: TranscriptionMetadata = Field(default_factory=TranscriptionMetadata)
-    channel: TranscriptionChannel = Field(default_factory=TranscriptionChannel)
     results: TranscriptionResults = Field(default_factory=TranscriptionResults)
-    is_final: bool = False
-    speech_final: bool = False
-
-
-class LiveTranscriptionResponse(BaseModel):
-    model_config = ConfigDict(strict=True)
-
-    type: Literal["Results"]
-    metadata: TranscriptionMetadata = Field(default_factory=TranscriptionMetadata)
-    channel: TranscriptionChannel = Field(default_factory=TranscriptionChannel)
-    is_final: bool = False
-    speech_final: bool = False
-
-
-class SpeechBoundaryResponse(BaseModel):
-    model_config = ConfigDict(strict=True)
-
-    type: Literal["SpeechStarted", "UtteranceEnd"]
-    channel: list[int] = Field(default_factory=list[int])
-    timestamp: float | None = None
-    last_word_end: float | None = None
-
-
-class MetadataResponse(BaseModel):
-    type: Literal["Metadata"]
-
-
-class OtherResponse(BaseModel):
-    """A message type this client does not read: ignored."""
-
-    type: str = ""
-
-
-_TAGS = {
-    "Results": "Results",
-    "SpeechStarted": "boundary",
-    "UtteranceEnd": "boundary",
-    "Metadata": "Metadata",
-}
-
-
-def _response_tag(value: object) -> str:
-    kind = value.get("type") if isinstance(value, dict) else getattr(value, "type", None)
-    return _TAGS.get(kind, "other") if isinstance(kind, str) else "other"
-
-
-StreamResponse = (
-    LiveTranscriptionResponse | SpeechBoundaryResponse | MetadataResponse | OtherResponse
-)
-STREAM_RESPONSE: TypeAdapter[StreamResponse] = TypeAdapter(
-    Annotated[
-        Annotated[LiveTranscriptionResponse, Tag("Results")]
-        | Annotated[SpeechBoundaryResponse, Tag("boundary")]
-        | Annotated[MetadataResponse, Tag("Metadata")]
-        | Annotated[OtherResponse, Tag("other")],
-        Discriminator(_response_tag),
-    ]
-)
-
-
-class FluxResponse(BaseModel):
-    model_config = ConfigDict(strict=True)
-
-    type: str = ""
-    request_id: str | None = None
-    event: str = ""
-    transcript: str = ""
-    words: list[TranscriptionWord] = Field(default_factory=list[TranscriptionWord])
-    languages: list[str] = Field(default_factory=list[str])
-    audio_window_start: float = 0.0
-    audio_window_end: float = 0.0
-    description: str | None = None

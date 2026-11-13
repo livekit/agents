@@ -21,10 +21,9 @@ _OPTS = APIConnectOptions(max_retry=2, retry_interval=0, connect_timeout=1, read
 
 
 @pytest.fixture
-async def peer(
-    avatar_host: AvatarHost,
-) -> AsyncIterator[tuple[AvatarSession, list[int], list[dict[str, str]]]]:
-    """A local Beyond Presence API answering with the queued statuses; yields avatar and state."""
+async def peer() -> AsyncIterator[tuple[str, list[int], list[dict[str, str]]]]:
+    """A local Beyond Presence API answering with the queued statuses; yields its URL and
+    state."""
     statuses: list[int] = []
     requests: list[dict[str, str]] = []
 
@@ -36,34 +35,32 @@ async def peer(
     app = web.Application()
     app.router.add_post("/v1/session", create)
     async with TestServer(app) as server, http.open():
-        avatar = AvatarSession(
-            api_key="bey-key", api_url=str(server.make_url("")).rstrip("/"), conn_options=_OPTS
-        )
-        yield avatar, statuses, requests
+        yield str(server.make_url("")).rstrip("/"), statuses, requests
 
 
 async def test_explicit_livekit_credentials_sign_the_avatar_token(
-    peer: tuple[AvatarSession, list[int], list[dict[str, str]]],
+    peer: tuple[str, list[int], list[dict[str, str]]],
     avatar_host: AvatarHost,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The avatar joins with the credentials passed to start(), not the environment's.
+    """The avatar joins with the credentials it was given, not the environment's.
 
     https://github.com/livekit/agents/pull/2217
     """
-    avatar, statuses, requests = peer
+    url, statuses, requests = peer
     statuses.append(200)
     monkeypatch.setenv("LIVEKIT_URL", "wss://env.test")
     monkeypatch.setenv("LIVEKIT_API_KEY", "env-key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "e" * 32)
-
-    await avatar.start(
-        avatar_host.agent,
-        avatar_host.room,
+    avatar = AvatarSession(
+        api_key="bey-key",
+        api_url=url,
         livekit_url="wss://given.test",
         livekit_api_key="given-key",
         livekit_api_secret="g" * 32,
     )
+
+    await avatar.start(avatar_host.agent, avatar_host.room)
 
     [sent] = requests
     assert sent["livekit_url"] == "wss://given.test"
@@ -77,7 +74,7 @@ async def test_explicit_livekit_credentials_sign_the_avatar_token(
     [(401, 1, APIStatusError), (503, _OPTS.max_retry + 1, APIStatusError)],
 )
 async def test_provider_status_survives_and_only_transient_errors_retry(
-    peer: tuple[AvatarSession, list[int], list[dict[str, str]]],
+    peer: tuple[str, list[int], list[dict[str, str]]],
     avatar_host: AvatarHost,
     status: int,
     attempts: int,
@@ -88,11 +85,12 @@ async def test_provider_status_survives_and_only_transient_errors_retry(
 
     https://github.com/livekit/agents/issues/7495
     """
-    avatar, statuses, requests = peer
+    url, statuses, requests = peer
+    avatar = AvatarSession(api_key="bey-key", api_url=url, conn_options=_OPTS)
     statuses.append(status)
 
     with pytest.raises(raised_type) as error:
-        await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+        await avatar.start(avatar_host.agent, avatar_host.room)
 
     refused = error.value if isinstance(error.value, APIStatusError) else error.value.__cause__
     assert isinstance(refused, APIStatusError)

@@ -5,6 +5,7 @@
 
 mod connection;
 mod executor;
+mod liveness;
 mod mux;
 
 use std::any::Any;
@@ -81,9 +82,16 @@ async fn open_direct(
     })
 }
 
-async fn recv_direct(receiver: &mut dyn WsReceiver) -> Result<Inbound, ApiError> {
+/// A direct socket's next frame or close, calling `heard` for everything the peer sends, a pong
+/// included.
+async fn recv_heard(
+    receiver: &mut dyn WsReceiver,
+    heard: &(dyn Fn() + Sync),
+) -> Result<Inbound, ApiError> {
     loop {
-        return Ok(match receiver.recv().await.map_err(lost)? {
+        let message = receiver.recv().await.map_err(lost)?;
+        heard();
+        return Ok(match message {
             WsMessage::Text(text) => Inbound::Frame(WsFrame::Text(text)),
             WsMessage::Binary(data) => Inbound::Frame(WsFrame::Binary(data)),
             WsMessage::Closed => {
@@ -120,6 +128,8 @@ pub struct Session {
     links: Links,
     /// Bumped by each `reconnect()`.
     rotations: lk_agents_net::signal::Shared<u64>,
+    /// Bumped by each `ready()`: the provider is ready on the current connection.
+    readies: lk_agents_net::signal::Shared<u64>,
     stop: CancellationToken,
     /// Held while `run()` runs, so `aclose()` returns once it ended.
     running: tokio::sync::Mutex<()>,
@@ -146,6 +156,7 @@ impl Session {
             env,
             links: Links::Direct(transports),
             rotations: lk_agents_net::signal::Shared::new(0),
+            readies: lk_agents_net::signal::Shared::new(0),
             stop: CancellationToken::new(),
             running: tokio::sync::Mutex::new(()),
         }
@@ -169,6 +180,10 @@ impl Session {
     pub fn reconnect(&self, reason: &str) {
         log::debug!(target: lk_agents_abi::LOG_TARGET, reason; "{}: reconnecting", self.label);
         self.rotations.modify(|n| *n += 1);
+    }
+
+    pub fn ready(&self) {
+        self.readies.modify(|n| *n += 1);
     }
 
     pub async fn run(&self, cx: &Cx) -> Result<(), ProviderError> {
@@ -209,6 +224,10 @@ impl abi::SocketSession for Session {
         Session::reconnect(self, &reason);
     }
 
+    fn ready(&self) {
+        Session::ready(self);
+    }
+
     async fn run(&self, cx: Cx) -> Result<(), ProviderError> {
         Session::run(self, &cx).await
     }
@@ -225,6 +244,10 @@ impl abi::SocketMux for Mux {
 
     fn new(env: &ProcessEnv, host: Arc<dyn MuxHost>, max_contexts: Option<u32>) -> Self {
         Mux::new(host, max_contexts, env.clone(), proxied())
+    }
+
+    fn prewarm(&self) {
+        Mux::prewarm(self);
     }
 
     fn invalidate(&self) {

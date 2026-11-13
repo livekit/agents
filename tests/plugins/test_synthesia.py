@@ -1,11 +1,10 @@
-"""Synthesia: the `SynthesiaAPI` session client against a real local HTTP peer."""
+"""Synthesia: the avatar's session request and its errors, against a real local HTTP peer."""
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses
 import logging
-import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
@@ -15,9 +14,8 @@ from aiohttp.test_utils import TestServer
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APITimeoutError, http
 from livekit.plugins.synthesia import AvatarConfig, AvatarSession
-from livekit.plugins.synthesia.api import SESSION_PATH, SynthesiaAPI
+from livekit.plugins.synthesia.api import SESSION_PATH
 from livekit.plugins.synthesia.errors import ErrorType, SynthesiaError
-from livekit.plugins.synthesia.types import StartSessionRequest, StartSessionResponse
 
 if TYPE_CHECKING:
     from tests.plugins.conftest import AvatarHost
@@ -41,7 +39,6 @@ class _Peer:
         self.outcomes: list[tuple[int, object, str]] = []
         self.calls: list[_Call] = []
         self.url = ""
-        self.session: http.HttpSession | None = None
 
     async def respond(self, request: web.Request) -> web.Response:
         self.calls.append(_Call(str(request.url), dict(request.headers), await request.json()))
@@ -54,9 +51,8 @@ async def peer() -> AsyncIterator[_Peer]:
     peer = _Peer()
     app = web.Application()
     app.router.add_post("/{path:.*}", peer.respond)
-    async with TestServer(app) as server, http.open() as session:
+    async with TestServer(app) as server, http.open():
         peer.url = str(server.make_url("")).rstrip("/")
-        peer.session = session
         yield peer
 
 
@@ -64,17 +60,16 @@ def _reply(peer: _Peer, status: int, body: object, content_type: str = "applicat
     peer.outcomes.append((status, body, content_type))
 
 
-async def _start(peer: _Peer) -> StartSessionResponse:
-    client = SynthesiaAPI(
-        api_key=API_KEY, api_url=peer.url, session=peer.session, conn_options=ONE_ATTEMPT
+async def _start(peer: _Peer, avatar_host: AvatarHost) -> AvatarSession:
+    avatar = AvatarSession(
+        AvatarConfig(avatar_ids=["avatar-1"]),
+        api_key=API_KEY,
+        api_url=peer.url,
+        livekit_url="https://room.livekit.cloud",
+        conn_options=ONE_ATTEMPT,
     )
-    return await client.start_session(
-        StartSessionRequest(
-            avatar_ids=["avatar-1"],
-            livekit_url="wss://room.livekit.cloud",
-            lk_token="lk-token-secret",
-        )
-    )
+    await avatar.start(avatar_host.agent, avatar_host.room)
+    return avatar
 
 
 @pytest.mark.parametrize(
@@ -95,7 +90,7 @@ async def _start(peer: _Peer) -> StartSessionResponse:
     ],
 )
 async def test_problem_type_maps_to_error_type(
-    peer: _Peer, code: str, status: int, expected: ErrorType
+    peer: _Peer, avatar_host: AvatarHost, code: str, status: int, expected: ErrorType
 ) -> None:
     """https://github.com/livekit/agents/pull/7216"""
     problem = {
@@ -107,42 +102,50 @@ async def test_problem_type_maps_to_error_type(
     }
     _reply(peer, status, problem, "application/problem+json")
     with pytest.raises(SynthesiaError) as exc:
-        await _start(peer)
+        await _start(peer, avatar_host)
     assert exc.value.type is expected
 
 
-async def test_request_carries_auth_header_and_payload(peer: _Peer) -> None:
-    """https://github.com/livekit/agents/pull/7216"""
+async def test_request_carries_auth_header_and_payload(
+    peer: _Peer, avatar_host: AvatarHost
+) -> None:
+    """The session request names the prefixed avatars and the room's ws(s):// URL.
+
+    https://github.com/livekit/agents/pull/7216
+    """
     _reply(peer, 200, {"session_id": "sess_123"})
-    await _start(peer)
+    await _start(peer, avatar_host)
     call = peer.calls[0]
     assert call.url == peer.url + SESSION_PATH
     assert call.headers["Authorization"] == API_KEY
-    assert call.json == {
-        "avatarIds": ["av_avatar-1"],
-        "livekitUrl": "wss://room.livekit.cloud",
-        "livekitToken": "lk-token-secret",
-    }
+    assert isinstance(call.json, dict)
+    assert call.json.pop("livekitToken")
+    assert call.json == {"avatarIds": ["av_avatar-1"], "livekitUrl": "wss://room.livekit.cloud"}
 
 
-async def test_secrets_never_logged(peer: _Peer, caplog: pytest.LogCaptureFixture) -> None:
+async def test_secrets_never_logged(
+    peer: _Peer, avatar_host: AvatarHost, caplog: pytest.LogCaptureFixture
+) -> None:
     """https://github.com/livekit/agents/pull/7216"""
-    caplog.set_level(logging.DEBUG, logger="livekit.plugins.synthesia")
+    caplog.set_level(logging.DEBUG, logger="livekit")
     _reply(peer, 200, {"session_id": "sess_ok"})
-    await _start(peer)
+    await _start(peer, avatar_host)
     _reply(peer, 401, {"error": {"code": "unauthorized"}})
     with pytest.raises(SynthesiaError):
-        await _start(peer)
+        await _start(peer, avatar_host)
+    sent = peer.calls[0].json
+    assert isinstance(sent, dict)
+    token = sent["livekitToken"]
     assert API_KEY not in caplog.text
-    assert "lk-token-secret" not in caplog.text
+    assert token not in caplog.text
 
 
-async def test_a_stalled_launch_fails_at_the_join_timeout(avatar_host: AvatarHost) -> None:
-    """The session launch is bounded by ``join_timeout`` as one total deadline, not per read."""
-    stalled = asyncio.Event()
+async def test_a_stalled_launch_fails_at_its_total_timeout(avatar_host: AvatarHost) -> None:
+    """The session launch is bounded by ``conn_options``' total deadline, and never resent."""
+    stalled: list[web.Request] = []
 
     async def stall(request: web.Request) -> web.Response:
-        stalled.set()
+        stalled.append(request)
         await asyncio.Event().wait()  # never answers
         return web.json_response({"session_id": "late"})
 
@@ -153,13 +156,11 @@ async def test_a_stalled_launch_fails_at_the_join_timeout(avatar_host: AvatarHos
             AvatarConfig(avatar_ids=["avatar-1"]),
             api_key=API_KEY,
             api_url=str(server.make_url("")).rstrip("/"),
-            join_timeout=0.05,
+            conn_options=dataclasses.replace(ONE_ATTEMPT, max_retry=2, total_timeout=0.05),
         )
-        started = time.monotonic()
 
         with pytest.raises(APITimeoutError) as raised:
-            await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+            await avatar.start(avatar_host.agent, avatar_host.room)
 
-    assert stalled.is_set()
     assert raised.value.timeout == "total"
-    assert time.monotonic() - started < 5
+    assert len(stalled) == 1

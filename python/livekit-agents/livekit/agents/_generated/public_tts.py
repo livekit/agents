@@ -18,9 +18,27 @@ from .tts import (
     TTSOptions as TTSOptions,
 )
 from .tts_availability import AvailabilityChangedEvent as AvailabilityChangedEvent
+from .tts_segments import (
+    SegmentAudio as SegmentAudio,
+    SegmentDone as SegmentDone,
+    SegmentEnd as SegmentEnd,
+    SegmentInput as SegmentInput,
+    SegmentOutput as SegmentOutput,
+    SegmentStart as SegmentStart,
+    SegmentText as SegmentText,
+    SegmentWords as SegmentWords,
+)
 
 __all__: list[str] = [
     "MarkupSplit",
+    "SegmentStart",
+    "SegmentText",
+    "SegmentEnd",
+    "SegmentInput",
+    "SegmentAudio",
+    "SegmentWords",
+    "SegmentDone",
+    "SegmentOutput",
     "SentenceStreamPacer",
     "TTSCapabilities",
     "MarkupInfo",

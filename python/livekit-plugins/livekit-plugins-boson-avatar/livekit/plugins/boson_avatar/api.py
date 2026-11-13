@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import ipaddress
 import os
-import uuid
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -33,29 +32,12 @@ from livekit.agents import (
 )
 
 from .errors import BosonAvatarException
-from .log import logger
 from .version import __version__
 
 _JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
 
 _USER_AGENT = f"livekit-plugins-boson-avatar/{__version__}"
 _SESSION_OBJECT = "avatar.livekit.session"
-
-
-@dataclass(frozen=True)
-class AvatarSessionInfo:
-    """Hosted Boson Avatar session returned by the provider API."""
-
-    id: str
-    avatar_identity: str
-
-
-class AvatarSessionStartError(BosonAvatarException):
-    """Session creation failed after the provider allocated a session."""
-
-    def __init__(self, message: str, *, session_info: AvatarSessionInfo) -> None:
-        super().__init__(message)
-        self.session_info = session_info
 
 
 @dataclass(frozen=True)
@@ -96,10 +78,9 @@ class BosonAvatarAPI:
 
     async def list_avatars(self) -> list[AvatarInfo]:
         """List Avatars available to the authenticated Boson project."""
-        _, payload = await self._json(
-            "GET",
-            "/avatars",
-            success_statuses=frozenset({200}),
+        _, payload = await http.retry_request(
+            lambda: self.request("GET", "/avatars", success_statuses=frozenset({200})),
+            conn_options=self._conn_options,
         )
         raw_avatars = payload.get("data")
         if payload.get("object") != "avatar.list" or not isinstance(raw_avatars, list):
@@ -122,115 +103,12 @@ class BosonAvatarAPI:
             avatars.append(AvatarInfo(avatar_id=avatar_id, name=name))
         return avatars
 
-    async def start_session(
-        self,
-        *,
-        avatar_id: str,
-        livekit_url: str,
-        livekit_room: str,
-        livekit_token: str,
-        avatar_identity: str,
-        publisher_identity: str,
-        width: int | None = None,
-        height: int | None = None,
-        max_duration_seconds: int | None = None,
-        idempotency_key: str | None = None,
-    ) -> AvatarSessionInfo:
-        """Start one Boson Avatar participant in an existing LiveKit room."""
-        body: dict[str, JsonValue] = {
-            "avatar_id": avatar_id,
-            "transport": {
-                "type": "livekit",
-                "url": livekit_url,
-                "room_name": livekit_room,
-                "participant_token": livekit_token,
-                "participant_identity": avatar_identity,
-                "publisher_identity": publisher_identity,
-                "audio_source": "data_stream",
-            },
-        }
-        if width is not None and height is not None:
-            body["output"] = {"width": width, "height": height}
-        if max_duration_seconds is not None:
-            body["max_duration_seconds"] = max_duration_seconds
-
-        _, data = await self._json(
-            "POST",
-            "/sessions",
-            json=body,
-            headers={"Idempotency-Key": idempotency_key or str(uuid.uuid4())},
-            success_statuses=frozenset({200, 201}),
-        )
-        session_id = data.get("id")
-        returned_identity = data.get("avatar_identity")
-        response_valid = (
-            isinstance(session_id, str)
-            and bool(session_id)
-            and data.get("object") == _SESSION_OBJECT
-            and data.get("status") == "active"
-            and returned_identity == avatar_identity
-        )
-        if not response_valid:
-            if not isinstance(session_id, str) or not session_id:
-                raise BosonAvatarException("Boson Avatar API response is missing a session id")
-            if returned_identity != avatar_identity:
-                error_message = (
-                    "Boson Avatar API returned a participant identity that does not match "
-                    "the request"
-                )
-            else:
-                error_message = "Boson Avatar API returned an invalid active session"
-
-            # A protocol-invalid response can still represent an allocated
-            # provider session. Compensate whenever it gives us a usable ID.
-            session_info = AvatarSessionInfo(
-                id=session_id,
-                avatar_identity=(
-                    returned_identity if isinstance(returned_identity, str) else avatar_identity
-                ),
-            )
-            try:
-                await self.end_session(session_id)
-            except Exception as exc:  # noqa: BLE001 - caller can retry compensation by ID
-                logger.warning(
-                    "failed to compensate boson avatar session after invalid response",
-                    extra={
-                        "error_type": type(exc).__name__,
-                        "lk.pii.session_id": session_id,
-                    },
-                )
-                raise AvatarSessionStartError(error_message, session_info=session_info) from None
-            raise BosonAvatarException(error_message)
-
-        assert isinstance(session_id, str)
-        assert isinstance(returned_identity, str)
-        return AvatarSessionInfo(id=session_id, avatar_identity=returned_identity)
-
-    async def end_session(self, session_id: str) -> None:
-        """Idempotently stop a hosted Boson Avatar session."""
-        status_code, data = await self._json(
-            "DELETE",
-            f"/sessions/{session_id}",
-            allow_empty=True,
-            success_statuses=frozenset({200, 204}),
-        )
-        invalid_response = (status_code == 204 and bool(data)) or (
-            status_code == 200
-            and (
-                data.get("id") != session_id
-                or data.get("object") != _SESSION_OBJECT
-                or data.get("status") != "terminated"
-            )
-        )
-        if invalid_response:
-            raise BosonAvatarException("Boson Avatar API returned an invalid terminated session")
-
     def _ensure_http_session(self) -> http.HttpSession:
         if self._session is None:
             self._session = http.http_session()
         return self._session
 
-    async def _json(
+    async def request(
         self,
         method: str,
         path: str,
@@ -240,44 +118,45 @@ class BosonAvatarAPI:
         allow_empty: bool = False,
         success_statuses: frozenset[int],
     ) -> tuple[int, dict[str, JsonValue]]:
+        """One request; a status outside ``success_statuses`` or a body that is not an object
+        breaks the provider's contract."""
         request_headers = {
             "Authorization": f"Bearer {self._api_key}",
             "User-Agent": _USER_AGENT,
             "Accept": "application/json",
             **(headers or {}),
         }
-        url = f"{self._api_url}{path}"
         session = self._ensure_http_session().with_request_id("x-request-id")
-
-        async def request() -> tuple[int, dict[str, JsonValue]]:
-            async with session.request(
-                method, url, json=json, headers=request_headers, conn_options=self._conn_options
-            ) as response:
-                try:
-                    await response.raise_for_status()
-                except APIStatusError as exc:
-                    exc.request_id = _error_request_id(exc.body) or exc.request_id
-                    raise
-                if response.status not in success_statuses:
-                    raise APIStatusError(
-                        "Boson Avatar API returned an unexpected status",
-                        status_code=response.status,
-                        kind="protocol",
-                    )
-                payload = await _read_payload(response)
-                if payload is None and allow_empty and response.status == 204:
-                    return response.status, {}
-                if not isinstance(payload, dict):
-                    raise APIStatusError(
-                        "Boson Avatar API returned a non-object JSON response",
-                        status_code=response.status,
-                        body=payload,
-                        kind="protocol",
-                        detail=str(payload),
-                    )
-                return response.status, payload
-
-        return await http.retry_request(request, conn_options=self._conn_options)
+        async with session.request(
+            method,
+            f"{self._api_url}{path}",
+            json=json,
+            headers=request_headers,
+            conn_options=self._conn_options,
+        ) as response:
+            try:
+                await response.raise_for_status()
+            except APIStatusError as exc:
+                exc.request_id = _error_request_id(exc.body) or exc.request_id
+                raise
+            if response.status not in success_statuses:
+                raise APIStatusError(
+                    "Boson Avatar API returned an unexpected status",
+                    status_code=response.status,
+                    kind="protocol",
+                )
+            payload = await _read_payload(response)
+            if payload is None and allow_empty and response.status == 204:
+                return response.status, {}
+            if not isinstance(payload, dict):
+                raise APIStatusError(
+                    "Boson Avatar API returned a non-object JSON response",
+                    status_code=response.status,
+                    body=payload,
+                    kind="protocol",
+                    detail=str(payload),
+                )
+            return response.status, payload
 
 
 def _resolve_api_key(value: NotGivenOr[str]) -> str | None:
@@ -378,4 +257,4 @@ def _error_request_id(body: object) -> str | None:
     return str(request_id) if request_id else None
 
 
-__all__ = ["AvatarInfo", "AvatarSessionInfo", "BosonAvatarAPI", "list_avatars"]
+__all__ = ["AvatarInfo", "BosonAvatarAPI", "list_avatars"]

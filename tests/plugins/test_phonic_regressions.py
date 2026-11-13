@@ -10,8 +10,6 @@ from typing import Any
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-from phonic import AsyncPhonic
-from phonic.environment import PhonicEnvironment
 
 from livekit.agents import llm
 from livekit.plugins.phonic.realtime import RealtimeModel, RealtimeSession
@@ -60,22 +58,14 @@ async def hang_up() -> str:
 
 
 @pytest.fixture
-async def conversation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> AsyncIterator[tuple[_Peer, RealtimeSession, Wire]]:
+async def conversation() -> AsyncIterator[tuple[_Peer, RealtimeSession, Wire]]:
     peer = _Peer()
     app = web.Application()
     app.router.add_get("/v1/sts/ws", peer.conversation)
     async with TestServer(app) as server:
-        environment = PhonicEnvironment(
-            base=str(server.make_url("/v1")), production=str(server.make_url("").with_scheme("ws"))
-        )
-        monkeypatch.setattr(
-            "livekit.plugins.phonic.realtime.realtime_model.AsyncPhonic",
-            lambda api_key: AsyncPhonic(api_key=api_key, environment=environment),
-        )
         model = RealtimeModel(
             api_key="key",
+            base_url=str(server.make_url("").with_scheme("ws")),
             default_language="en",
             additional_languages=["es"],
             configs_for_tools=[{"name": "hang_up", "forbid_speech_after_tool_call": True}],

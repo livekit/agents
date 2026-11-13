@@ -6,6 +6,7 @@ pub(crate) mod input;
 pub mod options;
 mod provider_options;
 pub mod retrying;
+pub mod speech;
 pub use retrying::{recognize, stream};
 mod stream;
 pub mod stream_adapter;

@@ -14,8 +14,11 @@ from .stt import (
     STTCapabilities as STTCapabilities,
     STTError as STTError,
     SpeechData as SpeechData,
+    SpeechEnded as SpeechEnded,
     SpeechEvent as SpeechEvent,
     SpeechEventType as SpeechEventType,
+    SpeechStarted as SpeechStarted,
+    Transcript as Transcript,
 )
 from .stt_availability import AvailabilityChangedEvent as AvailabilityChangedEvent
 
@@ -24,10 +27,13 @@ __all__: list[str] = [
     "SpeechData",
     "RecognitionUsage",
     "SpeechEvent",
+    "Transcript",
     "STTCapabilities",
     "AvailabilityChangedEvent",
     "STTError",
     "STT",
+    "SpeechStarted",
+    "SpeechEnded",
     "RecognizeStream",
     "FallbackRecognizeStream",
     "StreamAdapterWrapper",

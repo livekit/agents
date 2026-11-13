@@ -28,6 +28,8 @@ pub trait PushedAudio: Send + Sync {
     fn pushed_duration(&self) -> f64;
     fn start_segment(&self, segment_id: String) -> Result<(), EmitterError>;
     fn end_segment(&self) -> Result<(), EmitterError>;
+    /// Audio in the emitter's encoding.
+    fn push(&self, data: &[u8]) -> Result<(), EmitterError>;
     fn push_frame(&self, frame: crate::AudioFrame) -> Result<(), EmitterError>;
     /// The words the next frames cover; none is a no-op.
     fn push_timed_transcript(&self, words: Vec<crate::TranscriptChunk>)

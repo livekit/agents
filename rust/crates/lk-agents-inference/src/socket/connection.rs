@@ -15,6 +15,19 @@ pub(super) struct ConnectionOptions {
     pub(super) max_session_duration: Option<Duration>,
     /// How long a drain waits for the provider to finish or close.
     pub(super) drain_limit: Duration,
+    /// Pinged this often, the socket's own liveness.
+    pub(super) ping: Option<Duration>,
+    /// Whether input waits for the provider to say it is ready.
+    pub(super) readiness: Readiness,
+}
+
+/// When a connection takes input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Readiness {
+    /// As soon as it opens.
+    Open,
+    /// Once the provider said it is ready, by `by` (none: no limit).
+    Awaited { by: Option<Ts> },
 }
 
 /// What the connection's loops do next, in order.
@@ -39,6 +52,10 @@ pub(super) enum Finish {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
+    /// Waiting for the provider to say it is ready, until the deadline.
+    Opening {
+        until: Option<Ts>,
+    },
     /// Taking input.
     Open,
     /// The goodbye was sent (or none is owed): waiting for the provider to finish or close.
@@ -65,9 +82,13 @@ pub(super) struct Connection {
 impl Connection {
     pub(super) fn open(options: ConnectionOptions, now: Ts) -> Self {
         let rotate_at = options.max_session_duration.map(|limit| now.saturating_add(limit));
+        let phase = match options.readiness {
+            Readiness::Open => Phase::Open,
+            Readiness::Awaited { by } => Phase::Opening { until: by },
+        };
         Connection {
             options,
-            phase: Phase::Open,
+            phase,
             last_sent: now,
             mid_segment: false,
             rotate_at,
@@ -83,6 +104,14 @@ impl Connection {
     /// Whether the connection finished or failed: nothing more is done on it.
     pub(super) fn is_finished(&self) -> bool {
         self.phase == Phase::Finished
+    }
+
+    /// The provider said it is ready: input goes out from now.
+    pub(super) fn ready(&mut self, now: Ts) {
+        if matches!(self.phase, Phase::Opening { .. }) {
+            self.phase = Phase::Open;
+            self.last_sent = now;
+        }
     }
 
     /// An input item's frames went out; `boundary`: it ended a segment.
@@ -106,7 +135,7 @@ impl Connection {
 
     /// `reconnect(reason)`: rotate now.
     pub(super) fn rotate(&mut self, now: Ts, effects: &mut Vec<SocketEffect>) {
-        if self.phase == Phase::Open {
+        if matches!(self.phase, Phase::Open | Phase::Opening { .. }) {
             self.drain(Finish::Rotate, now, effects);
         }
     }
@@ -114,7 +143,7 @@ impl Connection {
     /// The protocol said the provider finished.
     pub(super) fn done(&mut self, effects: &mut Vec<SocketEffect>) {
         let then = match self.phase {
-            Phase::Open => Finish::Ended,
+            Phase::Open | Phase::Opening { .. } => Finish::Ended,
             Phase::Draining { then, .. } => then,
             Phase::Finished => return,
         };
@@ -129,7 +158,7 @@ impl Connection {
         effects: &mut Vec<SocketEffect>,
     ) {
         let expected = match self.phase {
-            Phase::Open => None,
+            Phase::Open | Phase::Opening { .. } => None,
             Phase::Draining { then, .. } => Some(then),
             Phase::Finished => return,
         };
@@ -143,6 +172,11 @@ impl Connection {
     /// The time is `now`: a keepalive or a rotation may be due, or a drain may have run out.
     pub(super) fn tick(&mut self, now: Ts, effects: &mut Vec<SocketEffect>) {
         match self.phase {
+            Phase::Opening { until: Some(until) } if now >= until => {
+                // connected, but the provider never said it is ready
+                self.finish(SocketEffect::Fail(ApiError::timed_out(Timeout::Connect)), effects);
+            }
+            Phase::Opening { .. } => {}
             Phase::Open => {
                 if let Some((interval, frame)) = &self.options.keepalive
                     && now >= self.last_sent.saturating_add(*interval)
@@ -181,6 +215,7 @@ impl Connection {
                 let rotation = self.rotate_at.filter(|_| !self.rotation_due);
                 keepalive.into_iter().chain(rotation).min()
             }
+            Phase::Opening { until } => until,
             Phase::Draining { until, .. } => Some(until),
             Phase::Finished => None,
         }

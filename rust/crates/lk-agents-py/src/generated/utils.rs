@@ -644,6 +644,15 @@ impl SocketSession {
         Ok(())
     }
 
+    /// The provider is ready for input on the current connection (see `awaits_ready`).
+    fn ready(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <SocketSessionImpl as ::lk_agents_abi::utils::socket::SocketSession>::ready(&self.0)
+        });
+        Ok(())
+    }
+
     /// Run until the input ended and the provider finished, or the failure that ended it.
     fn run<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
@@ -710,6 +719,15 @@ impl SocketMux {
             )
         });
         ::pyo3::PyResult::Ok(SocketMux(::std::sync::Arc::new(out)))
+    }
+
+    /// Open a shared socket now, unless one has room: the first stream then finds it open.
+    fn prewarm(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <SocketMuxImpl as ::lk_agents_abi::utils::socket::SocketMux>::prewarm(&self.0)
+        });
+        Ok(())
     }
 
     /// Options changed: idle sockets close, busy ones close once their streams end.
@@ -981,6 +999,48 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [error_arg.into_bound(py)];
                 Ok((
                     host.bind(py).getattr("_core_retrying")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+    }
+
+    fn sent(&self, command: u64) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let command_arg = command;
+        ::lk_agents_runtime::host::notify(
+            &self.notifier,
+            "SocketHost._core_sent",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            false,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [::pyo3::IntoPyObjectExt::into_bound_py_any(command_arg, py)?];
+                Ok((
+                    host.bind(py).getattr("_core_sent")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+    }
+
+    fn returned(&self, command: u64) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let command_arg = command;
+        ::lk_agents_runtime::host::notify(
+            &self.notifier,
+            "SocketHost._core_returned",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            false,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [::pyo3::IntoPyObjectExt::into_bound_py_any(command_arg, py)?];
+                Ok((
+                    host.bind(py).getattr("_core_returned")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

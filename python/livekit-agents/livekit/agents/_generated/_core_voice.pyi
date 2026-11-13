@@ -195,7 +195,7 @@ class _core_AvatarLifecycle:
     room was connected, `avatar_joined_time` when the video was published); a session's assistant
     message added with a `playback_latency` is reported as `AvatarMetrics(playback_latency=..)`
     until the close. Each metric reaches the avatar's `metrics_collected` and the session's
-    metrics once it runs. Inside a job, the job's shutdown runs the avatar's `aclose`. An avatar
+    metrics once it runs. The session's close runs the avatar's `aclose`. An avatar
     not joined [`JOIN_TIMEOUT`] after its start is the session's one recoverable `avatar_error`,
     and its attached output stops waiting for it; the join wait goes on.
     """

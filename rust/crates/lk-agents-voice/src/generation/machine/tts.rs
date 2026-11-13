@@ -83,10 +83,10 @@ impl StreamingTts {
     }
 }
 
-/// Stamped words own an aligned transcript after the first stamp: each of the voice's timed words
-/// is mapped onto the next spoken word of the transcript, so the transcript keeps its own text
-/// (markdown, emoji, code) and paces it on the voice's timings. An unstamped segment falls back to
-/// the transcript whole. Closing flushes it exactly once.
+/// Stamped words own an aligned transcript after the first stamp that releases words: each of the
+/// voice's timed words is mapped onto the next spoken word of the transcript, so the transcript
+/// keeps its own text (markdown, emoji, code) and paces it on the voice's timings. An unstamped
+/// segment falls back to the transcript whole. Closing flushes it exactly once.
 #[derive(Clone, Default)]
 pub struct AlignedTranscript {
     /// The transcript shown so far, as the transcript chain got it.
@@ -200,15 +200,16 @@ impl AlignedTranscript {
     }
 
     /// `said` is what the voice was given so far, as the transcript shows it. The stamp releases
-    /// the transcript up to the word it says, its silent text first, at no cost. A stamp that
-    /// finds no word nearby is held; the words the next matching stamp skips over take the held
-    /// stamps' time. Too many held stamps map by position, so the transcript never drifts far.
+    /// the transcript up to the last word it says, its silent text first, at no cost: a stamp of
+    /// several words (a voice that stamps each sentence whole) reaches as many words further. A
+    /// stamp that finds no word nearby is held; the words the next matching stamp skips over take
+    /// the held stamps' time. Too many held stamps map by position, so the transcript never drifts
+    /// far. Only a stamp that released words makes the transcript stamped.
     pub fn word(
         &mut self,
         stamp: &TranscriptChunk,
         said: &Visible,
     ) -> Vec<AlignedTranscriptEffect> {
-        self.stamped = true;
         let pending = self.pending(said);
         let words: Vec<usize> =
             pending.iter().enumerate().filter(|(_, p)| p.word.is_some()).map(|(i, _)| i).collect();
@@ -217,16 +218,21 @@ impl AlignedTranscript {
         let unfinished = |i: usize| {
             i + 1 == pending.len() && pending[i].text().ends_with(|c: char| !c.is_whitespace())
         };
-        let said_word = normalized(&stamp.text);
-        let found = words
-            .iter()
-            .take(LOOKAHEAD)
-            .copied()
-            .find(|&i| pending[i].word.as_deref() == Some(said_word.as_str()));
-        let upto = match found {
-            Some(i) => i,
+        let said_words: Vec<String> =
+            stamp.text.split_whitespace().map(normalized).filter(|w| !w.is_empty()).collect();
+        let reach = said_words.len().saturating_sub(1);
+        let last = said_words.last().map_or_else(|| normalized(&stamp.text), Clone::clone);
+        // the match nearest to where the stamp's last word falls
+        let found = (words.iter().enumerate())
+            .take(LOOKAHEAD + reach)
+            .filter(|(_, i)| pending[**i].word.as_deref() == Some(last.as_str()))
+            .min_by_key(|(n, _)| n.abs_diff(reach))
+            .map(|(n, _)| n);
+        let (from, upto) = match found {
+            Some(n) => (words[n.saturating_sub(reach)], words[n]),
             // the voice is ahead of the transcript it was given: show what it said
             None if words.is_empty() => {
+                self.stamped = true;
                 self.words.push_str(&stamp.text);
                 self.last_start = stamp.start_time;
                 return vec![AlignedTranscriptEffect::CaptureTimed(stamp.clone())];
@@ -239,34 +245,36 @@ impl AlignedTranscript {
             None => {
                 self.held.push(stamp.clone());
                 let oldest = self.held.remove(0);
-                return self.release(pending, words[0], &oldest, &oldest);
+                return self.release(pending, (words[0], words[0]), &oldest, &oldest);
             }
         };
-        // the words skipped over take the held stamps' span, the matched one its own stamp
+        // the words skipped over take the held stamps' span, the stamp's own words its time
         let skipped = std::mem::take(&mut self.held);
         let span = TranscriptChunk {
             start_time: skipped.first().map_or(stamp.start_time, |h| h.start_time),
             end_time: skipped.last().map_or(stamp.start_time, |h| h.end_time),
             ..TranscriptChunk::default()
         };
-        self.release(pending, upto, &span, stamp)
+        self.release(pending, (from, upto), &span, stamp)
     }
 
-    /// Show `pending` up to `upto`: silent text at its stamp's start, the last word at `stamp`,
-    /// any words before it over `skipped`.
+    /// Show `pending` up to `upto`: the stamp's own words, from `from`, at `stamp`, any words
+    /// before them over `skipped`, silent text at its stamp's start.
     fn release(
         &mut self,
         pending: Vec<Pending>,
-        upto: usize,
+        (from, upto): (usize, usize),
         skipped: &TranscriptChunk,
         stamp: &TranscriptChunk,
     ) -> Vec<AlignedTranscriptEffect> {
+        self.stamped = true;
         let mut effects = Vec::new();
         for (i, piece) in pending.into_iter().take(upto + 1).enumerate() {
-            let (start_time, end_time) = match piece.word {
-                Some(_) if i == upto => (stamp.start_time, stamp.end_time),
-                Some(_) => (skipped.start_time, skipped.end_time),
-                None => (skipped.start_time, skipped.start_time),
+            let (start_time, end_time) = match (piece.word, i >= from) {
+                (Some(_), true) => (stamp.start_time, stamp.end_time),
+                (Some(_), false) => (skipped.start_time, skipped.end_time),
+                (None, true) => (stamp.start_time, stamp.start_time),
+                (None, false) => (skipped.start_time, skipped.start_time),
             };
             (self.chunk, self.byte) = piece.next;
             self.last_start = start_time;

@@ -188,9 +188,15 @@ impl SessionChatCtx {
         visibility: Visibility,
         agent: &str,
     ) -> (Committed, CommitOutcome) {
-        let entry = Committed { item, source, visibility, agent: agent.to_owned() };
+        let mut entry = Committed { item, source, visibility, agent: agent.to_owned() };
         if entry.item.id() == INSTRUCTIONS_MESSAGE_ID {
             return (entry, CommitOutcome::Filtered);
+        }
+        if let Source::ToolCall { speech, .. } = entry.source
+            && !self.ids.contains(entry.item.id())
+        {
+            let held = self.items.iter().map(|c| (&c.item, c.source.speech()));
+            with_its_turn(&mut entry.item, speech, held);
         }
         let id = entry.item.id();
         let outcome = if self.ids.insert(id.to_owned()) {
@@ -387,14 +393,40 @@ impl SessionChatCtx {
         insertion_index(self.items.iter().map(|c| &c.item), item)
     }
 
-    /// Every item as the record will hold it once `pending` is committed: each one inserted as a
-    /// commit inserts it, by its own instant, one already held replaced in place.
-    pub fn projected(&self, pending: impl IntoIterator<Item = ChatItem>) -> Vec<ChatItem> {
-        let mut items: Vec<ChatItem> = self.items().cloned().collect();
-        for item in pending {
-            commit_by_instant(&mut items, item);
+    /// Every item as the record will hold it once `pending`, each with the reply it belongs to,
+    /// is committed: a new one inserted as a commit inserts it, one already held kept as held.
+    pub fn projected(
+        &self,
+        pending: impl IntoIterator<Item = (ChatItem, Option<SpeechId>)>,
+    ) -> Vec<ChatItem> {
+        let mut items: Vec<(ChatItem, Option<SpeechId>)> =
+            self.items.iter().map(|c| (c.item.clone(), c.source.speech())).collect();
+        for (mut item, speech) in pending {
+            if items.iter().any(|(held, _)| held.id() == item.id()) {
+                continue;
+            }
+            if let Some(speech) = speech {
+                with_its_turn(&mut item, speech, items.iter().map(|(i, s)| (i, *s)));
+            }
+            let at = insertion_index(items.iter().map(|(i, _)| i), &item);
+            items.insert(at, (item, speech));
         }
-        items
+        items.into_iter().map(|(item, _)| item).collect()
+    }
+}
+
+/// A reply's tool call sits with its turn: right after the last item the reply holds (its step's
+/// heard words, or the calls and outputs before it), at that item's instant. Never heard, a call
+/// never takes its place by when it started: a step's calls started before and after its words
+/// were first heard would straddle them.
+fn with_its_turn<'a>(
+    item: &mut ChatItem,
+    speech: SpeechId,
+    mut held: impl DoubleEndedIterator<Item = (&'a ChatItem, Option<SpeechId>)>,
+) {
+    let ChatItem::FunctionCall(call) = item else { return };
+    if let Some((turn, _)) = held.rfind(|(_, of)| *of == Some(speech)) {
+        call.created_at = turn.created_at();
     }
 }
 
@@ -532,5 +564,55 @@ mod tests {
         assert_eq!(outcome, CommitOutcome::Added);
         let ids: Vec<_> = ctx.history().map(|item| item.id().to_owned()).collect();
         assert_eq!(ids, ["asked", "reply"]);
+    }
+
+    // Catches (survey seed 317): a step's calls kept the instants they started at while its words
+    // took the instant they were first heard, so the words sat between the calls started before
+    // and after it, and a cut turn's late outputs ended up apart from their calls. A call sits
+    // with its turn, and a checkpoint projects it where the commit puts it.
+    #[test]
+    fn a_steps_calls_sit_together_right_after_its_words() {
+        let at = |ms: u64| SystemTime::UNIX_EPOCH + Duration::from_millis(ms);
+        let speech = SpeechId(7);
+        let said = |id: &str, role, ms| ChatItem::Message(ChatMessage::text(id, role, id, at(ms)));
+        let call = |id: &str, ms| {
+            ChatItem::FunctionCall(FunctionCall {
+                id: id.into(),
+                call_id: id.into(),
+                arguments: "{}".into(),
+                name: "lookup".into(),
+                created_at: at(ms),
+                extra: Default::default(),
+                group_id: None,
+            })
+        };
+        let mut ctx = SessionChatCtx::new("agent");
+        let commit = |ctx: &mut SessionChatCtx, item, source| {
+            let _ = ctx.commit(item, source, Visibility::Both, "agent");
+        };
+        commit(&mut ctx, said("asked", Role::User, 10_000), Source::HostCtx);
+        let words = Source::Reply { speech, step: 1 };
+        commit(&mut ctx, said("words", Role::Assistant, 50_000), words);
+        // the person cut the reply while its tools ran
+        commit(&mut ctx, said("cut", Role::User, 51_500), Source::HostCtx);
+        // one call started before the words were heard, one after the person spoke
+        let calls = [call("a", 15_000), call("b", 51_700)];
+        let projected = ctx.projected(calls.iter().map(|c| (c.clone(), Some(speech)))).into_iter();
+        let projected: Vec<String> = projected.map(|i| i.id().to_owned()).collect();
+        for item in calls {
+            commit(&mut ctx, item, Source::ToolCall { speech, step: 1 });
+        }
+        for id in ["a", "b"] {
+            let end = ctx.call_group_end(id).expect("held");
+            let output = FunctionCallOutput::new(format!("{id}_out"), id, "", false, end);
+            commit(&mut ctx, output.into(), Source::ToolOutput { speech, step: 1 });
+        }
+        let ids: Vec<_> = ctx.history().map(|item| item.id().to_owned()).collect();
+        assert_eq!(ids, ["asked", "words", "a", "b", "a_out", "b_out", "cut"]);
+        assert_eq!(projected, ["asked", "words", "a", "b", "cut"]);
+        // the host reads the order back from the instants
+        assert!(
+            ctx.history().zip(ctx.history().skip(1)).all(|(a, b)| a.created_at() <= b.created_at())
+        );
     }
 }

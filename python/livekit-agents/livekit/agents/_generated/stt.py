@@ -124,6 +124,29 @@ class SpeechEvent:
 
 
 @dataclass
+class Transcript:
+    """What a provider heard, as a stream reports it with `RecognizeStream.report`. The stream turns
+    it into speech events: the first words start the speech, and a final ends it unless the
+    provider detects speech itself.
+    """
+
+    text: str
+    language: LanguageCode
+    final: bool = False
+    """The provider will not change it. An empty final retracts the interim it follows."""
+    preflight: bool = False
+    """An interim stable enough for preemptive generation; dropped outside speech."""
+    request_id: str = ""
+    start_time: float = 0.0
+    end_time: float = 0.0
+    confidence: float = 0.0
+    speaker_id: str | None = None
+    words: list[TranscriptChunk] | None = None
+    source_languages: list[LanguageCode] | None = None
+    metadata: dict[str, JsonValue] | None = None
+
+
+@dataclass
 class STTCapabilities:
     """What an STT supports, fixed at construction.
 
@@ -165,6 +188,8 @@ RecognitionUsage.__annotations__ = get_annotations(RecognitionUsage, eval_str=Tr
 RecognitionUsage.__module__ = "livekit.agents.stt"
 SpeechEvent.__annotations__ = get_annotations(SpeechEvent, eval_str=True)
 SpeechEvent.__module__ = "livekit.agents.stt"
+Transcript.__annotations__ = get_annotations(Transcript, eval_str=True)
+Transcript.__module__ = "livekit.agents.stt"
 STTCapabilities.__annotations__ = get_annotations(STTCapabilities, eval_str=True)
 STTCapabilities.__module__ = "livekit.agents.stt"
 STTError.__module__ = "livekit.agents.stt"
@@ -369,17 +394,32 @@ class STT(
         return out
 
 
+class SpeechStarted:
+    """The provider heard speech start: reported only by a provider that detects speech itself."""
+
+
+class SpeechEnded:
+    """The provider heard speech end: reported only by a provider that detects speech itself."""
+
+
 class RecognizeStream(ABC):
     """A live recognition: audio in through ``push_frame``, ``SpeechEvent`` out.
 
-    Plugins implement ``_run``: one attempt at the recognition, reading ``input`` and handing
-    each event to ``send``. The framework runs it under ``conn_options``: a retryable
-    ``APIError`` reconnects by calling ``_run`` again, which reads the audio the failed attempt
-    had not taken; transcripts already sent stay delivered.
+    Plugins implement ``_run``: one attempt at the recognition, reading ``input`` and reporting
+    what the provider heard with ``report``. The framework runs it under ``conn_options``: a
+    retryable ``APIError`` reconnects by calling ``_run`` again, which reads the audio the failed
+    attempt had not taken; transcripts already sent stay delivered.
+
+    The speech events are the framework's: the first words start a speech, a final transcript
+    ends it, and each attempt's end closes the speech it left open.
     """
 
     class Flush:
         """Marks the end of a segment in ``input``."""
+
+    provider_vad: ClassVar[bool] = False
+    """The provider detects speech itself: it reports ``SpeechStarted`` and ``SpeechEnded``, and
+    a final transcript ends only a speech no words were heard in."""
 
     def __init__(
         self,
@@ -420,6 +460,7 @@ class RecognizeStream(ABC):
         self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
             "stt_stream", attempted, self
         )
+        self._core_speech = _core.SpeechState(self.provider_vad)
         self._core_attempt_task: asyncio.Task[None] | None = None
         self._core_cancelled = False
         self._attempt_started = 0.0
@@ -434,6 +475,11 @@ class RecognizeStream(ABC):
     @context.setter
     def context(self, value: BaseModel | None) -> None:
         self._context = value
+
+    @property
+    def speaking(self) -> bool:
+        """Whether a speech is open, as the reports so far decided."""
+        return self._core_speech.speaking
 
     @property
     def start_time_offset(self) -> float:
@@ -511,10 +557,17 @@ class RecognizeStream(ABC):
         try:
             await self._run()
         finally:
-            # the attempt's audio not yet reported, before the next attempt's events
+            # the attempt's open speech and audio not yet reported, before the next attempt's
+            # events
+            if not self._event_ch.closed:
+                self._end_speech()
             usage = self._core_attempts.unreported_usage()
             if usage is not None and not self._event_ch.closed:
                 self.send(usage)
+
+    def _end_speech(self) -> None:
+        for event in self._core_speech.boundary():
+            self.send(event)
 
     def _core_produced(self) -> bool:
         return False
@@ -581,8 +634,20 @@ class RecognizeStream(ABC):
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self
 
+    def report(self, report: Transcript | SpeechStarted | SpeechEnded) -> None:
+        """What the provider heard: the speech events it makes reach the reader."""
+        if isinstance(report, Transcript):
+            events = self._core_speech.transcript(report)
+        elif isinstance(report, SpeechStarted):
+            events = self._core_speech.started()
+        else:
+            events = self._core_speech.ended()
+        for event in events:
+            self.send(event)
+
     def send(self, event: SpeechEvent) -> None:
-        """Hand ``event`` to the reader."""
+        """Hand ``event`` to the reader: a usage the provider reports, or the events of a stream
+        that keeps its own speech state."""
         self._core_attempts.observe(event)
         stt = self._stt
         record = _core.stt_stream_metrics(event, time.time(), stt.label, stt.model, stt.provider)
@@ -636,4 +701,6 @@ class RecognizeStream(ABC):
 
 # The public module identity is assigned after all classes are built.
 STT.__module__ = "livekit.agents.stt"
+SpeechStarted.__module__ = "livekit.agents.stt"
+SpeechEnded.__module__ = "livekit.agents.stt"
 RecognizeStream.__module__ = "livekit.agents.stt"

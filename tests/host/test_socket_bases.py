@@ -17,6 +17,7 @@ from livekit.agents import APIConnectOptions, APIError, stt
 from tests.fakes import until
 from tests.type_checks.socket_protocols import (
     CodecSttStream,
+    LoopbackMux,
     LoopbackRealtime,
     LoopbackStt,
     LoopbackTts,
@@ -195,6 +196,45 @@ async def test_tts_streams_share_the_multiplexed_socket(
     assert two and set(two[::2]) == {2}
     assert connections == 1
     await tts_.mux.aclose()
+
+
+# Catches: a later segment's audio played before the segment ahead of it finished, or segments
+# merged into one (the flush lost), when the provider answers them out of order.
+async def test_tts_segments_play_in_order_whatever_order_the_provider_answers(
+    peer: Callable[[Handler], Awaitable[str]],
+) -> None:
+    ended: list[str] = []
+
+    async def provider(ws: web.WebSocketResponse, request: web.Request) -> None:
+        async for msg in ws:
+            command = json.loads(msg.data)
+            if command.get("final"):
+                ended.append(command["context_id"])
+            if len(ended) == 2:  # answer the second segment first
+                for context, tone in zip(reversed(ended), (b"\x02\x00", b"\x01\x00"), strict=True):
+                    await ws.send_bytes(context.encode() + b"|" + tone * 160)
+                    await ws.send_json({"type": "done", "context_id": context})
+
+    tts_ = LoopbackTts(await peer(provider))
+    stream = tts_.stream(conn_options=NO_RETRY)
+    stream.push_text("one fish.")
+    stream.flush()
+    stream.push_text("two fish.")
+    stream.end_input()
+    heard = [(audio.segment_id, bytes(audio.frame.data)) async for audio in stream]
+    segments = list(dict.fromkeys(segment for segment, _ in heard))
+    assert segments == ended
+    tones = [data[0] for _, data in heard if any(data)]
+    assert tones == sorted(tones) and set(tones) == {1, 2}
+    await tts_.mux.aclose()
+
+
+# Catches: a multiplexer keeping the decoded message of every frame it routed to a context no
+# stream holds (a late frame after the stream closed), growing for the socket's life.
+async def test_a_frame_for_no_stream_is_dropped_not_kept() -> None:
+    mux = LoopbackMux("ws://unused")
+    mux._socket_native()
+    assert await mux._core_route(b"gone|audio") is None
 
 
 # Catches: a realtime plugin's own reconnect loop and ping answering, and a change applied to

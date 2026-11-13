@@ -101,7 +101,7 @@ async def test_concurrent_closes_return_only_once_the_owned_sink_closed(
     """A close issued while another is still closing the avatar's audio sink waits for that
     sink too."""
     avatar = _anam(provider)
-    await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+    await avatar.start(avatar_host.agent, avatar_host.room)
     [sink] = avatar_host.sinks
     release, sink_closed = asyncio.Event(), asyncio.Event()
 
@@ -134,7 +134,7 @@ async def test_cancelling_a_runway_close_still_closes_its_audio_sink(
     avatar = runway.AvatarSession(
         avatar_id="avatar", api_key="key", api_url=provider.url, conn_options=OPTIONS
     )
-    await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+    await avatar.start(avatar_host.agent, avatar_host.room)
     [sink] = avatar_host.sinks
     closing = asyncio.ensure_future(avatar.aclose())
     await provider.cancelling.wait()
@@ -158,7 +158,7 @@ async def test_closing_a_liveavatar_sends_its_event_socket_a_close_frame(
     avatar = liveavatar.AvatarSession(
         avatar_id="avatar", api_key="key", api_url=provider.url + "/sessions", conn_options=OPTIONS
     )
-    await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+    await avatar.start(avatar_host.agent, avatar_host.room)
     # it speaks once its side of the handshake is done; a close before that is
     # test_liveavatar's stalled handshake
     await until(lambda: provider.heard, "the avatar spoke on its event socket")

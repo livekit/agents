@@ -343,9 +343,13 @@ pub trait AvatarHost: Send + Sync {
     /// The avatar's `metrics_collected` event.
     #[host(notify, emit = "metrics_collected")]
     fn metrics_collected(&self, metrics: crate::metrics::base::AvatarMetrics);
-    /// The avatar's `aclose` (a plugin's own), which the job's shutdown runs.
-    #[host(call, getter = "aclose")]
-    fn close(&self) -> Result<crate::HostRef, crate::errors::HostError>;
+    /// The avatar's `aclose` (a plugin's own), which its session's close runs before the room
+    /// disconnects: in a job and standalone alike.
+    #[host(await, name = "aclose")]
+    fn aclose(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 }
 
 /// Why `wait_for_join` returned without the avatar.
@@ -396,7 +400,7 @@ pub struct AvatarError {
 /// room was connected, `avatar_joined_time` when the video was published); a session's assistant
 /// message added with a `playback_latency` is reported as `AvatarMetrics(playback_latency=..)`
 /// until the close. Each metric reaches the avatar's `metrics_collected` and the session's
-/// metrics once it runs. Inside a job, the job's shutdown runs the avatar's `aclose`. An avatar
+/// metrics once it runs. The session's close runs the avatar's `aclose`. An avatar
 /// not joined [`JOIN_TIMEOUT`] after its start is the session's one recoverable `avatar_error`,
 /// and its attached output stops waiting for it; the join wait goes on.
 #[crate::host(class(name = "_core_AvatarLifecycle"))]

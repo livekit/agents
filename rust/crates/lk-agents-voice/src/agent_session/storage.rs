@@ -193,7 +193,9 @@ impl VoiceDriver {
     /// The conversation as the session will hold it with what the turns have in flight: the
     /// words heard so far and the replies' tool records, each where a commit puts it.
     fn checkpoint_history(&self) -> Vec<ChatItem> {
-        let progress = self.session.storage.progress.values().map(|m| ChatItem::Message(m.clone()));
+        let storage = &self.session.storage;
+        let progress = (storage.progress.iter())
+            .map(|(n, m)| (ChatItem::Message(m.clone()), storage.turns.get(n).map(|t| t.speech)));
         // Speech text comes from the delivery ledger: AgentRun may already hold generated text
         // that has not been heard; only tool records may lead delivery.
         let replies: Vec<(SpeechId, Vec<ChatItem>)> = self
@@ -202,10 +204,11 @@ impl VoiceDriver {
                 (speech, items.into_iter().filter(|i| i.as_message().is_none()).collect())
             })
             .collect();
-        let calls = (replies.iter())
-            .flat_map(|(_, items)| items)
-            .filter(|item| !matches!(item, ChatItem::FunctionCallOutput(_)))
-            .cloned();
+        let calls = replies.iter().flat_map(|(speech, items)| {
+            (items.iter())
+                .filter(|item| !matches!(item, ChatItem::FunctionCallOutput(_)))
+                .map(|item| (item.clone(), Some(*speech)))
+        });
         let held = self.session.chat_ctx.projected(progress.chain(calls));
         // An output lands as its commit stamps it: a cut turn's right after its call's group, any
         // other once its step's results are handled, after everything stamped before.

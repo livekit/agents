@@ -10,7 +10,7 @@ import pytest
 from google.genai import types
 from pydantic import BaseModel
 
-from livekit.agents import llm
+from livekit.agents import APIConnectOptions, _core, llm
 from livekit.plugins.google.realtime.realtime_api import RealtimeSession
 from tests.fakes import until
 
@@ -47,7 +47,7 @@ async def lookup_called(gemini_live: LivePeer, session: RealtimeSession) -> None
 
 
 def texts(contents: list[dict[str, list[dict[str, list[dict[str, str]]]]]]) -> list[list[str]]:
-    """The text of each client_content message, turn by turn."""
+    """The text of each clientContent message, turn by turn."""
     return [
         [part["text"] for turn in c.get("turns", []) for part in turn["parts"]] for c in contents
     ]
@@ -86,7 +86,7 @@ async def test_tool_result_answers_its_call_with_the_scheduling_the_backend_take
     await lookup_called(gemini_live, session)
 
     await session.update_chat_ctx(answer(reply_required=reply_required))
-    [response] = await gemini_live.wait_sent("tool_response")
+    [response] = await gemini_live.wait_sent("toolResponse")
 
     [result] = response["functionResponses"]
     assert (result["id"], result["response"]) == ("fc_1", {"output": "42"})
@@ -108,7 +108,7 @@ async def test_a_call_sent_without_an_id_is_answered_without_one(
     await until(lambda: generations, "the call opens a generation")
     call = await anext(aiter(generations[0].function_stream))
     await session.update_chat_ctx(answer(call.call_id))
-    [response] = await gemini_live.wait_sent("tool_response")
+    [response] = await gemini_live.wait_sent("toolResponse")
 
     assert call.call_id
     assert "id" not in response["functionResponses"][0]
@@ -128,7 +128,7 @@ async def test_tool_choice_none_rejects_calls_without_consuming_the_pending_repl
     pending = session.generate_reply()
 
     await gemini_live.send(toolCall=TOOL_CALL)
-    [response] = await gemini_live.wait_sent("tool_response")
+    [response] = await gemini_live.wait_sent("toolResponse")
     assert not pending.done()
     assert generations == []
     await gemini_live.send(serverContent={**gemini_live.AUDIO, "turnComplete": True})
@@ -219,11 +219,6 @@ async def test_tool_boundaries_preserve_one_complete_generation(
     assert len(generations) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="https://github.com/livekit/agents/pull/7944 reproduces: changed tools reuse the old resumption handle",
-)
 async def test_tool_config_restart_is_fresh_and_delivers_the_pending_result(
     gemini_live: LivePeer, open_session: Open
 ) -> None:
@@ -250,7 +245,7 @@ async def test_tool_config_restart_is_fresh_and_delivers_the_pending_result(
     await until(lambda: len(gemini_live.setups) == 2, "new tools restart the session")
 
     assert "handle" not in gemini_live.setups[1].get("sessionResumption", {})
-    [response] = await gemini_live.wait_sent("tool_response")
+    [response] = await gemini_live.wait_sent("toolResponse")
     assert [(r["id"], r["response"]) for r in response["functionResponses"]] == [
         ("fc_1", {"output": "42"})
     ]
@@ -276,7 +271,7 @@ async def test_async_tools_by_default_declare_non_blocking_and_answer_silently(
 
     await lookup_called(gemini_live, session)
     await session.update_chat_ctx(answer(reply_required=False))
-    [response] = await gemini_live.wait_sent("tool_response")
+    [response] = await gemini_live.wait_sent("toolResponse")
 
     [declaration] = gemini_live.setups[1]["tools"][0]["functionDeclarations"]
     assert declaration["behavior"] == "NON_BLOCKING"
@@ -307,8 +302,8 @@ async def test_live_tool_parameters_keep_their_declared_order(
 
     [declaration] = gemini_live.setups[0]["tools"][0]["functionDeclarations"]
     parameters = declaration["parameters"]
-    assert parameters["property_ordering"] == ["reasoning", "answer", "details"]
-    assert parameters["properties"]["details"]["property_ordering"] == ["zeta", "alpha"]
+    assert parameters["propertyOrdering"] == ["reasoning", "answer", "details"]
+    assert parameters["properties"]["details"]["propertyOrdering"] == ["zeta", "alpha"]
 
 
 async def test_live_tool_schema_drops_keywords_gemini_does_not_know(
@@ -382,7 +377,7 @@ async def hello_then_handle(gemini_live: LivePeer, session: RealtimeSession) -> 
     ctx = llm.ChatContext.empty()
     ctx.add_message(role="user", content="hello")
     await session.update_chat_ctx(ctx)
-    await gemini_live.wait_sent("client_content")
+    await gemini_live.wait_sent("clientContent")
     await gemini_live.ready(session, handle="resume-1")
     return ctx
 
@@ -399,7 +394,7 @@ async def test_resumed_session_does_not_replay_what_the_handle_holds(
 
     await gemini_live.drop()
     session.generate_reply()
-    contents = await gemini_live.wait_sent("client_content")
+    contents = await gemini_live.wait_sent("clientContent")
 
     assert gemini_live.setups[1]["sessionResumption"]["handle"] == "resume-1"
     assert [c.get("turnComplete") for c in contents] == [True]
@@ -422,7 +417,7 @@ async def test_resumed_session_sends_only_the_update_made_while_disconnected(
     await session.update_chat_ctx(ctx)
     gemini_live.accepting.set()
 
-    assert texts(await gemini_live.wait_sent("client_content")) == [["one more thing"]]
+    assert texts(await gemini_live.wait_sent("clientContent")) == [["one more thing"]]
     assert [m.text_content for m in session.chat_ctx.messages()] == ["hello", "one more thing"]
 
 
@@ -445,9 +440,9 @@ async def test_resumed_session_delivers_the_tool_result_made_while_disconnected(
     await session.update_chat_ctx(ctx)
     gemini_live.accepting.set()
 
-    [response] = await gemini_live.wait_sent("tool_response")
+    [response] = await gemini_live.wait_sent("toolResponse")
     assert [r["id"] for r in response["functionResponses"]] == ["call-1"]
-    assert gemini_live.sent("client_content") == []
+    assert gemini_live.sent("clientContent") == []
 
 
 async def test_resumed_session_resends_what_the_handle_missed(
@@ -461,10 +456,66 @@ async def test_resumed_session_resends_what_the_handle_missed(
     ctx = await hello_then_handle(gemini_live, session)
     ctx.add_message(role="user", content="sent before the socket dropped")
     await session.update_chat_ctx(ctx)
-    await gemini_live.wait_sent("client_content", 2)
+    await gemini_live.wait_sent("clientContent", 2)
 
     await gemini_live.drop()
 
-    assert texts(await gemini_live.wait_sent("client_content")) == [
+    assert texts(await gemini_live.wait_sent("clientContent")) == [
         ["sent before the socket dropped"]
     ]
+
+
+async def test_a_command_queued_while_reconnecting_never_precedes_the_setup(
+    gemini_live: LivePeer, open_session: Open
+) -> None:
+    """A message queued for a lost connection is not sent ahead of the next one's setup."""
+    # Catches: realtime socket commands surviving their connection, so the reconnect opened
+    # with a client_content instead of its setup and Gemini refused the session.
+    session = open_session()
+    await gemini_live.ready(session)
+    session.on("error", lambda _: session.generate_reply())  # the loss, before reconnecting
+
+    await gemini_live.drop()
+
+    assert len(gemini_live.setups) == 2
+
+
+async def test_a_handle_does_not_claim_an_item_not_yet_written(
+    gemini_live: LivePeer, open_session: Open
+) -> None:
+    """An item queued but not yet on the wire is not in the server's snapshot: it is resent."""
+    # Catches: an item counted as delivered once handed to the socket, so a handle that arrived
+    # before it was written claimed it and the resumed session never got it.
+    session = open_session(conn_options=APIConnectOptions(retry_interval=0.0))
+    ctx = await hello_then_handle(gemini_live, session)
+    gemini_live.accepting.clear()
+    await gemini_live.drop()  # the next connection is not ready: nothing is written on it
+    ctx.add_message(role="user", content="late")
+    await session.update_chat_ctx(ctx)
+    session.on_message({"sessionResumptionUpdate": {"newHandle": "resume-2", "resumable": True}})
+    gemini_live.accepting.set()
+    await gemini_live.wait_sent("clientContent")
+
+    await gemini_live.drop()
+
+    assert gemini_live.setups[-1]["sessionResumption"]["handle"] == "resume-2"
+    assert texts(await gemini_live.wait_sent("clientContent")) == [["late"]]
+
+
+async def test_a_setup_gemini_never_completes_fails_the_session_with_a_timeout(
+    gemini_live: LivePeer, open_session: Open
+) -> None:
+    """A connected socket whose setup is never completed fails within the connect limit."""
+    # Catches: a session waiting forever for setupComplete, its replies and audio held on it.
+    gemini_live.accepting.clear()
+    session = open_session(conn_options=APIConnectOptions(max_retry=0, connect_timeout=5))
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    await until(lambda: gemini_live.setups, "the plugin connects")
+
+    _core.skip_host_time(6)  # past the connect limit
+    await until(lambda: errors, "the session fails")
+
+    [error] = errors
+    assert not error.recoverable
+    assert getattr(error.error, "kind", None) == "timeout"

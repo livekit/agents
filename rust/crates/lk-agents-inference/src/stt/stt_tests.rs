@@ -942,6 +942,40 @@ async fn a_session_dropped_before_the_input_ends_reconnects_after_delivered_tran
     }
 }
 
+// Catches: a gateway reconnect mid-speech leaving the speech open, so the new session's first
+// words land inside the old speech and the turn never ends.
+#[tokio::test]
+async fn a_reconnect_mid_speech_ends_the_open_speech_first() {
+    let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
+    let stt = stt(ws.clone());
+    let (sink, source) =
+        stt.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
+    let mut source: crate::abi::SttSource = Box::new(source);
+    sink.push(frame(800)).unwrap();
+    ws.feed(text(json!({"type": "interim_transcript", "transcript": "hel"})));
+    let mut events = drain_until(source.as_mut(), SpeechEventType::InterimTranscript).await;
+    ws.feed(Ok(WsMessage::Closed));
+    until("reconnected", || ws.connect_count() == 2).await;
+    ws.feed(text(json!({"type": "session.created"})));
+    ws.feed(text(json!({"type": "interim_transcript", "transcript": "again"})));
+    events.extend(drain_until(source.as_mut(), SpeechEventType::InterimTranscript).await);
+    source.close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
+
+    let boundaries: Vec<_> = events
+        .iter()
+        .map(|e| e.kind)
+        .filter(|k| matches!(k, SpeechEventType::StartOfSpeech | SpeechEventType::EndOfSpeech))
+        .collect();
+    assert_eq!(
+        boundaries,
+        [
+            SpeechEventType::StartOfSpeech,
+            SpeechEventType::EndOfSpeech,
+            SpeechEventType::StartOfSpeech
+        ]
+    );
+}
+
 // Catches: a recognition that failed after its input ended reconnecting: the new session has no
 // audio to send, finalizes empty and reports clean success with the transcript lost.
 #[tokio::test]

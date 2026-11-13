@@ -251,7 +251,7 @@ impl SynthesizedAudio {
 }
 
 /// One chunk of a TTS's input, as the stage prepared it.
-#[crate::host(record(module = "tts", path = "livekit.agents.tts", dataclass, emit))]
+#[crate::host(record(module = "tts", path = "livekit.agents.tts", dataclass, emit, extract))]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SpeechChunk {
     /// What the provider is sent: its markup in the provider's syntax.

@@ -9,6 +9,105 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/stt/events.rs.
+type SpeechStateImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SpeechState;
+
+/// One recognition's speech state: START_OF_SPEECH and END_OF_SPEECH are derived here from what
+/// the stream reports, the provider's own boundaries deduplicated, and open speech ends at each
+/// connection boundary.
+#[pyclass(name = "SpeechState", module = "livekit.agents._core")]
+pub struct SpeechState(pub(crate) SpeechStateImpl);
+
+#[pymethods]
+impl SpeechState {
+    /// `provider_vad`: the provider detects speech itself, so its reported end closes the
+    /// speech and a final transcript does not.
+    #[new]
+    #[pyo3(signature = (provider_vad))]
+    fn new(py: Python<'_>, provider_vad: bool) -> PyResult<SpeechState> {
+        let out = py.detach(|| {
+            <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::new(provider_vad)
+        });
+        ::pyo3::PyResult::Ok(SpeechState(out))
+    }
+
+    /// Whether a speech is open.
+    #[getter]
+    fn speaking(&self) -> PyResult<bool> {
+        let out = <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::speaking(&self.0);
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// The events a transcript produces.
+    #[pyo3(signature = (transcript))]
+    fn transcript<'py>(
+        &mut self,
+        py: Python<'py>,
+        transcript: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let transcript = crate::generated::records::stt::transcript_from_py(transcript.as_any())?;
+        let out = <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::transcript(
+            &mut self.0,
+            transcript,
+        );
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::generated::records::stt::speech_event_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
+    }
+
+    /// The provider heard speech start.
+    fn started<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out =
+            <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::started(&mut self.0);
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::generated::records::stt::speech_event_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
+    }
+
+    /// The provider heard speech end.
+    fn ended<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out =
+            <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::ended(&mut self.0);
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::generated::records::stt::speech_event_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
+    }
+
+    /// A connection ended: the open speech ends before the next connection's events.
+    fn boundary<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out =
+            <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::boundary(&mut self.0);
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::generated::records::stt::speech_event_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/stt/fallback.rs.
 type FallbackSttImpl =
     <crate::generated::implementations::Selected as super::Implementations>::FallbackStt;

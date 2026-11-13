@@ -51,12 +51,24 @@ fn a_joined_segment_replays_from_its_reported_position() {
     assert_eq!(rest.samples_per_channel, 150);
     // The next report is told from where the recorder joined.
     let told = audio.told(&progressed(1_400, 350, 100));
-    assert_eq!(told, Some(progressed(1_400, 0, 100)));
+    assert_eq!(told, vec![progressed(1_400, 0, 100)]);
 }
 
-// Catches: a sink that reports no progress taken as having played nothing.
+fn finished(position: u64) -> PlaybackEvent {
+    PlaybackEvent::Finished {
+        segment: SEGMENT,
+        event: PlaybackFinished {
+            playback_position: ms(position),
+            interrupted: false,
+            synchronized_transcript: None,
+        },
+    }
+}
+
+// Catches: a sink that never reports progress placed from its start, so the audio it played
+// before the recorder attached lands before the recording, or none of it lands at all.
 #[test]
-fn a_silent_sink_has_played_since_it_started() {
+fn a_sink_that_never_reports_is_placed_from_the_join() {
     let mut audio = playing(None);
     let replay = audio.join(at(1_100));
     let [Replay::Started(started), Replay::Capture(first), Replay::Capture(second)] =
@@ -66,18 +78,39 @@ fn a_silent_sink_has_played_since_it_started() {
     };
     assert_eq!(
         (*started, first.samples_per_channel, second.samples_per_channel),
-        (at(1_100), 200, 200)
+        (at(1_000), 300, 200)
     );
-    let finished = PlaybackEvent::Finished {
-        segment: SEGMENT,
-        event: PlaybackFinished {
-            playback_position: ms(500),
-            interrupted: false,
-            synchronized_transcript: None,
-        },
+    // Its finish says it played from its start: what played after the join is placed there.
+    assert_eq!(audio.told(&finished(500)), vec![progressed(1_100, 100, 400), finished(500)]);
+}
+
+// Catches: a sink that played everything before the join left to the recorder's fallback, which
+// places it before the recording began.
+#[test]
+fn a_sink_that_never_reports_and_played_before_the_join_places_nothing() {
+    let mut audio = playing(None);
+    audio.join(at(3_000));
+    assert_eq!(audio.told(&finished(500)), vec![progressed(1_500, 500, 0), finished(500)]);
+}
+
+// Catches: seed 591's hole. A segment started on an output that had not reported yet, then held
+// while the output was replaced; a recorder attached seconds later was told it had played since
+// it started and got nothing, so the progress the sink reported from offset 0 placed silence where
+// the person heard the audio.
+#[test]
+fn a_held_segment_with_no_report_is_joined_whole() {
+    let mut audio = playing(None);
+    let replay = audio.join(at(5_000));
+    let [Replay::Started(_), Replay::Capture(first), Replay::Capture(second)] = replay.as_slice()
+    else {
+        panic!("{replay:?}")
     };
-    let Some(PlaybackEvent::Finished { event, .. }) = audio.told(&finished) else { panic!() };
-    assert_eq!(event.playback_position, ms(400));
+    assert_eq!((first.samples_per_channel, second.samples_per_channel), (300, 200));
+    let report = progressed(9_000, 0, 500);
+    assert_eq!(audio.told(&report), vec![report.clone()]);
+    audio.observe(&report);
+    // Reported, so its finish adds nothing the sink did not say.
+    assert_eq!(audio.told(&finished(500)), vec![finished(500)]);
 }
 
 // Catches: a finished segment's audio kept, and replayed to the next recorder.
@@ -119,5 +152,5 @@ fn a_reporting_sink_with_no_report_yet_has_played_nothing() {
         (at(1_000), 300, 200)
     );
     // its first report is told as it came: the recorder places the audio where it played
-    assert_eq!(audio.told(&progressed(30_100, 0, 100)), Some(progressed(30_100, 0, 100)));
+    assert_eq!(audio.told(&progressed(30_100, 0, 100)), vec![progressed(30_100, 0, 100)]);
 }

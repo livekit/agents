@@ -25,10 +25,6 @@ DEFAULT_PAL_ID = "pb87e71797da"
 DEFAULT_FACE_ID = "r4067604db72"
 
 
-class _ConversationResponse(BaseModel):
-    conversation_id: str
-
-
 class _PalResponse(BaseModel):
     pal_id: str
 
@@ -53,42 +49,6 @@ class TavusAPI:
         self._api_url = api_url or DEFAULT_API_URL
         self._conn_options = conn_options
         self._session = session or http.HttpSession()
-
-    async def create_conversation(
-        self,
-        *,
-        face_id: NotGivenOr[str] = NOT_GIVEN,
-        pal_id: NotGivenOr[str] = NOT_GIVEN,
-        properties: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
-        extra_payload: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
-    ) -> str:
-        face_id = face_id or os.getenv("TAVUS_FACE_ID") or NOT_GIVEN
-        pal_id = pal_id or os.getenv("TAVUS_PAL_ID") or NOT_GIVEN
-
-        # extra_payload overrides the payload wholesale, so a pal named there counts
-        # as user-supplied when deciding whether to fill in the stock face.
-        extra = dict(extra_payload) if utils.is_given(extra_payload) else {}
-        if not pal_id and not extra.get("pal_id"):
-            # no pal supplied — use the default stock pal and, unless overridden, its stock face
-            pal_id = DEFAULT_PAL_ID
-            face_id = face_id or DEFAULT_FACE_ID
-
-        properties = properties if utils.is_given(properties) else {}
-        payload: dict[str, JsonValue] = {"properties": properties}
-        if utils.is_given(pal_id):
-            payload["pal_id"] = pal_id
-        # a user-supplied pal carries its own default face, so only send face_id when we have one
-        if utils.is_given(face_id) and face_id:
-            payload["face_id"] = face_id
-        payload.update(extra)
-
-        if "conversation_name" not in payload:
-            payload["conversation_name"] = utils.shortuuid("lk_conversation_")
-
-        response_data = await self._post(
-            "conversations", payload, response_type=_ConversationResponse
-        )
-        return response_data.conversation_id
 
     async def create_pal(
         self,
@@ -118,7 +78,7 @@ class TavusAPI:
         self, endpoint: str, payload: dict[str, JsonValue], *, response_type: type[_ResponseT]
     ) -> _ResponseT:
         """
-        Make a POST request to the Tavus API with retry logic.
+        Make a POST request to the Tavus API, retried under ``conn_options``.
 
         Args:
             endpoint: API endpoint path (without leading slash)

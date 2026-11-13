@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Self
 
+from livekit.agents import ProviderAttempts
 from livekit.agents.tts import TTS, AudioEmitter
 
 from .connect import APIConnectOptions
@@ -18,9 +19,11 @@ from .tts import (
     MarkupSplit,
     OptionsTokenizer,
     SegmentCount,
+    SpeechChunk,
     SynthesizedAudio,
     TTSCapabilities,
 )
+from .tts_segments import SegmentInput, SegmentOutput
 
 def chat_message_text_content(parts: Sequence[str], assistant: bool) -> str | None: ...
 
@@ -54,6 +57,30 @@ class Markup:
         speech_steering: SpeechSteeringOptions | None = None,
     ) -> str | None:
         """The instructions teaching the LLM this voice's markup, `None` without markup."""
+
+class TtsSegments:
+    """`_core.TtsSegments`: one attempt's segments. The input as `encode` takes it (a chunk opens a
+    segment when none is open, a flush ends it), each segment's audio played in order into the
+    emitter (a later segment's waits for the ones before it) and completed once, and the read
+    deadline, run while a segment whose text ended is unanswered.
+    """
+    def __new__(cls, emitter: AudioEmitter, deadline: ProviderAttempts, label: str) -> Self:
+        """`label` names the provider in a protocol failure."""
+    def push(self, chunk: SpeechChunk) -> None:
+        """A chunk of the input."""
+    def flush(self) -> None:
+        """A flush: the open segment's text ended."""
+    def next(self) -> SegmentInput | None:
+        """The next input `encode` takes; `None` while none is queued."""
+    def deliver(self, output: SegmentOutput) -> None:
+        """What `on_message` returned for a segment."""
+    def holds(self, segment_id: str) -> bool:
+        """Whether `segment_id` is a segment not yet done: a multiplexed stream's context."""
+    @property
+    def open(self) -> list[str]:
+        """The segments not yet done, in order."""
+    async def settled(self) -> None:
+        """Waits until every segment is done."""
 
 class TtsStreamAdapter:
     """`tts.StreamAdapter`'s engine: a non-streaming TTS as a streaming one, each chunk of its input

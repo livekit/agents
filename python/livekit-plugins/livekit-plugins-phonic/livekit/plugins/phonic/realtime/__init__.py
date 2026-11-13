@@ -7,6 +7,7 @@ from .realtime_model import (
     PronunciationEntry,
     RealtimeModel,
     RealtimeSession,
+    ToolDefinition,
     to_phonic_tool_definitions,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "PronunciationEntry",
     "RealtimeModel",
     "RealtimeSession",
+    "ToolDefinition",
     "to_phonic_tool_definitions",
 ]

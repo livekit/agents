@@ -62,11 +62,8 @@ async def test_rejected_handshake_does_not_leak_the_api_key() -> None:
         err = err.__cause__
 
 
-@pytest.mark.parametrize("include_context_id", [True, False])
-async def test_stale_frames_from_a_previous_context_are_not_played(
-    include_context_id: bool,
-) -> None:
-    """A pooled socket's leftover frames from an older context are skipped.
+async def test_stale_frames_from_a_previous_context_are_not_played() -> None:
+    """A shared socket's leftover frames from an older context are skipped.
 
     https://github.com/livekit/agents/pull/7081
     """
@@ -78,14 +75,14 @@ async def test_stale_frames_from_a_previous_context_are_not_played(
         started = False
         async for msg in ws:
             packet = json.loads(msg.data)
-            ctx = {"context_id": packet["context_id"]} if include_context_id else {}
+            ctx = {"context_id": packet["context_id"]}
             if not started:
                 started = True
-                await ws.send_json({**stale, "data": b64(b"\x00" * 160)})
-                await ws.send_json({**stale, "done": True})
-                await ws.send_json({**ctx, "data": b64(b"\x01" * 160)})
-            if packet["continue"] is False:
-                await ws.send_json({**ctx, "done": True})
+                await ws.send_json({**stale, "type": "chunk", "data": b64(b"\x00" * 160)})
+                await ws.send_json({**stale, "type": "done"})
+                await ws.send_json({**ctx, "type": "chunk", "data": b64(b"\x01" * 160)})
+            if packet.get("continue") is False:
+                await ws.send_json({**ctx, "type": "done"})
         return ws
 
     app = web.Application()
@@ -121,8 +118,8 @@ async def test_changing_the_api_version_reconnects_with_the_new_version() -> Non
             packet = json.loads(msg.data)
             if packet["continue"] is False:
                 ctx = {"context_id": packet["context_id"]}
-                await ws.send_json({**ctx, "data": b64(PCM)})
-                await ws.send_json({**ctx, "done": True})
+                await ws.send_json({**ctx, "type": "chunk", "data": b64(PCM)})
+                await ws.send_json({**ctx, "type": "done"})
         return ws
 
     async def synthesize(tts: TTS) -> None:
@@ -218,19 +215,7 @@ def test_fallback_models_constrain_alignment_claim(
     assert stt_impl.capabilities.aligned_transcript == expected
 
 
-@pytest.mark.parametrize(
-    "event",
-    [
-        "flush_done",
-        pytest.param(
-            "phoneme_timestamps",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="https://github.com/livekit/agents/issues/3071 reproduces: benign phoneme timestamps are warned about",
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("event", ["flush_done", "phoneme_timestamps"])
 async def test_fragmented_input_alignment_and_benign_events(
     event: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -250,6 +235,7 @@ async def test_fragmented_input_alignment_and_benign_events(
             await ws.send_json(
                 {
                     **ctx,
+                    "type": "timestamps",
                     "word_timestamps": {
                         "words": ["Hello,", "substitute", "world!"],
                         "start": [0, 0.02, 0.04],
@@ -257,8 +243,8 @@ async def test_fragmented_input_alignment_and_benign_events(
                     },
                 }
             )
-            await ws.send_json({**ctx, "data": base64.b64encode(PCM).decode()})
-            await ws.send_json({**ctx, "done": True})
+            await ws.send_json({**ctx, "type": "chunk", "data": base64.b64encode(PCM).decode()})
+            await ws.send_json({**ctx, "type": "done"})
         return ws
 
     app = web.Application()
@@ -290,7 +276,9 @@ async def test_fragmented_input_alignment_and_benign_events(
             await provider.aclose()
 
 
-async def test_provider_error_preserves_diagnostic() -> None:
+# `message` is the field Cartesia's error schema names; `error` the one it sent before.
+@pytest.mark.parametrize("field", ["error", "message"])
+async def test_provider_error_preserves_diagnostic(field: str) -> None:
     """Provider errors reach callers with their diagnostic. https://github.com/livekit/agents/pull/3028"""
 
     async def speak(request: web.Request) -> web.StreamResponse:
@@ -301,7 +289,7 @@ async def test_provider_error_preserves_diagnostic() -> None:
             {
                 "context_id": packet["context_id"],
                 "type": "error",
-                "error": "voice unavailable diagnostic",
+                field: "voice unavailable diagnostic",
             }
         )
         async for _ in ws:
@@ -320,9 +308,10 @@ async def test_provider_error_preserves_diagnostic() -> None:
             async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
                 stream.push_text("Hello.")
                 stream.end_input()
-                with pytest.raises(APIError, match="voice unavailable diagnostic"):
+                with pytest.raises(APIError) as failed:
                     async with asyncio.timeout(2):
                         _ = [ev async for ev in stream]
+            assert failed.value.detail == "voice unavailable diagnostic"
         finally:
             await provider.aclose()
 
@@ -451,3 +440,76 @@ async def test_stt_unexpected_close_keeps_code_and_retryability(mode: str) -> No
                 assert error.value.detail == "upstream failed"
         finally:
             await provider.aclose()
+
+
+async def test_each_flushed_segment_is_its_own_context_and_segment() -> None:
+    """Catches: flushes ignored inside one Cartesia context, so a stream of two segments
+    failed with a segment count mismatch (or merged their audio into one segment)."""
+    contexts: list[str] = []
+
+    async def speak(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            packet = json.loads(msg.data)
+            if packet["continue"] is False:
+                ctx = {"context_id": packet["context_id"]}
+                contexts.append(packet["context_id"])
+                await ws.send_json({**ctx, "type": "chunk", "data": b64(PCM)})
+                await ws.send_json({**ctx, "type": "done"})
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/tts/websocket", speak)
+    async with TestServer(app) as server, http.open() as session:
+        tts = TTS(
+            api_key="key", base_url=str(server.make_url("")).rstrip("/"), http_session=session
+        )
+        async with tts.stream(conn_options=OPTIONS) as stream:
+            stream.push_text("Hello there.")
+            stream.flush()
+            stream.push_text("General Kenobi.")
+            stream.end_input()
+            async with asyncio.timeout(2):
+                segments = [ev.segment_id async for ev in stream]
+        await tts.aclose()
+
+    assert len(set(contexts)) == 2
+    assert list(dict.fromkeys(segments)) == contexts
+
+
+async def test_prewarm_opens_the_socket_the_first_stream_then_uses() -> None:
+    """Catches: prewarm opening nothing, so the first reply pays the socket's connect."""
+    connections = 0
+    connected = asyncio.Event()
+
+    async def speak(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connections
+        connections += 1
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        connected.set()
+        async for msg in ws:
+            packet = json.loads(msg.data)
+            if packet["continue"] is False:
+                ctx = {"context_id": packet["context_id"]}
+                await ws.send_json({**ctx, "type": "chunk", "data": b64(PCM)})
+                await ws.send_json({**ctx, "type": "done"})
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/tts/websocket", speak)
+    async with TestServer(app) as server, http.open() as session:
+        tts = TTS(
+            api_key="key", base_url=str(server.make_url("")).rstrip("/"), http_session=session
+        )
+        tts.prewarm()
+        await asyncio.wait_for(connected.wait(), 2)
+        async with tts.stream(conn_options=OPTIONS) as stream:
+            stream.push_text("Hello.")
+            stream.end_input()
+            async with asyncio.timeout(2):
+                _ = [ev async for ev in stream]
+        await tts.aclose()
+
+    assert connections == 1

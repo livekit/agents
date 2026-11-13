@@ -511,7 +511,6 @@ impl DriverBuilder {
         let view = std::mem::replace(&mut self.view, spent);
         let publications = super::shared::Publications {
             closing: closing.clone().drop_guard(),
-            recorder: signal(None).0,
             view,
             output: signal(outputs).0,
             chat_ctx: signal(Arc::new(lk_agents_abi::ChatContext::default())).0,
@@ -524,8 +523,7 @@ impl DriverBuilder {
             view: publications.view.cell(),
             time: self.time.clone(),
             output: publications.output.cell(),
-            recorder: publications.recorder.cell(),
-            unplayed: Default::default(),
+            recorder: Default::default(),
             conn: self.conn,
             queue: queue.clone(),
             speeches: Arc::clone(&self.speeches),

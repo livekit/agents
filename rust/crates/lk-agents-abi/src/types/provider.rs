@@ -88,6 +88,17 @@ pub trait AttemptHost: Send + Sync {
     fn retrying(&self, error: ProviderError);
 }
 
+/// A request's read deadline as native code drives it.
+#[crate::host(native(refused = "expected a ProviderAttempts"))]
+pub trait ReadDeadline: Send + Sync {
+    /// A response is owed: the read deadline runs.
+    fn expect_response(&self);
+    /// Response data arrived: the read deadline restarts.
+    fn progress(&self);
+    /// Nothing is owed: the read deadline disarms.
+    fn complete_response(&self);
+}
+
 /// The attempts of one host provider request (`livekit.agents.ProviderAttempts`).
 ///
 /// `run()` drives them: it waits until an attempt may start, runs the host's attempt, races it
@@ -99,7 +110,7 @@ pub trait AttemptHost: Send + Sync {
 /// `expect_response()` when it sent something that owes an answer, `progress()` when response
 /// data arrived (heartbeats are not progress), `audio_received()` for synthesized audio and
 /// `complete_response()` when nothing is owed any more.
-#[crate::host(class(name = "ProviderAttempts", module = "livekit.agents"))]
+#[crate::host(class(name = "ProviderAttempts", module = "livekit.agents", native = ReadDeadline))]
 pub trait ProviderAttempts: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class: its clock times the deadlines and its tasks
     /// own the running attempt.

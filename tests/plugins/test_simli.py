@@ -8,7 +8,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectionError, http
+from livekit.agents import APIConnectionError, APIConnectOptions, http
 from livekit.plugins.simli import AvatarSession, SimliConfig
 
 if TYPE_CHECKING:
@@ -36,10 +36,10 @@ async def test_start_propagates_provider_failure(
         avatar = AvatarSession(
             simli_config=SimliConfig(api_key="key", face_id="face"),
             api_url=str(server.make_url("")).rstrip("/"),
+            conn_options=APIConnectOptions(max_retry=0),
         )
 
         with pytest.raises(APIConnectionError):
-            await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+            await avatar.start(avatar_host.agent, avatar_host.room)
 
     avatar_host.audio_tail.assert_not_called()
-    avatar_host.framework_start.assert_not_awaited()

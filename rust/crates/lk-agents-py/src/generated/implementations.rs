@@ -82,6 +82,7 @@ impl super::Implementations for Selected {
     type PersistedSessionState = ::lk_agents_runtime::storage::session_state::SessionState;
     type SessionBinding = ::lk_agents_runtime::storage::session_binding::SessionBinding;
     type VoiceStore = ::lk_agents_runtime::storage::voice::VoiceStore;
+    type SpeechState = ::lk_agents_runtime::inference::stt::speech::Speech;
     type FallbackStt = ::lk_agents_runtime::inference::fallback::FallbackStt;
     type InferenceStt = ::lk_agents_runtime::inference::stt::GatewayStt;
     type SttStreamAdapter = ::lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter;
@@ -104,6 +105,7 @@ impl super::Implementations for Selected {
     type ToolSearch = ::lk_agents_runtime::cores::ToolDiscovery;
     type MarkupFunctions = ::lk_agents_runtime::cores::SpeechMarkup;
     type MarkupClass = ::lk_agents_runtime::cores::ProviderMarkup;
+    type TtsSegments = ::lk_agents_runtime::inference::tts::segments::TtsSegments;
     type TtsStreamAdapter = ::lk_agents_runtime::inference::tts::sentence_adapter::StreamAdapter;
     type TtsStream = ::lk_agents_runtime::inference::tts::stream::TtsStream;
     type SynthesisChecks = ::lk_agents_runtime::inference::tts::stream::SynthesisChecks;

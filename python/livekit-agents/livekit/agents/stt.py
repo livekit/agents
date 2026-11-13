@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Iterable
+from typing import TypeAlias
 
 from livekit import rtc
 
 from ._generated import facades_stt as _facades, public_stt as _public
 from ._generated.public_stt import *  # noqa: F403
+from ._generated.public_stt import SpeechEnded, SpeechStarted, Transcript
+from ._generated.socket import SocketConnection
 from .http.socket import (
     Done,
     EndOfInput,
@@ -19,6 +22,7 @@ from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, No
 from .utils import aio
 
 __all__ = [
+    "Report",
     "SocketStream",
     "StreamAdapter",
     "FallbackAdapter",
@@ -92,12 +96,17 @@ class StreamAdapter(_facades.StreamAdapter):
         self._stt.prewarm()
 
 
+Report: TypeAlias = Transcript | SpeechStarted | SpeechEnded
+"""What a stream reports of what its provider heard."""
+
+
 class SocketStream(
     SocketProtocol[rtc.AudioFrame | RecognizeStream.Flush, InboundT, OutboundT], RecognizeStream
 ):
     """A recognition over the provider's socket: the plugin writes ``connect``, ``encode`` (audio
-    frames, ``Flush`` and ``EndOfInput``) and ``on_message``; the framework runs the socket. Each
-    attempt is one socket session; the stream's attempts own the retries."""
+    frames, ``Flush`` and ``EndOfInput``) and ``on_message``, which reports what the provider
+    heard; the framework runs the socket. Each attempt is one socket session; the stream's
+    attempts own the retries, and each connection's end closes the speech it left open."""
 
     def __init__(
         self,
@@ -110,11 +119,15 @@ class SocketStream(
         self._socket_init()
 
     @abstractmethod
-    def on_message(self, message: InboundT) -> SpeechEvent | Iterable[SpeechEvent] | Done | None:
-        """One received message: the events it carries, ``DONE`` once the provider finished."""
+    def on_message(self, message: InboundT) -> Report | Iterable[Report] | Done | None:
+        """One received message: what the provider heard, ``DONE`` once it finished."""
 
     async def _run(self) -> None:
         await self._socket_run(_single_retry_owner(self._conn_options))
+
+    async def _core_connect(self, conn_options: APIConnectOptions) -> SocketConnection:
+        self._end_speech()
+        return await super()._core_connect(conn_options)
 
     async def _socket_input(self) -> rtc.AudioFrame | RecognizeStream.Flush | EndOfInput:
         try:
@@ -128,8 +141,8 @@ class SocketStream(
     def _socket_label(self) -> str:
         return self._stt.label
 
-    def _socket_deliver(self, answer: SpeechEvent | Iterable[SpeechEvent] | None) -> None:
+    def _socket_deliver(self, answer: Report | Iterable[Report] | None) -> None:
         if answer is None:
             return
-        for event in [answer] if isinstance(answer, SpeechEvent) else answer:
-            self.send(event)
+        for report in answer if isinstance(answer, Iterable) else [answer]:
+            self.report(report)

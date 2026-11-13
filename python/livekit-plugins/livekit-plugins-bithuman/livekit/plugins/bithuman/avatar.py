@@ -15,37 +15,28 @@ from numpy.typing import NDArray
 from PIL import Image
 
 import livekit.rtc as rtc
-from livekit import api
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
-    VoiceSession,
-    get_job_context,
     http,
     utils,
 )
-from livekit.agents.job import _server_credentials
-from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
     AvatarRunner,
     AvatarSession as BaseAvatarSession,
+    AvatarStart,
     DataStreamAudioOutput,
     QueueAudioOutput,
     VideoGenerator,
 )
 
-from .log import logger
-
 _logger.remove()
 _logger.add(sys.stdout, level="INFO")
 
-
-_AVATAR_AGENT_IDENTITY = "bithuman-avatar-agent"
-_AVATAR_AGENT_NAME = "bithuman-avatar-agent"
 
 # The avatar models a cloud session may ask for, in BitHuman's own spelling.
 # "expression"/"essence" are the first-generation names and keep resolving to
@@ -161,6 +152,9 @@ class AvatarSession(BaseAvatarSession):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Initialize a bitHuman avatar session.
@@ -192,6 +186,9 @@ class AvatarSession(BaseAvatarSession):
             conn_options: Retry and timeout options for the cloud session request.
             avatar_participant_identity: The avatar participant identity to use.
             avatar_participant_name: The avatar participant name to use.
+            livekit_url: The URL the avatar joins through; ``LIVEKIT_URL`` by default.
+            livekit_api_key: Signs the avatar's token; ``LIVEKIT_API_KEY`` by default.
+            livekit_api_secret: Signs the avatar's token; ``LIVEKIT_API_SECRET`` by default.
 
         Model Types:
             bitHuman has two model families, Essence and Expression, each in two
@@ -236,9 +233,16 @@ class AvatarSession(BaseAvatarSession):
                  avatar is prepared for, exactly as before this parameter existed.
 
             Cloud mode also needs LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET (or
-            the matching ``start()`` arguments) to create the avatar's room token.
+            the matching arguments) to create the avatar's room token.
         """
-        super().__init__()
+        super().__init__(
+            avatar_participant_identity=avatar_participant_identity,
+            avatar_participant_name=avatar_participant_name,
+            livekit_url=livekit_url,
+            livekit_api_key=livekit_api_key,
+            livekit_api_secret=livekit_api_secret,
+            conn_options=conn_options,
+        )
         self._provided_runtime = runtime if utils.is_given(runtime) else None
         self._api_url = (
             api_url
@@ -249,8 +253,6 @@ class AvatarSession(BaseAvatarSession):
         self._api_token = api_token or os.getenv("BITHUMAN_API_TOKEN")
         self._model_path = model_path or os.getenv("BITHUMAN_MODEL_PATH")
         self._avatar_id = avatar_id
-        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
-        self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
 
         # set default mode based on model_path, avatar_image or avatar_id presence
         self._mode = (
@@ -296,17 +298,16 @@ class AvatarSession(BaseAvatarSession):
             else:
                 raise BitHumanException(f"Invalid avatar image: {avatar_image}")
 
-        self._conn_options = conn_options
-        self._http_session: http.HttpSession | None = None
         self._avatar_runner: AvatarRunner | None = None
+        self._local_audio: QueueAudioOutput | None = None
         self._runtime = self._provided_runtime
 
     @property
     def _is_expression_model(self) -> bool:
         """True for every generation of the expression family.
 
-        Read in two places — the custom-endpoint request format and the legacy
-        ``mode`` field — and it must give the same answer in both, or a session
+        Read in two places, the custom-endpoint request format and the legacy
+        ``mode`` field, and it must give the same answer in both, or a session
         is dispatched one way and billed the other.
         """
         return utils.is_given(self._model) and str(self._model).startswith("expression")
@@ -317,42 +318,29 @@ class AvatarSession(BaseAvatarSession):
         # so the avatar identity is the local participant's identity.
         if self._mode == "local" and self._room is not None:
             return self._room.local_participant.identity
-        return self._avatar_participant_identity
+        return super().avatar_identity
 
     @property
     def provider(self) -> str:
         return "bithuman"
 
-    async def start(
-        self,
-        agent_session: VoiceSession,
-        room: rtc.Room,
-        *,
-        livekit_url: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
-    ) -> None:
-        if self._avatar_runner is not None:
-            raise BitHumanException("the local avatar session is already started")
-        try:
-            await super().start(agent_session, room)
-            if self._mode == "local":
-                await self._start_local(agent_session, room)
-            elif self._mode == "cloud":
-                await self._start_cloud(
-                    agent_session,
-                    room,
-                    livekit_url=livekit_url,
-                    livekit_api_key=livekit_api_key,
-                    livekit_api_secret=livekit_api_secret,
-                )
-            else:
-                raise BitHumanException(f"Invalid mode: {self._mode}")
-        except BaseException:
-            await self.aclose()
-            raise
+    async def create_session(self, ctx: AvatarStart) -> None:
+        if self._mode == "local":
+            await self._start_local(ctx.room)
+        elif self._is_expression_model and not self._is_default_api_url():
+            # a self-hosted avatar worker takes the session as a form
+            await self._post(ctx, self._session_form(ctx))
+        else:
+            await self._post(ctx, self._session_json(ctx))
 
-    async def _start_local(self, agent_session: VoiceSession, room: rtc.Room) -> None:
+    def audio_output(self, ctx: AvatarStart) -> DataStreamAudioOutput | QueueAudioOutput:
+        if self._local_audio is not None:
+            return self._local_audio
+        return DataStreamAudioOutput(
+            room=ctx.room, destination_identity=self.avatar_identity, wait_playback_start=False
+        )
+
+    async def _start_local(self, room: rtc.Room) -> None:
         runtime = self._provided_runtime
         if runtime is None:
             # BitHuman's native AsyncBithuman export has no complete type stub.
@@ -366,7 +354,6 @@ class AvatarSession(BaseAvatarSession):
         self._runtime = runtime
 
         video_generator = BithumanGenerator(runtime)
-
         output_width, output_height = video_generator.video_resolution
         avatar_options = AvatarOptions(
             video_width=output_width,
@@ -375,327 +362,90 @@ class AvatarSession(BaseAvatarSession):
             audio_sample_rate=video_generator.audio_sample_rate,
             audio_channels=1,
         )
-
-        audio_buffer = QueueAudioOutput(
-            sample_rate=runtime.settings.INPUT_SAMPLE_RATE,
-            wait_playback_start=True,
+        self._local_audio = QueueAudioOutput(
+            sample_rate=runtime.settings.INPUT_SAMPLE_RATE, wait_playback_start=True
         )
-        # create avatar runner
         self._avatar_runner = AvatarRunner(
             room=room,
             video_gen=video_generator,
-            audio_recv=audio_buffer,
+            audio_recv=self._local_audio,
             options=avatar_options,
         )
         await self._avatar_runner.start()
 
-        agent_session.output.replace_audio_tail(audio_buffer)
-
-    async def _start_cloud(
-        self,
-        agent_session: VoiceSession,
-        room: rtc.Room,
-        *,
-        livekit_url: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
-    ) -> None:
-        livekit_url, livekit_api_key, livekit_api_secret = _server_credentials(
-            livekit_url, livekit_api_key, livekit_api_secret
-        )
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
-            raise BitHumanException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
-                "by arguments or environment variables"
-            )
-
-        job_ctx = get_job_context()
-        local_participant_identity = job_ctx.local_participant_identity
-
-        # Prepare attributes for JWT token
-        attributes: dict[str, str] = {
-            ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity,
-        }
-
-        # Only add api_secret if it's not None
+    def _session_token(self, ctx: AvatarStart) -> str:
+        attributes: dict[str, str] = {}
         if self._api_secret is not None:
             attributes["api_secret"] = self._api_secret
-
-        # Only add agent_id if it's actually provided (not NotGiven)
         if utils.is_given(self._avatar_id):
             attributes["agent_id"] = self._avatar_id
-
-        # Only add image if it's actually provided (not NotGiven)
-        # if utils.is_given(self._avatar_image) and self._avatar_image is not None:
-        #     attributes["image"] = self._avatar_image
-
-        livekit_token = (
-            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
-            .with_kind("agent")
-            .with_identity(self._avatar_participant_identity)
-            .with_name(self._avatar_participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes(attributes)
-            .to_jwt()
-        )
-
-        logger.debug("starting avatar session")
-        await self._start_cloud_agent(livekit_url, livekit_token, room.name)
-
-        self._attach_audio_output(
-            agent_session,
-            DataStreamAudioOutput(
-                room=room,
-                destination_identity=self._avatar_participant_identity,
-                wait_playback_start=False,
-            ),
-        )
-
-    async def _start_cloud_agent(
-        self, livekit_url: str, livekit_token: str, room_name: str
-    ) -> None:
-        assert self._api_url is not None, "api_url is not set"
-
-        # Determine if using custom API endpoint (not the default BitHuman auth API)
-        # Custom endpoints use multipart/form-data format for direct avatar worker requests
-        is_custom_endpoint = not self._is_default_api_url()
-
-        if is_custom_endpoint and self._is_expression_model:
-            # Use FormData format for custom endpoints
-            # Parse async parameter from URL if present
-            async_mode = self._parse_async_parameter_from_url()
-            await self._send_formdata_request(
-                livekit_url, livekit_token, room_name, async_mode=async_mode
-            )
-        else:
-            # Default BitHuman API requires api_secret
-            assert self._api_secret is not None, "api_secret is not set"
-            # Use JSON format for default BitHuman API
-            await self._send_json_request(livekit_url, livekit_token, room_name)
+        return ctx.livekit_token(attributes=attributes)
 
     def _is_default_api_url(self) -> bool:
-        """
-        Check if using the default BitHuman API URL.
+        return urlparse(self._api_url).hostname in ("auth.api.bithuman.ai", "api.bithuman.ai")
 
-        Returns:
-            True if using default auth.api.bithuman.ai endpoint, False otherwise.
-        """
-        try:
-            parsed = urlparse(self._api_url)
-            hostname = parsed.hostname
-            if hostname is None:
-                return False
-            default_domains = ["auth.api.bithuman.ai", "api.bithuman.ai"]
-            return hostname in default_domains
-        except Exception:
-            # If parsing fails, fallback to substring matching
-            default_domains = ["auth.api.bithuman.ai", "api.bithuman.ai"]
-            return any(domain in self._api_url for domain in default_domains)
-
-    async def _send_json_request(
-        self, livekit_url: str, livekit_token: str, room_name: str
-    ) -> None:
-        """
-        Send request using JSON format (for default BitHuman API).
-
-        Args:
-            livekit_url: LiveKit server URL
-            livekit_token: JWT token for room access
-            room_name: Name of the LiveKit room
-        """
-        # Prepare JSON data.
-        #
+    def _session_json(self, ctx: AvatarStart) -> dict[str, str]:
         # `model` names the avatar model for this session explicitly. Without it the
         # server falls back to `mode`, which can only distinguish the two
-        # first-generation engines — so which model a second-generation avatar was
-        # served as depended on a server-side default rather than on what the caller
-        # asked for. `mode` is still sent, unchanged, for servers that predate `model`.
+        # first-generation engines. `mode` is still sent, unchanged, for servers that
+        # predate `model`.
         json_data = {
-            "livekit_url": livekit_url,
-            "livekit_token": livekit_token,
-            "room_name": room_name,
-            "mode": "gpu"
-            if (utils.is_given(self._avatar_image) and self._avatar_image is not None)
-            or self._is_expression_model
-            else "cpu",
+            "livekit_url": ctx.livekit_url,
+            "livekit_token": self._session_token(ctx),
+            "room_name": ctx.room.name,
+            "mode": "gpu" if self._avatar_image is not None or self._is_expression_model else "cpu",
         }
         if utils.is_given(self._model):
             json_data["model"] = str(self._model)
-
-        # Handle avatar image - convert to base64 for JSON serialization
         if isinstance(self._avatar_image, Image.Image):
-            img_byte_arr = io.BytesIO()
-            self._avatar_image.save(img_byte_arr, format="JPEG", quality=95)
-            img_byte_arr.seek(0)
-            json_data["image"] = base64.b64encode(img_byte_arr.getvalue()).decode("utf-8")
+            json_data["image"] = base64.b64encode(_jpeg(self._avatar_image)).decode("utf-8")
         elif isinstance(self._avatar_image, str):
             json_data["image"] = self._avatar_image
-
         if utils.is_given(self._avatar_id):
             json_data["agent_id"] = self._avatar_id
+        return json_data
 
-        assert self._api_secret is not None, "api_secret is required for default API"
-
-        headers = {
-            "Content-Type": "application/json",
-            "api-secret": self._api_secret,
-        }
-
-        await self._send_request_with_retry(
-            headers=headers,
-            json_data=json_data,
-            form_data=None,
-        )
-
-    def _parse_async_parameter_from_url(self) -> bool | None:
-        """
-        Parse async parameter from api_url if present.
-
-        Returns:
-            True if async=true, False if async=false, None if not present
-        """
-        try:
-            parsed = urlparse(self._api_url)
-            query_params = parse_qs(parsed.query)
-
-            if "async" in query_params:
-                async_value = query_params["async"][0].lower()
-                if async_value == "true":
-                    return True
-                elif async_value == "false":
-                    return False
-        except Exception:
-            # If parsing fails, return None (don't add async_mode parameter)
-            pass
-
-        return None
-
-    async def _send_formdata_request(
-        self, livekit_url: str, livekit_token: str, room_name: str, async_mode: bool | None = None
-    ) -> None:
-        """
-        Send request using multipart/form-data format (for custom avatar worker endpoints).
-
-        This format is used for direct communication with avatar workers like:
-        - gpu-avatar-worker (FLOAT model)
-        - cpu-avatar-worker
-        - Cerebrium deployments
-
-        Args:
-            livekit_url: LiveKit server URL
-            livekit_token: JWT token for room access
-            room_name: Name of the LiveKit room
-            async_mode: Optional async_mode parameter (parsed from URL if async parameter present)
-        """
-        # Build form data with required fields
+    def _session_form(self, ctx: AvatarStart) -> http.FormData:
+        """The session for a self-hosted avatar worker (gpu-avatar-worker, cpu-avatar-worker,
+        Cerebrium deployments)."""
         form_data = http.FormData()
-        form_data.add_field("livekit_url", livekit_url)
-        form_data.add_field("livekit_token", livekit_token)
-        form_data.add_field("room_name", room_name)
-        # Name the model here too, for the same reason the JSON request does: this
-        # is the SELF-HOSTED path, and without it a worker cannot tell
-        # `expression` from `expression-2` — the two render differently and meter
-        # on different lines. Workers that predate the field ignore it (they read
-        # the form into a dict and pick the keys they know), so sending it is
-        # additive for every existing deployment.
+        form_data.add_field("livekit_url", ctx.livekit_url)
+        form_data.add_field("livekit_token", self._session_token(ctx))
+        form_data.add_field("room_name", ctx.room.name)
+        # without it a worker cannot tell `expression` from `expression-2`; workers that
+        # predate the field ignore it
         if utils.is_given(self._model):
             form_data.add_field("model", str(self._model))
+        async_mode = parse_qs(urlparse(self._api_url).query).get("async", [""])[0].lower()
+        if async_mode in ("true", "false"):
+            form_data.add_field("async_mode", async_mode)
 
-        # Add async_mode parameter if parsed from URL
-        # FastAPI Form bool accepts "true"/"false" strings and converts them to boolean
-        if async_mode is not None:
-            form_data.add_field("async_mode", "true" if async_mode else "false")
-
-        # Handle avatar image - send as file upload or URL
-        if isinstance(self._avatar_image, Image.Image):
-            # Convert PIL Image to bytes and upload as file
-            img_byte_arr = io.BytesIO()
-            self._avatar_image.save(img_byte_arr, format="JPEG", quality=95)
-            img_byte_arr.seek(0)
+        image = self._avatar_image
+        if isinstance(image, str) and image.startswith(("http://", "https://")):
+            form_data.add_field("avatar_image_url", image)
+        elif image is not None:
+            data = _jpeg(image) if isinstance(image, Image.Image) else base64.b64decode(image)
             form_data.add_field(
-                "avatar_image",
-                img_byte_arr,
-                filename="avatar.jpg",
-                content_type="image/jpeg",
+                "avatar_image", io.BytesIO(data), filename="avatar.jpg", content_type="image/jpeg"
             )
-        elif isinstance(self._avatar_image, str):
-            # String can be URL or base64 - check if it's a URL
-            if self._avatar_image.startswith(("http://", "https://")):
-                form_data.add_field("avatar_image_url", self._avatar_image)
-            elif _is_valid_base64(self._avatar_image):
-                # Valid base64 string, decode and upload as file
-                try:
-                    decoded_image = base64.b64decode(self._avatar_image)
-                    img_byte_arr = io.BytesIO(decoded_image)
-                    form_data.add_field(
-                        "avatar_image",
-                        img_byte_arr,
-                        filename="avatar.jpg",
-                        content_type="image/jpeg",
-                    )
-                except Exception as err:
-                    # If decode fails despite validation, raise error
-                    raise BitHumanException(
-                        f"Failed to decode base64 avatar image: {self._avatar_image[:50]}..."
-                    ) from err
-            else:
-                # Not a URL and not valid base64, raise error
-                raise BitHumanException(
-                    f"Invalid avatar image string: must be a URL (starting with http:// or https://) "
-                    f"or valid base64 encoded data. Got: {self._avatar_image[:50]}..."
-                )
-
-        # Add avatar_id if provided
         if utils.is_given(self._avatar_id):
             form_data.add_field("avatar_id", self._avatar_id)
+        return form_data
 
-        # Authorization header for custom endpoints uses api_token (Bearer token format)
-        # Note: api_token is different from api_secret - token is for direct API access,
-        # while secret is for BitHuman's authentication service
-        auth_token = self._api_token or self._api_secret
-        if auth_token is None:
-            raise BitHumanException(
-                "api_token or api_secret is required for custom endpoint requests. "
-                "Set BITHUMAN_API_TOKEN or BITHUMAN_API_SECRET environment variable."
-            )
-
-        headers = {
-            "Authorization": f"Bearer {auth_token}",
-        }
-
-        await self._send_request_with_retry(
+    async def _post(self, ctx: AvatarStart, body: dict[str, str] | http.FormData) -> None:
+        if isinstance(body, http.FormData):
+            # a self-hosted worker takes a bearer token: the runtime token, else the secret
+            headers = {"Authorization": f"Bearer {self._api_token or self._api_secret}"}
+        else:
+            headers = {"api-secret": self._api_secret or ""}
+        async with http.http_session().post(
+            self._api_url,
             headers=headers,
-            json_data=None,
-            form_data=form_data,
-        )
-
-    async def _send_request_with_retry(
-        self,
-        headers: dict[str, str],
-        json_data: dict[str, str] | None = None,
-        form_data: http.FormData | None = None,
-    ) -> None:
-        """Send the session request, retrying transient failures under ``conn_options``."""
-        session = self._ensure_http_session()
-
-        async def request() -> None:
-            async with session.post(
-                self._api_url,
-                headers=headers,
-                json=json_data,
-                data=form_data,
-                conn_options=self._conn_options,
-            ) as response:
-                await response.raise_for_status()
-
-        await http.retry_request(request, conn_options=self._conn_options)
-
-    def _ensure_http_session(self) -> http.HttpSession:
-        if self._http_session is None:
-            self._http_session = http.http_session()
-
-        return self._http_session
+            json=None if isinstance(body, http.FormData) else body,
+            data=body if isinstance(body, http.FormData) else None,
+            conn_options=ctx.conn_options,
+        ) as response:
+            await response.raise_for_status()
 
     @property
     def runtime(self) -> BitHumanRuntime:
@@ -706,6 +456,7 @@ class AvatarSession(BaseAvatarSession):
     async def aclose(self) -> None:
         runner, self._avatar_runner = self._avatar_runner, None
         runtime, self._runtime = self._runtime, None
+        self._local_audio = None
         try:
             try:
                 if runner is not None:
@@ -719,6 +470,12 @@ class AvatarSession(BaseAvatarSession):
                             runtime.cleanup()
         finally:
             await super().aclose()
+
+
+def _jpeg(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=95)
+    return buffer.getvalue()
 
 
 class BithumanGenerator(VideoGenerator):

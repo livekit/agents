@@ -5,7 +5,7 @@ use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
+use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream, ProviderId};
 use lk_agents_core::lexer::Vocabulary;
 use lk_agents_core::usage::ModelKind;
 use lk_agents_voice::agent_session::DriverError;
@@ -133,17 +133,25 @@ impl LlmInference<'_> {
         let node = LlmNodeTrace::start(shared, self.ctx.span, &req);
         let mut trace = telemetry::LlmTrace::start(node.cx(shared), llm.as_ref(), &req);
         let attempt = trace.attempt();
-        let mut data = self.announce_request(&req, llm.as_ref());
+        let id = llm.id();
+        let (label, metadata) = (id.label.clone(), Some(id.metadata()));
+        let vocab = self.ctx.vocab(shared);
+        let mut data = LlmGenerationData::new(shared.time.wall_secs(), label, metadata, vocab);
         let observer = give_up_observer(shared, handle, ProviderKind::Llm);
-        // An open is still owned by nobody, so an interrupt drops it: the step has no words.
-        let open = lk_agents_inference::llm::chat(
-            llm.clone(),
-            trace.cx(),
-            &req,
-            shared.time.clock(),
-            Some(observer),
-        );
-        let ended = match until_interrupted(handle, open).await {
+        // An open is still owned by nobody, so an interrupt drops it: the step has no words. The
+        // request is announced in the open's first poll, so an open dropped unpolled requested
+        // nothing.
+        let mut requested = false;
+        let open = async {
+            self.announce_request(&req, id);
+            requested = true;
+            let clock = shared.time.clock();
+            lk_agents_inference::llm::chat(llm.clone(), trace.cx(), &req, clock, Some(observer))
+                .await
+        };
+        let opened = until_interrupted(handle, open).await;
+        let ended = match opened {
+            None if !requested => Ok(()),
             None => {
                 self.request_finished(None);
                 report_llm_metrics(&data, false, shared, handle);
@@ -179,12 +187,8 @@ impl LlmInference<'_> {
         }
     }
 
-    /// Journals the request and reports its start: the attempt's data, starting now.
-    fn announce_request(
-        &self,
-        req: &ChatRequest,
-        llm: &dyn lk_agents_abi::Llm,
-    ) -> LlmGenerationData {
+    /// Journals the request and reports its start.
+    fn announce_request(&self, req: &ChatRequest, id: ProviderId) {
         let (shared, speech, step) = (self.shared, self.handle.id(), self.ctx.plan.step);
         shared.trace(GenerationStep::ChatRequested {
             speech,
@@ -198,16 +202,12 @@ impl LlmInference<'_> {
             ctx_ids: req.chat_ctx.items.iter().map(|it| it.id().to_owned()).collect(),
             tool_choice: req.tool_choice.clone(),
         });
-        let started_at = shared.time.wall_secs();
-        let id = llm.id();
-        let (label, metadata) = (id.label.clone(), Some(id.metadata()));
         shared.report(GenEvent::RequestStarted {
             speech,
             kind: ModelKind::Llm,
             provider: id.provider,
             model: id.model,
         });
-        LlmGenerationData::new(started_at, label, metadata, self.ctx.vocab(shared))
     }
 
     fn request_finished(&self, error: Option<&ProviderError>) {

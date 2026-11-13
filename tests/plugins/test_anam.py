@@ -39,7 +39,7 @@ async def test_reply_starts_when_the_avatar_reports_playback(avatar_host: Avatar
             api_url=str(server.make_url("")).rstrip("/"),
         )
 
-        await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+        await avatar.start(avatar_host.agent, avatar_host.room)
 
     assert avatar.session_id == "S1"
     [sink] = avatar_host.sinks

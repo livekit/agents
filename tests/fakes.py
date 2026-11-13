@@ -23,6 +23,7 @@ import json
 import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from types import SimpleNamespace
 from typing import Literal, TypeAlias, TypeVar
 
 import aiohttp
@@ -56,7 +57,9 @@ from livekit.agents.utils import aio, shortuuid
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarSession,
+    AvatarStart,
     DataStreamAudioOutput,
+    QueueAudioOutput,
     VideoGenerator,
 )
 from livekit.agents.voice.io import (
@@ -841,10 +844,35 @@ class FakeDuplexSession(llm.DuplexSession):
             self.audio.put_nowait(llm.DuplexAudioFrame(audio_frame(0.1, level=0.001)))
 
 
+AVATAR_CREDENTIALS = {
+    "livekit_url": "wss://lk.test",
+    "livekit_api_key": "lk-key",
+    "livekit_api_secret": "lk-secret-with-enough-entropy-32b",
+}
+
+
+class AgentRoom(rtc.Room):
+    """A room ``room-1`` the agent is connected to as ``agent-1``."""
+
+    @property
+    def name(self) -> str:
+        return "room-1"
+
+    def isconnected(self) -> bool:
+        return True
+
+    @property
+    def local_participant(self) -> rtc.LocalParticipant:
+        return SimpleNamespace(identity="agent-1")  # type: ignore[return-value]
+
+
 class FakeAvatar(AvatarSession):
-    """An avatar that never joins; counts its closes."""
+    """An avatar that never joins; counts its closes. Start it in an ``AgentRoom``."""
 
     closes = 0
+
+    def __init__(self) -> None:
+        super().__init__(**AVATAR_CREDENTIALS)
 
     @property
     def avatar_identity(self) -> str:
@@ -853,6 +881,12 @@ class FakeAvatar(AvatarSession):
     @property
     def provider(self) -> str:
         return "test-provider"
+
+    async def create_session(self, ctx: AvatarStart) -> None:
+        return None
+
+    def audio_output(self, ctx: AvatarStart) -> QueueAudioOutput:
+        return QueueAudioOutput()
 
     async def aclose(self) -> None:
         self.closes += 1

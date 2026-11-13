@@ -203,7 +203,6 @@ def test_cli_logging_quiets_noisy_libraries_below_warning() -> None:
     ("flag", "module"),
     [
         ("LIVEKIT_EVALS_VERBOSE", "livekit.agents"),
-        ("LK_GOOGLE_DEBUG", "livekit.plugins.google"),
         ("LK_OPENAI_DEBUG", "livekit.plugins.openai.realtime.gpt_live_model"),
         ("LK_BEDROCK_DEBUG", "livekit.plugins.aws.experimental.realtime"),
         ("LK_SESSION_MAX_DURATION", "livekit.plugins.aws.experimental.realtime"),

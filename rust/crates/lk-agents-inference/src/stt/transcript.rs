@@ -1,8 +1,8 @@
+use crate::stt::speech::Speech;
 use crate::stt::wire::{Incoming, Transcript};
-use lk_agents_abi::{RecognitionUsage, SpeechData, SpeechEvent, SpeechEventType, TranscriptChunk};
+use lk_agents_abi::{RecognitionUsage, SpeechEvent, SpeechEventType, TranscriptChunk};
 
-// One connection's transcript assembly. `speaking` is written from three places, and its end-of-speech edge releases a deferred keyterm
-// update.
+// One connection's transcript assembly; its end-of-speech edge releases a deferred keyterm update.
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct Processed {
@@ -15,7 +15,7 @@ pub(super) struct Processed {
 
 #[derive(Debug, Clone)]
 pub(super) struct TranscriptMachine {
-    speaking: bool,
+    speech: Speech,
     speech_duration: f64,
     /// `self._request_id`, a `shortuuid("stt_request_")` replaced by the connection's session id
     /// once the socket reports one.
@@ -27,7 +27,8 @@ pub(super) struct TranscriptMachine {
 impl TranscriptMachine {
     pub fn new(request_id: impl Into<String>, language: Option<&str>) -> Self {
         TranscriptMachine {
-            speaking: false,
+            // the gateway reports onsets, but each final ends the turn
+            speech: Speech::new(false),
             speech_duration: 0.0,
             request_id: request_id.into(),
             // `self._opts.language or "en"`.
@@ -39,7 +40,14 @@ impl TranscriptMachine {
     }
 
     pub fn is_speaking(&self) -> bool {
-        self.speaking
+        self.speech.speaking()
+    }
+
+    /// The connection ended: its open speech ends with it.
+    pub fn boundary(&mut self) -> Vec<SpeechEvent> {
+        let mut events = Vec::new();
+        self.speech.ended(&mut events);
+        events
     }
 
     /// `_speech_duration` is accumulated on the send side.
@@ -51,12 +59,12 @@ impl TranscriptMachine {
         match msg {
             Incoming::StartOfSpeech => {
                 let mut out = Processed::default();
-                self.start_of_speech(&mut out.events);
+                self.speech.started(&mut out.events);
                 out
             }
-            Incoming::PreflightTranscript(data) => self.preflight(&data),
-            Incoming::InterimTranscript(data) => self.transcript(&data, false),
-            Incoming::FinalTranscript(data) => self.transcript(&data, true),
+            Incoming::PreflightTranscript(data) => self.transcript(&data, false, true),
+            Incoming::InterimTranscript(data) => self.transcript(&data, false, false),
+            Incoming::FinalTranscript(data) => self.transcript(&data, true, false),
             Incoming::Error { code } => Processed {
                 error: Some(
                     lk_agents_abi::errors::ApiError::status(
@@ -98,89 +106,32 @@ impl TranscriptMachine {
         }
     }
 
-    /// Onset reported by a provider that detects it server-side (e.g. Cartesia Ink-2).
-    fn start_of_speech(&mut self, events: &mut Vec<SpeechEvent>) {
-        if self.speaking {
-            return;
-        }
-        self.speaking = true;
-        // No request id: the reference constructs this event with the kind alone.
-        events.push(SpeechEvent::new(SpeechEventType::StartOfSpeech));
-    }
-
-    fn preflight(&mut self, data: &Transcript) -> Processed {
-        let text = &data.transcript;
-        // Drop an empty preflight, and any preflight outside a turn (a speculative final).
-        if text.is_empty() || !self.speaking {
-            return Processed::default();
-        }
-        let event = SpeechEvent {
-            kind: SpeechEventType::PreflightTranscript,
-            request_id: self.request_id_of(data),
-            alternatives: vec![self.speech_data(data)],
-            recognition_usage: None,
-            ..SpeechEvent::new(SpeechEventType::PreflightTranscript)
-        };
-        Processed { events: vec![event], ..Default::default() }
-    }
-
-    fn transcript(&mut self, data: &Transcript, is_final: bool) -> Processed {
+    fn transcript(&mut self, data: &Transcript, is_final: bool, preflight: bool) -> Processed {
         let request_id = self.request_id_of(data);
-        let text = &data.transcript;
-
-        // `if not text and not is_final: return`. An empty final still closes the turn.
-        if text.is_empty() && !is_final {
-            return Processed::default();
-        }
-
+        let report = lk_agents_abi::stt::events::Transcript {
+            r#final: is_final,
+            preflight,
+            ..self.report(data, request_id.clone())
+        };
         let mut out = Processed::default();
-        self.start_of_speech(&mut out.events);
-        let speech_data = self.speech_data(data);
-
-        if !is_final {
-            out.events.push(SpeechEvent {
-                kind: SpeechEventType::InterimTranscript,
-                request_id,
-                alternatives: vec![speech_data],
-                recognition_usage: None,
-                speech_start_time: None,
-                created_at: None,
-                speech_end_time: None,
-            });
-            return out;
-        }
-
+        out.end_of_speech = self.speech.transcript(report, &mut out.events);
         // Usage goes before the final transcript, and only when audio was pushed.
-        if self.speech_duration > 0.0 {
-            out.events.push(SpeechEvent {
-                kind: SpeechEventType::RecognitionUsage,
-                request_id: request_id.clone(),
-                alternatives: Vec::new(),
-                recognition_usage: Some(Box::new(RecognitionUsage {
-                    audio_duration: Some(self.speech_duration),
-                    ..Default::default()
-                })),
-                speech_start_time: None,
-                created_at: None,
-                speech_end_time: None,
-            });
+        if is_final && self.speech_duration > 0.0 {
+            let at = usize::from(
+                out.events.first().is_some_and(|e| e.kind == SpeechEventType::StartOfSpeech),
+            );
+            out.events.insert(
+                at,
+                SpeechEvent {
+                    request_id,
+                    recognition_usage: Some(Box::new(RecognitionUsage {
+                        audio_duration: Some(self.speech_duration),
+                        ..Default::default()
+                    })),
+                    ..SpeechEvent::new(SpeechEventType::RecognitionUsage)
+                },
+            );
             self.speech_duration = 0.0;
-        }
-
-        out.events.push(SpeechEvent {
-            kind: SpeechEventType::FinalTranscript,
-            request_id,
-            alternatives: vec![speech_data],
-            recognition_usage: None,
-            speech_start_time: None,
-            created_at: None,
-            speech_end_time: None,
-        });
-
-        if self.speaking {
-            self.speaking = false;
-            out.events.push(SpeechEvent::new(SpeechEventType::EndOfSpeech));
-            out.end_of_speech = true;
         }
         out
     }
@@ -190,9 +141,11 @@ impl TranscriptMachine {
     }
 
     /// `_build_speech_data`.
-    fn speech_data(&self, data: &Transcript) -> SpeechData {
-        let start = data.start;
-        let duration = data.duration;
+    fn report(
+        &self,
+        data: &Transcript,
+        request_id: String,
+    ) -> lk_agents_abi::stt::events::Transcript {
         let language = data.language.as_deref().unwrap_or(&self.default_language);
         let words = data
             .words
@@ -208,21 +161,17 @@ impl TranscriptMachine {
             })
             .collect();
 
-        SpeechData {
-            language: lk_agents_abi::tokenize::language::LanguageCode::new(language),
-            text: data.transcript.clone(),
-            start_time: start,
-            end_time: start + duration,
+        lk_agents_abi::stt::events::Transcript {
+            request_id,
+            start_time: data.start,
+            end_time: data.start + data.duration,
             confidence: data.confidence,
             speaker_id: data.speaker_id.clone(),
             // An absent `words` is an empty list, not `None`.
             words: Some(words),
-            source_languages: None,
-            source_texts: None,
-            target_languages: None,
-            target_texts: None,
             // An empty `extra` object is `None`, not `Some({})`.
             metadata: data.extra.as_ref().filter(|extra| !extra.is_empty()).cloned(),
+            ..lk_agents_abi::stt::events::Transcript::new(language, data.transcript.clone())
         }
     }
 }

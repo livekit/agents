@@ -350,6 +350,20 @@ impl ProviderAttempts {
     }
 }
 
+// Wherever the host passes a `::lk_agents_abi::types::provider::ReadDeadline`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::types::provider::ReadDeadline>(),
+        read: |obj| match obj.cast::<ProviderAttempts>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::types::provider::ReadDeadline> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/types/provider.rs.
 
 /// [`::lk_agents_abi::types::provider::ProviderEvents`] over a host `livekit.agents._bindings.ProviderEvents`.

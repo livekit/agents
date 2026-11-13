@@ -3,8 +3,7 @@
 Provides LiveAvatar interactive avatar integration similar to Tavus.
 """
 
-from .api import LiveAvatarException
-from .avatar import AvatarSession
+from .avatar import AvatarSession, LiveAvatarException
 from .version import __version__
 
 __all__ = [

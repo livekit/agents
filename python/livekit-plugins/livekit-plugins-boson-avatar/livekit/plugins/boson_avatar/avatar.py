@@ -14,11 +14,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import uuid
 from datetime import timedelta
+
+from pydantic import JsonValue
 
 import livekit.rtc as rtc
 from livekit import api
@@ -26,23 +27,23 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    APIError,
     NotGivenOr,
-    VoiceSession,
     get_job_context,
     utils,
 )
-from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
-from livekit.agents.voice.events import CloseEvent
-from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
+from livekit.agents.voice.avatar import (
+    AvatarSession as BaseAvatarSession,
+    AvatarStart,
+    DataStreamAudioOutput,
+)
 
-from .api import AvatarSessionInfo, AvatarSessionStartError, BosonAvatarAPI
+from .api import BosonAvatarAPI
 from .errors import BosonAvatarException
 from .log import logger
 
-SAMPLE_RATE = 24000
 MAX_DURATION_SECONDS = 14_400
-_AVATAR_AGENT_IDENTITY = "boson-avatar-agent"
-_AVATAR_AGENT_NAME = "Boson Avatar"
+_SESSION_OBJECT = "avatar.livekit.session"
 
 
 class AvatarSession(BaseAvatarSession):
@@ -60,6 +61,9 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         idempotency_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """Create a Boson Avatar session.
@@ -80,12 +84,26 @@ class AvatarSession(BaseAvatarSession):
                 Must be a UUID when provided. Inside an Agent job, the default
                 is a UUID derived from the job ID and immutable Avatar session
                 binding, so a redelivered job recovers the provider session.
+            livekit_url: LiveKit server URL. Defaults to `LIVEKIT_URL`.
+            livekit_api_key: LiveKit API key. Defaults to `LIVEKIT_API_KEY`.
+            livekit_api_secret: LiveKit API secret. Defaults to `LIVEKIT_API_SECRET`.
             conn_options: Timeout and retry options for Boson API requests.
 
         Raises:
             BosonAvatarException: If required configuration is missing or invalid.
         """
-        super().__init__()
+        super().__init__(
+            avatar_participant_identity=_resolve_optional_string(
+                avatar_participant_identity, "boson-avatar-agent"
+            ),
+            avatar_participant_name=_resolve_optional_string(
+                avatar_participant_name, "Boson Avatar"
+            ),
+            livekit_url=livekit_url,
+            livekit_api_key=livekit_api_key,
+            livekit_api_secret=livekit_api_secret,
+            conn_options=conn_options,
+        )
         resolved_avatar_id = _resolve_env_or_value(avatar_id, "BOSON_AVATAR_ID")
         if not resolved_avatar_id:
             raise BosonAvatarException(
@@ -103,34 +121,12 @@ class AvatarSession(BaseAvatarSession):
             "max_duration_seconds",
             maximum=MAX_DURATION_SECONDS,
         )
-
-        self._avatar_identity = _resolve_optional_string(
-            avatar_participant_identity, _AVATAR_AGENT_IDENTITY
-        )
-        self._avatar_name = _resolve_optional_string(avatar_participant_name, _AVATAR_AGENT_NAME)
         self._idempotency_key = _resolve_optional_idempotency_key(idempotency_key)
-        self._api = BosonAvatarAPI(
-            api_key=api_key,
-            api_url=api_url,
-            conn_options=conn_options,
-        )
-        self._session_info: AvatarSessionInfo | None = None
-        self._start_called = False
-        self._closed = False
-        self._close_requested = False
-        self._lifecycle_lock = asyncio.Lock()
-        # Holds the provider calls and the close; never cancelled, since each runs to completion
-        # so a created session is always ended. aclose() awaits the ones it depends on.
-        self._tasks = utils.aio.TaskSet()
-        self._create_task: asyncio.Task[AvatarSessionInfo] | None = None
-        self._startup_cleanup_task: asyncio.Task[None] | None = None
-        self._shutdown_task: asyncio.Task[None] | None = None
-        self._agent_close_task: asyncio.Task[None] | None = None
-        self._tracked_agent_session: VoiceSession | None = None
-
-    @property
-    def avatar_identity(self) -> str:
-        return self._avatar_identity
+        self._api = BosonAvatarAPI(api_key=api_key, api_url=api_url, conn_options=conn_options)
+        # one key per start, shared by its retries, so Boson allocates one session
+        self._attempts_of: AvatarStart | None = None
+        self._attempt_key = ""
+        self._session_id: str | None = None
 
     @property
     def provider(self) -> str:
@@ -139,310 +135,120 @@ class AvatarSession(BaseAvatarSession):
     @property
     def session_id(self) -> str | None:
         """Boson Avatar session ID after `start()` succeeds, otherwise `None`."""
-        return self._session_info.id if self._session_info is not None else None
+        return self._session_id
 
-    async def start(  # type: ignore[override]
-        self,
-        agent_session: VoiceSession,
-        room: rtc.Room,
-        *,
-        livekit_url: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
-    ) -> str:
-        """Start the Avatar participant and route generic VoiceSession audio to it."""
-        if self._start_called:
-            raise RuntimeError("AvatarSession.start() called twice; create a new AvatarSession.")
-        self._start_called = True
-
-        livekit_url_value = _resolve_env_or_value(livekit_url, "LIVEKIT_URL")
-        livekit_api_key_value = _resolve_env_or_value(livekit_api_key, "LIVEKIT_API_KEY")
-        livekit_api_secret_value = _resolve_env_or_value(livekit_api_secret, "LIVEKIT_API_SECRET")
-        if not livekit_url_value or not livekit_api_key_value or not livekit_api_secret_value:
-            raise BosonAvatarException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
-                "by arguments or environment variables"
+    async def create_session(self, ctx: AvatarStart) -> str:
+        if ctx.avatar_identity == ctx.agent_identity:
+            raise APIError(
+                "avatar_participant_identity must differ from the local agent participant identity",
+                kind="invalid_request",
             )
-
-        publisher_identity = _local_participant_identity(room)
-        if self._avatar_identity == publisher_identity:
-            raise BosonAvatarException(
-                "avatar_participant_identity must differ from the local agent participant identity"
+        if self._attempts_of is not ctx:
+            self._attempts_of = ctx
+            self._attempt_key = (
+                self._idempotency_key
+                or _livekit_job_idempotency_key(
+                    livekit_url=ctx.livekit_url,
+                    room_name=ctx.room.name,
+                    avatar_id=self._avatar_id,
+                    avatar_identity=ctx.avatar_identity,
+                    publisher_identity=ctx.agent_identity,
+                    width=self._width,
+                    height=self._height,
+                    max_duration_seconds=self._max_duration_seconds,
+                )
+                or str(uuid.uuid4())
             )
-        livekit_token = self._mint_avatar_token(
-            room=room,
-            publisher_identity=publisher_identity,
-            livekit_api_key=livekit_api_key_value,
-            livekit_api_secret=livekit_api_secret_value,
-        )
-
-        async with self._lifecycle_lock:
-            if self._close_requested or self._closed:
-                raise RuntimeError("AvatarSession was closed before start() completed")
-
-            await super().start(agent_session, room)
-            self._tracked_agent_session = agent_session
-            agent_session.on("close", self._on_agent_session_close)
-            started_info: AvatarSessionInfo | None = None
-            try:
-                self._create_task = self._tasks.spawn(
-                    self._api.start_session(
-                        avatar_id=self._avatar_id,
-                        livekit_url=livekit_url_value,
-                        livekit_room=room.name,
-                        livekit_token=livekit_token,
-                        avatar_identity=self._avatar_identity,
-                        publisher_identity=publisher_identity,
-                        width=self._width,
-                        height=self._height,
-                        max_duration_seconds=self._max_duration_seconds,
-                        idempotency_key=self._idempotency_key
-                        or _livekit_job_idempotency_key(
-                            livekit_url=livekit_url_value,
-                            room_name=room.name,
-                            avatar_id=self._avatar_id,
-                            avatar_identity=self._avatar_identity,
-                            publisher_identity=publisher_identity,
-                            width=self._width,
-                            height=self._height,
-                            max_duration_seconds=self._max_duration_seconds,
-                        ),
-                    ),
-                    name="boson_avatar_create_session",
-                )
-                # The provider create is shielded so cancellation cannot discard a
-                # successful response before its session ID can be compensated.
-                started_info = await asyncio.shield(self._create_task)
-                self._session_info = started_info
-
-                if self._close_requested:
-                    raise RuntimeError("AvatarSession was closed while start() was in progress")
-
-                audio_output = DataStreamAudioOutput(
-                    room=room,
-                    destination_identity=self._avatar_identity,
-                    sample_rate=SAMPLE_RATE,
-                    # Higgs publishes audio before its first generated video frame.
-                    # Waiting on audio avoids a first-frame dependency cycle while
-                    # still buffering speech until the Avatar is ready.
-                    wait_remote_track=rtc.TrackKind.KIND_AUDIO,
-                )
-                self._attach_audio_output(agent_session, audio_output)
-            except BaseException:
-                # Move all startup cleanup into an independent task. It owns both
-                # the provider result and DELETE, so repeated caller cancellation
-                # cannot interrupt compensation or base-session cleanup.
-                self._startup_cleanup_task = self._tasks.spawn(
-                    self._cleanup_failed_start(
-                        create_task=self._create_task if started_info is None else None,
-                        session_info=started_info,
-                    ),
-                    name="boson_avatar_startup_cleanup",
-                )
-                self._startup_cleanup_task.add_done_callback(self._consume_startup_cleanup_result)
-                try:
-                    await asyncio.shield(self._startup_cleanup_task)
-                except BaseException:
-                    # The owned task remains alive and completes independently.
-                    pass
-                raise
-            finally:
-                if self._startup_cleanup_task is None:
-                    self._create_task = None
-
-        assert started_info is not None
-        logger.debug(
-            "boson avatar session started",
-            extra={
-                "lk.pii.session_id": started_info.id,
-                "lk.pii.avatar_id": self._avatar_id,
-            },
-        )
-        return started_info.id
-
-    async def aclose(self) -> None:
-        """End the hosted Avatar session and remove its LiveKit participant."""
-        # Set this before acquiring the lock so an in-flight start knows that
-        # close won the race and compensates the provider session it just created.
-        self._close_requested = True
-        while True:
-            owned_task: asyncio.Task[None] | None
-            is_startup_cleanup = False
-            async with self._lifecycle_lock:
-                if self._startup_cleanup_task is not None:
-                    owned_task = self._startup_cleanup_task
-                    is_startup_cleanup = True
-                elif self._shutdown_task is not None:
-                    owned_task = self._shutdown_task
-                elif self._closed and self._session_info is None:
-                    return
-                else:
-                    self._shutdown_task = self._tasks.spawn(
-                        self._run_shutdown(), name="boson_avatar_shutdown"
-                    )
-                    self._shutdown_task.add_done_callback(self._consume_shutdown_result)
-                    owned_task = self._shutdown_task
-
-            await asyncio.shield(owned_task)
-            if not is_startup_cleanup:
-                # a close the VoiceSession's end started finishes with this one
-                agent_close = self._agent_close_task
-                if agent_close is not None and agent_close is not asyncio.current_task():
-                    await asyncio.shield(agent_close)
-                return
-            # Awaiting an already-completed task does not yield to its queued
-            # done callback. Clear it here too so close cannot spin on it.
-            async with self._lifecycle_lock:
-                if self._startup_cleanup_task is owned_task:
-                    self._startup_cleanup_task = None
-            # Startup cleanup can retain a session ID when provider DELETE
-            # exhausts its retries. Re-evaluate once so this close call can retry.
-
-    async def _cleanup_failed_start(
-        self,
-        *,
-        create_task: asyncio.Task[AvatarSessionInfo] | None,
-        session_info: AvatarSessionInfo | None,
-    ) -> None:
-        try:
-            if session_info is None and create_task is not None:
-                try:
-                    session_info = await create_task
-                except AvatarSessionStartError as exc:
-                    session_info = exc.session_info
-                except Exception:
-                    session_info = None
-            if session_info is not None:
-                self._session_info = session_info
-                await self._compensate_start(session_info)
-        finally:
-            if create_task is not None and self._create_task is create_task:
-                self._create_task = None
-            self._detach_agent_close_listener()
-            try:
-                await super().aclose()
-            finally:
-                self._closed = True
-
-    async def _run_shutdown(self) -> None:
-        session_info = self._session_info
-        if session_info is not None:
-            try:
-                await self._api.end_session(session_info.id)
-            except Exception as exc:  # noqa: BLE001 - a later aclose() can retry by ID
-                logger.warning(
-                    "failed to end boson avatar session",
-                    extra={
-                        "error_type": type(exc).__name__,
-                        "lk.pii.session_id": session_info.id,
-                    },
-                )
-            else:
-                if self._session_info is session_info:
-                    self._session_info = None
-
-        if not self._closed:
-            self._detach_agent_close_listener()
-            try:
-                await super().aclose()
-            finally:
-                self._closed = True
-
-    def _consume_startup_cleanup_result(self, task: asyncio.Task[None]) -> None:
-        if self._startup_cleanup_task is task:
-            self._startup_cleanup_task = None
-        self._consume_background_task_result(
-            task, "failed to compensate cancelled boson avatar startup"
-        )
-
-    def _consume_shutdown_result(self, task: asyncio.Task[None]) -> None:
-        if self._shutdown_task is task:
-            self._shutdown_task = None
-        self._consume_background_task_result(task, "failed to close boson avatar session")
-
-    async def _compensate_start(self, session_info: AvatarSessionInfo) -> None:
-        try:
-            await self._api.end_session(session_info.id)
-        except Exception as exc:  # noqa: BLE001 - startup compensation is best-effort
-            logger.warning(
-                "failed to compensate boson avatar session after startup error",
-                extra={
-                    "error_type": type(exc).__name__,
-                    "lk.pii.session_id": session_info.id,
-                },
-            )
-        else:
-            if self._session_info is session_info:
-                self._session_info = None
-
-    def _on_agent_session_close(self, _: CloseEvent) -> None:
-        self._close_requested = True
-        if (self._closed and self._session_info is None) or self._agent_close_task is not None:
-            return
-        self._agent_close_task = self._tasks.spawn(
-            self.aclose(), name="boson_avatar_agent_session_close"
-        )
-        self._agent_close_task.add_done_callback(self._consume_agent_close_result)
-
-    def _consume_agent_close_result(self, task: asyncio.Task[None]) -> None:
-        self._consume_background_task_result(
-            task, "failed to close boson avatar after VoiceSession closed"
-        )
-
-    def _consume_background_task_result(self, task: asyncio.Task[None], message: str) -> None:
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is not None:
-            logger.error(
-                message,
-                extra={"error_type": type(error).__name__},
-            )
-
-    def _detach_agent_close_listener(self) -> None:
-        if self._tracked_agent_session is not None:
-            self._tracked_agent_session.off("close", self._on_agent_session_close)
-            self._tracked_agent_session = None
-
-    def _mint_avatar_token(
-        self,
-        *,
-        room: rtc.Room,
-        publisher_identity: str,
-        livekit_api_key: str,
-        livekit_api_secret: str,
-    ) -> str:
         grants = api.VideoGrants(
             room_join=True,
-            room=room.name,
+            room=ctx.room.name,
             can_subscribe=False,
             can_publish_data=True,
             can_publish_sources=["camera", "microphone"],
         )
         ttl = timedelta(
-            seconds=(self._max_duration_seconds + 300)
-            if self._max_duration_seconds is not None
-            else 4 * 60 * 60
+            seconds=self._max_duration_seconds + 300 if self._max_duration_seconds else 4 * 3600
         )
-        return (
-            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
-            .with_kind("agent")
-            .with_identity(self._avatar_identity)
-            .with_name(self._avatar_name)
-            .with_grants(grants)
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: publisher_identity})
-            .with_ttl(ttl)
-            .to_jwt()
+        body: dict[str, JsonValue] = {
+            "avatar_id": self._avatar_id,
+            "transport": {
+                "type": "livekit",
+                "url": ctx.livekit_url,
+                "room_name": ctx.room.name,
+                "participant_token": ctx.livekit_token(ttl=ttl, grants=grants),
+                "participant_identity": ctx.avatar_identity,
+                "publisher_identity": ctx.agent_identity,
+                "audio_source": "data_stream",
+            },
+        }
+        if self._width is not None and self._height is not None:
+            body["output"] = {"width": self._width, "height": self._height}
+        if self._max_duration_seconds is not None:
+            body["max_duration_seconds"] = self._max_duration_seconds
+
+        _, data = await self._api.request(
+            "POST",
+            "/sessions",
+            json=body,
+            headers={"Idempotency-Key": self._attempt_key},
+            success_statuses=frozenset({200, 201}),
         )
+        session_id = data.get("id")
+        if not isinstance(session_id, str) or not session_id:
+            raise APIError("Boson Avatar API response is missing a session id", kind="protocol")
+        if (
+            data.get("object") != _SESSION_OBJECT
+            or data.get("status") != "active"
+            or data.get("avatar_identity") != ctx.avatar_identity
+        ):
+            # the answer still names an allocated session: end it before failing
+            try:
+                await self.end_session(session_id)
+            except Exception as e:
+                logger.warning(
+                    "failed to end an invalid boson avatar session",
+                    extra={"error_type": type(e).__name__, "lk.pii.session_id": session_id},
+                )
+            raise APIError("Boson Avatar API returned an invalid active session", kind="protocol")
+        self._session_id = session_id
+        logger.debug(
+            "boson avatar session started",
+            extra={"lk.pii.session_id": session_id, "lk.pii.avatar_id": self._avatar_id},
+        )
+        return session_id
 
+    async def end_session(self, session_id: str) -> None:
+        """Idempotently stop the hosted Boson Avatar session."""
+        status, data = await self._api.request(
+            "DELETE",
+            f"/sessions/{session_id}",
+            allow_empty=True,
+            success_statuses=frozenset({200, 204}),
+        )
+        if (status == 204 and data) or (
+            status == 200
+            and (
+                data.get("id") != session_id
+                or data.get("object") != _SESSION_OBJECT
+                or data.get("status") != "terminated"
+            )
+        ):
+            raise APIError(
+                "Boson Avatar API returned an invalid terminated session", kind="protocol"
+            )
+        if self._session_id == session_id:
+            self._session_id = None
 
-def _local_participant_identity(room: rtc.Room) -> str:
-    job_ctx = get_job_context(required=False)
-    if job_ctx is not None and job_ctx.local_participant_identity:
-        return job_ctx.local_participant_identity
-    if room.isconnected() and room.local_participant.identity:
-        return room.local_participant.identity
-    raise BosonAvatarException("failed to get the local LiveKit participant identity")
+    def audio_output(self, ctx: AvatarStart) -> DataStreamAudioOutput:
+        return DataStreamAudioOutput(
+            room=ctx.room,
+            destination_identity=self.avatar_identity,
+            sample_rate=self.sample_rate,
+            # Higgs publishes audio before its first generated video frame. Waiting on audio
+            # avoids a first-frame dependency cycle while still buffering speech until the
+            # Avatar is ready.
+            wait_remote_track=rtc.TrackKind.KIND_AUDIO,
+        )
 
 
 def _livekit_job_idempotency_key(

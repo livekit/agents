@@ -9,7 +9,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import Agent, VoiceSession
-from livekit.agents.voice.avatar import AvatarSession, DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession, AvatarStart, DataStreamAudioOutput
 from tests.fakes import FakeAudioStage, FakeTTS, until
 
 from .conftest import JoinAvatar
@@ -28,14 +28,15 @@ class _Avatar(AvatarSession):
     def avatar_identity(self) -> str:
         return self._identity
 
-    async def start(self, agent_session: VoiceSession, room: rtc.Room) -> None:
-        await super().start(agent_session, room)
-        output = DataStreamAudioOutput(
-            room,
+    async def create_session(self, ctx: AvatarStart) -> None:
+        return None
+
+    def audio_output(self, ctx: AvatarStart) -> DataStreamAudioOutput:
+        return DataStreamAudioOutput(
+            ctx.room,
             destination_identity=self._identity,
             wait_remote_track=self._wait_remote_track,
         )
-        self._attach_audio_output(agent_session, output)
 
 
 def new_room() -> str:

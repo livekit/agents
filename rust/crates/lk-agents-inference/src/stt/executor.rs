@@ -259,6 +259,12 @@ impl SttStreamExecutor {
                 log::error!(target: lk_agents_abi::LOG_TARGET, "STT VAD cleanup incomplete");
             }
         }
+        // the connection's open speech ends before the next one's events
+        let ended = progress.lock().transcript.boundary();
+        self.deferred.speaking.store(false, std::sync::atomic::Ordering::SeqCst);
+        for event in ended {
+            self.event_tx.send(Ok(event)).await;
+        }
         outcome.map_err(|error| {
             // A reconnect sends only new audio, so it repeats no delivered transcript; once the
             // input ended there is nothing left to send and the pending transcript would be lost.

@@ -37,6 +37,7 @@ from livekit.agents.voice.avatar import (
     AvatarOptions,
     AvatarRunner,
     AvatarSession,
+    AvatarStart,
     DataStreamAudioOutput,
     DataStreamAudioReceiver,
 )
@@ -185,10 +186,11 @@ class _Avatar(AvatarSession):
     def avatar_identity(self) -> str:
         return AVATAR_IDENTITY
 
-    async def start(self, agent_session: VoiceSession, room: rtc.Room) -> None:
-        await super().start(agent_session, room)
-        output = DataStreamAudioOutput(room=room, destination_identity=AVATAR_IDENTITY)
-        self._attach_audio_output(agent_session, output)
+    async def create_session(self, ctx: AvatarStart) -> None:
+        return None
+
+    def audio_output(self, ctx: AvatarStart) -> DataStreamAudioOutput:
+        return DataStreamAudioOutput(room=ctx.room, destination_identity=AVATAR_IDENTITY)
 
 
 @function_tool

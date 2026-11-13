@@ -157,18 +157,12 @@ def _known(rule: str, package: str, reason: str) -> object:
 
 _REALTIME_LOGGED = "the realtime session's main task or push_audio is @utils.log_exceptions"
 KNOWN = {
-    ("log_exceptions", "livekit-plugins-nvidia"): _REALTIME_LOGGED,
     ("log_exceptions", "livekit-plugins-openai"): _REALTIME_LOGGED + " (gpt_live_model)",
-    ("log_exceptions", "livekit-plugins-phonic"): _REALTIME_LOGGED,
-    ("log_exceptions", "livekit-plugins-ultravox"): _REALTIME_LOGGED,
     ("swallowed_in_io_loop", "livekit-plugins-aws"): (
         "Nova Sonic's audio loop logs any send failure (logger.exception) and carries on"
     ),
     ("swallowed_in_io_loop", "livekit-plugins-nabrah"): (
         "the receive loop logs a message it cannot parse and carries on"
-    ),
-    ("swallowed_in_io_loop", "livekit-plugins-ultravox"): (
-        "the receive loop logs an event it fails to handle and carries on"
     ),
 }
 

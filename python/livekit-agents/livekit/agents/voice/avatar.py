@@ -120,6 +120,10 @@ class AvatarStart:
     _api_key: str = field(repr=False)
     _api_secret: str = field(repr=False)
 
+    def access_token(self) -> api.AccessToken:
+        """A token signed with the LiveKit credentials, for a participant other than the avatar."""
+        return api.AccessToken(api_key=self._api_key, api_secret=self._api_secret)
+
     def livekit_token(
         self,
         *,
@@ -131,7 +135,7 @@ class AvatarStart:
         room and publishing on behalf of ``agent_identity``. ``grants`` replaces the default
         room join; ``attributes`` are added to the publish-on-behalf one."""
         return (
-            api.AccessToken(api_key=self._api_key, api_secret=self._api_secret)
+            self.access_token()
             .with_kind("agent")
             .with_identity(self.avatar_identity)
             .with_name(self.avatar_name)
@@ -158,7 +162,8 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
       or connection failure is retried after at least the provider's ``Retry-After``, nothing is
       resent once a read timed out. A failure that is not an ``APIError`` becomes a final ``protocol`` one.
     - The agent's audio goes to ``audio_output``: DataStream to the avatar worker by default.
-    - Inside a job, the job's shutdown runs ``aclose()``, which runs ``end_session`` once.
+    - The agent session's close runs ``aclose()`` while the room is still connected, in a job
+      or not; ``aclose()`` runs ``end_session`` once.
     - ``metrics_collected`` emits ``AvatarMetrics`` once when the avatar joins, then for each
       assistant message with a ``playback_latency``, until ``aclose()``.
     """
@@ -191,7 +196,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         self._name = avatar_participant_name or None
         self._credentials = (livekit_url, livekit_api_key, livekit_api_secret)
         self._conn_options = conn_options
-        self._created: str | None = None
+        self._creating: asyncio.Task[str | None] | None = None
         self._tasks = utils.aio.TaskSet()
         self._ended: asyncio.Task[None] | None = None
         self._lifecycle: _core._core_AvatarLifecycle | None = None
@@ -244,14 +249,18 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
             avatar=self,
             job=get_job_context(required=False),
         )
-        if type(self).create_session is AvatarSession.create_session:
-            # a plugin that still runs its own start: the lifecycle is all it takes from here
-            return
+        self._creating = self._ended = None
         try:
             ctx = self._start_context(agent_session, room)
-            self._created = await http.retry_request(
-                lambda: self._attempt(ctx), conn_options=self._conn_options
+            self._creating = self._tasks.spawn(
+                http.retry_request(lambda: self._attempt(ctx), conn_options=self._conn_options),
+                name="create_session",
             )
+            # a start cancelled or closed while creating still learns the session it created,
+            # which its close ends
+            await asyncio.shield(self._creating)
+            if self._ended is not None:
+                raise RuntimeError("the avatar was closed while starting")
             self._attach_audio_output(agent_session, self.audio_output(ctx))
         except BaseException:
             await self.aclose()
@@ -325,46 +334,61 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         job, also remove the avatar participant from the room. Idempotent: concurrent closes
         share one."""
         try:
-            if self._created is not None and self._ended is None:
-                self._ended = self._tasks.spawn(self._end(self._created), name="end_session")
+            if self._creating is not None and self._ended is None:
+                self._ended = self._tasks.spawn(self._end(self._creating), name="end_session")
             if self._ended is not None:
                 await asyncio.shield(self._ended)
-            output = self._audio_output
-            if output is not None:
-                await output.aclose()
-                if self._audio_output is output:
-                    self._audio_output = None
         finally:
-            lifecycle = self._lifecycle
-            if lifecycle is not None:
-                # a concurrent close waits for the same one
-                await lifecycle.aclose()
-            if self._lifecycle is lifecycle:
-                self._lifecycle = None
-                self._agent_session = None
-                self._room = None
+            # a close cancelled while ending the session still closes the output it owns
+            try:
+                output = self._audio_output
+                if output is not None:
+                    await output.aclose()
+                    if self._audio_output is output:
+                        self._audio_output = None
+            finally:
+                lifecycle = self._lifecycle
+                if lifecycle is not None:
+                    # a concurrent close waits for the same one
+                    await lifecycle.aclose()
+                if self._lifecycle is lifecycle:
+                    self._lifecycle = None
+                    self._agent_session = None
+                    self._room = None
 
-    async def _end(self, session_id: str) -> None:
+    async def _end(self, creating: asyncio.Task[str | None]) -> None:
+        try:
+            session_id = await creating
+        except BaseException:
+            # nothing was created; start raises why
+            return
+        if session_id is None:
+            return
         limit = self._conn_options.read_timeout or self._conn_options.connect_timeout or 10.0
         try:
             async with asyncio.timeout(limit):
                 await self.end_session(session_id)
         except Exception as e:
-            # the close completes whatever the provider answered
+            # the close completes whatever the provider answered; its answer is not logged
             logger.warning(
                 "ending the avatar session failed",
-                extra={"provider": self.provider, "session_id": session_id, "error": repr(e)},
+                extra={
+                    "provider": self.provider,
+                    "session_id": session_id,
+                    "error_type": type(e).__name__,
+                    "kind": e.kind if isinstance(e, APIError) else None,
+                },
             )
 
 
 class ForwardingAvatarSession(AvatarSession[TEvent]):
     """An avatar whose audio the agent sends to the provider itself (an SDK, its own socket).
 
-    The plugin writes ``forward`` (each frame, then ``AudioSegmentEnd`` at a segment's end) and
-    ``clear`` (the agent was interrupted), and reports its provider's playback with
-    ``playback_started`` and ``playback_finished``. The framework owns the loop: frames go out
-    in order, a clear runs once at a time, and a failure of either is the session's
-    ``avatar_error`` and closes the avatar.
+    The plugin writes ``forward`` (each frame, then ``AudioSegmentEnd`` at a segment's end),
+    ``clear`` (the agent was interrupted) and, for a provider that answers, ``receive``, and
+    reports its provider's playback with ``playback_started`` and ``playback_finished``. The
+    framework owns the loop: frames go out in order, a clear runs once at a time, and a failure
+    of any is the session's ``avatar_error`` and closes the avatar.
     """
 
     wait_playback_start: bool = True
@@ -377,6 +401,11 @@ class ForwardingAvatarSession(AvatarSession[TEvent]):
     @abstractmethod
     async def clear(self) -> None:
         """Drop the audio not yet played: the agent was interrupted."""
+
+    async def receive(self) -> None:
+        """The provider's own events (its socket's receive loop), run beside the forwarding
+        until the avatar closes. A failure fails the avatar like one of ``forward``'s."""
+        await asyncio.Event().wait()
 
     def playback_started(self) -> None:
         """The provider started playing the current segment."""
@@ -417,7 +446,7 @@ class ForwardingAvatarSession(AvatarSession[TEvent]):
 
         try:
             async with utils.aio.TaskSet() as tasks:
-                await tasks.first_completed(self._forward_frames(output), clears())
+                await tasks.first_completed(self._forward_frames(output), clears(), self.receive())
         except asyncio.CancelledError:
             raise
         except Exception as error:

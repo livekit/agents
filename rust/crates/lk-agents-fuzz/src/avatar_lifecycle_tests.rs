@@ -1,14 +1,18 @@
-use lk_agents_abi::errors::{HostError, RefRegistry};
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::metrics::base::AvatarMetrics;
 use lk_agents_abi::voice::avatar::{AvatarHost, AvatarJoinError, AvatarLifecycle as _};
 use lk_agents_abi::voice::io::{AudioOutputExt, IoError};
-use lk_agents_abi::voice::rtc::{ConnectionState, ParticipantKind, TRACK_KIND_VIDEO, TrackSource};
+use lk_agents_abi::voice::rtc::{
+    ConnectionState, ParticipantKind, RtcRoom as _, TRACK_KIND_VIDEO, TrackSource,
+};
 use lk_agents_abi::voice::session::SessionOptions as _;
 use lk_agents_abi::voice::session_options::{SessionKwargs, TurnHandlingKwargs};
 use lk_agents_abi::voice::session_owner::SessionOwner as _;
-use lk_agents_abi::worker::ipc_host::{FrameworkShutdown, JobExecution};
+use lk_agents_abi::worker::ipc_host::JobExecution;
 use lk_agents_abi::worker::job::SessionJob;
-use lk_agents_abi::{AudioFrame, ChatItem, ChatMessage, HostRef, Maybe, Role};
+use lk_agents_abi::{
+    AudioFrame, BoxFuture, ChatItem, ChatMessage, HostRef, Maybe, Role, telemetry,
+};
 use lk_agents_fuzz::fakes::room::{FakeRoom, FakeRtc};
 use lk_agents_runtime::avatar::lifecycle::{AvatarLifecycle, item_added};
 use lk_agents_runtime::avatar::output::DataStreamAudioOutput;
@@ -22,44 +26,30 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-struct Registry;
-
-impl RefRegistry for Registry {
-    fn release(&self, _id: u64) {}
-}
-
+/// The avatar's host: its metrics, and the room's state at each of its closes.
 #[derive(Default)]
-struct Avatar(Mutex<Vec<AvatarMetrics>>);
+struct Avatar {
+    metrics: Mutex<Vec<AvatarMetrics>>,
+    room: Mutex<Option<Arc<FakeRoom>>>,
+    closed_connected: Mutex<Vec<bool>>,
+}
 
 impl AvatarHost for Avatar {
     fn metrics_collected(&self, metrics: AvatarMetrics) {
-        self.0.lock().unwrap().push(metrics);
+        self.metrics.lock().unwrap().push(metrics);
     }
-    fn close(&self) -> Result<HostRef, HostError> {
-        let registry: Arc<dyn RefRegistry> = Arc::new(Registry);
-        Ok(HostRef::new(7, &registry))
+    fn aclose(&self, _: &telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
+        let room = self.room.lock().unwrap().clone();
+        let connected = room
+            .is_some_and(|room| room.connection_state().is_ok_and(|state| state.is_connected()));
+        self.closed_connected.lock().unwrap().push(connected);
+        Box::pin(async { Ok(()) })
     }
 }
 
 #[derive(Default)]
 struct Job {
-    shutdown: Arc<Mutex<Vec<u64>>>,
     env: BTreeMap<String, String>,
-}
-
-/// The job's run, recording the host closes registered on its shutdown.
-struct Run(Arc<Mutex<Vec<u64>>>);
-
-impl JobExecution for Run {
-    fn session_closed(&self, _: String) {
-        unreachable!("an avatar ends no job")
-    }
-    fn add_framework_shutdown(&self, _: String, shutdown: FrameworkShutdown) {
-        let FrameworkShutdown::Host(close) = shutdown else {
-            panic!("an avatar's close is its host aclose")
-        };
-        self.0.lock().unwrap().push(close.id());
-    }
 }
 
 impl SessionJob for Job {
@@ -82,7 +72,7 @@ impl SessionJob for Job {
         unreachable!("an avatar does not record")
     }
     fn run(&self) -> Arc<dyn JobExecution> {
-        Arc::new(Run(self.shutdown.clone()))
+        unreachable!("an avatar registers nothing on its job")
     }
     fn server_env(&self) -> Result<BTreeMap<String, String>, HostError> {
         Ok(self.env.clone())
@@ -119,6 +109,7 @@ fn start(name: &str, job: Option<Arc<Job>>) -> Started {
     let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
     let room = rtc.room(name);
     let (owner, avatar) = (owner(), Arc::new(Avatar::default()));
+    *avatar.room.lock().unwrap() = Some(room.clone());
     let lifecycle = AvatarLifecycle::open(
         owner.clone(),
         room.clone(),
@@ -160,7 +151,7 @@ async fn the_join_is_reported_and_seen_by_every_waiter() {
     avatar.publish_track("TR_cam", TrackSource::Camera);
     tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap().unwrap();
     s.lifecycle.wait_for_join(Some(0.0)).await.unwrap();
-    let metrics = s.avatar.0.lock().unwrap().clone();
+    let metrics = s.avatar.metrics.lock().unwrap().clone();
     assert_eq!(metrics.len(), 1, "{metrics:?}");
     let (started, joined) =
         (metrics[0].session_started_time.unwrap(), metrics[0].avatar_joined_time.unwrap());
@@ -197,7 +188,7 @@ async fn a_timeout_leaves_the_wait_running_and_a_close_ends_it() {
         .add_participant("avatar", ParticipantKind::Agent)
         .publish_track("TR", TrackSource::Camera);
     settle().await;
-    assert!(s.avatar.0.lock().unwrap().is_empty());
+    assert!(s.avatar.metrics.lock().unwrap().is_empty());
 }
 
 // Catches: a playback latency reported for a user message, without one, or after the close.
@@ -208,14 +199,14 @@ async fn an_assistant_message_with_playback_latency_is_reported_until_the_close(
     item_added(&s.owner, &assistant(None, Role::Assistant), 11.0);
     item_added(&s.owner, &assistant(Some(0.5), Role::User), 12.0);
     {
-        let metrics = s.avatar.0.lock().unwrap();
+        let metrics = s.avatar.metrics.lock().unwrap();
         assert_eq!(metrics.len(), 1, "{metrics:?}");
         assert_eq!((metrics[0].timestamp, metrics[0].playback_latency), (10.0, 0.25));
         assert_eq!(metrics[0].avatar_joined_time, None);
     }
     s.lifecycle.aclose().await;
     item_added(&s.owner, &assistant(Some(0.25), Role::Assistant), 13.0);
-    assert_eq!(s.avatar.0.lock().unwrap().len(), 1);
+    assert_eq!(s.avatar.metrics.lock().unwrap().len(), 1);
 }
 
 /// A RoomService answering every request with `status` and `body`; the paths it was sent.
@@ -254,19 +245,17 @@ fn job(url: &str) -> Arc<Job> {
         ("LIVEKIT_API_SECRET", "a-secret-long-enough-for-signing-000000"),
     ];
     let env = env.into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
-    Arc::new(Job { env, ..Default::default() })
+    Arc::new(Job { env })
 }
 
-// Catches: an avatar whose close the job's shutdown does not run, a close that leaves the avatar
-// in the room, a participant already gone failing the close, or a second close removing again.
+// Catches: a close that leaves the avatar in the room, a participant already gone failing the
+// close, or a second close removing again.
 #[tokio::test]
 async fn the_close_removes_the_participant_once_and_skips_one_already_gone() {
     let (url, paths) =
         room_service("404 Not Found", r#"{"code":"not_found","msg":"participant not found"}"#)
             .await;
-    let job = job(&url);
-    let s = start("removes", Some(job.clone()));
-    assert_eq!(*job.shutdown.lock().unwrap(), vec![7], "the job's shutdown runs aclose");
+    let s = start("removes", Some(job(&url)));
     let (first, second) = tokio::join!(s.lifecycle.aclose(), s.lifecycle.aclose());
     let ((), ()) = (first, second);
     s.lifecycle.aclose().await;
@@ -423,4 +412,15 @@ mod overdue_avatar_error {
         assert!(!events.iter().any(|(_, ev)| matches!(ev, SessionEvent::Close { .. })));
         assert!(!run.record.host_view().audio_pushed().is_empty(), "the agent kept speaking");
     }
+}
+
+// Catches: an avatar the agent session's close leaves running, or closes only once the room is
+// gone (a job disconnects it after the session's close), so the provider session cannot be
+// ended over the room.
+#[tokio::test]
+async fn the_session_close_closes_its_avatar_while_the_room_is_up() {
+    let s = start("session-close", None);
+    s.owner.aclose(None, false).unwrap().await;
+    assert_eq!(*s.avatar.closed_connected.lock().unwrap(), vec![true]);
+    s.lifecycle.aclose().await;
 }

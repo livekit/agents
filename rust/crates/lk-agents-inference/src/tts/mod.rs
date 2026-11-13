@@ -39,6 +39,7 @@ pub mod pacing;
 mod provider_options;
 mod pump;
 pub(crate) mod request;
+pub mod segments;
 pub mod sentence_adapter;
 pub use request::{stream, synthesize};
 pub(crate) mod stage;

@@ -18,12 +18,6 @@ You'll need an API key from Ultravox. Set it as an environment variable:
 export ULTRAVOX_API_KEY="your_api_key_here"
 ```
 
-Optional: enable debug logs for the plugin (disabled by default):
-
-```bash
-export LK_ULTRAVOX_DEBUG=true
-```
-
 ## Basic Usage
 
 ### Simple Voice Assistant

@@ -1,28 +1,25 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
-import livekit.rtc as rtc
-from livekit import api
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
+    APIConnectOptions,
     NotGivenOr,
-    VoiceSession,
-    get_job_context,
     http,
 )
-from livekit.agents.job import _server_credentials
-from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
-from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
+from livekit.agents.voice.avatar import (
+    AvatarSession as BaseAvatarSession,
+    AvatarStart,
+    DataStreamAudioOutput,
+)
 
-from .log import logger
 
-SAMPLE_RATE = 16000
-_AVATAR_AGENT_IDENTITY = "simli-avatar-agent"
-_AVATAR_AGENT_NAME = "simli-avatar-agent"
+class _Token(BaseModel):
+    session_token: str
 
 
 @dataclass
@@ -59,6 +56,8 @@ class SimliConfig:
 class AvatarSession(BaseAvatarSession):
     """A Simli avatar session"""
 
+    sample_rate = 16000
+
     def __init__(
         self,
         *,
@@ -66,84 +65,47 @@ class AvatarSession(BaseAvatarSession):
         api_url: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        super().__init__()
-        self._http_session: http.HttpSession | None = None
-        self.conversation_id: str | None = None
+        super().__init__(
+            avatar_participant_identity=avatar_participant_identity,
+            avatar_participant_name=avatar_participant_name,
+            livekit_url=livekit_url,
+            livekit_api_key=livekit_api_key,
+            livekit_api_secret=livekit_api_secret,
+            conn_options=conn_options,
+        )
         self._simli_config = simli_config
-        self.api_url = api_url or "https://api.simli.ai"
-        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
-        self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-        self._ensure_http_session()
-
-    @property
-    def avatar_identity(self) -> str:
-        return self._avatar_participant_identity
+        self._api_url = api_url or "https://api.simli.ai"
 
     @property
     def provider(self) -> str:
         return "simli"
 
-    def _ensure_http_session(self) -> http.HttpSession:
-        if self._http_session is None:
-            self._http_session = http.http_session()
-
-        return self._http_session
-
-    async def start(
-        self,
-        agent_session: VoiceSession,
-        room: rtc.Room,
-        *,
-        livekit_url: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
-    ) -> None:
-        livekit_url, livekit_api_key, livekit_api_secret = _server_credentials(
-            livekit_url, livekit_api_key, livekit_api_secret
-        )
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
-            raise Exception(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
-                "by arguments or environment variables"
-            )
-
-        job_ctx = get_job_context()
-        local_participant_identity = job_ctx.local_participant_identity
-        livekit_token = (
-            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
-            .with_kind("agent")
-            .with_identity(self._avatar_participant_identity)
-            .with_name(self._avatar_participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
-            .to_jwt()
-        )
-
-        logger.debug("starting avatar session")
-        async with self._ensure_http_session().post(
-            f"{self.api_url}/compose/token",
+    async def create_session(self, ctx: AvatarStart) -> None:
+        async with http.http_session().post(
+            f"{self._api_url}/compose/token",
             json=self._simli_config.create_json(),
             headers={"x-simli-api-key": self._simli_config.api_key},
-        ) as token_response:
-            await token_response.raise_for_status()
-            body = await token_response.text()
-        async with self._ensure_http_session().post(
-            f"{self.api_url}/integrations/livekit/agents",
+            conn_options=ctx.conn_options,
+        ) as response:
+            await response.raise_for_status()
+            token = _Token.model_validate_json(await response.text()).session_token
+        async with http.http_session().post(
+            f"{self._api_url}/integrations/livekit/agents",
             json={
-                "session_token": json.loads(body)["session_token"],
-                "livekit_token": livekit_token,
-                "livekit_url": livekit_url,
+                "session_token": token,
+                "livekit_token": ctx.livekit_token(),
+                "livekit_url": ctx.livekit_url,
             },
-        ) as connection_response:
-            await connection_response.raise_for_status()
-        await super().start(agent_session, room)
-        self._attach_audio_output(
-            agent_session,
-            DataStreamAudioOutput(
-                room=room,
-                destination_identity=self._avatar_participant_identity,
-                sample_rate=SAMPLE_RATE,
-            ),
+            conn_options=ctx.conn_options,
+        ) as response:
+            await response.raise_for_status()
+
+    def audio_output(self, ctx: AvatarStart) -> DataStreamAudioOutput:
+        return DataStreamAudioOutput(
+            room=ctx.room, destination_identity=self.avatar_identity, sample_rate=self.sample_rate
         )

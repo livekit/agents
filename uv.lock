@@ -3278,16 +3278,10 @@ name = "livekit-plugins-phonic"
 source = { editable = "python/livekit-plugins/livekit-plugins-phonic" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "phonic" },
-    { name = "websockets" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "livekit-agents", editable = "python/livekit-agents" },
-    { name = "phonic", specifier = ">=0.32.34" },
-    { name = "websockets", specifier = ">=11.0" },
-]
+requires-dist = [{ name = "livekit-agents", editable = "python/livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-protoface"
@@ -4682,22 +4676,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ed/f0/07d8b771b99c16a06741cd7b2639494a15357df819ecf899c33b87db6257/pdoc3-0.11.6.tar.gz", hash = "sha256:1ea5e84b87a754d191fb64bf5e517ca6c50d0d84a614c1efecf6b46d290ae387", size = 177107, upload-time = "2025-03-20T22:53:53.099Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/df/98/629f269c2bd91bdcac147aad5cf51ceb645c0196e23a41ee3c051125190f/pdoc3-0.11.6-py3-none-any.whl", hash = "sha256:8b72723767bd48d899812d2aec8375fc1c3476e179455db0b4575e6dccb44b93", size = 255188, upload-time = "2025-03-20T22:53:51.671Z" },
-]
-
-[[package]]
-name = "phonic"
-version = "0.32.34"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "pydantic-core" },
-    { name = "typing-extensions" },
-    { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/96/9a/a60f80b3ecefe91d87498f5683b99268e13a6109de40809b13afad7f3375/phonic-0.32.34.tar.gz", hash = "sha256:e678cd74228cbbe5c3e4915b51873ec060abf8e99f5e4cf829f3d1297b304ae7", size = 213403, upload-time = "2026-09-22T03:52:08.824Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/54/ed/57c4dc7cdb0476561d995d0e6c7bdef1b62f1a18f94fcae30fa964dcc7d2/phonic-0.32.34-py3-none-any.whl", hash = "sha256:0e9187dc3bb5c0617c3bed209f0529f79a9a39c340cf9e2236a3a205c57c6659", size = 460677, upload-time = "2026-09-22T03:52:07.519Z" },
 ]
 
 [[package]]

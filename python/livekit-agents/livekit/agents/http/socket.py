@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import itertools
 import json
 import types
 import typing
@@ -32,12 +33,14 @@ from ..types import APIConnectOptions
 
 __all__ = [
     "DONE",
+    "READY",
     "protocol_error",
     "Done",
     "Encoded",
     "EndOfInput",
     "Keepalive",
     "Multiplexer",
+    "Ready",
     "SocketProtocol",
 ]
 
@@ -55,6 +58,13 @@ class Done:
 
 
 DONE = Done()
+
+
+class Ready:
+    """``on_message``'s answer once the provider is ready for input (see ``awaits_ready``)."""
+
+
+READY = Ready()
 
 Encoded: TypeAlias = Union[  # noqa: UP007
     bytes, str, OutboundT, Iterable[Union[bytes, str, OutboundT]], None  # noqa: UP007
@@ -239,12 +249,26 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
     """Sent once the input ended and before a rotation; the provider then finishes and closes."""
     max_session_duration: float | None = None
     """Seconds after which the connection is rotated, at the next input boundary."""
+    ping_interval: float | None = 30.0
+    """Seconds between websocket pings; a ping unanswered for half of it fails the connection
+    as lost. ``None`` sends none."""
     frame_ms: int | None = None
     """Audio items are re-chunked to this many milliseconds before ``encode``."""
     multiplexer: Multiplexer[InboundT, OutboundT] | None = None
     """Set to share one provider socket across streams; ``connect`` then is not called."""
 
+    awaits_ready: ClassVar[bool] = False
+    """Each connection opens a provider session that says when it is ready: nothing but the
+    ``setup`` is sent until ``on_message`` returns ``READY``, which is due within the connect
+    limit."""
+
     _decoder: ClassVar[_Decoder | None] = None
+    _socket_commands_outlive_connection: ClassVar[bool] = True
+    """A command taken for a connection that ended before writing it is sent on the next one;
+    a kind whose commands belong to their provider session drops it instead."""
+    _socket_ends_settled: ClassVar[bool] = False
+    """The kind hands ``EndOfInput`` only once the provider owes nothing: the stream then ends
+    with no goodbye or drain."""
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -270,10 +294,22 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
         decoded: InboundT | None = self._decoder.decode(frame, self._socket_label())
         return decoded
 
-    def send_command(self, command: bytes | str | OutboundT) -> None:
+    def setup(self) -> Encoded[OutboundT]:
+        """The frames each connection sends first, ahead of every command and input item: the
+        provider session's setup, built after ``connect``."""
+        return None
+
+    def command_sent(self, command: bytes | str | OutboundT) -> None:
+        """``command`` was written to the connection it was queued for."""
+
+    def send_command(self, command: bytes | str | OutboundT, *, first: bool = False) -> None:
         """Queue a command, sent ahead of the input not yet taken: a provider command, or an
-        answer to a protocol-level frame (a ping)."""
-        self._socket_commands.append(command)
+        answer to a protocol-level frame (a ping). ``first`` puts it ahead of the commands
+        already queued: state ``connect`` rebuilds for a session the queued ones assume."""
+        if first:
+            self._socket_commands.appendleft(command)
+        else:
+            self._socket_commands.append(command)
         self._socket_wake.set()
 
     def reconnect(self, reason: str) -> None:
@@ -293,9 +329,22 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
     _socket_context: str | None = None
 
     def _socket_init(self) -> None:
+        # what the multiplexer decoded for this stream, so a frame is decoded once
+        self._socket_routed: dict[WsFrame, Any] = {}
         self._socket_commands: collections.deque[bytes | str | OutboundT] = collections.deque()
         self._socket_wake = asyncio.Event()
         self._socket_audio: utils.media.AudioByteStream | None = None
+        # connections made, and each command taken but not yet written, by its id: the command
+        # and the connection it was taken for
+        self._socket_connections = 0
+        self._socket_ids = itertools.count(1)
+        self._socket_taken: dict[int, tuple[bytes | str | OutboundT, int]] = {}
+        # input went out that the provider has not answered yet
+        self._socket_owed = False
+
+    def _socket_answered(self) -> None:
+        """The provider answered everything sent so far: an input that ends now owes nothing."""
+        self._socket_owed = False
 
     def _socket_label(self) -> str:
         return type(self).__name__
@@ -312,19 +361,28 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
     async def _socket_run(self, conn_options: APIConnectOptions) -> None:
         """Runs the socket to the end of the stream, its failure raised."""
         mux = self.multiplexer
-        self._socket_context = utils.shortuuid() if mux is not None else None
+        context = self._socket_context = utils.shortuuid() if mux is not None else None
         session = _core.SocketSession(
             self,
             conn_options,
             self._socket_label(),
             mux=mux._socket_native() if mux is not None else None,
-            context_id=self._socket_context,
+            context_id=context,
         )
         self._socket_session = session
+        if mux is not None and context is not None:
+            mux._socket_streams[context] = self
         try:
             await session.run()
         finally:
             await session.aclose()
+            if mux is not None and context is not None:
+                mux._socket_streams.pop(context, None)
+            self._socket_routed.clear()
+
+    def _socket_segments(self) -> _core.TtsSegments | None:
+        """A TTS stream's segments: its contexts on a multiplexed provider."""
+        return None
 
     async def _next_input(self) -> ItemT | EndOfInput | None:
         """The next input item, or ``None`` once a command was queued first."""
@@ -351,6 +409,7 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
         return list(self._socket_audio.flush()) if self._socket_audio is not None else []
 
     async def _core_connect(self, conn_options: APIConnectOptions) -> SocketConnection:
+        self._socket_connections += 1
         target = await self.connect(conn_options)
         keepalive = self.keepalive
         return SocketConnection(
@@ -363,13 +422,24 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
             goodbye=_frame(self.goodbye) if self.goodbye is not None else None,
             max_session_duration=self.max_session_duration,
             proxy=_job_proxy(),
+            ping_interval=self.ping_interval,
+            setup=_frames(self.setup()),
+            awaits_ready=self.awaits_ready,
         )
 
     async def _core_next(self) -> SocketSend:
         while True:
             if self._socket_commands:
                 command = self._socket_commands.popleft()
-                return SocketSend(frames=_frames(command), boundary=True, end=False)
+                command_id = next(self._socket_ids)
+                self._socket_taken[command_id] = (command, self._socket_connections)
+                return SocketSend(
+                    frames=_frames(command),
+                    boundary=True,
+                    end=False,
+                    done=False,
+                    command=command_id,
+                )
             item = await self._next_input()
             if item is None:
                 continue
@@ -384,12 +454,18 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
                     for chunk in self._flush_audio():
                         frames += _frames(self.encode(typing.cast(ItemT, chunk)))
                 frames += _frames(self.encode(item))
+            if frames and not end:
+                self._socket_owed = True
             if frames or boundary:
-                return SocketSend(frames=frames, boundary=boundary, end=end)
+                # an input that ends with nothing owed closes at once, without the drain
+                done = end and (self._socket_ends_settled or not self._socket_owed)
+                return SocketSend(
+                    frames=frames, boundary=boundary, end=end, done=done, command=None
+                )
 
     async def _core_on_message(self, frame: WsFrame) -> bool:
         mux = self.multiplexer
-        message = mux._socket_decoded(frame) if mux is not None else None
+        message = self._socket_routed.pop(frame, None) if mux is not None else None
         if message is None:
             message = self.decode(frame)
         if message is None:
@@ -397,11 +473,27 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
         answer = self.on_message(message)
         if isinstance(answer, Done):
             return True
+        if isinstance(answer, Ready):
+            if self._socket_session is not None:
+                self._socket_session.ready()
+            return False
         self._socket_deliver(answer)
         return False
 
     def _core_retrying(self, error: Exception) -> None:
         pass
+
+    def _core_sent(self, command_id: int) -> None:
+        if (taken := self._socket_taken.pop(command_id, None)) is not None:
+            self.command_sent(taken[0])
+
+    def _core_returned(self, command_id: int) -> None:
+        if (taken := self._socket_taken.pop(command_id, None)) is None:
+            return
+        command, connection = taken
+        if self._socket_commands_outlive_connection or connection == self._socket_connections:
+            self._socket_commands.appendleft(command)
+            self._socket_wake.set()
 
     @abstractmethod
     def on_message(self, message: InboundT) -> Any:
@@ -421,6 +513,9 @@ class Multiplexer(ABC, Generic[InboundT, OutboundT]):
     keepalive: Keepalive[OutboundT] | None = None
     max_session_duration: float | None = None
     """Seconds after which a socket takes no new stream; it closes once its streams ended."""
+    ping_interval: float | None = 30.0
+    """Seconds between websocket pings; a ping unanswered for half of it fails the socket and
+    every stream on it as lost. ``None`` sends none."""
     max_contexts: int | None = None
     """Streams one socket carries at most; another socket opens for the next."""
 
@@ -437,15 +532,17 @@ class Multiplexer(ABC, Generic[InboundT, OutboundT]):
 
     @abstractmethod
     def route(self, message: InboundT) -> str | None:
-        """The context ``message`` belongs to; ``None`` for a socket-level message. Raising
-        fails the socket and every stream on it."""
+        """The context ``message`` belongs to: a stream's ``context_id``, or a segment's id for a
+        TTS stream; ``None`` for a socket-level message. Raising fails the socket and every
+        stream on it."""
 
     def open_context(self, context_id: str) -> Encoded[OutboundT]:
         """Frames that open a context, if the provider needs any."""
         return None
 
     def close_context(self, context_id: str) -> Encoded[OutboundT]:
-        """Frames that end a context its stream left before the provider finished it."""
+        """Frames that end a context its stream left before the provider finished it: each of a
+        TTS stream's open segments."""
         return None
 
     def decode(self, frame: bytes | str) -> InboundT | None:
@@ -454,6 +551,10 @@ class Multiplexer(ABC, Generic[InboundT, OutboundT]):
             raise TypeError(f"{type(self).__name__} declares no Inbound type and no decode()")
         decoded: InboundT | None = self._decoder.decode(frame, type(self).__name__)
         return decoded
+
+    def prewarm(self) -> None:
+        """Open a shared socket now, unless one has room: the first stream finds it open."""
+        self._socket_native().prewarm()
 
     def invalidate(self) -> None:
         """Options changed: idle sockets close now, busy ones once their streams ended."""
@@ -468,12 +569,17 @@ class Multiplexer(ABC, Generic[InboundT, OutboundT]):
         native: _core.SocketMux | None = getattr(self, "_native", None)
         if native is None:
             native = self._native = _core.SocketMux(self, max_contexts=self.max_contexts)
-            self._decoded: dict[WsFrame, Any] = {}
+            self._socket_streams: dict[str, SocketProtocol[Any, InboundT, OutboundT]] = {}
         return native
 
-    def _socket_decoded(self, frame: WsFrame) -> Any:
-        """What ``route`` decoded for the stream, so a frame is decoded once."""
-        return self._decoded.pop(frame, None)
+    def _socket_stream(self, context: str) -> SocketProtocol[Any, InboundT, OutboundT] | None:
+        """The stream a context belongs to: its own, or one of a TTS stream's segments."""
+        if (stream := self._socket_streams.get(context)) is not None:
+            return stream
+        for stream in self._socket_streams.values():
+            if (segments := stream._socket_segments()) is not None and segments.holds(context):
+                return stream
+        return None
 
     async def _core_connect(self, conn_options: APIConnectOptions) -> SocketConnection:
         target = await self.connect(conn_options)
@@ -488,22 +594,29 @@ class Multiplexer(ABC, Generic[InboundT, OutboundT]):
             goodbye=None,
             max_session_duration=self.max_session_duration,
             proxy=_job_proxy(),
+            ping_interval=self.ping_interval,
+            setup=[],
+            awaits_ready=False,
         )
 
     async def _core_route(self, frame: WsFrame) -> str | None:
         message = self.decode(frame)
-        if message is None:
+        if message is None or (context := self.route(message)) is None:
             return None
-        context = self.route(message)
-        if context is not None:
-            self._decoded[frame] = message
-        return context
+        # a frame no stream reads (a late one of a closed context) is dropped, never kept
+        if (stream := self._socket_stream(context)) is None:
+            return None
+        stream._socket_routed[frame] = message
+        return stream.context_id
 
     async def _core_open_context(self, context_id: str) -> list[WsFrame]:
         return _frames(self.open_context(context_id))
 
     async def _core_close_context(self, context_id: str) -> list[WsFrame]:
-        return _frames(self.close_context(context_id))
+        stream = self._socket_streams.get(context_id)
+        segments = stream._socket_segments() if stream is not None else None
+        contexts = [context_id] if segments is None else segments.open
+        return [frame for c in contexts for frame in _frames(self.close_context(c))]
 
 
 def _single_retry_owner(conn_options: APIConnectOptions) -> APIConnectOptions:

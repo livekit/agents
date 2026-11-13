@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, http
 from livekit.plugins.lemonslice import AvatarSession
 from livekit.plugins.lemonslice.meeting.audio import stream_meeting_relay
 from tests.fakes import until
@@ -35,21 +35,20 @@ async def test_audio_output_is_bound_before_the_session_request_answers(
 
     app = web.Application()
     app.router.add_post("/sessions", create)
-    async with TestServer(app) as server:
+    async with TestServer(app) as server, http.open():
         avatar = AvatarSession(
             agent_id="agent", api_key="key", api_url=str(server.make_url("/sessions"))
         )
-        start = asyncio.create_task(
-            avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
-        )
+        start = asyncio.create_task(avatar.start(avatar_host.agent, avatar_host.room))
         await until(lambda: bound_at_request, "LemonSlice receives the session request")
         pending_while_requesting = not start.done()
         release.set()
 
-        assert await start == "S1"
+        await start
 
     assert bound_at_request == [True]
     assert pending_while_requesting
+    assert avatar.session_id == "S1"
 
 
 async def test_meeting_relay_recovers_from_stalled_handshake() -> None:

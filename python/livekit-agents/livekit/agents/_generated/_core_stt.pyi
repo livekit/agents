@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Self
 
 from livekit.agents.stt import STT
 from livekit.agents.vad import VAD
@@ -15,7 +15,28 @@ from livekit.local_inference import VAD as HostVAD
 from .connect import APIConnectOptions
 from .inference_stt import FallbackModels
 from .rtc_frames import AudioFrame
-from .stt import SpeechEvent, STTCapabilities
+from .stt import SpeechEvent, STTCapabilities, Transcript
+
+class SpeechState:
+    """One recognition's speech state: START_OF_SPEECH and END_OF_SPEECH are derived here from what
+    the stream reports, the provider's own boundaries deduplicated, and open speech ends at each
+    connection boundary.
+    """
+    def __new__(cls, provider_vad: bool) -> Self:
+        """`provider_vad`: the provider detects speech itself, so its reported end closes the
+        speech and a final transcript does not.
+        """
+    @property
+    def speaking(self) -> bool:
+        """Whether a speech is open."""
+    def transcript(self, transcript: Transcript) -> list[SpeechEvent]:
+        """The events a transcript produces."""
+    def started(self) -> list[SpeechEvent]:
+        """The provider heard speech start."""
+    def ended(self) -> list[SpeechEvent]:
+        """The provider heard speech end."""
+    def boundary(self) -> list[SpeechEvent]:
+        """A connection ended: the open speech ends before the next connection's events."""
 
 class FallbackStt:
     """`stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""

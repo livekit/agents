@@ -169,6 +169,7 @@ from ._generated._core_stt import (
     FallbackStt as FallbackStt,
     InferenceStt as InferenceStt,
     InferenceSttStream as InferenceSttStream,
+    SpeechState as SpeechState,
     SttAdapterStream as SttAdapterStream,
     SttStreamAdapter as SttStreamAdapter,
 )
@@ -217,6 +218,7 @@ from ._generated._core_tokenize import (
 from ._generated._core_tts import (
     Markup as Markup,
     TtsOptionsCell as TtsOptionsCell,
+    TtsSegments as TtsSegments,
     TtsStream as TtsStream,
     TtsStreamAdapter as TtsStreamAdapter,
     chat_message_text_content as chat_message_text_content,

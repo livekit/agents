@@ -10,7 +10,8 @@ from .. import utils
 from .._generated import facades_llm_realtime as _facades, public_llm_realtime as _public
 from .._generated.public_llm_realtime import *  # noqa: F403
 from .._generated.realtime import EventTypes, RealtimeModel, RealtimeModelError, RealtimeSession
-from ..http.socket import EndOfInput, InboundT, OutboundT, SocketProtocol
+from .._generated.socket import SocketConnection
+from ..http.socket import EndOfInput, InboundT, OutboundT, Ready, SocketProtocol
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 
@@ -64,9 +65,12 @@ class RealtimeSocketSession(
         self._socket_tasks = utils.aio.TaskSet()
         self._socket_tasks.spawn(self._socket_main(conn_options), name="RealtimeSocketSession")
 
+    _socket_commands_outlive_connection = False
+
     @abstractmethod
-    def on_message(self, message: InboundT) -> None:
-        """One received message: the plugin emits the session's events from it."""
+    def on_message(self, message: InboundT) -> Ready | None:
+        """One received message: the plugin emits the session's events from it, and answers
+        ``READY`` once the provider session is ready (with ``awaits_ready``)."""
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._socket_input_audio.closed:
@@ -96,6 +100,14 @@ class RealtimeSocketSession(
 
     def _socket_label(self) -> str:
         return self.realtime_model.label
+
+    async def _core_connect(self, conn_options: APIConnectOptions) -> SocketConnection:
+        # a command belongs to the provider session it was queued for: ``connect`` rebuilds the
+        # next session's state from the current options and history. Commands queued before
+        # the first connection are its own.
+        if self._socket_connections:
+            self._socket_commands.clear()
+        return await super()._core_connect(conn_options)
 
     def _socket_deliver(self, answer: None) -> None:
         pass

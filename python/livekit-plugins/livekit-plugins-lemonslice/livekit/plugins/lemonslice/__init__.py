@@ -17,8 +17,7 @@
 See https://docs.livekit.io/agents/models/avatar/plugins/lemonslice/ for more information.
 """
 
-from .api import LemonSliceException
-from .avatar import AvatarSession
+from .avatar import AvatarSession, LemonSliceException
 from .version import __version__
 
 __all__ = [

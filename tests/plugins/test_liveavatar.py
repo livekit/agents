@@ -20,14 +20,11 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
-    CloseEvent,
     VoiceSession,
     http,
 )
 from livekit.agents.voice.avatar import QueueAudioOutput
-from livekit.agents.voice.events import CloseReason
 from livekit.plugins.liveavatar import AvatarSession
-from livekit.plugins.liveavatar.api import LiveAvatarAPI
 from tests.fakes import until
 
 SAMPLE_RATE = 24000
@@ -151,7 +148,7 @@ async def started(peer: LiveAvatarPeer, avatar_host: SimpleNamespace) -> AsyncIt
         api_url=peer.api_url,
         conn_options=OPTIONS,
     )
-    await avatar.start(voice, avatar_host.room, **avatar_host.credentials)
+    await avatar.start(voice, avatar_host.room)
     audio = voice.output.audio
     assert isinstance(audio, QueueAudioOutput)
     try:
@@ -332,21 +329,18 @@ async def test_queued_utterances_report_in_order_with_their_full_duration(
     assert reports == pytest.approx([1.6, 0.6])
 
 
-@pytest.mark.parametrize("close", ["voice_session_closed", "avatar_aclose"])
 async def test_ending_stops_the_provider_session_quietly(
-    peer: LiveAvatarPeer, started: Started, caplog: pytest.LogCaptureFixture, close: str
+    peer: LiveAvatarPeer, started: Started, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Ending the avatar stops the LiveAvatar session with its token and logs no warning.
 
     https://github.com/livekit/agents/issues/4193 https://github.com/livekit/agents/pull/7341
     """
-    avatar, voice, _ = started
+    avatar, _, _ = started
     await peer.command("session.keep_alive")
     caplog.set_level(logging.WARNING)
 
-    if close == "voice_session_closed":
-        voice.emit("close", CloseEvent(reason=CloseReason.USER_INITIATED))
-        await until(lambda: peer.stops, "the session to be stopped")
+    await avatar.aclose()
     await avatar.aclose()
 
     assert peer.stops == [
@@ -364,17 +358,23 @@ async def test_ending_stops_the_provider_session_quietly(
     ],
 )
 async def test_provider_status_and_body_survive_and_only_transient_errors_retry(
-    peer: LiveAvatarPeer, status: int, attempts: int, raised_type: type[APIError]
+    peer: LiveAvatarPeer,
+    avatar_host: SimpleNamespace,
+    status: int,
+    attempts: int,
+    raised_type: type[APIError],
 ) -> None:
     """Exhausted retries raise from the provider's last answer.
 
     https://github.com/livekit/agents/pull/6306
     """
     peer.start_status = status
-    api = LiveAvatarAPI("key", api_url=peer.api_url, conn_options=OPTIONS)
+    avatar = AvatarSession(
+        api_key="key", avatar_id="avatar", api_url=peer.api_url, conn_options=OPTIONS
+    )
 
     with pytest.raises(raised_type) as raised:
-        await api.start_streaming_session("S1", "session-token")
+        await avatar.start(VoiceSession(vad=None), avatar_host.room)
 
     refused = raised.value if isinstance(raised.value, APIStatusError) else raised.value.__cause__
     assert isinstance(refused, APIStatusError)
@@ -384,17 +384,13 @@ async def test_provider_status_and_body_survive_and_only_transient_errors_retry(
     assert peer.starts == attempts
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the event socket is opened outside the cleanup that calls /sessions/stop",
-)
 async def test_closing_during_a_stalled_handshake_stops_the_provider_session(
     peer: LiveAvatarPeer, avatar_host: SimpleNamespace
 ) -> None:
     """An avatar closed while its event socket handshake hangs still stops the LiveAvatar session."""
     peer.handshake.clear()
     avatar = AvatarSession(api_key="key", avatar_id="avatar", api_url=peer.api_url)
-    await avatar.start(VoiceSession(vad=None), avatar_host.room, **avatar_host.credentials)
+    await avatar.start(VoiceSession(vad=None), avatar_host.room)
     await until(lambda: peer.handshakes, "the event socket handshake begins")
 
     await avatar.aclose()
@@ -417,7 +413,7 @@ async def test_zero_retries_still_starts_the_session(
         conn_options=APIConnectOptions(max_retry=0),
     )
 
-    await avatar.start(VoiceSession(vad=None), avatar_host.room, **avatar_host.credentials)
+    await avatar.start(VoiceSession(vad=None), avatar_host.room)
     await avatar.aclose()
 
     assert peer.starts == 1
@@ -440,7 +436,7 @@ async def test_event_socket_handshake_obeys_read_timeout(
     avatar = AvatarSession(
         api_key="key", avatar_id="avatar", api_url=peer.api_url, conn_options=options
     )
-    await avatar.start(VoiceSession(vad=None), avatar_host.room, **avatar_host.credentials)
+    await avatar.start(VoiceSession(vad=None), avatar_host.room)
 
     try:
         await until(hung_up.is_set, "the plugin gives up on the stalled handshake")
@@ -463,6 +459,6 @@ async def test_invalid_api_url_is_not_classified_as_invalid_provider_response(
 
     async with http.open():
         with pytest.raises(APIConnectionError) as error:
-            await avatar.start(VoiceSession(vad=None), avatar_host.room, **avatar_host.credentials)
+            await avatar.start(VoiceSession(vad=None), avatar_host.room)
 
     assert "invalid response" not in str(error.value)

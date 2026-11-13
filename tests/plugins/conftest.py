@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import datetime
-import ipaddress
 import json
-import ssl
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -18,16 +15,12 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
 from google.genai import types
 from google.oauth2.credentials import Credentials
 
 from livekit import rtc
 from livekit.agents import VoiceSession, http, llm
-from livekit.agents.voice.avatar import AvatarSession
+from livekit.agents.voice import avatar
 from livekit.plugins.google.realtime import RealtimeModel
 from livekit.plugins.google.realtime.realtime_api import RealtimeSession
 from tests.fakes import until
@@ -36,12 +29,12 @@ from tests.fakes import until
 Wire = dict[str, Any]
 
 
-@dataclass
 class AudioSink:
     """A DataStreamAudioOutput an avatar plugin built, with the options it was built with."""
 
-    options: dict[str, object]
-    aclose: AsyncMock = field(default_factory=AsyncMock)
+    def __init__(self, room: rtc.Room | None = None, **options: object) -> None:
+        self.options = options
+        self.aclose = AsyncMock()
 
 
 @dataclass
@@ -51,13 +44,16 @@ class AvatarHost:
     agent: VoiceSession
     room: rtc.Room
     audio_tail: Mock
-    framework_start: AsyncMock
+    lifecycle: Mock
     credentials: dict[str, str]
     sinks: list[AudioSink]
 
 
 class _Agent(rtc.EventEmitter[str]):
     """The VoiceSession an avatar attaches to: it emits events and takes the audio tail."""
+
+    tts = None
+    _native = None  # what the native lifecycle (stubbed) would follow
 
     def __init__(self, audio_tail: Mock) -> None:
         super().__init__()
@@ -66,20 +62,31 @@ class _Agent(rtc.EventEmitter[str]):
 
 @pytest.fixture
 def avatar_host(monkeypatch: pytest.MonkeyPatch) -> AvatarHost:
-    """Lets an avatar plugin's ``start(host.agent, host.room, **host.credentials)`` run outside
-    a job and room.
+    """Lets an avatar plugin's ``start(host.agent, host.room)`` run outside a job and room.
 
     ``host.agent`` emits like a VoiceSession and hands its audio tail to ``host.audio_tail``.
-    The framework's half of ``start`` (``host.framework_start``) is stubbed, the job's agent
-    identity is ``agent-1``, and every audio sink a plugin builds is kept in ``host.sinks``.
+    The LiveKit credentials are ``host.credentials`` (from the environment), the job's agent
+    identity is ``agent-1``, the native join wait and metrics are ``host.lifecycle``, and every
+    audio sink a plugin builds is kept in ``host.sinks``.
     """
     audio_tail = Mock()
     host = AvatarHost(
         # stand-ins for the session and room: an avatar only emits on and names them
         agent=cast(VoiceSession, _Agent(audio_tail)),
-        room=cast(rtc.Room, SimpleNamespace(name="room-1", isconnected=lambda: False)),
+        room=cast(
+            rtc.Room,
+            SimpleNamespace(
+                name="room-1",
+                isconnected=lambda: False,
+                local_participant=SimpleNamespace(
+                    identity="agent-1",
+                    register_rpc_method=Mock(),
+                    unregister_rpc_method=Mock(),
+                ),
+            ),
+        ),
         audio_tail=audio_tail,
-        framework_start=AsyncMock(),
+        lifecycle=Mock(wait_for_join=AsyncMock(), aclose=AsyncMock()),
         credentials={
             "livekit_url": "wss://lk.test",
             "livekit_api_key": "lk-key",
@@ -87,6 +94,8 @@ def avatar_host(monkeypatch: pytest.MonkeyPatch) -> AvatarHost:
         },
         sinks=[],
     )
+    for name, value in host.credentials.items():
+        monkeypatch.setenv(name.upper(), value)
     job = SimpleNamespace(
         local_participant_identity="agent-1",
         token_claims=lambda: SimpleNamespace(identity="agent-1"),
@@ -94,21 +103,24 @@ def avatar_host(monkeypatch: pytest.MonkeyPatch) -> AvatarHost:
         add_shutdown_callback=Mock(),
     )
 
-    def sink(**options: object) -> AudioSink:
-        host.sinks.append(AudioSink(options))
-        return host.sinks[-1]
+    class Sink(AudioSink):
+        def __init__(self, room: rtc.Room | None = None, **options: object) -> None:
+            super().__init__(room, **options)
+            host.sinks.append(self)
 
-    monkeypatch.setattr(AvatarSession, "start", host.framework_start)
-    for name, module in list(sys.modules.items()):
-        if name.startswith("livekit.plugins.") and hasattr(module, "get_job_context"):
+    monkeypatch.setattr(avatar._core, "_core_AvatarLifecycle", lambda *_, **__: host.lifecycle)
+    for name, module in [*sys.modules.items(), ("livekit.agents.voice.avatar", avatar)]:
+        if not name.startswith(("livekit.plugins.", "livekit.agents.voice.avatar")):
+            continue
+        if hasattr(module, "get_job_context"):
             monkeypatch.setattr(module, "get_job_context", lambda *_, **__: job)
-        if name.startswith("livekit.plugins.") and hasattr(module, "DataStreamAudioOutput"):
-            monkeypatch.setattr(module, "DataStreamAudioOutput", sink)
+        if hasattr(module, "DataStreamAudioOutput"):
+            monkeypatch.setattr(module, "DataStreamAudioOutput", Sink)
     return host
 
 
 class LivePeer:
-    """Gemini Live on a local TLS socket: answers each setup, records what the plugin sends."""
+    """Gemini Live on a local socket: answers each setup, records what the plugin sends."""
 
     # 10 ms of 24 kHz mono PCM, base64 as Gemini sends it
     AUDIO_PART = {
@@ -116,9 +128,8 @@ class LivePeer:
     }
     AUDIO = {"modelTurn": {"parts": [AUDIO_PART]}}
 
-    def __init__(self, ssl_context: ssl.SSLContext) -> None:
+    def __init__(self) -> None:
         self.url = ""
-        self.ssl_context = ssl_context
         self.setups: list[Wire] = []
         self.headers: list[dict[str, str]] = []
         self.received: list[list[Wire]] = []  # one list per connection
@@ -142,7 +153,7 @@ class LivePeer:
 
     @property
     def http_options(self) -> types.HttpOptions:
-        return types.HttpOptions(base_url=self.url, async_client_args={"ssl": self.ssl_context})
+        return types.HttpOptions(base_url=self.url)
 
     async def send(self, **message: object) -> None:
         await until(lambda: self.sockets, "the plugin connects")
@@ -179,58 +190,21 @@ class LivePeer:
         return text, frames, [call.name async for call in generation.function_stream]
 
 
-@pytest.fixture(scope="module")
-def gemini_tls(tmp_path_factory: pytest.TempPathFactory) -> tuple[ssl.SSLContext, ssl.SSLContext]:
-    """A self-signed 127.0.0.1 certificate: the SDK only speaks wss to its base_url."""
-    key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
-    now = datetime.datetime.now(datetime.UTC)
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=1))
-        .not_valid_after(now + datetime.timedelta(days=1))
-        .add_extension(
-            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
-            critical=False,
-        )
-        .sign(key, hashes.SHA256())
-    )
-    folder = tmp_path_factory.mktemp("tls")
-    (cert_file := folder / "cert.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    (key_file := folder / "key.pem").write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-    )
-    server = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    server.load_cert_chain(cert_file, key_file)
-    return server, ssl.create_default_context(cafile=cert_file)
-
-
 @pytest.fixture
-async def gemini_live(gemini_tls: tuple[ssl.SSLContext, ssl.SSLContext]) -> AsyncIterator[LivePeer]:
+async def gemini_live() -> AsyncIterator[LivePeer]:
     """A local Gemini Live peer (see LivePeer)."""
-    server_ctx, client_ctx = gemini_tls
-    live = LivePeer(client_ctx)
+    live = LivePeer()
     app = web.Application()
     app.router.add_get("/{path:.*}", live.handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, "127.0.0.1", 0, ssl_context=server_ctx).start()
-    live.url = f"https://127.0.0.1:{runner.addresses[0][1]}"
+    await web.TCPSite(runner, "127.0.0.1", 0).start()
+    live.url = f"http://127.0.0.1:{runner.addresses[0][1]}"
     try:
         yield live
     finally:
         live.accepting.set()
         await runner.cleanup()
-        # the SDK's AsyncClient.__del__ schedules aclose() even on a closed client; settle it
-        await asyncio.sleep(0)
 
 
 @pytest.fixture

@@ -1,21 +1,28 @@
 //! What the outputs still have to play, kept so a recorder attached while a segment plays records
 //! the rest of it, where it plays. Audio heard before the attach is not the recording's.
 
-use lk_agents_abi::voice::io::{PlaybackEvent, PlaybackSegment};
+use lk_agents_abi::voice::io::{PlaybackEvent, PlaybackProgressed, PlaybackSegment};
 use lk_agents_abi::{AudioFrame, Ts};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
 
 #[derive(Debug, Default)]
 pub struct UnplayedAudio {
     /// Captured segments not yet finished, oldest first.
     segments: VecDeque<Unplayed>,
-    /// Where each segment joined by the attached recorder began for it: its events are told
-    /// from there.
-    joined: BTreeMap<PlaybackSegment, Duration>,
-    /// The attachments whose sink reports its progress: a segment of theirs with no report yet
-    /// has played nothing, however long ago it started.
-    reporting: BTreeSet<u64>,
+    /// The segments the attached recorder joined while they played.
+    joined: BTreeMap<PlaybackSegment, Joined>,
+}
+
+/// Where the recorder's audio of a joined segment begins: what the sink reported played when it
+/// joined. Only the sink says what played; the time since it started never does.
+#[derive(Debug, Clone, Copy)]
+struct Joined {
+    base: Duration,
+    /// Started before the join with no report yet: `(started, joined at)`. A sink that finishes it
+    /// still unreported never reports, so its endpoints place it, and the part before the join is
+    /// not the recording's.
+    unreported: Option<(Ts, Ts)>,
 }
 
 #[derive(Debug)]
@@ -70,8 +77,10 @@ impl UnplayedAudio {
             PlaybackEvent::Progressed(e) => e.segment,
             PlaybackEvent::Finished { segment, .. } => *segment,
         };
-        if let PlaybackEvent::Progressed(_) = ev {
-            self.reporting.insert(segment.attachment);
+        if let PlaybackEvent::Progressed(_) = ev
+            && let Some(joined) = self.joined.get_mut(&segment)
+        {
+            joined.unreported = None;
         }
         if let PlaybackEvent::Finished { .. } = ev {
             self.segments.retain(|u| u.segment != segment);
@@ -93,30 +102,27 @@ impl UnplayedAudio {
         }
     }
 
-    /// A recorder attaches at `now`: each unfinished segment's audio from its playout position on.
-    /// A sink that never reports progress has played since it started; one that does has played
-    /// what it reported.
+    /// A recorder attaches at `now`: each unfinished segment's audio from what its sink reported
+    /// played.
     pub fn join(&mut self, now: Ts) -> Vec<Replay> {
         self.joined.clear();
         let mut replay = Vec::new();
         for unplayed in &self.segments {
             let captured: Duration =
                 unplayed.frames.iter().map(|f| Duration::from_secs_f64(f.duration())).sum();
-            let reporting = self.reporting.contains(&unplayed.segment.attachment);
-            let position = match (unplayed.started, unplayed.heard) {
-                (_, Some(heard)) => heard,
-                (Some(started), None) if !reporting => now.saturating_duration_since(started),
-                (_, None) => Duration::ZERO,
-            }
-            .min(captured);
-            if position >= captured {
+            let base = unplayed.heard.unwrap_or_default().min(captured);
+            if base >= captured {
                 continue;
             }
-            self.joined.insert(unplayed.segment, position);
+            let unreported = match (unplayed.heard, unplayed.started) {
+                (None, Some(started)) => Some((started, now)),
+                _ => None,
+            };
+            self.joined.insert(unplayed.segment, Joined { base, unreported });
             if let Some(started) = unplayed.started {
-                replay.push(Replay::Started(started.saturating_add(position)));
+                replay.push(Replay::Started(started.saturating_add(base)));
             }
-            let mut skip = position;
+            let mut skip = base;
             for frame in &unplayed.frames {
                 let length = Duration::from_secs_f64(frame.duration());
                 if skip >= length {
@@ -132,36 +138,49 @@ impl UnplayedAudio {
 
     /// `ev` as the recorder hears it: a joined segment's audio begins where it joined, and what
     /// played before is not told.
-    pub fn told(&self, ev: &PlaybackEvent) -> Option<PlaybackEvent> {
+    pub fn told(&self, ev: &PlaybackEvent) -> Vec<PlaybackEvent> {
         let segment = match ev {
             PlaybackEvent::Started(e) => e.segment,
             PlaybackEvent::Progressed(e) => e.segment,
             PlaybackEvent::Finished { segment, .. } => *segment,
         };
-        let Some(&base) = self.joined.get(&segment) else { return Some(ev.clone()) };
-        Some(match ev {
+        let Some(&Joined { base, unreported }) = self.joined.get(&segment) else {
+            return vec![ev.clone()];
+        };
+        match ev {
             PlaybackEvent::Started(e) => {
                 let mut e = *e;
                 e.created_at = e.created_at.saturating_add(base);
-                PlaybackEvent::Started(e)
+                vec![PlaybackEvent::Started(e)]
             }
             PlaybackEvent::Progressed(e) => {
                 if e.offset + e.duration <= base {
-                    return None;
+                    return Vec::new();
                 }
                 let skip = base.saturating_sub(e.offset);
                 let mut e = *e;
                 e.started_at = e.started_at.saturating_add(skip);
                 e.offset = e.offset + skip - base;
                 e.duration -= skip;
-                PlaybackEvent::Progressed(e)
+                vec![PlaybackEvent::Progressed(e)]
             }
             PlaybackEvent::Finished { segment, event } => {
                 let mut event = event.clone();
                 event.playback_position = event.playback_position.saturating_sub(base);
-                PlaybackEvent::Finished { segment: *segment, event }
+                let position = event.playback_position;
+                let finished = PlaybackEvent::Finished { segment: *segment, event };
+                let Some((started, joined_at)) = unreported else { return vec![finished] };
+                // Played from its start to its position: only what played after the join is placed.
+                let before = joined_at.saturating_duration_since(started).min(position);
+                let after = PlaybackEvent::Progressed(PlaybackProgressed {
+                    segment: *segment,
+                    started_at: started.saturating_add(before),
+                    offset: before,
+                    duration: position - before,
+                });
+                vec![after, finished]
             }
-        })
+        }
     }
 }
 

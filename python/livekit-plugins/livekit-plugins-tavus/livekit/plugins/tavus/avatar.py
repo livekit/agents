@@ -1,26 +1,24 @@
 from __future__ import annotations
 
-import livekit.rtc as rtc
-from livekit import api
+import os
+
+from pydantic import BaseModel, JsonValue
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
-    VoiceSession,
-    get_job_context,
     http,
+    utils,
 )
-from livekit.agents.job import _server_credentials
-from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
-from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, AvatarStart
 
-from .api import TavusAPI, TavusException
-from .log import logger
+from .api import DEFAULT_API_URL, DEFAULT_FACE_ID, DEFAULT_PAL_ID, TavusException
 
-SAMPLE_RATE = 24000
-_AVATAR_AGENT_IDENTITY = "tavus-avatar-agent"
-_AVATAR_AGENT_NAME = "tavus-avatar-agent"
+
+class _Conversation(BaseModel):
+    conversation_id: str
 
 
 class AvatarSession(BaseAvatarSession):
@@ -35,84 +33,56 @@ class AvatarSession(BaseAvatarSession):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        super().__init__()
-        self._http_session: http.HttpSession | None = None
-        self._conn_options = conn_options
-        self.conversation_id: str | None = None
-        self._pal_id = pal_id
-        self._face_id = face_id
-        self._api = TavusAPI(
-            api_url=api_url,
-            api_key=api_key,
+        super().__init__(
+            avatar_participant_identity=avatar_participant_identity,
+            avatar_participant_name=avatar_participant_name,
+            livekit_url=livekit_url,
+            livekit_api_key=livekit_api_key,
+            livekit_api_secret=livekit_api_secret,
             conn_options=conn_options,
-            session=self._ensure_http_session(),
         )
-
-        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
-        self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-
-    @property
-    def avatar_identity(self) -> str:
-        return self._avatar_participant_identity
+        self.conversation_id: str | None = None
+        key = api_key or os.getenv("TAVUS_API_KEY")
+        if not key:
+            raise TavusException("TAVUS_API_KEY must be set")
+        self._api_key = key
+        self._api_url = api_url or DEFAULT_API_URL
+        pal_id = pal_id or os.getenv("TAVUS_PAL_ID") or ""
+        face_id = face_id or os.getenv("TAVUS_FACE_ID") or ""
+        if not pal_id:
+            # the stock pal, with its stock face unless one is given
+            pal_id, face_id = DEFAULT_PAL_ID, face_id or DEFAULT_FACE_ID
+        self._pal_id = pal_id
+        # a pal carries its own default face
+        self._face_id = face_id
 
     @property
     def provider(self) -> str:
         return "tavus"
 
-    def _ensure_http_session(self) -> http.HttpSession:
-        if self._http_session is None:
-            self._http_session = http.http_session()
-
-        return self._http_session
-
-    async def start(
-        self,
-        agent_session: VoiceSession,
-        room: rtc.Room,
-        *,
-        livekit_url: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
-    ) -> None:
-        await super().start(agent_session, room)
-
-        livekit_url, livekit_api_key, livekit_api_secret = _server_credentials(
-            livekit_url, livekit_api_key, livekit_api_secret
-        )
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
-            raise TavusException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
-                "by arguments or environment variables"
-            )
-
-        job_ctx = get_job_context()
-        local_participant_identity = job_ctx.local_participant_identity
-        livekit_token = (
-            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
-            .with_kind("agent")
-            .with_identity(self._avatar_participant_identity)
-            .with_name(self._avatar_participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
-            .to_jwt()
-        )
-
-        logger.debug("starting avatar session")
-        self.conversation_id = await self._api.create_conversation(
-            pal_id=self._pal_id,
-            face_id=self._face_id,
-            properties={"livekit_ws_url": livekit_url, "livekit_room_token": livekit_token},
-        )
-
-        self._attach_audio_output(
-            agent_session,
-            DataStreamAudioOutput(
-                room=room,
-                destination_identity=self._avatar_participant_identity,
-                sample_rate=SAMPLE_RATE,
-                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-            ),
-        )
+    async def create_session(self, ctx: AvatarStart) -> str:
+        payload: dict[str, JsonValue] = {
+            "pal_id": self._pal_id,
+            "conversation_name": utils.shortuuid("lk_conversation_"),
+            "properties": {
+                "livekit_ws_url": ctx.livekit_url,
+                "livekit_room_token": ctx.livekit_token(),
+            },
+        }
+        if self._face_id:
+            payload["face_id"] = self._face_id
+        async with http.http_session().post(
+            f"{self._api_url}/conversations",
+            headers={"x-api-key": self._api_key},
+            json=payload,
+            conn_options=ctx.conn_options,
+        ) as response:
+            await response.raise_for_status()
+            conversation = _Conversation.model_validate_json(await response.text())
+        self.conversation_id = conversation.conversation_id
+        return self.conversation_id

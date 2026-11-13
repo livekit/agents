@@ -221,7 +221,6 @@ CASES: dict[str, SttCase] = {
         make=lambda peer: GeminiSTT(api_key="key", http_options={"base_url": peer.url}),
         speech=[],
         error=None,
-        skip="the genai SDK connects only over wss:// and the peer serves plain ws://",
     ),
     "gradium": SttCase(
         make=lambda peer: gradium.STT(api_key="key", model_endpoint=peer.ws_url + "/api/speech"),

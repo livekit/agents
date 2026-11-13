@@ -60,6 +60,8 @@ async def test_a_silent_socket_fails_the_stream_with_a_connection_error(
         return await connect(self, url, **kwargs)
 
     monkeypatch.setattr(http.HttpSession, "ws_connect", scaled)
+    # a socket protocol's pings are the framework's
+    monkeypatch.setattr(deepgram.SpeechStream, "ping_interval", HEARTBEAT)
 
     app = web.Application()
     app.router.add_route("GET", "/{tail:.*}", blackhole)

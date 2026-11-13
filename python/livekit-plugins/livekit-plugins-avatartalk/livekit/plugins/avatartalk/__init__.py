@@ -17,8 +17,7 @@
 See https://docs.livekit.io/agents/integrations/avatar/avatartalk/ for more information.
 """
 
-from .api import AvatarTalkException
-from .avatar import AvatarSession
+from .avatar import AvatarSession, AvatarTalkException
 from .version import __version__
 
 __all__ = [

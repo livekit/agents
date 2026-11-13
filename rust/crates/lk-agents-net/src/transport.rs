@@ -110,6 +110,11 @@ pub trait WsSender: Send + Sync {
     async fn send_text(&self, text: String) -> Result<(), TransportError>;
     /// A binary frame (`ws.send_bytes`): the interruption wire's audio.
     async fn send_binary(&self, data: Vec<u8>) -> Result<(), TransportError>;
+    /// A ping the peer answers with a pong, which the receiver reads as
+    /// [`WsMessage::Other`]. A transport with no pings sends nothing.
+    async fn ping(&self) -> Result<(), TransportError> {
+        Ok(())
+    }
     fn is_closed(&self) -> bool;
     async fn close(&self);
 }
@@ -128,6 +133,11 @@ pub trait WsReceiver: Send {
 
     /// The peer's close frame's reason, once [`WsMessage::Closed`] was read.
     fn close_reason(&self) -> Option<String> {
+        None
+    }
+
+    /// A header of the handshake's response, `None` when it carried none.
+    fn response_header(&self, _name: &str) -> Option<String> {
         None
     }
 }

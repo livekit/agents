@@ -18,17 +18,9 @@ import json
 
 from pydantic import JsonValue, TypeAdapter
 
-from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
-    APIConnectOptions,
-    APIStatusError,
-    APITimeoutError,
-    http,
-)
+from livekit.agents import http
 
 from .errors import ErrorType, SynthesiaError
-from .types import StartSessionRequest, StartSessionResponse
 
 _JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
 
@@ -71,128 +63,30 @@ _STATUS_TO_ERROR: dict[int, ErrorType] = {
 }
 
 
-class SynthesiaAPI:
-    """Async client for the Synthesia interactive-avatar session API.
-
-    Opens one session per ``start_session`` call. Pass ``session`` to reuse an
-    ``http.HttpSession``; when omitted the LiveKit Agents shared session is
-    used.
-    """
-
-    def __init__(
-        self,
-        *,
-        api_key: str,
-        api_url: str,
-        session: http.HttpSession | None = None,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> None:
-        self._api_key = api_key
-        self._api_url = api_url.rstrip("/")
-        self._session = session
-        self._conn_options = conn_options
-
-    def _http(self) -> http.HttpSession:
-        return self._session or http.http_session()
-
-    async def start_session(
-        self,
-        request: StartSessionRequest,
-        *,
-        conn_options: APIConnectOptions | None = None,
-    ) -> StartSessionResponse:
-        conn_options = conn_options or self._conn_options
-        url = self._api_url + SESSION_PATH
-        headers = {"Authorization": self._api_key}
-        payload: dict[str, object] = {
-            "avatarIds": [_public_avatar_id(a) for a in request.avatar_ids],
-            "livekitUrl": request.livekit_url,
-            "livekitToken": request.lk_token,
-        }
-
-        session = self._http()
-
-        async def attempt() -> StartSessionResponse:
-            async with session.post(
-                url, headers=headers, json=payload, conn_options=conn_options
-            ) as resp:
-                if resp.status >= 500:
-                    await resp.raise_for_status()
-                body = await _read_json(resp)
-                if resp.ok:
-                    return self._parse_success(body)
-                raise self._mapped_error(resp, body)
-
-        try:
-            return await http.retry_request(attempt, conn_options=conn_options)
-        except APITimeoutError:
-            raise
-        except APIConnectionError as e:
-            # retries exhausted: a mapped answer keeps its type, anything else is CONNECTION
-            last = e.__cause__
-            if isinstance(last, SynthesiaError):
-                raise last from None
-            status = last.status_code if isinstance(last, APIStatusError) else None
-            body = _parse_json(last.body) if isinstance(last, APIStatusError) else None
-            raise SynthesiaError(
-                _exhausted_message(conn_options.max_retry + 1, status, body),
-                type=ErrorType.CONNECTION,
-                body=body,
-                status=status,
-                request_id=_body_request_id(body),
-            ) from e
-
-    def _parse_success(self, body: JsonValue) -> StartSessionResponse:
-        if isinstance(body, dict):
-            session_id = body.get("id") or body.get("session_id")
-            if isinstance(session_id, str) and session_id:
-                return StartSessionResponse(session_id=session_id)
-        raise SynthesiaError("Synthesia response did not contain a session id")
-
-    def _mapped_error(self, resp: http.HttpResponse, body: JsonValue) -> SynthesiaError:
-        code = _body_code(body)
-        error_type = _CODE_TO_ERROR.get(code or "")
-        if error_type is None:
-            # A problem body names its code; an unknown one is a new code, not a hint to
-            # guess the type from the status.
-            error_type = (
-                None
-                if _is_problem(body) and code is not None
-                else _STATUS_TO_ERROR.get(resp.status)
-            )
-        message = _body_message(body) or (
-            f"Synthesia request failed ({code or f'HTTP {resp.status}'})"
+def session_error(resp: http.HttpResponse, body: JsonValue) -> SynthesiaError:
+    """The error a refused session request names, by its body's code, else its status."""
+    code = _body_code(body)
+    error_type = _CODE_TO_ERROR.get(code or "")
+    if error_type is None:
+        # A problem body names its code; an unknown one is a new code, not a hint to
+        # guess the type from the status.
+        error_type = (
+            None if _is_problem(body) and code is not None else _STATUS_TO_ERROR.get(resp.status)
         )
-        request_id = _body_request_id(body)
-        retry_after = (
-            _parse_retry_after(resp, body)
-            if error_type in (ErrorType.RATE_LIMITED, ErrorType.CONCURRENCY_LIMIT)
-            else None
-        )
-        return SynthesiaError(
-            message,
-            type=error_type,
-            retry_after=retry_after,
-            body=body,
-            status=resp.status,
-            request_id=request_id,
-        )
-
-
-def _exhausted_message(attempts: int, status: int | None, body: JsonValue) -> str:
-    message = "could not start a Synthesia session"
-    if attempts > 1:
-        message = f"{message} after {attempts} attempts"
-    if status is None:
-        return f"{message}; last attempt: connection error"
-    message = f"{message}; last attempt: HTTP {status}"
-    detail = _body_message(body)
-    if detail is not None:
-        message = f"{message}: {detail}"
-    request_id = _body_request_id(body)
-    if request_id is not None:
-        message = f"{message} (request {request_id})"
-    return message
+    message = _body_message(body) or (f"Synthesia request failed ({code or f'HTTP {resp.status}'})")
+    retry_after = (
+        _parse_retry_after(resp, body)
+        if error_type in (ErrorType.RATE_LIMITED, ErrorType.CONCURRENCY_LIMIT)
+        else None
+    )
+    return SynthesiaError(
+        message,
+        type=error_type,
+        retry_after=retry_after,
+        body=body,
+        status=resp.status,
+        request_id=_body_request_id(body),
+    )
 
 
 def _is_problem(body: JsonValue) -> bool:
@@ -236,7 +130,7 @@ def _body_request_id(body: JsonValue) -> str | None:
     return None
 
 
-def _public_avatar_id(avatar_id: str) -> str:
+def public_avatar_id(avatar_id: str) -> str:
     """Prefix a gallery id for the wire, leaving an already-prefixed id alone.
 
     Callers pass the raw gallery id they see in Synthesia, and the API takes the
@@ -263,12 +157,8 @@ def _parse_retry_after(resp: http.HttpResponse, body: JsonValue) -> float | None
     return None
 
 
-async def _read_json(resp: http.HttpResponse) -> JsonValue:
-    return _parse_json(await resp.read())
-
-
-def _parse_json(body: object) -> JsonValue:
+def parse_json(body: bytes) -> JsonValue:
     try:
-        return _JSON_VALUE.validate_json(body if isinstance(body, (str, bytes)) else str(body))
+        return _JSON_VALUE.validate_json(body)
     except ValueError:
         return None

@@ -445,6 +445,10 @@ impl Inner {
         if let Some(session) = self.session.get() {
             session.close_session(reason, drain).await;
         }
+        // Before the job disconnects the room, which comes after this close: an avatar ends its
+        // provider session over the room.
+        let cx = self.startup.get().map_or(&telemetry::Cx::NONE, |startup| &startup.trace);
+        self.avatars.close(cx).await;
         if let Some(toolsets) = self.toolsets.get()
             && let Err(error) = toolsets.release(None).await
         {

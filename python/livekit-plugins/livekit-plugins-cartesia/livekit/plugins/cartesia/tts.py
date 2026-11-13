@@ -14,19 +14,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
 import os
 import weakref
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast
+
+from pydantic import Field
 
 from livekit.agents import (
     APIConnectOptions,
-    APIError,
     APIStatusError,
     LanguageCode,
     http,
@@ -56,20 +55,70 @@ from .models import (
     TTSVoiceSpeed,
 )
 
+# Cartesia's websocket: each segment is one context, ended by `continue: false`. Each message
+# declares only the fields read.
+
+
+class _WordTimestamps(TypedDict):
+    words: list[str]
+    start: list[float]
+    end: list[float]
+
+
+class _Chunk(TypedDict):
+    type: Literal["chunk"]
+    context_id: str
+    data: str
+
+
+class _Timestamps(TypedDict):
+    type: Literal["timestamps"]
+    context_id: str
+    word_timestamps: NotRequired[_WordTimestamps]
+
+
+class _Done(TypedDict):
+    type: Literal["done"]
+    context_id: str
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    context_id: NotRequired[str]
+    message: NotRequired[str]
+    error: NotRequired[str]
+    status_code: NotRequired[int]
+
+
+_Message = Annotated[_Chunk | _Timestamps | _Done | _Error, Field(discriminator="type")]
+
+
+class _Options(TypedDict):
+    model_id: str
+    voice: dict[str, Any]
+    output_format: dict[str, Any]
+    language: str | None
+    pronunciation_dict_id: NotRequired[str]
+    generation_config: NotRequired[dict[str, Any]]
+    add_timestamps: NotRequired[bool]
+
+
+_Continue = TypedDict("_Continue", {"continue": bool})  # a keyword: the functional form
+
+
+class _Speak(_Options, _Continue):
+    max_buffer_delay_ms: int
+    context_id: str
+    transcript: str
+
+
+class _Cancel(TypedDict):
+    context_id: str
+    cancel: bool
+
 
 def _is_sonic_3(model: str) -> bool:
     return model.startswith("sonic-3")
-
-
-def _decode(raw: str | bytes) -> dict[str, Any]:
-    """A provider message, which must be a JSON object."""
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        data = None
-    if not isinstance(data, dict):
-        raise APIError("Cartesia sent a malformed message", kind="protocol", detail=str(raw))
-    return data
 
 
 @dataclass
@@ -169,12 +218,7 @@ class TTS(tts.TTS):
             self._check_generation_config()
 
         self._session = http_session
-        self._pool = utils.ConnectionPool[http.WebSocket](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=300,
-            mark_refreshed_on_get=True,
-        )
+        self._mux = _Mux(self._opts)
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
         if word_timestamps:
@@ -207,34 +251,14 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Cartesia"
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        url = self._opts.get_ws_url(f"/tts/websocket?cartesia_version={self._opts.api_version}")
-        ws = await self._ensure_session().ws_connect(
-            url,
-            headers={
-                "User-Agent": USER_AGENT,
-                API_AUTH_HEADER: self._opts.api_key,
-            },
-            conn_options=conn_options,
-        )
-        c_request_id = ws.headers.get(REQUEST_ID_HEADER)
-        logger.debug(
-            "Established new Cartesia TTS WebSocket connection",
-            extra={"cartesia_request_id": c_request_id},
-        )
-        return ws
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await ws.close()
+    def prewarm(self) -> None:
+        self._mux.prewarm()
 
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:
             self._session = http.http_session()
 
         return self._session
-
-    def prewarm(self) -> None:
-        self._pool.prewarm()
 
     def update_options(
         self,
@@ -286,10 +310,10 @@ class TTS(tts.TTS):
             self._opts.pronunciation_dict_id = pronunciation_dict_id
         if is_given(api_version) and api_version != self._opts.api_version:
             self._opts.api_version = api_version
-            # cartesia_version is a query parameter on the websocket URL, so a pooled
+            # cartesia_version is a query parameter on the websocket URL, so a shared
             # socket keeps speaking the version it was opened with while
             # _to_cartesia_options starts shaping the body for the new one.
-            self._pool.invalidate()
+            self._mux.invalidate()
 
         if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
@@ -306,12 +330,7 @@ class TTS(tts.TTS):
         )
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            pool=self._pool,
-            opts=replace(self._opts),
-            tts=self,
-            conn_options=conn_options,
-        )
+        stream = SynthesizeStream(opts=replace(self._opts), tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -320,7 +339,7 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
-        await self._pool.aclose()
+        await self._mux.aclose()
 
     def _check_generation_config(self) -> None:
         if _is_sonic_3(self._opts.model):
@@ -373,8 +392,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        json = _to_cartesia_options(self._opts, streaming=False)
-        json["transcript"] = self._input_text
+        body = {**_to_cartesia_options(self._opts, streaming=False), "transcript": self._input_text}
 
         async with self._get_session().post(
             self._opts.get_http_url("/tts/bytes"),
@@ -383,7 +401,7 @@ class ChunkedStream(tts.ChunkedStream):
                 API_VERSION_HEADER: self._opts.api_version,
                 "User-Agent": USER_AGENT,
             },
-            json=json,
+            json=body,
             conn_options=self._conn_options,
         ) as resp:
             await resp.raise_for_status()
@@ -401,152 +419,116 @@ class ChunkedStream(tts.ChunkedStream):
             output_emitter.flush()
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        pool: utils.ConnectionPool[http.WebSocket],
-        opts: _TTSOptions,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-    ):
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
+class _Mux(http.Multiplexer[_Message, _Speak | _Cancel]):
+    """One Cartesia socket carries every stream's segments, each its own context."""
+
+    max_session_duration = 300
+
+    def __init__(self, opts: _TTSOptions) -> None:
         self._opts = opts
-        self._pool = pool
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            mime_type="audio/pcm",
-            stream=True,
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        return http.SocketTarget(
+            self._opts.get_ws_url("/tts/websocket"),
+            headers={"User-Agent": USER_AGENT, API_AUTH_HEADER: self._opts.api_key},
+            params={"cartesia_version": self._opts.api_version},
+            request_id_header=REQUEST_ID_HEADER,
         )
-        input_sent_event = asyncio.Event()
-        sent_tokens = deque[str]()
-        input_done = False
-        # reads time out only while a response is owed, never while waiting for more text
-        read_deadline = self._core_attempts
 
-        async def _send_task(ws: http.WebSocket, cartesia_context_id: str) -> None:
-            nonlocal input_done
-            base_pkt = _to_cartesia_options(self._opts, streaming=True)
-            base_pkt["max_buffer_delay_ms"] = 0
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    continue
+    def route(self, message: _Chunk | _Timestamps | _Done | _Error) -> str:
+        if "context_id" not in message:
+            # an error naming no context fails every stream on the socket
+            raise _error(message)
+        return message["context_id"]
 
-                token_pkt = base_pkt.copy()
-                token_pkt["context_id"] = cartesia_context_id
-                token_pkt["transcript"] = data.text + " "
-                sent_tokens.append(data.said + " ")
-                token_pkt["continue"] = True
-                self.mark_started()
-                await ws.send_str(json.dumps(token_pkt))
-                read_deadline.expect_response()
-                input_sent_event.set()
+    def close_context(self, context_id: str) -> _Cancel:
+        return _Cancel(context_id=context_id, cancel=True)
 
-            input_done = True
-            end_pkt = base_pkt.copy()
-            end_pkt["context_id"] = cartesia_context_id
-            end_pkt["transcript"] = " "
-            sent_tokens.append(" ")
-            end_pkt["continue"] = False
-            await ws.send_str(json.dumps(end_pkt))
-            read_deadline.expect_response(final=True)
-            input_sent_event.set()
 
-        async def _recv_task(ws: http.WebSocket, cartesia_context_id: str) -> None:
-            current_segment_id: str | None = None
-            await input_sent_event.wait()
-            skip_aligning = False
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error(
-                        "Cartesia connection closed unexpectedly "
-                        f"(cartesia_context_id={cartesia_context_id})"
-                    )
+class SynthesizeStream(tts.SocketStream[_Message, _Speak | _Cancel]):
+    def __init__(self, *, opts: _TTSOptions, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self.multiplexer = tts._mux
+        self._options = _to_cartesia_options(opts, streaming=True)
+        self._aligned: dict[str, _Alignment] = {}
 
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected Cartesia message type %s", msg.type)
-                    continue
+    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Speak | None:
+        if isinstance(item, tts.SegmentStart):
+            self._aligned[item.segment_id] = _Alignment()
+            return None
+        if isinstance(item, tts.SegmentText):
+            self._aligned[item.segment_id].sent.append(item.chunk.said + " ")
+            return self._speak(item.segment_id, item.chunk.text + " ", more=True)
+        if isinstance(item, tts.SegmentEnd):
+            self._aligned[item.segment_id].sent.append(" ")
+            return self._speak(item.segment_id, " ", more=False)
+        return None
 
-                data = _decode(msg.data)
-                segment_id = data.get("context_id")
-                # A pooled websocket may still hold audio/done from an interrupted
-                # previous context; ignore messages tagged with another context id.
-                if segment_id is not None and segment_id != cartesia_context_id:
-                    continue
-                if current_segment_id is None:
-                    current_segment_id = cartesia_context_id
-                    output_emitter.start_segment(segment_id=cartesia_context_id)
-                if data.get("data"):
-                    b64data = base64.b64decode(data["data"])
-                    read_deadline.audio_received()
-                    output_emitter.push(b64data)
-                elif data.get("done"):
-                    if input_done:
-                        # close only if the input stream is closed
-                        output_emitter.end_input()
-                        break
-                    read_deadline.complete_response()
-                elif word_timestamps := data.get("word_timestamps"):
-                    # assuming Cartesia echos the sent text in the original format and order.
-                    for word, start, end in zip(
-                        word_timestamps["words"],
-                        word_timestamps["start"],
-                        word_timestamps["end"],
-                        strict=False,
-                    ):
-                        if not sent_tokens or skip_aligning:
-                            word = f"{word} "
-                            skip_aligning = True
-                        else:
-                            sent = sent_tokens.popleft()
-                            if (idx := sent.find(word)) != -1:
-                                word, sent = sent[: idx + len(word)], sent[idx + len(word) :]
-                                if sent.strip():
-                                    sent_tokens.appendleft(sent)
-                                elif sent and sent_tokens:
-                                    # merge the remaining whitespace to the next sentence
-                                    sent_tokens[0] = sent + sent_tokens[0]
-                            else:
-                                word = f"{word} "
-                                skip_aligning = True
+    def on_message(self, message: _Chunk | _Timestamps | _Done | _Error) -> tts.SegmentOutput:
+        if message["type"] == "chunk":
+            return tts.SegmentAudio(message["context_id"], base64.b64decode(message["data"]))
+        if message["type"] == "timestamps":
+            context_id, words = message["context_id"], message.get("word_timestamps")
+            aligned = self._aligned.setdefault(context_id, _Alignment())
+            return tts.SegmentWords(context_id, aligned.words(words) if words else [])
+        if message["type"] == "done":
+            self._aligned.pop(message["context_id"], None)
+            return tts.SegmentDone(message["context_id"])
+        raise _error(message)
 
-                        output_emitter.push_timed_transcript(
-                            TranscriptChunk(text=word, start_time=start, end_time=end)
-                        )
-                elif data.get("type") == "error":
-                    # an HTTP-style status: a 5xx is retried, a rejected request is not
-                    raise APIStatusError(
-                        f"Cartesia returned error (cartesia_context_id={cartesia_context_id})",
-                        status_code=data.get("status_code") or 500,
-                        request_id=request_id,
-                        body=data,
-                        detail=data.get("error"),
-                    )
-                elif data.get("type") == "flush_done":
-                    pass
+    def _speak(self, context_id: str, transcript: str, *, more: bool) -> _Speak:
+        return {
+            **self._options,
+            "max_buffer_delay_ms": 0,
+            "context_id": context_id,
+            "transcript": transcript,
+            "continue": more,
+        }
+
+
+class _Alignment:
+    """Cartesia's words matched to the text sent, so each keeps the text's punctuation and
+    spacing; once a word does not match, the rest are taken as Cartesia spells them."""
+
+    def __init__(self) -> None:
+        self.sent = deque[str]()
+        self._lost = False
+
+    def words(self, timestamps: _WordTimestamps) -> list[TranscriptChunk]:
+        chunks = []
+        for word, start, end in zip(
+            timestamps["words"], timestamps["start"], timestamps["end"], strict=False
+        ):
+            if not self.sent or self._lost:
+                word = f"{word} "
+                self._lost = True
+            else:
+                sent = self.sent.popleft()
+                if (idx := sent.find(word)) != -1:
+                    word, sent = sent[: idx + len(word)], sent[idx + len(word) :]
+                    if sent.strip():
+                        self.sent.appendleft(sent)
+                    elif sent and self.sent:
+                        # the remaining whitespace goes to the next sentence
+                        self.sent[0] = sent + self.sent[0]
                 else:
-                    logger.warning("unexpected message", extra={"lk.pii.data": data})
-
-        cartesia_context_id = utils.shortuuid()
-        async with self._pool.connection(conn_options=self._conn_options) as ws:
-            async with utils.aio.TaskSet() as tasks:
-                try:
-                    await asyncio.gather(
-                        tasks.spawn(_send_task(ws, cartesia_context_id)),
-                        tasks.spawn(_recv_task(ws, cartesia_context_id)),
-                    )
-                finally:
-                    input_sent_event.set()
+                    word = f"{word} "
+                    self._lost = True
+            chunks.append(TranscriptChunk(text=word, start_time=start, end_time=end))
+        return chunks
 
 
-def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any]:
+def _error(message: _Error) -> APIStatusError:
+    # an HTTP-style status: a 5xx is retried, a rejected request is not
+    return APIStatusError(
+        f"Cartesia returned error (cartesia_context_id={message.get('context_id')})",
+        status_code=message.get("status_code") or 500,
+        body=message,
+        detail=message.get("message") or message.get("error"),
+    )
+
+
+def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> _Options:
     voice: dict[str, Any] = {}
     if isinstance(opts.voice, str):
         voice["mode"] = "id"
@@ -566,7 +548,7 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
         if voice_controls:
             voice["__experimental_controls"] = voice_controls
 
-    options: dict[str, Any] = {
+    options: _Options = {
         "model_id": opts.model,
         "voice": voice,
         "output_format": {

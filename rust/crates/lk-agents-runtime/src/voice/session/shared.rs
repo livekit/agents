@@ -324,11 +324,8 @@ pub struct SessionShared {
     pub(in crate::voice) conn: lk_agents_abi::voice::session_options::SessionConnOptions,
     /// `session.output` as the core last published it.
     pub(in crate::voice) output: lk_agents_net::signal::Cell<Outputs>,
-    pub(in crate::voice) recorder:
-        lk_agents_net::signal::Cell<Option<crate::voice::recorder::RecorderTap>>,
-    /// What the outputs still have to play, for a recorder attached while it plays.
-    pub(in crate::voice) unplayed:
-        Arc<parking_lot::Mutex<lk_agents_voice::unplayed_audio::UnplayedAudio>>,
+    /// The recorder, fed what the outputs play and still have to play.
+    pub(in crate::voice) recorder: Arc<crate::voice::recorder::RecorderFeed>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
     /// receives. Unbounded: a task must never block on the loop draining it.
     pub(in crate::voice) queue: Tx,
@@ -395,7 +392,7 @@ impl SessionShared {
     }
 
     pub fn recorder_tap(&self) -> Option<crate::voice::recorder::RecorderTap> {
-        self.recorder.get()
+        self.recorder.tap()
     }
 
     /// The audio sink the core installed, switched on or not.
@@ -414,7 +411,6 @@ impl SessionShared {
 pub(crate) struct Publications {
     /// Dropping the publications cancels it too.
     pub closing: tokio_util::sync::DropGuard,
-    pub recorder: lk_agents_net::signal::Producer<Option<crate::voice::recorder::RecorderTap>>,
     pub view: lk_agents_net::signal::Producer<Arc<SessionView>>,
     pub output: lk_agents_net::signal::Producer<Outputs>,
     pub chat_ctx: lk_agents_net::signal::Producer<Arc<lk_agents_abi::ChatContext>>,

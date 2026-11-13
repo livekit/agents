@@ -23,6 +23,7 @@ from livekit.agents.metrics import TTSMetrics
 from livekit.plugins.openai.responses import LLM as ResponsesLLM
 from livekit.plugins.openai.tools import WebSearch
 from tests.fakes import (
+    AgentRoom,
     FakeAudioInput,
     FakeAudioOutput,
     FakeAvatar,
@@ -299,7 +300,7 @@ async def test_host_sdk_receives_and_core_executes_its_virtual_output_tool() -> 
 async def test_an_avatar_that_never_joins_times_out() -> None:
     """Waiting for an avatar that never joins the room ends at its timeout."""
     avatar = FakeAvatar()
-    await avatar.start(VoiceSession(vad=None), rtc.Room())
+    await avatar.start(VoiceSession(vad=None), AgentRoom())
 
     with pytest.raises(TimeoutError):
         await avatar.wait_for_join(timeout=0.05)
@@ -309,7 +310,7 @@ async def test_an_avatar_that_never_joins_times_out() -> None:
 async def test_closing_an_avatar_ends_a_wait_for_its_join() -> None:
     """An unbounded wait for the avatar's join ends when the avatar is closed, which closes once."""
     avatar = FakeAvatar()
-    await avatar.start(VoiceSession(vad=None), rtc.Room())
+    await avatar.start(VoiceSession(vad=None), AgentRoom())
     waiting = asyncio.ensure_future(avatar.wait_for_join(timeout=None))
     await asyncio.sleep(0)  # the wait starts
 

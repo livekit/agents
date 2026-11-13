@@ -1,24 +1,22 @@
 from .events import (
-    ClientToolInvocationEvent,
-    ClientToolResultEvent,
-    DebugEvent,
-    PingEvent,
-    PlaybackClearBufferEvent,
-    PongEvent,
-    SetOutputMediumEvent,
-    UserTextMessageEvent,
+    ClientMessage,
+    ClientToolInvocation,
+    ClientToolResult,
+    ForcedAgentMessage,
+    ServerMessage,
+    SetOutputMedium,
+    UserTextMessage,
 )
 from .realtime_model import RealtimeModel, RealtimeSession
 
 __all__ = [
     "RealtimeModel",
     "RealtimeSession",
-    "ClientToolInvocationEvent",
-    "ClientToolResultEvent",
-    "DebugEvent",
-    "UserTextMessageEvent",
-    "PingEvent",
-    "PlaybackClearBufferEvent",
-    "PongEvent",
-    "SetOutputMediumEvent",
+    "ClientMessage",
+    "ClientToolInvocation",
+    "ClientToolResult",
+    "ForcedAgentMessage",
+    "ServerMessage",
+    "SetOutputMedium",
+    "UserTextMessage",
 ]

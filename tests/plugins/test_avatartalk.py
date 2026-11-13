@@ -27,12 +27,11 @@ async def test_start_propagates_provider_failure(avatar_host: AvatarHost) -> Non
         avatar = AvatarSession(api_secret="key", api_url=str(server.make_url("")).rstrip("/"))
 
         with pytest.raises(APIStatusError) as raised:
-            await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+            await avatar.start(avatar_host.agent, avatar_host.room)
 
     assert raised.value.status_code == 400
 
     avatar_host.audio_tail.assert_not_called()
-    avatar_host.framework_start.assert_not_awaited()
 
 
 async def test_close_stops_the_billable_session_once(avatar_host: AvatarHost) -> None:
@@ -51,7 +50,7 @@ async def test_close_stops_the_billable_session_once(avatar_host: AvatarHost) ->
     app.router.add_delete("/livekit/delete-session/{task_id}", delete)
     async with TestServer(app) as server, http.open():
         avatar = AvatarSession(api_secret="key", api_url=str(server.make_url("")).rstrip("/"))
-        await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+        await avatar.start(avatar_host.agent, avatar_host.room)
 
         await avatar.aclose()
         await avatar.aclose()

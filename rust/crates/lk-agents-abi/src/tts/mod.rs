@@ -1,4 +1,5 @@
 pub mod markup;
+pub mod segments;
 pub mod stream_adapter;
 pub mod stream_pacer;
 pub mod streams;

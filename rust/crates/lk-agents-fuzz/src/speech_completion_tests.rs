@@ -42,6 +42,51 @@ mod speech_announced_before_user_item {
     }
 }
 
+mod reply_cut_before_its_request {
+    //! A reply interrupted before its step runs makes no model request, and says so.
+    use lk_agents_fuzz::check::check_all;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{Input, Millis, Ref};
+    use lk_agents_voice::trace::{GenerationStep, Step};
+
+    // Catches: the step journalling `ChatRequested` and reporting its request started before
+    // polling the open an interrupt then dropped, so a request that never reached the model was on
+    // the record and the next reply's failure was charged to the cut one (survey seed 304).
+    #[test]
+    fn a_reply_cut_before_its_request_requests_nothing() {
+        let setup = Setup::default();
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::InterruptSpeech { speech: Ref::new(0), force: true },
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(20) },
+                Input::LlmFail { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+            ] {
+                run.apply(&input).await;
+            }
+            run
+        });
+        let next = run.record.host_view().speeches()[1].id;
+        let requested: Vec<u64> = run
+            .record
+            .journal()
+            .iter()
+            .filter_map(|(_, step)| match step {
+                Step::Generation(GenerationStep::ChatRequested { speech, .. }) => Some(speech.0),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(requested, [next], "only the live reply asked its model");
+        assert_eq!(run.record.inference_view().request_for(0), Some(next));
+        let (failures, checked) = check_all(&run.record);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(checked.get("provider_failure_is_accounted"), Some(&1));
+    }
+}
+
 mod step_cut_text_conserved {
     //! A host's unforced `interrupt()` during playout ends the whole speech: the cut step loses its
     //! words, the tool's answer is committed, and no follow-up is asked for.

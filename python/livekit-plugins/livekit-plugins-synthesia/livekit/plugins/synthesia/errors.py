@@ -69,15 +69,8 @@ class ErrorType(enum.Enum):
     normally ``None``; it is honoured if one ever arrives.
     """
 
-    TIMEOUT = "timeout"
-    """The avatar did not join within ``join_timeout``."""
-
     CONNECTION = "connection"
-    """No usable response after retries.
-
-    The last attempt either failed to connect or was answered with a 5xx;
-    ``status`` and ``request_id`` describe that answer when there was one.
-    """
+    """The avatar worker could not be reached."""
 
 
 _KINDS: dict[ErrorType, ErrorKind] = {
@@ -90,7 +83,6 @@ _KINDS: dict[ErrorType, ErrorKind] = {
     ErrorType.QUOTA_EXCEEDED: "quota",
     ErrorType.RATE_LIMITED: "rate_limit",
     ErrorType.CONCURRENCY_LIMIT: "rate_limit",
-    ErrorType.TIMEOUT: "timeout",
     ErrorType.CONNECTION: "connection",
 }
 

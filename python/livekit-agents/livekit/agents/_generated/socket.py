@@ -50,17 +50,32 @@ class SocketConnection:
     """Seconds after which the connection is rotated, at the next input boundary."""
     proxy: str | None
     """The job's HTTP proxy, as the host's HTTP session uses it."""
+    ping_interval: float | None
+    """Seconds between pings; a ping unanswered for half of it fails the connection. `None`
+    sends none.
+    """
+    setup: list[WsFrame]
+    """Sent first on the connection, before any input or command: the provider session's setup."""
+    awaits_ready: bool
+    """The provider must say it is ready (`SocketSession.ready()`) before any input or command
+    is sent; it has the connect limit to say so, else the attempt fails with a timeout.
+    """
 
 
 @dataclass(kw_only=True, slots=True)
 class SocketSend:
     """The frames of the next input item, encoded. `boundary`: it ended a segment (a flush), where a
-    due rotation may run. `end`: it was the last item.
+    due rotation may run. `end`: it was the last item. `done`: the stream owes nothing more, so it
+    ends once these frames went, with no goodbye or drain. `command`: the id of the command these
+    frames carry, which belongs to the connection it was taken on: once written it is reported
+    `sent`, and one that connection could not write is `returned` instead of sent on another.
     """
 
     frames: list[WsFrame]
     boundary: bool
     end: bool
+    done: bool
+    command: int | None
 
 
 WsFrame: TypeAlias = str | bytes

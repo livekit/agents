@@ -10,8 +10,9 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, CloseEvent, CloseReason, http
+from livekit.agents import APIConnectOptions, VoiceSession, http
 from livekit.plugins.runway import AvatarSession
+from tests.fakes import AVATAR_CREDENTIALS, AgentRoom
 
 if TYPE_CHECKING:
     from tests.plugins.conftest import AvatarHost
@@ -40,7 +41,7 @@ class _Runway:
 async def test_closing_the_avatar_in_a_connected_room_sends_end_call_once(
     avatar_host: AvatarHost,
 ) -> None:
-    """While the room is up, closing the session and the avatar sends one END_CALL, no cancel.
+    """While the room is up, closing the avatar, even twice, sends one END_CALL and no cancel.
 
     https://github.com/livekit/agents/pull/5612 https://github.com/livekit/agents/pull/5623
     """
@@ -68,9 +69,8 @@ async def test_closing_the_avatar_in_a_connected_room_sends_end_call_once(
             api_url=str(server.make_url("")).rstrip("/"),
             conn_options=OPTIONS,
         )
-        await avatar.start(avatar_host.agent, room, **avatar_host.credentials)
+        await avatar.start(avatar_host.agent, room)
 
-        avatar_host.agent.emit("close", CloseEvent(reason=CloseReason.USER_INITIATED))
         await avatar.aclose()
         await avatar.aclose()
 
@@ -94,8 +94,48 @@ async def test_closing_the_avatar_after_the_room_disconnected_cancels_the_sessio
             api_url=str(server.make_url("")).rstrip("/"),
             conn_options=OPTIONS,
         )
-        await avatar.start(avatar_host.agent, room, **avatar_host.credentials)
+        await avatar.start(avatar_host.agent, room)
 
         await avatar.aclose()
 
     assert runway.deletes == [("/v1/realtime_sessions/rs_1", "Bearer runway-key")]
+
+
+class _ConnectedRoom(AgentRoom):
+    """The agent's connected room, keeping the data it publishes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.published: list[tuple[dict[str, str], list[str]]] = []
+
+    @property
+    def local_participant(self) -> rtc.LocalParticipant:
+        async def publish_data(
+            payload: bytes, *, reliable: bool, destination_identities: list[str]
+        ) -> None:
+            self.published.append((json.loads(payload), destination_identities))
+
+        participant = SimpleNamespace(identity="agent-1", publish_data=publish_data)
+        return cast(rtc.LocalParticipant, participant)
+
+
+async def test_closing_the_session_ends_the_runway_session_over_the_room() -> None:
+    """Closing the agent session closes its avatar while the room is up, so Runway is told
+    END_CALL (a completed session) rather than cancelled by DELETE. Catches an avatar closed
+    only after the room disconnected."""
+    room, runway = _ConnectedRoom(), _Runway()
+    async with TestServer(runway.app()) as server, http.open():
+        avatar = AvatarSession(
+            avatar_id="avatar",
+            api_key="runway-key",
+            api_url=str(server.make_url("")).rstrip("/"),
+            conn_options=OPTIONS,
+            **AVATAR_CREDENTIALS,
+        )
+        session = VoiceSession(vad=None)
+        await avatar.start(session, room)
+
+        await session.aclose()
+
+    assert room.published == [({"type": "END_CALL"}, ["runway-avatar-agent"])]
+    assert runway.deletes == []

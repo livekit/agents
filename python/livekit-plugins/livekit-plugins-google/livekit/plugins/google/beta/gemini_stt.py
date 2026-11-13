@@ -14,40 +14,22 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import json
 from dataclasses import dataclass
 from typing import Any
 
-from google.genai import Client, types
-from google.genai.errors import APIError, ClientError, ServerError
+from google.genai import types
 from livekit import rtc
-from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
-    APIConnectOptions,
-    APIStatusError,
-    LanguageCode,
-    stt,
-    utils,
-)
-from livekit.agents.types import (
-    NOT_GIVEN,
-    NotGivenOr,
-)
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, LanguageCode, http, stt
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from ..utils import genai_http_options
+from ..realtime.api_proto import ClientMessage, LiveEndpoint, ServerMessage, dump
 
 # Must be a Live-capable model: the plain chat models (e.g. gemini-2.5-flash) are
 # rejected by the Live endpoint with "not supported for bidiGenerateContent".
 DEFAULT_MODEL = "gemini-3.5-transcribe-live"
 DEFAULT_SAMPLE_RATE = 16000
-
-# The finalized transcript for the last turn lands after audio_stream_end, so teardown
-# waits briefly for it. Bounded so a silent session can't hang.
-FINALIZE_TIMEOUT = 2.0
 
 
 @dataclass
@@ -97,7 +79,8 @@ class STT(stt.STT):
             credentials_path: Path to service account credentials JSON file.
             project: Google Cloud project ID (required for Vertex AI).
             location: Google Cloud region (e.g. "us-central1").
-            http_options: Optional HTTP options for Client.
+            http_options: Optional ``types.HttpOptions`` (or its dict): base URL, API version
+                and headers.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -172,7 +155,10 @@ class STT(stt.STT):
         raise NotImplementedError("Gemini STT only supports streaming recognition")
 
 
-class RecognizeStream(stt.RecognizeStream):
+class RecognizeStream(stt.SocketStream[ServerMessage, ClientMessage]):
+    """One Gemini Live transcription session: its setup asks for text and input transcription,
+    the audio follows, and ``audioStreamEnd`` asks for the last turn's transcript."""
+
     def __init__(
         self,
         *,
@@ -186,209 +172,134 @@ class RecognizeStream(stt.RecognizeStream):
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
-        self._api_key = api_key
-        self._credentials = credentials
-        self._credentials_path = credentials_path
-        self._http_options = http_options
+        self._endpoint = _endpoint(opts, api_key, credentials, credentials_path, http_options)
+        self._default_language = LanguageCode(str(opts.language or "en-US"))
+        self._language = self._default_language
+        self._pending_interim = ""
+        self._audio_ended = False
 
-    async def _run(self) -> None:
-        http_options = genai_http_options(
-            self._conn_options,
-            types.HttpOptions.model_validate(self._http_options)
-            if self._http_options is not None
-            else None,
-        )
-        creds = None
-        project_id = self._opts.project
-
-        if self._credentials:
-            if isinstance(self._credentials, str):
-                from google.oauth2 import service_account
-
-                json_account_info = json.loads(self._credentials)
-                project_id = project_id or json_account_info.get("project_id")
-                creds = service_account.Credentials.from_service_account_info(  # type: ignore[no-untyped-call]
-                    json_account_info,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                )
-            else:
-                creds = self._credentials
-        elif self._credentials_path:
-            from google.oauth2 import service_account
-
-            with open(self._credentials_path) as f:
-                json_account_info = json.load(f)
-                project_id = project_id or json_account_info.get("project_id")
-            creds = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
-                self._credentials_path,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
-            )
-
-        is_enterprise = self._opts.vertexai
-        if is_enterprise is None:
-            if self._api_key is not None:
-                is_enterprise = False
-            elif creds or project_id or self._opts.location:
-                is_enterprise = True
-
-        client_kwargs: dict[str, Any] = {
-            "api_key": self._api_key,
-            "http_options": http_options,
-        }
-        if is_enterprise:
-            client_kwargs["enterprise"] = True
-            if project_id:
-                client_kwargs["project"] = project_id
-            client_kwargs["location"] = self._opts.location or "global"
-            if creds:
-                client_kwargs["credentials"] = creds
-
-        client = Client(**client_kwargs)
-
-        lang_codes = self._opts.language_codes
-        if lang_codes is None and self._opts.language:
-            lang_codes = [str(self._opts.language)]
-
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        target, model = await self._endpoint.target(self._opts.model)
+        language_codes = self._opts.language_codes
+        if language_codes is None and self._opts.language:
+            language_codes = [str(self._opts.language)]
         # An empty list means "detect the language", per
         # https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
         # Both backends accept these -- verified against gemini-3.5-transcribe-live on the
         # Gemini Developer API, which takes them the same as Vertex.
-        input_audio_transcription = types.AudioTranscriptionConfig(
-            language_codes=lang_codes or [],
+        transcription = types.AudioTranscriptionConfig(
+            language_codes=language_codes or [],
             custom_vocabulary=self._opts.custom_vocabulary or None,
         )
-
-        config = types.LiveConnectConfig(
-            response_modalities=[types.Modality.TEXT],
-            input_audio_transcription=input_audio_transcription,
+        self.send_command(
+            {
+                "setup": {
+                    "model": model,
+                    "generationConfig": {"responseModalities": [types.Modality.TEXT.value]},
+                    "inputAudioTranscription": dump(transcription),
+                }
+            }
         )
+        self._pending_interim = ""
+        self._language = self._default_language
+        return target
 
-        try:
-            async with client.aio.live.connect(model=self._opts.model, config=config) as session:
-                async with utils.aio.TaskSet() as tasks:
-                    receive_task = tasks.spawn(self._receive_loop(session))
-                    await tasks.first_completed(
-                        tasks.spawn(self._send_loop(session)), asyncio.shield(receive_task)
-                    )
-                    # A closed input channel doesn't mean Gemini is done: the tail of the
-                    # transcript is only emitted once `finished`/`turn_complete` arrives.
-                    # Give the receive loop a bounded grace period instead of cancelling
-                    # it the moment _send_loop returns, which would drop that final.
-                    with contextlib.suppress(TimeoutError):
-                        await asyncio.wait_for(asyncio.shield(receive_task), FINALIZE_TIMEOUT)
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[ClientMessage]:
+        if isinstance(item, http.EndOfInput):
+            # Gemini finalizes the pending transcript rather than waiting for more audio
+            self._audio_ended = True
+            return {"realtimeInput": {"audioStreamEnd": True}}
+        if isinstance(item, stt.RecognizeStream.Flush) or not item.data:
+            return None
+        blob = types.Blob(data=bytes(item.data), mime_type=f"audio/pcm;rate={item.sample_rate}")
+        return {"realtimeInput": {"audio": dump(blob)}}
 
-        # Provider errors can quote the audio payload or transcript: their text goes in detail.
-        except (ClientError, ServerError, APIError) as e:
-            code = getattr(e, "code", None)
-            if not isinstance(code, int) or not 100 <= code < 600:
-                # a websocket close code, not an HTTP status; the genai SDK owns the socket
-                raise APIConnectionError(
-                    f"Gemini STT connection closed ({type(e).__name__}, close code {code})",
-                    detail=str(e),
-                ) from None
-            raise APIStatusError(
-                message=f"Gemini STT request failed ({type(e).__name__})",
-                status_code=code,
-                body=None,
-                detail=str(e),
-            ) from None
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            raise APIConnectionError(
-                f"Gemini STT connection failed ({type(e).__name__})", detail=str(e)
-            ) from None
-
-    async def _send_loop(self, session: Any) -> None:
-        sample_rate = self._opts.sample_rate
-
-        async for data in self.input:
-            if isinstance(data, rtc.AudioFrame):
-                pcm_data = data.data.tobytes()
-                if pcm_data:
-                    await session.send_realtime_input(
-                        audio=types.Blob(
-                            data=pcm_data,
-                            mime_type=f"audio/pcm;rate={sample_rate}",
-                        )
-                    )
-
-        # Tell Gemini the audio stream ended so it finalizes the pending transcript
-        # rather than waiting for more frames that will never arrive.
-        with contextlib.suppress(Exception):
-            await session.send_realtime_input(audio_stream_end=True)
-
-    def _speech_event(
-        self,
-        event_type: stt.SpeechEventType,
-        text: str,
-        language: LanguageCode,
-    ) -> stt.SpeechEvent:
-        return stt.SpeechEvent(
-            type=event_type,
-            alternatives=[stt.SpeechData(language=language, text=text, confidence=1.0)],
-        )
-
-    async def _receive_loop(self, session: Any) -> None:
-        default_lang = (
-            self._opts.language
-            if isinstance(self._opts.language, LanguageCode)
-            else LanguageCode(str(self._opts.language or "en-US"))
-        )
-        # Both streams carry a complete hypothesis, not deltas -- neither is accumulated:
-        #   interim_input_transcription - speculative, resent in full while the user speaks
-        #   input_transcription - the finalized, authoritative transcript, emitted once the
+    def on_message(self, message: ServerMessage) -> list[stt.Report] | http.Done | None:
+        # Both transcriptions carry a complete hypothesis, not deltas -- neither is accumulated:
+        #   interimInputTranscription - speculative, resent in full while the user speaks
+        #   inputTranscription - the finalized, authoritative transcript, emitted once the
         #     speech turn ends. One per turn, so a session yields several.
         # See https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
-        pending_interim = ""
-        lang = default_lang
+        sc = message.get("serverContent")
+        if not sc:
+            return None
+        reports: list[stt.Report] = []
 
-        try:
-            turn = session.receive()
-            async for message in turn:
-                sc = getattr(message, "server_content", None)
-                if not sc:
-                    continue
+        # interim first: when a message carries both, the final supersedes it
+        if interim := sc.get("interimInputTranscription"):
+            if code := interim.get("languageCode"):
+                self._language = LanguageCode(code)
+            if text := interim.get("text", "").strip():
+                self._pending_interim = text
+                reports.append(self._transcript(text, final=False))
 
-                # interim first: when a message carries both, the final supersedes it
-                if interim := getattr(sc, "interim_input_transcription", None):
-                    if code := getattr(interim, "language_code", None):
-                        lang = LanguageCode(code)
-                    if text := (interim.text or "").strip():
-                        pending_interim = text
-                        self.send(
-                            self._speech_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, text, lang)
-                        )
+        if transcription := sc.get("inputTranscription"):
+            if code := transcription.get("languageCode"):
+                # the model detects the language when no hints are configured
+                self._language = LanguageCode(code)
+            if text := transcription.get("text", "").strip():
+                self._pending_interim = ""
+                reports.append(self._transcript(text, final=True))
+                self._language = self._default_language
 
-                if transcription := getattr(sc, "input_transcription", None):
-                    if code := getattr(transcription, "language_code", None):
-                        # the model detects the language when no hints are configured
-                        lang = LanguageCode(code)
-                    if text := (transcription.text or "").strip():
-                        pending_interim = ""
-                        self.send(
-                            self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, text, lang)
-                        )
-                        lang = default_lang
+        # a turn that produced only interims would otherwise be dropped
+        if sc.get("generationComplete") or sc.get("turnComplete"):
+            if self._pending_interim:
+                reports.append(self._transcript(self._pending_interim, final=True))
+                self._pending_interim = ""
+            self._language = self._default_language
+            if self._audio_ended:
+                # the last turn after the audio ended: the session is done
+                for report in reports:
+                    self.report(report)
+                return http.DONE
+        return reports
 
-                # a turn that produced only interims would otherwise be dropped
-                if getattr(sc, "generation_complete", False) or getattr(sc, "turn_complete", False):
-                    if pending_interim:
-                        self.send(
-                            self._speech_event(
-                                stt.SpeechEventType.FINAL_TRANSCRIPT, pending_interim, lang
-                            )
-                        )
-                        pending_interim = ""
-                    lang = default_lang
+    def _transcript(self, text: str, *, final: bool) -> stt.Transcript:
+        return stt.Transcript(text, self._language, final=final, confidence=1.0)
 
-        except APIError as e:
-            # a normal close ends the session; _run reports anything else
-            if e.code != 1000:
-                raise
 
-        # the session closed mid-turn: its last interim is the turn's transcript
-        if pending_interim:
-            self.send(
-                self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, pending_interim, lang)
+def _endpoint(
+    opts: _STTOptions,
+    api_key: str | None,
+    credentials: Any | None,
+    credentials_path: str | None,
+    http_options: Any | None,
+) -> LiveEndpoint:
+    creds = None
+    project_id = opts.project
+    if credentials:
+        if isinstance(credentials, str):
+            from google.oauth2 import service_account
+
+            json_account_info = json.loads(credentials)
+            project_id = project_id or json_account_info.get("project_id")
+            creds = service_account.Credentials.from_service_account_info(  # type: ignore[no-untyped-call]
+                json_account_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
             )
+        else:
+            creds = credentials
+    elif credentials_path:
+        from google.oauth2 import service_account
+
+        with open(credentials_path) as f:
+            project_id = project_id or json.load(f).get("project_id")
+        creds = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
+            credentials_path, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+
+    vertexai = opts.vertexai
+    if vertexai is None:
+        vertexai = api_key is None and bool(creds or project_id or opts.location)
+    return LiveEndpoint(
+        vertexai=vertexai,
+        api_key=api_key,
+        project=project_id if vertexai else None,
+        location=(opts.location or "global") if vertexai else None,
+        credentials=creds if vertexai else None,
+        http_options=(
+            types.HttpOptions.model_validate(http_options) if http_options is not None else None
+        ),
+    )

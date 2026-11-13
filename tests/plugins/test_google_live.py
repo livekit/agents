@@ -242,7 +242,7 @@ async def test_appended_text_then_a_reply_request_completes_one_turn(
 
     await session.update_chat_ctx(ctx)
     pending = session.generate_reply()
-    contents = await gemini_live.wait_sent("client_content", 2)
+    contents = await gemini_live.wait_sent("clientContent", 2)
     await gemini_live.send(serverContent={**gemini_live.AUDIO, "turnComplete": True})
     await pending
 
@@ -289,14 +289,7 @@ async def test_fragmented_transcripts_finalize_once_when_interrupted(
     "audio",
     [
         True,
-        pytest.param(
-            False,
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="https://github.com/livekit/agents/issues/3540 reproduces: text-only setup carries speech_config",
-            ),
-        ),
+        False,
     ],
 )
 async def test_text_only_setup_does_not_request_a_voice(
@@ -321,14 +314,7 @@ async def test_text_only_setup_does_not_request_a_voice(
     "vertex",
     [
         False,
-        pytest.param(
-            True,
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="https://github.com/livekit/agents/issues/7785 reproduces: Vertex updates append a model turn",
-            ),
-        ),
+        True,
     ],
 )
 async def test_instruction_update_uses_the_backend_instruction_role_without_reconnect(
@@ -342,7 +328,7 @@ async def test_instruction_update_uses_the_backend_instruction_role_without_reco
     await gemini_live.ready(session)
 
     await session.update_instructions("Use the new policy")
-    [content] = await gemini_live.wait_sent("client_content")
+    [content] = await gemini_live.wait_sent("clientContent")
 
     assert content["turns"] == [
         {"role": "system" if vertex else "model", "parts": [{"text": "Use the new policy"}]}
@@ -355,14 +341,7 @@ async def test_instruction_update_uses_the_backend_instruction_role_without_reco
     "handle",
     [
         "saved-handle",
-        pytest.param(
-            None,
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="https://github.com/livekit/agents/issues/5102 reproduces: initial setup sends an empty resumption config",
-            ),
-        ),
+        None,
     ],
 )
 async def test_initial_setup_omits_null_resumption_but_keeps_saved_handles(
@@ -385,22 +364,8 @@ async def test_initial_setup_omits_null_resumption_but_keeps_saved_handles(
     "model",
     [
         "gemini-2.5-flash-native-audio-preview-12-2025",
-        pytest.param(
-            "gemini-3.1-flash-live-preview",
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="https://github.com/livekit/agents/pull/7673 reproduces: 3.x reply instructions use an unwrapped model turn",
-            ),
-        ),
-        pytest.param(
-            "gemini-3.8-live",
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="https://github.com/livekit/agents/pull/7673 reproduces: 3.x reply instructions use an unwrapped model turn",
-            ),
-        ),
+        "gemini-3.1-flash-live-preview",
+        "gemini-3.8-live",
     ],
 )
 async def test_reply_instructions_are_wrapped_for_models_without_placeholders(
@@ -410,7 +375,7 @@ async def test_reply_instructions_are_wrapped_for_models_without_placeholders(
     session = open_session(model=model)
 
     session.generate_reply(instructions="Greet the caller")
-    [content] = await gemini_live.wait_sent("client_content")
+    [content] = await gemini_live.wait_sent("clientContent")
 
     turns = [(turn["role"], turn["parts"][0]["text"]) for turn in content["turns"]]
     if "2.5" in model:
@@ -545,7 +510,8 @@ async def test_gemini_stt_emits_the_finalized_transcript_on_arrival(gemini_live:
         events = [
             (e.type, e.alternatives[0].text)
             async for e in stream
-            if e.type != stt.SpeechEventType.RECOGNITION_USAGE
+            if e.type
+            in (stt.SpeechEventType.INTERIM_TRANSCRIPT, stt.SpeechEventType.FINAL_TRANSCRIPT)
         ]
 
     assert events == [
@@ -594,3 +560,41 @@ async def test_gemini_stt_commits_a_turn_of_interims_only(gemini_live: LivePeer)
         await gemini_live.send(serverContent={"generationComplete": True})
 
         assert await _finals(stream, 1) == ["hello there"]
+
+
+async def test_gemini_stt_input_that_ends_before_any_audio_closes_at_once(
+    gemini_live: LivePeer,
+) -> None:
+    """An STT stream that ends with nothing sent owes nothing: it closes without a drain."""
+    # Catches: the end of an input that owed no transcript waiting out the read limit, then
+    # failing the stream with a read timeout.
+    stream = GeminiSTT(api_key="test", http_options=gemini_live.http_options).stream()
+    stream.end_input()
+    async with asyncio.timeout(2), stream:
+        events = [event async for event in stream]
+    assert [e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT] == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=TimeoutError,
+    reason="the STT base never tells the socket base a final answered the audio: "
+    "stt.SocketStream._socket_deliver must call self._socket_answered() on a final Transcript; "
+    "reproduces with audio, a final, then end_input()",
+)
+async def test_gemini_stt_input_that_ends_after_its_final_closes_at_once(
+    gemini_live: LivePeer,
+) -> None:
+    """Once every audio frame was answered by a final, the input's end owes nothing."""
+    # Catches: a silent end after the last final waiting out the read limit, then failing the
+    # stream with a read timeout.
+    stream = GeminiSTT(api_key="test", http_options=gemini_live.http_options).stream()
+    stream.push_frame(rtc.AudioFrame(bytes(320), 16000, 1, 160))
+    await gemini_live.send(serverContent={"inputTranscription": {"text": "Hello."}})
+    finals: list[str] = []
+    async with asyncio.timeout(2), stream:
+        async for event in stream:
+            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                finals.append(event.alternatives[0].text)
+                stream.end_input()
+    assert finals == ["Hello."]

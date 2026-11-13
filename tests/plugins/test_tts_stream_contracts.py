@@ -79,9 +79,10 @@ class TtsCase:
 
 def _cartesia(_: Connection, message: str | bytes) -> list[Frame]:
     packet = json.loads(message)
-    audio = {"context_id": packet["context_id"], "data": base64.b64encode(PCM).decode()}
+    context = {"context_id": packet["context_id"]}
+    audio = {**context, "type": "chunk", "data": base64.b64encode(PCM).decode()}
     if packet.get("continue") is False:
-        return [audio, {"context_id": packet["context_id"], "done": True}]
+        return [audio, {**context, "type": "done"}]
     return [audio] if packet.get("transcript", "").strip() else []
 
 
