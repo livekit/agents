@@ -11,7 +11,7 @@ pytestmark = pytest.mark.plugin("perplexity")
 def test_default_model_base_url_and_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
     llm = responses.LLM()
-    assert llm.model == "sonar-pro"
+    assert llm.model == "perplexity/sonar"
     assert llm._opts.use_websocket is False
     assert PERPLEXITY_RESPONSES_BASE_URL == "https://api.perplexity.ai/v1"
     assert str(llm._client.base_url).startswith("https://api.perplexity.ai/v1")
