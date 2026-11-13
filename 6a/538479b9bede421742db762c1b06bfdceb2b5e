@@ -1,0 +1,19 @@
+tests/test_telemetry_redaction.py
+  s_93b6ba4269a7f8::t_58a8ae7e83bcd4 266-268
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6a538479b9bede421742db762c1b06bfdceb2b5e",
+  "prompts": {},
+  "sessions": {
+    "s_93b6ba4269a7f8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1d474-88e2-78e1-b99d-3d95e6a4caa2",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
