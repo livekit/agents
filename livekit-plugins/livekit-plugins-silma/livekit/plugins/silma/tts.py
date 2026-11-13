@@ -38,9 +38,9 @@ from livekit.agents.utils import is_given
 
 from ._utils import (
     Float32Decoder,
+    close_code_status,
     http_stream_url,
-    is_auth_close_code,
-    normalize_base_url,
+    is_retryable_status,
     raise_for_status,
     raise_ws_error,
     split_text,
@@ -64,6 +64,11 @@ from .models import (
 # reused. The pool refreshes this on every acquisition, so it is an idle timeout
 # and not a cap on connection age.
 MAX_SESSION_DURATION = 240
+
+# How long to wait for the close frame the server sends right after a `failed`
+# event. It normally arrives at once; the cap only keeps a server that leaves
+# the socket open from stalling the error.
+FAILED_CLOSE_TIMEOUT = 1.0
 
 
 class _ChunkProgress:
@@ -153,7 +158,6 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         text_pacing: tts.SentenceStreamPacer | bool = False,
-        allow_insecure_base_url: bool = False,
     ) -> None:
         """Create a new instance of the SILMA TTS.
 
@@ -190,9 +194,6 @@ class TTS(tts.TTS):
                 ``livekit.agents.tokenize.blingfire.SentenceTokenizer``.
             text_pacing: Stream pacer for the TTS. ``True`` uses the default
                 pacer, ``False`` disables pacing.
-            allow_insecure_base_url: Permit a plaintext ``http://`` base URL
-                pointing at a non-local host. Only for trusted development
-                networks.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -224,7 +225,7 @@ class TTS(tts.TTS):
             custom_audio_id=custom_audio_id,
             enable_server_pronunciation_overrides=enable_server_pronunciation_overrides,
             api_key=silma_api_key,
-            base_url=normalize_base_url(base_url, allow_insecure_base_url=allow_insecure_base_url),
+            base_url=base_url,
         )
 
         self._session = http_session
@@ -282,7 +283,7 @@ class TTS(tts.TTS):
                 status_code=e.status,
                 request_id=None,
                 body=None,
-                retryable=e.status not in (401, 403),
+                retryable=is_retryable_status(e.status),
             ) from None
         except Exception as e:
             # Transport errors can embed credentials in URLs.
@@ -577,12 +578,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 aiohttp.WSMsgType.CLOSING,
             ):
                 close_code = ws.close_code
+                # A close code that maps to a status means the server refused
+                # the request; any other close is treated as transient.
+                refused_status = close_code_status(close_code)
                 raise APIStatusError(
                     "SILMA TTS WebSocket closed before the utterance completed",
-                    status_code=401 if is_auth_close_code(close_code) else (close_code or 1006),
+                    status_code=refused_status or close_code or 1006,
                     request_id=None,
                     body=None,
-                    retryable=not is_auth_close_code(close_code),
+                    retryable=refused_status is None,
                 )
 
             if msg.type == aiohttp.WSMsgType.ERROR:
@@ -619,8 +623,31 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             status = event.get("status")
             if status == "failed":
-                raise_ws_error(event)
+                raise_ws_error(event, close_code=await self._read_close_code(ws))
             elif status == "completed":
                 return
             elif status not in ("started", "streaming", None):
                 logger.debug("unhandled SILMA TTS status %r", status)
+
+    async def _read_close_code(self, ws: aiohttp.ClientWebSocketResponse) -> int | None:
+        """Read the close code that follows a ``failed`` event.
+
+        The event itself carries only a prose message. The server closes the
+        socket straight after it, and the close code is what tells a refused
+        request (which must not be retried) from a server-side failure.
+
+        Returns:
+            The close code, or ``None`` if the server did not close in time.
+        """
+        try:
+            msg = await ws.receive(timeout=min(self._conn_options.timeout, FAILED_CLOSE_TIMEOUT))
+        except asyncio.TimeoutError:
+            return None
+
+        if msg.type in (
+            aiohttp.WSMsgType.CLOSED,
+            aiohttp.WSMsgType.CLOSE,
+            aiohttp.WSMsgType.CLOSING,
+        ):
+            return ws.close_code
+        return None

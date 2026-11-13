@@ -176,17 +176,20 @@ def test_websocket_url_from_https() -> None:
     assert websocket_url("https://api.silma.ai/tts/v2") == "wss://api.silma.ai/tts/v2/ws/stream"
 
 
-def test_insecure_base_url_rejected() -> None:
-    from livekit.plugins.silma._utils import normalize_base_url
+def test_base_url_is_taken_as_given() -> None:
+    from livekit.plugins.silma import TTS
 
-    with pytest.raises(ValueError, match="HTTPS"):
-        normalize_base_url("http://example.com")
+    tts = TTS(api_key="test-key", base_url="http://tts.internal:8080/tts/v2")
+    assert tts._opts.base_url == "http://tts.internal:8080/tts/v2"
 
 
-def test_insecure_localhost_allowed() -> None:
-    from livekit.plugins.silma._utils import normalize_base_url
+def test_http_stream_url_from_a_websocket_base_url() -> None:
+    """A ws(s):// base URL has to work for synthesize(), which POSTs over HTTP."""
+    from livekit.plugins.silma._utils import http_stream_url, websocket_url
 
-    assert normalize_base_url("http://localhost:8080/tts/v2") == "http://localhost:8080/tts/v2"
+    assert http_stream_url("wss://api.silma.ai/tts/v2/") == "https://api.silma.ai/tts/v2/stream"
+    assert http_stream_url("ws://localhost:8080") == "http://localhost:8080/stream"
+    assert websocket_url("wss://api.silma.ai/tts/v2/") == "wss://api.silma.ai/tts/v2/ws/stream"
 
 
 # -------------------------------------------------------------- float32 decode
@@ -229,6 +232,65 @@ def test_float32_decoder_emits_nothing_for_partial_sample() -> None:
 
 
 # --------------------------------------------------------------- text splitting
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "You can reach us on <STAG_PN>92005455</STAG_PN> or at "
+        "<STAG_EMAIL>hi@silma.ai</STAG_EMAIL>.",
+        "call:<STAG_PN>920</STAG_PN>",
+        "First line.\nSecond  line,\twith   odd spacing. ",
+    ],
+)
+def test_split_text_returns_text_that_fits_unchanged(text: str) -> None:
+    from livekit.plugins.silma._utils import split_text
+
+    assert split_text(text, max_characters=250) == [text]
+
+
+def test_split_text_chunks_are_verbatim_slices() -> None:
+    """Splitting may drop the whitespace at a cut, and must change nothing else."""
+    from livekit.plugins.silma._utils import split_text
+
+    text = (
+        "Our number:<STAG_PN>92005455</STAG_PN>, twice.\nWrite to  "
+        "<STAG_EMAIL>hi@silma.ai</STAG_EMAIL>. " * 6
+    )
+    chunks = split_text(text, max_characters=80)
+
+    assert len(chunks) > 1
+    assert all(0 < len(chunk) <= 80 for chunk in chunks)
+    # Each chunk is found in order in the original, with only whitespace between.
+    cursor = 0
+    for chunk in chunks:
+        start = text.index(chunk, cursor)
+        assert text[cursor:start].strip() == ""
+        cursor = start + len(chunk)
+    assert text[cursor:].strip() == ""
+
+
+def test_split_text_keeps_punctuation_attached_to_tags() -> None:
+    from livekit.plugins.silma._utils import split_text
+
+    text = "Please call:<STAG_PN>920</STAG_PN>. Or write to <STAG_EMAIL>hi@silma.ai</STAG_EMAIL>."
+    chunks = split_text(text, max_characters=45)
+
+    assert chunks == [
+        "Please call:<STAG_PN>920</STAG_PN>. Or write",
+        "to <STAG_EMAIL>hi@silma.ai</STAG_EMAIL>.",
+    ]
+
+
+def test_split_text_never_cuts_a_tag_inside_an_unbreakable_run() -> None:
+    from livekit.plugins.silma._utils import split_text
+
+    text = "x" * 30 + "<STAG_PN>920</STAG_PN>." + "y" * 30
+    chunks = split_text(text, max_characters=40)
+
+    assert "".join(chunks) == text
+    assert all(len(chunk) <= 40 for chunk in chunks)
+    assert sum("<STAG_PN>920</STAG_PN>" in chunk for chunk in chunks) == 1
 
 
 def test_split_text_respects_provider_limit() -> None:
@@ -307,6 +369,36 @@ def test_raise_for_status_does_not_echo_response_body() -> None:
 
     assert secret not in str(exc_info.value)
     assert secret not in json.dumps(exc_info.value.body)
+
+
+@pytest.mark.parametrize(
+    ("event", "close_code", "status_code", "retryable"),
+    [
+        # What the server sends today: a prose error, then a close code.
+        ({"status": "failed", "error": "Model x not found."}, 1008, 400, False),
+        ({"status": "failed", "error": "Internal server error."}, 1011, 500, True),
+        ({"status": "failed"}, None, 500, True),
+        # An explicit status on the event wins over the close code.
+        ({"status": "failed", "code": 422}, 1011, 422, False),
+        ({"status": "failed", "code": "401"}, None, 401, False),
+        ({"status": "failed", "code": 429}, 1008, 429, True),
+        ({"status": "failed", "code": 503}, 1008, 503, True),
+        # A symbolic code says nothing about retrying, so the close code decides.
+        ({"status": "failed", "code": "internal_error"}, None, 500, True),
+        ({"status": "failed", "code": "invalid_voice"}, 1008, 400, False),
+    ],
+)
+def test_raise_ws_error_classifies_failures_like_the_http_path(
+    event: dict[str, Any], close_code: int | None, status_code: int, retryable: bool
+) -> None:
+    from livekit.plugins.silma._utils import raise_ws_error
+
+    with pytest.raises(APIStatusError) as exc_info:
+        raise_ws_error(event, close_code=close_code)
+
+    assert exc_info.value.status_code == status_code
+    assert exc_info.value.retryable is retryable
+    assert "not found" not in str(exc_info.value)
 
 
 # ------------------------------------------------------------- http synthesize
@@ -429,6 +521,34 @@ async def test_websocket_handshake_sends_the_plugin_user_agent() -> None:
 
     assert captured["headers"]["User-Agent"] == USER_AGENT
     assert captured["headers"]["apiKey"] == "test-key"
+    await tts.aclose()
+
+
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [(400, False), (401, False), (403, False), (404, False), (429, True), (503, True)],
+)
+async def test_websocket_handshake_rejection_is_classified_like_http(
+    status: int, retryable: bool
+) -> None:
+    from livekit.plugins.silma import TTS
+
+    class FakeHTTPSession:
+        async def ws_connect(self, url: str, *, headers: Any) -> Any:
+            raise aiohttp.WSServerHandshakeError(
+                request_info=None,  # type: ignore[arg-type]
+                history=(),
+                status=status,
+                message="Invalid response status",
+            )
+
+    tts = TTS(api_key="test-key", http_session=FakeHTTPSession())  # type: ignore[arg-type]
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await tts._connect_ws(timeout=1.0)
+
+    assert exc_info.value.status_code == status
+    assert exc_info.value.retryable is retryable
     await tts.aclose()
 
 
@@ -676,6 +796,101 @@ async def test_stream_raises_on_failed_status(monkeypatch: pytest.MonkeyPatch) -
 
     assert exc_info.value.body == {"status": "failed", "code": "internal_error"}
     assert "secret text" not in str(exc_info.value)
+    await tts.aclose()
+
+
+def _failed_event(error: str) -> _FakeMsg:
+    return _FakeMsg(aiohttp.WSMsgType.TEXT, json.dumps({"error": error, "status": "failed"}))
+
+
+async def test_stream_does_not_retry_a_request_the_server_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bad model or voice fails the same way every time, so it is sent exactly once."""
+    from livekit.plugins.silma import TTS
+
+    sockets: list[_FakeWS] = []
+
+    def make_ws() -> _FakeWS:
+        # The server reports the failure and closes with 1008 (policy violation).
+        ws = _FakeWS([[_failed_event("Model nope not found or not loaded.")]])
+        ws.close_code = 1008
+        sockets.append(ws)
+        return ws
+
+    tts = TTS(api_key="test-key", model="nope")
+    connects = _install_ws(monkeypatch, tts, make_ws)
+
+    # Prime the pool: a reused socket is the case that used to be replayed.
+    pooled = await tts._pool.get(timeout=1.0)
+    tts._pool.put(pooled)
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0))
+    stream.push_text("Hello there.")
+    stream.end_input()
+
+    with pytest.raises(APIStatusError) as exc_info:
+        async for _ in stream:
+            pass
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.retryable is False
+    assert exc_info.value.body == {"status": "failed", "close_code": 1008}
+    assert "not found" not in str(exc_info.value)
+    assert len(connects) == 1, "no replacement connection should have been opened"
+    assert sum(len(ws.sent) for ws in sockets) == 1, "the request must not be re-sent"
+    await tts.aclose()
+
+
+async def test_stream_treats_an_internal_server_failure_as_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.silma import TTS
+
+    ws = _FakeWS([[_failed_event("Internal server error.")]])
+    ws.close_code = 1011
+    tts = TTS(api_key="test-key")
+    _install_ws(monkeypatch, tts, ws)
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream.push_text("Hello there.")
+    stream.end_input()
+
+    with pytest.raises(APIStatusError) as exc_info:
+        async for _ in stream:
+            pass
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.retryable is True
+    await tts.aclose()
+
+
+async def test_stream_failure_does_not_wait_on_a_server_that_stays_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no close frame to read, the failure still surfaces, as retryable."""
+    from livekit.plugins.silma import TTS
+
+    class OpenWS(_FakeWS):
+        async def receive(self, timeout: float | None = None) -> _FakeMsg:
+            if not self._inbox:
+                raise asyncio.TimeoutError
+            return await super().receive(timeout)
+
+    ws = OpenWS([[_failed_event("Internal server error.")]])
+    tts = TTS(api_key="test-key")
+    _install_ws(monkeypatch, tts, ws)
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream.push_text("Hello there.")
+    stream.end_input()
+
+    with pytest.raises(APIStatusError) as exc_info:
+        async for _ in stream:
+            pass
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.retryable is True
     await tts.aclose()
 
 

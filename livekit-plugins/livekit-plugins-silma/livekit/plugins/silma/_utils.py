@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 import numpy as np
 
@@ -27,8 +26,9 @@ from .models import HTTP_STREAM_PATH, MAX_TEXT_CHARACTERS, WEBSOCKET_PATH
 
 __all__ = [
     "Float32Decoder",
+    "close_code_status",
     "http_stream_url",
-    "normalize_base_url",
+    "is_retryable_status",
     "raise_for_status",
     "raise_ws_error",
     "split_text",
@@ -37,8 +37,13 @@ __all__ = [
 
 # SILMA pronunciation hints, e.g. <STAG_PN>92005455</STAG_PN>. These must survive
 # text splitting intact or the server sees a broken tag and reads it literally.
-_STAG_BLOCK = re.compile(r"<STAG_[A-Z]+>.*?</STAG_[A-Z]+>", re.DOTALL)
+_STAG = r"<STAG_[A-Z]+>.*?</STAG_[A-Z]+>"
+_STAG_BLOCK = re.compile(_STAG, re.DOTALL)
 _STAG_INNER = re.compile(r"<STAG_[A-Z]+>(.*?)</STAG_[A-Z]+>", re.DOTALL)
+
+# A run of text with no whitespace to break on. Whitespace inside a tag does not
+# count, so a tag and any punctuation touching it stay in one unit.
+_UNIT = re.compile(rf"(?:{_STAG}|\S)+", re.DOTALL)
 
 # A provider error code such as `invalid_api_key`, as opposed to a prose message
 # that may quote the text being synthesized.
@@ -47,43 +52,22 @@ _ERROR_CODE = re.compile(r"[a-z][a-z0-9_.\-]{0,48}")
 # 4xx codes that will never succeed on retry.
 _NON_RETRYABLE_STATUS = frozenset({400, 401, 403, 404, 405, 409, 413, 422})
 
-# WebSocket close codes that indicate a rejected credential rather than a
-# transient failure.
-_AUTH_CLOSE_CODES = frozenset({4001, 4003, 1008})
-
-
-def normalize_base_url(base_url: str, *, allow_insecure_base_url: bool = False) -> str:
-    """Strip a trailing slash and reject plaintext HTTP to non-local hosts.
-
-    Args:
-        base_url: The API root, e.g. ``https://api.silma.ai/tts/v2``.
-        allow_insecure_base_url: Permit ``http://`` to an arbitrary host. Only
-            set this for a trusted development network.
-
-    Returns:
-        The normalized base URL.
-
-    Raises:
-        ValueError: If a plaintext URL points at a non-local host.
-    """
-    normalized = base_url.rstrip("/")
-    parsed = urlparse(normalized)
-    if parsed.scheme != "http":
-        return normalized
-
-    host = parsed.hostname or ""
-    if allow_insecure_base_url or host in {"localhost", "127.0.0.1", "::1"}:
-        return normalized
-
-    raise ValueError(
-        "base_url must use HTTPS unless it points to localhost. "
-        "Pass allow_insecure_base_url=True only for trusted development networks."
-    )
+# WebSocket close codes the server uses to refuse a request outright, and the
+# HTTP status each one stands for. SILMA closes with 1008 after rejecting a
+# payload (unknown model, invalid parameters, no credits left) and with 1011
+# after an internal error; 4001 and 4003 are the usual codes for a rejected
+# credential. Anything not listed here is treated as transient.
+_CLOSE_CODE_STATUS = {1008: 400, 4001: 401, 4003: 403}
 
 
 def http_stream_url(base_url: str) -> str:
-    """Build the binary waveform streaming URL from an API base URL."""
-    return f"{base_url.rstrip('/')}{HTTP_STREAM_PATH}"
+    """Build the binary waveform streaming URL from an HTTP(S) or WS(S) base URL."""
+    root = base_url.rstrip("/")
+    if root.startswith("wss://"):
+        root = "https://" + root[len("wss://") :]
+    elif root.startswith("ws://"):
+        root = "http://" + root[len("ws://") :]
+    return f"{root}{HTTP_STREAM_PATH}"
 
 
 def websocket_url(base_url: str) -> str:
@@ -137,12 +121,63 @@ class Float32Decoder:
         return b""
 
 
+def _unwrap_oversized_tags(text: str, max_characters: int) -> str:
+    """Drop the markup of any ``<STAG_*>`` block too long for one request.
+
+    Cutting such a block would leave a dangling ``<STAG_...>`` that the model
+    reads out literally, so the hint is dropped and its content kept.
+    """
+
+    def unwrap(match: re.Match[str]) -> str:
+        block = match.group(0)
+        if len(block) <= max_characters:
+            return block
+        return _STAG_INNER.sub(r"\1", block)
+
+    return _STAG_BLOCK.sub(unwrap, text)
+
+
+def _split_unit(text: str, start: int, end: int, max_characters: int) -> list[tuple[int, int]]:
+    """Cut ``text[start:end]``, which has no whitespace to break on, into spans.
+
+    Breaks fall between a tag and the text around it where possible, so a tag
+    is never cut. Plain text longer than the budget is cut at the limit.
+    """
+    spans: list[tuple[int, int]] = []
+    span_start = start
+
+    def take_plain(until: int) -> None:
+        nonlocal span_start
+        while until - span_start > max_characters:
+            spans.append((span_start, span_start + max_characters))
+            span_start += max_characters
+
+    for match in _STAG_BLOCK.finditer(text, start, end):
+        take_plain(match.start())
+        if match.end() - span_start > max_characters:
+            # The tag does not fit after what is already in this span.
+            spans.append((span_start, match.start()))
+            span_start = match.start()
+
+    take_plain(end)
+    if span_start < end:
+        spans.append((span_start, end))
+    return spans
+
+
 def split_text(text: str, *, max_characters: int = MAX_TEXT_CHARACTERS) -> list[str]:
     """Split text into chunks the API will accept.
 
-    Splits on whitespace so words stay whole, and treats a ``<STAG_*>`` block as
-    a single indivisible token. A token longer than ``max_characters`` on its own
-    (a very long URL, say) is hard-split as a last resort.
+    Text that already fits is returned exactly as given. Longer text is cut at
+    whitespace, and every chunk is a verbatim slice of the input: only the
+    whitespace at a cut is dropped, so spacing, line breaks and the punctuation
+    around a ``<STAG_*>`` block reach the server untouched. A ``<STAG_*>`` block
+    is never cut, and a run of text longer than ``max_characters`` with no
+    whitespace in it (a very long URL, say) is hard-split as a last resort.
+
+    The one case where the text itself changes is a ``<STAG_*>`` block that is
+    longer than ``max_characters`` on its own: its markup is dropped and its
+    content kept, since half a tag would be read out literally.
 
     Args:
         text: The text to split.
@@ -155,43 +190,34 @@ def split_text(text: str, *, max_characters: int = MAX_TEXT_CHARACTERS) -> list[
     if max_characters <= 0:
         raise ValueError("max_characters must be positive")
 
-    tokens: list[str] = []
-    cursor = 0
-    for match in _STAG_BLOCK.finditer(text):
-        tokens.extend(text[cursor : match.start()].split())
-        block = match.group(0)
-        if len(block) <= max_characters:
-            tokens.append(block)
-        else:
-            # The tag cannot fit in one request. Splitting it would leave a
-            # dangling `<STAG_...>` that the model reads out literally, so drop
-            # the hint and keep the content instead.
-            tokens.extend(_STAG_INNER.sub(r"\1", block).split())
-        cursor = match.end()
-    tokens.extend(text[cursor:].split())
+    if not text.strip():
+        return []
+
+    text = _unwrap_oversized_tags(text, max_characters)
+    if len(text) <= max_characters:
+        return [text]
 
     chunks: list[str] = []
-    current = ""
-    for token in tokens:
-        while len(token) > max_characters:
-            # An indivisible token that cannot fit; emit what we have and carve
-            # the token down to size.
-            if current:
-                chunks.append(current)
-                current = ""
-            chunks.append(token[:max_characters])
-            token = token[max_characters:]
+    # The span of the chunk being built, as offsets into `text`.
+    chunk_start = chunk_end = -1
+    for match in _UNIT.finditer(text):
+        unit_start, unit_end = match.span()
+        if chunk_start >= 0:
+            if unit_end - chunk_start <= max_characters:
+                chunk_end = unit_end
+                continue
+            chunks.append(text[chunk_start:chunk_end])
 
-        if not current:
-            current = token
-        elif len(current) + 1 + len(token) <= max_characters:
-            current = f"{current} {token}"
-        else:
-            chunks.append(current)
-            current = token
+        if unit_end - unit_start <= max_characters:
+            chunk_start, chunk_end = unit_start, unit_end
+            continue
 
-    if current:
-        chunks.append(current)
+        # The last piece stays open so the text after it can share its request.
+        *full, (chunk_start, chunk_end) = _split_unit(text, unit_start, unit_end, max_characters)
+        chunks.extend(text[a:b] for a, b in full)
+
+    if chunk_start >= 0:
+        chunks.append(text[chunk_start:chunk_end])
 
     return chunks
 
@@ -232,26 +258,63 @@ def raise_for_status(status_code: int, body: str) -> None:
         status_code=status_code,
         request_id=None,
         body=error_body,
-        retryable=status_code not in _NON_RETRYABLE_STATUS,
+        retryable=is_retryable_status(status_code),
     )
 
 
-def raise_ws_error(event: dict[str, Any]) -> None:
-    """Raise an ``APIStatusError`` for a ``failed`` WebSocket event."""
+def is_retryable_status(status_code: int) -> bool:
+    """Whether a request that failed with this HTTP status is worth repeating."""
+    return status_code not in _NON_RETRYABLE_STATUS
+
+
+def close_code_status(close_code: int | None) -> int | None:
+    """The HTTP status a WebSocket close code stands for.
+
+    Returns:
+        The equivalent status when the code means the server refused the request
+        or the credential, and ``None`` when it says nothing either way.
+    """
+    if close_code is None:
+        return None
+    return _CLOSE_CODE_STATUS.get(close_code)
+
+
+def _ws_failure_status(event: dict[str, Any], close_code: int | None) -> int:
+    """Work out the HTTP status a ``failed`` WebSocket event amounts to."""
+    code = event.get("code")
+    if isinstance(code, str) and code.isdigit():
+        code = int(code)
+    if isinstance(code, int) and not isinstance(code, bool) and 400 <= code <= 599:
+        return code
+
+    # The event names no status, so the close code that follows it is the only
+    # thing that tells a refused request apart from a server-side failure.
+    return close_code_status(close_code) or 500
+
+
+def raise_ws_error(event: dict[str, Any], *, close_code: int | None = None) -> None:
+    """Raise an ``APIStatusError`` for a ``failed`` WebSocket event.
+
+    A request the server refused is marked non-retryable, the same way the HTTP
+    path treats a 4xx: sending it again cannot succeed, and each attempt would
+    cost a new connection.
+
+    Args:
+        event: The decoded ``failed`` event.
+        close_code: The close code the server sent after the event, if any.
+    """
     code = event.get("code")
     error_body: dict[str, Any] = {"status": "failed"}
     if isinstance(code, (str, int)):
         error_body["code"] = code
+    if close_code is not None:
+        error_body["close_code"] = close_code
 
+    status_code = _ws_failure_status(event, close_code)
     raise APIStatusError(
         "SILMA TTS reported a failed synthesis",
-        status_code=500,
+        status_code=status_code,
         request_id=None,
         body=error_body,
-        retryable=True,
+        retryable=is_retryable_status(status_code),
     )
-
-
-def is_auth_close_code(close_code: int | None) -> bool:
-    """Whether a WebSocket close code means the API key was rejected."""
-    return close_code in _AUTH_CLOSE_CODES

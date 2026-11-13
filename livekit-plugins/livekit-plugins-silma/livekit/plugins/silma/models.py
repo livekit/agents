@@ -50,11 +50,6 @@ TTSArabicVoices = Literal[
 TTSVoices = Literal[TTSEnglishVoices, TTSArabicVoices]
 """Every pre-defined SILMA voice."""
 
-ENGLISH_VOICES: frozenset[str] = frozenset({"james", "emma"})
-ARABIC_VOICES: frozenset[str] = frozenset(
-    {"sarah", "salma", "salwa", "saja", "sultan", "salman", "sulaiman", "salim"}
-)
-
 DEFAULT_BASE_URL = "https://api.silma.ai/tts/v2"
 DEFAULT_MODEL: TTSModels = "silma-tts-v2-msa"
 DEFAULT_VOICE: TTSVoices = "sarah"

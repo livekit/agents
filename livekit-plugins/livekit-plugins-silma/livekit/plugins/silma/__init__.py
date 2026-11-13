@@ -20,10 +20,8 @@ See https://silma.ai/ for more information.
 """
 
 from .models import (
-    ARABIC_VOICES,
     DEFAULT_MODEL,
     DEFAULT_VOICE,
-    ENGLISH_VOICES,
     TTSArabicVoices,
     TTSEnglishVoices,
     TTSModels,
@@ -40,8 +38,6 @@ __all__ = [
     "TTSVoices",
     "TTSArabicVoices",
     "TTSEnglishVoices",
-    "ARABIC_VOICES",
-    "ENGLISH_VOICES",
     "DEFAULT_MODEL",
     "DEFAULT_VOICE",
     "__version__",
