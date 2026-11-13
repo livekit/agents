@@ -1699,15 +1699,16 @@ class AudioRecognition:
                 if not await turn_detector.supports_language(self._last_language):
                     logger.info("Turn detector does not support language %s", self._last_language)
                 else:
+                    eou_model_attributes = {
+                        trace_types.ATTR_EOU_MODEL: turn_detector.model,
+                        trace_types.ATTR_EOU_PROVIDER: turn_detector.provider,
+                    }
                     # ended explicitly: _end_eou_wait_span closes it early if the user resumes
                     with (
                         tracer.use_span(eou_wait_span),
                         tracer.start_as_current_span(
                             "eou_detection",
-                            attributes={
-                                trace_types.ATTR_EOU_MODEL: turn_detector.model,
-                                trace_types.ATTR_EOU_PROVIDER: turn_detector.provider,
-                            },
+                            attributes=eou_model_attributes,
                             end_on_exit=False,
                         ) as eou_detection_span,
                         self._track_eou_detection_span(eou_detection_span),
@@ -1796,8 +1797,7 @@ class AudioRecognition:
                         logger.debug(
                             "eot prediction",
                             extra={
-                                trace_types.ATTR_EOU_MODEL: turn_detector.model,
-                                trace_types.ATTR_EOU_PROVIDER: turn_detector.provider,
+                                **eou_model_attributes,
                                 "probability": end_of_turn_probability,
                                 "unlikely_threshold": unlikely_threshold,
                                 "endpointing_delay": endpointing_delay,
