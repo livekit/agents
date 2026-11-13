@@ -29,10 +29,16 @@ def generate_summary(xml_path: str) -> str:
 
         passed = tests - failures - errors - skipped
 
-        if failures == 0 and errors == 0:
-            status = "✓ All tests passed"
-        else:
+        if failures or errors:
             status = "✗ Some tests failed"
+        elif tests == 0:
+            status = "⚠ No tests ran"
+        elif skipped == tests:
+            status = "⚠ All tests skipped"
+        elif skipped:
+            status = "✓ All executed tests passed"
+        else:
+            status = "✓ All tests passed"
 
         lines.append("## STT Test Results\n")
         lines.append(f"**Status:** {status}\n")
