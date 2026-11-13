@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass
@@ -72,5 +73,5 @@ class SessionOptions:
     video_width: int | None = None
     video_height: int | None = None
     show_ai_avatar_disclosure: bool | None = None
-    region: str | None = None
-    region_policy: str | None = None
+    region: Literal["eu", "us"] | str | None = None
+    region_policy: Literal["preferred", "strict"] | None = None
