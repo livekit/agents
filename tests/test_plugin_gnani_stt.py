@@ -1224,6 +1224,39 @@ async def test_language_list_change_commits_audio_the_server_has_not_announced_y
     assert FINAL in _types(events)
 
 
+async def test_language_list_change_survives_audio_flowing_through_the_reconnect(server):
+    """Closing the old socket while the sender is mid-`send()` makes websockets raise
+    ConnectionClosedOK there. That is our own close, not a failure: the stream must carry on
+    with the new session instead of ending with an APIConnectionError."""
+    stt_ = _make_stt(server, model="prisma-v3.0", language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    consumer = asyncio.ensure_future(_collect(stream))  # raises if the stream fails
+
+    async def pump() -> None:
+        # no speech, so the reconnect has nothing to commit and closes right away, while
+        # the sender is still pushing frames
+        while True:
+            stream.push_frame(SILENCE)
+            await asyncio.sleep(0.005)
+
+    pusher = asyncio.ensure_future(pump())
+    changes = [["hi-IN", "en-IN"], "hi-IN"] * 5
+    try:
+        # whether the sender or the receiver notices the close first is a race, so repeat it
+        for n, language in enumerate(changes):
+            await _wait_for(
+                lambda n=n: len(server.sessions) == n + 1 and server.sessions[n].audio > 0
+            )
+            stt_.update_options(language=language)
+        await _wait_for(
+            lambda: len(server.sessions) == len(changes) + 1 and server.sessions[-1].audio > 0
+        )
+    finally:
+        pusher.cancel()
+    stream.end_input()
+    await asyncio.wait_for(consumer, timeout=5)  # APIConnectionError here is the bug
+
+
 async def test_repeated_language_changes_are_not_mistaken_for_a_broken_session(server):
     """Reconnecting on request must not trip the guard against sessions that keep closing
     immediately."""

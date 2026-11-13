@@ -875,6 +875,11 @@ class SpeechStream(stt.RecognizeStream):
             ) from e
         except websockets.exceptions.ConnectionClosed as e:
             code = e.rcvd.code if e.rcvd is not None else None
+            if self._reconnect_requested and code != 1008:
+                # We closed this session ourselves to reconnect with new options. The
+                # sender or receiver can notice that close first, as a ConnectionClosed
+                # raised from a `send()` that was in flight: that is not a failure.
+                return False
             if code == 1008:
                 # policy violation: the server rejected the request (bad language, format,
                 # context, ...) and sent the reason in an `error` message just before
