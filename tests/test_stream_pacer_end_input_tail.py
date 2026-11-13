@@ -1,5 +1,3 @@
-"""Regression for StreamPacerWrapper.end_input dropping the buffered tail (#7810)."""
-
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +7,7 @@ import pytest
 from livekit.agents import APIConnectOptions, tts, utils
 from livekit.agents.tts import SentenceStreamPacer, StreamAdapter
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 SAMPLE_RATE = 24000
 REPLY = (
@@ -72,14 +70,9 @@ def _record_pacers(monkeypatch: pytest.MonkeyPatch):
     yield
 
 
-async def _run_with_wakeup_offset(k: int) -> int:
-    """Inject pacer wakeup k event-loop iterations after (or before) end_input.
-
-    k=0 is the race window: end_input sets flags, then wakeup runs before the
-    sentence tokenizer has flushed its buffered tail into _sentences.
-    """
-    synthesized.clear()
-    pacers.clear()
+@pytest.mark.parametrize("k", [-1, 0, 1])
+async def test_stream_pacer_keeps_tail_across_end_input_wakeup_race(k: int) -> None:
+    """Every sentence reaches the TTS when the pacer wakes up k loop turns around end_input."""
     adapter = StreamAdapter(
         tts=FakeTTS(),
         text_pacing=SentenceStreamPacer(min_remaining_audio=3.0, max_text_length=200),
@@ -98,6 +91,7 @@ async def _run_with_wakeup_offset(k: int) -> int:
         ):
             await asyncio.sleep(0.003)
         pacer = pacers[0]
+        # k=0 is the race: the wakeup runs before the tokenizer flushes its tail
         if k >= 0:
             stream.end_input()
             for _ in range(k):
@@ -115,12 +109,4 @@ async def _run_with_wakeup_offset(k: int) -> int:
 
     await asyncio.gather(produce(), consume())
     await stream.aclose()
-    return len(synthesized)
-
-
-@pytest.mark.parametrize("k", [-1, 0, 1])
-@pytest.mark.asyncio
-async def test_stream_pacer_keeps_tail_across_end_input_wakeup_race(k: int) -> None:
-    """All sentences must reach TTS even when wakeup fires in the end_input window."""
-    requests = await _run_with_wakeup_offset(k)
-    assert requests == 2, f"k={k}: expected 2 TTS requests (full reply), got {requests}"
+    assert len(synthesized) == 2

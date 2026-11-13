@@ -478,3 +478,27 @@ async def test_manual_flush_requires_support_from_every_fallback(supports_flush)
         assert adapter.capabilities.manual_flush is True
     finally:
         await adapter.aclose()
+
+
+@pytest.mark.parametrize("primary_streams", [True, False])
+async def test_prewarm_reaches_only_the_primary(primary_streams: bool) -> None:
+    """A non-streaming primary is wrapped in a StreamAdapter, which must forward prewarm too."""
+
+    class _PrewarmableSTT(FakeSTT):
+        def __init__(self, *, streaming: bool) -> None:
+            super().__init__()
+            self._capabilities = STTCapabilities(streaming=streaming, interim_results=False)
+            self.prewarm_count = 0
+
+        def prewarm(self) -> None:
+            self.prewarm_count += 1
+
+    primary = _PrewarmableSTT(streaming=primary_streams)
+    secondary = _PrewarmableSTT(streaming=True)
+    fallback_adapter = FallbackAdapter([primary, secondary], vad=FakeVAD())
+    try:
+        fallback_adapter.prewarm()
+    finally:
+        await fallback_adapter.aclose()
+
+    assert (primary.prewarm_count, secondary.prewarm_count) == (1, 0)

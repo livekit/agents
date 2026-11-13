@@ -4,7 +4,7 @@ This spec defines multi-turn answering-machine detection for outbound calls. It
 describes the public API, the runtime behavior, and the rules that tests must hold.
 
 Code: `livekit-agents/livekit/agents/voice/amd/`. Example:
-`examples/telephony/amd.py`. Tests: `tests/test_amd_*.py`.
+`examples/telephony/amd.py`. Tests: `tests/test_amd.py`.
 
 ## 1. Scope
 
