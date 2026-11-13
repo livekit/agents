@@ -30,7 +30,7 @@ from collections.abc import AsyncGenerator, Callable, Generator
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import httpx
+import httpx2 as httpx
 import openai
 from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 

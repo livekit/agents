@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterable
 from typing import Any, Generic, TypeVar, cast
 
+from opentelemetry import context as otel_context, trace
 from typing_extensions import override
 
 import livekit.rtc as rtc
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
 from ...log import logger
+from ...telemetry import trace_types, tracer
 from ...utils import aio, log_exceptions
+from ...utils.audio import silence_frame
 from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
 from .types import NoiseCancellationParams, NoiseCancellationSelector
@@ -44,6 +48,9 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._track: rtc.RemoteTrack | None = None
         self._stream: rtc.VideoStream | rtc.AudioStream | None = None
         self._participant_identity: str | None = None
+        # when set, only this exact publication is accepted, rather than any track of the
+        # linked participant whose source is accepted
+        self._track_sid: str | None = None
         self._attached = True
         self._closed = False
 
@@ -57,6 +64,16 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._processor = processor
         self._processor_owned = False
+
+        # wait_for_<kind>_track: linked participant -> first frame (audio streams only)
+        self._track_wait_span_name: str | None = None
+        self._track_wait_span: trace.Span | None = None
+        self._track_wait_started_at: float | None = None
+        self._trace_context: otel_context.Context | None = None
+
+    def set_trace_context(self, context: otel_context.Context | None) -> None:
+        """Parent for the next track-wait span (the session's startup bar), never current."""
+        self._trace_context = context
 
     async def __anext__(self) -> T:
         return await self._data_ch.__anext__()
@@ -96,6 +113,25 @@ class _ParticipantInputStream(Generic[T], ABC):
         )
         self._attached = False
 
+    def set_track_sid(self, track_sid: str | None) -> None:
+        """Pin the stream to one publication of the linked participant.
+
+        ``None`` restores the default, which takes any track whose source is accepted.
+        """
+        if self._track_sid == track_sid:
+            return
+
+        self._track_sid = track_sid
+        self._close_stream()
+
+        if (identity := self._participant_identity) is None:
+            return
+
+        if (participant := self._room.remote_participants.get(identity)) is not None:
+            for publication in participant.track_publications.values():
+                if publication.track:
+                    self._on_track_available(publication.track, publication, participant)
+
     def set_participant(self, participant: rtc.RemoteParticipant | str | None) -> None:
         # set_participant can be called before the participant is connected
         participant_identity = (
@@ -106,10 +142,12 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._participant_identity = participant_identity
         self._close_stream()
+        self._end_track_wait()
 
         if participant_identity is None:
             return
 
+        self._begin_track_wait(participant_identity)
         participant = (
             participant
             if isinstance(participant, rtc.RemoteParticipant)
@@ -130,6 +168,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._stream = None
         self._track = None
         self._publication = None
+        self._end_track_wait()
         if stream:
             await stream.aclose()
         if self._processor:
@@ -162,6 +201,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         }
         logger.debug("start reading stream", extra=extra)
         async for event in stream:
+            self._on_first_frame()
             if not self._attached:
                 # drop frames if the stream is detached
                 continue
@@ -174,6 +214,34 @@ class _ParticipantInputStream(Generic[T], ABC):
     def _process_frame(self, frame: T) -> None:
         """Hook for subclasses to process frames in-place before forwarding."""
         pass
+
+    def _begin_track_wait(self, participant_identity: str) -> None:
+        if self._track_wait_span_name is None:
+            return
+        self._track_wait_started_at = time.time()
+        self._track_wait_span = tracer.start_span(
+            self._track_wait_span_name,
+            context=self._trace_context,
+            attributes={trace_types.ATTR_PARTICIPANT_IDENTITY: participant_identity},
+        )
+
+    def _on_first_frame(self) -> None:
+        span = self._track_wait_span
+        if span is None or not span.is_recording():
+            return
+        now = time.time()
+        span.add_event("first_frame", timestamp=int(now * 1_000_000_000))
+        if self._track_wait_started_at is not None:
+            span.set_attribute(
+                trace_types.ATTR_FIRST_FRAME_DELAY, max(now - self._track_wait_started_at, 0.0)
+            )
+        self._end_track_wait()
+
+    def _end_track_wait(self) -> None:
+        span, self._track_wait_span = self._track_wait_span, None
+        self._track_wait_started_at = None
+        if span is not None and span.is_recording():
+            span.end()
 
     @abstractmethod
     def _create_stream(
@@ -211,6 +279,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             self._closed
             or self._participant_identity != participant.identity
             or publication.source not in self._accepted_sources
+            or (self._track_sid is not None and publication.sid != self._track_sid)
             or (
                 self._publication is not None
                 and self._publication.sid == publication.sid
@@ -223,6 +292,14 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._stream = self._create_stream(track, participant)
         self._track = track
         self._publication = publication
+        if (span := self._track_wait_span) is not None and span.is_recording():
+            span.add_event(
+                "track_subscribed",
+                {
+                    trace_types.ATTR_TRACK_SID: publication.sid,
+                    trace_types.ATTR_TRACK_SOURCE: rtc.TrackSource.Name(publication.source),
+                },
+            )
         forward_task = asyncio.create_task(
             self._forward_task(self._forward_atask, self._stream, track, publication, participant)
         )
@@ -288,16 +365,19 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         auto_gain_control: bool = True,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
+        track_source: rtc.TrackSource.ValueType
+        | list[rtc.TrackSource.ValueType] = rtc.TrackSource.SOURCE_MICROPHONE,
     ) -> None:
         _ParticipantInputStream.__init__(
             self,
             room=room,
-            track_source=rtc.TrackSource.SOURCE_MICROPHONE,
+            track_source=track_source,
             processor=(
                 noise_cancellation if isinstance(noise_cancellation, rtc.FrameProcessor) else None
             ),
         )
         AudioInput.__init__(self, label="RoomIO")
+        self._track_wait_span_name = "wait_for_audio_track"
         if frame_size_ms <= 0:
             raise ValueError("frame_size_ms must be greater than 0")
 
@@ -325,6 +405,19 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 self._update_processor(noise_cancellation)
             else:
                 self._update_processor(None)
+
+        publication = participant.track_publications.get(track.sid)
+        if (
+            noise_cancellation is not None
+            and publication is not None
+            and AudioTrackFeature.TF_ENHANCED_NOISE_CANCELLATION in publication.audio_features
+        ):
+            logger.warning(
+                "the participant's audio track already has enhanced noise cancellation enabled, "
+                "applying noise cancellation again on the agent side degrades audio quality. "
+                "disable it on either the client or the agent",
+                extra={"participant": participant.identity, "track_id": track.sid},
+            )
 
         return rtc.AudioStream.from_track(
             track=track,
@@ -372,6 +465,11 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                         "pre-connect audio buffer pushed",
                         extra={"duration": duration, **logging_extra},
                     )
+                    if (span := self._track_wait_span) is not None and span.is_recording():
+                        span.add_event(
+                            "pre_connect_audio",
+                            {trace_types.ATTR_PRE_CONNECT_AUDIO_DURATION: duration},
+                        )
 
             except asyncio.TimeoutError:
                 self._pre_connect_audio_publications.add(pre_connect_key)
@@ -388,15 +486,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
         await super()._forward_task(None, stream, track, publication, participant)
         if self._attached:
-            silent_samples = int(self._sample_rate * 0.5)
-            await self._data_ch.send(
-                rtc.AudioFrame(
-                    b"\x00\x00" * silent_samples,
-                    sample_rate=self._sample_rate,
-                    num_channels=self._num_channels,
-                    samples_per_channel=silent_samples,
-                )
-            )
+            await self._data_ch.send(silence_frame(0.5, self._sample_rate, self._num_channels))
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None

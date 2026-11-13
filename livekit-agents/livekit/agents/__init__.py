@@ -56,6 +56,7 @@ from .llm.tool_context import (
     StopResponse,
     ToolContext,
     ToolError,
+    ToolResult,
     function_tool,
 )
 from .plugin import Plugin
@@ -97,6 +98,7 @@ from .voice import (
     RecordingOptions,
     RunContext,
     RunOutputOptions,
+    SessionConnectOptions,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     SpeechSteeringOptions,
@@ -214,6 +216,7 @@ __all__ = [
     "StopResponse",
     "ToolContext",
     "ToolError",
+    "ToolResult",
     "RunContext",
     "Plugin",
     "Scenario",
@@ -224,6 +227,7 @@ __all__ = [
     "SimulationRun",
     "SimulationVerdict",
     "AgentSession",
+    "SessionConnectOptions",
     "AudioRecognition",
     "ExpressiveOptions",
     "NonverbalOptions",

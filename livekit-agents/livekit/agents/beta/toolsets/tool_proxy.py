@@ -26,15 +26,15 @@ _DEFAULT_SEARCH_DESCRIPTION = (
 
 _DEFAULT_CALL_DESCRIPTION = (
     "Call a tool by name with the given arguments. "
-    "Use search_tools to discover available tools and their schemas if it isn't already loaded."
+    "Use tool_search to discover available tools and their schemas if it isn't already loaded."
 )
 
 
 class ToolProxyToolset(ToolSearchToolset):
-    """Exposes exactly two fixed tools: search_tools and call_tool.
+    """Exposes exactly two fixed tools: tool_search and call_tool.
 
     Unlike ToolSearchToolset which dynamically modifies the tool list,
-    ToolProxyToolset keeps a constant tool list. ``search_tools`` returns
+    ToolProxyToolset keeps a constant tool list. ``tool_search`` returns
     tool schemas as text, and ``call_tool`` executes tools by name.
 
     This is useful for maximizing prompt cache hit rates with providers
@@ -87,7 +87,7 @@ class ToolProxyToolset(ToolSearchToolset):
 
     @property
     def tools(self) -> list[Tool | Toolset]:
-        # constant tool list — only search_tools and call_tool
+        # constant tool list — only tool_search and call_tool
         return [self._search_tool, self._call_tool]
 
     async def setup(self, *, reload: bool = False) -> Self:
@@ -128,7 +128,7 @@ class ToolProxyToolset(ToolSearchToolset):
 
         fnc_tool = self._tool_ctx.get_function_tool(name)
         if fnc_tool is None:
-            raise ToolError(f"unknown tool '{name}', use search_tools to discover available tools")
+            raise ToolError(f"unknown tool '{name}', use tool_search to discover available tools")
 
         fnc_args, fnc_kwargs = prepare_function_arguments(
             fnc=fnc_tool,

@@ -94,7 +94,9 @@ class STTModelUsage(_BaseModelUsage):
     """The model name (e.g., 'nova-2', 'best')."""
 
     input_tokens: int = 0
-    """Input audio tokens (for token-based STT billing)."""
+    """Total input tokens, including both audio and text (for token-based STT billing)."""
+    input_audio_tokens: int = 0
+    """Audio input tokens, a subset of input_tokens when reported by the provider."""
     output_tokens: int = 0
     """Output text tokens (for token-based STT billing)."""
     audio_duration: float = 0.0
@@ -251,6 +253,7 @@ class ModelUsageCollector:
             provider, model = self._extract_provider_model(metrics)
             stt_usage = self._get_stt_usage(provider, model)
             stt_usage.input_tokens += metrics.input_tokens
+            stt_usage.input_audio_tokens += metrics.input_audio_tokens
             stt_usage.output_tokens += metrics.output_tokens
             stt_usage.audio_duration += metrics.audio_duration
         elif isinstance(metrics, InterruptionMetrics):

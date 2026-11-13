@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,6 +14,9 @@ from livekit import rtc
 
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
+
+if TYPE_CHECKING:
+    from .delegation import DelegationDetectionOptions
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem, FunctionCall, MetricsMetadata
 from .tool_context import Tool, ToolChoice, ToolContext
@@ -73,6 +76,10 @@ class RealtimeCapabilities:
     can_disable_turn_detection: bool = False
     """Whether server-side turn detection can be disabled for a session so the client drives
     turn-taking. Set by plugins that implement ``session(turn_detection_disabled=True)``."""
+    supports_overlapping_speech: bool = False
+    """Whether the model and the caller may speak at once, the model deciding when to yield. The
+    framework then never holds the model's speech back for silence, nor cuts it when the caller
+    starts, so its output reaches the caller as it is generated"""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
@@ -161,6 +168,7 @@ EventTypes = Literal[
     "session_reconnected",
     "metrics_collected",
     "remote_item_added",
+    "delegation_created",  # a DelegationCreatedEvent, for a model that delegates
     "error",
 ]
 
@@ -183,6 +191,9 @@ class InputTranscriptionCompleted:
     generating should set this, so the user message can be placed on the session
     timeline where the turn happened rather than where the transcript arrived.
     """
+    delegated: bool | None = None
+    """On a final transcript, whether the model delegated the turn or work it already runs
+    covers it; None for a model that does not delegate."""
 
 
 @dataclass
@@ -210,6 +221,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
             RealtimeModelMetrics(
                 request_id="",
                 timestamp=time.time(),
+                label=self._realtime_model.label,
                 acquire_time=acquire_time,
                 connection_reused=False,
                 input_token_details=RealtimeModelMetrics.InputTokenDetails(),
@@ -241,6 +253,15 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @property
     @abstractmethod
     def tools(self) -> ToolContext: ...
+
+    @property
+    def background_work_running(self) -> bool:
+        """Whether the model works on something it will speak about when done, without new input.
+
+        Speech the user can already hear is not background work. The user is not marked away
+        while it runs.
+        """
+        return False
 
     @abstractmethod
     async def update_instructions(self, instructions: str) -> None: ...
@@ -282,6 +303,18 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     # cancel the current generation (do nothing if no generation is in progress)
     @abstractmethod
     def interrupt(self) -> None: ...
+
+    def delegate(self, instructions: str | None = None) -> None:
+        """Start a delegation on the conversation so far, for a turn the model did not delegate.
+
+        It emits ``delegation_created`` like one the model starts, with ``source="manual"``.
+        """
+        raise RealtimeError(f"{type(self).__name__} cannot delegate")
+
+    @property
+    def _delegation_detection(self) -> DelegationDetectionOptions | None:
+        """The options for delegating turns the model should have and did not, detector set."""
+        return None
 
     # message_id is the ID of the message to truncate (inside the ChatCtx)
     @abstractmethod

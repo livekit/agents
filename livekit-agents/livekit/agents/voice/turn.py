@@ -68,10 +68,13 @@ class _StreamingTurnDetectorStream(Protocol):
     async def backchannel_threshold(self, language: LanguageCode | None) -> float | None: ...
     async def supports_language(self, language: LanguageCode | None) -> bool: ...
 
-    def predict(self) -> asyncio.Future[TurnDetectionEvent]: ...
+    def predict(
+        self, chat_ctx: ChatContext | None = None
+    ) -> asyncio.Future[TurnDetectionEvent]: ...
     def cancel_inference(self, *, timed_out: bool = False) -> None: ...
     def flush(self, reason: str | None = None) -> None: ...
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...
+    def on_start_of_turn(self, started_at: float) -> None: ...
     def end_input(self) -> None: ...
     async def aclose(self) -> None: ...
 
@@ -344,7 +347,7 @@ def _migrate_turn_handling(
     allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     resume_false_interruption: NotGivenOr[bool] = NOT_GIVEN,
     agent_false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
-    preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
+    preemptive_generation: NotGivenOr[bool | PreemptiveGenerationOptions] = NOT_GIVEN,
 ) -> TurnHandlingOptions:
     """Build a TurnHandlingOptions from deprecated keyword arguments."""
     if is_given(agent_false_interruption_timeout):
@@ -381,7 +384,9 @@ def _migrate_turn_handling(
     if is_given(turn_detection):
         result["turn_detection"] = turn_detection
 
-    if is_given(preemptive_generation):
+    if isinstance(preemptive_generation, dict):
+        result["preemptive_generation"] = PreemptiveGenerationOptions(**preemptive_generation)
+    elif is_given(preemptive_generation):
         result["preemptive_generation"] = {"enabled": preemptive_generation}
 
     return result

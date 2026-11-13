@@ -211,8 +211,11 @@ class SpeechStream(stt.RecognizeStream):
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -231,10 +234,15 @@ class SpeechStream(stt.RecognizeStream):
                             bool(data.get("transcript")),
                         )
                         self._process_stream_event(data)
+                        if "transcript" in data:
+                            self._mark_provider_progress()
                     except Exception:
                         logger.exception("Failed to process Telnyx STT message")
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error("Telnyx STT WebSocket error: %s", ws.exception())
+                    if closing_ws:
+                        return
+                    # Preserve the underlying transport error.
+                    raise APIConnectionError("Telnyx STT connection lost") from ws.exception()
 
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
@@ -264,7 +272,15 @@ class SpeechStream(stt.RecognizeStream):
 
         try:
             ws = await asyncio.wait_for(
-                self._stt._session_manager.ensure_session().ws_connect(url, headers=headers),
+                self._stt._session_manager.ensure_session().ws_connect(
+                    url,
+                    headers=headers,
+                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+                    # is never noticed: recv_task parks on ws.receive() forever, and the
+                    # retry in _main_task only runs when something raises. Matches the
+                    # Deepgram and Muse STT plugins.
+                    autoping=False,
+                ),
                 self._conn_options.timeout,
             )
             logger.debug("Established Telnyx STT WebSocket connection")

@@ -174,3 +174,204 @@ async def test_synthesize_skips_stale_frames_from_previous_context():
     # stale frame (b"\x00") must be dropped; only current audio (b"\x01") is played
     assert frames, "no audio frames were synthesized"
     assert all(f == b"\x01" * 160 for f in frames)
+
+
+@pytest.mark.asyncio
+async def test_update_options_invalidates_the_pool_when_api_version_changes():
+    """cartesia_version rides on the websocket URL, so pooled sockets go stale."""
+    from livekit.plugins.cartesia import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    invalidated = 0
+    original = tts._pool.invalidate
+
+    def counting_invalidate() -> None:
+        nonlocal invalidated
+        invalidated += 1
+        original()
+
+    tts._pool.invalidate = counting_invalidate  # type: ignore[method-assign]
+
+    # a no-op update must not throw away warm connections
+    tts.update_options(api_version=tts._opts.api_version)
+    assert invalidated == 0, "Expected no invalidation when api_version is unchanged."
+
+    tts.update_options(api_version="2099-01-01")
+    assert tts._opts.api_version == "2099-01-01"
+    assert invalidated == 1, "Changing api_version must drop pooled connections."
+
+    # unrelated options ride in the per-request body and need no reconnect
+    tts.update_options(speed=1.2)
+    assert invalidated == 1, "Only connection-bound options should invalidate the pool."
+
+    await tts.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ws_url_carries_the_updated_api_version():
+    from livekit.plugins.cartesia import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    tts.update_options(api_version="2099-01-01")
+
+    captured: dict[str, str] = {}
+
+    class _Session:
+        def ws_connect(self_, url, **kwargs):  # noqa: ANN001, N805
+            captured["url"] = str(url)
+            raise ConnectionError("stop here, the URL is what matters")
+
+    tts._ensure_session = lambda: _Session()  # type: ignore[method-assign]
+
+    with pytest.raises(APIConnectionError):
+        await tts._connect_ws(timeout=1.0)
+
+    assert "cartesia_version=2099-01-01" in captured["url"], (
+        f"Expected the new api_version in the handshake URL, got {captured['url']}"
+    )
+
+    await tts.aclose()
+
+
+@pytest.mark.asyncio
+async def test_rest_request_sends_the_configured_api_version_header():
+    """The header and the body must agree; the body is shaped by _opts.api_version."""
+    from livekit.plugins.cartesia import TTS
+    from livekit.plugins.cartesia.tts import API_VERSION_HEADER
+
+    tts = TTS(api_key=SECRET_API_KEY, api_version="2099-01-01")
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        async def __aenter__(self_):  # noqa: N805
+            raise ConnectionError("stop here, the headers are what matter")
+
+        async def __aexit__(self_, *exc):  # noqa: N805
+            return False
+
+    class _Session:
+        def post(self_, url, *, headers, **kwargs):  # noqa: ANN001, N805
+            captured["headers"] = headers
+            return _Resp()
+
+    tts._ensure_session = lambda: _Session()  # type: ignore[method-assign]
+
+    stream = tts.synthesize("hello")
+    with pytest.raises(APIConnectionError):
+        async for _ in stream:
+            pass
+    await stream.aclose()
+
+    headers = captured.get("headers")
+    assert headers is not None, "The REST path never issued a request."
+    assert headers[API_VERSION_HEADER] == "2099-01-01", (
+        f"Header sent {headers[API_VERSION_HEADER]!r} while the body was built for "
+        f"{tts._opts.api_version!r}"
+    )
+
+    await tts.aclose()
+
+
+def test_timestamp_options_are_sent_only_on_the_websocket_when_enabled():
+    from livekit.plugins.cartesia import TTS
+    from livekit.plugins.cartesia.tts import _to_cartesia_options
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    streaming = _to_cartesia_options(tts._opts, streaming=True)
+    assert "add_phoneme_timestamps" not in streaming
+    assert "use_normalized_timestamps" not in streaming
+
+    tts = TTS(
+        api_key=SECRET_API_KEY,
+        add_phoneme_timestamps=True,
+        use_normalized_timestamps=True,
+    )
+    streaming = _to_cartesia_options(tts._opts, streaming=True)
+    assert streaming["add_phoneme_timestamps"] is True
+    assert streaming["use_normalized_timestamps"] is True
+
+    # the bytes endpoint does not accept timestamp options
+    rest = _to_cartesia_options(tts._opts, streaming=False)
+    assert "add_phoneme_timestamps" not in rest
+    assert "use_normalized_timestamps" not in rest
+
+
+@pytest.mark.asyncio
+async def test_update_options_sets_timestamp_options():
+    from livekit.plugins.cartesia import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    tts.update_options(add_phoneme_timestamps=True, use_normalized_timestamps=True)
+    assert tts._opts.add_phoneme_timestamps is True
+    assert tts._opts.use_normalized_timestamps is True
+
+    tts.update_options(add_phoneme_timestamps=False)
+    assert tts._opts.add_phoneme_timestamps is False
+    assert tts._opts.use_normalized_timestamps is True
+
+    await tts.aclose()
+
+
+class _PhonemeFakeWS(_FakeWS):
+    """Send a phoneme_timestamps message ahead of the current context's audio."""
+
+    async def receive(self, timeout: float | None = None) -> _FakeMsg:
+        if not self._built:
+            self._built = True
+            await self._end_pkt_sent.wait()
+            ctx = self._context_id or ""
+            self._queue.append(
+                _FakeMsg.text(
+                    {
+                        "type": "phoneme_timestamps",
+                        "context_id": ctx,
+                        "phoneme_timestamps": {
+                            "phonemes": ["h", "ə"],
+                            "start": [0.0, 0.05],
+                            "end": [0.05, 0.1],
+                        },
+                    }
+                )
+            )
+            self._queue.append(_FakeMsg.text({"context_id": ctx, "data": _b64(b"\x01" * 160)}))
+            self._queue.append(_FakeMsg.text({"context_id": ctx, "done": True}))
+        return self._queue.popleft()
+
+
+@pytest.mark.asyncio
+async def test_phoneme_timestamps_message_is_not_reported_as_unexpected(caplog):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.cartesia import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY, add_phoneme_timestamps=True)
+    tts._pool = _FakePool(_PhonemeFakeWS())  # type: ignore[assignment]
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5.0))
+    stream.push_text("hello")
+    stream.end_input()
+
+    frames = [ev async for ev in stream]
+
+    assert frames, "audio after the phoneme message must still be synthesized"
+    assert not [r for r in caplog.records if "unexpected message" in r.getMessage()]
+
+
+@pytest.mark.parametrize("speed", [1, 2, 1.25])
+def test_sonic_3_accepts_numeric_speed(speed):
+    from livekit.plugins.cartesia import TTS
+    from livekit.plugins.cartesia.tts import _to_cartesia_options
+
+    tts = TTS(api_key=SECRET_API_KEY, model="sonic-3", speed=speed)
+    options = _to_cartesia_options(tts._opts, streaming=True)
+    assert options["generation_config"]["speed"] == speed
+
+    tts.update_options(speed=1)
+    assert _to_cartesia_options(tts._opts, streaming=True)["generation_config"]["speed"] == 1
+
+
+@pytest.mark.parametrize("speed", ["fast", True])
+def test_sonic_3_rejects_non_numeric_speed(speed):
+    from livekit.plugins.cartesia import TTS
+
+    with pytest.raises(ValueError, match="speed must be a number for sonic-3"):
+        TTS(api_key=SECRET_API_KEY, model="sonic-3", speed=speed)

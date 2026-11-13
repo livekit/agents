@@ -47,3 +47,44 @@ result = await WarmTransferTask(
 ```python
 python warm_transfer.py dev
 ```
+
+## Twilio connector transfers with the original caller ID
+
+[`twilio_connector_warm_transfer.py`](twilio_connector_warm_transfer.py) dials the
+supervisor through the [Twilio Connector](https://docs.livekit.io/telephony/connectors/twilio/)
+and Twilio's Calls API. This requires LiveKit Cloud and Twilio credentials.
+
+As shipped, this example uses the business number. It does not receive or store
+inbound Twilio webhooks. To demonstrate caller-ID forwarding, implement
+`inbound_caller_id()` using your server-side store for the current inbound `CallSid`;
+the placeholder currently returns an empty number/token pair.
+
+To show the inbound customer's number to the supervisor instead of your Twilio number,
+pass `original_caller_number` (the inbound call's `From`) together with
+`twilio_call_token` (its `CallToken`), both captured from the validated voice webhook:
+
+```python
+result = await TwilioConnectorWarmTransferTask(
+    SUPERVISOR_PHONE_NUMBER,
+    twilio_from_number=TWILIO_FROM_NUMBER,
+    original_caller_number=inbound_from,
+    twilio_call_token=inbound_call_token,
+    chat_ctx=self.chat_ctx,
+)
+```
+
+If Twilio rejects the preserved caller ID with HTTP 400 and
+error [21210](https://www.twilio.com/docs/api/errors/21210) (From not verified) or
+[21212](https://www.twilio.com/docs/api/errors/21212) (invalid From), the task retries
+once from `twilio_from_number` without the token; other errors are not retried. Keep the
+token in server-side state, out of prompts, chat history, logs, and participant attributes.
+
+Keep the number/token pair together, keyed by the inbound `CallSid`;
+the token does not authorize an arbitrary caller ID. Without a token (including an
+empty token), the task uses the business number even if `original_caller_number`
+is supplied. Transport timeouts and unrelated errors never trigger a second dial.
+
+Cancellation and ringing timeouts return promptly while cleanup continues in the
+background. If in-flight creation returns a call SID, the task attempts to cancel
+that call while the worker is alive. Provider failure or worker shutdown can still
+prevent cleanup.

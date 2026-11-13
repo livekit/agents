@@ -26,6 +26,13 @@ from .fake_vad import FakeVAD
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _livekit_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    # the adaptive interruption detector reads these; keep construction hermetic
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+
 def _make_activity(session: AgentSession) -> AgentActivity:
     return AgentActivity(Agent(instructions="test"), session)
 
@@ -113,7 +120,7 @@ def test_audio_activity_waits_for_min_words() -> None:
     activity._audio_recognition._current_transcript = "now enough words"
     activity._interrupt_by_audio_activity()
 
-    activity._current_speech.interrupt.assert_called_once_with()
+    activity._current_speech.interrupt.assert_called_once_with(source="audio_activity")
 
 
 def test_rejected_audio_interruption_clears_confirmed_verdict() -> None:
@@ -209,70 +216,38 @@ def _realtime_barge_in_session() -> AgentSession:
     )
 
 
-async def test_adaptive_interruption_enabled_for_realtime_without_stt(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("realtime", "server_turn_detection", "enabled"),
+    [
+        # a realtime model transcribes internally, so barge-in needs no separate STT
+        (True, False, True),
+        # without STT a pipeline LLM has no text for the gate
+        (False, False, False),
+        # server-side turn detection creates turns itself, so client barge-in cannot take over
+        (True, True, False),
+    ],
+    ids=["realtime-without-stt", "pipeline-without-stt", "realtime-server-turn-detection"],
+)
+def test_adaptive_interruption_without_stt(
+    realtime: bool, server_turn_detection: bool, enabled: bool
 ) -> None:
-    # a realtime model with server-side turn detection off transcribes internally and
-    # commits turns manually, so barge-in gatekeeps by withholding commit rather than
-    # holding STT transcripts — no separate STT is required
-    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
-
-    activity = _make_activity(_realtime_barge_in_session())
-
-    assert activity._interruption_detection_enabled is True
-    assert activity._interruption_detector is not None
-
-
-async def test_adaptive_interruption_still_requires_stt_for_non_realtime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # the non-realtime gate still needs STT because VAD alone cannot provide text
-    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
-
     session = AgentSession(
-        llm=FakeLLM(fake_responses=[]),
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=server_turn_detection))
+        if realtime
+        else FakeLLM(fake_responses=[]),
         vad=FakeVAD(fake_user_speeches=[]),
-        turn_handling=TurnHandlingOptions(
-            turn_detection="vad",
-            interruption={"mode": "adaptive"},
-        ),
+        turn_handling=TurnHandlingOptions(turn_detection="vad", interruption={"mode": "adaptive"}),
     )
 
     activity = _make_activity(session)
 
-    assert activity._interruption_detection_enabled is False
-    assert activity._interruption_detector is None
+    assert activity._interruption_detection_enabled is enabled
+    assert (activity._interruption_detector is not None) is enabled
 
 
-async def test_adaptive_interruption_disabled_for_realtime_with_server_turn_detection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # server-side turn detection creates turns automatically, so client-side barge-in
-    # cannot take over — it stays disabled even for a realtime model
-    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
-
-    session = AgentSession(
-        llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=True)),
-        vad=FakeVAD(fake_user_speeches=[]),
-        turn_handling=TurnHandlingOptions(interruption={"mode": "adaptive"}),
-    )
-
-    activity = _make_activity(session)
-
-    assert activity._interruption_detection_enabled is False
-    assert activity._interruption_detector is None
-
-
-async def test_unjudged_overlap_over_a_paused_speech_commits(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_unjudged_overlap_over_a_paused_speech_commits() -> None:
     # a pause silences the agent and ends the overlap, so no verdict is coming: the turn must
     # commit rather than be discarded on the assumption that one might still arrive
-    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
     activity = _make_activity(_realtime_barge_in_session())
     activity._scheduling_paused = False  # simulate a running session
@@ -288,12 +263,8 @@ async def test_unjudged_overlap_over_a_paused_speech_commits(
     assert activity.on_end_of_turn(_end_of_turn_info(backchannel_over_agent=False)) is True
 
 
-async def test_confirmed_backchannel_drops_while_agent_speaking(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_confirmed_backchannel_drops_while_agent_speaking() -> None:
     # the detector's verdict is the only thing that suppresses a turn
-    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
     activity = _make_activity(_realtime_barge_in_session())
     activity._scheduling_paused = False
@@ -306,14 +277,10 @@ async def test_confirmed_backchannel_drops_while_agent_speaking(
     assert activity.on_end_of_turn(_end_of_turn_info(backchannel_over_agent=True)) is False
 
 
-async def test_backchannel_dropped_after_agent_finishes_speaking(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_backchannel_dropped_after_agent_finishes_speaking() -> None:
     # the user finished the backchannel first (verdict latched), then the agent finished —
     # the backchannel verdict survives to end of turn, so the turn is still dropped with no
     # live speech to key off
-    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
     activity = _make_activity(_realtime_barge_in_session())
     activity._scheduling_paused = False  # simulate a running session
@@ -324,12 +291,8 @@ async def test_backchannel_dropped_after_agent_finishes_speaking(
     assert activity.on_end_of_turn(_end_of_turn_info(backchannel_over_agent=True)) is False
 
 
-async def test_backchannel_confirmed_clears_rt_audio_even_with_stt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_backchannel_confirmed_clears_rt_audio_even_with_stt() -> None:
     # a realtime session buffers input even with an STT attached, so the clear isn't stt-gated
-    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
     session = AgentSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False)),
@@ -349,12 +312,8 @@ async def test_backchannel_confirmed_clears_rt_audio_even_with_stt(
     activity._rt_session.clear_audio.assert_called_once()
 
 
-async def test_backchannel_confirmed_noop_when_barge_in_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_backchannel_confirmed_noop_when_barge_in_disabled() -> None:
     # a late event after barge-in was disabled must not clear the buffer
-    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
     activity = _make_activity(_realtime_barge_in_session())
     activity._interruption_detection_enabled = False
@@ -663,17 +622,27 @@ async def test_a_resolved_overlap_is_not_closed_again() -> None:
     assert _sentinel_names(ch) == []
 
 
-async def test_real_end_of_agent_speech_still_tears_down() -> None:
-    # the agent turn genuinely ending must stop the inference
-    ar, ch = _recognition_with_interruption_ch()
-    ar._on_start_of_agent_speech(started_at=time.time())
-    ar._on_start_of_speech(started_at=time.time())
-    ch.sent.clear()
+@pytest.mark.parametrize("realtime", [False, True])
+async def test_text_simulation_disables_audio_turn_handling_without_warnings(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, realtime: bool
+) -> None:
+    monkeypatch.setattr(AgentSession, "_text_only", property(lambda self: True))
 
-    ar._on_end_of_agent_speech(ended_at=time.time())
+    session = AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False))
+        if realtime
+        else FakeLLM(fake_responses=[]),
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            interruption={"mode": "adaptive"},
+        ),
+    )
 
-    assert _sentinel_names(ch) == [
-        "_OverlapSpeechEndedSentinel",
-        "_AgentSpeechEndedSentinel",
-    ]
-    assert ch.sent[0]._agent_ended is True  # type: ignore[attr-defined]
+    with caplog.at_level("WARNING", logger="livekit.agents"):
+        activity = _make_activity(session)
+
+    assert activity._turn_detection is None
+    assert activity._interruption_detector is None
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]

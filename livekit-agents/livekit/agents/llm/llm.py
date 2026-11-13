@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Iterator
 from datetime import datetime, timezone
 from types import TracebackType
 from typing import Any, ClassVar, Generic, Literal, TypeVar
@@ -18,12 +19,7 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..telemetry import (
-    gen_ai as gen_ai_telemetry,
-    trace_types,
-    tracer,
-    utils as telemetry_utils,
-)
+from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -224,8 +220,23 @@ class LLM(
         await self.aclose()
 
 
+class _LLMEventChannel(aio.Chan[ChatChunk]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.output_sent = False
+
+    def send_nowait(self, value: ChatChunk) -> None:
+        super().send_nowait(value)
+        # A provider can raise before the consumer or metrics task reads the chunk.
+        if value.delta and (value.delta.content or value.delta.tool_calls):
+            self.output_sent = True
+
+
 class LLMStream(ABC):
     _llm_request_span_name: ClassVar[str] = "llm_request"
+    # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
+    _llm_attempt_span_name: ClassVar[str | None] = "llm_request_run"
+    _genai_operation_name: ClassVar[str | None] = trace_types.GenAIOperationName.CHAT
 
     def __init__(
         self,
@@ -240,11 +251,14 @@ class LLMStream(ABC):
         self._tools = tools
         self._conn_options = conn_options
 
-        self._event_ch = aio.Chan[ChatChunk]()
+        self._event_ch = _LLMEventChannel()
+        self._retry_on_chunk_sent = True
         self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
         self._provider_request_ids: list[str] = []
+        self._llm_request_span: trace.Span | None = None
+        self._record_content = False
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
@@ -257,13 +271,15 @@ class LLMStream(ABC):
             with tracer.start_as_current_span(
                 self._llm_request_span_name, end_on_exit=False
             ) as span:
+                # Enabling capture later must not emit a partial response.
+                self._record_content = (
+                    span.is_recording() and gen_ai_telemetry.capture_content_enabled()
+                )
                 self._record_genai_request(span)
                 await self._main_task()
 
         self._task = asyncio.create_task(_traceable_main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
-
-        self._llm_request_span: trace.Span | None = None
 
     @abstractmethod
     async def _run(self) -> None: ...
@@ -272,34 +288,58 @@ class LLMStream(ABC):
         """The GenAI inference span's request side, per the OTel GenAI conventions."""
         gen_ai_telemetry.set_request_attributes(
             span,
-            operation=trace_types.GenAIOperationName.CHAT,
+            operation=self._genai_operation_name,
             provider=self._llm.provider,
             model=self._llm.model,
             stream=True,
             output_type=trace_types.GenAIOutputType.TEXT,
         )
-        gen_ai_telemetry.set_content_attributes(
-            span,
-            system_instructions=gen_ai_telemetry.to_system_instructions(self._chat_ctx),
-            input_messages=gen_ai_telemetry.to_input_messages(self._chat_ctx),
-            tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools),
-        )
+        # user attributes belong on the provider call, not on a delegating span (fallback)
+        if self._genai_operation_name is not None and span.is_recording():
+            if extra_attributes := gen_ai_telemetry.llm_request_attributes():
+                span.set_attributes(extra_attributes)
+        if self._record_content:
+            if self._genai_operation_name is None and input_delta.active():
+                # a delegating span (fallback) would only repeat the input its provider
+                # span records, and take that span's place as the next delta's base
+                gen_ai_telemetry.set_content_attributes(
+                    span, tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools)
+                )
+                return
+            delta = input_delta.compute(input_delta.LLM_REQUEST, self._chat_ctx, span)
+            gen_ai_telemetry.set_content_attributes(
+                span,
+                system_instructions=delta.system_instructions(),
+                input_messages=delta.input_messages(),
+                tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools),
+            )
+            input_delta.set_attributes(span, delta)
+
+    @contextlib.contextmanager
+    def _attempt_span(self) -> Iterator[trace.Span]:
+        if self._llm_attempt_span_name is None:
+            yield trace.get_current_span()
+            return
+
+        with tracer.start_as_current_span(self._llm_attempt_span_name) as span:
+            # a failed attempt names the model it asked without opening its parent
+            gen_ai_telemetry.set_request_attributes(
+                span, operation=None, provider=self._llm.provider, model=self._llm.model
+            )
+            yield span
 
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
 
         for i in range(self._conn_options.max_retry + 1):
             try:
-                with tracer.start_as_current_span("llm_request_run") as attempt_span:
+                with self._attempt_span() as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
                     # Reset per-attempt context ids; the monitor task populates
                     # this as ChatChunks arrive.
                     self._provider_request_ids = []
                     try:
                         await self._run()
-                    except Exception as e:
-                        telemetry_utils.record_exception(attempt_span, e)
-                        raise
                     finally:
                         if self._provider_request_ids:
                             attempt_span.set_attribute(
@@ -310,6 +350,9 @@ class LLMStream(ABC):
                 # 499 (Client Closed Request) - close gracefully without raising
                 if isinstance(e, APIStatusError) and e.status_code == 499:
                     return
+
+                if not self._retry_on_chunk_sent and self._event_ch.output_sent:
+                    e.retryable = False
 
                 retry_interval = self._conn_options._interval_for_retry(i)
 
@@ -378,7 +421,7 @@ class LLMStream(ABC):
                 completion_start_time = datetime.now(timezone.utc).isoformat()
 
             if ev.delta:
-                if ev.delta.content:
+                if ev.delta.content and self._record_content:
                     response_content += ev.delta.content
                 if ev.delta.tool_calls:
                     tool_calls.extend(ev.delta.tool_calls)
@@ -419,7 +462,8 @@ class LLMStream(ABC):
             )
 
             # the GenAI response side; the request side was recorded at span creation
-            gen_ai_telemetry.set_usage_attributes(self._llm_request_span, metrics)
+            if self._genai_operation_name is not None:
+                gen_ai_telemetry.set_usage_attributes(self._llm_request_span, metrics)
             finish_reason = gen_ai_telemetry.finish_reason_for(
                 function_calls=tool_calls, interrupted=metrics.cancelled
             )
@@ -430,14 +474,15 @@ class LLMStream(ABC):
                 finish_reasons=[finish_reason],
                 time_to_first_chunk=ttft if ttft >= 0 else None,
             )
-            gen_ai_telemetry.set_content_attributes(
-                self._llm_request_span,
-                output_messages=gen_ai_telemetry.to_output_messages(
-                    text=response_content,
-                    function_calls=tool_calls,
-                    finish_reason=finish_reason,
-                ),
-            )
+            if self._record_content:
+                gen_ai_telemetry.set_content_attributes(
+                    self._llm_request_span,
+                    output_messages=gen_ai_telemetry.to_output_messages(
+                        text=response_content,
+                        function_calls=tool_calls,
+                        finish_reason=finish_reason,
+                    ),
+                )
             if completion_start_time:
                 self._llm_request_span.set_attribute(
                     trace_types.ATTR_LANGFUSE_COMPLETION_START_TIME, f'"{completion_start_time}"'

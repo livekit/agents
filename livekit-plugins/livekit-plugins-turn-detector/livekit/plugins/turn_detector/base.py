@@ -30,7 +30,7 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
     from huggingface_hub import hf_hub_download
 
     try:
-        local_path = hf_hub_download(repo_id=repo_id, filename=filename, **kwargs)
+        local_path: str = hf_hub_download(repo_id=repo_id, filename=filename, **kwargs)
     except (errors.LocalEntryNotFoundError, OSError):
         logger.error(
             f'Could not find file "{filename}". '
@@ -86,11 +86,12 @@ class _EUORunnerBase(_InferenceRunner):
         convo_text = self._tokenizer.apply_chat_template(
             new_chat_ctx, add_generation_prompt=False, add_special_tokens=False, tokenize=False
         )
+        assert isinstance(convo_text, str)
 
         # remove the EOU token from current utterance
         ix = convo_text.rfind("<|im_end|>")
         text = convo_text[:ix]
-        return text  # type: ignore
+        return text
 
     def initialize(self) -> None:
         logger = logging.getLogger("transformers")
@@ -99,7 +100,10 @@ class _EUORunnerBase(_InferenceRunner):
             def filter(self, record: logging.LogRecord) -> bool:
                 msg = record.getMessage()
                 return not msg.startswith(
-                    "None of PyTorch, TensorFlow >= 2.0, or Flax have been found."
+                    (
+                        "None of PyTorch, TensorFlow >= 2.0, or Flax have been found.",
+                        "PyTorch was not found.",  # transformers >= 5
+                    )
                 )
 
         filt = _SuppressSpecific()
@@ -130,7 +134,7 @@ class _EUORunnerBase(_InferenceRunner):
             self._session = ort.InferenceSession(
                 local_path_onnx, providers=["CPUExecutionProvider"], sess_options=sess_options
             )
-            self._tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
+            self._tokenizer = AutoTokenizer.from_pretrained(
                 HG_MODEL,
                 revision=revision,
                 local_files_only=True,
@@ -181,7 +185,7 @@ class _EUORunnerBase(_InferenceRunner):
         from transformers import AutoTokenizer
 
         # ensure the tokenizer is downloaded
-        AutoTokenizer.from_pretrained(HG_MODEL, revision=cls.model_revision())  # type: ignore[no-untyped-call]
+        AutoTokenizer.from_pretrained(HG_MODEL, revision=cls.model_revision())
         _download_from_hf_hub(
             HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=cls.model_revision()
         )
