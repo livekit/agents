@@ -31,7 +31,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import aiohttp
 
@@ -55,13 +55,13 @@ from .models import (
     MAX_SPEED,
     MIN_SPEED,
     RETIRED_MODELS,
-    TIMBRE_V25_VOICES,
-    TIMBRE_V30_VOICES,
     GnaniTTSBitrates,
     GnaniTTSContainers,
     GnaniTTSEncodings,
     GnaniTTSLanguages,
     GnaniTTSModels,
+    GnaniTTSV25Voices,
+    GnaniTTSV30Voices,
     GnaniTTSVoices,
 )
 
@@ -92,8 +92,8 @@ def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__i
 # cross-model mismatch (which the API rejects with a 400); voices outside these
 # sets are passed through untouched so newly added voices keep working.
 _MODEL_VOICES: dict[str, frozenset[str]] = {
-    "timbre-v2.5": frozenset(TIMBRE_V25_VOICES),
-    "timbre-v3.0": frozenset(TIMBRE_V30_VOICES),
+    "timbre-v2.5": frozenset(get_args(GnaniTTSV25Voices)),
+    "timbre-v3.0": frozenset(get_args(GnaniTTSV30Voices)),
 }
 
 

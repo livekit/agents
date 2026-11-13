@@ -522,11 +522,19 @@ def test_tts_update_options_explicit_voice_mismatching_new_model_is_rejected_ato
 
 def test_tts_voice_catalogues_are_disjoint():
     """Voices are bound to one model; the catalogue check relies on that."""
-    from livekit.plugins.gnani.models import TIMBRE_V25_VOICES, TIMBRE_V30_VOICES
+    from typing import get_args
 
-    assert len(TIMBRE_V30_VOICES) == 13
-    assert not set(TIMBRE_V25_VOICES) & set(TIMBRE_V30_VOICES)
-    assert "Pranav" in TIMBRE_V25_VOICES and "Avinash" in TIMBRE_V30_VOICES
+    from livekit.plugins.gnani.models import (
+        GnaniTTSV25Voices,
+        GnaniTTSV30Voices,
+        GnaniTTSVoices,
+    )
+
+    v25, v30 = set(get_args(GnaniTTSV25Voices)), set(get_args(GnaniTTSV30Voices))
+    assert len(v30) == 13
+    assert not v25 & v30
+    assert "Pranav" in v25 and "Avinash" in v30
+    assert set(get_args(GnaniTTSVoices)) == v25 | v30
 
 
 def test_tts_speed_validation():

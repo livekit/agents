@@ -51,124 +51,12 @@ RETIRED_MODELS = frozenset({"timbre-v2.0"})
 """Models the API rejects with ``400 ... is deprecated and is no longer available``."""
 
 # Voices are bound to a model: using a ``timbre-v3.0`` voice with ``timbre-v2.5``
-# (or the other way round) is rejected by the API with a 400. The tuples below
+# (or the other way round) is rejected by the API with a 400. The literals below
 # are used for editor autocomplete and to fail fast on a *known* cross-model
 # mismatch only. Any other voice string is passed through, so voices that Gnani
 # adds later keep working without a plugin release. The API stays the source of
 # truth. Catalogues as returned by the API on 2026-10-30.
-TIMBRE_V25_VOICES = (
-    "Aarohi",
-    "Abhimanyu",
-    "Ambuja",
-    "Asmita",
-    "Bhavini",
-    "Bhavna",
-    "Brinda",
-    "Charvi",
-    "Chirag",
-    "Chitra",
-    "Damini",
-    "Deepak",
-    "Deven",
-    "Devika",
-    "Dhruva",
-    "Eishani",
-    "Falak",
-    "Falguni",
-    "Farhan",
-    "Gaurav",
-    "Gauri",
-    "Girish",
-    "Hansika",
-    "Harshit",
-    "Hemraj",
-    "Iravati",
-    "Ishaan",
-    "Jalaj",
-    "Janaki",
-    "Jatin",
-    "Jwala",
-    "Kamakshi",
-    "Kartik",
-    "Kaveri",
-    "Kavin",
-    "Kirra",
-    "Lalita",
-    "Lavanya",
-    "Lehara",
-    "Madhuri",
-    "Mehuli",
-    "Nalini",
-    "Nayana",
-    "Noopur",
-    "Omkar",
-    "Oviya",
-    "Parvati",
-    "Poorvi",
-    "Pranav",
-    "Radhika",
-    "Reshma",
-    "Riyaan",
-    "Roopesh",
-    "Saanvi",
-    "Shlok",
-    "Shweta",
-    "Suhana",
-    "Tanvi",
-    "Trisha",
-    "Trupti",
-    "Urmila",
-    "Urvashi",
-    "Varuni",
-    "Vedika",
-    "Veera",
-    "Vidya",
-    "Vikrant",
-    "Wamika",
-    "Yamini",
-    "Yashvi",
-    "Yukti",
-    "Zahira",
-    "Zayan",
-)
-
-TIMBRE_V30_VOICES = (
-    "Avinash",
-    "Chetana",
-    "Devansh",
-    "Harshad",
-    "Kalpana",
-    "Lakshmi",
-    "Prakash",
-    "Riyaa",
-    "Shivani",
-    "Shubham",
-    "Tarika",
-    "Vasudha",
-    "Yashraj",
-)
-
-DEFAULT_VOICE = "Pranav"
-DEFAULT_VOICES: dict[str, str] = {
-    "timbre-v2.5": "Pranav",
-    "timbre-v3.0": "Avinash",
-}
-"""Default voice per model; used when ``voice`` is not given."""
-
-GnaniTTSVoices = Literal[
-    "Avinash",
-    "Chetana",
-    "Devansh",
-    "Harshad",
-    "Kalpana",
-    "Lakshmi",
-    "Prakash",
-    "Riyaa",
-    "Shivani",
-    "Shubham",
-    "Tarika",
-    "Vasudha",
-    "Yashraj",
+GnaniTTSV25Voices = Literal[
     "Aarohi",
     "Abhimanyu",
     "Ambuja",
@@ -243,7 +131,35 @@ GnaniTTSVoices = Literal[
     "Zahira",
     "Zayan",
 ]
+"""Voices of ``timbre-v2.5``."""
+
+GnaniTTSV30Voices = Literal[
+    "Avinash",
+    "Chetana",
+    "Devansh",
+    "Harshad",
+    "Kalpana",
+    "Lakshmi",
+    "Prakash",
+    "Riyaa",
+    "Shivani",
+    "Shubham",
+    "Tarika",
+    "Vasudha",
+    "Yashraj",
+]
+"""Voices of ``timbre-v3.0``."""
+
+GnaniTTSVoices = Literal[GnaniTTSV25Voices, GnaniTTSV30Voices]
 """Known voices across ``timbre-v2.5`` and ``timbre-v3.0``. Any string is accepted."""
+
+DEFAULT_VOICE = "Pranav"
+DEFAULT_VOICES: dict[str, str] = {
+    "timbre-v2.5": "Pranav",
+    "timbre-v3.0": "Avinash",
+}
+"""Default voice per model; used when ``voice`` is not given."""
+
 
 GnaniTTSLanguages = Literal[
     "auto",
