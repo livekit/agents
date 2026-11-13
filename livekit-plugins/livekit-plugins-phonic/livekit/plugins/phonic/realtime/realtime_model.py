@@ -13,6 +13,7 @@ from typing import Literal, TypedDict
 
 from livekit import rtc
 from livekit.agents import AgentSession, get_job_context, llm, utils
+from livekit.agents.llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -1543,8 +1544,14 @@ class RealtimeSession(llm.RealtimeSession):
         """
         session = self._agent_session
         activity = session._activity if session else None
+        if session is None or activity is None:
+            return
+        rt_session = activity.realtime_llm_session
+        # A fallback adapter wraps the realtime session in use; its active child is the one in use.
+        if isinstance(rt_session, _FallbackRealtimeSession):
+            rt_session = rt_session._active
         # A job can run several agent sessions; only the one using this realtime session takes keys.
-        if session is None or activity is None or activity.realtime_llm_session is not self:
+        if rt_session is not self:
             return
         linked = session._room_io.linked_participant if session._room_io else None
         if linked is None or ev.participant is None or ev.participant.identity != linked.identity:
