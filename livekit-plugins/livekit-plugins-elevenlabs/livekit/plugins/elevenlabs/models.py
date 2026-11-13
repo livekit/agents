@@ -23,6 +23,16 @@ def is_dialogue_model(model: str) -> bool:
     return model.startswith(DIALOGUE_TTS_MODEL_PREFIXES)
 
 
+# https://elevenlabs.io/docs/api-reference/text-to-dialogue/stream#request.body.settings
+# Other models answer voice_settings.clone_strength with a 400 (unsupported_model).
+CLONE_STRENGTH_MODEL_PREFIXES = ("eleven_v4",)
+
+
+def supports_clone_strength(model: str) -> bool:
+    """Whether `model` accepts voice_settings.clone_strength."""
+    return model.startswith(CLONE_STRENGTH_MODEL_PREFIXES)
+
+
 # https://elevenlabs.io/docs/api-reference/text-to-speech/convert#request.query.output_format
 TTSEncoding = Literal[
     "mp3_22050_32",

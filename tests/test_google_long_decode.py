@@ -1,9 +1,4 @@
-"""
-Tests for Gemini 4 (argon) in the Google LLM plugin: thinking is configured with a level
-rather than a token budget, sampling parameters are dropped, the output ceiling is pinned
-because the surfaces disagree on a default, and a turn too large for one request is resumed
-through continuation tokens.
-"""
+"""Gemini model gates in the Google LLM plugin, and Gemini 4 request shaping and long decode."""
 
 from __future__ import annotations
 
@@ -21,6 +16,8 @@ from livekit.plugins.google.llm import (
     LONG_DECODE_MAX_REQUESTS,
     LONG_DECODE_MIN_OUTPUT_TOKENS,
     _ignores_sampling_params,
+    _is_gemini_3_flash_model,
+    _is_gemini_3_model,
     _is_gemini_4_model,
     _requires_thought_signatures,
     _supports_thinking_level,
@@ -72,9 +69,11 @@ class _FakeStreams:
     def __init__(self, hops: list[list[types.GenerateContentResponse]]) -> None:
         self._hops = hops
         self.configs: list[types.GenerateContentConfig] = []
+        self.contents: list[list[types.Content]] = []
 
     async def __call__(self, **kwargs: Any) -> AsyncIterator[types.GenerateContentResponse]:
         self.configs.append(kwargs["config"])
+        self.contents.append(kwargs["contents"])
         responses = self._hops[min(len(self.configs) - 1, len(self._hops) - 1)]
 
         async def _iter() -> AsyncIterator[types.GenerateContentResponse]:
@@ -116,8 +115,8 @@ class TestModelDetection:
         "model,expected",
         [
             ("gemini-4-argon", True),
-            # the EAP name is not a listed id, but routes the same if passed as a raw string
-            ("gemini-4-argon-eap", True),
+            ("gemini-4-carbon", True),
+            ("gemini-4-hydrogen", True),
             ("gemini-3-pro-preview", False),
             ("gemini-2.5-flash", False),
             ("gemma-4-27b-it", False),
@@ -126,12 +125,88 @@ class TestModelDetection:
     def test_is_gemini_4(self, model: str, expected: bool) -> None:
         assert _is_gemini_4_model(model) is expected
 
-    async def test_gemini_4_joins_the_gates_gemini_3_already_passed(self) -> None:
-        # thinking_budget returns 400 on argon, so it must take the level path
-        assert _supports_thinking_level(ARGON)
-        assert _requires_thought_signatures(ARGON)
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("gemini-3-pro-preview", True),
+            ("gemini-3-flash-preview", True),
+            ("gemini-3-flash", True),
+            ("gemini-3-pro", True),
+            ("GEMINI-3-FLASH", True),
+            ("gemini-2.5-flash", False),
+            ("gemini-2.5-pro-preview-05-06", False),
+            ("gemini-2.0-flash-001", False),
+            ("gemini-1.5-pro", False),
+            ("gemma-4-31b-it", False),
+            ("gpt-4", False),
+            ("claude-3", False),
+        ],
+    )
+    def test_is_gemini_3(self, model: str, expected: bool) -> None:
+        assert _is_gemini_3_model(model) == expected
 
-    async def test_only_gemini_4_drops_sampling_params(self) -> None:
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("gemini-3-flash-preview", True),
+            ("gemini-3-flash", True),
+            ("GEMINI-3-FLASH", True),
+            ("models/gemini-3-flash-preview", True),
+            ("gemini-3-pro-preview", False),
+            ("gemini-3-pro", False),
+            ("gemini-2.5-flash", False),
+            ("gemini-2.0-flash-001", False),
+        ],
+    )
+    def test_is_gemini_3_flash(self, model: str, expected: bool) -> None:
+        assert _is_gemini_3_flash_model(model) == expected
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            # thinking_budget returns 400 on argon, so it must take the level path
+            (ARGON, True),
+            ("gemini-3-pro-preview", True),
+            ("gemma-4-31b-it", True),
+            ("GEMMA-4-31B-IT", True),
+            ("models/gemma-4-31b-it", True),
+            ("publishers/google/models/gemma-4-26b-a4b-it", True),
+            ("gemini-2.5-flash", False),
+            ("gemma-3-27b-it", False),
+            ("gemma-40-31b-it", False),
+        ],
+    )
+    def test_supports_thinking_level(self, model: str, expected: bool) -> None:
+        assert _supports_thinking_level(model) == expected
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            (ARGON, True),
+            ("gemini-3-pro-preview", True),
+            ("gemini-3-flash-preview", True),
+            ("gemini-3-flash", True),
+            ("gemini-3-pro", True),
+            ("GEMINI-3-FLASH", True),
+            ("gemini-2.5-flash", True),
+            ("gemini-2.5-pro-preview-05-06", True),
+            ("gemini-2.5-flash-preview-04-17", True),
+            ("gemini-2.5-flash-preview-05-20", True),
+            ("GEMINI-2.5-FLASH", True),
+            ("gemini-2.0-flash-001", False),
+            ("gemini-2.0-flash-lite-preview-02-05", False),
+            ("gemini-2.0-pro-exp-02-05", False),
+            ("gemini-1.5-pro", False),
+            ("gemma-4-31b-it", False),
+            ("gpt-4", False),
+            ("claude-3", False),
+        ],
+    )
+    def test_requires_thought_signatures(self, model: str, expected: bool) -> None:
+        """Gemini 2.5+ needs thought signatures passed back in multi-turn function calling."""
+        assert _requires_thought_signatures(model) == expected
+
+    def test_only_gemini_4_drops_sampling_params(self) -> None:
         assert _ignores_sampling_params(ARGON)
         assert not _ignores_sampling_params("gemini-3-pro-preview")
 
@@ -174,6 +249,89 @@ class TestRequestShaping:
         cfg = extra["thinking_config"]
         assert cfg.thinking_budget is None
         assert cfg.thinking_level == types.ThinkingLevel.HIGH
+
+    @pytest.mark.parametrize("level", ["xhigh", "XHIGH"])
+    async def test_xhigh_goes_out_upper_case_on_hydrogen(self, level: str) -> None:
+        extra = await _request_config(
+            _llm("gemini-4-hydrogen", thinking_config=types.ThinkingConfig(thinking_level=level))
+        )
+        cfg = extra["thinking_config"]
+        assert cfg.model_dump(mode="json", exclude_none=True) == {"thinking_level": "XHIGH"}
+
+    @pytest.mark.parametrize(
+        "thinking_config",
+        [{"thinking_level": "xhigh"}, types.ThinkingConfig(thinking_level="xhigh")],
+    )
+    async def test_a_per_call_xhigh_goes_out_upper_case_on_hydrogen(
+        self, thinking_config: types.ThinkingConfigOrDict
+    ) -> None:
+        extra = await _request_config(
+            _llm("gemini-4-hydrogen"), extra_kwargs={"thinking_config": thinking_config}
+        )
+        cfg = extra["thinking_config"]
+        assert cfg.model_dump(mode="json", exclude_none=True) == {"thinking_level": "XHIGH"}
+
+    @pytest.mark.parametrize(
+        "thinking_config",
+        [{"thinking_level": "xhigh"}, types.ThinkingConfig(thinking_level="xhigh")],
+    )
+    async def test_a_per_call_xhigh_is_rejected_where_unsupported(
+        self, thinking_config: types.ThinkingConfigOrDict
+    ) -> None:
+        with pytest.raises(ValueError, match="xhigh"):
+            await _request_config(_llm(), extra_kwargs={"thinking_config": thinking_config})
+
+    @pytest.mark.parametrize("model", [ARGON, "gemini-4-carbon", "gemini-3-pro-preview"])
+    def test_xhigh_is_rejected_where_unsupported(self, model: str) -> None:
+        with pytest.raises(ValueError, match="xhigh"):
+            _llm(model, thinking_config={"thinking_level": "xhigh"})
+
+
+def _tool_call_first_ctx() -> agents_llm.ChatContext:
+    """An interrupted generate_reply() greeting: only its tool call survived."""
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.insert(
+        [
+            agents_llm.FunctionCall(
+                call_id="c1", name="lookup_weather", arguments='{"location": "Tokyo"}'
+            ),
+            agents_llm.FunctionCallOutput(
+                call_id="c1", name="lookup_weather", output="sunny", is_error=False
+            ),
+        ]
+    )
+    chat_ctx.add_message(role="user", content="hahahaa")
+    return chat_ctx
+
+
+async def _sent_contents(model: LLM, chat_ctx: agents_llm.ChatContext) -> list[types.Content]:
+    """The contents the first request carried."""
+    streams = _FakeStreams([[_response(text="hi", finish_reason=types.FinishReason.STOP)]])
+    model._client.aio.models.generate_content_stream = streams  # type: ignore[method-assign]
+    async with model.chat(chat_ctx=chat_ctx) as stream:
+        async for _ in stream:
+            pass
+    return streams.contents[0]
+
+
+class TestHistoryShaping:
+    async def test_a_user_turn_goes_before_an_opening_tool_call(self) -> None:
+        # Gemini 4 answers a history that opens with a function call with a 400
+        contents = await _sent_contents(_llm(), _tool_call_first_ctx())
+        assert [c.role for c in contents] == ["user", "model", "user", "user"]
+        assert contents[0].parts is not None and contents[0].parts[0].text == "."
+        assert contents[1].parts is not None and contents[1].parts[0].function_call is not None
+
+    async def test_an_opening_reply_with_text_is_left_alone(self) -> None:
+        chat_ctx = agents_llm.ChatContext.empty()
+        chat_ctx.add_message(role="assistant", content="Hi!")
+        chat_ctx.add_message(role="user", content="hahahaa")
+        contents = await _sent_contents(_llm(), chat_ctx)
+        assert [c.role for c in contents] == ["model", "user"]
+
+    async def test_older_models_send_the_history_as_is(self) -> None:
+        contents = await _sent_contents(_llm("gemini-2.5-flash"), _tool_call_first_ctx())
+        assert [c.role for c in contents] == ["model", "user", "user"]
 
 
 class TestLongDecode:
