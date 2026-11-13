@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
 from livekit import rtc
-from livekit.agents import AgentSession, get_job_context, llm, utils
+from livekit.agents import AgentSession, RoomIO, get_job_context, llm, utils
 from livekit.agents.llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -573,10 +573,14 @@ class RealtimeSession(llm.RealtimeSession):
         self._keypad_send_tasks: set[asyncio.Task[None]] = set()
         # Keypad presses come from the job's agent session: its room and its linked participant.
         self._agent_session = _job_agent_session()
-        self._keypad_room: rtc.Room | None = None
-        if self._agent_session is not None and self._agent_session._room_io is not None:
-            self._keypad_room = self._agent_session._room_io.room
-            self._keypad_room.on("sip_dtmf_received", self._on_sip_dtmf_received)
+        self._keypad_room_io: RoomIO | None = None
+        if self._agent_session is not None:
+            try:
+                self._keypad_room_io = self._agent_session.room_io
+            except RuntimeError:  # the session wasn't started with a room
+                pass
+            else:
+                self._keypad_room_io.room.on("sip_dtmf_received", self._on_sip_dtmf_received)
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -1215,8 +1219,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_should_close.set()
         self._send_ch.close()
 
-        if self._keypad_room is not None:
-            self._keypad_room.off("sip_dtmf_received", self._on_sip_dtmf_received)
+        if self._keypad_room_io is not None:
+            self._keypad_room_io.room.off("sip_dtmf_received", self._on_sip_dtmf_received)
         if self._keypad_flush_handle is not None:
             self._keypad_flush_handle.cancel()
         for task in list(self._keypad_send_tasks):
@@ -1539,21 +1543,22 @@ class RealtimeSession(llm.RealtimeSession):
     def _on_sip_dtmf_received(self, ev: rtc.SipDTMF) -> None:
         """Buffer a keypad press from the participant the agent session is linked to.
 
-        Presses from anyone else, or meant for another agent session in the job, are ignored. The buffer is sent once the caller
-        pauses or the key limit is reached.
+        Presses from anyone else, or meant for another agent session in the job, are ignored.
+        The buffer is sent once the caller pauses or the key limit is reached.
         """
-        session = self._agent_session
-        activity = session._activity if session else None
-        if session is None or activity is None:
+        if self._agent_session is None or self._keypad_room_io is None:
             return
-        rt_session = activity.realtime_llm_session
-        # A fallback adapter wraps the realtime session in use; its active child is the one in use.
-        if isinstance(rt_session, _FallbackRealtimeSession):
+        try:
+            rt_session = self._agent_session.current_agent.realtime_llm_session
+        except RuntimeError:  # no agent running yet
+            return
+        # Fallback adapters wrap the realtime session in use; unwrap to their active child.
+        while isinstance(rt_session, _FallbackRealtimeSession):
             rt_session = rt_session._active
         # A job can run several agent sessions; only the one using this realtime session takes keys.
         if rt_session is not self:
             return
-        linked = session._room_io.linked_participant if session._room_io else None
+        linked = self._keypad_room_io.linked_participant
         if linked is None or ev.participant is None or ev.participant.identity != linked.identity:
             return
         # Every key, including * and #, is part of what the caller typed.
