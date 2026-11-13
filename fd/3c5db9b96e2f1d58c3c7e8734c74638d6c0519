@@ -1,0 +1,16 @@
+tests/test_amd.py
+  h_a827ab16c3c189 15-16,40,390-508,800-830
+tests/test_inference_stt.py
+  h_a827ab16c3c189 30,705,710,813-835
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fd3c5db9b96e2f1d58c3c7e8734c74638d6c0519",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
