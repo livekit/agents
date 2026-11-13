@@ -161,7 +161,8 @@ pub(crate) async fn dial(url: &str, db: &str) -> Result<Conn, WsdbError> {
     let mut opts = Options::new(url, db);
     opts.reconnect.min_backoff = Duration::from_millis(10);
     opts.reconnect.budget = Duration::from_secs(5);
-    Conn::dial(opts, minter(), tokio::runtime::Handle::current()).await
+    let background = crate::testing::background();
+    Conn::dial(opts, minter(), background.spawner, background.clock).await
 }
 
 #[tokio::test]
@@ -351,16 +352,45 @@ async fn dropping_the_last_handle_closes_the_connection() {
     assert!(inner.upgrade().is_none(), "its tasks no longer hold it");
 }
 
+/// Real time until armed; then whichever task reads it panics.
+#[derive(Default)]
+struct Failing {
+    real: lk_agents_net::clock::RealClock,
+    armed: AtomicBool,
+}
+
+impl Failing {
+    fn check(&self) {
+        assert!(!self.armed.load(Ordering::Acquire), "the clock failed");
+    }
+}
+
+impl Clock for Failing {
+    fn now(&self) -> lk_agents_abi::Ts {
+        self.check();
+        self.real.now()
+    }
+    fn wait_until(&self, at: lk_agents_abi::Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
+        self.check();
+        self.real.wait_until(at)
+    }
+    fn wall(&self) -> std::time::SystemTime {
+        self.real.wall()
+    }
+}
+
 // Catches: a supervisor that dies while redialing leaving later requests waiting on a ready
 // gate nobody will open.
 #[tokio::test]
 async fn a_supervisor_that_dies_mid_redial_fails_later_requests() {
     let (url, _) = serve(script, true).await;
-    let mut opts = Options::new(&url, "DB_1");
-    // The redial's deadline overflows: the supervisor panics while connecting.
-    opts.reconnect.budget = Duration::MAX;
-    let conn = Conn::dial(opts, minter(), tokio::runtime::Handle::current()).await.unwrap();
+    let opts = Options::new(&url, "DB_1");
+    let clock = Arc::new(Failing::default());
+    let spawner = crate::testing::background().spawner;
+    let conn = Conn::dial(opts, minter(), spawner, clock.clone()).await.unwrap();
     assert!(conn.exec(&st("drop", vec![])).await.is_err());
+    // The supervisor is redialing: its wait for the server's `Hello` answer panics.
+    clock.armed.store(true, Ordering::Release);
     let insert = st("INSERT", vec![]);
     let next = tokio::time::timeout(Duration::from_secs(5), conn.exec(&insert));
     assert!(matches!(next.await, Ok(Err(_))), "a request after the supervisor died hung");

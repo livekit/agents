@@ -1,12 +1,13 @@
 use lk_agents_net::clock::unix_now_ms;
-use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::owned::Background;
+use lk_agents_net::task::TaskSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::{Clock, Ts};
 use lk_agents_net::signal;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::Instant;
 
 use super::executor::{Connection, Exit, Runner, RunnerExecutor};
 use super::ipc_channel::{ChannelError, SendError, VERSION};
@@ -242,14 +243,15 @@ pub struct RunnerSupervisor {
 }
 
 impl RunnerSupervisor {
-    /// Launches a runner through `executor` and supervises it. Needs a runtime context.
+    /// Launches a runner through `executor` and supervises it on `rt`.
     pub fn new<H: SupervisorCallbacks>(
         executor: Arc<dyn RunnerExecutor>,
         host: H,
         opts: JobRunnerOptions,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
+        rt: &Background,
     ) -> Self {
-        let spawner = TokioSpawner::current();
+        let clock = rt.clock.clone();
         let (commands, commands_rx) = mpsc::channel(QUEUE);
         let control = Arc::new(signal::Shared::new(Control::default()));
         let control_rx = control.clone();
@@ -262,13 +264,14 @@ impl RunnerSupervisor {
                 Ok((runner, channel)) => {
                     drop(executor);
                     status_tx.modify(|status| status.launched = Some(Ok(())));
-                    let driver = Driver::new(opts, host, blocking_io, runner, channel, status_tx);
+                    let driver =
+                        Driver::new(opts, host, blocking_io, runner, channel, status_tx, clock);
                     driver.run(commands_rx, control_rx).await;
                 }
                 Err(cause) => refuse(cause, host, commands_rx, status_tx).await,
             }
         };
-        driving.spawn(&spawner, "job runner supervisor", run);
+        driving.spawn(rt.spawner.as_ref(), "job runner supervisor", run);
         Self { commands, control, status, _driver: driving }
     }
 
@@ -373,7 +376,9 @@ type Sampling = Option<lk_agents_net::blocking_io::Job<Option<f64>>>;
 /// The supervisor's actor: the runner's state and every deadline, changed only here.
 struct Driver {
     opts: JobRunnerOptions,
-    origin: Instant,
+    clock: Arc<dyn Clock>,
+    /// The instant the deadlines count from.
+    origin: Ts,
     host: Arc<dyn SupervisorCallbacks>,
     blocking_io: lk_agents_net::blocking_io::BlockingIo,
     runner: Arc<dyn Runner>,
@@ -397,9 +402,11 @@ impl Driver {
         runner: Box<dyn Runner>,
         channel: Connection,
         status: signal::Producer<Status>,
+        clock: Arc<dyn Clock>,
     ) -> Self {
-        let origin = Instant::now();
+        let origin = clock.now();
         Self {
+            clock,
             lifecycle: Lifecycle::Active {
                 phase: Active::Starting { deadline: secs(opts.initialize_timeout) },
                 health: Health::Idle,
@@ -437,11 +444,12 @@ impl Driver {
                 self.publish();
                 continue;
             }
-            let deadline = self.wake_at().map(|at| self.origin + at);
+            let deadline = self.wake_at().map(|at| self.origin.saturating_add(at));
+            let clock = self.clock.clone();
             tokio::select! {
                 biased;
                 () = async { match deadline {
-                    Some(at) => tokio::time::sleep_until(at).await,
+                    Some(at) => clock.wait_until(at).await,
                     None => std::future::pending().await,
                 } } => continue,
                 exit = runner.finished(), if !self.exited() => self.input(AfterExit::Read, |d| d.on_finished(exit.unwrap_or_else(|_| d.lost()))),
@@ -474,7 +482,9 @@ impl Driver {
         }
         // Started blocking samples cannot be aborted: retain the host until they settle.
         if let Some(mut sample) = self.sampling.take()
-            && tokio::time::timeout(secs(self.opts.close_timeout), &mut sample).await.is_err()
+            && lk_agents_abi::timeout(&*self.clock, secs(self.opts.close_timeout), &mut sample)
+                .await
+                .is_err()
         {
             runner_log!(self.host.runner(), log::Level::Error; "memory sample did not settle; retaining the runner's host");
             self.status.modify(|s| s.incomplete = true);
@@ -540,7 +550,7 @@ impl Driver {
     }
 
     fn now(&self) -> Duration {
-        Instant::now().duration_since(self.origin)
+        self.clock.now().saturating_duration_since(self.origin)
     }
 
     fn exited(&self) -> bool {

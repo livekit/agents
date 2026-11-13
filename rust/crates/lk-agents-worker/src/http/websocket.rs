@@ -4,12 +4,11 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::http::{ExchangeError, ExchangeEvent, ExchangeMessage, HttpCompletion};
-use lk_agents_abi::{BoxFuture, OwnedTask, SpawnerExt};
+use lk_agents_abi::{BoxFuture, OwnedTask, SpawnerExt, timeout};
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
-use lk_agents_net::task::TokioSpawner;
 use tokio::io::{BufReader, Join};
 use tokio::sync::{Mutex, mpsc};
-use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::error::{CapacityError, ProtocolError};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -114,6 +113,8 @@ struct Shared {
     /// `Closed` is terminal.
     phase: signal::Shared<Phase>,
     tasks: parking_lot::Mutex<Tasks>,
+    /// Where the reader and the close run, and the clock their deadlines are read on.
+    rt: Background,
 }
 
 #[derive(Clone)]
@@ -141,6 +142,7 @@ impl Connection {
         key: &str,
         limits: HttpServerLimits,
         outcome: Recorded,
+        rt: Background,
     ) -> Self {
         let (inbox_tx, inbox) = mpsc::channel(limits.websocket_inbox.max(1));
         Self(Arc::new(Shared {
@@ -154,6 +156,7 @@ impl Connection {
             inbox_tx: parking_lot::Mutex::new(Some(inbox_tx)),
             phase: signal::Shared::new(Phase::Handshake),
             tasks: Default::default(),
+            rt,
         }))
     }
 
@@ -171,7 +174,7 @@ impl Connection {
         let unanswered = async {
             let answered =
                 self.0.phase.wait_until(|phase| (*phase != Phase::Handshake).then_some(()));
-            if tokio::time::timeout(answer_by, answered).await.is_ok() {
+            if timeout(&*self.0.rt.clock, answer_by, answered).await.is_ok() {
                 std::future::pending::<()>().await;
             }
         };
@@ -308,7 +311,7 @@ impl Connection {
         *state = State::Open(sink);
         let inbox = self.0.inbox_tx.lock().take().expect("accepted once");
         let (ended, reader_ended) = signal::once();
-        let reader = TokioSpawner::current().spawn(self.clone().read_frames(stream, inbox, ended));
+        let reader = self.0.rt.spawner.spawn(self.clone().read_frames(stream, inbox, ended));
         let mut tasks = self.0.tasks.lock();
         (tasks.reader, tasks.reader_ended) = (Some(reader), Some(reader_ended));
         drop(tasks);
@@ -359,9 +362,8 @@ impl Connection {
         if tasks.close.is_none() && !closed {
             let reason = reason.to_owned();
             let this = self.clone();
-            tasks.close = Some(
-                TokioSpawner::current().spawn(async move { this.finish_close(code, reason).await }),
-            );
+            let closing = async move { this.finish_close(code, reason).await };
+            tasks.close = Some(self.0.rt.spawner.spawn(closing));
         }
     }
 
@@ -372,7 +374,8 @@ impl Connection {
             }
         });
         let limit = self.0.limits.close_flush_timeout;
-        let Ok(mut state) = tokio::time::timeout(limit, self.0.state.lock()).await else {
+        let clock = &*self.0.rt.clock;
+        let Ok(mut state) = timeout(clock, limit, self.0.state.lock()).await else {
             self.0.end.reset(Code::HsrAbort);
             return self.mark_closed(close_code);
         };
@@ -382,8 +385,7 @@ impl Connection {
                     code: CloseCode::from(close_code),
                     reason: truncate(&reason, MAX_CLOSE_REASON).into(),
                 };
-                let sent =
-                    tokio::time::timeout(limit, sink.send(Message::Close(Some(frame)))).await;
+                let sent = timeout(clock, limit, sink.send(Message::Close(Some(frame)))).await;
                 if matches!(sent, Ok(Ok(()))) {
                     self.0.end.finish();
                     // Wait for the peer's close reply, which ends the reader.
@@ -393,7 +395,7 @@ impl Connection {
                             let _ = ended.wait().await;
                         }
                     };
-                    if tokio::time::timeout(limit, replied).await.is_err() {
+                    if timeout(clock, limit, replied).await.is_err() {
                         self.0.end.stop(Code::HsrAbort);
                     }
                 } else {
@@ -407,7 +409,7 @@ impl Connection {
                     response.start(403, &headers).await?;
                     response.body(b"", false).await
                 };
-                match tokio::time::timeout(limit, refused).await {
+                match timeout(clock, limit, refused).await {
                     Ok(Ok(_)) => self.0.end.finish(),
                     _ => self.0.end.reset(Code::HsrAbort),
                 }
@@ -453,28 +455,30 @@ impl Connection {
         let (interval, patience) =
             (self.0.limits.websocket_ping_interval, self.0.limits.websocket_ping_timeout);
         let mut peer_code = code(CloseCode::Abnormal);
-        let mut heard = Instant::now();
-        let mut pinged: Option<Instant> = None;
+        let clock = self.0.rt.clock.clone();
+        let mut heard = clock.now();
+        let mut pinged: Option<lk_agents_abi::Ts> = None;
         let ending = loop {
-            let wake = pinged.map_or(heard + interval, |at| at + patience);
+            let wake =
+                pinged.map_or(heard.saturating_add(interval), |at| at.saturating_add(patience));
             let next = tokio::select! {
                 biased;
                 next = stream.next() => next,
-                () = tokio::time::sleep_until(wake) => {
+                () = clock.wait_until(wake) => {
                     if self.phase() != Phase::Open {
                         // Closing: the close handshake bounds the wait.
-                        (heard, pinged) = (Instant::now(), None);
+                        (heard, pinged) = (clock.now(), None);
                         continue;
                     }
                     if pinged.is_some() || !self.ping().await {
                         break Ending::Unresponsive;
                     }
-                    pinged = Some(Instant::now());
+                    pinged = Some(clock.now());
                     continue;
                 }
             };
             // Any frame, a pong included, shows the peer is there.
-            (heard, pinged) = (Instant::now(), None);
+            (heard, pinged) = (clock.now(), None);
             let event = match next {
                 Some(Ok(Message::Text(text))) => ExchangeEvent::Text { text: text.to_string() },
                 Some(Ok(Message::Binary(data))) => ExchangeEvent::Binary { data: data.to_vec() },

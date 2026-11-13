@@ -813,7 +813,9 @@ inbox continues to serve endpoint request policies independently.
 The steps a reply runs through belong to the session, not to an agent. Register
 at most one callback per step on the session before `start()`; it runs for
 whichever agent holds the call, `ctx.agent`, and for every `VoiceTask`.
-`session.default.<step>` is the built-in step, so a callback can wrap it.
+`session.default.<step>` is the built-in step, so a callback can wrap it. What it returns has
+`aclose()`, which ends the step's provider request and returns once the provider's stream closed;
+a step dropped unclosed ends with the session, whose close waits for it.
 `agent.run()` and `TextSession` run none of these.
 
 ```python

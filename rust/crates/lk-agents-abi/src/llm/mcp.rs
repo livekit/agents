@@ -52,7 +52,8 @@ pub struct McpToolOptionsPatch {
     pub timeout: Option<f64>,
 }
 
-/// Seconds a connection stays open after its toolset's last run ends, for the next run to reuse.
+/// Seconds a connection stays open after its toolset's last run ends, for the next run to reuse:
+/// `MCPToolset(idle_timeout=)`'s default.
 #[crate::host(constant)]
 pub const MCP_IDLE_CLOSE_SECONDS: f64 = 60.0;
 
@@ -69,6 +70,9 @@ pub enum McpTimeout {
     /// A tool's own `MCPToolOptions(timeout=)`.
     #[host(rename = "timeout")]
     Tool,
+    /// `MCPToolset(idle_timeout=)`.
+    #[host(rename = "idle_timeout")]
+    Idle,
 }
 
 /// MCP failures preserve their native cause, including the upstream SDK error.
@@ -147,6 +151,7 @@ pub trait McpSession: Send + Sync + Sized + 'static {
     /// reply stream.
     #[host(new)]
     fn new(
+        env: &Self::Env,
         init_timeout: f64,
         request_timeout: Option<f64>,
         #[host(default = None)] read_timeout: Option<f64>,
@@ -291,17 +296,27 @@ pub trait McpToolsetHost: Send + Sync {
 
 /// An `MCPToolset`'s lifecycle (docs/tools.md "MCP servers"): one listing at a time; an
 /// unreachable server leaves the toolset without tools and is listed again in the background at
-/// the session's backoff until it answers; the connection closes [`MCP_IDLE_CLOSE_SECONDS`] after the
+/// the session's backoff until it answers; the connection closes `idle_timeout` seconds after the
 /// last run released the toolset unless a run sets it up again first. `host` is the toolset,
-/// held only while a recovery or an idle close is pending.
+/// held only while a recovery or an idle close is pending; both end when the lifecycle drops.
 #[crate::host(class(name = "_core_McpToolsetLifecycle"))]
 pub trait McpToolsetLifecycle: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(class(name = "McpSession"))]
     type Session: Send + Sync + 'static;
 
-    /// `server` names the server in logs; `session` owns the reconnect backoff.
+    /// `server` names the server in logs; `session` owns the reconnect backoff; `idle_timeout`
+    /// is the seconds an unused connection stays open ([`MCP_IDLE_CLOSE_SECONDS`] by default).
     #[host(new)]
-    fn new(server: String, session: std::sync::Arc<Self::Session>) -> Self;
+    fn new(
+        env: &Self::Env,
+        server: String,
+        session: std::sync::Arc<Self::Session>,
+        idle_timeout: f64,
+    ) -> Result<Self, McpError>;
     /// Disarm a pending idle close, then list the tools unless they are listed or a recovery
     /// is under way. A failed listing is logged and recovered in the background; a cancelled
     /// setup cancels its listing.

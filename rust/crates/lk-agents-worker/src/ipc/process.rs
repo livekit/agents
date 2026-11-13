@@ -6,9 +6,9 @@ use std::time::Duration;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host;
-use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_abi::{Clock, OwnedTask, SpawnerExt};
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
-use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
@@ -558,6 +558,8 @@ pub struct ProcessExecutor {
     logger: JobLogger,
     launcher: Arc<dyn ipc_host::JobLauncher>,
     context: CallContext,
+    /// Where the launch, the channel and the process watch run, and the clock the watch polls on.
+    rt: Background,
 }
 
 impl ProcessExecutor {
@@ -565,8 +567,9 @@ impl ProcessExecutor {
         launcher: Arc<dyn ipc_host::JobLauncher>,
         context: CallContext,
         logger: JobLogger,
+        rt: Background,
     ) -> Self {
-        Self { logger, launcher, context }
+        Self { logger, launcher, context, rt }
     }
 }
 
@@ -575,11 +578,11 @@ impl RunnerExecutor for ProcessExecutor {
     /// Returns once a process exists to own: a host launch failing after its receipt kills it.
     async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), HostError> {
         let (parent, child) = ipc_channel::pair().map_err(host_error)?;
-        let connection = Channel::from_endpoint(parent).map_err(host_error)?;
+        let connection = Channel::from_endpoint(parent, &self.rt).map_err(host_error)?;
         let (launcher, context) = (self.launcher.clone(), self.context.clone());
         let (receipt, mut reported) = ProcessReceipt::new();
         let launch = Arc::new(ProcessLaunch(receipt));
-        let mut launching = TokioSpawner::current().spawn(async move {
+        let mut launching = self.rt.spawner.spawn(async move {
             launcher.launch(&telemetry::Cx::NONE, &context, child, launch).await
         });
         // Dropping this future drops the receipt, killing a process reported to it.
@@ -597,7 +600,8 @@ impl RunnerExecutor for ProcessExecutor {
         };
         // A forkserver child's pid is unknown until the forkserver reports it.
         self.logger.state.lock().pid = resource.control().map(|control| control.pid);
-        Ok((Box::new(JobProcess::watch(self.logger.clone(), resource, launching)), connection))
+        let process = JobProcess::watch(self.logger.clone(), resource, launching, &self.rt);
+        Ok((Box::new(process), connection))
     }
 }
 
@@ -660,6 +664,7 @@ async fn watch(
     process: Arc<Mutex<Tracked>>,
     mut launching: Option<OwnedTask<Result<(), HostError>>>,
     logger: JobLogger,
+    clock: Arc<dyn Clock>,
 ) -> Exit {
     loop {
         if let Some(launch) = launching.as_mut().filter(|launch| launch.is_finished()) {
@@ -677,7 +682,7 @@ async fn watch(
         if let Some(exit) = process.lock().poll(&logger) {
             return exit;
         }
-        tokio::time::sleep(POLL).await;
+        clock.wait_until(clock.now().saturating_add(POLL)).await;
     }
 }
 
@@ -695,6 +700,7 @@ impl JobProcess {
         logger: JobLogger,
         resource: ProcessResource,
         launching: Option<OwnedTask<Result<(), HostError>>>,
+        rt: &Background,
     ) -> Self {
         let process = Arc::new(Mutex::new(Tracked {
             resource,
@@ -705,9 +711,9 @@ impl JobProcess {
         }));
         // The watcher holds the producer: its panic or cancel ends the wait.
         let (exit, finished) = signal::once();
-        let watching = TokioSpawner::current().spawn({
-            let (process, logger) = (process.clone(), logger.clone());
-            async move { exit.resolve(watch(process, launching, logger).await) }
+        let watching = rt.spawner.spawn({
+            let (process, logger, clock) = (process.clone(), logger.clone(), rt.clock.clone());
+            async move { exit.resolve(watch(process, launching, logger, clock).await) }
         });
         Self { logger, process, finished, _watching: watching }
     }
@@ -887,7 +893,7 @@ mod tests {
             Vec::new(),
         )
         .unwrap();
-        (JobProcess::watch(logger, resource, None), receipt)
+        (JobProcess::watch(logger, resource, None, &crate::test_rt()), receipt)
     }
 
     async fn pending(runner: &JobProcess) -> bool {
@@ -989,8 +995,12 @@ mod tests {
             pid: Mutex::default(),
             reported: signal::Shared::new(false),
         });
-        let executor =
-            ProcessExecutor::new(launcher.clone(), CallContext::default(), JobLogger::default());
+        let executor = ProcessExecutor::new(
+            launcher.clone(),
+            CallContext::default(),
+            JobLogger::default(),
+            crate::test_rt(),
+        );
         let mut launch = Box::pin(executor.launch());
         tokio::select! {
             biased;

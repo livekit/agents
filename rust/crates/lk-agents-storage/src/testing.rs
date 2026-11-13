@@ -7,7 +7,9 @@ use livekit_protocol::agent::agent_thread::CreateRequest;
 use crate::StorageError;
 use lk_agents_abi::storage::Storage as _;
 use lk_agents_abi::storage::Unacknowledged;
+use lk_agents_abi::{Clock, Ts};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::owned::Background;
 
 use crate::backends::sqlite::{FileConnection, SqliteStorage, Workers};
 use crate::sql::{BatchResult, Bind as _, Row, SqlValue, Statement, StatementKind, statement};
@@ -183,15 +185,30 @@ pub struct Faulty {
     faults: Arc<Faults>,
 }
 
-/// The faults armed on a [`Faulty`] connection and those sharing them.
-#[derive(Default)]
+/// The faults armed on a [`Faulty`] connection and those sharing them, timed on `clock` (the
+/// wall clock, which follows Tokio's paused time, by default).
 pub struct Faults {
+    clock: Arc<dyn Clock>,
     commit: parking_lot::Mutex<Option<WriteFault>>,
     take: parking_lot::Mutex<Option<WriteFault>>,
     write: parking_lot::Mutex<Option<(&'static str, WriteFault)>>,
-    probes_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
+    probes_until: parking_lot::Mutex<Option<Ts>>,
     unreachable_for: parking_lot::Mutex<Option<Duration>>,
-    unreachable_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
+    unreachable_until: parking_lot::Mutex<Option<Ts>>,
+}
+
+impl Default for Faults {
+    fn default() -> Self {
+        Self {
+            clock: Arc::new(lk_agents_net::clock::RealClock::new()),
+            commit: Default::default(),
+            take: Default::default(),
+            write: Default::default(),
+            probes_until: Default::default(),
+            unreachable_for: Default::default(),
+            unreachable_until: Default::default(),
+        }
+    }
 }
 
 impl std::ops::Deref for Faulty {
@@ -215,7 +232,12 @@ impl Faults {
 
     /// Every request fails `Unavailable` for `d` from now.
     pub fn unreachable_for(&self, d: Duration) {
-        *self.unreachable_until.lock() = Some(tokio::time::Instant::now() + d);
+        *self.unreachable_until.lock() = Some(self.after(d));
+    }
+
+    /// `d` from now.
+    fn after(&self, d: Duration) -> Ts {
+        self.clock.now().saturating_add(d)
     }
 
     pub fn fail_next_commit(&self, fault: WriteFault) {
@@ -225,7 +247,7 @@ impl Faults {
     /// A lost commit's resolution probes fail `Unavailable` for `d` from now; other requests
     /// still reach the database.
     pub fn probes_unavailable_for(&self, d: Duration) {
-        *self.probes_until.lock() = Some(tokio::time::Instant::now() + d);
+        *self.probes_until.lock() = Some(self.after(d));
     }
 
     /// The next batch with a statement whose SQL contains `sql`: any statement kind.
@@ -244,7 +266,7 @@ impl Faults {
     }
 
     fn reachable(&self) -> Result<(), StorageError> {
-        let now = tokio::time::Instant::now();
+        let now = self.clock.now();
         match *self.unreachable_until.lock() {
             Some(until) if now < until => Err(StorageError::Unavailable("unreachable".into())),
             _ => Ok(()),
@@ -269,7 +291,7 @@ impl ThreadDbConnection for Faulty {
             .iter()
             .any(|s| !matches!(s.kind(), Some(StatementKind::Commit | StatementKind::Bookkeeping)));
         if has(StatementKind::FenceRead)
-            && self.probes_until.lock().is_some_and(|until| tokio::time::Instant::now() < until)
+            && self.probes_until.lock().is_some_and(|until| self.clock.now() < until)
         {
             return Err(StorageError::Unavailable("probe unreachable".into()));
         }
@@ -289,7 +311,7 @@ impl ThreadDbConnection for Faulty {
         if fault.is_some()
             && let Some(d) = self.unreachable_for.lock().take()
         {
-            *self.unreachable_until.lock() = Some(tokio::time::Instant::now() + d);
+            *self.unreachable_until.lock() = Some(self.after(d));
         }
         match fault {
             None => self.inner.batch(statements).await,
@@ -324,10 +346,10 @@ impl Fixture {
     pub async fn faulty_thread(&self) -> (Thread, Arc<Faulty>) {
         let conn = FileConnection::open(self.file(), false, threads()).await.unwrap();
         let faulty = Arc::new(Faulty::new(Box::new(conn)));
-        let thread =
-            Thread::new(faulty.clone(), &self.thread_id, self.lease, SchemaCell::default())
-                .await
-                .unwrap();
+        let schema = SchemaCell::default();
+        let thread = Thread::new(faulty.clone(), &self.thread_id, self.lease, schema, background())
+            .await
+            .unwrap();
         (thread, faulty)
     }
 }
@@ -349,16 +371,21 @@ impl Drop for TempDir {
     }
 }
 
-/// Production's workers: a thread each, on the OS wall clock.
-pub fn threads() -> Workers {
-    Workers::threads(Arc::new(lk_agents_net::clock::RealClock::new()))
+/// A storage background of its own on the current runtime, on the wall clock, which follows
+/// Tokio's paused time.
+pub fn background() -> Background {
+    ProcessEnv::current_runtime().background().expect("a test runs on a Tokio runtime")
 }
 
-/// Workers as tasks of the current runtime, on the OS wall clock: a paused-time test's waits
-/// stay virtual.
+/// Production's workers: a thread each, the rest on [`background`].
+pub fn threads() -> Workers {
+    Workers::threads(background())
+}
+
+/// Workers as tasks of the current runtime: a paused-time test's waits stay virtual.
 pub fn tasks() -> Workers {
-    let spawner = Arc::new(lk_agents_net::task::TokioSpawner::current());
-    Workers { spawner, clock: Arc::new(lk_agents_net::clock::RealClock::new()) }
+    let background = background();
+    Workers { spawner: background.spawner.clone(), background }
 }
 
 /// A thread database file of its own, its connections' workers [`tasks`]. Removed on drop.
@@ -473,7 +500,12 @@ where
 
     async fn open(&self, thread_id: &str) -> Result<Thread, StorageError> {
         let connection = (self.wrap)(self.storage.connect(thread_id).await?);
-        Thread::new(connection, thread_id, self.storage.lease, SchemaCell::default()).await
+        let (schema, background) = (SchemaCell::default(), self.storage.background().clone());
+        Thread::new(connection, thread_id, self.storage.lease, schema, background).await
+    }
+
+    fn background(&self) -> &Background {
+        self.storage.background()
     }
 
     async fn close(&self) {

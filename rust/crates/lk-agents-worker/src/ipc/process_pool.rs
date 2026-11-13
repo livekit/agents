@@ -132,11 +132,12 @@ impl ProcessPool {
             close_timeout: secs(options.close_timeout),
             instruments: &telemetry::process::INSTRUMENTS,
         };
-        let spawner = TokioSpawner::new(
-            (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?,
-        );
+        let failed =
+            |error: lk_agents_net::env::ProcessError| WorkerError::Failed(error.to_string());
+        let spawner = TokioSpawner::new((env.runtime)().map_err(failed)?);
+        let rt = env.background().map_err(failed)?;
         let executors = HostExecutors { env: env.clone(), launchers, options, context, observer };
-        Ok(Self { pool: ProcPool::new(Arc::new(executors), opts), spawner })
+        Ok(Self { pool: ProcPool::new(Arc::new(executors), opts, rt), spawner })
     }
 
     /// The jobs whose process runs them now (`status` `RUNNING`).

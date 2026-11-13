@@ -1,4 +1,5 @@
 //! Generated adapters against the real public package: values, callbacks and native resources.
+#![allow(clippy::disallowed_methods, reason = "a test polls the host's real loop from its thread")]
 
 use _core::py_calls;
 

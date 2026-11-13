@@ -16,6 +16,7 @@ use lk_agents_abi::{
 };
 use lk_agents_media::media_queue::{self, Item, Policy};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
 use std::convert::Infallible;
@@ -68,10 +69,10 @@ impl NodeFactory for AgentNodes {
         &'a self,
         cx: &telemetry::Cx,
         req: &'a ChatRequest,
+        calls: Arc<dyn ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         let cx = cx.clone();
         Box::pin(async move {
-            let calls = Arc::new(NodeCalls { step: Some(cx.clone()), ..NodeCalls::default() });
             let out = self.host.llm(&cx, req, calls).await?;
             Ok(Box::new(Mapped { source: out, map: llm_chunk, calls: None }) as LlmStream)
         })
@@ -80,14 +81,15 @@ impl NodeFactory for AgentNodes {
     fn tts_node(
         &self,
         cx: &telemetry::Cx,
+        calls: Arc<dyn ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TextSink, TtsSource>, ProviderError>,
     > {
         let cx = cx.clone();
+        let calls = NodeCalls::of(calls);
         Box::pin(async move {
             let (sink, input) = channel();
-            let calls = Arc::new(NodeCalls { step: Some(cx.clone()), ..NodeCalls::default() });
             let out = self.host.tts(&cx, Box::new(input), calls.clone()).await?;
             let request_id = node_id("tts_node_");
             let relay = calls.clone();
@@ -107,14 +109,15 @@ impl NodeFactory for AgentNodes {
     fn stt_node(
         &self,
         cx: &telemetry::Cx,
+        calls: Arc<dyn ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
     > {
         let cx = cx.clone();
+        let calls = NodeCalls::of(calls);
         Box::pin(async move {
             let (sink, input) = audio_channel(Arc::clone(&self.clock), cx.clone());
-            let calls = Arc::new(NodeCalls::default());
             let out = self.host.stt(&cx, Box::new(input), calls.clone()).await?;
             let map = move |mut event: SpeechEvent| {
                 if let Some(usage) = &mut event.recognition_usage
@@ -554,13 +557,16 @@ impl<A: Send + 'static, T, M: FnMut(A) -> T + Send> lk_agents_abi::utils::stream
 
 /// The provider calls of the default node a registered node runs, as the reference meters a TTS's
 /// streams and not the node's output, the connection its provider acquired, which the node's
-/// output does not carry across the host, and the step's trace its request records for.
+/// output does not carry across the host, the step's trace its request records for, and the
+/// session whose tasks run its request.
 #[derive(Default)]
 pub struct NodeCalls {
     state: Mutex<NodeCallState>,
     connection: Mutex<Option<ConnectionAcquired>>,
     /// The step's node span, job and conversation; `None` outside a step.
     pub(super) step: Option<telemetry::Cx>,
+    /// The session's tasks, which its close joins; `None` outside a session.
+    pub(super) owner: Option<Background>,
 }
 
 #[derive(Default)]
@@ -575,6 +581,11 @@ enum NodeCallState {
 }
 
 impl NodeCalls {
+    /// The runtime's own calls; another `ProviderCalls` meters and owns nothing.
+    pub(super) fn of(calls: Arc<dyn ProviderCalls>) -> Arc<NodeCalls> {
+        (calls as Arc<dyn std::any::Any + Send + Sync>).downcast().unwrap_or_default()
+    }
+
     pub(super) fn record(&self, ledger: Option<CallLedger>) {
         let mut state = self.state.lock();
         match (ledger, &mut *state) {
@@ -617,34 +628,53 @@ pub struct Nodes {
     pub llm: Option<Arc<dyn NodeFactory>>,
     pub tts: Option<Arc<dyn NodeFactory>>,
     pub stt: Option<Arc<dyn NodeFactory>>,
+    /// The session's tasks, where the default nodes they run make their requests; `None` leaves
+    /// those to the process.
+    pub owner: Option<Background>,
 }
 
 impl Nodes {
     pub fn llm(&self, below: Arc<dyn Llm>) -> Arc<dyn Llm> {
         match &self.llm {
-            Some(host) => Arc::new(Node { below, host: Arc::clone(host) }),
+            Some(host) => Arc::new(self.node(below, host)),
             None => below,
         }
     }
 
     pub fn tts(&self, below: Arc<dyn Tts>) -> Arc<dyn Tts> {
         match &self.tts {
-            Some(host) => Arc::new(Node { below, host: Arc::clone(host) }),
+            Some(host) => Arc::new(self.node(below, host)),
             None => below,
         }
     }
 
     pub fn stt(&self, below: Arc<dyn Stt>) -> Arc<dyn Stt> {
         match &self.stt {
-            Some(host) => Arc::new(Node { below, host: Arc::clone(host) }),
+            Some(host) => Arc::new(self.node(below, host)),
             None => below,
         }
+    }
+
+    fn node<P: ?Sized>(&self, below: Arc<P>, host: &Arc<dyn NodeFactory>) -> Node<P> {
+        Node { below, host: Arc::clone(host), owner: self.owner.clone() }
     }
 }
 
 struct Node<P: ?Sized> {
     below: Arc<P>,
     host: Arc<dyn NodeFactory>,
+    owner: Option<Background>,
+}
+
+impl<P: ?Sized> Node<P> {
+    /// One invocation's calls, recording for `step` when it runs in one.
+    fn calls(&self, step: Option<&telemetry::Cx>) -> Arc<NodeCalls> {
+        Arc::new(NodeCalls {
+            step: step.cloned(),
+            owner: self.owner.clone(),
+            ..NodeCalls::default()
+        })
+    }
 }
 
 /// The engine does not retry a node: the provider the node calls retries below it, and the node's
@@ -730,7 +760,8 @@ impl Llm for Node<dyn Llm> {
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         let cx = cx.clone();
         Box::pin(async move {
-            let stream = self.host.llm_node(&cx, req).await.map_err(final_error)?;
+            let calls = self.calls(Some(&cx));
+            let stream = self.host.llm_node(&cx, req, calls).await.map_err(final_error)?;
             Ok(Box::new(Final(stream)) as LlmStream)
         })
     }
@@ -786,7 +817,8 @@ impl Tts for Node<dyn Tts> {
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         let cx = cx.clone();
         Box::pin(async move {
-            let (sink, source) = duplex(self.host.tts_node(&cx).await)?.split();
+            let opened = self.host.tts_node(&cx, self.calls(Some(&cx))).await;
+            let (sink, source) = duplex(opened)?.split();
             sink.push(chunk.text.clone()).map_err(final_error)?;
             sink.end_input();
             Ok(source)
@@ -802,7 +834,8 @@ impl Tts for Node<dyn Tts> {
     > {
         let cx = cx.clone();
         Box::pin(async move {
-            let (sink, source) = duplex(self.host.tts_node(&cx).await)?.split();
+            let opened = self.host.tts_node(&cx, self.calls(Some(&cx))).await;
+            let (sink, source) = duplex(opened)?.split();
             Ok(lk_agents_abi::DuplexStream::new(Box::new(AsWritten(sink)) as TtsSink, source))
         })
     }
@@ -884,7 +917,7 @@ impl Stt for Node<dyn Stt> {
     > {
         // The stream outlives every turn: it runs under the activity that opened it.
         let cx = cx.clone();
-        Box::pin(async move { duplex(self.host.stt_node(&cx).await).map(Some) })
+        Box::pin(async move { duplex(self.host.stt_node(&cx, self.calls(None)).await).map(Some) })
     }
 }
 

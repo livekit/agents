@@ -12,7 +12,7 @@ from pydantic import JsonValue
 
 from .. import _core
 from .._generated import facades_llm_mcp as _facades, public_llm_mcp as _public
-from .._generated.mcp import ResolvedToolOptions
+from .._generated.mcp import MCP_IDLE_CLOSE_SECONDS, ResolvedToolOptions
 from .._generated.public_llm_mcp import *  # noqa: F403
 from ..voice.events import RunContext
 from .tool_context import AsyncToolset, RawFunctionTool, Toolset, function_tool
@@ -140,10 +140,18 @@ class MCPToolset(AsyncToolset):
 
     A server that cannot be reached leaves the toolset without tools instead of failing the run
     or the call; it keeps trying in the background, and later runs and activations get the tools
-    once it answers. The connection stays open for a while after the last run, for the next.
+    once it answers. The connection stays open for ``idle_timeout`` seconds after the last run,
+    for the next.
 
     Per-tool behavior is set with ``MCPToolOptions`` in ``tool_options`` (keyed by tool name);
     unlisted tools are plain blocking calls.
+
+    Args:
+        id: The toolset's id.
+        mcp_server: The server its tools come from.
+        tool_options: Per-tool behavior, keyed by tool name.
+        idle_timeout: Seconds the connection stays open after the toolset's last run, for the
+            next run to reuse.
 
     Example::
 
@@ -164,12 +172,16 @@ class MCPToolset(AsyncToolset):
         id: str,
         mcp_server: MCPServer,
         tool_options: dict[str, MCPToolOptions] | None = None,
+        idle_timeout: float = MCP_IDLE_CLOSE_SECONDS,
     ) -> None:
         super().__init__(id=id)
         self._mcp_server = mcp_server
         self._tool_options = dict(tool_options or {})
+        self._idle_timeout = idle_timeout
         # calls back _core_list and _core_close_idle
-        self._lifecycle = _core._core_McpToolsetLifecycle(_describe(mcp_server), mcp_server._native)
+        self._lifecycle = _core._core_McpToolsetLifecycle(
+            _describe(mcp_server), mcp_server._native, idle_timeout
+        )
         # per-run credentials: one toolset per credential set, kept by a call for its length
         self._by_credentials: dict[str, MCPToolset] = {}
         self._by_call: weakref.WeakKeyDictionary[object, MCPToolset] = weakref.WeakKeyDictionary()
@@ -193,7 +205,10 @@ class MCPToolset(AsyncToolset):
         key = hashlib.sha256(repr(server._credentials(ctx)).encode()).hexdigest()
         if (toolset := self._by_credentials.get(key)) is None:
             toolset = MCPToolset(
-                id=self.id, mcp_server=server._for_run(ctx), tool_options=self._tool_options
+                id=self.id,
+                mcp_server=server._for_run(ctx),
+                tool_options=self._tool_options,
+                idle_timeout=self._idle_timeout,
             )
             toolset._tool_handling = self._tool_handling
             toolset._release = functools.partial(self._by_credentials.pop, key, None)
@@ -213,7 +228,7 @@ class MCPToolset(AsyncToolset):
 
     async def aclose(self) -> None:
         """Release the toolset: a recovery stops, and the connection closes after
-        ``MCP_IDLE_CLOSE_SECONDS`` unless a run sets the toolset up again first."""
+        ``idle_timeout`` seconds unless a run sets the toolset up again first."""
         try:
             await super().aclose()
         finally:

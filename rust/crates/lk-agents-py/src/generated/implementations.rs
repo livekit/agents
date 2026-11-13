@@ -179,6 +179,7 @@ impl super::Implementations for Selected {
     type JobRun = ::lk_agents_runtime::worker::ipc::JobRun;
     type ProcessBootstrap = ::lk_agents_runtime::worker::ipc::process::Bootstrap;
     type ProcessInitialization = ::lk_agents_runtime::process::Initialization;
+    type ProcessClock = ::lk_agents_runtime::process::ClockSkip;
     type ServerConfig = ::lk_agents_runtime::worker::server::host::Configuration;
     type ServerRuntime = ::lk_agents_runtime::worker::server::host::AgentServerRuntime;
 }

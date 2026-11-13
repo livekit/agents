@@ -32,6 +32,10 @@ from tests.fakes import (
 from .mcp_peer import CRASH_DETAIL, NAMES, UNICODE, HttpPeer, Journal, serve_http, stdio_command
 
 INTERNAL = "An internal error occurred"
+RECONNECT_BACKOFF_MAX = 30
+"""Seconds of the longest reconnect backoff: skipping them lets a reconnect through at once."""
+INTERRUPTION_WATCHDOG = 5
+"""Seconds an interrupted call may run on before its watchdog cancels it."""
 
 
 # --- Surfaces --------------------------------------------------------------------------------
@@ -597,13 +601,9 @@ async def test_an_unreachable_server_leaves_the_turn_without_its_tools_until_it_
     assert offered(model) == []
 
     await peer.start()
-    async with asyncio.timeout(10):
-        while True:
-            model = FakeLLM(["Hello."])
-            await converse(agent_with(model, toolset), "hi")
-            if offered(model):
-                break
-            await asyncio.sleep(0.1)
+    _core.skip_host_time(RECONNECT_BACKOFF_MAX)
+    model = FakeLLM(["Hello."])
+    await converse(agent_with(model, toolset), "hi")
     assert offered(model) == NAMES
 
 
@@ -623,14 +623,10 @@ async def test_an_outage_after_listing_fails_calls_and_recovers(
     assert reply.output == "Done."
 
     await peer.start()
-    async with asyncio.timeout(10):
-        while True:
-            reply = await converse(agent_with(calling(("echo", {"text": "back"})), toolset), "go")
-            [output] = reply.outputs()
-            if not output.is_error:
-                break
-            await asyncio.sleep(0.2)
-    assert output.text == "back"
+    _core.skip_host_time(RECONNECT_BACKOFF_MAX)
+    reply = await converse(agent_with(calling(("echo", {"text": "back"})), toolset), "go")
+    [output] = reply.outputs()
+    assert (output.is_error, output.text) == (False, "back")
 
 
 async def test_a_server_answering_garbage_leaves_the_turn_without_its_tools() -> None:
@@ -711,7 +707,8 @@ async def test_an_interruption_frees_the_conversation_and_the_watchdog_cancels_t
             await session.interrupt()
             await speech
             later = await session._run(user_input="are you there?")
-        await peer.journal.until("settled", timeout=6)
+        _core.skip_host_time(INTERRUPTION_WATCHDOG)
+        await peer.journal.until("settled", timeout=1)
     assert speech.interrupted
     assert _reply(later).output == "Yes, I'm here."
 

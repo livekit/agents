@@ -29,6 +29,7 @@ use crate::voice::speech_handle::{SayStream, SpeechHandle, Speeches};
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::toolsets::SESSION_TOOLSET_SCOPE;
 use lk_agents_abi::voice::events::{CloseReason, HostWire};
+use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::room_owner::RoomIo;
 use lk_agents_abi::voice::session::{
     CommandRefused, OpenRefused, SessionRefused, StartFailed, UpdateAgentArgs,
@@ -71,6 +72,9 @@ pub struct VoiceSession {
     spawner: Arc<dyn Spawner>,
     /// What runs beside the loop: its drain, hook answers, handoffs, fed `say`s, a `shutdown`.
     tasks: Arc<TaskSet>,
+    /// The executor's tasks `start()` runs the session on, drained by the runtime's close: what
+    /// the default nodes a registered node runs request through.
+    executor: lk_agents_net::owned::Background,
     /// The driver's clock: `close` on a virtual clock moves it.
     time: Timebase,
     /// The last `with_filler` scope numbered by `filler_start`.
@@ -237,6 +241,16 @@ impl VoiceSession {
     /// The scheduler supplied when the session was assembled.
     pub fn spawner(&self) -> Arc<dyn Spawner> {
         self.spawner.clone()
+    }
+
+    /// The registered nodes, their default nodes' requests run by the session's executor.
+    fn nodes(
+        &self,
+        llm: Option<Arc<dyn NodeFactory>>,
+        tts: Option<Arc<dyn NodeFactory>>,
+        stt: Option<Arc<dyn NodeFactory>>,
+    ) -> Nodes {
+        Nodes { llm, tts, stt, owner: Some(self.executor.clone()) }
     }
 
     pub fn legs(&self) -> SessionLegs {
@@ -766,7 +780,7 @@ impl VoiceSession {
             turn_handling.as_ref(),
             min_consecutive_speech_delay,
         );
-        let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
+        let nodes = self.nodes(llm_node, tts_node, stt_node);
         let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);
         AgentUpdate {
             agent,

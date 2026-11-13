@@ -63,7 +63,7 @@ fn accepted(message: &protocol::WorkerMessage, id: &str) -> bool {
     matches!(&message.message, Some(Sent::Availability(reply)) if reply.job_id == id && reply.available)
 }
 
-type Run = tokio::task::JoinHandle<Result<(), RuntimeError>>;
+type Run = lk_agents_abi::OwnedTask<Result<(), RuntimeError>>;
 
 /// Runs the rig's worker after it registered, with `decisions` decisions let through.
 fn running(rig: RuntimeRig, decisions: usize) -> (Rig, Run) {
@@ -82,7 +82,8 @@ fn running(rig: RuntimeRig, decisions: usize) -> (Rig, Run) {
     } = rig;
     peer.send(register_message("worker")).unwrap();
     gate.add_permits(decisions);
-    let task = tokio::spawn(async move { runtime.run().await });
+    let spawner = lk_agents_net::task::TokioSpawner::current();
+    let task = lk_agents_abi::SpawnerExt::spawn(&spawner, async move { runtime.run().await });
     let rig =
         Rig { handle, peer, sent, started, decisions: gate, launches, connections, load, launched };
     (rig, task)
@@ -639,7 +640,9 @@ mod generated_sequences {
                 ..
             } = runtime_rig();
             let mut notifications = handle.subscribe();
-            let task = tokio::spawn(async move { runtime.run().await });
+            let spawner = lk_agents_net::task::TokioSpawner::current();
+            let task =
+                lk_agents_abi::SpawnerExt::spawn(&spawner, async move { runtime.run().await });
             let first = sent.recv().await.expect("register was not sent");
             assert!(matches!(
                 first.message,

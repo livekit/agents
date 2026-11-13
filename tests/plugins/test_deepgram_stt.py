@@ -374,10 +374,13 @@ async def test_usage_covers_the_connection_lifetime() -> None:
     https://github.com/livekit/agents/issues/3464 https://github.com/livekit/agents/issues/5498
     """
 
+    audio_arrived = asyncio.Event()
+
     async def peer(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         async for message in ws:
+            audio_arrived.set()
             if message.type == web.WSMsgType.TEXT and message.json()["type"] == "CloseStream":
                 await ws.close()
         return ws
@@ -386,6 +389,7 @@ async def test_usage_covers_the_connection_lifetime() -> None:
         model = deepgram.STT(api_key="test", base_url=str(server.make_url("/listen")))
         async with model.stream(conn_options=NO_RETRY) as stream:
             stream.push_frame(_audio(100))
+            await audio_arrived.wait()  # the socket is open
             await asyncio.sleep(0.5)  # the socket stays open, and billed, while idle
             stream.end_input()
             usage = [

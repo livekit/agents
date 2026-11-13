@@ -103,6 +103,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
                         local_model.clone(),
                         sink,
                         lk_agents_media::pool::media_pool(),
+                        Arc::new(lk_agents_net::clock::RealClock::new()),
                     )) as Arc<dyn EotTransport>
                 }
             })
@@ -228,8 +229,12 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
         let model = Arc::clone(&model) as Arc<dyn LocalEotModel>;
         MountedTransport::mount(m.as_str(), Arc::clone(&shared), move |sink| match m {
             TurnDetectorModel::V1 => Arc::new(DyingTransport) as Arc<dyn EotTransport>,
-            _ => Arc::new(LocalTransport::new(model, sink, lk_agents_media::pool::media_pool()))
-                as Arc<dyn EotTransport>,
+            _ => Arc::new(LocalTransport::new(
+                model,
+                sink,
+                lk_agents_media::pool::media_pool(),
+                Arc::new(lk_agents_net::clock::RealClock::new()),
+            )) as Arc<dyn EotTransport>,
         })
     });
     let spawner = lk_agents_net::task::TokioSpawner::current();
@@ -290,6 +295,7 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
                     Arc::new(Model(Arc::default())),
                     sink,
                     lk_agents_media::pool::media_pool(),
+                    Arc::new(lk_agents_net::clock::RealClock::new()),
                 ))
             })
         });

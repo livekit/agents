@@ -57,4 +57,6 @@ MCPToolOptions.__module__ = "livekit.agents.llm.mcp"
 
 
 MCP_IDLE_CLOSE_SECONDS: Final = 60.0
-"""Seconds a connection stays open after its toolset's last run ends, for the next run to reuse."""
+"""Seconds a connection stays open after its toolset's last run ends, for the next run to reuse:
+`MCPToolset(idle_timeout=)`'s default.
+"""

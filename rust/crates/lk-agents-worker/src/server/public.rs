@@ -4,7 +4,7 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 use livekit_protocol::agent_http::{AgentEndpoint, AgentEndpointKind};
 use lk_agents_abi::worker::http::{EndpointKind, EndpointRequest, HttpScheme, RequestHead};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::task::TokioSpawner;
+use lk_agents_net::owned::Background;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 
@@ -31,6 +31,7 @@ pub struct PublicRoutes {
 /// Serve `listener` until `stop`; dropping or stopping it cancels and joins its connections.
 pub async fn serve_public(
     listener: TcpListener,
+    rt: Background,
     routes: Arc<PublicRoutes>,
     server: Arc<EndpointServer>,
     stop: CancellationToken,
@@ -38,7 +39,7 @@ pub async fn serve_public(
     if stop.is_cancelled() {
         return Ok(());
     }
-    let spawner = TokioSpawner::current();
+    let spawner = &rt.spawner;
     let mut connections = FuturesUnordered::<OwnedTask>::new();
     let mut result = Ok(());
     loop {

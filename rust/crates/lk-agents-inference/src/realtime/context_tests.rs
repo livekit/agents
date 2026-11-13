@@ -1,5 +1,9 @@
 //! Bounds temporary allocation while diffing realtime conversation histories.
-#![allow(clippy::print_stdout, reason = "integration test that prints its measurements")]
+#![allow(
+    clippy::print_stdout,
+    clippy::disallowed_methods,
+    reason = "integration test that measures real elapsed time and prints its measurements"
+)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};

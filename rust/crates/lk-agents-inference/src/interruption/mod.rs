@@ -78,7 +78,8 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
         let conn_options = ApiConnectOptions { max_retry: 0, ..conn_options.unwrap_or_default() };
         let config =
             ConnectionConfig { conn_options, token_ttl_secs, ..ConnectionConfig::default() };
-        let detector = AdaptiveInterruptionDetector::new(opts, config, env.clock.clone());
+        let spawner = (env.spawner)().map_err(|e| Invalid(e.to_string()))?;
+        let detector = AdaptiveInterruptionDetector::new(opts, config, env.clock.clone(), spawner);
         Ok(NativeInterruptionDetector { detector })
     }
 

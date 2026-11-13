@@ -13,10 +13,11 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{HeaderMap, Request, StatusCode, Version};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
-use lk_agents_net::task::TokioSpawner;
+use lk_agents_abi::{Clock, OwnedTask, SpawnerExt, TaskError};
+use lk_agents_net::owned::Background;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpListener;
+/// The listeners' socket: this module and the public listener are the server's socket adapters.
+pub use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use super::ServerError;
@@ -61,11 +62,13 @@ pub(super) fn method_not_allowed() -> Response {
 /// joins its connections; malformed requests and peer I/O errors only end that connection.
 pub(super) struct HttpServer {
     listener: TcpListener,
+    /// Where the connections run, and the clock their deadline is read on.
+    rt: Background,
 }
 
 impl HttpServer {
-    pub(super) fn new(listener: TcpListener) -> Self {
-        Self { listener }
+    pub(super) fn new(listener: TcpListener, rt: Background) -> Self {
+        Self { listener, rt }
     }
 
     pub(super) async fn serve<F, R>(
@@ -97,7 +100,7 @@ impl HttpServer {
         F: Fn(Request<()>) -> R + Send + Sync + 'static,
         R: Future<Output = Response> + Send + 'static,
     {
-        let spawner = TokioSpawner::current();
+        let spawner = &self.rt.spawner;
         loop {
             tokio::select! {
                 biased;
@@ -109,7 +112,8 @@ impl HttpServer {
                 }
                 accepted = self.listener.accept(), if connections.len() < MAX_CONNECTIONS => {
                     let (socket, _) = accepted?;
-                    connections.push(spawner.spawn(serve_connection(socket, route.clone())));
+                    let clock = self.rt.clock.clone();
+                    connections.push(spawner.spawn(serve_connection(socket, route.clone(), clock)));
                 }
             }
         }
@@ -151,7 +155,7 @@ fn valid_host(headers: &HeaderMap, version: Version) -> bool {
         })
 }
 
-async fn serve_connection<I, F, R>(io: I, route: Arc<F>)
+async fn serve_connection<I, F, R>(io: I, route: Arc<F>, clock: Arc<dyn Clock>)
 where
     I: AsyncRead + AsyncWrite + Unpin,
     F: Fn(Request<()>) -> R + Send + Sync + 'static,
@@ -187,9 +191,8 @@ where
         .header_read_timeout(HEADER_TIMEOUT);
     // Hyper also enforces the header deadline; this bounds the entire exchange, including
     // application callbacks and a peer that stops reading a response.
-    match tokio::time::timeout(CONNECTION_TIMEOUT, http.serve_connection(TokioIo::new(io), service))
-        .await
-    {
+    let served = http.serve_connection(TokioIo::new(io), service);
+    match lk_agents_abi::timeout(&*clock, CONNECTION_TIMEOUT, served).await {
         Err(_) => {
             log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = CONNECTION_TIMEOUT.as_millis() as u64; "worker HTTP exchange timed out")
         }

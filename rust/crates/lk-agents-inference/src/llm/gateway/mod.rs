@@ -25,13 +25,12 @@ use tokio::sync::mpsc;
 use crate::llm::model_text::SaidText;
 use crate::llm::parse::{ChoiceAccumulator, WireChunk, usage_chunk};
 use futures_util::StreamExt;
-use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
+use lk_agents_abi::{OwnedTask, Spawner, SpawnerExt, TaskOutcome};
 pub use lk_agents_core::request::Policy;
 use lk_agents_core::request::{AttemptFailure, Request, Step};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
 use lk_agents_net::sse::SseDecoder;
-use lk_agents_net::task::TokioSpawner;
 
 // The request is stepped only while it is pulled or closed, so nothing runs ahead of demand.
 // The read limit runs only while the consumer waits for the next chunk: downstream backpressure
@@ -48,7 +47,7 @@ pub struct GatewayLlm {
     label: String,
     opts: Arc<Mutex<LlmOptions>>,
     http: Arc<GatewayHttp>,
-    runtime: tokio::runtime::Handle,
+    spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
     requests: Arc<AtomicU64>,
     /// The host object it was built as, which hears the attempts it retries fail.
@@ -60,14 +59,14 @@ impl GatewayLlm {
     pub fn new(
         opts: LlmOptions,
         http: Arc<GatewayHttp>,
-        runtime: tokio::runtime::Handle,
+        spawner: Arc<dyn Spawner>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         GatewayLlm {
             label: opts.label.clone(),
             opts: Arc::new(Mutex::new(opts)),
             http,
-            runtime,
+            spawner,
             clock,
             requests: Arc::new(AtomicU64::new(1)),
             events: None,
@@ -107,7 +106,7 @@ impl GatewayLlm {
             rx,
             reporter: Reporter { tx, clock: self.clock.clone() },
             exchange: Arc::new(Exchange { http: self.http.clone(), request }),
-            runtime: self.runtime.clone(),
+            spawner: self.spawner.clone(),
             tasks: BTreeMap::new(),
             ready: VecDeque::new(),
             outcome: None,
@@ -139,7 +138,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
     ) -> Result<Self, Invalid> {
         use lk_agents_abi::inference::InferenceCredentials as _;
         let unavailable = |e: lk_agents_net::env::ProcessError| Invalid(e.to_string());
-        let runtime = (env.runtime)().map_err(unavailable)?;
+        let spawner = (env.spawner)().map_err(unavailable)?;
         let http = (env.http)().map_err(unavailable)?;
         let (base_url, auth, strict_tools, body) = match endpoint {
             Some(e) => (
@@ -167,7 +166,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
             label: NativeLabel::InferenceLlm.as_str().into(),
             extra_kwargs: extra_kwargs.unwrap_or_default(),
         };
-        let llm = GatewayLlm::new(opts, http, runtime, env.clock.clone());
+        let llm = GatewayLlm::new(opts, http, spawner, env.clock.clone());
         Ok(GatewayLlm { label, events: Some(events), ..llm })
     }
 
@@ -278,8 +277,7 @@ impl Llm for GatewayLlm {
         };
         let (http, url) =
             (self.http.clone(), format!("{}/models", opts.base_url.trim_end_matches('/')));
-        let task = TokioSpawner::new(self.runtime.clone())
-            .spawn(async move { http.warm(url, headers).await });
+        let task = self.spawner.spawn(async move { http.warm(url, headers).await });
         *self.prewarm.lock() = Some(task);
     }
 
@@ -378,7 +376,7 @@ pub struct LlmChunks {
     rx: mpsc::Receiver<Stamped<Event>>,
     reporter: Reporter<Event>,
     exchange: Arc<Exchange>,
-    runtime: tokio::runtime::Handle,
+    spawner: Arc<dyn Spawner>,
     tasks: BTreeMap<u32, OwnedTask>,
     ready: VecDeque<LlmChunk>,
     outcome: Option<Result<(), ApiError>>,
@@ -581,7 +579,7 @@ impl LlmChunks {
             }
             closed.report(Event::AttemptClosed { attempt }).await;
         };
-        let task = TokioSpawner::new(self.runtime.clone()).spawn_settled(work, settle);
+        let task = self.spawner.spawn_settled(work, settle);
         self.tasks.insert(attempt, task);
     }
 }

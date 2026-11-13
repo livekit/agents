@@ -6,6 +6,7 @@ use parking_lot::Mutex;
 
 use lk_agents_abi::storage::{StorageError, Unacknowledged};
 use lk_agents_abi::{Clock, Ts};
+use lk_agents_runtime::net::owned::Background;
 use lk_agents_runtime::storage::backends::sqlite::{FileConnection, SqliteStorage, Workers};
 use lk_agents_runtime::storage::sql::{BatchResult, Row, Statement};
 use lk_agents_runtime::storage::testing::{Dying, TempDir, Wrapped, lessee};
@@ -42,8 +43,9 @@ impl Store {
     pub async fn open(seed: u64, faults: bool, clock: Arc<dyn Clock>) -> Self {
         let dir = TempDir::new("lk-agents-fuzz-text-");
         let spawner = Arc::new(lk_agents_runtime::net::task::TokioSpawner::current());
-        let dying = Arc::new(Dying::new(spawner));
-        let workers = Workers { spawner: dying.clone(), clock: clock.clone() };
+        let dying = Arc::new(Dying::new(spawner.clone()));
+        let background = Background::new(Arc::default(), spawner, clock.clone());
+        let workers = Workers { spawner: dying.clone(), background };
         let storage = SqliteStorage::open(&dir.0, LeaseTiming::default(), workers);
         let storage = Arc::new(storage.await.expect("a storage directory"));
         let thread = storage.create_thread(Default::default()).await.expect("a thread");

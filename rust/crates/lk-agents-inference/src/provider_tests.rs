@@ -106,8 +106,14 @@ fn options(max_retry: u32) -> ApiConnectOptions {
 
 fn attempts(kind: RequestKind, max_retry: u32, host: &Arc<Host>) -> Arc<ProviderAttempts> {
     let attempts = Arc::new(
-        ProviderAttempts::new(kind, options(max_retry), host.clone(), CallContext::default())
-            .unwrap(),
+        ProviderAttempts::new(
+            &lk_agents_net::env::ProcessEnv::current_runtime(),
+            kind,
+            options(max_retry),
+            host.clone(),
+            CallContext::default(),
+        )
+        .unwrap(),
     );
     *host.attempts.lock() = Some(attempts.clone());
     attempts

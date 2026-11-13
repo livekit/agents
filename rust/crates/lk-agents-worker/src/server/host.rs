@@ -432,6 +432,8 @@ pub struct AgentServerRuntime {
     host: ServerCallbacks,
     mounted: Mounted,
     spawner: TokioSpawner,
+    /// Where the server's tasks run, and the clock its deadlines are read on.
+    rt: lk_agents_net::owned::Background,
     /// The process's span recording, for the endpoint server's `http_request` spans.
     tracer: crate::ipc::telemetry::Tracer,
 }
@@ -454,8 +456,10 @@ impl ServerRuntime for AgentServerRuntime {
         let config = config
             .downcast::<Configuration>()
             .map_err(|_| WorkerError::Invalid("expected a native ServerConfig".into()))?;
-        let runtime = (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?;
-        let spawner = TokioSpawner::new(runtime);
+        let failed =
+            |error: lk_agents_net::env::ProcessError| WorkerError::Failed(error.to_string());
+        let spawner = TokioSpawner::new((env.runtime)().map_err(failed)?);
+        let rt = env.background().map_err(failed)?;
         let host = ServerCallbacks::new(host, native_pools(env.clone()));
         let mounted = host.mounted.clone();
         Ok(Self {
@@ -463,10 +467,11 @@ impl ServerRuntime for AgentServerRuntime {
             settings: config.settings.clone(),
             serving: config.serving.clone(),
             running: config.running.clone(),
-            runtime: server::ServerRuntime::new(host.clone(), None),
+            runtime: server::ServerRuntime::new(host.clone(), None, rt.clone()),
             host,
             mounted,
             spawner,
+            rt,
             tracer: env.tracer.clone(),
         })
     }
@@ -510,7 +515,8 @@ impl ServerRuntime for AgentServerRuntime {
             host_context: context.host_context.clone(),
         };
         let limits = HttpServerLimits::default();
-        let server = EndpointServer::new(endpoints, limits, self.tracer.clone()).with_text(text);
+        let server = EndpointServer::new(endpoints, limits, self.tracer.clone(), self.rt.clone())
+            .with_text(text);
         let _ = self.mounted.set(Arc::new(server));
         let start = ServerStart {
             settings: self.settings(),

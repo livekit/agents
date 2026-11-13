@@ -333,6 +333,10 @@ impl<'v> log::kv::VisitValue<'v> for Typed<'_> {
 /// one): from taking it, through waiting for the GIL, to Python's handlers returning; 0 between
 /// lines.
 static FORWARDING_SINCE: AtomicU64 = AtomicU64::new(0);
+#[allow(
+    clippy::disallowed_methods,
+    reason = "how long a line really waits for the GIL, which the stall detector reads"
+)]
 static DRAIN_EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 fn since_epoch() -> u64 {
@@ -396,7 +400,12 @@ fn emit(py: Python<'_>, line: &Line) -> PyResult<()> {
         Level::Trace => 5,
     };
     let effective: u32 = access::Logger::get_effective_level(&logger)?.call0()?.extract()?;
-    forwarder().levels.lock().insert(line.target.clone(), (filter(effective), Instant::now()));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the level cache's age on the logging thread, which no owner's clock drives"
+    )]
+    let read_at = Instant::now();
+    forwarder().levels.lock().insert(line.target.clone(), (filter(effective), read_at));
     if !access::Logger::is_enabled_for(&logger)?.call1((level,))?.extract::<bool>()? {
         return Ok(());
     }

@@ -884,6 +884,7 @@ async fn the_local_transport_scores_the_audio_it_was_holding_when_the_request_wa
         Arc::new(RecordingModel { seen: seen.clone(), answer: Ok(0.9) }),
         sink.clone() as Arc<dyn PredictionListener>,
         test_pool(),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
     ));
     assert_eq!(transport.session_id(), None, "there is no connection to name");
 
@@ -922,6 +923,7 @@ async fn a_model_that_raises_scores_the_turn_zero_and_says_so() {
         }),
         sink.clone() as Arc<dyn PredictionListener>,
         test_pool(),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
     );
     transport.run_inference(&id("turn_request_1"));
     transport.end_input();
@@ -953,6 +955,7 @@ async fn a_local_prediction_waits_for_a_media_pool_slot() {
         Arc::new(RecordingModel { seen: Arc::new(Mutex::new(Vec::new())), answer: Ok(0.9) }),
         sink.clone() as Arc<dyn PredictionListener>,
         pool.clone(),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
     ));
     transport.run_inference(&id("turn_request_1"));
     transport.end_input();

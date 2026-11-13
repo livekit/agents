@@ -14,6 +14,7 @@ use crate::thread::db;
 use crate::thread::{LeaseTiming, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection, shortuuid};
 use lk_agents_abi::telemetry::Cx;
+use lk_agents_net::owned::Background;
 
 mod connection;
 mod lifecycle;
@@ -169,7 +170,7 @@ impl SqliteStorage {
         let directory = std::path::absolute(directory.as_ref())
             .map_err(|e| StorageError::Invalid(format!("storage directory: {e}")))?;
         let (threads, path, clock) =
-            (directory.join("threads"), directory.join("registry.sqlite"), workers.clock.clone());
+            (directory.join("threads"), directory.join("registry.sqlite"), workers.clock().clone());
         let open = move || {
             std::fs::create_dir_all(&threads)
                 .map_err(|e| StorageError::Invalid(format!("{}: {e}", threads.display())))?;
@@ -200,7 +201,7 @@ impl SqliteStorage {
     }
 
     fn now_ms(&self) -> i64 {
-        (lk_agents_abi::unix_secs(self.workers.clock.wall()) * 1000.0) as i64
+        (lk_agents_abi::unix_secs(self.workers.clock().wall()) * 1000.0) as i64
     }
 
     /// A live thread's own connection, under its lifecycle access.
@@ -376,12 +377,23 @@ impl Storage for SqliteStorage {
 
     async fn open(&self, thread_id: &str) -> Result<Thread, StorageError> {
         let connection = self.connect(thread_id).await?;
-        let thread =
-            Thread::new(Arc::new(connection), thread_id, self.lease, SchemaCell::default());
+        let background = self.workers.background.clone();
+        let thread = Thread::new(
+            Arc::new(connection),
+            thread_id,
+            self.lease,
+            SchemaCell::default(),
+            background,
+        );
         Ok(thread.await?.with_telemetry(self.cx.clone()))
     }
 
+    fn background(&self) -> &Background {
+        &self.workers.background
+    }
+
     async fn close(&self) {
+        crate::backends::settle(&self.workers.background).await;
         self.registry.close().await;
     }
 }
@@ -435,7 +447,7 @@ mod tests {
             .unwrap();
         }
         for _ in 0..2 {
-            let workers = Workers::threads(Arc::new(lk_agents_net::clock::RealClock::new()));
+            let workers = crate::testing::threads();
             let storage = SqliteStorage::open(&directory, LeaseTiming::default(), workers);
             let storage = storage.await.unwrap();
             let rows = storage

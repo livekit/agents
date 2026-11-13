@@ -2,10 +2,11 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::task::TokioSpawner;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 
 use super::*;
 
@@ -17,7 +18,7 @@ struct Peer {
     received: Arc<Mutex<Vec<u8>>>,
     stop: Option<oneshot::Sender<()>>,
     closed: Option<oneshot::Receiver<()>>,
-    task: JoinHandle<()>,
+    task: OwnedTask,
 }
 
 impl Peer {
@@ -31,7 +32,7 @@ impl Peer {
         let (stop, mut stopped) = oneshot::channel();
         let (closed_tx, closed) = oneshot::channel();
         let mut closed_tx = Some(closed_tx);
-        let task = tokio::spawn(async move {
+        let task = TokioSpawner::current().spawn(async move {
             loop {
                 tokio::select! {
                     _ = &mut stopped => break,
@@ -73,12 +74,6 @@ impl Peer {
     async fn close(mut self) {
         self.stop.take();
         (&mut self.task).await.unwrap();
-    }
-}
-
-impl Drop for Peer {
-    fn drop(&mut self) {
-        self.task.abort();
     }
 }
 

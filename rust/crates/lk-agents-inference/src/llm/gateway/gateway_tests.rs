@@ -158,7 +158,12 @@ fn llm(peer: &Peer) -> GatewayLlm {
         extra_kwargs: Default::default(),
     };
     let http = Arc::new(GatewayHttp::new().unwrap());
-    GatewayLlm::new(opts, http, tokio::runtime::Handle::current(), Arc::new(RealClock::new()))
+    GatewayLlm::new(
+        opts,
+        http,
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
+        Arc::new(RealClock::new()),
+    )
 }
 
 fn open(llm: &GatewayLlm, policy: Policy) -> LlmChunks {
@@ -489,7 +494,7 @@ mod live {
         Some(GatewayLlm::new(
             opts,
             http,
-            tokio::runtime::Handle::current(),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
             Arc::new(RealClock::new()),
         ))
     }

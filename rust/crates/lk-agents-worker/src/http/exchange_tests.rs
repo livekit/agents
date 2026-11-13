@@ -111,7 +111,7 @@ where
         Arc::new(lk_agents_abi::VirtualClock::new()),
         7,
     );
-    (Arc::new(EndpointServer::new(Arc::new(app), limits, tracer)), spans)
+    (Arc::new(EndpointServer::new(Arc::new(app), limits, tracer, crate::test_rt())), spans)
 }
 
 pub(crate) fn default_server<F, Fut>(app: F) -> Arc<EndpointServer>
@@ -832,6 +832,7 @@ async fn a_door_route_is_served_by_its_door_and_everything_else_by_the_binding()
         }))),
         HttpServerLimits::default(),
         lk_agents_telemetry::Tracer::disabled(Arc::new(lk_agents_abi::VirtualClock::new())),
+        crate::test_rt(),
     )
     .with_text(text);
     let raw = b"GET /desk/v1 HTTP/1.1\r\nHost: x\r\n\r\n";

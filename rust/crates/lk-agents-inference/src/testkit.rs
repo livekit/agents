@@ -252,17 +252,19 @@ pub mod fallback {
 
     const LIMIT: Duration = Duration::from_secs(5);
 
+    /// `f`, or a panic once [`LIMIT`] passes on Tokio's (possibly paused) clock.
     pub async fn within<F: std::future::Future>(what: &str, f: F) -> F::Output {
-        match tokio::time::timeout(LIMIT, f).await {
+        match lk_agents_abi::timeout(&lk_agents_net::clock::RealClock::new(), LIMIT, f).await {
             Ok(v) => v,
             Err(_) => panic!("timed out after {LIMIT:?} waiting for {what}"),
         }
     }
 
     pub async fn until(what: &str, mut cond: impl FnMut() -> bool) {
+        let clock = lk_agents_net::clock::RealClock::new();
         within(what, async {
             while !cond() {
-                tokio::time::sleep(Duration::from_millis(2)).await;
+                clock.wait_until(clock.now().saturating_add(Duration::from_millis(2))).await;
             }
         })
         .await;

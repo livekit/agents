@@ -15,9 +15,9 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::SpawnerExt as _;
-use lk_agents_net::clock::RealClock;
-use lk_agents_net::task::{Leave, TaskSet, TokioSpawner};
+use lk_agents_abi::{Clock, Ts};
+use lk_agents_net::owned::Background;
+use lk_agents_net::task::{Leave, TaskSet};
 use parking_lot::Mutex;
 
 use crate::StorageError;
@@ -71,7 +71,8 @@ impl Default for LeaseTiming {
 /// apply twice. `Uncertain` reaches the caller only once `wait` ran out with the outcome still
 /// unknown.
 pub(crate) struct Resend {
-    epoch: tokio::time::Instant,
+    clock: Arc<dyn Clock>,
+    epoch: Ts,
     backoff: Backoff,
     lost: Option<Unacknowledged>,
     /// Where a write left unresolved is counted, under its kind.
@@ -80,20 +81,26 @@ pub(crate) struct Resend {
 }
 
 impl Resend {
-    pub(crate) fn new(wait: Duration, cx: &Cx, write: StorageWrite) -> Self {
-        let epoch = tokio::time::Instant::now();
-        let backoff = Backoff::new(epoch.elapsed(), wait);
-        Self { epoch, backoff, lost: None, cx: cx.clone(), write }
+    /// Its backoff waits on `clock`.
+    pub(crate) fn new(clock: Arc<dyn Clock>, wait: Duration, cx: &Cx, write: StorageWrite) -> Self {
+        let epoch = clock.now();
+        let backoff = Backoff::new(Duration::ZERO, wait);
+        Self { clock, epoch, backoff, lost: None, cx: cx.clone(), write }
     }
 
     /// Resolving a write whose acknowledgment `lost` already reported lost.
     pub(crate) fn after_lost(
+        clock: Arc<dyn Clock>,
         wait: Duration,
         cx: &Cx,
         write: StorageWrite,
         lost: Unacknowledged,
     ) -> Self {
-        Self { lost: Some(lost), ..Self::new(wait, cx, write) }
+        Self { lost: Some(lost), ..Self::new(clock, wait, cx, write) }
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.clock.now().saturating_duration_since(self.epoch)
     }
 
     /// Whether an earlier send may have applied.
@@ -115,13 +122,13 @@ impl Resend {
                 return ControlFlow::Break(out);
             }
         };
-        let Some(at) = self.backoff.next(self.epoch.elapsed()) else {
-            telemetry::write_uncertain(&self.cx, self.write);
+        let Some(at) = self.backoff.next(self.elapsed()) else {
+            telemetry::write_uncertain(&self.cx, &*self.clock, self.write);
             return ControlFlow::Break(Err(StorageError::Uncertain(lost)));
         };
         log::debug!(target: lk_agents_abi::LOG_TARGET, "write acknowledgment lost, sending it again: {lost}");
         self.lost = Some(lost);
-        tokio::time::sleep_until(self.epoch + at).await;
+        self.clock.wait_until(self.epoch.saturating_add(at)).await;
         ControlFlow::Continue(())
     }
 
@@ -187,23 +194,26 @@ pub struct Thread {
     pub(crate) cx: Cx,
     /// The background writes its callers left (a dropped lease's release, a dropped turn's
     /// cleanup): the connection stays open past [`Thread::close`] until they end.
-    background: Arc<TaskSet>,
+    left: Arc<TaskSet>,
+    /// The storage's background: where those writes and a deferred close run, and the clock
+    /// every wait on this thread reads.
+    pub(crate) background: Background,
     /// The lease holder id of the storage that opened it, labelling its turns' leases.
     holder: Option<Arc<str>>,
 }
 
 impl Thread {
     /// Over an open connection; `schema` is what is known of its schema, probed when unknown.
+    /// Its background work runs on, and its waits read, the storage's `background`.
     pub async fn new(
         conn: Arc<dyn ThreadDbConnection>,
         thread_id: &str,
         timing: LeaseTiming,
         schema: SchemaCell,
+        background: Background,
     ) -> Result<Self, StorageError> {
-        let background = Arc::default();
-        let thread_id = thread_id.into();
-        let thread =
-            Self { conn, thread_id, timing, schema, cx: Cx::NONE, background, holder: None };
+        let (left, thread_id, cx, holder) = (Arc::default(), thread_id.into(), Cx::NONE, None);
+        let thread = Self { conn, thread_id, timing, schema, cx, left, background, holder };
         if thread.schema_missing() {
             let found = db::schema_version(&*thread.conn).await?;
             *thread.schema.lock() = found;
@@ -233,18 +243,29 @@ impl Thread {
 
     /// The resends of one `write`, for up to [`RESOLVE_WAIT`].
     pub(crate) fn resend(&self, write: StorageWrite) -> Resend {
-        Resend::new(RESOLVE_WAIT, &self.cx, write)
+        self.resend_within(RESOLVE_WAIT, write)
+    }
+
+    /// The resends of one `write`, for up to `wait`.
+    pub(crate) fn resend_within(&self, wait: Duration, write: StorageWrite) -> Resend {
+        Resend::new(self.background.clock.clone(), wait, &self.cx, write)
+    }
+
+    pub(crate) fn clock(&self) -> &dyn Clock {
+        &*self.background.clock
     }
 
     /// Done with the database: the backend releases or parks the connection, once the
-    /// background writes its callers left ended.
+    /// background writes its callers left ended. Deferred, the close is the storage's task, which
+    /// its close joins; refused or cancelled there, the dropped connection closes itself.
     pub async fn close(&self) {
-        if self.background.is_empty() {
+        if self.left.is_empty() {
             return self.conn.close().await;
         }
-        let (conn, background) = (self.conn.clone(), self.background.clone());
-        TokioSpawner::current().spawn_detached(async move {
-            background.wait_empty(&RealClock::new(), None).await;
+        let (conn, left, clock) =
+            (self.conn.clone(), self.left.clone(), self.background.clock.clone());
+        self.background.spawn("thread close", async move {
+            left.wait_empty(&*clock, None).await;
             conn.close().await;
         });
     }
@@ -252,7 +273,7 @@ impl Thread {
     /// Keeps the connection open past [`Thread::close`] until the guard drops: what a background
     /// write on this thread holds.
     pub fn keep_open(&self, name: &str) -> Leave {
-        self.background.track(name)
+        self.left.track(name)
     }
 
     pub fn partition(&self, name: &str) -> Partition {

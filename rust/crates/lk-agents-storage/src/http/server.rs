@@ -11,7 +11,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode, body::Incoming};
 use hyper_util::rt::TokioIo;
 use lk_agents_abi::SpawnerExt;
-use lk_agents_net::task::TokioSpawner;
+use lk_agents_net::owned::Background;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -51,9 +51,11 @@ impl ThreadServer {
             .map_err(|error| StorageError::Unavailable(format!("thread API listener: {error}")))?;
         let port =
             listener.local_addr().map_err(|e| StorageError::Unavailable(e.to_string()))?.port();
+        let background = storage.background().clone();
         let service = Arc::new(ThreadService::new(storage, project_id, api_key, api_secret));
         let stop = CancellationToken::new();
-        let task = TokioSpawner::current().spawn(serve(listener, service, stop.clone()));
+        let served = serve(listener, service, stop.clone(), background.clone());
+        let task = background.spawner.spawn(served);
         Ok(Self { port, stop, task: Mutex::new(Some(task)) })
     }
 }
@@ -77,7 +79,13 @@ impl Drop for ThreadServer {
     }
 }
 
-async fn serve(listener: TcpListener, service: Arc<ThreadService>, stopped: CancellationToken) {
+/// Accepts until `stopped`; each connection runs on the storage's executor and clock.
+async fn serve(
+    listener: TcpListener,
+    service: Arc<ThreadService>,
+    stopped: CancellationToken,
+    background: Background,
+) {
     let mut connections = FuturesUnordered::new();
     loop {
         tokio::select! {
@@ -87,8 +95,9 @@ async fn serve(listener: TcpListener, service: Arc<ThreadService>, stopped: Canc
             accepted = listener.accept(), if connections.len() < CONNECTION_LIMIT => {
                 let accepted = accepted.inspect_err(|error| log::warn!(target: lk_agents_abi::LOG_TARGET, "thread API accept failed: {error}"));
                 let Ok((socket, _)) = accepted else { break };
-                let served = connection(socket, service.clone(), stopped.clone());
-                connections.push(TokioSpawner::current().spawn(served));
+                let clock = background.clock.clone();
+                let served = connection(socket, service.clone(), stopped.clone(), clock);
+                connections.push(background.spawner.spawn(served));
             }
         }
     }
@@ -96,7 +105,12 @@ async fn serve(listener: TcpListener, service: Arc<ThreadService>, stopped: Canc
     while connections.next().await.is_some() {}
 }
 
-async fn connection(socket: TcpStream, service: Arc<ThreadService>, stopped: CancellationToken) {
+async fn connection(
+    socket: TcpStream,
+    service: Arc<ThreadService>,
+    stopped: CancellationToken,
+    clock: Arc<dyn lk_agents_abi::Clock>,
+) {
     let handler = service_fn(move |request| {
         let service = service.clone();
         async move { Ok::<_, Infallible>(handle(service, request).await) }
@@ -108,7 +122,7 @@ async fn connection(socket: TcpStream, service: Arc<ThreadService>, stopped: Can
     tokio::select! {
         biased;
         () = stopped.cancelled() => {},
-        _ = tokio::time::timeout(REQUEST_TIMEOUT, connection) => {},
+        _ = lk_agents_abi::timeout(&*clock, REQUEST_TIMEOUT, connection) => {},
     }
 }
 

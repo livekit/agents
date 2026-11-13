@@ -258,12 +258,13 @@ fn cancel_task(event_loop: &Py<PyAny>, child: &Child) {
 }
 
 /// Runs `work` on the blocking I/O pool, off the calling thread: what a drop does under the GIL,
-/// so a drop holding a lock never waits for it. Lost only when the process runtime is gone.
+/// so a drop holding a lock never waits for it. A cleanup of the process's tasks, which join it.
+/// Lost only when the process runtime is gone.
 pub(crate) fn off_thread(what: &'static str, work: impl FnOnce() + Send + 'static) {
-    match process_handle() {
-        Ok(handle) => drop(handle.spawn(async move {
+    match lk_agents_runtime::process::env().background() {
+        Ok(background) => background.cleanup(what, async move {
             let _ = lk_agents_runtime::net::blocking_io::blocking_io().run((), work).await;
-        })),
+        }),
         Err(_) => {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "{what} skipped: no process runtime")
         }
@@ -822,7 +823,7 @@ pub fn check_pid() -> PyResult<()> {
 }
 
 /// The process runtime's handle; a forked child's refusal raises.
-pub fn process_handle() -> PyResult<tokio::runtime::Handle> {
+fn process_handle() -> PyResult<tokio::runtime::Handle> {
     lk_agents_runtime::process::handle()
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
@@ -835,6 +836,13 @@ tokio::task_local! {
     static LOCALS: pyo3_async_runtimes::TaskLocals;
 }
 
+/// The host's executor: each `_core` coroutine's future is a task owned by its Python awaitable,
+/// which `pyo3_async_runtimes` cancels with it.
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the executor primitive pyo3_async_runtimes drives the host's awaitables on"
+)]
 impl pyo3_async_runtimes::generic::Runtime for ProcessRuntime {
     type JoinError = tokio::task::JoinError;
     type JoinHandle = tokio::task::JoinHandle<()>;

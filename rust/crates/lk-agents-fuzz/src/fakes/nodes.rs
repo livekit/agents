@@ -220,6 +220,7 @@ impl NodeFactory for FakeNodes {
         &'a self,
         cx: &lk_agents_abi::telemetry::Cx,
         req: &'a ChatRequest,
+        _calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         let cx = cx.clone();
         Box::pin(async move {
@@ -239,6 +240,7 @@ impl NodeFactory for FakeNodes {
     fn tts_node(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
+        _calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<lk_agents_abi::TextSink, TtsSource>, ProviderError>,
@@ -265,6 +267,7 @@ impl NodeFactory for FakeNodes {
     fn stt_node(
         &self,
         cx: &lk_agents_abi::telemetry::Cx,
+        _calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,

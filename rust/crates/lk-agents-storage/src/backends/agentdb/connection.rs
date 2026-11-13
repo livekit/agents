@@ -5,13 +5,13 @@ use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 pub use livekit_protocol::agent_db::wire;
+use lk_agents_abi::{Clock, Spawner};
 use lk_agents_net::signal::{self, Producer};
-use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::TransportError;
 use lk_agents_net::websocket::{Message, RawWebSocket, connect_with_limit};
 use parking_lot::Mutex;
 use prost::Message as _;
-use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use wire as pb;
 
@@ -282,8 +282,10 @@ struct Inner {
     state: Mutex<State>,
     /// Whether a socket is live, published by the supervisor; ended once it is gone.
     ready: signal::Cell<bool>,
-    /// The runtime the connection's supervisor, heartbeat and writer run on.
-    runtime: Handle,
+    /// The executor the connection's supervisor, heartbeat and writer run on.
+    spawner: Arc<dyn Spawner>,
+    /// What its dial bound, heartbeat, redial backoff and read deadline wait on.
+    clock: Arc<dyn Clock>,
     /// The supervisor, heartbeat and socket writers; closing the connection cancels them.
     tasks: Arc<TaskSet>,
 }
@@ -335,11 +337,11 @@ struct Socket {
 
 impl Socket {
     /// An error when the writer stopped, nothing (not even a pong) arrived within the read
-    /// deadline, or the socket ended or failed.
-    async fn next_message(&mut self) -> Result<Message, WsdbError> {
+    /// deadline on `clock`, or the socket ended or failed.
+    async fn next_message(&mut self, clock: &dyn Clock) -> Result<Message, WsdbError> {
         let next = async {
             match self.read_deadline {
-                Some(d) => tokio::time::timeout(d, self.read.next()).await.ok(),
+                Some(d) => lk_agents_abi::timeout(clock, d, self.read.next()).await.ok(),
                 None => Some(self.read.next().await),
             }
         };
@@ -394,11 +396,12 @@ impl Supervisor {
 }
 
 impl Conn {
-    /// Dials, says `Hello`, and starts the supervisor on `runtime`.
+    /// Dials, says `Hello`, and starts the supervisor on `spawner`; every wait reads `clock`.
     pub async fn dial(
         opts: Options,
         minter: TokenMinter,
-        runtime: Handle,
+        spawner: Arc<dyn Spawner>,
+        clock: Arc<dyn Clock>,
     ) -> Result<Conn, WsdbError> {
         let (ready, ready_cell) = signal::signal(false);
         let inner = Arc::new(Inner {
@@ -413,7 +416,8 @@ impl Conn {
                 tip: 0,
             }),
             ready: ready_cell,
-            runtime,
+            spawner,
+            clock,
             tasks: Arc::default(),
         });
         let guard = Arc::new(CloseOnDrop(Arc::downgrade(&inner)));
@@ -422,12 +426,12 @@ impl Conn {
         ready.set(true);
         let ping_interval = socket.ping_interval;
         let supervisor = Supervisor { conn: conn.unguarded(), ready };
-        let spawner = TokioSpawner::new(conn.0.runtime.clone());
+        let spawner = &*conn.0.spawner;
         // Refused once the connection closed: the work is then dropped unstarted.
-        conn.0.tasks.try_spawn(&spawner, "agentdb supervisor", supervisor.run(socket));
+        conn.0.tasks.try_spawn(spawner, "agentdb supervisor", supervisor.run(socket));
         if !ping_interval.is_zero() {
             let owner = conn.unguarded();
-            conn.0.tasks.try_spawn(&spawner, "agentdb heartbeat", owner.ping_loop(ping_interval));
+            conn.0.tasks.try_spawn(spawner, "agentdb heartbeat", owner.ping_loop(ping_interval));
         }
         Ok(conn)
     }
@@ -448,14 +452,19 @@ impl Conn {
 
     /// Dial, `Hello`, publish the writer.
     async fn connect(&self) -> Result<Socket, WsdbError> {
-        let deadline = tokio::time::Instant::now() + self.0.opts.dial_timeout;
-        let token = self.0.minter.mint(&self.0.opts.database_id).map_err(|e| WsdbError::Io(e.to_string()))?;
+        let clock = &*self.0.clock;
+        let deadline = Some(clock.now().saturating_add(self.0.opts.dial_timeout));
+        let token = self
+            .0
+            .minter
+            .mint(&self.0.opts.database_id)
+            .map_err(|e| WsdbError::Io(e.to_string()))?;
         // the token also rides the upgrade, so a proxy in front of agent-db can admit the socket
         let mut url = url::Url::parse(&self.0.opts.url)
             .map_err(|e| WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)))?;
         url.query_pairs_mut().append_pair("access_token", &token);
         let dial = connect_with_limit(url.as_str(), Default::default(), Some(MAX_FRAME));
-        let ws = tokio::time::timeout_at(deadline, dial)
+        let ws = lk_agents_abi::before(clock, deadline, dial)
             .await
             .map_err(|_| WsdbError::Timeout)?
             .map_err(|e| match e {
@@ -476,7 +485,7 @@ impl Conn {
                 database_id: self.0.opts.database_id.clone(),
             })),
         };
-        tokio::time::timeout_at(deadline, sink.send(Message::binary(hello.encode_to_vec())))
+        lk_agents_abi::before(clock, deadline, sink.send(Message::binary(hello.encode_to_vec())))
             .await
             .map_err(|_| WsdbError::Timeout)?
             .map_err(|e| WsdbError::Io(e.to_string()))?;
@@ -495,8 +504,9 @@ impl Conn {
                 }
             }
         };
-        let resp =
-            tokio::time::timeout_at(deadline, first).await.map_err(|_| WsdbError::Timeout)??;
+        let resp = lk_agents_abi::before(clock, deadline, first)
+            .await
+            .map_err(|_| WsdbError::Timeout)??;
         if resp.request_id != hello.request_id {
             return Err(WsdbError::Protocol("Hello response has a different request id".into()));
         }
@@ -518,19 +528,20 @@ impl Conn {
         // socket
         let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (gone, writer_gone) = tokio::sync::oneshot::channel();
-        let spawner = TokioSpawner::new(self.0.runtime.clone());
+        let writer_clock = self.0.clock.clone();
         // Refused once the connection closed: the sink and `gone` then drop unstarted.
-        self.0.tasks.try_spawn(&spawner, "agentdb writer", async move {
+        self.0.tasks.try_spawn(&*self.0.spawner, "agentdb writer", async move {
             // Declared first, so `gone` reports the writer stopped after the sink dropped.
             let _gone = gone;
-            let mut sink = sink;
+            let (mut sink, clock) = (sink, &*writer_clock);
             while let Some(bytes) = rx.recv().await {
-                let sent = tokio::time::timeout(ping_timeout, sink.send(Message::binary(bytes)));
+                let sent =
+                    lk_agents_abi::timeout(clock, ping_timeout, sink.send(Message::binary(bytes)));
                 if !matches!(sent.await, Ok(Ok(()))) {
                     return;
                 }
             }
-            let _ = tokio::time::timeout(ping_timeout, sink.close()).await;
+            let _ = lk_agents_abi::timeout(clock, ping_timeout, sink.close()).await;
         });
         {
             let mut st = self.0.state.lock();
@@ -544,7 +555,7 @@ impl Conn {
 
     async fn read_loop(&self, socket: &mut Socket) -> WsdbError {
         loop {
-            let routed = match socket.next_message().await {
+            let routed = match socket.next_message(&*self.0.clock).await {
                 Ok(Message::Binary(bytes)) => self.route_response(bytes.as_ref()),
                 Ok(Message::Close(_)) => Err(WsdbError::Io("socket closed".into())),
                 Ok(_) => Ok(()),
@@ -582,8 +593,8 @@ impl Conn {
 
     /// Exponential backoff until the budget runs out.
     async fn redial(&self) -> Option<Socket> {
-        let r = &self.0.opts.reconnect;
-        let deadline = tokio::time::Instant::now() + r.budget;
+        let (r, clock) = (&self.0.opts.reconnect, &*self.0.clock);
+        let deadline = clock.now().saturating_add(r.budget);
         let mut backoff = r.min_backoff;
         loop {
             match self.connect().await {
@@ -600,26 +611,24 @@ impl Conn {
                     log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb redial failed: {e}")
                 }
             }
-            if tokio::time::Instant::now() >= deadline || self.is_closed() {
+            if clock.now() >= deadline || self.is_closed() {
                 return None;
             }
-            tokio::time::sleep(backoff).await;
+            clock.wait_until(clock.now().saturating_add(backoff)).await;
             backoff = (backoff * 2).min(r.max_backoff);
         }
     }
 
     async fn ping_loop(self, interval: Duration) {
-        let mut tick = tokio::time::interval(interval);
-        tick.tick().await;
+        let clock = self.0.clock.clone();
+        let mut next = clock.now();
         loop {
-            tick.tick().await;
+            next = next.saturating_add(interval);
+            clock.wait_until(next).await;
             if !self.0.ready.get() {
                 continue; // mid-reconnect: a ping before Hello is a protocol error
             }
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
+            let now = (lk_agents_abi::unix_secs(clock.wall()) * 1000.0) as i64;
             let _ = self.write(
                 self.next_id(),
                 pb::client_message::Message::Ping(pb::Ping { timestamp_ms: now }),
@@ -646,7 +655,7 @@ impl Conn {
     /// Cancellation of this waiter leaves those tasks owned by the connection tracker.
     pub async fn aclose(&self) {
         self.close();
-        self.0.tasks.wait_empty(&lk_agents_net::clock::RealClock::new(), None).await;
+        self.0.tasks.wait_empty(&*self.0.clock, None).await;
     }
 
     /// Why a closed connection refuses a call: what made it give up, else `Closed`.

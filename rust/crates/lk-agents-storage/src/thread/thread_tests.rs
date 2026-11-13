@@ -114,6 +114,7 @@ async fn initialize(reword_initial: bool, install_race: bool, version: Option<i6
             "AT_schema_probe",
             LeaseTiming::default(),
             SchemaCell::default(),
+            crate::testing::background(),
         )
         .await?;
         diagnostics.reword.store(true, Ordering::Relaxed);
@@ -182,6 +183,7 @@ async fn a_lost_install_race_reports_why_the_schema_could_not_be_checked() {
         "AT_schema_probe",
         LeaseTiming::default(),
         SchemaCell::default(),
+        crate::testing::background(),
     )
     .await
     .unwrap();

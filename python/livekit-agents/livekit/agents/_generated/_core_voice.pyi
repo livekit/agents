@@ -335,16 +335,28 @@ class LlmNodeChunks:
     """The default `llm_node`'s chunks."""
     def __aiter__(self) -> Self: ...
     async def __anext__(self) -> ChatChunk: ...
+    async def aclose(self) -> None:
+        """Stops reading: the provider's request ends and its stream closes, bounded by the teardown
+        limit. Dropping the object ends it too, without waiting.
+        """
 
 class TtsNodeFrames:
     """The default `tts_node`'s frames."""
     def __aiter__(self) -> Self: ...
     async def __anext__(self) -> NodeFrame: ...
+    async def aclose(self) -> None:
+        """Stops reading: the provider's request ends and its stream closes, bounded by the teardown
+        limit. Dropping the object ends it too, without waiting.
+        """
 
 class SttNodeEvents:
     """The default `stt_node`'s speech events."""
     def __aiter__(self) -> Self: ...
     async def __anext__(self) -> SpeechEvent: ...
+    async def aclose(self) -> None:
+        """Stops reading: the provider's request ends and its stream closes, bounded by the teardown
+        limit. Dropping the object ends it too, without waiting.
+        """
 
 def llm_node(
     llm: LLM[Any],

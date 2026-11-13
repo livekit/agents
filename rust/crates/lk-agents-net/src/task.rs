@@ -165,6 +165,10 @@ impl TokioSpawner {
 impl Spawner for TokioSpawner {
     fn launch(&self, task: Launch) -> OwnedTask<Box<dyn Any + Send>> {
         let (run, owned) = launch(task);
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the Spawner itself: the returned OwnedTask owns the work"
+        )]
         drop(self.handle.spawn(inherit(run)));
         owned
     }

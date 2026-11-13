@@ -109,15 +109,12 @@ fn avatar(url: String, read_ms: u64) -> GatewayAvatar {
         retry_interval: Duration::from_millis(10),
     };
     let http = Arc::new(GatewayHttp::new().unwrap());
-    let runtime = tokio::runtime::Handle::current();
-    GatewayAvatar::new(
-        opts,
-        ("key".into(), "secret".into()),
-        policy,
-        http,
-        &runtime,
+    let background = lk_agents_net::owned::Background::new(
+        Arc::default(),
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
         Arc::new(RealClock::new()),
-    )
+    );
+    GatewayAvatar::new(opts, ("key".into(), "secret".into()), policy, http, &background)
 }
 
 fn room() -> AvatarRoom {
@@ -273,6 +270,7 @@ mod stepped {
     use lk_agents_core::request::{AttemptFailure, Policy};
     use lk_agents_inference::avatar::{AvatarOptions, ProviderSession};
     use lk_agents_net::http::GatewayHttp;
+    use lk_agents_net::owned::Background;
     use tokio::sync::oneshot;
 
     type Answer = oneshot::Receiver<Result<u32, AvatarError>>;
@@ -302,12 +300,15 @@ mod stepped {
         )
         .unwrap();
         let http = Arc::new(GatewayHttp::new().unwrap());
-        let runtime = tokio::runtime::Handle::current();
         let view = Arc::new(parking_lot::Mutex::new(View::default()));
-        let clock = Arc::new(VirtualClock::new());
+        let background = Background::new(
+            Arc::default(),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
+            Arc::new(VirtualClock::new()),
+        );
         let credentials = ("key".into(), "secret".into());
         let (driver, observed) =
-            Driver::new(Arc::new(opts), credentials, policy, http, &runtime, clock, view);
+            Driver::new(Arc::new(opts), credentials, policy, http, &background, view);
         // Reports are never read: the attempts are never polled.
         std::mem::forget(observed);
         driver

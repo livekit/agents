@@ -2,6 +2,13 @@
 //! for sans-I/O machines, [`ScopedSpan`] for async work, and [`process`] instruments.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "tests drive Tokio's paused clock and spawn directly; the library is linted without"
+    )
+)]
 
 // `#[span]` functions name the span API by its crate path, here as in every caller.
 extern crate self as lk_agents_telemetry;

@@ -1101,12 +1101,14 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a lk_agents_abi::ChatRequest,
+        _calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::LlmStream, ProviderError>> {
         Box::pin(async { Err(lk_agents_abi::errors::ApiError::connection(None).into()) })
     }
     fn tts_node(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
+        _calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
@@ -1119,6 +1121,7 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
     fn stt_node(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
+        _calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<

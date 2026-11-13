@@ -1,5 +1,4 @@
 use parking_lot::Mutex;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, HostError};
@@ -7,7 +6,7 @@ use lk_agents_media::pool::JobClass;
 use lk_agents_media::pool::MediaPool;
 use tokio::sync::mpsc;
 
-use lk_agents_abi::AudioFrame;
+use lk_agents_abi::{AudioFrame, Clock};
 
 use crate::eot::session::TransportPrediction;
 use crate::eot::transport::{EotTransport, PredictionListener};
@@ -68,6 +67,8 @@ pub struct LocalTransport {
     model: std::sync::Arc<dyn LocalEotModel>,
     media_pool: MediaPool,
     sink: std::sync::Arc<dyn PredictionListener>,
+    /// Times each prediction's `inference_duration`.
+    clock: std::sync::Arc<dyn Clock>,
     buf: Mutex<AudioRingBuffer>,
     /// `None` once the input has ended, which is what lets [`run`](EotTransport::run) return.
     tx: Mutex<Option<mpsc::UnboundedSender<Job>>>,
@@ -79,12 +80,14 @@ impl LocalTransport {
         model: std::sync::Arc<dyn LocalEotModel>,
         sink: std::sync::Arc<dyn PredictionListener>,
         media_pool: MediaPool,
+        clock: std::sync::Arc<dyn Clock>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         LocalTransport {
             model,
             media_pool,
             sink,
+            clock,
             buf: Mutex::new(AudioRingBuffer::new(CLIENT_BUFFER_SAMPLES)),
             tx: Mutex::new(Some(tx)),
             rx: Mutex::new(Some(rx)),
@@ -141,7 +144,7 @@ impl EotTransport for LocalTransport {
         };
         while let Some((request_id, pcm)) = rx.recv().await {
             let model = self.model.clone();
-            let started = Instant::now();
+            let started = self.clock.now();
             // CPU-bound, on an admitted media worker; a full pool delays the prediction.
             let permit = self.admit().await;
             let result = self
@@ -149,7 +152,8 @@ impl EotTransport for LocalTransport {
                 .spawn_admitted(permit, move || model.predict(&pcm))
                 .await
                 .unwrap_or_else(|panicked| Err(HostError::new(panicked.to_string())));
-            let inference_duration = started.elapsed().as_secs_f64();
+            let inference_duration =
+                self.clock.now().saturating_duration_since(started).as_secs_f64();
 
             // Any failure (panic included) scores 0.0 (`transports.py:421`): "no end of turn".
             let probability = result.unwrap_or_else(|error| {

@@ -1,4 +1,9 @@
 # The I/O policy for the crates that run beside the host.
+#
+# The spawn and time rules bind library code; each crate's tests drive Tokio's paused clock and
+# spawn directly (`#![cfg_attr(test, allow(clippy::disallowed_methods))]` in its lib.rs). A
+# primitive that implements ownership or time (lk_agents_net::{task, clock}) or a boundary adapter
+# allows its one site with a reason.
 
 # Tests may unwrap, print and debug (AGENTS.md "Idiomatic Rust").
 allow-unwrap-in-tests = true
@@ -16,11 +21,29 @@ disallowed-types = [
   { path = "tokio::sync::Notify", reason = "A waiter on a Notify is woken only if someone remembers to: wait on lk_agents_net::signal, whose producer's drop resolves every waiter." },
   { path = "futures_util::future::Shared", reason = "A wake that lands while another waiter polls is lost: share work through lk_agents_net::signal::Shared, its driver a task its executor polls again." },
   { path = "futures::future::Shared", reason = "A wake that lands while another waiter polls is lost: share work through lk_agents_net::signal::Shared, its driver a task its executor polls again." },
+  { path = "tokio::task::JoinHandle", reason = "A dropped JoinHandle detaches its task and nothing joins it: hold a ScopedTask of the owner's TaskSet, or run it through owned::Background." },
 ]
 
 # No Tokio blocking pool: blocking work runs on our pools (lk_agents_media::pool::media_pool,
 # lk_agents_net::blocking_io), names resolve through lk_agents_net::dns.
 disallowed-methods = [
+  # Async work has an owner that joins or cancels it, on the injected executor the DST replaces.
+  { path = "tokio::spawn", reason = "Nothing joins or cancels a detached Tokio task: spawn on the injected Spawner through the owner's TaskSet (ScopedTask, spawn_settling) or owned::Background." },
+  { path = "tokio::task::spawn", reason = "Nothing joins or cancels a detached Tokio task: spawn on the injected Spawner through the owner's TaskSet (ScopedTask, spawn_settling) or owned::Background." },
+  { path = "tokio::task::spawn_local", reason = "Nothing joins or cancels a detached Tokio task: spawn on the injected Spawner through the owner's TaskSet (ScopedTask, spawn_settling) or owned::Background." },
+  { path = "tokio::runtime::Handle::spawn", reason = "Nothing joins or cancels a detached Tokio task: spawn on the injected Spawner through the owner's TaskSet (ScopedTask, spawn_settling) or owned::Background." },
+  { path = "tokio::runtime::Runtime::spawn", reason = "Nothing joins or cancels a detached Tokio task: spawn on the injected Spawner through the owner's TaskSet (ScopedTask, spawn_settling) or owned::Background." },
+  { path = "lk_agents_abi::SpawnerExt::spawn_detached", reason = "Detached work outlives its owner and nothing joins it: run it through the owner's TaskSet or owned::Background, whose close joins it." },
+  # Time comes from the injected Clock, so tests drive it (a paused or virtual clock) instead of waiting.
+  { path = "tokio::time::sleep", reason = "Real time a test must wait out: wait on the injected Clock (Clock::wait_until)." },
+  { path = "tokio::time::sleep_until", reason = "Real time a test must wait out: wait on the injected Clock (Clock::wait_until)." },
+  { path = "tokio::time::timeout", reason = "Real time a test must wait out: bound it with lk_agents_abi::timeout or before on the injected Clock." },
+  { path = "tokio::time::timeout_at", reason = "Real time a test must wait out: bound it with lk_agents_abi::before on the injected Clock." },
+  { path = "tokio::time::interval", reason = "Real time a test must wait out: tick with Clock::wait_until on the injected Clock." },
+  { path = "tokio::time::interval_at", reason = "Real time a test must wait out: tick with Clock::wait_until on the injected Clock." },
+  { path = "tokio::time::Instant::now", reason = "Time read outside the injected Clock: use Clock::now." },
+  { path = "std::time::Instant::now", reason = "Time read outside the injected Clock: use Clock::now." },
+  { path = "std::thread::sleep", reason = "Real time a test must wait out, blocking a thread: wait on the injected Clock." },
   { path = "tokio::sync::watch::channel", reason = "A watch's sender can outlive its producer: use lk_agents_net::signal, whose Producer is the only writer and ends the signal on drop." },
   { path = "tokio::sync::watch::Sender::new", reason = "A watch's sender can outlive its producer: use lk_agents_net::signal, whose Producer is the only writer and ends the signal on drop." },
   { path = "tokio::task::spawn_blocking", reason = "Run blocking work on lk_agents_net::blocking_io or the media pool." },

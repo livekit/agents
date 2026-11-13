@@ -1,5 +1,12 @@
 //! The shared async transport of the I/O crates: HTTP, SSE, WebSocket, tokens, the delegation
 //! A2A client and telemetry export.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "tests drive Tokio's paused clock and spawn directly; the library is linted without"
+    )
+)]
 
 pub mod a2a_auth;
 pub mod a2a_client;

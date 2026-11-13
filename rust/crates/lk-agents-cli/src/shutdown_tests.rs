@@ -1,4 +1,8 @@
 //! Native deadline enforcement does not depend on a responsive Python loop or stderr reader.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the test watches a real child process against the OS clock"
+)]
 
 use std::process::{Command, Output, Stdio};
 use std::thread;

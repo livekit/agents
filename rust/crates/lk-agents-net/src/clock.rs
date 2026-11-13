@@ -46,6 +46,73 @@ impl Clock for SimClock {
     }
 }
 
+/// Time skipped on every [`HostClock`] of this process ([`skip_host_time`]).
+static SKIPPED: std::sync::LazyLock<crate::signal::Producer<Duration>> =
+    std::sync::LazyLock::new(|| crate::signal::signal(Duration::ZERO).0);
+
+/// Moves every [`HostClock`] of this process `by` forward at once: each wait whose instant it
+/// passes ends now. For tests, so a grace period, a watchdog or an idle close fires without its
+/// test waiting it out in real time.
+pub fn skip_host_time(by: Duration) {
+    SKIPPED.modify(|skipped| *skipped += by);
+}
+
+/// The host's clock: real time (a [`RealClock`]) plus the time [`skip_host_time`] skipped since
+/// it was made.
+pub struct HostClock {
+    real: RealClock,
+    skipped: crate::signal::Cell<Duration>,
+    /// What was skipped before this clock existed, so it starts at `Ts::ZERO`.
+    base: Duration,
+}
+
+impl HostClock {
+    pub fn new() -> Self {
+        let skipped = SKIPPED.cell();
+        let base = skipped.get();
+        HostClock { real: RealClock::new(), skipped, base }
+    }
+
+    fn skipped(&self) -> Duration {
+        self.skipped.get().saturating_sub(self.base)
+    }
+}
+
+impl Default for HostClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clock for HostClock {
+    fn now(&self) -> Ts {
+        self.real.now().saturating_add(self.skipped())
+    }
+
+    fn wall(&self) -> SystemTime {
+        self.real.nudged(SystemTime::now() + self.skipped())
+    }
+
+    fn wait_until(&self, at: Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            loop {
+                let seen = self.skipped.get();
+                let skipped = seen.saturating_sub(self.base);
+                if at <= self.real.now().saturating_add(skipped) {
+                    return;
+                }
+                // The real instant `at` stands for, unless a skip moves it nearer first.
+                let real_at = at.saturating_sub(skipped);
+                tokio::select! {
+                    biased;
+                    _ = self.skipped.wait_for(|now| *now != seen) => {}
+                    () = self.real.wait_until(real_at) => {}
+                }
+            }
+        })
+    }
+}
+
 /// Anchors `Ts::ZERO` at construction. Scheduling follows Tokio time; wall stamps use the OS clock.
 pub struct RealClock {
     origin: tokio::time::Instant,
@@ -55,6 +122,7 @@ pub struct RealClock {
 impl RealClock {
     pub fn new() -> Self {
         RealClock {
+            #[allow(clippy::disallowed_methods, reason = "the Clock itself: Tokio time's origin")]
             origin: tokio::time::Instant::now(),
             last_wall: Mutex::new(SystemTime::UNIX_EPOCH),
         }
@@ -90,6 +158,7 @@ impl Clock for RealClock {
         Box::pin(async move {
             let now = self.now();
             if at > now {
+                #[allow(clippy::disallowed_methods, reason = "the Clock itself: Tokio time")]
                 tokio::time::sleep(at.saturating_duration_since(now)).await;
             }
         })
@@ -119,6 +188,20 @@ mod tests {
             Err(Elapsed)
         );
         assert_eq!(clock.now(), Ts::ZERO.saturating_add(Duration::from_secs(7)));
+    }
+
+    // Catches: a skip of the host clocks not ending a wait it passes, or moving a clock made
+    // after it.
+    #[tokio::test(start_paused = true)]
+    async fn skipping_host_time_ends_the_waits_it_passes() {
+        let clock = HostClock::new();
+        let wait = clock.wait_until(Ts::ZERO.saturating_add(Duration::from_secs(3600)));
+        tokio::pin!(wait);
+        assert!(std::future::poll_fn(|cx| Poll::Ready(wait.as_mut().poll(cx))).await.is_pending());
+        skip_host_time(Duration::from_secs(3600));
+        wait.await;
+        assert!(clock.now() >= Ts::ZERO.saturating_add(Duration::from_secs(3600)));
+        assert!(HostClock::new().now() < Ts::ZERO.saturating_add(Duration::from_secs(1)));
     }
 
     // Catches: `RealClock::wall` reporting the nudge origin instead of the real time.

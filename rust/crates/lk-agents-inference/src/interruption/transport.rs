@@ -14,11 +14,10 @@ use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
-use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
+use lk_agents_abi::{OwnedTask, Spawner, SpawnerExt, TaskError};
 use lk_agents_core::request::{Request, Retry};
 use lk_agents_media::media_queue::{self, AudioSender, Item, Policy};
 use lk_agents_net::signal;
-use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::token::{INFERENCE_TOKEN_TTL, inference_bearer_with_ttl};
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status, connect_error,
@@ -63,17 +62,25 @@ pub struct AdaptiveInterruptionDetector {
     opts: Arc<Mutex<InterruptionOptions>>,
     config: ConnectionConfig,
     clock: Arc<dyn Clock>,
+    /// Runs each stream's task, which the stream owns.
+    spawner: Arc<dyn Spawner>,
     /// `weakref.WeakSet[InterruptionWebSocketStream]`, so `update_options` reaches live streams
     /// without keeping dead ones alive.
     streams: Mutex<Vec<Weak<Reconnect>>>,
 }
 
 impl AdaptiveInterruptionDetector {
-    pub fn new(opts: InterruptionOptions, config: ConnectionConfig, clock: Arc<dyn Clock>) -> Self {
+    pub fn new(
+        opts: InterruptionOptions,
+        config: ConnectionConfig,
+        clock: Arc<dyn Clock>,
+        spawner: Arc<dyn Spawner>,
+    ) -> Self {
         AdaptiveInterruptionDetector {
             opts: Arc::new(Mutex::new(opts)),
             config,
             clock,
+            spawner,
             streams: Mutex::new(Vec::new()),
         }
     }
@@ -111,6 +118,7 @@ impl AdaptiveInterruptionDetector {
             opts: self.opts.clone(),
             config: self.config.clone(),
             clock: self.clock.clone(),
+            spawner: self.spawner.clone(),
             stream_events: event_tx,
             reconnect: reconnect.clone(),
             closed: closed.clone(),
@@ -121,7 +129,7 @@ impl AdaptiveInterruptionDetector {
             queue: Mutex::new(Some(queue)),
             failure: input_failure,
         }));
-        let task = TokioSpawner::current().spawn(main_task(ctx, input_rx));
+        let task = self.spawner.spawn(main_task(ctx, input_rx));
         InterruptionStream { input_tx: Some(input_tx), event_rx, reconnect, closed, task }
     }
 }
@@ -139,6 +147,7 @@ struct StreamContext {
     opts: Arc<Mutex<InterruptionOptions>>,
     config: ConnectionConfig,
     clock: Arc<dyn Clock>,
+    spawner: Arc<dyn Spawner>,
     stream_events: mpsc::UnboundedSender<StreamEvent>,
     reconnect: Arc<Reconnect>,
     closed: Arc<AtomicBool>,
@@ -445,12 +454,8 @@ async fn run_once(
     let (data_tx, data_rx) = mpsc::unbounded_channel();
     // `closing_ws`: per connection, reset on reconnect; tells an orderly shutdown from a hang-up.
     let closing = Arc::new(AtomicBool::new(false));
-    let mut send_task = TokioSpawner::current().spawn(send_task(
-        core.clone(),
-        Arc::clone(&sink),
-        data_rx,
-        closing.clone(),
-    ));
+    let mut send_task =
+        ctx.spawner.spawn(send_task(core.clone(), Arc::clone(&sink), data_rx, closing.clone()));
     let mut send_finished = false;
     let mut input_open = true;
     let mut data_tx = Some(data_tx);
@@ -747,6 +752,7 @@ mod tests {
                 ..Default::default()
             },
             Arc::new(lk_agents_net::clock::RealClock::new()),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
         )
     }
 

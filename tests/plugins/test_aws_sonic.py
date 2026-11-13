@@ -174,6 +174,19 @@ def frame(value: int = 1) -> rtc.AudioFrame:
     )
 
 
+async def handled(session: sonic.RealtimeSession, duplex: Duplex) -> None:
+    """Everything queued before it was handled: the input loop sends tool results and audio in
+    order, so two later frames sent mean an earlier tool result was sent or dropped."""
+    for value in (5, 6):
+        session.push_audio(frame(value))
+        sent = base64.b64encode(frame(value).data.tobytes()).decode()
+        await duplex.wait_until(
+            lambda events, sent=sent: any(
+                e.get("audioInput", {}).get("content") == sent for e in events
+            )
+        )
+
+
 def tool_use(call_id: str, arguments: str) -> list[Event]:
     return [
         {"contentStart": {"contentId": f"tool-{call_id}", "type": "TOOL", "role": "TOOL"}},
@@ -267,7 +280,7 @@ async def test_every_string_tool_result_reaches_sonic_as_json(
     for event in tool_use("call-1", '{"city": "Paris"}'):
         await bedrock.answer(**event)
     await session.update_chat_ctx(tool_output("call-1", output))
-    await duplex.wait_for("toolResult")
+    await handled(session, duplex)
     start_event = next(
         e["contentStart"] for e in duplex.sent if e.get("contentStart", {}).get("type") == "TOOL"
     )

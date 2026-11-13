@@ -104,6 +104,7 @@ async fn update_options_forces_a_reconnect_that_carries_the_new_settings() {
         options(format!("ws://127.0.0.1:{port}"), Some(0.4)),
         ConnectionConfig::default(),
         Arc::new(RealClock::new()),
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
     );
     let _stream = detector.stream(&cx);
 
@@ -147,6 +148,7 @@ async fn an_unreachable_gateway_climbs_the_ladder_and_then_gives_up() {
         options(format!("ws://127.0.0.1:{port}"), Some(0.5)),
         config,
         Arc::new(RealClock::new()),
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
     );
     let mut stream = detector.stream(&lk_agents_abi::telemetry::Cx::NONE);
 
@@ -184,6 +186,7 @@ async fn end_input_closes_the_input_and_further_pushes_are_rejected() {
         options(format!("ws://127.0.0.1:{port}"), Some(0.5)),
         ConnectionConfig::default(),
         Arc::new(RealClock::new()),
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
     );
     let mut stream = detector.stream(&lk_agents_abi::telemetry::Cx::NONE);
 
@@ -239,6 +242,7 @@ mod websocket {
             opts,
             ConnectionConfig::default(),
             Arc::new(RealClock::new()),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
         )
     }
 
@@ -260,7 +264,8 @@ mod websocket {
     ///
     /// Returns the port and a handle that yields the `session.create` the client sent, so the test can
     /// assert on the handshake as well as on the verdict.
-    async fn fake_gateway() -> (u16, tokio::task::JoinHandle<(String, u64)>) {
+    async fn fake_gateway()
+    -> (u16, impl std::future::Future<Output = Result<(String, u64), tokio::task::JoinError>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let handle = tokio::spawn(async move {

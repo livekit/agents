@@ -1484,6 +1484,19 @@ impl LlmNodeChunks {
             }
         })
     }
+
+    /// Stops reading: the provider's request ends and its stream closes, bounded by the teardown
+    /// limit. Dropping the object ends it too, without waiting.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () =
+                <LlmNodeChunksImpl as ::lk_agents_abi::voice::nodes::LlmNodeChunks>::aclose(&this)
+                    .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
@@ -1510,6 +1523,19 @@ impl TtsNodeFrames {
             }
         })
     }
+
+    /// Stops reading: the provider's request ends and its stream closes, bounded by the teardown
+    /// limit. Dropping the object ends it too, without waiting.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () =
+                <TtsNodeFramesImpl as ::lk_agents_abi::voice::nodes::TtsNodeFrames>::aclose(&this)
+                    .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
@@ -1534,6 +1560,19 @@ impl SttNodeEvents {
                 Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::stt::speech_event_to_py(py, out)?, py)),
                 None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),
             }
+        })
+    }
+
+    /// Stops reading: the provider's request ends and its stream closes, bounded by the teardown
+    /// limit. Dropping the object ends it too, without waiting.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () =
+                <SttNodeEventsImpl as ::lk_agents_abi::voice::nodes::SttNodeEvents>::aclose(&this)
+                    .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 }

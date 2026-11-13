@@ -135,7 +135,9 @@ impl Database {
             Err(StorageError::Uncertain(why)) => {
                 let (resolved, resolving) = signal::once();
                 let lost = why.clone();
+                let spawner = thread.background.spawner.clone();
                 self.holder.spawn_settling_cleanup(
+                    &*spawner,
                     "context save resolution",
                     resolved,
                     async move {
@@ -298,7 +300,9 @@ impl ContextStore {
     /// Waits, bounded, for the releases its direct saves' dropped leases left.
     pub(crate) async fn wait_released(&self) -> bool {
         match &self.database {
-            Some(database) => database.holder.wait_released().await,
+            Some(database) => {
+                database.holder.wait_released(&*database.storage.background().clock).await
+            }
             None => true,
         }
     }

@@ -3,19 +3,28 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::llm::mcp::{McpToolsetHost, McpToolsetLifecycle as Port};
+use lk_agents_abi::llm::mcp::{
+    McpError, McpSession as _, McpTimeout, McpToolsetHost, McpToolsetLifecycle as Port,
+};
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
-use lk_agents_net::task::Cancellation;
+use lk_agents_abi::{Clock, timeout};
+use lk_agents_core::mcp::timeout_duration;
+use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::owned::Background;
+use lk_agents_net::signal;
+use lk_agents_net::task::{Cancellation, ScopedTask};
 use parking_lot::Mutex;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use super::session::McpSession;
 use crate::telemetry;
 
 pub struct McpToolsetLifecycle {
     server: String,
-    session: Arc<super::session::McpSession>,
+    session: Arc<McpSession>,
     idle_close: Duration,
+    /// Where the recovery and the idle close run, on the host's clock.
+    background: Background,
     /// One setup at a time.
     setting_up: tokio::sync::Mutex<()>,
     state: Arc<Mutex<State>>,
@@ -27,19 +36,22 @@ struct State {
     recovery: Option<Recovery>,
     /// The armed idle close; taken by whichever comes first, a setup (disarming it) or the
     /// close itself (firing it).
-    idle: Option<(u64, JoinHandle<()>)>,
+    idle: Option<(u64, ScopedTask)>,
     idle_generation: u64,
 }
 
 struct Recovery {
     stop: CancellationToken,
-    task: JoinHandle<()>,
+    task: ScopedTask,
+    /// Ends when the recovery's task does, its listing settled.
+    done: signal::Cell<Option<()>>,
 }
 
 /// One cancellable listing: `Ok(true)` when the tools are listed, `Ok(false)` when `stop` fired
 /// first (the listing cancelled and settled).
 async fn list(
     host: &dyn McpToolsetHost,
+    clock: &dyn Clock,
     cx: &telemetry::Cx,
     context: &CallContext,
     stop: Option<&CancellationToken>,
@@ -52,7 +64,7 @@ async fn list(
         result = &mut listing => result.map(|()| true),
         () = stop.cancelled() => {
             cancel.cancel();
-            if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, listing).await.is_err() {
+            if timeout(clock, HOST_TEARDOWN_TIMEOUT, listing).await.is_err() {
                 log::error!(target: lk_agents_abi::LOG_TARGET, "MCP listing cleanup incomplete");
             }
             Ok(false)
@@ -63,24 +75,28 @@ async fn list(
 /// List again at the session's backoff until the server answers or `stop` fires.
 async fn recover(
     host: Arc<dyn McpToolsetHost>,
-    session: Arc<super::session::McpSession>,
+    session: Arc<McpSession>,
+    clock: Arc<dyn Clock>,
     state: Arc<Mutex<State>>,
     stop: CancellationToken,
     context: CallContext,
     cx: telemetry::Cx,
 ) {
     loop {
-        let wait = session.retry_delay();
+        let at = clock.now().saturating_add(session.retry_delay());
         tokio::select! {
             biased;
             () = stop.cancelled() => return,
-            () = tokio::time::sleep(wait) => {}
+            () = clock.wait_until(at) => {}
         }
-        match list(&*host, &cx, &context, Some(&stop)).await {
+        match list(&*host, &*clock, &cx, &context, Some(&stop)).await {
             Ok(true) => {
                 let mut state = state.lock();
                 state.listed = true;
-                state.recovery = None;
+                // Ending on its own: its handle no longer cancels it.
+                if let Some(recovery) = state.recovery.take() {
+                    recovery.task.release();
+                }
                 return;
             }
             Ok(false) => return,
@@ -89,33 +105,73 @@ async fn recover(
     }
 }
 
-impl Port for McpToolsetLifecycle {
-    type Session = super::session::McpSession;
+/// After `idle` unless disarmed: drop the tools and close the server. A host that can no longer
+/// run its close (its event loop is gone) leaves the native session to close here.
+#[allow(clippy::too_many_arguments, reason = "the idle close's owner, inputs and its host")]
+async fn close_when_idle(
+    host: Arc<dyn McpToolsetHost>,
+    session: Arc<McpSession>,
+    clock: Arc<dyn Clock>,
+    state: Arc<Mutex<State>>,
+    idle: Duration,
+    generation: u64,
+    context: CallContext,
+    cx: telemetry::Cx,
+) {
+    clock.wait_until(clock.now().saturating_add(idle)).await;
+    {
+        let mut state = state.lock();
+        // A setup that came first disarmed it.
+        if state.idle.as_ref().is_none_or(|(armed, _)| *armed != generation) {
+            return;
+        }
+        // Ending on its own: its handle no longer cancels it.
+        if let Some((_, task)) = state.idle.take() {
+            task.release();
+        }
+        state.listed = false;
+    }
+    if let Err(error) = host.close_idle(&cx, &context).await {
+        log::debug!(target: lk_agents_abi::LOG_TARGET, "MCP idle close ran natively, the host's failed: {error}");
+        session.close().await;
+    }
+}
 
-    fn new(server: String, session: Arc<Self::Session>) -> Self {
-        Self {
+impl Port for McpToolsetLifecycle {
+    type Env = ProcessEnv;
+    type Session = McpSession;
+
+    fn new(
+        env: &ProcessEnv,
+        server: String,
+        session: Arc<Self::Session>,
+        idle_timeout: f64,
+    ) -> Result<Self, McpError> {
+        Ok(Self {
             server,
             session,
-            idle_close: Duration::from_secs_f64(lk_agents_abi::llm::mcp::MCP_IDLE_CLOSE_SECONDS),
+            idle_close: timeout_duration(McpTimeout::Idle, idle_timeout)?,
+            background: env.background().map_err(|e| HostError::new(e.to_string()))?,
             setting_up: tokio::sync::Mutex::new(()),
             state: Arc::default(),
-        }
+        })
     }
 
     async fn setup(&self, host: Arc<dyn McpToolsetHost>, context: CallContext, cx: telemetry::Cx) {
         let _one = self.setting_up.lock().await;
         // A server that said its tools changed is listed again by the next run.
         let changed = self.session.tools_changed();
-        {
+        let disarmed = {
             let mut state = self.state.lock();
-            if let Some((_, idle)) = state.idle.take() {
-                idle.abort();
-            }
+            let disarmed = state.idle.take();
             if (state.listed && !changed) || state.recovery.is_some() {
                 return;
             }
-        }
-        match list(&*host, &cx, &context, None).await {
+            disarmed
+        };
+        drop(disarmed);
+        let clock = &*self.background.clock;
+        match list(&*host, clock, &cx, &context, None).await {
             Ok(_) => self.state.lock().listed = true,
             Err(error) => {
                 log::warn!(
@@ -124,15 +180,30 @@ impl Port for McpToolsetLifecycle {
                     self.server
                 );
                 let stop = CancellationToken::new();
-                let task = tokio::spawn(recover(
+                let (finished, done) = signal::once();
+                let recovery = recover(
                     host,
                     self.session.clone(),
+                    self.background.clock.clone(),
                     self.state.clone(),
                     stop.clone(),
                     context,
                     cx,
-                ));
-                self.state.lock().recovery = Some(Recovery { stop, task });
+                );
+                // Holds the state's lock until the recovery is recorded, so it cannot end first.
+                // Refused only once the process is shutting down: no recovery then.
+                let mut state = self.state.lock();
+                let task = self.background.tasks.try_scoped(
+                    self.background.spawner.as_ref(),
+                    "MCP toolset recovery",
+                    async move {
+                        let _finished = finished;
+                        recovery.await;
+                    },
+                );
+                if let Some(task) = task {
+                    state.recovery = Some(Recovery { stop, task, done });
+                }
             }
         }
     }
@@ -144,32 +215,33 @@ impl Port for McpToolsetLifecycle {
         cx: telemetry::Cx,
     ) {
         let recovery = self.state.lock().recovery.take();
-        if let Some(Recovery { stop, task }) = recovery {
+        if let Some(Recovery { stop, task, done }) = recovery {
             stop.cancel();
-            let _ = task.await;
+            let _ = done.wait().await;
+            drop(task);
         }
-        let (state, idle) = (self.state.clone(), self.idle_close);
-        let mut guard = self.state.lock();
-        guard.idle_generation += 1;
-        let generation = guard.idle_generation;
-        let task = tokio::spawn(async move {
-            tokio::time::sleep(idle).await;
-            {
-                let mut state = state.lock();
-                // A setup that came first disarmed it.
-                if state.idle.as_ref().is_none_or(|(armed, _)| *armed != generation) {
-                    return;
-                }
-                state.idle = None;
-                state.listed = false;
-            }
-            if let Err(error) = host.close_idle(&cx, &context).await {
-                log::warn!(target: lk_agents_abi::LOG_TARGET, "MCP idle close failed: {error}");
-            }
-        });
-        if let Some((_, previous)) = guard.idle.replace((generation, task)) {
-            previous.abort();
-        }
+        let mut state = self.state.lock();
+        state.idle_generation += 1;
+        let generation = state.idle_generation;
+        let close = close_when_idle(
+            host,
+            self.session.clone(),
+            self.background.clock.clone(),
+            self.state.clone(),
+            self.idle_close,
+            generation,
+            context,
+            cx,
+        );
+        // Refused only once the process is shutting down; the session closes when dropped.
+        let task = self.background.tasks.try_scoped(
+            self.background.spawner.as_ref(),
+            "MCP toolset idle close",
+            close,
+        );
+        let previous = std::mem::replace(&mut state.idle, task.map(|task| (generation, task)));
+        drop(state);
+        drop(previous);
     }
 }
 

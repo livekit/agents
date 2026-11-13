@@ -6,6 +6,7 @@
 //! `uv run --no-sync cargo test --release --manifest-path rust/Cargo.toml -p lk-agents-py
 //!  --features ffmpeg --test host_bench -- --ignored --nocapture`
 #![cfg(test)]
+#![allow(clippy::disallowed_methods, reason = "a benchmark measures real time on its own runtime")]
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

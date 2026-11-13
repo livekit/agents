@@ -15,6 +15,7 @@ async fn exchange(request: &[u8], calls: Arc<AtomicUsize>) -> Vec<u8> {
             calls.fetch_add(1, Ordering::SeqCst);
             async { text(StatusCode::OK, "hello") }
         }),
+        crate::test_rt().clock,
     ));
     client.write_all(request).await.unwrap();
     let mut response = Vec::new();
@@ -93,7 +94,8 @@ async fn a_malformed_peer_does_not_stop_the_listener() {
     let (listener, port) = bind_listener("127.0.0.1", 0).await.unwrap();
     let stop = CancellationToken::new();
     let serving = tokio::spawn(
-        HttpServer::new(listener).serve(stop.clone(), |_| async { text(StatusCode::OK, "hello") }),
+        HttpServer::new(listener, crate::test_rt())
+            .serve(stop.clone(), |_| async { text(StatusCode::OK, "hello") }),
     );
     for (request, status) in [
         ("GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n", "HTTP/1.1 400"),
@@ -129,6 +131,7 @@ async fn partial_headers_release_the_connection_before_the_exchange_deadline() {
     let serving = tokio::spawn(serve_connection(
         server,
         Arc::new(|_| async { panic!("partial request reached the route") }),
+        crate::test_rt().clock,
     ));
     client.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
     tokio::task::yield_now().await;
@@ -160,6 +163,7 @@ async fn the_exchange_deadline_drops_a_stalled_route() {
                 std::future::pending::<Response>().await
             }
         }),
+        crate::test_rt().clock,
     ));
     client.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").await.unwrap();
     running.notified().await;
@@ -187,6 +191,7 @@ async fn a_client_that_stops_reading_cannot_hold_a_connection_forever() {
                 )
             }
         }),
+        crate::test_rt().clock,
     ));
     client.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").await.unwrap();
     running.notified().await;
@@ -204,7 +209,7 @@ async fn an_already_stopped_listener_returns_without_accepting() {
     stopped.cancel();
     tokio::time::timeout(
         Duration::from_secs(1),
-        HttpServer::new(listener)
+        HttpServer::new(listener, crate::test_rt())
             .serve(stopped, |_| async { panic!("stopped listener accepted a request") }),
     )
     .await

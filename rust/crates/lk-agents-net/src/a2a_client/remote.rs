@@ -30,8 +30,14 @@ mod tests;
 
 pub struct RemoteInteraction {
     inner: Interaction,
-    /// The running delegation's stop and settlement.
-    running: Mutex<Option<(Arc<Cancellation>, Settled)>>,
+    /// The running delegation's stop, settlement and the clock bounding its wait.
+    running: Mutex<Option<Running>>,
+}
+
+struct Running {
+    stop: Arc<Cancellation>,
+    settled: Settled,
+    clock: Arc<dyn lk_agents_abi::Clock>,
 }
 
 /// Ends with the delegation's task, however it ends.
@@ -141,22 +147,27 @@ impl Port for RemoteInteraction {
             shared: thread_id.map(|thread| (thread, token)),
             live,
         };
+        let background = env.background().map_err(unavailable)?;
         let stop = Arc::new(Cancellation::default());
         let (done, settled) = signal::once::<()>();
-        *self.running.lock() = Some((stop.clone(), settled));
+        *self.running.lock() =
+            Some(Running { stop: stop.clone(), settled, clock: Arc::clone(&background.clock) });
         let delegation = Delegation { interaction: self.inner.clone(), client, host, context, cx };
-        // Its own task: a dropped `run` leaves it to the host, which stops it in the same turn
-        // (`cancelled()`), and `settled()` waits for its cleanup.
-        let task = (env.runtime)().map_err(unavailable)?.spawn(async move {
+        // The process's task: a dropped `run` leaves it to the host, which stops it in the same
+        // turn (`cancelled()`), and `settled()` waits for its cleanup.
+        let (outcome, result) = tokio::sync::oneshot::channel();
+        background.spawn("delegation", async move {
             let _done = done;
-            delegation.run(request, &stop).await
+            let _ = outcome.send(delegation.run(request, &stop).await);
         });
-        task.await.unwrap_or_else(|error| Err(AgentClientError::Protocol(error.to_string())))
+        result.await.unwrap_or_else(|_| {
+            Err(AgentClientError::Protocol("the delegation's task was cancelled".into()))
+        })
     }
 
     fn cancelled(&self) -> Result<(), AgentClientError> {
-        if let Some((stop, _)) = &*self.running.lock() {
-            stop.cancel();
+        if let Some(running) = &*self.running.lock() {
+            running.stop.cancel();
         }
         let mut state = self.inner.0.lock();
         state.policy.cancel();
@@ -165,9 +176,9 @@ impl Port for RemoteInteraction {
     }
 
     async fn settled(&self) {
-        let running = self.running.lock().as_ref().map(|(_, settled)| settled.clone());
-        if let Some(settled) = running
-            && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, settled.wait()).await.is_err()
+        let running = self.running.lock().as_ref().map(|r| (r.settled.clone(), r.clock.clone()));
+        if let Some((settled, clock)) = running
+            && lk_agents_abi::timeout(&*clock, HOST_TEARDOWN_TIMEOUT, settled.wait()).await.is_err()
         {
             log::error!(target: lk_agents_abi::LOG_TARGET, "delegation cleanup incomplete");
         }

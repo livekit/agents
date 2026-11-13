@@ -2,7 +2,8 @@
 #![allow(
     clippy::unwrap_used,
     clippy::print_stdout,
-    reason = "integration test that prints its measurements"
+    clippy::disallowed_methods,
+    reason = "integration test that measures real elapsed time and prints its measurements"
 )]
 #![cfg(unix)]
 

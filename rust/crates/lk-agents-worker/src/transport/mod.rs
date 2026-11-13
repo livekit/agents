@@ -37,9 +37,10 @@ pub enum TransportConfig {
 }
 
 impl TransportConfig {
-    pub fn build(self) -> Box<dyn WorkerTransport> {
+    /// `rt`: where the transport's tasks run, and the clock its deadlines are read on.
+    pub fn build(self, rt: lk_agents_net::owned::Background) -> Box<dyn WorkerTransport> {
         match self {
-            Self::WebSocket { heartbeat } => Box::new(WebSocketTransport { heartbeat }),
+            Self::WebSocket { heartbeat } => Box::new(WebSocketTransport { heartbeat, rt }),
             Self::WebTransport { insecure } => Box::new(WtTransport { insecure }),
         }
     }

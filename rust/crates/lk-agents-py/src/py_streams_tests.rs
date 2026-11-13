@@ -375,7 +375,10 @@ mod nodes {
         let (g, nodes) = nodes("coroutine_node_receives_its_input_before_returning");
         let (sink, mut output) = tokio::time::timeout(
             Duration::from_secs(2),
-            nodes.stt_node(&lk_agents_abi::telemetry::Cx::NONE),
+            nodes.stt_node(
+                &lk_agents_abi::telemetry::Cx::NONE,
+                Arc::new(lk_agents_runtime::voice::nodes::NodeCalls::default()),
+            ),
         )
         .await
         .expect("the leg awaited the node's output before returning its input")
@@ -404,10 +407,10 @@ mod gil {
     use std::time::Duration;
 
     use lk_agents_abi::errors::ProviderError;
+    use lk_agents_abi::tts::types::TextUnit;
     use lk_agents_abi::{
         BoxFuture, SpeechChunk, StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities,
     };
-    use lk_agents_abi::tts::types::TextUnit;
     use lk_agents_abi::{Closed, Ts, TtsSink, TtsSource};
     use lk_agents_runtime::inference::fallback::{ChainPolicy, FallbackTts, IgnoreEvents};
     use lk_agents_runtime::inference::tts::stream::TtsStream;

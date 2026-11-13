@@ -174,6 +174,11 @@ pub struct ServerOptions {
     /// Total process shutdown budget in seconds, draining and cleanup included; 3610. Must
     /// exceed `drain_timeout`.
     pub shutdown_timeout: crate::Maybe<f64>,
+    /// Seconds a registered worker may stay disconnected from LiveKit before `/` fails
+    /// (`disconnected`): a short reconnect stays live, a longer one is what a restart fixes; 30.
+    pub reconnect_grace: crate::Maybe<f64>,
+    /// Seconds the host may leave the worker's heartbeat unanswered before `/` fails (`stuck`); 5.
+    pub stuck_timeout: crate::Maybe<f64>,
     /// A job process's memory warning threshold in MB; 1000.
     pub job_memory_warn_mb: crate::Maybe<f64>,
     /// A job process's memory kill threshold in MB; 0, no limit.

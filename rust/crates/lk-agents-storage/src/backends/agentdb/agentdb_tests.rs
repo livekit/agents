@@ -1,8 +1,8 @@
 use lk_agents_abi::storage::{Storage as _, TaskState};
+use lk_agents_abi::{OwnedTask, SpawnerExt as _};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::task::JoinHandle;
 
 use super::*;
 use crate::storage::Namespace;
@@ -28,7 +28,7 @@ async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
     let pooled = Pooled {
         conn,
         schema: SchemaCell::default(),
-        pool: Arc::default(),
+        pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
         closed: AtomicBool::new(false),
     };
     let result =
@@ -92,7 +92,8 @@ async fn a_socket_closed_after_a_write_was_sent_leaves_it_uncertain() {
             opts.reconnect.min_backoff = Duration::from_millis(10);
             opts.reconnect.budget = Duration::from_secs(5);
             let minter = TokenMinter::new("devkey", "secret").unwrap();
-            Conn::dial(opts, minter, tokio::runtime::Handle::current())
+            let background = crate::testing::background();
+            Conn::dial(opts, minter, background.spawner, background.clock)
         };
         let exec = dial().await.unwrap().exec(&Statement::raw("UPDATE t SET n = 1")).await;
         let exec = StorageError::from(exec.unwrap_err());
@@ -100,7 +101,7 @@ async fn a_socket_closed_after_a_write_was_sent_leaves_it_uncertain() {
         let pooled = Pooled {
             conn: dial().await.unwrap(),
             schema: SchemaCell::default(),
-            pool: Arc::default(),
+            pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
             closed: AtomicBool::new(false),
         };
         let batch = pooled.batch(vec![Statement::raw("UPDATE t SET n = 2")]).await;
@@ -127,14 +128,15 @@ async fn the_data_plane_sits_under_the_project_public_api() {
 
 struct Peer {
     url: String,
-    task: Option<JoinHandle<()>>,
+    /// Dropped with the peer, which cancels it.
+    task: Option<OwnedTask>,
 }
 
 impl Peer {
     async fn tasks() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let task = tokio::spawn(async move {
+        let task = lk_agents_net::task::TokioSpawner::current().spawn(async move {
             for (index, status) in ["INPUT_REQUIRED", "not-a-state"].into_iter().enumerate() {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = Vec::new();
@@ -170,14 +172,6 @@ impl Peer {
 
     async fn close(&mut self) {
         self.task.take().unwrap().await.unwrap();
-    }
-}
-
-impl Drop for Peer {
-    fn drop(&mut self) {
-        if let Some(task) = &self.task {
-            task.abort();
-        }
     }
 }
 

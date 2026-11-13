@@ -27551,6 +27551,35 @@ pub mod worker_options {
                     }
                 },
             )?,
+            reconnect_grace: crate::py_values::attr_with(
+                obj,
+                "ServerOptions",
+                "reconnect_grace",
+                |v| {
+                    if crate::py_values::is_not_given(v)? {
+                        Ok(::lk_agents_abi::Maybe::NotGiven)
+                    } else {
+                        (crate::py_values::number_from_py::<f64>(
+                            v,
+                            "ServerOptions.reconnect_grace",
+                        ))
+                        .map(::lk_agents_abi::Maybe::Given)
+                    }
+                },
+            )?,
+            stuck_timeout: crate::py_values::attr_with(
+                obj,
+                "ServerOptions",
+                "stuck_timeout",
+                |v| {
+                    if crate::py_values::is_not_given(v)? {
+                        Ok(::lk_agents_abi::Maybe::NotGiven)
+                    } else {
+                        (crate::py_values::number_from_py::<f64>(v, "ServerOptions.stuck_timeout"))
+                            .map(::lk_agents_abi::Maybe::Given)
+                    }
+                },
+            )?,
             job_memory_warn_mb: crate::py_values::attr_with(
                 obj,
                 "ServerOptions",
@@ -27600,6 +27629,8 @@ pub mod worker_options {
             num_idle_processes,
             drain_timeout,
             shutdown_timeout,
+            reconnect_grace,
+            stuck_timeout,
             job_memory_warn_mb,
             job_memory_limit_mb,
         } = value;
@@ -27679,6 +27710,24 @@ pub mod worker_options {
         kwargs.set_item(
             "shutdown_timeout",
             match shutdown_timeout {
+                ::lk_agents_abi::Maybe::NotGiven => crate::py_values::not_given(py)?,
+                ::lk_agents_abi::Maybe::Given(x) => {
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?
+                }
+            },
+        )?;
+        kwargs.set_item(
+            "reconnect_grace",
+            match reconnect_grace {
+                ::lk_agents_abi::Maybe::NotGiven => crate::py_values::not_given(py)?,
+                ::lk_agents_abi::Maybe::Given(x) => {
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?
+                }
+            },
+        )?;
+        kwargs.set_item(
+            "stuck_timeout",
+            match stuck_timeout {
                 ::lk_agents_abi::Maybe::NotGiven => crate::py_values::not_given(py)?,
                 ::lk_agents_abi::Maybe::Given(x) => {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?

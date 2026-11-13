@@ -2,6 +2,11 @@
 //! --example media_bench -- output.json [codecs|recording|images|control|all]`.
 //! Measures the background file decoder, declared recorder implementation and shipped
 //! admitted image preparation against an independent anchored 1ms Tokio heartbeat.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "a benchmark measures real time against a Tokio heartbeat it spawns"
+)]
 
 #[cfg(not(all(feature = "media-ffmpeg", feature = "media-images")))]
 fn main() {

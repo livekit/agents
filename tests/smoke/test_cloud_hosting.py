@@ -35,8 +35,8 @@ API_KEY, API_SECRET = "pod-key", "pod-secret-pod-secret-pod-secret-pod"
 REGION = "us-east"
 WORKER_TOKEN = "wt+pod/token="  # characters a query string must escape
 IN_CLUSTER_INFERENCE = "http://inference.livekit.svc.cluster.local/v1"
-DRAIN_TIMEOUT = 0.5  # the drain a test cuts short, instead of the production hour
-PROCESS_EXIT_TIMEOUT = 0.5  # what a job process is given to exit, instead of the production 10 s
+DRAIN_TIMEOUT = 0.1  # the drain a test cuts short, instead of the production hour
+PROCESS_EXIT_TIMEOUT = 0.1  # what a job process is given to exit, instead of the production 10 s
 SHUTDOWN_SLACK = 12.0  # what the pod may take past its drain: job and pool cleanup
 # `livekit.WorkerInfo`'s JSON tags: the only keys the watcher decodes
 WORKER_INFO_KEYS = {

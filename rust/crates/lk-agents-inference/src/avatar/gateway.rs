@@ -11,20 +11,21 @@ use crate::avatar::{
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::inference::avatar_session::{AvatarError, InferenceAvatar};
 use lk_agents_abi::telemetry::Cx;
-use lk_agents_abi::{ApiConnectOptions, Clock, Closed, Extra, Ts};
+use lk_agents_abi::{ApiConnectOptions, Closed, Extra, Ts};
 use lk_agents_core::request::{self, AttemptFailure, Policy, Step};
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{mpsc, oneshot};
 
-use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
+use lk_agents_abi::{OwnedTask, Spawner, SpawnerExt, TaskOutcome};
 use lk_agents_net::env::ProcessEnv;
 
-// The driver outlives its caller: it ends only once the instance is dropped and nothing is owed,
-// so a session created after its caller left is still terminated. A create the gateway may have
+// The driver outlives its caller, a task of the background it was given: it ends only once the
+// instance is dropped and nothing is owed, so a session created after its caller left is still
+// terminated. A create the gateway may have
 // received is never abandoned: it is retried under its request id (one idempotency key) until the
 // gateway answers, and a session it made is terminated.
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, read_body};
-use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::owned::Background;
 
 /// Transport observations attempts may report ahead of the driver.
 const OBSERVATION_QUEUE: usize = 32;
@@ -69,8 +70,6 @@ pub struct GatewayAvatar {
     /// One message per host call, so the queue is bounded by the calls in flight.
     inputs: mpsc::UnboundedSender<Input>,
     callers: AtomicU64,
-    /// The driver's owner; dropping the instance does not cancel it.
-    _driver: Arc<TaskSet>,
 }
 
 impl GatewayAvatar {
@@ -79,22 +78,16 @@ impl GatewayAvatar {
         credentials: (String, String),
         policy: Policy,
         http: Arc<GatewayHttp>,
-        runtime: &tokio::runtime::Handle,
-        clock: Arc<dyn Clock>,
+        background: &Background,
     ) -> Self {
         let opts = Arc::new(opts);
         let view = Arc::new(Mutex::new(View::default()));
         let (inputs, rx) = mpsc::unbounded_channel();
         let (driver, observed) =
-            Driver::new(opts.clone(), credentials, policy, http, runtime, clock, view.clone());
-        // Self-owned: see the module docs.
-        let tasks = Arc::new(TaskSet::default());
-        tasks.spawn(
-            &TokioSpawner::new(runtime.clone()),
-            "avatar gateway driver",
-            driver.run(rx, observed),
-        );
-        GatewayAvatar { opts, view, inputs, callers: AtomicU64::new(1), _driver: tasks }
+            Driver::new(opts.clone(), credentials, policy, http, background, view.clone());
+        // Owned by `background`, not the instance: see the module docs.
+        background.spawn("avatar gateway driver", driver.run(rx, observed));
+        GatewayAvatar { opts, view, inputs, callers: AtomicU64::new(1) }
     }
 
     /// Creates the provider session for the job `cx` runs for and returns the sample rate the
@@ -163,17 +156,10 @@ impl InferenceAvatar for GatewayAvatar {
             extra_kwargs.unwrap_or_default(),
             base_url,
         )?;
-        let runtime = (env.runtime)().map_err(ApiError::from)?;
+        let background = env.background().map_err(ApiError::from)?;
         let http = (env.http)().map_err(ApiError::from)?;
         let policy = Policy::from_options(&conn_options);
-        Ok(GatewayAvatar::new(
-            opts,
-            (api_key, api_secret),
-            policy,
-            http,
-            &runtime,
-            env.clock.clone(),
-        ))
+        Ok(GatewayAvatar::new(opts, (api_key, api_secret), policy, http, &background))
     }
 
     fn provider(&self) -> String {
@@ -304,7 +290,7 @@ struct Driver {
     credentials: (String, String),
     policy: Policy,
     http: Arc<GatewayHttp>,
-    runtime: tokio::runtime::Handle,
+    spawner: Arc<dyn Spawner>,
     reporter: Reporter<Event>,
     view: Arc<Mutex<View>>,
     /// The instant the driver last stepped at; supplied time never goes back.
@@ -342,8 +328,7 @@ impl Driver {
         credentials: (String, String),
         policy: Policy,
         http: Arc<GatewayHttp>,
-        runtime: &tokio::runtime::Handle,
-        clock: Arc<dyn Clock>,
+        background: &Background,
         view: Arc<Mutex<View>>,
     ) -> (Self, mpsc::Receiver<Stamped<Event>>) {
         let (tx, observed) = mpsc::channel(OBSERVATION_QUEUE);
@@ -352,9 +337,9 @@ impl Driver {
             credentials,
             policy,
             http,
-            runtime: runtime.clone(),
-            now: clock.now(),
-            reporter: Reporter { tx, clock },
+            spawner: background.spawner.clone(),
+            now: background.clock.now(),
+            reporter: Reporter { tx, clock: background.clock.clone() },
             view,
             caller: None,
             arriving: None,
@@ -785,7 +770,7 @@ impl Driver {
         let work =
             async move { kind.run(&http, (*exchange).clone(), request, attempt, &reporter).await };
         let closed = self.reporter.clone();
-        let task = TokioSpawner::new(self.runtime.clone()).spawn_settled(work, move |outcome| async move {
+        let task = self.spawner.spawn_settled(work, move |outcome| async move {
             if outcome == TaskOutcome::Panicked {
                 log::error!(target: lk_agents_abi::LOG_TARGET, request = request.0, attempt; "avatar gateway request attempt panicked");
             }

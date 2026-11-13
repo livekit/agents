@@ -336,8 +336,10 @@ impl Partition {
         owner: &Holder,
     ) -> Result<(Acquired, Lease), StorageError> {
         let holder = owner.as_str();
-        let epoch = tokio::time::Instant::now();
-        let mut poll = Backoff::new(epoch.elapsed(), opts.wait_timeout);
+        let clock = self.thread.clock();
+        let epoch = clock.now();
+        let elapsed = || clock.now().saturating_duration_since(epoch);
+        let mut poll = Backoff::new(elapsed(), opts.wait_timeout);
         let (thread, wait) = (self.thread.clone(), opts.wait_timeout);
         let run_id = Some(opts.run_id.as_str());
         let mut pending =
@@ -348,9 +350,16 @@ impl Partition {
         // when this acquire first found the partition held by a holder that stopped renewing
         let mut ownerless_since = None;
         let waited = |ownerless_since: Option<std::time::Duration>| {
-            let waited = epoch.elapsed();
+            let waited = elapsed();
             let ownerless = ownerless_since.map(|since| waited.saturating_sub(since));
-            telemetry::acquire_waited(&self.thread.cx, opts.kind, self.name(), waited, ownerless);
+            telemetry::acquire_waited(
+                &self.thread.cx,
+                clock,
+                opts.kind,
+                self.name(),
+                waited,
+                ownerless,
+            );
         };
         loop {
             let req = Acquire {
@@ -401,24 +410,24 @@ impl Partition {
             if let (Some(acquired), Some(lease)) = (acquired, lease) {
                 if before.lapsed(holder) {
                     let lapsed = before.holder.as_deref().unwrap_or_default();
-                    telemetry::lease_lapsed(&self.thread.cx, opts.kind, self.name(), lapsed);
+                    telemetry::lease_lapsed(&self.thread.cx, clock, opts.kind, self.name(), lapsed);
                 }
                 waited(ownerless_since);
                 return Ok((acquired, lease));
             }
             if ownerless_since.is_none() && before.ownerless(holder, timing.millis(), stale) {
-                ownerless_since = Some(epoch.elapsed());
+                ownerless_since = Some(elapsed());
             }
             if when_held == WhenHeld::Reject {
                 waited(ownerless_since);
                 return Err(StorageError::Rejected { running_task_id: None });
             }
-            let Some(at) = poll.next(epoch.elapsed()) else {
+            let Some(at) = poll.next(elapsed()) else {
                 log::debug!(target: lk_agents_abi::LOG_TARGET, partition_key = self.name(); "the partition_key was not released within {}s", opts.wait_timeout.as_secs_f64());
                 waited(ownerless_since);
                 return Err(StorageError::Rejected { running_task_id: None });
             };
-            tokio::time::sleep_until(epoch + at).await;
+            clock.wait_until(epoch.saturating_add(at)).await;
         }
     }
 }

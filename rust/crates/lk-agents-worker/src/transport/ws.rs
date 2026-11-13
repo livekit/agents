@@ -1,5 +1,5 @@
-use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::task::TokioSpawner;
+use lk_agents_abi::{Clock, OwnedTask, SpawnerExt, Ts};
+use lk_agents_net::owned::Background;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +15,8 @@ use prost::Message as _;
 
 pub struct WebSocketTransport {
     pub heartbeat: Duration,
+    /// Where the pinger runs, and the clock the heartbeat is read on.
+    pub rt: Background,
 }
 
 #[async_trait]
@@ -42,25 +44,23 @@ impl WorkerTransport for WebSocketTransport {
 
         // tungstenite originates no pings, so without this a half-open connection is invisible
         // and every offered job times out.
-        let pinger = write.clone();
-        let pinger = TokioSpawner::current().spawn(async move {
-            let mut tick = tokio::time::interval(heartbeat);
-            tick.tick().await; // the first tick is immediate
+        let (pinger, clock) = (write.clone(), self.rt.clock.clone());
+        let pinger = self.rt.spawner.spawn(async move {
+            let mut next = clock.now();
             loop {
-                tick.tick().await;
+                next = next.saturating_add(heartbeat).max(clock.now());
+                clock.wait_until(next).await;
                 if pinger.lock().await.send(Message::Ping(Vec::new().into())).await.is_err() {
                     return;
                 }
             }
         });
 
+        let (idle, clock) = (heartbeat.saturating_mul(2), self.rt.clock.clone());
+        let idle_deadline = clock.now().saturating_add(idle);
         Ok(Connected {
             sink: Arc::new(WsSink { write, pinger }),
-            stream: Box::new(WsStream {
-                read,
-                idle: heartbeat.saturating_mul(2),
-                idle_deadline: tokio::time::Instant::now() + heartbeat.saturating_mul(2),
-            }),
+            stream: Box::new(WsStream { read, idle, idle_deadline, clock }),
         })
     }
 }
@@ -97,14 +97,18 @@ impl WorkerSink for WsSink {
 struct WsStream {
     read: futures_util::stream::SplitStream<RawWebSocket>,
     idle: Duration,
-    idle_deadline: tokio::time::Instant,
+    idle_deadline: Ts,
+    clock: Arc<dyn Clock>,
 }
 
 #[async_trait]
 impl WorkerStream for WsStream {
     async fn recv(&mut self) -> Result<TransportEvent, TransportError> {
         loop {
-            let next = match tokio::time::timeout_at(self.idle_deadline, self.read.next()).await {
+            let reading = self.read.next();
+            let next = match lk_agents_abi::before(&*self.clock, Some(self.idle_deadline), reading)
+                .await
+            {
                 Ok(n) => n,
                 // No frame and no pong for two heartbeats: fail so the caller reconnects.
                 Err(_) => {
@@ -112,7 +116,7 @@ impl WorkerStream for WsStream {
                 }
             };
             if matches!(next, Some(Ok(_))) {
-                self.idle_deadline = tokio::time::Instant::now() + self.idle;
+                self.idle_deadline = self.clock.now().saturating_add(self.idle);
             }
             match next {
                 None => return Err(TransportError::Failed("websocket ended".into())),
@@ -187,7 +191,7 @@ mod tests {
             .unwrap();
         });
         let Connected { sink, mut stream, .. } =
-            WebSocketTransport { heartbeat: Duration::from_secs(30) }
+            WebSocketTransport { heartbeat: Duration::from_secs(30), rt: crate::test_rt() }
                 .connect(&url, None, vec![])
                 .await
                 .unwrap();
@@ -213,7 +217,7 @@ mod tests {
             let _ = hold.await;
         });
         let Connected { sink, mut stream } =
-            WebSocketTransport { heartbeat: Duration::from_secs(1) }
+            WebSocketTransport { heartbeat: Duration::from_secs(1), rt: crate::test_rt() }
                 .connect(&url, None, vec![])
                 .await
                 .unwrap();

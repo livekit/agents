@@ -247,6 +247,7 @@ pub trait Implementations: 'static {
     type JobRun: ::lk_agents_abi::worker::ipc_host::JobRun;
     type ProcessBootstrap: ::lk_agents_abi::worker::ipc_host::ProcessBootstrap;
     type ProcessInitialization: ::lk_agents_abi::worker::ipc_host::ProcessInitialization;
+    type ProcessClock: ::lk_agents_abi::worker::ipc_host::ProcessClock;
     type ServerConfig: ::lk_agents_abi::worker::server_host::ServerConfig;
     type ServerRuntime: ::lk_agents_abi::worker::server_host::ServerRuntime;
 }
@@ -535,6 +536,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<worker::JobRun>()?;
     m.add_function(wrap_pyfunction!(worker::ipc_pair, m)?)?;
     m.add_function(wrap_pyfunction!(worker::init, m)?)?;
+    m.add_function(wrap_pyfunction!(worker::skip_host_time, m)?)?;
     m.add_class::<worker::ServerConfig>()?;
     m.add_class::<worker::ServerRuntime>()?;
     m.add_class::<voice::NodeText>()?;

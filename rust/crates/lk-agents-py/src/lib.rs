@@ -1,6 +1,13 @@
 //! `livekit.agents._core`, the PyO3 binding generated from `lk-agents-abi` declarations.
 //! Importing it starts nothing: everything that starts lives behind `init(role)`, and every runtime
 //! entry calls `check_pid()` first, so a fork-inherited core raises instead of deadlocking.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "tests drive Tokio's paused clock and spawn directly; the library is linted without"
+    )
+)]
 
 use pyo3::prelude::*;
 

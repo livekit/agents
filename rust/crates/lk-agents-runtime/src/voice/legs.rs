@@ -121,6 +121,11 @@ impl Executor {
     /// Preparation and abandoned-stream cleanup use the supplied session clock and scheduler.
     pub fn new(time: Timebase, spawner: Arc<dyn Spawner>) -> Self {
         let background = Background::new(Arc::default(), spawner, time.clock());
+        Self::owned_by(time, background)
+    }
+
+    /// Runs the session on `background`'s tasks, which its close drains.
+    pub fn owned_by(time: Timebase, background: Background) -> Self {
         Self { time, background, opening: Vec::new(), realtime: None }
     }
 

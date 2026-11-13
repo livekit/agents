@@ -77,6 +77,10 @@ pub struct ServerSettings {
     pub drain_timeout: f64,
     /// Overall launcher budget, including draining and host cleanup.
     pub shutdown_timeout: f64,
+    /// Seconds a registered worker may stay disconnected before `/` fails.
+    pub reconnect_grace: f64,
+    /// Seconds the host may leave the heartbeat unanswered before `/` reads it as stuck.
+    pub stuck_timeout: f64,
     pub max_retry: u32,
     pub http_proxy: Option<String>,
     /// Set by `--simulation`: load shedding off, and no health listener (runs share a host).
@@ -114,6 +118,8 @@ impl Default for ServerSettings {
             num_idle_processes: None,
             drain_timeout: crate::DRAIN_TIMEOUT.as_secs_f64(),
             shutdown_timeout: crate::DRAIN_TIMEOUT.as_secs_f64() + 10.0,
+            reconnect_grace: 30.0,
+            stuck_timeout: 5.0,
             max_retry: 16,
             http_proxy: None,
             simulation: false,
@@ -203,6 +209,12 @@ impl ServerSettings {
         if let Given(value) = options.shutdown_timeout {
             next.shutdown_timeout = value;
         }
+        if let Given(value) = options.reconnect_grace {
+            next.reconnect_grace = value;
+        }
+        if let Given(value) = options.stuck_timeout {
+            next.stuck_timeout = value;
+        }
         next.validate()?;
         if next.multiprocessing_context == MultiprocessingContext::Forkserver
             && !cfg!(target_os = "linux")
@@ -220,6 +232,8 @@ impl ServerSettings {
         for (name, value) in [
             ("drain_timeout", self.drain_timeout),
             ("shutdown_timeout", self.shutdown_timeout),
+            ("reconnect_grace", self.reconnect_grace),
+            ("stuck_timeout", self.stuck_timeout),
             ("job_memory_warn_mb", self.job_memory_warn_mb),
             ("job_memory_limit_mb", self.job_memory_limit_mb),
             ("shutdown_process_timeout", self.shutdown_process_timeout),

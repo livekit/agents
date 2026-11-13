@@ -1,6 +1,10 @@
 //! TLS trust across net, storage and worker transports, each CA mode in its own process.
 
 #![allow(clippy::unwrap_used, reason = "integration test")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "an integration test spawns its peers and bounds itself on Tokio directly"
+)]
 
 use std::path::Path;
 use std::process::Command;
@@ -234,7 +238,7 @@ fn tls_acceptor(cert: CertificateDer<'static>, key: &[u8]) -> TlsAcceptor {
 async fn http_server(
     cert: CertificateDer<'static>,
     key: &[u8],
-) -> (String, tokio::task::JoinHandle<()>) {
+) -> (String, impl Future<Output = Result<(), tokio::task::JoinError>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("https://localhost:{}", listener.local_addr().unwrap().port());
     let acceptor = tls_acceptor(cert, key);

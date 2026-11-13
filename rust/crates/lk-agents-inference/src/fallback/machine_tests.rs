@@ -14,7 +14,7 @@ fn fail(attempt: u64) -> ChainEvent {
 fn request(deadline: Option<Ts>) -> ChainRequest {
     let policy = ChainPolicy {
         max_retry_per_backend: 1,
-        retry_interval: Some(0.0),
+        retry_interval: Some(0.1),
         ..ChainPolicy::stt_defaults()
     };
     ChainRequest::new(

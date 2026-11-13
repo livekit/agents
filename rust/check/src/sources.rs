@@ -5,11 +5,13 @@
 //!    only in generated files and the `_core` module shell ("Bindings and the host").
 //! 3. In `lk-agents-py`, Python is called only from [`HOST_ENTRY`] files and tests
 //!    ("Bindings and the host").
-//! 4. The runtime's DST executor modules ([`EXECUTORS`]) use no Tokio runtime (`tokio::spawn`,
-//!    `tokio::time`, `tokio::net`, `tokio::runtime`, `Handle::current`), never detach work
-//!    (`spawn_detached`: work that outlives its caller goes through `owned::Background`, whose
-//!    task set joins it), and every `select!` is `biased;` ("Runtime executors and the
-//!    DST", "Cancellation safety").
+//! 4. The async crates ([`ASYNC`]) use no Tokio runtime (`tokio::spawn`, `tokio::time`,
+//!    `tokio::net`, `tokio::runtime`, `Handle::current`) and never detach work (`spawn_detached`):
+//!    tasks run on the injected `Spawner` under an owner that joins or cancels them (`TaskSet`,
+//!    `ScopedTask`, `owned::Background`), and time comes from the injected `Clock`. Only the
+//!    primitives that implement ownership and time, and the boundary adapters, are exempt, each
+//!    for what it names ([`EXEMPT`]). In the runtime's DST executor modules ([`EXECUTORS`]),
+//!    every `select!` is also `biased;` ("Runtime executors and the DST", "Cancellation safety").
 //! 5. In the async crates ([`SELECT_ORDERED`]), no `select!` branch that runs the producer
 //!    (`run()`) precedes a branch reading its data (`next()`, `recv()`), so queued data is read
 //!    before the end is acted on; branches are matched by method name ("Runtime executors and
@@ -18,8 +20,9 @@
 //!    is handed to its transport: the storage connections and their fakes ([`SENT_WRITES`]);
 //!    everything else passes on the `Uncertain` it was given ("Errors").
 //!
-//! Rules 4 to 6 skip test files and `#[cfg(test)]` items. pyo3 and `#[host]` placement need no
-//! rule here: the crate graph ([`crate::graph`]) leaves the compiler to reject them.
+//! Rules 4 to 6 skip test files, benches, examples and `#[cfg(test)]` items. pyo3 and `#[host]`
+//! placement need no rule here: the crate graph ([`crate::graph`]) leaves the compiler to reject
+//! them.
 
 use std::path::Path;
 use std::process::Command;
@@ -49,6 +52,77 @@ const PYO3_MACROS: &[&str] = &["pyclass", "pymethods", "pyfunction", "pymodule"]
 
 /// The runtime modules the DST runs on its own scheduler (rule 4).
 const EXECUTORS: &[&str] = &["voice", "room_io", "avatar", "rtc"];
+/// The crates that run beside the host, checked by rule 4.
+const ASYNC: &[&str] = &[
+    "lk-agents-cli",
+    "lk-agents-inference",
+    "lk-agents-net",
+    "lk-agents-py",
+    "lk-agents-runtime",
+    "lk-agents-storage",
+    "lk-agents-telemetry",
+    "lk-agents-worker",
+];
+/// A use rule 4 bans: `spawn` (`tokio::spawn`, `tokio::task::spawn*`), `time`, `net`,
+/// `runtime`, `Handle::current` or `spawn_detached`.
+type Item = &'static str;
+/// The files rule 4 exempts, each for the items it names and why.
+const EXEMPT: &[(&str, &[Item], &str)] = &[
+    (
+        "crates/lk-agents-net/src/task.rs",
+        &["runtime", "spawn", "Handle::current"],
+        "implements Spawner on the Tokio runtime",
+    ),
+    ("crates/lk-agents-net/src/clock.rs", &["time"], "implements Clock on Tokio time"),
+    (
+        "crates/lk-agents-net/src/env.rs",
+        &["runtime", "Handle::current"],
+        "ProcessEnv lends the process runtime, the composition root of every async crate",
+    ),
+    (
+        "crates/lk-agents-py/src/py_calls.rs",
+        &["runtime"],
+        "implements pyo3_async_runtimes' Runtime, the host's executor, on the process runtime",
+    ),
+    (
+        "crates/lk-agents-runtime/src/process.rs",
+        &["runtime"],
+        "builds and owns the process runtime that ProcessEnv lends",
+    ),
+    (
+        "crates/lk-agents-storage/src/http/server.rs",
+        &["net"],
+        "the local ThreadService's socket listener boundary adapter",
+    ),
+    ("crates/lk-agents-net/src/dns.rs", &["net"], "the name-resolution boundary adapter"),
+    ("crates/lk-agents-net/src/websocket.rs", &["net"], "the WebSocket boundary adapter"),
+    ("crates/lk-agents-cli/src/remote_cli.rs", &["net"], "the dev channel's TCP boundary adapter"),
+    (
+        "crates/lk-agents-worker/src/ipc/ipc_transport_unix.rs",
+        &["net"],
+        "the job channel's Unix socket boundary adapter",
+    ),
+    (
+        "crates/lk-agents-worker/src/ipc/ipc_transport_windows.rs",
+        &["net"],
+        "the job channel's named pipe boundary adapter",
+    ),
+    (
+        "crates/lk-agents-worker/src/server/http.rs",
+        &["net"],
+        "the health and metrics listeners' socket boundary adapter",
+    ),
+    (
+        "crates/lk-agents-worker/src/server/public.rs",
+        &["net"],
+        "the public listener's socket boundary adapter",
+    ),
+    (
+        "crates/lk-agents-worker/src/transport/webtransport.rs",
+        &["net"],
+        "the endpoint streams' QUIC and TCP boundary adapter",
+    ),
+];
 /// Async crates checked by rule 5.
 const SELECT_ORDERED: &[&str] = &[
     "lk-agents-inference",
@@ -82,6 +156,7 @@ impl Source<'_> {
         file.ends_with("_tests.rs")
             || self.path.contains("/tests/")
             || self.path.contains("/benches/")
+            || self.path.contains("/examples/")
     }
 }
 
@@ -133,12 +208,15 @@ fn check_source(source: &Source) -> Vec<String> {
     {
         unacknowledged(source, without_tests(&source.text), &mut errors);
     }
-    if SELECT_ORDERED.contains(&crate_name) && !source.test() {
+    if ASYNC.contains(&crate_name) && !source.test() {
         let product = without_tests(&source.text);
+        unowned(source, product.clone(), &mut errors);
         if executor(source.path) {
-            executors(source, product.clone(), &mut errors);
+            biased(source, product.clone(), &mut errors);
         }
-        select_order(source, product, &mut errors);
+        if SELECT_ORDERED.contains(&crate_name) {
+            select_order(source, product, &mut errors);
+        }
     }
     errors
 }
@@ -216,17 +294,31 @@ fn executor(path: &str) -> bool {
         .any(|module| path.starts_with(&format!("crates/lk-agents-runtime/src/{module}/")))
 }
 
-/// No Tokio runtime and only biased selects in the modules the DST schedules.
-fn executors(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) {
+/// What `path` may use of rule 4's items.
+fn exempt(path: &str) -> &'static [Item] {
+    EXEMPT.iter().find(|(file, ..)| *file == path).map_or(&[], |(_, items, _)| items)
+}
+
+/// No Tokio runtime and no detached work outside the primitives and adapters. Rule 4.
+fn unowned(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) {
+    let allowed = exempt(source.path);
+    let mut report = |token: &TokenTree, item: Item, message: &str| {
+        if !allowed.contains(&item) {
+            errors.push(source.error(line(token), message));
+        }
+    };
     levels(tokens, &mut |level| {
         for (at, token) in level.iter().enumerate() {
             match ident(Some(token)).as_deref() {
                 Some("tokio") => {
-                    if let Some(item) = tokio_runtime(level, at) {
-                        let message = format!(
-                            "tokio::{item} in a DST executor: use the injected Spawner and Clock"
-                        );
-                        errors.push(source.error(line(token), &message));
+                    if let Some(used) = tokio_runtime(level, at) {
+                        let (item, fix) = match used.as_str() {
+                            "time" => ("time", "wait and read time on the injected Clock"),
+                            "net" => ("net", "sockets live in the boundary adapters"),
+                            "runtime" => ("runtime", "use the injected Spawner"),
+                            _ => ("spawn", "spawn on the injected Spawner under an owner"),
+                        };
+                        report(token, item, &format!("tokio::{used}: {fix}"));
                     }
                 }
                 Some("Handle")
@@ -235,26 +327,32 @@ fn executors(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) {
                         Some("current" | "try_current")
                     ) =>
                 {
-                    errors.push(source.error(
-                        line(token),
-                        "Handle::current in a DST executor: use the injected Spawner",
-                    ));
+                    report(token, "Handle::current", "Handle::current: use the injected Spawner");
                 }
-                Some("spawn_detached") => errors.push(source.error(
-                    line(token),
-                    "spawn_detached in a DST executor: run it through owned::Background, \
-                     which the session's tasks join",
-                )),
-                Some("select") if punct(level.get(at + 1), '!') => {
-                    let body = group(level.get(at + 2), Delimiter::Brace)
-                        .map(|g| g.stream().into_iter().collect::<Vec<_>>());
-                    if body.is_some_and(|b| ident(b.first()).as_deref() != Some("biased")) {
-                        errors.push(
-                            source.error(line(token), "select! in a DST executor must be biased;"),
-                        );
-                    }
-                }
+                Some("spawn_detached") => report(
+                    token,
+                    "spawn_detached",
+                    "spawn_detached: nothing joins it; run it through the owner's TaskSet or \
+                     owned::Background, whose close joins it",
+                ),
                 _ => {}
+            }
+        }
+    });
+}
+
+/// Only biased selects in the modules the DST schedules. Rule 4.
+fn biased(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) {
+    levels(tokens, &mut |level| {
+        for (at, token) in level.iter().enumerate() {
+            if ident(Some(token)).as_deref() == Some("select") && punct(level.get(at + 1), '!') {
+                let body = group(level.get(at + 2), Delimiter::Brace)
+                    .map(|g| g.stream().into_iter().collect::<Vec<_>>());
+                if body.is_some_and(|b| ident(b.first()).as_deref() != Some("biased")) {
+                    errors.push(
+                        source.error(line(token), "select! in a DST executor must be biased;"),
+                    );
+                }
             }
         }
     });
@@ -384,21 +482,31 @@ mod tests {
     }
 
     #[test]
-    fn tokio_runtime_in_an_executor_fails() {
+    fn tokio_runtime_in_an_async_crate_fails() {
         assert_eq!(errors(EXECUTOR, "fn f() { tokio::spawn(x); }").len(), 1);
         assert_eq!(errors(EXECUTOR, "use tokio::{sync, time};").len(), 1);
         assert_eq!(errors(EXECUTOR, "fn f() { tokio::task::spawn_local(x); }").len(), 1);
+        let storage = "crates/lk-agents-storage/src/thread/lease.rs";
+        assert_eq!(errors(storage, "fn f() { tokio::time::sleep(d); }").len(), 1);
+        assert_eq!(errors(storage, "fn f() { Handle::try_current(); }").len(), 1);
+        assert!(errors("crates/lk-agents-core/src/x.rs", "fn f() { tokio::spawn(x); }").is_empty());
     }
 
-    // Catches: work that outlives its caller detached from the session's tasks, so nothing
-    // joins it at the close.
+    // Catches: an exemption leaking past what it names.
     #[test]
-    fn detached_work_in_an_executor_fails() {
+    fn an_exemption_allows_only_what_it_names() {
+        let clock = "crates/lk-agents-net/src/clock.rs";
+        assert!(errors(clock, "async fn f() { tokio::time::sleep(d).await }").is_empty());
+        assert_eq!(errors(clock, "fn f() { tokio::spawn(x); }").len(), 1);
+    }
+
+    // Catches: work that outlives its caller detached from its owner's tasks, so nothing joins
+    // it at the close.
+    #[test]
+    fn detached_work_in_an_async_crate_fails() {
         assert_eq!(errors(EXECUTOR, "fn f(s: &dyn Spawner) { s.spawn_detached(w); }").len(), 1);
-        assert!(
-            errors("crates/lk-agents-net/src/owned.rs", "fn f() { s.spawn_detached(w); }")
-                .is_empty()
-        );
+        let storage = "crates/lk-agents-storage/src/storage.rs";
+        assert_eq!(errors(storage, "fn f(s: &dyn Spawner) { s.spawn_detached(w); }").len(), 1);
     }
 
     // Catches: a write called uncertain that no connection sent, so a write that never left

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host;
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
 
 use super::ipc_channel::{self, Channel};
@@ -58,11 +59,17 @@ impl Exit {
 pub struct ThreadExecutor {
     launcher: Arc<dyn ipc_host::JobLauncher>,
     context: CallContext,
+    /// Where the worker's end of the channel runs.
+    rt: Background,
 }
 
 impl ThreadExecutor {
-    pub fn new(launcher: Arc<dyn ipc_host::JobLauncher>, context: CallContext) -> Self {
-        Self { launcher, context }
+    pub fn new(
+        launcher: Arc<dyn ipc_host::JobLauncher>,
+        context: CallContext,
+        rt: Background,
+    ) -> Self {
+        Self { launcher, context, rt }
     }
 }
 
@@ -70,7 +77,7 @@ impl ThreadExecutor {
 impl RunnerExecutor for ThreadExecutor {
     async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), HostError> {
         let (parent, child) = ipc_channel::pair().map_err(host_error)?;
-        let connection = Channel::from_endpoint(parent).map_err(host_error)?;
+        let connection = Channel::from_endpoint(parent, &self.rt).map_err(host_error)?;
         // The host holds the producer: dropping the launch unreported ends the wait.
         let (exited, returned) = signal::signal(false);
         let launch = Arc::new(ThreadLaunch(exited));

@@ -28,11 +28,8 @@ impl Policy {
         if !retryable || retries >= self.max_retry {
             return None;
         }
-        Some(if retries == 0 {
-            Duration::from_secs_f64(lk_agents_abi::types::connect::FIRST_RETRY_INTERVAL)
-        } else {
-            self.retry_interval
-        })
+        let first = Duration::from_secs_f64(lk_agents_abi::types::connect::FIRST_RETRY_INTERVAL);
+        Some(if retries == 0 { first.min(self.retry_interval) } else { self.retry_interval })
     }
 
     /// Phase limits of validated options. Pool capacity belongs to the transport.

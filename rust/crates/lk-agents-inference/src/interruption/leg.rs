@@ -239,7 +239,12 @@ mod tests {
         let transport = Arc::new(FakeWs::new(Vec::new()).keep_open());
         let config = ConnectionConfig { transport: transport.clone(), ..Default::default() };
         let clock = Arc::new(lk_agents_net::clock::RealClock::new());
-        let detector = AdaptiveInterruptionDetector::new(opts, config, clock.clone());
+        let detector = AdaptiveInterruptionDetector::new(
+            opts,
+            config,
+            clock.clone(),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
+        );
         let anchor = WallAnchor { wall: 1.0, at: clock.now() };
         let leg = InterruptionLeg::open(&detector, anchor, &crate::telemetry::Cx::NONE);
         leg.signal(S::AgentSpeechStarted);

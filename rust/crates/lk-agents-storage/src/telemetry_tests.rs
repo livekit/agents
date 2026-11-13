@@ -50,17 +50,20 @@ fn label(value: &str) -> Value {
 #[test]
 fn each_event_records_its_instrument() {
     let (cx, sink) = recording();
+    let clock = VirtualClock::new();
     acquire_waited(
         &cx,
+        &clock,
         PartitionKind::Voice,
         PARTITION_KEY,
         Duration::from_secs(20),
         Some(Duration::from_secs(4)),
     );
-    acquire_waited(&cx, PartitionKind::Text, PARTITION_KEY, Duration::from_millis(5), None);
-    lease_lapsed(&cx, PartitionKind::A2a, PARTITION_KEY, "dead");
-    teardown_overrun(&cx, TeardownStage::LeaseRelease, PARTITION_KEY);
-    write_uncertain(&cx, StorageWrite::Commit);
+    let short = Duration::from_millis(5);
+    acquire_waited(&cx, &clock, PartitionKind::Text, PARTITION_KEY, short, None);
+    lease_lapsed(&cx, &clock, PartitionKind::A2a, PARTITION_KEY, "dead");
+    teardown_overrun(&cx, &clock, TeardownStage::LeaseRelease, PARTITION_KEY);
+    write_uncertain(&cx, &clock, StorageWrite::Commit);
     let waits = sink.of("lk.agents.partition.acquire_wait");
     assert_eq!(waits, vec![(20.0, label("voice")), (0.005, label("text"))]);
     assert_eq!(sink.of("lk.agents.partition.ownerless_wait"), vec![(4.0, label("voice"))]);
@@ -72,11 +75,11 @@ fn each_event_records_its_instrument() {
 #[test]
 fn a_throttle_admits_one_log_per_interval_and_counts_the_rest() {
     let throttle = Throttle::new();
-    assert_eq!(throttle.admit(), Some(0));
-    assert_eq!(throttle.admit(), None);
-    assert_eq!(throttle.admit(), None);
-    *throttle.0.lock() = (Some(Instant::now() - HEALTH_LOG_INTERVAL), 2);
-    assert_eq!(throttle.admit(), Some(2));
+    let at = lk_agents_abi::simulated_epoch();
+    assert_eq!(throttle.admit(at), Some(0));
+    assert_eq!(throttle.admit(at), None);
+    assert_eq!(throttle.admit(at + HEALTH_LOG_INTERVAL / 2), None);
+    assert_eq!(throttle.admit(at + HEALTH_LOG_INTERVAL), Some(2));
 }
 
 statement! {
@@ -89,7 +92,8 @@ WHERE partition_key = :partition_key
 
 async fn handle(db: &TempDatabase, cx: &Cx) -> Thread {
     let conn = Arc::new(db.connect().await);
-    let thread = Thread::new(conn, "AT_health", LeaseTiming::default(), SchemaCell::default());
+    let (timing, schema) = (LeaseTiming::default(), SchemaCell::default());
+    let thread = Thread::new(conn, "AT_health", timing, schema, crate::testing::background());
     thread.await.unwrap().with_telemetry(cx.clone())
 }
 
@@ -156,8 +160,9 @@ async fn a_write_left_uncertain_counts_it_by_kind() {
     let (cx, sink) = recording();
     let db = TempDatabase::new();
     let faulty = Arc::new(Faulty::new(Box::new(db.connect().await)));
+    let (timing, schema) = (LeaseTiming::default(), SchemaCell::default());
     let thread =
-        Thread::new(faulty.clone(), "AT_health", LeaseTiming::default(), SchemaCell::default());
+        Thread::new(faulty.clone(), "AT_health", timing, schema, crate::testing::background());
     let thread = thread.await.unwrap().with_telemetry(cx);
     let mut run =
         thread.partition(PARTITION_KEY).open(reject("r0"), &Holder::new("seed")).await.unwrap();

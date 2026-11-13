@@ -15,10 +15,10 @@ impl Worker {
         }
         self.load_pending = true;
         self.load_requested = self.clock.now();
-        let host = self.host.clone();
+        let (host, clock) = (self.host.clone(), self.clock.clone());
         self.operations.push(
             async move {
-                let load = tokio::time::timeout(STALE_AFTER, host.user_load())
+                let load = lk_agents_abi::timeout(&*clock, STALE_AFTER, host.user_load())
                     .await
                     .unwrap_or(Some(f32::NAN));
                 Completion::Load(load)

@@ -16,10 +16,11 @@ use lk_agents_abi::a2a::door::{TextEndpoint, TextServing};
 use lk_agents_abi::worker::http::{
     EndpointHandler, EndpointKind, EndpointRequest as RequestMetadata, HttpScheme,
 };
+use lk_agents_abi::{BoxFuture, Clock};
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
-use tokio::time::Sleep;
 
 use crate::transport::{
     AgentEndpointKind, EndpointControl, EndpointReader, EndpointStream as TransportStream,
@@ -194,6 +195,8 @@ pub struct EndpointServer {
     /// `Stopping` is terminal.
     state: signal::Shared<ServerState>,
     websockets: parking_lot::Mutex<WebSockets>,
+    /// Where the WebSockets' tasks run, and the clock every deadline is read on.
+    rt: Background,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -228,11 +231,12 @@ impl EndpointServer {
         handler: Arc<dyn EndpointHandler>,
         limits: HttpServerLimits,
         tracer: telemetry::Tracer,
+        rt: Background,
     ) -> Self {
         let connections = Connections::new(limits.max_connections);
         let state = signal::Shared::new(ServerState::Serving);
         let websockets = Default::default();
-        Self { handler, tracer, text: None, limits, connections, state, websockets }
+        Self { handler, tracer, text: None, limits, connections, state, websockets, rt }
     }
 
     /// Serve `text` routes with their A2A doors instead of the binding's handler.
@@ -257,7 +261,8 @@ impl EndpointServer {
     /// to `stop_grace` for them to settle.
     pub async fn stop(&self) {
         self.enter(ServerState::Stopping);
-        if tokio::time::timeout(self.limits.stop_grace, self.connections.idle()).await.is_err() {
+        let idle = self.connections.idle();
+        if lk_agents_abi::timeout(&*self.rt.clock, self.limits.stop_grace, idle).await.is_err() {
             log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = self.limits.stop_grace.as_millis() as u64; "worker HTTP connections did not stop in time");
         }
     }
@@ -292,7 +297,8 @@ impl EndpointServer {
 
     /// Serve one exchange stream to completion.
     pub(crate) async fn serve(&self, wire: Wire, origin: Origin) {
-        let write = Box::pin(WriteIdle::new(wire.write, self.limits.idle_timeout));
+        let write = WriteIdle::new(wire.write, self.limits.idle_timeout, self.rt.clock.clone());
+        let write = Box::pin(write);
         exchange::serve(self, Wire { write, ..wire }, origin).await;
     }
 }
@@ -301,13 +307,14 @@ impl EndpointServer {
 struct WriteIdle {
     inner: WriteHalf,
     limit: Duration,
-    stall: Pin<Box<Sleep>>,
-    stalled: bool,
+    clock: Arc<dyn Clock>,
+    /// Since the write stopped making progress: ends `limit` later.
+    stall: Option<BoxFuture<'static, ()>>,
 }
 
 impl WriteIdle {
-    fn new(inner: WriteHalf, limit: Duration) -> Self {
-        Self { inner, limit, stall: Box::pin(tokio::time::sleep(limit)), stalled: false }
+    fn new(inner: WriteHalf, limit: Duration, clock: Arc<dyn Clock>) -> Self {
+        Self { inner, limit, clock, stall: None }
     }
 
     fn progress<T>(
@@ -316,15 +323,15 @@ impl WriteIdle {
         poll: Poll<std::io::Result<T>>,
     ) -> Poll<std::io::Result<T>> {
         if poll.is_ready() {
-            self.stalled = false;
+            self.stall = None;
             return poll;
         }
-        if !self.stalled {
-            self.stalled = true;
-            let deadline = tokio::time::Instant::now() + self.limit;
-            self.stall.as_mut().reset(deadline);
-        }
-        match self.stall.as_mut().poll(cx) {
+        let (clock, limit) = (self.clock.clone(), self.limit);
+        let stall = self.stall.get_or_insert_with(|| {
+            let at = clock.now().saturating_add(limit);
+            Box::pin(async move { clock.wait_until(at).await })
+        });
+        match stall.as_mut().poll(cx) {
             Poll::Ready(()) => Poll::Ready(Err(std::io::ErrorKind::TimedOut.into())),
             Poll::Pending => Poll::Pending,
         }
@@ -444,8 +451,13 @@ impl StreamEnd for HttpStream {
 /// way to wait here; the node writes the preamble in the same call as the request head.
 const PREAMBLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub(crate) async fn accept<P: WorkerHost + ?Sized>(host: Arc<P>, mut stream: TransportStream) {
-    let preamble = match tokio::time::timeout(PREAMBLE_TIMEOUT, stream.read_preamble()).await {
+pub(crate) async fn accept<P: WorkerHost + ?Sized>(
+    host: Arc<P>,
+    mut stream: TransportStream,
+    clock: Arc<dyn Clock>,
+) {
+    let preamble = lk_agents_abi::timeout(&*clock, PREAMBLE_TIMEOUT, stream.read_preamble()).await;
+    let preamble = match preamble {
         Ok(Ok(preamble)) => preamble,
         Ok(Err(error)) => {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "endpoint stream without a valid preamble: {error}");

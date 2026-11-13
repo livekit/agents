@@ -1,6 +1,10 @@
 //! The job channel over its real transport, in its own binary for the allocation recorder.
 
 #![allow(clippy::unwrap_used, reason = "integration test")]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests drive Tokio's clock and spawn directly; the library is linted without"
+)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -13,6 +17,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
 type Message = (u64, Vec<u8>);
 type Side = Channel<Message, Message>;
+
+/// The test's runtime and Tokio's clock.
+fn rt() -> lk_agents_net::owned::Background {
+    let spawner = std::sync::Arc::new(lk_agents_net::task::TokioSpawner::current());
+    let clock = std::sync::Arc::new(lk_agents_net::clock::RealClock::new());
+    lk_agents_net::owned::Background::new(Default::default(), spawner, clock)
+}
 
 struct RecordingAllocator;
 thread_local! {
@@ -54,13 +65,13 @@ static ALLOCATOR: RecordingAllocator = RecordingAllocator;
 /// Two channels over the platform's real transport.
 fn real() -> (Side, Side) {
     let (a, b) = pair().unwrap();
-    (Channel::from_endpoint(a).unwrap(), Channel::from_endpoint(b).unwrap())
+    (Channel::from_endpoint(a, &rt()).unwrap(), Channel::from_endpoint(b, &rt()).unwrap())
 }
 
 /// A channel and the raw stream at its peer, past the channel's preamble.
 async fn raw() -> (Side, DuplexStream) {
     let (ours, mut peer) = tokio::io::duplex(1 << 16);
-    let channel = Side::new(ours);
+    let channel = Side::new(ours, &rt());
     peer.read_exact(&mut [0; 8]).await.unwrap();
     (channel, peer)
 }
@@ -222,8 +233,8 @@ async fn a_process_the_job_spawns_does_not_inherit_the_channel() {
     // multiprocessing hands the job process its end inheritable.
     // SAFETY: a plain flag update on a descriptor this test owns.
     assert_eq!(unsafe { libc::fcntl(child as RawFd, libc::F_SETFD, 0) }, 0);
-    let parent = Side::from_endpoint(parent).unwrap();
-    let child = Side::from_endpoint(child).unwrap();
+    let parent = Side::from_endpoint(parent, &rt()).unwrap();
+    let child = Side::from_endpoint(child, &rt()).unwrap();
     let mut grandchild = std::process::Command::new("sleep").arg("30").spawn().unwrap();
     drop(child);
     let received = tokio::time::timeout(Duration::from_secs(5), parent.recv()).await;
@@ -312,7 +323,7 @@ async fn stress_both_directions_over_the_real_transport() {
 #[ignore = "stress (~10 s in debug): CI runs it with --include-ignored"]
 async fn stress_both_directions_in_memory() {
     for seed in 1..=4 {
-        let (a, b) = memory();
+        let (a, b) = memory(&rt());
         stress(a, b, 300, seed * 104_729).await;
     }
 }

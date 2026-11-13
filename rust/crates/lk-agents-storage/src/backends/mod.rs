@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
+use lk_agents_net::owned::Background;
 
 /// One thread database's execution: typed reads and atomic ordered batches. Statements and
 /// results are backend-neutral; an `Err` from `batch` never claims a rollback it did not see.
@@ -56,8 +57,22 @@ pub trait Storage: Send + Sync {
         with_thread(self, id, async |thread| crate::storage::thread_tasks(thread, id, status).await)
             .await
     }
-    /// Releases backend resources; repeat-safe.
+    /// Where its work outliving a caller runs (a lease's renewal and release, a thread's
+    /// deferred close, a voice turn's settle), on the executor and clock every wait of its
+    /// threads reads. [`Storage::close`] joins its tasks.
+    fn background(&self) -> &Background;
+    /// Releases backend resources, its background tasks settled or, past their bound,
+    /// cancelled; repeat-safe.
     async fn close(&self);
+}
+
+/// Waits, at most [`HOST_TEARDOWN_TIMEOUT`](lk_agents_abi::HOST_TEARDOWN_TIMEOUT), for a
+/// storage's background tasks, then cancels and names the stragglers.
+pub(crate) async fn settle(background: &Background) {
+    let late = background.tasks.drain(&*background.clock, background.deadline()).await;
+    if !late.is_empty() {
+        log::warn!(target: lk_agents_abi::LOG_TARGET, "storage closed with its background work cancelled: {late:?}");
+    }
 }
 
 /// Executes one operation on a borrowed thread and releases its connection on either result.

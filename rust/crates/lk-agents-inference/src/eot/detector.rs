@@ -62,11 +62,14 @@ impl AudioEot {
                     .create()
                     .map(|model| Arc::new(HostModel(model)) as Arc<dyn LocalEotModel>),
             };
+            let clock = clock.clone();
             MountedTransport::mount(model.as_str(), thresholds.clone(), move |sink| match local {
-                Ok(model) => {
-                    Arc::new(LocalTransport::new(model, sink, lk_agents_media::pool::media_pool()))
-                        as Arc<dyn EotTransport>
-                }
+                Ok(model) => Arc::new(LocalTransport::new(
+                    model,
+                    sink,
+                    lk_agents_media::pool::media_pool(),
+                    clock.clone(),
+                )) as Arc<dyn EotTransport>,
                 Err(e) => Arc::new(FailedTransport(e.to_string())) as Arc<dyn EotTransport>,
             })
         })

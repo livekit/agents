@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use lk_agents_abi::{OwnedTask, SpawnerExt, Ts};
-use lk_agents_net::task::TokioSpawner;
 
 use super::{Completion, Outbox, Worker, WorkerNotification};
 use crate::config::{ASSIGNMENT_TIMEOUT, UPDATE_LOAD_INTERVAL, UPDATE_STATUS_INTERVAL};
@@ -244,7 +243,9 @@ impl Worker {
 
     /// The connection is gone. Per-connection timers stop; assignment timers keep running.
     pub(super) fn on_disconnected(&mut self) {
-        self.conn = ConnState::Disconnected;
+        if std::mem::replace(&mut self.conn, ConnState::Disconnected) == ConnState::Registered {
+            self.notify(WorkerNotification::Disconnected);
+        }
         self.timers.clear_deadline(WorkerTimer::StatusUpdate);
         // Decisions and assignments belong to the lost connection. Launches already handed to
         // the host must still complete and become active jobs.
@@ -331,7 +332,7 @@ impl Worker {
     fn ask_user(&mut self, slot: Slot, request: JobRequest) {
         let (host, generation) = (self.host.clone(), self.generation);
         let (decided, decision) = tokio::sync::oneshot::channel();
-        let task: OwnedTask = TokioSpawner::current().spawn(async move {
+        let task: OwnedTask = self.spawner.spawn(async move {
             let _ = decided.send(host.on_job_request(request).await);
         });
         self.requests.insert(slot, task);

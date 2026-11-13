@@ -102,8 +102,14 @@ pub trait AttemptHost: Send + Sync {
 /// `complete_response()` when nothing is owed any more.
 #[crate::host(class(name = "ProviderAttempts", module = "livekit.agents"))]
 pub trait ProviderAttempts: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class: its clock times the deadlines and its tasks
+    /// own the running attempt.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(
+        env: &Self::Env,
         kind: RequestKind,
         conn_options: ApiConnectOptions,
         host: Arc<dyn AttemptHost>,

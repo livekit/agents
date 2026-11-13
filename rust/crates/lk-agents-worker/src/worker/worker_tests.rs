@@ -116,20 +116,6 @@ pub(super) fn runtime_cfg(max_retry: u32) -> RuntimeConfig {
     }
 }
 
-pub(super) struct FrozenClock;
-impl Clock for FrozenClock {
-    fn now(&self) -> Ts {
-        Ts::ZERO
-    }
-    fn wall(&self) -> SystemTime {
-        SystemTime::UNIX_EPOCH
-    }
-    /// Frozen: a wait on it never ends. No test here arms one.
-    fn wait_until(&self, _at: Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
-        Box::pin(async move { std::future::pending::<()>().await })
-    }
-}
-
 pub(super) fn register_message(worker_id: &str) -> Result<ServerMessage, TransportError> {
     let msg = ServerMessage {
         message: Some(server_message::Message::Register(RegisterWorkerResponse {
@@ -162,7 +148,7 @@ pub(super) fn conn_with(
         runtime_cfg(max_retry),
         cfg_worker,
         Arc::new(host),
-        Arc::new(FrozenClock),
+        rt(Arc::new(TestClock(tokio::time::Instant::now()))),
         blocking_io(),
     );
     (c, wire, h)
@@ -177,6 +163,12 @@ pub(super) fn load_conn(host: LoadHost) -> (Worker, WorkerClient) {
     };
     let (c, _wire, h) = conn_with(vec![], 0, cfg, host);
     (c, h)
+}
+
+/// The test's runtime, on `clock`.
+pub(super) fn rt(clock: Arc<dyn Clock>) -> lk_agents_net::owned::Background {
+    let spawner = Arc::new(lk_agents_net::task::TokioSpawner::current());
+    lk_agents_net::owned::Background::new(Default::default(), spawner, clock)
 }
 
 pub(super) struct TestClock(pub(super) tokio::time::Instant);
@@ -398,7 +390,7 @@ pub(super) fn runtime_rig_with(max_retry: u32, cfg: WorkerConfig) -> RuntimeRig 
             dropped: dropped.clone(),
             failing_launches: failing_launches.clone(),
         }),
-        Arc::new(TestClock(tokio::time::Instant::now())),
+        rt(Arc::new(TestClock(tokio::time::Instant::now()))),
         blocking_io(),
     );
     RuntimeRig {
@@ -509,11 +501,12 @@ async fn max_retry_two_means_three_connect_attempts() {
     assert_eq!(wire.lock().attempts, 3);
 }
 
-// Catches: treating a mid-session close as fatal instead of reconnecting.
+// Catches: treating a mid-session close as fatal instead of reconnecting, or the server's health
+// not told of the lost registration until its next poll.
 
 #[tokio::test(start_paused = true)]
 async fn a_closed_connection_reconnects_and_the_machine_is_told() {
-    let (mut c, wire, _h) = conn(
+    let (mut c, wire, h) = conn(
         vec![
             Step::Serves(vec![
                 register_message("W-1"),
@@ -523,9 +516,15 @@ async fn a_closed_connection_reconnects_and_the_machine_is_told() {
         ],
         5,
     );
+    let mut notifications = h.subscribe();
     let _ = tokio::time::timeout(Duration::from_millis(50), c.run()).await;
     assert_eq!(wire.lock().attempts, 2, "did not reconnect after the close");
     assert_eq!(c.snapshot_now().worker_id, "W-2", "did not re-register on the new socket");
+    let told: Vec<_> = std::iter::from_fn(|| notifications.try_recv().ok())
+        .filter(|event| !matches!(event, WorkerNotification::Stopped(_)))
+        .map(|event| matches!(event, WorkerNotification::Disconnected))
+        .collect();
+    assert_eq!(told, [false, true, false], "registered, lost, registered again");
 }
 
 // Catches: the reconnect budget spent over the worker's lifetime instead of per outage (the
@@ -790,7 +789,7 @@ async fn closing_cancels_an_unfinished_dial() {
         runtime_cfg(0),
         WorkerConfig::default(),
         Arc::new(LoadHost::default()),
-        Arc::new(TestClock(tokio::time::Instant::now())),
+        rt(Arc::new(TestClock(tokio::time::Instant::now()))),
         blocking_io(),
     );
     let h = handle.clone();
@@ -816,7 +815,7 @@ async fn an_unanswered_webtransport_dial_fails_startup_with_the_reason() {
         runtime_cfg(16),
         WorkerConfig::default(),
         Arc::new(LoadHost::default()),
-        Arc::new(TestClock(tokio::time::Instant::now())),
+        rt(Arc::new(TestClock(tokio::time::Instant::now()))),
         blocking_io(),
     );
     let result = tokio::time::timeout(Duration::from_secs(11), runtime.run()).await.unwrap();

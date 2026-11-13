@@ -95,7 +95,7 @@ struct Inner {
     /// Set once the job ends: the application calls still running are cancelled.
     tasks_closed: CancellationToken,
     tracer: telemetry::Tracer,
-    /// Times the session report's outputs.
+    /// Times the session report's outputs and bounds the shutdown's steps.
     clock: Arc<dyn lk_agents_abi::Clock>,
     /// Where the job's Cloud telemetry goes, signed with the server's credentials.
     cloud: Option<telemetry::CloudEndpoint>,
@@ -172,7 +172,7 @@ impl Inner {
         (): telemetry::SpanEnd<D>,
     {
         let outcome = match timeout {
-            Some(t) => tokio::time::timeout(secs(t), run).await.map_err(|_| ()),
+            Some(t) => lk_agents_abi::timeout(&*self.clock, secs(t), run).await.map_err(|_| ()),
             None => Ok(run.await),
         };
         match outcome {
@@ -252,7 +252,7 @@ impl Inner {
         let entry = host.start_entrypoint(job, cx).await?;
         let wait_entry = entry.wait(job, cx);
         tokio::pin!(wait_entry);
-        let warn_at = tokio::time::sleep(CONNECT_WARNING_DELAY);
+        let warn_at = self.clock.wait_until(self.clock.now().saturating_add(CONNECT_WARNING_DELAY));
         tokio::pin!(warn_at);
         let (mut entry_done, mut warned) = (false, self.fake);
         let mut crash = None;
@@ -279,7 +279,9 @@ impl Inner {
 
         // The entrypoint returns, or is cancelled.
         if !entry_done
-            && tokio::time::timeout(ENTRYPOINT_EXIT_TIMEOUT, &mut wait_entry).await.is_err()
+            && lk_agents_abi::timeout(&*self.clock, ENTRYPOINT_EXIT_TIMEOUT, &mut wait_entry)
+                .await
+                .is_err()
         {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "entrypoint did not exit in time, cancelling");
             let _ = entry.cancel(shutdown.cx(), cx).await;
@@ -349,7 +351,8 @@ impl Inner {
         under: &telemetry::Cx,
     ) {
         let aclose_timeout = self.session_aclose_timeout;
-        match tokio::time::timeout(secs(aclose_timeout), host.close_session(under, cx)).await {
+        let closing = host.close_session(under, cx);
+        match lk_agents_abi::timeout(&*self.clock, secs(aclose_timeout), closing).await {
             Ok(Err(error)) => {
                 log::error!(target: lk_agents_abi::LOG_TARGET, exc_text:% = error.exc_text(); "error while closing the session")
             }
@@ -411,7 +414,7 @@ impl Inner {
         reason: &str,
     ) {
         let callbacks = std::mem::take(&mut self.state.lock().shutdown_callbacks);
-        let spawner = TokioSpawner::new(self.spawner.handle().clone());
+        let spawner = &self.spawner;
         let runs: Vec<_> = callbacks
             .into_iter()
             .map(|callback| {
@@ -584,7 +587,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         }
         let (tx, rx) = oneshot::channel();
         let closed = self.inner.tasks_closed.clone();
-        let task = TokioSpawner::new(self.inner.spawner.handle().clone()).spawn(async move {
+        let task = self.inner.spawner.spawn(async move {
             let called = tokio::select! {
                 called = call.call(&cx, &context) => called.map_err(WorkerError::Host),
                 () = closed.cancelled() => Err(WorkerError::Cancelled),

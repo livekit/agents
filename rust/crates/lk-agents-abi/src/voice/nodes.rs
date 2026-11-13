@@ -78,8 +78,9 @@ pub trait AgentNodes: Send + Sync + Sized + 'static {
 
 /// The provider calls of the default node a registered node runs: metered for the speech in place
 /// of the node's output, as the reference meters the TTS's own streams, the connections they
-/// acquired, which the node's output does not carry, and the step's trace (its job and
-/// conversation), which the default node's request records for.
+/// acquired, which the node's output does not carry, the step's trace (its job and
+/// conversation), which the default node's request records for, and the session whose tasks run
+/// the default node's request, so the session's close joins it.
 #[crate::host(native(refused = "expected the calls of a registered tts_node"))]
 pub trait ProviderCalls: Any + Send + Sync {}
 
@@ -101,6 +102,10 @@ pub struct NodeFrame {
 pub trait LlmNodeChunks: Send + Sync + Sized + 'static {
     #[host(next)]
     async fn next(&self) -> Result<Option<LlmChunk>, ProviderError>;
+    /// Stops reading: the provider's request ends and its stream closes, bounded by the teardown
+    /// limit. Dropping the object ends it too, without waiting.
+    #[host(await)]
+    async fn aclose(&self);
 }
 
 /// The default `tts_node`'s frames.
@@ -108,6 +113,10 @@ pub trait LlmNodeChunks: Send + Sync + Sized + 'static {
 pub trait TtsNodeFrames: Send + Sync + Sized + 'static {
     #[host(next)]
     async fn next(&self) -> Result<Option<NodeFrame>, ProviderError>;
+    /// Stops reading: the provider's request ends and its stream closes, bounded by the teardown
+    /// limit. Dropping the object ends it too, without waiting.
+    #[host(await)]
+    async fn aclose(&self);
 }
 
 /// The default `stt_node`'s speech events.
@@ -115,6 +124,10 @@ pub trait TtsNodeFrames: Send + Sync + Sized + 'static {
 pub trait SttNodeEvents: Send + Sync + Sized + 'static {
     #[host(next)]
     async fn next(&self) -> Result<Option<SpeechEvent>, ProviderError>;
+    /// Stops reading: the provider's request ends and its stream closes, bounded by the teardown
+    /// limit. Dropping the object ends it too, without waiting.
+    #[host(await)]
+    async fn aclose(&self);
 }
 
 /// `session.default.llm_node`, `tts_node` and `stt_node`: the session's provider over the node's
@@ -190,23 +203,27 @@ pub trait NodeFactory: Send + Sync {
         below: Arc<dyn TranscriptionOutput>,
     ) -> Result<Arc<dyn TextNode>, HostError>;
     /// `llm_node(chat_ctx, tools, model_settings)`: its chunks, strings and flushes as chunks; it
-    /// runs under `cx`, the step's `llm_node` span.
+    /// runs under `cx`, the step's `llm_node` span. `calls`: the invocation's, which the default
+    /// node it runs is handed (`ProviderCalls`).
     fn llm_node<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
         req: &'a ChatRequest,
+        calls: Arc<dyn ProviderCalls>,
     ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
     /// `tts_node(text, model_settings)`: the text as written pushed in, its frames out; the
     /// node's own synthesis prepares it. It runs under `cx`, the step's `tts_node` span.
     fn tts_node(
         &self,
         cx: &crate::telemetry::Cx,
+        calls: Arc<dyn ProviderCalls>,
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<crate::TextSink, TtsSource>, ProviderError>>;
     /// `stt_node(audio, model_settings)`: frames pushed in, its speech events out. It runs under
     /// `cx`'s span.
     fn stt_node(
         &self,
         cx: &crate::telemetry::Cx,
+        calls: Arc<dyn ProviderCalls>,
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<SttSink, SttSource>, ProviderError>>;
 }
 

@@ -293,13 +293,15 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 - Media's thread pool (`pool.rs`) and `media_queue` are the only exempt modules. [lint]
 
 ### Runtime executors and the DST
-- Executor modules (`runtime/src/{voice,room_io,avatar,rtc}`) spawn and sleep only through the
-  injected `Spawner` and `Clock`: no `tokio::spawn`, `tokio::time`, `tokio::net` or `Handle`. [check]
+- The async crates spawn and sleep only through the injected `Spawner` and `Clock`: no
+  `tokio::spawn`, `tokio::time`, `tokio::net`, `tokio::runtime` or `Handle::current` outside the
+  primitives (`lk_agents_net::{task, clock, env}`, the process runtime) and the socket boundary
+  adapters, each exempted in `rust/check` for what it names. [check]
 - Every `select!` in an executor module is `biased;`. [check]
 - In the async crates, a data branch (`next()`, `recv()`) comes before a branch that runs the
   producer (`run()`), so queued data is read first; the check matches these method names. [check]
-- Executor modules never call `spawn_detached`: work that outlives its caller goes through
-  `owned::Background`, which the session's tasks join. [check]
+- Nothing calls `spawn_detached`: work that outlives its caller goes through its owner's
+  `TaskSet` or `owned::Background`, which the owner's close joins. [check]
 - Tasks are held as `ScopedTask` handles, never ids: dropping or replacing a handle cancels its
   task, and the set still joins it. [review]
 - Sockets live only in boundary adapters, which the DST replaces with port fakes. [review]
@@ -316,6 +318,9 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 - Never use Tokio's blocking pool (`spawn_blocking`, `block_in_place`, `tokio::fs`, Tokio stdio):
   run blocking work on `lk_agents_net::blocking_io` or the media pool. [lint]
 - Resolve names with `lk_agents_net::dns` and connect websockets with `lk_agents_net::websocket`. [lint]
+- No `tokio::spawn`, `JoinHandle`, Tokio sleeps/timeouts/intervals or `Instant::now` in library
+  code: tasks are `ScopedTask`/`TaskSet`/`owned::Background` on the injected `Spawner`, time is the
+  injected `Clock`. A Python test skips a duration with `_core.skip_host_time(seconds)`. [lint]
 - Never wrap a write or send in `timeout`: time out reads only. [review]
 - Audio into a consumer goes through a `media_queue`, never a bounded channel that errors when full. [review]
 

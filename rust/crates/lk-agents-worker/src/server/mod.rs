@@ -46,8 +46,8 @@ use host::ServerCallbacks;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
-use lk_agents_net::task::TokioSpawner;
 use std::future::Future;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -58,7 +58,7 @@ mod health;
 mod http;
 mod public;
 pub use health::{HealthProbe, ServerStatus, serve_health, serve_metrics};
-pub use http::bind_listener;
+pub use http::{TcpListener, bind_listener};
 pub use public::{PublicRoutes, serve_public};
 mod settings;
 pub use settings::{
@@ -262,12 +262,15 @@ pub struct ServerRuntime {
     /// The lifecycle task `run` starts, outliving a cancelled `run` caller; `close` takes and
     /// awaits it unless a missed cleanup deadline left it holding the stragglers.
     serving: Arc<parking_lot::Mutex<Option<OwnedTask>>>,
+    /// Where the server's tasks run, and the clock its deadlines are read on.
+    rt: Background,
 }
 
 impl ServerRuntime {
     pub fn new(
         host: ServerCallbacks,
         blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>,
+        rt: Background,
     ) -> Self {
         let (outcome, outcome_cell) = signal::once();
         let (cleanup, cleanup_cell) = signal::once();
@@ -289,6 +292,7 @@ impl ServerRuntime {
             cleanup_outcome: cleanup_cell,
             drain_outcome: drain_cell,
             serving: Arc::default(),
+            rt,
         }
     }
 
@@ -309,7 +313,9 @@ impl ServerRuntime {
             snapshot.has_rtc = start.has_rtc;
         });
         let runtime = self.clone();
-        let serving = TokioSpawner::current()
+        let serving = self
+            .rt
+            .spawner
             .spawn(async move { runtime.serve(start, settles, cleanup_timeout).await });
         *self.serving.lock() = Some(serving);
         wait_outcome(&self.outcome).await
@@ -426,7 +432,8 @@ impl ServerRuntime {
         .into();
         let mut cleanup_failure: Option<ServerError> = None;
         let mut reported = false;
-        let deadline = tokio::time::sleep(cleanup_timeout);
+        let clock = &self.rt.clock;
+        let deadline = clock.wait_until(clock.now().saturating_add(cleanup_timeout));
         tokio::pin!(deadline);
         while !remaining.is_empty() {
             tokio::select! {
@@ -488,7 +495,7 @@ impl ServerRuntime {
         if !start.has_rtc {
             settings.num_idle_processes = Some(crate::EnvOption::Fixed(0));
         }
-        let status = Arc::new(ServerStatus::default());
+        let status = Arc::new(ServerStatus::of(self.rt.clock.clone(), &settings));
         let local = start.devmode || start.unregistered;
         let probe = Arc::new(host.clone());
         resources.health = self.open_health(&settings, local, &status, probe, stop).await?;
@@ -523,7 +530,7 @@ impl ServerRuntime {
             status.registered.store(true, Ordering::Release);
             status.set_connected(true);
         } else {
-            let (worker, handle) = new_worker(&settings, start, host, &blocking_io);
+            let (worker, handle) = new_worker(&settings, start, host, &blocking_io, &self.rt);
             resources.worker = Some(handle.clone());
             self.snapshot.modify(|snapshot| snapshot.worker = Some(handle.clone()));
             let registration = Registration {
@@ -534,14 +541,15 @@ impl ServerRuntime {
                 cloud_routed,
             };
             resources.connection =
-                Some(TokioSpawner::current().spawn(run_worker_connection(worker, registration)));
+                Some(self.rt.spawner.spawn(run_worker_connection(worker, registration)));
         }
         let reporter = LoadReporter {
             host: self.host.clone(),
             worker: resources.worker.clone(),
             status: status.clone(),
+            clock: self.rt.clock.clone(),
         };
-        resources.load = Some(TokioSpawner::current().spawn(reporter.run()));
+        resources.load = Some(self.rt.spawner.spawn(reporter.run()));
         Ok(status)
     }
 
@@ -565,7 +573,7 @@ impl ServerRuntime {
                 }
             }
         };
-        let permit = tokio::time::timeout(admission_deadline, admit)
+        let permit = lk_agents_abi::timeout(&*self.rt.clock, admission_deadline, admit)
             .await
             .map_err(|_| "server setup capacity wait timed out".to_owned())?;
         resources.setup = Some(blocking_io.spawn_admitted(permit, move || {
@@ -598,8 +606,9 @@ impl ServerRuntime {
         self.snapshot
             .modify(|snapshot| snapshot.http_port = listener.local_addr().map_or(0, |a| a.port()));
         log::info!(target: lk_agents_abi::LOG_TARGET, url:% = url, paths = "/,/ready,/worker"; "health listener");
-        Ok(Some(TokioSpawner::current().spawn(serve_health(
+        Ok(Some(self.rt.spawner.spawn(serve_health(
             listener,
+            self.rt.clone(),
             Arc::new(settings.clone()),
             status.clone(),
             probe,
@@ -621,8 +630,9 @@ impl ServerRuntime {
         };
         let (listener, url) = bind(&address).await?;
         log::info!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}/metrics"); "prometheus listener");
-        Ok(Some(TokioSpawner::current().spawn(serve_metrics(
+        Ok(Some(self.rt.spawner.spawn(serve_metrics(
             listener,
+            self.rt.clone(),
             status.instruments,
             stop.clone(),
         ))))
@@ -659,7 +669,8 @@ impl ServerRuntime {
             unauthenticated,
             proxy_headers: settings.listeners.public.as_ref().is_some_and(|p| p.proxy_headers),
         });
-        Ok(TokioSpawner::current().spawn(serve_public(listener, routes, handler, stop.clone())))
+        let serving = serve_public(listener, self.rt.clone(), routes, handler, stop.clone());
+        Ok(self.rt.spawner.spawn(serving))
     }
 
     fn drain_resources(
@@ -668,6 +679,7 @@ impl ServerRuntime {
         timeout: Option<Duration>,
     ) -> BoxFuture<'static, Result<(), DrainError>> {
         let host = self.host.clone();
+        let clock = self.rt.clock.clone();
         async move {
             let jobs = async {
                 match worker {
@@ -681,9 +693,9 @@ impl ServerRuntime {
             // Endpoint exchanges in flight finish beside the jobs, under the same deadline.
             let drain = async { futures_util::future::join(host.drain_endpoints(), jobs).await.1 };
             match timeout {
-                Some(timeout) => {
-                    tokio::time::timeout(timeout, drain).await.map_err(|_| DrainError::TimedOut)?
-                }
+                Some(timeout) => lk_agents_abi::timeout(&*clock, timeout, drain)
+                    .await
+                    .map_err(|_| DrainError::TimedOut)?,
                 None => drain.await,
             }
         }
@@ -834,6 +846,7 @@ fn new_worker(
     start: &ServerStart,
     host: ServerCallbacks,
     blocking_io: &lk_agents_net::blocking_io::BlockingIo,
+    rt: &Background,
 ) -> (Worker, WorkerClient) {
     let (config, connection) = settings.worker(start.devmode, start.endpoints.clone());
     let transport = match &start.transport {
@@ -844,7 +857,7 @@ fn new_worker(
             crate::TransportConfig::WebTransport { insecure: *insecure }
         }
     };
-    Worker::new(config, connection, transport, Arc::new(host), blocking_io.clone())
+    Worker::new(config, connection, transport, Arc::new(host), blocking_io.clone(), rt.clone())
 }
 
 /// Mirrors the worker's registrations into the snapshot and the health status.
@@ -861,6 +874,7 @@ impl Registration {
         while let Ok(event) = self.notifications.recv().await {
             match event {
                 WorkerNotification::Registered(info) => self.registered(info),
+                WorkerNotification::Disconnected => self.status.set_connected(false),
                 WorkerNotification::Stopped(_) => break,
                 _ => {}
             }
@@ -901,14 +915,17 @@ struct LoadReporter {
     host: ServerCallbacks,
     worker: Option<WorkerClient>,
     status: Arc<ServerStatus>,
+    clock: Arc<dyn lk_agents_abi::Clock>,
 }
 
 impl LoadReporter {
     async fn run(self) -> Result<(), ServerError> {
-        let mut interval = tokio::time::interval(crate::UPDATE_LOAD_INTERVAL);
+        let mut next = self.clock.now();
         loop {
-            interval.tick().await;
+            self.clock.wait_until(next).await;
             self.report_once().await?;
+            // A late report is not made up for: the next one is an interval after this one.
+            next = next.saturating_add(crate::UPDATE_LOAD_INTERVAL).max(self.clock.now());
         }
     }
 
@@ -950,7 +967,7 @@ fn send_job_status(
 }
 
 /// A listener bound at `address`, and the URL it is reached at from this host.
-async fn bind(address: &Bind) -> Result<(tokio::net::TcpListener, String), ServerError> {
+async fn bind(address: &Bind) -> Result<(TcpListener, String), ServerError> {
     let (listener, port) = bind_listener(&address.host, address.port).await?;
     let host = match address.host.as_str() {
         "" | "0.0.0.0" => "127.0.0.1".to_owned(),

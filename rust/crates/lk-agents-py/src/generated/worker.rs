@@ -939,6 +939,35 @@ pub fn init(py: Python<'_>, role: Bound<'_, PyAny>) -> PyResult<()> {
     Ok(())
 }
 
+// Declared in rust/crates/lk-agents-abi/src/worker/ipc_host.rs.
+type ProcessClockImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::ProcessClock;
+
+fn _extract_process_clock_skip_host_time_seconds(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ProcessClockSkipHostTimeSecondsInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "seconds")
+}
+type ProcessClockSkipHostTimeSecondsInput = f64;
+
+/// Moves every host clock of this process `seconds` forward at once (a negative or NaN value
+/// moves nothing): each wait whose instant it passes ends now. For tests, so a grace period, a
+/// watchdog or an idle close fires without the test waiting it out.
+#[pyfunction]
+#[pyo3(signature = (seconds))]
+pub fn skip_host_time(
+    py: Python<'_>,
+    #[pyo3(from_py_with = _extract_process_clock_skip_host_time_seconds)]
+    seconds: ProcessClockSkipHostTimeSecondsInput,
+) -> PyResult<()> {
+    py.detach(|| {
+        <ProcessClockImpl as ::lk_agents_abi::worker::ipc_host::ProcessClock>::skip_host_time(
+            seconds,
+        )
+    });
+    Ok(())
+}
+
 // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
 type ServerConfigImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ServerConfig;

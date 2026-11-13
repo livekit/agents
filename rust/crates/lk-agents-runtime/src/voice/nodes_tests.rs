@@ -103,6 +103,7 @@ impl NodeFactory for GaveUp {
         &'a self,
         _cx: &telemetry::Cx,
         _req: &'a ChatRequest,
+        _calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })
     }
@@ -110,6 +111,7 @@ impl NodeFactory for GaveUp {
     fn tts_node(
         &self,
         _cx: &telemetry::Cx,
+        _calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<lk_agents_abi::TextSink, TtsSource>, ProviderError>,
@@ -120,6 +122,7 @@ impl NodeFactory for GaveUp {
     fn stt_node(
         &self,
         _cx: &telemetry::Cx,
+        _calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
@@ -277,8 +280,9 @@ async fn a_tts_connection_reaches_the_sink_through_the_node() {
     let tts: Arc<dyn lk_agents_abi::Tts> = Arc::new(gateway);
     let env = lk_agents_net::env::ProcessEnv::current_runtime();
     let nodes = crate::voice::nodes::AgentNodes::new(&env, Arc::new(DefaultTtsNode(tts.clone())));
+    let calls = Arc::new(crate::voice::nodes::NodeCalls::default());
     let (sink, mut source) =
-        nodes.tts_node(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
+        nodes.tts_node(&lk_agents_abi::telemetry::Cx::NONE, calls).await.unwrap().split();
     sink.push("Hello there.".to_owned()).unwrap();
     sink.end_input();
     let mut fold =

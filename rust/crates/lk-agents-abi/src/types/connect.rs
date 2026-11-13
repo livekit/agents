@@ -133,10 +133,14 @@ impl ApiConnectOptions {
         after(since, self.read_timeout)
     }
 
-    /// `types.py:138`. The first retry waits 100 ms, not zero as the docstring says (#1337). Shared
-    /// so native and host retry loops agree.
+    /// `types.py:138`. The first retry waits 100 ms, or `retry_interval` when shorter (#1337), so a
+    /// zero interval never waits. Shared so native and host retry loops agree.
     pub fn interval_for_retry(&self, num_retries: u32) -> f64 {
-        if num_retries == 0 { FIRST_RETRY_INTERVAL } else { self.retry_interval }
+        if num_retries == 0 {
+            FIRST_RETRY_INTERVAL.min(self.retry_interval)
+        } else {
+            self.retry_interval
+        }
     }
 }
 
@@ -182,16 +186,17 @@ pub const FIRST_RETRY_INTERVAL: f64 = 0.1;
 mod tests {
     use super::*;
 
-    // Catches: a 0.0 first retry (from the docstring), or retry #1 not back on the interval.
+    // Catches: a 0.0 first retry (from the docstring) on the default interval, a zero interval
+    // still waiting 100 ms, or retry #1 not back on the interval.
     #[test]
     fn only_the_first_retry_skips_the_configured_interval() {
         let opts = ApiConnectOptions::default();
         assert_eq!(opts.interval_for_retry(0), 0.1);
         assert_eq!(opts.interval_for_retry(1), 2.0);
         assert_eq!(opts.interval_for_retry(7), 2.0);
-        // The 100 ms floor is the first step only, not a `max`.
+        // The 100 ms first step is a ceiling: a shorter interval, zero included, is honored.
         let opts = ApiConnectOptions { retry_interval: 0.0, ..ApiConnectOptions::default() };
-        assert_eq!(opts.interval_for_retry(0), 0.1);
+        assert_eq!(opts.interval_for_retry(0), 0.0);
         assert_eq!(opts.interval_for_retry(1), 0.0);
     }
 

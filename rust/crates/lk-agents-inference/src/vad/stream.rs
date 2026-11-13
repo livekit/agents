@@ -228,14 +228,13 @@ type DetectionStream =
     lk_agents_abi::DuplexStream<Box<dyn StreamInput<AudioFrame>>, Box<dyn StreamOutput<VadOutput>>>;
 
 /// One detection: input queued for, and events produced by, an admitted worker that owns the
-/// model from construction to settlement. `runtime` runs the worker's channel waits; drops are
-/// measured under `cx`'s job.
+/// model from construction to settlement and drives its channel waits itself; drops are measured
+/// under `cx`'s job.
 pub(super) fn open(
     options: Cell<VadOptions>,
     models: Arc<dyn VadModelFactory>,
     clock: Arc<dyn Clock>,
     media_pool: MediaPool,
-    runtime: tokio::runtime::Handle,
     cx: &telemetry::Cx,
 ) -> Result<DetectionStream, ProviderError> {
     let cancelled = CancellationToken::new();
@@ -250,11 +249,31 @@ pub(super) fn open(
             let machine = VadMachine::new(applied);
             let model = models.create();
             let detection = Detection { machine, model, options, applied, input, output, stop };
-            runtime.block_on(detection.run())
+            park_on(detection.run())
         })
         .map_err(|error| failed(error.to_string()))?;
     Ok(lk_agents_abi::DuplexStream::new(
         Box::new(sink),
         Box::new(Output { events, worker: Some(worker), cancelled, clock }),
     ))
+}
+
+/// Drives `work` on this worker thread, parked between wakes: a detection waits only on its
+/// channels and its cancellation, never on time or I/O.
+fn park_on<F: std::future::Future>(work: F) -> F::Output {
+    struct Unpark(std::thread::Thread);
+    impl std::task::Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let mut work = std::pin::pin!(work);
+    let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut cx = std::task::Context::from_waker(&waker);
+    loop {
+        if let std::task::Poll::Ready(output) = work.as_mut().poll(&mut cx) {
+            return output;
+        }
+        std::thread::park();
+    }
 }

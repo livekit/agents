@@ -105,6 +105,7 @@ async fn a_peer_closing_during_the_final_write_does_not_fail_the_interruption_st
                 ..Default::default()
             },
             Arc::new(RealClock::new()),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
         );
         let mut stream = detector.stream(&lk_agents_abi::telemetry::Cx::NONE);
         tokio::time::timeout(Duration::from_secs(2), session_created).await.unwrap().unwrap();

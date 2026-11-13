@@ -13,6 +13,7 @@ use lk_agents_abi::storage::{
     ThreadPage, ThreadTask,
 };
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::owned::Background;
 use lk_agents_net::task::TaskSet;
 use serde_json::Value;
 use tokio::sync::OnceCell;
@@ -25,7 +26,6 @@ use crate::thread::LeaseTiming;
 use crate::thread::db::{ItemPage, TaskPage, TaskQuery};
 use crate::voice::VoiceStore;
 use crate::{CommitOptions, ItemRow, Run, RunOptions, RunOutcome, Storage, Thread};
-use lk_agents_abi::SpawnerExt;
 use lk_agents_abi::storage::context::ContextScope;
 use lk_agents_abi::storage::context::ContextScopeWrite;
 use serde_json::Map;
@@ -33,7 +33,7 @@ use serde_json::Map;
 /// What the lazily opened backend is built from.
 enum Config {
     Local { directory: PathBuf, lease: LeaseTiming, project_id: String },
-    Cloud { opts: AgentDbOptions, minter: TokenMinter, env: ProcessEnv },
+    Cloud { opts: AgentDbOptions, minter: TokenMinter },
 }
 
 /// The project a local store without options belongs to.
@@ -70,7 +70,6 @@ impl Config {
         key: String,
         secret: String,
         lease: LeaseTiming,
-        env: &ProcessEnv,
     ) -> Result<Self, StorageError> {
         let mut opts = AgentDbOptions::new(url);
         opts.lease = lease;
@@ -80,7 +79,7 @@ impl Config {
                 opts.url
             )));
         }
-        Ok(Config::Cloud { opts, minter: TokenMinter::new(key, secret)?, env: env.clone() })
+        Ok(Config::Cloud { opts, minter: TokenMinter::new(key, secret)? })
     }
 }
 
@@ -129,7 +128,8 @@ pub struct Namespace {
     config: Config,
     backend: OnceCell<Backend>,
     a2a_tasks: Arc<TaskSet>,
-    clock: Arc<dyn lk_agents_abi::Clock>,
+    /// The process's executor and clock, which the backend's work runs on.
+    env: ProcessEnv,
     /// The lease holder id this process opens threads under.
     holder: String,
     /// Where the local backend's health metrics go.
@@ -165,14 +165,18 @@ impl Namespace {
             .get_or_try_init(|| async {
                 Ok(match &self.config {
                     Config::Local { directory, lease, .. } => {
-                        let workers = Workers::threads(self.clock.clone());
+                        let spawner = (self.env.spawner)().map_err(|e| {
+                            StorageError::Unavailable(format!("storage runtime: {e}"))
+                        })?;
+                        let clock = self.env.clock.clone();
+                        let workers = Workers::threads(Background::new(Arc::default(), spawner, clock));
                         let storage = SqliteStorage::open(directory, *lease, workers).await?;
                         let storage = storage.with_telemetry(self.cx.clone());
                         log::info!(target: lk_agents_abi::LOG_TARGET, "local thread storage in {}", directory.display());
                         Backend::Local(Arc::new(storage))
                     }
-                    Config::Cloud { opts, minter, env } => {
-                        let (opts, minter, env) = (opts.clone(), minter.clone(), env.clone());
+                    Config::Cloud { opts, minter } => {
+                        let (opts, minter, env) = (opts.clone(), minter.clone(), self.env.clone());
                         let runtime = (env.runtime)().map_err(|e| {
                             StorageError::Unavailable(format!("storage runtime: {e}"))
                         })?;
@@ -379,13 +383,13 @@ impl HostStorageClass for Namespace {
                     env_seconds(lease_ttl, "LIVEKIT_AGENTDB_LEASE_TTL")?,
                     env_seconds(renew_interval, "LIVEKIT_AGENTDB_RENEW_INTERVAL")?,
                 )?;
-                Config::cloud(&url, key, secret, lease, env)?
+                Config::cloud(&url, key, secret, lease)?
             }
         };
-        let (backend, a2a_tasks, clock) = (OnceCell::new(), Arc::default(), env.clock.clone());
+        let (backend, a2a_tasks) = (OnceCell::new(), Arc::default());
         let holder = holder.filter(|h| !h.is_empty()).unwrap_or_else(|| env.lease_holder());
-        let cx = env.tracer.root();
-        Ok(Self { config, backend, a2a_tasks, clock, holder, cx })
+        let (cx, env) = (env.tracer.root(), env.clone());
+        Ok(Self { config, backend, a2a_tasks, env, holder, cx })
     }
 
     fn holder(&self) -> String {
@@ -517,8 +521,9 @@ impl HostStorageClass for Namespace {
     }
 
     async fn aclose(&self) {
-        let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        if !self.a2a_tasks.wait_empty(&*self.clock, Some(deadline)).await {
+        let clock = &*self.env.clock;
+        let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        if !self.a2a_tasks.wait_empty(clock, Some(deadline)).await {
             log::error!(target: lk_agents_abi::LOG_TARGET, "storage is closing while accepted A2A work settles");
         }
 
@@ -645,14 +650,10 @@ impl host::handles::Thread for Thread {
         let owner = crate::Holder::new("run");
         Ok(RunHandle::new(self.partition(&partition_key).open(options, &owner).await?))
     }
-    fn close(&self, env: &ProcessEnv) {
+    /// The close runs as its storage's task, which the storage's close joins.
+    fn close(&self, _env: &ProcessEnv) {
         let thread = self.clone();
-        match (env.spawner)() {
-            Ok(spawner) => spawner.spawn_detached(async move { thread.close().await }),
-            Err(error) => {
-                log::warn!(target: lk_agents_abi::LOG_TARGET, "the database connection could not close: {error}")
-            }
-        }
+        self.background.spawn("thread close", async move { thread.close().await });
     }
 }
 

@@ -1,13 +1,13 @@
 use crate::telemetry;
-use lk_agents_abi::SpawnerExt;
+use lk_agents_abi::errors::HostError;
+use lk_agents_abi::{Clock, SpawnerExt, timeout};
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal::Shared;
-use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::time::Instant;
 
 use futures_util::StreamExt;
 use lk_agents_abi::invoke::CallContext;
@@ -122,6 +122,8 @@ impl Target {
 
 struct Connection {
     peer: Peer<RoleClient>,
+    /// The session's: runs the close's settlement and the cancel notifications.
+    background: Background,
     client: Client,
     cancel: CancellationToken,
     service: Mutex<Option<RunningService<RoleClient, Client>>>,
@@ -138,16 +140,17 @@ impl Drop for Call {
     }
 }
 
-/// A request the caller stopped awaiting, an interruption among them, is cancelled on the server.
-struct CancelOnDrop {
-    peer: Peer<RoleClient>,
+/// A request the caller stopped awaiting, an interruption among them, is cancelled on the server
+/// by a notification the session's background sends.
+struct CancelOnDrop<'a> {
+    connection: &'a Connection,
     id: Option<RequestId>,
 }
-impl Drop for CancelOnDrop {
+impl Drop for CancelOnDrop<'_> {
     fn drop(&mut self) {
         let Some(id) = self.id.take() else { return };
-        let peer = self.peer.clone();
-        TokioSpawner::current().spawn_detached(async move {
+        let peer = self.connection.peer.clone();
+        self.connection.background.spawn("MCP cancel notification", async move {
             let reason = Some(CALLER_CANCELLED.into());
             let notification =
                 CancelledNotification::new(CancelledNotificationParam::new(Some(id), reason));
@@ -174,7 +177,7 @@ impl Connection {
         let Some(service) = self.service.lock().take() else { return };
         let owner = self.clone();
         // The owner outlives a cancelled close waiter or a missed cleanup deadline.
-        let closing = TokioSpawner::current().spawn(async move {
+        let closing = self.background.spawner.spawn(async move {
             let _ = service.waiting().await;
             owner.receipt.closed().await;
             owner.state.wait_until(|state| state.settle_when_idle().then_some(())).await;
@@ -198,7 +201,8 @@ pub struct McpSession {
     request_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     state: Mutex<State>,
-    epoch: Instant,
+    /// The host's: the reconnect gate's time, the session's waits and its tasks.
+    background: Background,
     /// Serializes connection attempts and teardown, including their awaits.
     connecting: tokio::sync::Mutex<()>,
 }
@@ -220,6 +224,7 @@ impl McpSessionPort for McpSession {
     type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         init_timeout: f64,
         request_timeout: Option<f64>,
         read_timeout: Option<f64>,
@@ -232,7 +237,7 @@ impl McpSessionPort for McpSession {
             request_timeout: limit(McpTimeout::Request, request_timeout)?,
             read_timeout: limit(McpTimeout::Read, read_timeout)?,
             state: Mutex::default(),
-            epoch: Instant::now(),
+            background: env.background().map_err(|e| HostError::new(e.to_string()))?,
             connecting: tokio::sync::Mutex::default(),
         })
     }
@@ -302,12 +307,12 @@ impl McpSessionPort for McpSession {
                 step = self.state.lock().listing.page(pages, tools, page.next_cursor, closing);
             }
         };
-        let result = match tokio::time::timeout(self.init_timeout, fetch).await {
+        let result = match timeout(self.clock(), self.init_timeout, fetch).await {
             Ok(result) => result,
             Err(_) => Err(timed_out(self.init_timeout)),
         };
         if result.is_err() && reached {
-            self.state.lock().gate.failed(self.epoch.elapsed());
+            self.state.lock().gate.failed(self.clock().now());
         }
         match result {
             Ok(tools) => Ok(tools.into()),
@@ -341,7 +346,7 @@ impl McpSessionPort for McpSession {
             _ = connection.cancel.cancelled() => return Err(cancelled()),
             result = connection.peer.send_cancellable_request(request, options(timeout)) => result.map_err(|e| connection.error(e))?,
         };
-        let mut guard = CancelOnDrop { peer: connection.peer.clone(), id: Some(handle.id.clone()) };
+        let mut guard = CancelOnDrop { connection: &connection, id: Some(handle.id.clone()) };
         let mut updates = connection.client.progress.subscribe(handle.progress_token.clone()).await;
         let response = handle.await_response();
         tokio::pin!(response);
@@ -377,13 +382,13 @@ impl McpSessionPort for McpSession {
         self.retire();
         let previous = self.state.lock().previous.clone();
         if let Some(connection) = previous
-            && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, connection.settled()).await.is_err()
+            && timeout(self.clock(), HOST_TEARDOWN_TIMEOUT, connection.settled()).await.is_err()
         {
             log::error!(target: lk_agents_abi::LOG_TARGET, "MCP incomplete cleanup; runtime retains ownership");
         }
         let initializing = self.state.lock().initializing.clone();
         if let Some(receipt) = initializing
-            && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err()
+            && timeout(self.clock(), HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err()
         {
             log::error!(target: lk_agents_abi::LOG_TARGET, "MCP incomplete initialization cleanup; runtime retains ownership");
         }
@@ -397,7 +402,11 @@ impl McpSession {
     }
 
     pub(super) fn retry_delay(&self) -> Duration {
-        self.state.lock().gate.wait(self.epoch.elapsed())
+        self.state.lock().gate.wait(self.clock().now())
+    }
+
+    fn clock(&self) -> &dyn Clock {
+        &*self.background.clock
     }
 
     async fn connect_to(&self, target: Target) -> Result<(), McpError> {
@@ -440,7 +449,7 @@ impl McpSession {
             if state.closed || state.target.is_none() {
                 return Err(missing);
             }
-            if !state.gate.wait(self.epoch.elapsed()).is_zero() {
+            if !state.gate.wait(self.clock().now()).is_zero() {
                 return Err(McpError::Unavailable);
             }
         }
@@ -483,7 +492,8 @@ impl McpSession {
                     self.serve(transport, receipt.clone(), cancel.clone()).await
                 }
                 Target::Stdio { command, args, env, cwd } => {
-                    let transport = StdioTransport::spawn(command, args, env, cwd)?;
+                    let clock = self.background.clock.clone();
+                    let transport = StdioTransport::spawn(command, args, env, cwd, clock)?;
                     self.serve(transport, receipt.clone(), cancel.clone()).await
                 }
                 #[cfg(test)]
@@ -491,17 +501,18 @@ impl McpSession {
             }
         };
         tokio::pin!(attempt);
+        let deadline = self.clock().now().saturating_add(self.init_timeout);
         let result = tokio::select! {
             biased;
             result = &mut attempt => result,
-            _ = tokio::time::sleep(self.init_timeout) => {
+            () = self.clock().wait_until(deadline) => {
                 // Cancelling lets the attempt release its transport before reporting the deadline.
                 cancel.cancel();
                 let _ = attempt.await;
                 Err(timed_out(self.init_timeout))
             }
         };
-        let now = self.epoch.elapsed();
+        let now = self.clock().now();
         match &result {
             Ok(()) => {
                 let mut state = self.state.lock();
@@ -537,7 +548,7 @@ impl McpSession {
         drop(previous);
         let service = match serve_client_with_ct(
             client.clone(),
-            Observed::new(transport, receipt.clone()),
+            Observed::new(transport, receipt.clone(), self.background.clone()),
             cancel.clone(),
         )
         .await
@@ -545,7 +556,7 @@ impl McpSession {
             Ok(service) => service,
             Err(error) => {
                 // Observed owns the transport even if the SDK handshake is cancelled.
-                if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err() {
+                if timeout(self.clock(), HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err() {
                     log::error!(target: lk_agents_abi::LOG_TARGET, "MCP incomplete initialization cleanup; runtime retains ownership");
                 }
                 return Err(McpError::Initialization(Arc::new(error)));
@@ -554,6 +565,7 @@ impl McpSession {
         let peer = service.peer().clone();
         let connection = Arc::new(Connection {
             peer,
+            background: self.background.clone(),
             client,
             cancel,
             service: Mutex::new(Some(service)),

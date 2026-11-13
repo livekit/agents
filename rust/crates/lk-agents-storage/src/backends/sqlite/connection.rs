@@ -11,7 +11,8 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
 use crate::{StorageError, ThreadDbConnection};
 use lk_agents_abi::storage::Unacknowledged;
-use lk_agents_abi::{Clock, Spawner, SpawnerExt as _};
+use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _};
+use lk_agents_net::owned::Background;
 
 // Each database is served by its own worker, so no query blocks the executor.
 
@@ -27,27 +28,31 @@ pub(super) enum Request {
     Close(oneshot::Sender<()>),
 }
 
-/// Where each database's worker runs and the clock its `unixepoch()` reads: a dedicated thread
-/// per worker and the wall clock in production, the scheduler and its virtual clock in a
-/// simulation.
+/// Where a local storage's work runs: each database's worker on `spawner` (a dedicated thread
+/// per worker in production, the scheduler in a simulation), everything else in `background`,
+/// whose clock `unixepoch()` and every wait read.
 #[derive(Clone)]
 pub struct Workers {
     pub spawner: Arc<dyn Spawner>,
-    pub clock: Arc<dyn Clock>,
+    pub background: Background,
 }
 
 impl Workers {
     /// Production: each worker on a thread of its own.
-    pub fn threads(clock: Arc<dyn Clock>) -> Self {
-        Self { spawner: Arc::new(lk_agents_net::task::DedicatedThreads), clock }
+    pub fn threads(background: Background) -> Self {
+        Self { spawner: Arc::new(lk_agents_net::task::DedicatedThreads), background }
+    }
+
+    pub fn clock(&self) -> &Arc<dyn Clock> {
+        &self.background.clock
     }
 }
 
 type Open = Arc<dyn Fn() -> Result<SqliteThread, StorageError> + Send + Sync>;
 
 /// Opens the database, then runs its requests in order, each inline. Closes the connection once,
-/// at a close request or when every sender is gone. Dropped before it answers, the worker dies as
-/// a crashed one does: what it still held has an unknown outcome.
+/// at a close request, when every sender is gone or when its owner drops it. Dropped before it
+/// answers, the worker dies as a crashed one does: what it still held has an unknown outcome.
 async fn serve(
     open: Open,
     ready: oneshot::Sender<Result<(), StorageError>>,
@@ -65,32 +70,38 @@ async fn serve(
     };
     let done = loop {
         let Some(request) = rx.recv().await else { break None };
-        let access = sqlite.access.as_ref();
+        let SqliteThread { conn, access } = &mut sqlite;
+        let (conn, access) = (conn.as_mut().expect("open until the worker ends"), access.as_ref());
         match request {
             Request::Query(s, reply) => {
-                let _ =
-                    reply.send(super::lifecycle::with_access(access, || query(&sqlite.conn, &s)));
+                let _ = reply.send(super::lifecycle::with_access(access, || query(conn, &s)));
             }
             Request::Batch(statements, reply) => {
-                let run = || batch(&mut sqlite.conn, &statements);
+                let run = || batch(conn, &statements);
                 let _ = reply.send(super::lifecycle::with_access(access, run));
             }
             Request::DeleteThread(directory, id, reply) => {
-                let _ = reply.send(super::lifecycle::delete(&mut sqlite.conn, &directory, &id));
+                let _ = reply.send(super::lifecycle::delete(conn, &directory, &id));
             }
             Request::Close(done) => break Some(done),
         }
     };
-    super::lifecycle::close(sqlite.conn, sqlite.access.as_ref());
+    drop(sqlite);
     if let Some(done) = done {
         let _ = done.send(());
     }
 }
 
-/// One SQLite database, served by its worker in order. A worker found gone is replaced by the
-/// next request.
+/// A database's worker and its queue: dropping it cancels the worker, which closes the database.
+struct Worker {
+    tx: mpsc::Sender<Request>,
+    _task: OwnedTask,
+}
+
+/// One SQLite database, served by its worker in order, which it owns. A worker found gone is
+/// replaced by the next request.
 pub struct FileConnection {
-    tx: Mutex<mpsc::Sender<Request>>,
+    worker: Mutex<Worker>,
     workers: Workers,
     open: Open,
     closed: AtomicBool,
@@ -108,15 +119,15 @@ impl FileConnection {
         thread: Option<(PathBuf, String)>,
         workers: Workers,
     ) -> Result<Self, StorageError> {
-        let clock = workers.clock.clone();
+        let clock = workers.clock().clone();
         let open = move || SqliteThread::open(&path, create, thread.clone(), &clock);
         Self::start(workers, Arc::new(open)).await
     }
 
     /// Over the connection `open` makes, run first on the worker.
     pub(super) async fn start(workers: Workers, open: Open) -> Result<Self, StorageError> {
-        let tx = spawn(&workers, &open).await?;
-        Ok(Self { tx: Mutex::new(tx), workers, open, closed: AtomicBool::new(false) })
+        let worker = spawn(&workers, &open).await?;
+        Ok(Self { worker: Mutex::new(worker), workers, open, closed: AtomicBool::new(false) })
     }
 
     /// A request that changes nothing, or whose loss before an answer is harmless.
@@ -135,30 +146,39 @@ impl FileConnection {
         if self.closed.load(Ordering::Acquire) {
             return Err(closed());
         }
-        let mut tx = self.tx.lock().await;
-        if tx.is_closed() {
-            *tx = spawn(&self.workers, &self.open).await?;
+        let mut worker = self.worker.lock().await;
+        if worker.tx.is_closed() {
+            *worker = spawn(&self.workers, &self.open).await?;
         }
         let (reply, answer) = oneshot::channel();
-        tx.send(request(reply)).await.map_err(|_| closed())?;
+        worker.tx.send(request(reply)).await.map_err(|_| closed())?;
         Ok(answer)
     }
 }
 
 /// Starts a worker over `open` and waits for it to open the database.
-async fn spawn(workers: &Workers, open: &Open) -> Result<mpsc::Sender<Request>, StorageError> {
+async fn spawn(workers: &Workers, open: &Open) -> Result<Worker, StorageError> {
     let (tx, rx) = mpsc::channel(QUEUE);
     let (ready, opened) = oneshot::channel();
-    // Owned by its senders: the worker ends once the connection closes or is dropped.
-    workers.spawner.spawn_detached(serve(open.clone(), ready, rx));
+    let task = workers.spawner.spawn(serve(open.clone(), ready, rx));
     opened.await.map_err(|_| closed())??;
-    Ok(tx)
+    Ok(Worker { tx, _task: task })
 }
 
-/// The connection a worker owns, and the thread's lifecycle access when it serves one.
+/// The connection a worker owns, and the thread's lifecycle access when it serves one. Dropped,
+/// however its worker ended, it closes the connection under the lifecycle lock.
 pub(super) struct SqliteThread {
-    conn: rusqlite::Connection,
+    /// `None` only while dropped.
+    conn: Option<rusqlite::Connection>,
     access: Option<super::lifecycle::Access>,
+}
+
+impl Drop for SqliteThread {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            super::lifecycle::close(conn, self.access.as_ref());
+        }
+    }
 }
 
 impl SqliteThread {
@@ -172,7 +192,7 @@ impl SqliteThread {
             .map(|(directory, id)| super::lifecycle::Access::open(&directory, id, clock))
             .transpose()?;
         let conn = super::lifecycle::with_access(access.as_ref(), || connect(path, create, clock))?;
-        Ok(Self { conn, access })
+        Ok(Self { conn: Some(conn), access })
     }
 }
 
@@ -199,7 +219,7 @@ impl ThreadDbConnection for FileConnection {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }
-        let tx = self.tx.lock().await.clone();
+        let tx = self.worker.lock().await.tx.clone();
         let (done, closed) = oneshot::channel();
         if tx.send(Request::Close(done)).await.is_ok() {
             let _ = closed.await;
@@ -393,8 +413,7 @@ mod tests {
         let dying = Arc::new(crate::testing::Dying::new(Arc::new(
             lk_agents_net::task::TokioSpawner::current(),
         )));
-        let clock = Arc::new(lk_agents_net::clock::RealClock::new());
-        let workers = Workers { spawner: dying.clone(), clock };
+        let workers = Workers { spawner: dying.clone(), background: crate::testing::background() };
         let conn = FileConnection::open(dir.0.join("db.sqlite"), true, workers).await.unwrap();
         conn.batch(vec![Statement::raw("CREATE TABLE notes (n INTEGER)")]).await.unwrap();
         let insert = |n: i64| {

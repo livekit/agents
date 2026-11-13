@@ -27,6 +27,12 @@ const FORWARDING_GRACE: Duration = Duration::from_millis(200);
 /// The recorded stack: its deepest frames, at most this long.
 const FRAMES: usize = 20;
 
+/// Real time, never a session's clock: the detector measures how long a loop's thread really
+/// stopped, from its own sampler thread.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the stall detector's real-time boundary: a blocked loop is measured in real time"
+)]
 static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 fn now() -> u64 {

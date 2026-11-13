@@ -1502,9 +1502,11 @@ impl McpSession {
         read_timeout: McpSessionNewReadTimeoutInput,
     ) -> PyResult<McpSession> {
         crate::py_calls::check_pid()?;
+        let env = crate::process::env();
         let out = py
             .detach(|| {
                 <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::new(
+                    &env,
                     init_timeout,
                     request_timeout,
                     read_timeout,
@@ -1661,34 +1663,41 @@ impl McpSession {
 type CoreMcpToolsetLifecycleImpl =
     <crate::generated::implementations::Selected as super::Implementations>::McpToolsetLifecycle;
 
+fn _extract_mcp_toolset_lifecycle_new_idle_timeout(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<McpToolsetLifecycleNewIdleTimeoutInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "idle_timeout")
+}
+type McpToolsetLifecycleNewIdleTimeoutInput = f64;
+
 /// An `MCPToolset`'s lifecycle (docs/tools.md "MCP servers"): one listing at a time; an
 /// unreachable server leaves the toolset without tools and is listed again in the background at
-/// the session's backoff until it answers; the connection closes [`MCP_IDLE_CLOSE_SECONDS`] after the
+/// the session's backoff until it answers; the connection closes `idle_timeout` seconds after the
 /// last run released the toolset unless a run sets it up again first. `host` is the toolset,
-/// held only while a recovery or an idle close is pending.
+/// held only while a recovery or an idle close is pending; both end when the lifecycle drops.
 #[pyclass(frozen, name = "_core_McpToolsetLifecycle", module = "livekit.agents._core")]
 pub struct CoreMcpToolsetLifecycle(pub(crate) ::std::sync::Arc<CoreMcpToolsetLifecycleImpl>);
 
 #[pymethods]
 impl CoreMcpToolsetLifecycle {
-    /// `server` names the server in logs; `session` owns the reconnect backoff.
+    /// `server` names the server in logs; `session` owns the reconnect backoff; `idle_timeout`
+    /// is the seconds an unused connection stays open ([`MCP_IDLE_CLOSE_SECONDS`] by default).
     #[new]
-    #[pyo3(signature = (server, session))]
+    #[pyo3(signature = (server, session, idle_timeout))]
     fn new(
         py: Python<'_>,
         server: ::std::string::String,
         session: Bound<'_, PyAny>,
+        #[pyo3(from_py_with = _extract_mcp_toolset_lifecycle_new_idle_timeout)]
+        idle_timeout: McpToolsetLifecycleNewIdleTimeoutInput,
     ) -> PyResult<CoreMcpToolsetLifecycle> {
         crate::py_calls::check_pid()?;
+        let env = crate::process::env();
         let session = session
             .cast::<super::llm::McpSession>()
             .map(|value| ::std::sync::Arc::clone(&value.get().0))
             .map_err(::pyo3::PyErr::from)?;
-        let out = py.detach(|| {
-            <CoreMcpToolsetLifecycleImpl as ::lk_agents_abi::llm::mcp::McpToolsetLifecycle>::new(
-                server, session,
-            )
-        });
+        let out = py.detach(|| <CoreMcpToolsetLifecycleImpl as ::lk_agents_abi::llm::mcp::McpToolsetLifecycle>::new(&env, server, session, idle_timeout)).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(CoreMcpToolsetLifecycle(::std::sync::Arc::new(out)))
     }
 

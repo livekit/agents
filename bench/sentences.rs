@@ -7,6 +7,7 @@
 //!
 //! `cargo test --release -p lk-agents-runtime --test sentence_bench -- --ignored --nocapture
 //! --test-threads=1`
+#![allow(clippy::disallowed_methods, reason = "a benchmark measures real time")]
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -29,11 +30,7 @@ fn pieces(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut at = 0;
     let mut size = 1;
-    let bounds: Vec<usize> = text
-        .char_indices()
-        .map(|(i, _)| i)
-        .chain([text.len()])
-        .collect();
+    let bounds: Vec<usize> = text.char_indices().map(|(i, _)| i).chain([text.len()]).collect();
     let mut k = 0;
     while k + 1 < bounds.len() {
         let next = (k + size).min(bounds.len() - 1);
@@ -67,21 +64,8 @@ fn options() -> Vec<(&'static str, SentenceOptions)> {
     let base = SentenceOptions::default();
     vec![
         ("default", base.clone()),
-        (
-            "markup",
-            SentenceOptions {
-                markup: Some(Vocabulary::LiveKit),
-                ..base.clone()
-            },
-        ),
-        (
-            "clauses",
-            SentenceOptions {
-                clause_words: Some(5),
-                max_token_len: Some(120),
-                ..base
-            },
-        ),
+        ("markup", SentenceOptions { markup: Some(Vocabulary::LiveKit), ..base.clone() }),
+        ("clauses", SentenceOptions { clause_words: Some(5), max_token_len: Some(120), ..base }),
     ]
 }
 
@@ -96,10 +80,7 @@ fn texts(name: &str) -> Vec<String> {
         .filter(|l| !l.trim().is_empty())
         .map(|l| {
             let doc: serde_json::Value = serde_json::from_str(l).expect("a corpus line is JSON");
-            doc["text"]
-                .as_str()
-                .expect("a corpus document has a text")
-                .to_owned()
+            doc["text"].as_str().expect("a corpus document has a text").to_owned()
         })
         .collect()
 }
@@ -151,15 +132,9 @@ fn speed_on_adversarial_replies() {
     let cases: Vec<Case> = vec![
         ("no sentence end", |n| "word ".repeat(n / 5)),
         ("short sentences", |n| "Ok. ".repeat(n / 4)),
-        ("normal sentences", |n| {
-            "The flight leaves at nine from gate twelve. ".repeat(n / 44)
-        }),
-        ("open wrapper", |n| {
-            format!("{OPEN}{}", "Short one here, really. ".repeat(n / 24))
-        }),
-        ("many tags", |n| {
-            "Hello <break time=\"1s\"/> there my friend. ".repeat(n / 42)
-        }),
+        ("normal sentences", |n| "The flight leaves at nine from gate twelve. ".repeat(n / 44)),
+        ("open wrapper", |n| format!("{OPEN}{}", "Short one here, really. ".repeat(n / 24))),
+        ("many tags", |n| "Hello <break time=\"1s\"/> there my friend. ".repeat(n / 42)),
         ("cjk no stop", |n| "我们今天去公园玩".repeat(n / 8)),
         ("cjk sentences", |n| "我们今天去公园玩。".repeat(n / 9)),
         ("digit readout", |n| "4 1 5 ".repeat(n / 6)),
@@ -199,10 +174,7 @@ fn speed_from_cold() {
     let mut stream = SentenceStream::new(SentenceOptions::default());
     let mut pushes = Vec::new();
     let whole = time(&mut stream, reply, &mut pushes);
-    println!(
-        "first reply: {whole:?}, slowest push {:?}",
-        pushes.iter().max().unwrap()
-    );
+    println!("first reply: {whole:?}, slowest push {:?}", pushes.iter().max().unwrap());
     for i in 0..3 {
         let t = Instant::now();
         let mut stream = SentenceStream::new(SentenceOptions::default());

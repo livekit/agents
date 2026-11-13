@@ -463,6 +463,19 @@ impl StreamInput {
     }
 }
 
+/// Python interface: `livekit.agents.utils.aio`.
+pub use crate::py_streams::interfaces::AioModule;
+impl AioModule {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
+        py.import("livekit.agents.utils.aio")
+    }
+    pub fn _keep_closing<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("_keep_closing")
+    }
+}
+
 /// Python interface: `builtins.memoryview`.
 pub use crate::py_values::interfaces::MemoryView;
 impl MemoryView {

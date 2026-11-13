@@ -413,7 +413,7 @@ member_services = Agent(..., tools=[Cards(), rewards])
 | `Toolset(id=, tools=)` | a group of tools; a subclass adds its `@function_tool` methods |
 | `toolset.filtered(predicate)` | the toolset's tools for which `predicate(tool)` is true, as a toolset that sets up and closes with it: `rewards.filtered(lambda tool: tool.info.name != "close_account")` |
 | `AsyncToolset(id=, tools=, tool_handling=)` | on a call, background work from its tools survives a handoff when the toolset is passed to `VoiceSession(tools=)` |
-| `MCPToolset(id=, mcp_server=, tool_options=)` | an `AsyncToolset` of an MCP server's tools, `MCPServerHTTP(url)` or `MCPServerStdio(command, args)` |
+| `MCPToolset(id=, mcp_server=, tool_options=, idle_timeout=60)` | an `AsyncToolset` of an MCP server's tools, `MCPServerHTTP(url)` or `MCPServerStdio(command, args)`; `idle_timeout` is the seconds its connection stays open after its last run |
 | `MCPServerHTTP(url, *, headers=, auth=, init_timeout=5, read_timeout=300, request_timeout=30)` | an MCP server over Streamable HTTP; `headers` a dict and `auth` a bearer token, or either a function of the run's `RunContext` |
 | `MCPServerStdio(command, args, *, env=, cwd=, init_timeout=5, request_timeout=30)` | an MCP server run as a child process, restarted if it exits |
 | `MCPToolOptions(retries=, flags=, on_duplicate=, duplicate_scope=, report_progress=, timeout=)` | one MCP tool's options, keyed by tool name in `tool_options`; `report_progress` turns the server's progress into `ctx.update()`, `timeout` replaces `request_timeout` for that tool |
@@ -433,9 +433,9 @@ reached at `setup()` leaves its `MCPToolset` without tools instead of failing th
 or the run; the toolset keeps listing again in the background at that backoff while it is in
 use, and a later run or activation gets the tools once the server answers. One listing runs at
 a time. Once listed, the tools stay available through a later outage. The connection stays
-open for a minute (`MCP_IDLE_CLOSE_SECONDS`) after the toolset's last run, so the next run
-reuses it; the last run's end stops a background retry, cancelling its listing. Once the
-minute passes the toolset drops its tools and closes the connection, and the next `setup()`
+open for `idle_timeout` seconds (a minute, `MCP_IDLE_CLOSE_SECONDS`, by default) after the
+toolset's last run, so the next run reuses it; the last run's end stops a background retry,
+cancelling its listing. Once that time passes the toolset drops its tools and closes the connection, and the next `setup()`
 connects and lists again. A server that announces its tools changed
 (`notifications/tools/list_changed`) is listed again by the next `setup()`, so the next run, or
 on a call the next agent activation, sees the new tools; the tools never change during a reply.

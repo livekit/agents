@@ -29,6 +29,13 @@ pub mod interfaces {
         )
     ))]
     pub struct StreamInput;
+
+    /// Keeps a close nobody awaits until it finishes; the loop's teardown awaits it.
+    #[lk_agents_host_derive::host(interface(
+        module = "livekit.agents.utils.aio",
+        attrs(_keep_closing)
+    ))]
+    pub struct AioModule;
 }
 
 use crate::generated::accessors as access;
@@ -306,8 +313,8 @@ impl<T> Drop for HostStream<T> {
 type Located = (Py<PyAny>, Py<PyAny>, Py<PyAny>);
 
 /// `aclose()` of the host iterator nobody closed that `located` names, queued as a task of its
-/// loop, never awaited. Scheduled from the blocking I/O pool, so a drop holding a lock never
-/// waits for the GIL. Lost only when the interpreter or the process runtime is gone.
+/// loop that the loop's teardown awaits. Scheduled from the blocking I/O pool, so a drop holding
+/// a lock never waits for the GIL. Lost only when the interpreter or the process runtime is gone.
 fn close_later(located: impl FnOnce(Python<'_>) -> PyResult<Located> + Send + 'static) {
     crate::py_calls::off_thread("closing an abandoned host stream", move || {
         let scheduled = Python::try_attach(|py| {
@@ -320,7 +327,9 @@ fn close_later(located: impl FnOnce(Python<'_>) -> PyResult<Located> + Send + 's
     });
 }
 
-/// Queues `iterator.aclose()` as a task of `event_loop` in `ctx`, when it has one.
+/// Queues `iterator.aclose()` as a task of `event_loop` in `ctx`, when it has one, held until it
+/// finishes (asyncio holds a task only weakly) and awaited by the loop's teardown
+/// (`utils.aio.close_loop`).
 fn schedule_aclose(
     py: Python<'_>,
     iterator: Py<PyAny>,
@@ -335,22 +344,14 @@ fn schedule_aclose(
         let py = args.py();
         let closing = access::AsyncClose::aclose(iterator.bind(py))?.call0()?;
         let coroutine = crate::py_calls::awaiting(py)?.call1((closing,))?;
-        access::EventLoop::create_task(loop_ref.bind(py), &coroutine, task_ctx.bind(py))?;
+        let task =
+            access::EventLoop::create_task(loop_ref.bind(py), &coroutine, task_ctx.bind(py))?;
+        access::AioModule::_keep_closing(&access::AioModule::import(py)?)?.call1((task,))?;
         PyResult::Ok(())
     })?;
     access::EventLoop::call_soon_threadsafe(event_loop.bind(py))?
         .call1((access::Context::run(ctx.bind(py))?, start))?;
     Ok(())
-}
-
-/// Runs `work` on the process runtime, off the dropping thread.
-fn on_process(work: impl std::future::Future<Output = ()> + Send + 'static) {
-    match crate::py_calls::process_handle() {
-        Ok(handle) => drop(handle.spawn(work)),
-        Err(_) => {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, "an abandoned host stream could not be closed: no process runtime")
-        }
-    }
 }
 
 /// The entry of a call that returns a host stream: a caller dropped before it took the stream
@@ -375,12 +376,26 @@ impl Drop for UnclaimedStream {
     fn drop(&mut self) {
         let Some((mut started, ran_in)) = self.0.take() else { return };
         started.cancel_later();
-        on_process(async move {
-            if let Ok(value) = started.settled().await {
-                close_later(move |py| {
+        let background = match lk_agents_runtime::process::env().background() {
+            Ok(background) => background,
+            Err(error) => {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "an unclaimed host stream could not be closed: {error}");
+                return;
+            }
+        };
+        let clock = Arc::clone(&background.clock);
+        // A cleanup of the process's tasks: its own bound, then the stream's close is queued.
+        background.cleanup("closing an unclaimed host stream", async move {
+            let limit = lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
+            match lk_agents_abi::timeout(&*clock, limit, started.settled()).await {
+                Ok(Ok(value)) => close_later(move |py| {
                     let (event_loop, ctx) = ran_in.bind(py).extract()?;
                     Ok((value, event_loop, ctx))
-                });
+                }),
+                Ok(Err(_)) => {}
+                Err(_) => {
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "an unclaimed host stream's call did not settle in time; it is not closed")
+                }
             }
         });
     }

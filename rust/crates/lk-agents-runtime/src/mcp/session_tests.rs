@@ -141,10 +141,11 @@ impl Peer {
                         let changed = ServerNotification::ToolListChangedNotification(
                             ToolListChangedNotification::default(),
                         );
-                        let notification = ServerJsonRpcMessage::Notification(JsonRpcNotification {
-                            jsonrpc: JsonRpcVersion2_0,
-                            notification: changed,
-                        });
+                        let notification =
+                            ServerJsonRpcMessage::Notification(JsonRpcNotification {
+                                jsonrpc: JsonRpcVersion2_0,
+                                notification: changed,
+                            });
                         let _ = self.send.send(notification).await;
                         text("changed")
                     }
@@ -215,7 +216,8 @@ async fn connected() -> (Arc<McpSession>, Arc<Server>) {
 
 async fn connected_with_timeout(request: Option<f64>) -> (Arc<McpSession>, Arc<Server>) {
     let server = Arc::new(Server::default());
-    let session = Arc::new(McpSession::new(5.0, request, None).unwrap());
+    let session =
+        Arc::new(McpSession::new(&ProcessEnv::current_runtime(), 5.0, request, None).unwrap());
     let factory = server.clone();
     session.connect_fake(move || factory.connect()).await.unwrap();
     (session, server)
@@ -335,7 +337,7 @@ async fn a_failed_reconnect_fails_calls_fast_until_its_backoff_ends() {
 async fn init_timeout_bounds_a_silent_handshake() {
     let server = Arc::new(Server::default());
     server.silent.store(true, Ordering::SeqCst);
-    let session = McpSession::new(2.0, None, None).unwrap();
+    let session = McpSession::new(&ProcessEnv::current_runtime(), 2.0, None, None).unwrap();
     let factory = server.clone();
     let result = tokio::time::timeout(
         Duration::from_secs(3),
@@ -537,7 +539,8 @@ mod lifecycle {
     #[tokio::test]
     async fn mcp_real_server_lifecycle_stdio() -> Result {
         let peer = Peer::new("stdio");
-        let session = Arc::new(McpSession::new(5.0, Some(30.0), Some(30.0))?);
+        let session =
+            Arc::new(McpSession::new(&ProcessEnv::current_runtime(), 5.0, Some(30.0), Some(30.0))?);
         let result = async {
             session.connect_stdio(peer.python.clone(), peer.args("stdio"), None, None).await?;
             exercise(session.clone(), &peer).await?;
@@ -565,7 +568,8 @@ mod lifecycle {
             .args(peer.args("http"))
             .kill_on_drop(true)
             .spawn()?;
-        let session = Arc::new(McpSession::new(5.0, Some(30.0), Some(30.0))?);
+        let session =
+            Arc::new(McpSession::new(&ProcessEnv::current_runtime(), 5.0, Some(30.0), Some(30.0))?);
         let result = async {
             let url = peer.receipt_when("url", |_| true).await?;
             session

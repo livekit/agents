@@ -1,6 +1,6 @@
-use lk_agents_net::clock::RealClock;
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal::{self, Producer};
-use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::task::TaskSet;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,6 +38,8 @@ pub struct VoiceStore {
     lost: Arc<AtomicBool>,
     /// Settles, aborts and loss observations, which `aclose` waits out.
     tasks: Arc<TaskSet>,
+    /// The backend's executor and clock, which they run on.
+    background: Background,
     closing: Mutex<bool>,
     /// The session the store serves: its turns' health metrics record under it.
     cx: Cx,
@@ -142,7 +144,6 @@ impl VoiceStore {
             }
         };
         Ok(Self {
-            backend,
             thread_id,
             partition_key,
             holder: Holder::new("voice"),
@@ -158,8 +159,10 @@ impl VoiceStore {
             generation: signal::signal(0).0,
             lost: Arc::new(AtomicBool::new(false)),
             tasks: Arc::default(),
+            background: backend.background().clone(),
             closing: Mutex::new(false),
             cx,
+            backend,
         })
     }
 
@@ -419,7 +422,7 @@ impl VoiceStore {
 
     fn settle_in_background(self: &Arc<Self>, speech: u64, history: Vec<ChatItem>, events: Events) {
         let store = self.clone();
-        self.tasks.spawn(&TokioSpawner::current(), "voice storage settle", async move {
+        self.tasks.spawn(&*self.background.spawner, "voice storage settle", async move {
             let result = store.finish(speech, history).await;
             let lease_lost = store.lease_lost();
             let _ = events.push(VoiceStorageEvent::Settled { speech, result, lease_lost });
@@ -428,7 +431,7 @@ impl VoiceStore {
 
     fn abandon_in_background(self: &Arc<Self>, speech: u64, events: Events) {
         let store = self.clone();
-        self.tasks.spawn(&TokioSpawner::current(), "voice storage abort", async move {
+        self.tasks.spawn(&*self.background.spawner, "voice storage abort", async move {
             let result = store.abandon(speech).await;
             let _ = events.push(VoiceStorageEvent::Abandoned { speech, result });
         });
@@ -436,7 +439,7 @@ impl VoiceStore {
 
     fn report_lease_loss(&self, speech: u64, events: Events) {
         let observation = self.observe_loss();
-        self.tasks.spawn(&TokioSpawner::current(), "voice lease loss", async move {
+        self.tasks.spawn(&*self.background.spawner, "voice lease loss", async move {
             if observation.await.unwrap_or(false) {
                 let _ = events.push(VoiceStorageEvent::LeaseLost { speech });
             }
@@ -549,9 +552,10 @@ impl HostVoiceStore for VoiceStore {
         }
         self.activation.close();
         drop(state);
-        self.tasks.wait_empty(&RealClock::new(), None).await;
+        let clock = &*self.background.clock;
+        self.tasks.wait_empty(clock, None).await;
         let (voice, context) =
-            tokio::join!(self.holder.wait_released(), self.activation.wait_released());
+            tokio::join!(self.holder.wait_released(clock), self.activation.wait_released());
         if !(voice && context) {
             log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.as_str(); "the voice store closed with a lease release in flight");
         }

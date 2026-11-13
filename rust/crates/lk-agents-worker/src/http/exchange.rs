@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::ipc::telemetry;
-use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::http::{
     EndpointExchange, EndpointRequest, ExchangeError, ExchangeEvent, ExchangeKind, ExchangeMessage,
     HttpCompletion, HttpExchange, RequestHead,
 };
+use lk_agents_abi::{BoxFuture, Clock};
 use lk_agents_net::signal;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
@@ -147,9 +147,11 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
     };
     let Wire { read, write, end } = wire;
     let mut read = BufReader::with_capacity(READ_SIZE, read);
-    let parsed = tokio::time::timeout(limits.head_timeout, parse(&mut read, head_limit))
-        .await
-        .unwrap_or(Err(HeadError::TimedOut));
+    let clock = &server.rt.clock;
+    let parsed =
+        lk_agents_abi::timeout(&**clock, limits.head_timeout, parse(&mut read, head_limit))
+            .await
+            .unwrap_or(Err(HeadError::TimedOut));
     let (parsed, request) = match (parsed, origin) {
         (Ok(parsed), Origin::Node(request)) => (parsed, request),
         (Ok(parsed), Origin::Listener { .. }) if draining => {
@@ -198,6 +200,7 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
                 body: parsed.body,
                 metadata_bytes: limits.body_metadata_bytes,
                 idle_timeout: limits.idle_timeout,
+                clock: clock.clone(),
                 expect_continue: parsed.expect_continue,
                 disconnected: false,
             };
@@ -217,11 +220,18 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
                 None => server.handler.handle(&cx, native, request),
             };
             let Kind::Http(http) = &exchange.kind else { unreachable!("built as HTTP") };
-            http.run(handled, deadline, server.stopping()).await;
+            http.run(handled, deadline, &**clock, server.stopping()).await;
         }
         Some(key) => {
-            let connection =
-                Connection::new(read, response, end, &key, limits.clone(), outcome.clone());
+            let connection = Connection::new(
+                read,
+                response,
+                end,
+                &key,
+                limits.clone(),
+                outcome.clone(),
+                server.rt.clone(),
+            );
             let exchange =
                 Arc::new(Exchange { head: parsed.head, kind: Kind::WebSocket(connection) });
             let Some(_registered) = server.register(&exchange) else {
@@ -473,6 +483,7 @@ struct Request {
     metadata_bytes: usize,
     /// A body that makes no progress for this long is abandoned.
     idle_timeout: Duration,
+    clock: Arc<dyn Clock>,
     expect_continue: bool,
     disconnected: bool,
 }
@@ -523,7 +534,7 @@ impl Request {
 
     /// Buffered bytes, at least one; the end of the stream inside a body is malformed.
     async fn fill(&mut self) -> Result<&[u8], BodyError> {
-        match tokio::time::timeout(self.idle_timeout, self.read.fill_buf()).await {
+        match lk_agents_abi::timeout(&*self.clock, self.idle_timeout, self.read.fill_buf()).await {
             Ok(Ok(buf)) if !buf.is_empty() => Ok(buf),
             _ => Err(BodyError::Malformed),
         }
@@ -620,6 +631,7 @@ impl Http {
         &self,
         handled: BoxFuture<'_, Result<(), HostError>>,
         deadline: Option<Duration>,
+        clock: &dyn Clock,
         stopped: impl std::future::Future<Output = ()>,
     ) {
         // Dropped unfinished (its connection cancelled), the exchange still ends.
@@ -628,7 +640,7 @@ impl Http {
         let head_missed = async {
             let Some(limit) = deadline else { return std::future::pending().await };
             let started = self.phase.wait_until(|p| (*p != Phase::Waiting).then_some(()));
-            if tokio::time::timeout(limit, started).await.is_ok() {
+            if lk_agents_abi::timeout(clock, limit, started).await.is_ok() {
                 std::future::pending::<()>().await;
             }
         };

@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::llm::mcp::McpSession as _;
 
 use super::*;
 
@@ -28,7 +27,15 @@ impl Default for Host {
             lists: AtomicUsize::new(0),
             cancelled: AtomicUsize::new(0),
             closes: AtomicUsize::new(0),
-            session: Arc::new(super::super::session::McpSession::new(10.0, None, None).unwrap()),
+            session: Arc::new(
+                super::super::session::McpSession::new(
+                    &lk_agents_net::env::ProcessEnv::current_runtime(),
+                    10.0,
+                    None,
+                    None,
+                )
+                .unwrap(),
+            ),
             server,
         }
     }
@@ -72,7 +79,16 @@ impl McpToolsetHost for Host {
 struct Lifecycle(McpToolsetLifecycle, Arc<Host>);
 
 fn lifecycle(host: &Arc<Host>) -> Lifecycle {
-    Lifecycle(McpToolsetLifecycle::new("test".into(), host.session.clone()), host.clone())
+    Lifecycle(
+        McpToolsetLifecycle::new(
+            &lk_agents_net::env::ProcessEnv::current_runtime(),
+            "test".into(),
+            host.session.clone(),
+            60.0,
+        )
+        .unwrap(),
+        host.clone(),
+    )
 }
 
 async fn setup(lifecycle: &Lifecycle) {

@@ -10,16 +10,14 @@ use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnord
 use livekit_protocol::{
     self as proto, JobStatus, RegisterWorkerResponse, ServerMessage, WorkerMessage,
 };
-use lk_agents_abi::{Clock, TimerSet, WallAnchor};
+use lk_agents_abi::{Clock, Spawner, TimerSet, Ts, WallAnchor};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::clock::RealClock;
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
-use lk_agents_net::task::TokioSpawner;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
 
 // Host futures are cancelled when the worker stops; writes are ordered, bounded and
 // per-connection, and a reconnect regenerates state rather than replaying.
@@ -66,11 +64,13 @@ pub enum WorkerCommand {
     JobStatus { job_id: JobId, status: JobStatus },
 }
 
-/// Each variant carries a named `lk_agents_abi::worker::types` record: the binding projects it into
-/// the dict the host matches on.
+/// What the worker tells its server as it happens: its registrations, a lost connection, a
+/// drain's outcome and its end.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkerNotification {
     Registered(RegisteredInfo),
+    /// The registered connection was lost; the worker registers again.
+    Disconnected,
     Drained(DrainOutcome),
     Stopped(WorkerStopped),
 }
@@ -195,6 +195,8 @@ pub struct Worker {
     host: Arc<dyn WorkerHost>,
     pub(super) blocking_io: lk_agents_net::blocking_io::BlockingIo,
     clock: Arc<dyn Clock>,
+    /// Where the host's decisions and the endpoint exchanges run.
+    spawner: Arc<dyn Spawner>,
     default_load: DefaultLoadCalc,
     load_health: crate::load::LoadHealth,
     load_available: bool,
@@ -256,7 +258,7 @@ impl Drop for Worker {
 struct PendingWrite {
     message: WorkerMessage,
     accepted: Option<JobId>,
-    deadline: tokio::time::Instant,
+    deadline: Ts,
 }
 
 /// Encode the core's ordered acceptance without making another admission decision.
@@ -280,10 +282,11 @@ fn availability_message(job_id: &str, arguments: crate::AcceptArguments) -> Work
 struct Outbox {
     pending: VecDeque<PendingWrite>,
     timeout: Duration,
+    clock: Arc<dyn Clock>,
 }
 impl Outbox {
-    fn new(timeout: Duration) -> Self {
-        Self { pending: VecDeque::new(), timeout }
+    fn new(timeout: Duration, clock: Arc<dyn Clock>) -> Self {
+        Self { pending: VecDeque::new(), timeout, clock }
     }
 
     fn push(
@@ -312,7 +315,7 @@ impl Outbox {
         self.pending.push_back(PendingWrite {
             message,
             accepted,
-            deadline: tokio::time::Instant::now() + self.timeout,
+            deadline: self.clock.now().saturating_add(self.timeout),
         });
         Ok(())
     }
@@ -340,10 +343,11 @@ struct ConnectionIo {
     outbox: Outbox,
     cleanups: FuturesUnordered<BoxFuture<'static, ()>>,
     timeout: Duration,
+    clock: Arc<dyn Clock>,
 }
 
 enum ConnectionState {
-    Waiting(Instant),
+    Waiting(Ts),
     Dialing(BoxFuture<'static, Result<Connected, TransportError>>),
     Active(ActiveConnection),
 }
@@ -351,17 +355,18 @@ enum ConnectionState {
 struct ActiveConnection {
     transport: Connected,
     /// `None` after the server's registration response has been received.
-    registration_deadline: Option<Instant>,
+    registration_deadline: Option<Ts>,
     writing: Option<BoxFuture<'static, Result<Option<String>, TransportError>>>,
 }
 
 impl ConnectionIo {
-    fn new(timeout: Duration) -> Self {
+    fn new(timeout: Duration, clock: Arc<dyn Clock>) -> Self {
         Self {
-            state: ConnectionState::Waiting(Instant::now()),
-            outbox: Outbox::new(timeout),
+            state: ConnectionState::Waiting(clock.now()),
+            outbox: Outbox::new(timeout, clock.clone()),
             cleanups: FuturesUnordered::new(),
             timeout,
+            clock,
         }
     }
 
@@ -380,21 +385,23 @@ impl ConnectionIo {
         config: &RuntimeConfig,
     ) -> Result<ConnectionEvent, RuntimeError> {
         tokio::select! {
-            event = self.state.next_event(&mut self.outbox, transport, config) => event,
+            event = self.state.next_event(&mut self.outbox, transport, config, &self.clock) => event,
             _ = self.cleanups.next(), if !self.cleanups.is_empty() => Ok(ConnectionEvent::Progress),
         }
     }
 
     fn disconnect(&mut self) {
-        let previous = std::mem::replace(&mut self.state, ConnectionState::Waiting(Instant::now()));
+        let waiting = ConnectionState::Waiting(self.clock.now());
+        let previous = std::mem::replace(&mut self.state, waiting);
         self.outbox.clear();
         if let ConnectionState::Active(active) = previous {
-            let timeout = self.timeout;
+            let (timeout, clock) = (self.timeout, self.clock.clone());
             // Cancel the in-flight write before attempting to acquire the sink for shutdown.
             drop(active.writing);
             self.cleanups.push(
                 async move {
-                    if tokio::time::timeout(timeout, active.transport.sink.close()).await.is_err() {
+                    let closing = active.transport.sink.close();
+                    if lk_agents_abi::timeout(&*clock, timeout, closing).await.is_err() {
                         log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = timeout.as_millis() as u64; "worker transport close timed out");
                     }
                 }
@@ -405,7 +412,7 @@ impl ConnectionIo {
 
     fn retry_after(&mut self, delay: Duration) {
         debug_assert!(matches!(self.state, ConnectionState::Waiting(_)));
-        self.state = ConnectionState::Waiting(Instant::now() + delay);
+        self.state = ConnectionState::Waiting(self.clock.now().saturating_add(delay));
     }
 
     async fn close(&mut self) {
@@ -420,23 +427,26 @@ impl ConnectionState {
         outbox: &mut Outbox,
         transport: Arc<dyn WorkerTransport>,
         config: &RuntimeConfig,
+        clock: &Arc<dyn Clock>,
     ) -> Result<ConnectionEvent, RuntimeError> {
         match self {
             Self::Waiting(retry_at) => {
-                tokio::time::sleep_until(*retry_at).await;
-                *self = Self::Dialing(dial(transport, config)?);
+                clock.wait_until(*retry_at).await;
+                *self = Self::Dialing(dial(transport, config, clock.clone())?);
                 Ok(ConnectionEvent::Progress)
             }
             Self::Dialing(connecting) => {
                 let connected = connecting.await?;
+                let registration_deadline =
+                    Some(clock.now().saturating_add(config.connection_timeout));
                 *self = Self::Active(ActiveConnection {
                     transport: connected,
-                    registration_deadline: Some(Instant::now() + config.connection_timeout),
+                    registration_deadline,
                     writing: None,
                 });
                 Ok(ConnectionEvent::Connected)
             }
-            Self::Active(connection) => connection.next_event(outbox).await,
+            Self::Active(connection) => connection.next_event(outbox, clock).await,
         }
     }
 }
@@ -444,6 +454,7 @@ impl ConnectionState {
 fn dial(
     transport: Arc<dyn WorkerTransport>,
     config: &RuntimeConfig,
+    clock: Arc<dyn Clock>,
 ) -> Result<BoxFuture<'static, Result<Connected, TransportError>>, RuntimeError> {
     let url = config.server_url.clone();
     let token = config.worker_token.clone();
@@ -455,7 +466,8 @@ fn dial(
         headers.push(("Authorization".to_owned(), format!("Bearer {jwt}")));
     }
     Ok(async move {
-        tokio::time::timeout(timeout, transport.connect(&url, token.as_deref(), headers))
+        let connecting = transport.connect(&url, token.as_deref(), headers);
+        lk_agents_abi::timeout(&*clock, timeout, connecting)
             .await
             .map_err(|_| TransportError::TimedOut(timeout))?
     }
@@ -463,11 +475,15 @@ fn dial(
 }
 
 impl ActiveConnection {
-    async fn next_event(&mut self, outbox: &mut Outbox) -> Result<ConnectionEvent, RuntimeError> {
+    async fn next_event(
+        &mut self,
+        outbox: &mut Outbox,
+        clock: &Arc<dyn Clock>,
+    ) -> Result<ConnectionEvent, RuntimeError> {
         if self.writing.is_none()
             && let Some(pending) = outbox.pop_front()
         {
-            self.writing = Some(pending.send(self.transport.sink.clone()).boxed());
+            self.writing = Some(pending.send(self.transport.sink.clone(), clock.clone()).boxed());
         }
         tokio::select! {
             sent = await_write(&mut self.writing) => {
@@ -478,7 +494,7 @@ impl ActiveConnection {
                 })
             }
             received = self.transport.stream.recv() => self.receive(received?),
-            _ = wait_for_deadline(self.registration_deadline) => {
+            _ = wait_for_deadline(&**clock, self.registration_deadline) => {
                 Err(TransportError::Failed("registration timed out".into()).into())
             }
         }
@@ -514,20 +530,24 @@ async fn await_write(
     }
 }
 
-async fn wait_for_deadline(deadline: Option<Instant>) {
+async fn wait_for_deadline(clock: &dyn Clock, deadline: Option<Ts>) {
     match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        Some(deadline) => clock.wait_until(deadline).await,
         None => std::future::pending().await,
     }
 }
 
 impl PendingWrite {
-    async fn send(self, sink: Arc<dyn WorkerSink>) -> Result<Option<String>, TransportError> {
+    async fn send(
+        self,
+        sink: Arc<dyn WorkerSink>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Option<String>, TransportError> {
         let expired = || TransportError::Failed("control write deadline exceeded".into());
-        if Instant::now() >= self.deadline {
+        if clock.now() >= self.deadline {
             return Err(expired());
         }
-        tokio::time::timeout_at(self.deadline, sink.send(self.message))
+        lk_agents_abi::before(&*clock, Some(self.deadline), sink.send(self.message))
             .await
             .map_err(|_| expired())??;
         Ok(self.accepted)
@@ -552,15 +572,10 @@ impl Worker {
         transport: crate::TransportConfig,
         host: Arc<dyn WorkerHost>,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
+        rt: Background,
     ) -> (Self, WorkerClient) {
-        Self::with_components(
-            transport.build().into(),
-            connection,
-            config,
-            host,
-            Arc::new(RealClock::new()),
-            blocking_io,
-        )
+        let transport = transport.build(rt.clone()).into();
+        Self::with_components(transport, connection, config, host, rt, blocking_io)
     }
 
     /// Explicit runtime components, for custom drivers and tests.
@@ -569,9 +584,10 @@ impl Worker {
         runtime_cfg: RuntimeConfig,
         cfg: WorkerConfig,
         host: Arc<dyn WorkerHost>,
-        clock: Arc<dyn Clock>,
+        rt: Background,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
     ) -> (Self, WorkerClient) {
+        let Background { clock, spawner, .. } = rt;
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let control = Arc::new(signal::Shared::new(WorkerControl::default()));
         let (notifications, _) = tokio::sync::broadcast::channel(128);
@@ -592,6 +608,7 @@ impl Worker {
                 blocking_io,
                 load_health: crate::load::LoadHealth::starting(clock.now()),
                 clock,
+                spawner,
                 default_load: DefaultLoadCalc::new(),
                 load_available: true,
                 load_requested: lk_agents_abi::Ts::ZERO,
@@ -650,7 +667,8 @@ impl Worker {
     }
 
     pub async fn run(&mut self) -> Result<(), RuntimeError> {
-        let mut connection = ConnectionIo::new(self.runtime_cfg.connection_timeout);
+        let mut connection =
+            ConnectionIo::new(self.runtime_cfg.connection_timeout, self.clock.clone());
         // The 0.5 s load timer lives outside any connection.
         self.timers.set_deadline(
             WorkerTimer::LoadSample,
@@ -691,11 +709,11 @@ impl Worker {
                     break;
                 }
             }
-            let timer = self
+            let clock = self.clock.clone();
+            let wake = self
                 .timers
                 .next_deadline()
-                .map(|at| at.saturating_duration_since(self.clock.now()))
-                .unwrap_or(IDLE_WAKE);
+                .unwrap_or_else(|| clock.now().saturating_add(IDLE_WAKE));
             let result = tokio::select! {
                 request = control.wait_until(|control| (*control != seen).then(|| control.clone())) => {
                     seen = request.clone();
@@ -722,7 +740,7 @@ impl Worker {
                     }
                     self.handle_connection_event(event, &mut connection.outbox)
                 }),
-                _ = tokio::time::sleep(timer) => Ok(()),
+                () = clock.wait_until(wake) => Ok(()),
             };
             self.settle();
             self.publish();
@@ -779,9 +797,10 @@ impl Worker {
         let id = self.next_endpoint;
         self.next_endpoint = self.next_endpoint.wrapping_add(1);
         let (served, done) = tokio::sync::oneshot::channel::<()>();
-        let task = TokioSpawner::current().spawn(async move {
+        let clock = self.clock.clone();
+        let task = self.spawner.spawn(async move {
             let _served = served;
-            crate::http::accept(host, stream).await;
+            crate::http::accept(host, stream, clock).await;
         });
         self.endpoints.insert(id, task);
         self.operations.push(
@@ -905,10 +924,11 @@ pub trait WorkerHost: Send + Sync {
 #[cfg(test)]
 mod write_tests {
     use super::*;
+    use lk_agents_net::clock::RealClock;
 
     #[tokio::test(start_paused = true)]
     async fn pending_statuses_coalesce_but_availability_replies_keep_their_order() {
-        let mut queue = Outbox::new(Duration::from_secs(10));
+        let mut queue = Outbox::new(Duration::from_secs(10), Arc::new(RealClock::new()));
         queue.push(jobs::update_worker(crate::WorkerStatus::Available, 0.1, 0), None).unwrap();
         queue.push(jobs::availability_reject("first"), None).unwrap();
         queue.push(jobs::availability_reject("second"), None).unwrap();
@@ -928,13 +948,14 @@ mod write_tests {
 
     #[tokio::test(start_paused = true)]
     async fn queue_capacity_and_write_age_are_bounded() {
-        let mut queue = Outbox::new(Duration::from_secs(1));
+        let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
+        let mut queue = Outbox::new(Duration::from_secs(1), clock.clone());
         for i in 0..MAX_PENDING_WRITES {
             queue.push(jobs::availability_reject(&i.to_string()), None).unwrap();
         }
         assert!(queue.push(jobs::availability_reject("overflow"), None).is_err());
         tokio::time::advance(Duration::from_secs(2)).await;
-        assert!(queue.pop_front().unwrap().deadline < tokio::time::Instant::now());
+        assert!(queue.pop_front().unwrap().deadline < clock.now());
         queue.clear();
         assert!(queue.pop_front().is_none(), "disconnected writes must not be replayed");
     }
@@ -951,7 +972,7 @@ mod write_tests {
         }
 
         pub(crate) async fn sample_load_now(&mut self) -> Result<(), RuntimeError> {
-            let mut outbox = Outbox::new(self.runtime_cfg.connection_timeout);
+            let mut outbox = Outbox::new(self.runtime_cfg.connection_timeout, self.clock.clone());
             self.sample_load();
             while let Some(completed) = self.operations.next().await {
                 self.complete(completed, &mut outbox);

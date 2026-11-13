@@ -175,12 +175,13 @@ impl ProviderAttempts {
         host: Bound<'_, PyAny>,
     ) -> PyResult<ProviderAttempts> {
         crate::py_calls::check_pid()?;
+        let env = crate::process::env();
         let kind = crate::py_values::str_from_py(kind.as_any())?;
         let conn_options =
             crate::generated::records::connect::api_connect_options_from_py(conn_options.as_any())?;
         let host = crate::generated::types::AttemptHostProxy::from_host(host.as_any())?;
         let context = crate::py_calls::entered();
-        let out = py.detach(|| <ProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::new(kind, conn_options, host, context)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <ProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::new(&env, kind, conn_options, host, context)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(ProviderAttempts(::std::sync::Arc::new(out)))
     }
 

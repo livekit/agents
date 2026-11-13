@@ -1,5 +1,12 @@
 //! `lk-agents-runtime`: I/O, Tokio execution, real clocks, task ownership and effect execution
 //! for the synchronous cores.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "tests drive Tokio's paused clock and spawn directly; the library is linted without"
+    )
+)]
 
 /// The declared classes a core implements outright, which the extension reaches through here.
 pub mod cores {
@@ -9,6 +16,7 @@ pub mod cores {
     pub use lk_agents_core::llm::chat_dict::ChatDict;
     pub use lk_agents_core::llm::ctx_diff::ChatDiffs;
     pub use lk_agents_core::llm::history::ChatPlans;
+    pub use lk_agents_core::markup::{ProviderMarkup, SpeechMarkup};
     pub use lk_agents_core::metrics::provider::{LlmMetricState, ProviderMetrics, TtsMetricState};
     pub use lk_agents_core::request::ConnectOptionsRules;
     pub use lk_agents_core::text::Languages;
@@ -18,7 +26,6 @@ pub mod cores {
     };
     pub use lk_agents_core::tool_outcome::ToolReports;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
-    pub use lk_agents_core::markup::{ProviderMarkup, SpeechMarkup};
 }
 
 // The cores' in-place `_core` registrations are linked with the extension only from a crate it

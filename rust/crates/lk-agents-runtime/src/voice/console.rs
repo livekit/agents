@@ -53,7 +53,7 @@ impl lk_agents_abi::voice::console::ConsoleIo for ConsoleIo {
     type Env = ProcessEnv;
 
     fn new(env: &ProcessEnv, addr: String) -> Self {
-        Self::with_ports(addr, Arc::new(crate::tcp::Tcp::new(env.runtime)), env.clock.clone())
+        Self::with_ports(addr, Arc::new(crate::tcp::Tcp::new(env.spawner)), env.clock.clone())
     }
 }
 

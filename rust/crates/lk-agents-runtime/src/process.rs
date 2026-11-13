@@ -91,9 +91,18 @@ pub fn reinit() {
     }
 }
 
-/// The host's clock: the wall clock.
+/// The host's clock: real time, plus what a test skipped ([`ClockSkip`]).
 pub fn host_clock() -> Arc<dyn Clock> {
-    Arc::new(lk_agents_net::clock::RealClock::new())
+    Arc::new(lk_agents_net::clock::HostClock::new())
+}
+
+/// Skips the host clocks of this process forward, for tests.
+pub struct ClockSkip;
+
+impl lk_agents_abi::worker::ipc_host::ProcessClock for ClockSkip {
+    fn skip_host_time(seconds: f64) {
+        lk_agents_net::clock::skip_host_time(lk_agents_abi::secs(seconds));
+    }
 }
 
 /// The host's executor: the process runtime's.

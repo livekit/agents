@@ -1,5 +1,12 @@
 //! The inference gateway's provider clients, detectors and fallback adapters, over the shared
 //! transport of `lk-agents-net`.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "tests drive Tokio's paused clock and spawn directly; the library is linted without"
+    )
+)]
 
 /// The provider traits, re-exported so a call site names one crate.
 pub use lk_agents_abi as abi;

@@ -1,4 +1,11 @@
 //! Agent process launcher: command line, remote CLI connection, logs and shutdown.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "tests drive Tokio's paused clock and spawn directly; the library is linted without"
+    )
+)]
 
 use std::sync::Arc;
 

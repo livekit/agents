@@ -472,3 +472,14 @@ pub trait ProcessInitialization {
     #[host(function)]
     fn init(role: ProcessRole);
 }
+
+/// The process's host clock, which every session, server and client of the process reads: real
+/// time, plus the time a test skipped.
+#[crate::host(functions(pid = false))]
+pub trait ProcessClock {
+    /// Moves every host clock of this process `seconds` forward at once (a negative or NaN value
+    /// moves nothing): each wait whose instant it passes ends now. For tests, so a grace period, a
+    /// watchdog or an idle close fires without the test waiting it out.
+    #[host(function)]
+    fn skip_host_time(seconds: f64);
+}

@@ -81,9 +81,15 @@ as the SDK room and the console's TCP port are replaced by port fakes. Executors
 spawn and sleep only through the injected `Spawner` and `Clock`
 ([effect execution](architecture.md#effect-execution)), which the DST binds to its own
 deterministic scheduler and virtual clock; every `select!` is `biased;`, so the
-scheduler alone decides which ready work runs. The `rust/check` crate enforces
-these rules on the runtime's `voice/`, `room_io/`, `avatar/` and `rtc/` modules, with no
-baseline.
+scheduler alone decides which ready work runs. The `rust/check` crate and the I/O Clippy
+policy enforce the spawn and time rules on every async crate (biased selects on the runtime's
+`voice/`, `room_io/`, `avatar/` and `rtc/` modules), with no baseline.
+
+Python tests never wait out a duration. Every host session, server and client reads the
+process's host clock (`ProcessEnv.clock`): real time, plus what a test skipped.
+`_core.skip_host_time(seconds)` moves every host clock of the process forward at once, so a
+watchdog, a grace period or an idle close fires at the point the test chooses. Rust tests drive
+Tokio's paused clock (`start_paused`) or a `VirtualClock`.
 
 The scheduler chooses among enabled core event deliveries, executor tasks and
 fake completions. Each core transition remains synchronous and atomic. Advance

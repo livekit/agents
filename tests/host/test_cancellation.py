@@ -460,6 +460,39 @@ async def test_an_interruption_cancels_the_python_llm_and_closes_the_node_genera
     assert closed.is_set()
 
 
+async def test_closing_the_default_llm_node_returns_once_the_python_llm_ended() -> None:
+    """`aclose()` on the chunks `session.default.llm_node` returned ends the Python LLM's stream
+    before it returns, so the node's `finally` leaves no request running."""
+    hang = Hang()
+    ended_at_close: list[bool] = []
+    session = VoiceSession(vad=None, llm=FakeLLM([["Let me check.", hang]]), tts=FakeTTS())
+    session.output.audio = FakeAudioOutput()
+
+    @session.llm_node
+    async def think(
+        ctx: RunContext,
+        chat_ctx: ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+    ) -> AsyncIterator[llm.ChatChunk | str | FlushSentinel]:
+        chunks = session.default.llm_node(ctx, chat_ctx, tools, model_settings)
+        try:
+            async for chunk in chunks:
+                yield chunk
+        finally:
+            await chunks.aclose()  # type: ignore[attr-defined]
+            ended_at_close.append(hang.ended.is_set())
+
+    async with session:
+        await session.start(Agent(instructions="Help."))
+        speech = session.generate_reply(user_input="hello")
+        await hang.started.wait()
+        await session.interrupt()
+        await speech
+
+    assert ended_at_close == [True]
+
+
 async def test_a_session_close_cancels_the_reply_and_runs_its_done_callbacks() -> None:
     """Closing the session mid-reply cancels the Python LLM and still tells the host the
     speech is done."""

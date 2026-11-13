@@ -192,7 +192,7 @@ fn measured_pool(host: &Arc<Host>, idle: usize) -> (ProcPool, &'static Instrumen
         close_timeout: Duration::from_secs(1),
         instruments,
     };
-    (ProcPool::new(host.clone(), opts), instruments)
+    (ProcPool::new(host.clone(), opts, crate::test_rt()), instruments)
 }
 
 fn count(host: &Host, event: ProcessEvent) -> usize {

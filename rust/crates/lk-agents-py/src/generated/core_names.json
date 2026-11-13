@@ -270,6 +270,7 @@
     "session_report_json",
     "set_capture_content",
     "shortuuid",
+    "skip_host_time",
     "split_expr_markup",
     "split_words",
     "strip_expr_markup",

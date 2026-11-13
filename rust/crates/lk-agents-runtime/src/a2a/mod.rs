@@ -315,7 +315,7 @@ impl Turn {
                         submitted.answered = true;
                     }
                     drop((run, lease, submitted));
-                    if !holder.wait_released().await {
+                    if !holder.wait_released(&*self.clock).await {
                         log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.as_str(); "an A2A turn ended with its lease release in flight");
                     }
                     return answer.map(|answer| machine.result(answer, self.thread.id(), now));
@@ -784,9 +784,11 @@ mod lease_tests {
         let clock = Arc::new(lk_agents_net::clock::RealClock::new());
         let file = lk_agents_storage::testing::TempDatabase::new();
         let connection = Arc::new(file.connect().await);
-        let thread = Thread::new(connection, "AT_loss", Default::default(), Default::default())
-            .await
-            .unwrap();
+        let background = ProcessEnv::current_runtime().background().unwrap();
+        let thread =
+            Thread::new(connection, "AT_loss", Default::default(), Default::default(), background)
+                .await
+                .unwrap();
         let partition_key = thread.partition("desk");
         let holder = Holder::new("worker");
         let run = partition_key.open(RunOptions::new("run", "task"), &holder).await.unwrap();

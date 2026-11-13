@@ -121,7 +121,10 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             Box::new(move |anchor, cx: &telemetry::Cx| source.open(anchor, cx))
                 as InterruptionPortFactory
         });
-        let nodes = Nodes { llm: args.llm_node, tts: None, stt: None };
+        let executor =
+            lk_agents_net::owned::Background::new(Arc::default(), spawner.clone(), time.clock());
+        let owner = Some(executor.clone());
+        let nodes = Nodes { llm: args.llm_node, tts: None, stt: None, owner: owner.clone() };
         let llm = args.llm.map(|l| nodes.llm(llm_leg(l, conn.llm)));
         // Facts, not options: the legs the two leg-dependent defaults need.
         let legs = SessionLegs {
@@ -219,7 +222,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             tool_bodies,
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready {
                 builder,
-                nodes: Nodes { llm: None, tts: args.tts_node, stt: args.stt_node },
+                nodes: Nodes { llm: None, tts: args.tts_node, stt: args.stt_node, owner },
                 interruption,
                 #[cfg(feature = "dst")]
                 probe: None,
@@ -229,6 +232,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             room_io,
             outputs,
             tasks: Arc::default(),
+            executor,
             spawner,
             anchor,
             time,
@@ -253,7 +257,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     }
 
     fn start(&self) -> Result<BoxFuture<'static, Result<(), StartFailed>>, OpenRefused> {
-        self.start_with(Box::new(crate::voice::Executor::new(self.time.clone(), self.spawner())))
+        let executor = crate::voice::Executor::owned_by(self.time.clone(), self.executor.clone());
+        self.start_with(Box::new(executor))
     }
 
     fn usage(&self) -> lk_agents_abi::usage::Usage {
@@ -286,7 +291,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         tts_node: Option<Arc<dyn NodeFactory>>,
         stt_node: Option<Arc<dyn NodeFactory>>,
     ) -> Result<(), SessionRefused> {
-        let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
+        let nodes = self.nodes(llm_node, tts_node, stt_node);
         let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);
         self.send(ActivityCommand::UpdateModels(Box::new(
             lk_agents_voice::agent_session::ModelUpdate { stt, vad, llm, tts },

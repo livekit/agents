@@ -2,7 +2,7 @@ pub mod connection;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use parking_lot::Mutex;
 
@@ -18,7 +18,9 @@ use livekit_protocol::agent::agent_thread::{
 };
 use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::wsdb::WsdbCode;
+use lk_agents_abi::{Clock, Ts};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::owned::Background;
 
 use crate::telemetry::{Cx, StorageWrite};
 use crate::thread::{LeaseTiming, RESOLVE_WAIT, Resend, SchemaCell, Thread};
@@ -144,14 +146,14 @@ pub struct AgentDbStorage {
     minter: TokenMinter,
     api: Arc<LiveKitApi>,
     pool: Arc<DbPool>,
-    /// The runtime the process lends: its connections run there.
-    runtime: tokio::runtime::Handle,
+    /// Its own tasks, on the process's executor and clock: its connections run there.
+    background: Background,
     /// Where its health metrics go.
     cx: Cx,
 }
 
 impl AgentDbStorage {
-    /// Its connections run on the process runtime.
+    /// Its connections run on the process's executor and clock, in a task set of its own.
     pub fn new(
         opts: AgentDbOptions,
         minter: TokenMinter,
@@ -160,7 +162,8 @@ impl AgentDbStorage {
         let unavailable = |what: &str, e: lk_agents_net::env::ProcessError| {
             StorageError::Unavailable(format!("{what}: {e}"))
         };
-        let runtime = (env.runtime)().map_err(|e| unavailable("storage runtime", e))?;
+        let spawner = (env.spawner)().map_err(|e| unavailable("storage runtime", e))?;
+        let background = Background::new(Arc::default(), spawner, env.clock.clone());
         let url = &opts.url;
         let data_plane = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
             (Some(host), _) => format!("wss://{host}/v0/agentstore/db"),
@@ -174,8 +177,8 @@ impl AgentDbStorage {
             minter.api_secret(),
             http.client(),
         ));
-        let cx = env.tracer.root();
-        Ok(Self { data_plane, opts, minter, api, pool: Arc::default(), runtime, cx })
+        let (cx, pool) = (env.tracer.root(), Arc::new(DbPool::new(env.clock.clone())));
+        Ok(Self { data_plane, opts, minter, api, pool, background, cx })
     }
 
     pub fn options(&self) -> &AgentDbOptions {
@@ -185,6 +188,12 @@ impl AgentDbStorage {
     /// The threads service: map its errors with [`service_error`].
     pub fn threads(&self) -> &ThreadClient {
         self.api.threads()
+    }
+
+    /// The resends of one thread-service write.
+    fn resend(&self) -> Resend {
+        let clock = self.background.clock.clone();
+        Resend::new(clock, RESOLVE_WAIT, &self.cx, StorageWrite::Thread)
     }
 }
 
@@ -207,7 +216,7 @@ impl Storage for AgentDbStorage {
     /// The same merge applied twice is one: a lost response is sent again.
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError> {
         let request = &request;
-        Resend::new(RESOLVE_WAIT, &self.cx, StorageWrite::Thread)
+        self.resend()
             .send(|| async move {
                 self.threads().update(request.clone()).await.map_err(service_write_error)
             })
@@ -216,7 +225,7 @@ impl Storage for AgentDbStorage {
 
     /// Repeat-safe, so a lost response is sent again.
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError> {
-        Resend::new(RESOLVE_WAIT, &self.cx, StorageWrite::Thread)
+        self.resend()
             .send(|| async move {
                 match self.threads().delete(thread_id).await.map_err(service_write_error) {
                     Err(StorageError::NotFound(_)) => Ok(()),
@@ -235,7 +244,9 @@ impl Storage for AgentDbStorage {
             None => {
                 let mut opts = connection::Options::new(self.data_plane.clone(), thread_id);
                 opts.reconnect = self.opts.reconnect.clone();
-                let conn = Conn::dial(opts, self.minter.clone(), self.runtime.clone()).await?;
+                let (spawner, clock) =
+                    (self.background.spawner.clone(), self.background.clock.clone());
+                let conn = Conn::dial(opts, self.minter.clone(), spawner, clock).await?;
                 (conn, SchemaCell::default())
             }
         };
@@ -245,7 +256,9 @@ impl Storage for AgentDbStorage {
             pool: self.pool.clone(),
             closed: AtomicBool::new(false),
         };
-        let thread = Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema).await?;
+        let background = self.background.clone();
+        let thread =
+            Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema, background).await?;
         Ok(thread.with_telemetry(self.cx.clone()))
     }
 
@@ -322,7 +335,12 @@ impl Storage for AgentDbStorage {
         }
     }
 
+    fn background(&self) -> &Background {
+        &self.background
+    }
+
     async fn close(&self) {
+        crate::backends::settle(&self.background).await;
         self.pool.clear().await;
     }
 }
@@ -364,7 +382,8 @@ impl Pooled {
     }
 }
 
-/// How long a parked connection waits for the thread's next turn before it is closed.
+/// How long a parked connection waits for the thread's next turn before it is closed, on the
+/// storage's clock.
 const IDLE_TTL: Duration = Duration::from_secs(60);
 /// Parked connections per database, and in all.
 const IDLE_PER_DATABASE: usize = 2;
@@ -372,29 +391,34 @@ const IDLE_TOTAL: usize = 64;
 
 /// The connections closed threads left behind, by database id: a thread's next turn takes one
 /// back, with the schema version it knew, instead of dialing and probing again.
-#[derive(Default)]
 struct DbPool {
     idle: Mutex<Vec<(String, Idle)>>,
+    clock: Arc<dyn Clock>,
 }
 
 struct Idle {
     conn: Conn,
     schema: SchemaCell,
-    since: Instant,
+    since: Ts,
 }
 
 impl Idle {
-    fn usable(&self) -> bool {
-        self.since.elapsed() < IDLE_TTL && self.conn.is_idle()
+    fn usable(&self, now: Ts) -> bool {
+        now.saturating_duration_since(self.since) < IDLE_TTL && self.conn.is_idle()
     }
 }
 
 impl DbPool {
+    fn new(clock: Arc<dyn Clock>) -> Self {
+        Self { idle: Mutex::default(), clock }
+    }
+
     fn take(&self, database_id: &str) -> Option<Idle> {
+        let now = self.clock.now();
         let mut idle = self.idle.lock();
         while let Some(i) = idle.iter().rposition(|(id, _)| id == database_id) {
             let (_, entry) = idle.remove(i);
-            if entry.usable() {
+            if entry.usable(now) {
                 return Some(entry);
             }
             entry.conn.close();
@@ -403,9 +427,10 @@ impl DbPool {
     }
 
     fn put(&self, conn: Conn, schema: SchemaCell) {
+        let now = self.clock.now();
         let mut idle = self.idle.lock();
         idle.retain(|(_, entry)| {
-            let keep = entry.usable();
+            let keep = entry.usable(now);
             if !keep {
                 entry.conn.close();
             }
@@ -417,7 +442,7 @@ impl DbPool {
             conn.close();
             return;
         }
-        idle.push((database_id, Idle { conn, schema, since: Instant::now() }));
+        idle.push((database_id, Idle { conn, schema, since: now }));
     }
 
     async fn clear(&self) {

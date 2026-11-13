@@ -2,6 +2,10 @@
 //! from. The test binary re-executes itself as the dying worker (`crash_child`, its role in
 //! `LK_CRASH_ROLE`); the parent kills it at a chosen point, then takes the partition as another worker.
 #![cfg(unix)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the test kills a real worker process and waits on it in real time"
+)]
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};

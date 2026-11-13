@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::WhenHeld;
-use crate::testing::{Faulty, TempDatabase, WriteFault};
+use crate::testing::{Faulty, TempDatabase, WriteFault, background};
 use crate::thread::db::{Receive, ReceiveInput};
 use crate::thread::schema::TaskData;
 use crate::thread::tests::PARTITION_KEY;
@@ -25,9 +25,8 @@ fn database() -> TempDatabase {
 /// One worker's handle on the database.
 async fn handle(db: &TempDatabase) -> Thread {
     let timing = LeaseTiming::default();
-    Thread::new(Arc::new(db.connect().await), "AT_lane", timing, SchemaCell::default())
-        .await
-        .unwrap()
+    let (conn, schema) = (Arc::new(db.connect().await), SchemaCell::default());
+    Thread::new(conn, "AT_lane", timing, schema, crate::testing::background()).await.unwrap()
 }
 
 /// A faulty handle on a database whose schema exists, so a fault never meets the bootstrap.
@@ -35,7 +34,9 @@ async fn faulty(db: &TempDatabase, owner: &Holder) -> (Thread, Arc<Faulty>) {
     let faulty = Arc::new(Faulty::new(Box::new(db.connect().await)));
     let timing = LeaseTiming::default();
     let thread =
-        Thread::new(faulty.clone(), "AT_lane", timing, SchemaCell::default()).await.unwrap();
+        Thread::new(faulty.clone(), "AT_lane", timing, SchemaCell::default(), background())
+            .await
+            .unwrap();
     let mut run =
         thread.partition(PARTITION_KEY).open(RunOptions::new("r0", ""), owner).await.unwrap();
     run.commit(CommitOptions::default()).await.unwrap();

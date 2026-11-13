@@ -78,6 +78,10 @@ impl CpuMonitor {
     /// The utilization and the actual interval it describes. Missing or reset counters
     /// do not manufacture idle samples; freshness is enforced by the worker.
     pub(crate) fn sample(&mut self) -> Option<(f32, Duration)> {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "a CPU counter's delta is divided by the OS time it was measured over"
+        )]
         let now = Instant::now();
         match &mut self.source {
             Source::Cgroup { path, unit_per_sec, last } => {

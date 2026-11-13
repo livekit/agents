@@ -128,7 +128,9 @@ impl Port for LocalInteraction {
     async fn settled(&self) {
         let running = self.running.lock().as_ref().map(|(_, settled)| settled.clone());
         if let Some(settled) = running
-            && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, settled.wait()).await.is_err()
+            && lk_agents_abi::timeout(&*self.clock, HOST_TEARDOWN_TIMEOUT, settled.wait())
+                .await
+                .is_err()
         {
             log::error!(target: lk_agents_abi::LOG_TARGET, "agent tool cleanup incomplete");
         }

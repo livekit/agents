@@ -165,11 +165,11 @@ impl ToolListing {
 
 /// When a session whose connection failed may connect again: at once after a success, then
 /// after a backoff doubling from one second to thirty while attempts keep failing. Calls in
-/// between fail fast instead of each waiting out a connect.
+/// between fail fast instead of each waiting out a connect. Time is the session clock's `now`.
 #[derive(Debug, Default)]
 pub struct ReconnectGate {
     failures: u32,
-    retry_at: Option<std::time::Duration>,
+    retry_at: Option<lk_agents_abi::Ts>,
 }
 
 impl ReconnectGate {
@@ -177,13 +177,13 @@ impl ReconnectGate {
     const MAX: std::time::Duration = std::time::Duration::from_secs(30);
 
     /// How long from `now` until an attempt is allowed; zero when it is.
-    pub fn wait(&self, now: std::time::Duration) -> std::time::Duration {
-        self.retry_at.map_or(std::time::Duration::ZERO, |at| at.saturating_sub(now))
+    pub fn wait(&self, now: lk_agents_abi::Ts) -> std::time::Duration {
+        self.retry_at.map_or(std::time::Duration::ZERO, |at| at.saturating_duration_since(now))
     }
-    pub fn failed(&mut self, now: std::time::Duration) {
+    pub fn failed(&mut self, now: lk_agents_abi::Ts) {
         let backoff = Self::FIRST.saturating_mul(1 << self.failures.min(5)).min(Self::MAX);
         self.failures += 1;
-        self.retry_at = Some(now + backoff);
+        self.retry_at = Some(now.saturating_add(backoff));
     }
     pub fn succeeded(&mut self) {
         *self = Self::default();

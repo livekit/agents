@@ -4,10 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::FutureExt;
-use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_abi::{OwnedTask, SpawnerExt, Ts};
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
-use lk_agents_net::task::TokioSpawner;
-use tokio::time::Instant;
 
 use crate::ipc::telemetry;
 use lk_agents_abi::errors::HostError;
@@ -158,7 +157,7 @@ enum ReservationState {
 struct Process<P> {
     executor: Option<Executor<P>>,
     phase: Phase,
-    spawned: Instant,
+    spawned: Ts,
     /// The reservation this process is created, initialized or reserved for.
     request: Option<ReservationId>,
     /// The job it was reserved for, released when it retires.
@@ -200,7 +199,7 @@ struct State<P> {
     requests: BTreeMap<ReservationId, Reservation>,
     jobs: BTreeMap<String, ReservationId>,
     /// A spawn failed: no warm process is added before this.
-    refill_paused_until: Option<Instant>,
+    refill_paused_until: Option<Ts>,
     tasks: Vec<OwnedTask>,
     /// The close's join of `tasks`, started by the first close.
     cleanup: Option<OwnedTask>,
@@ -307,6 +306,8 @@ struct Inner<P> {
     cleanup_timeout: Duration,
     state: signal::Shared<State<P>>,
     closed: tokio_util::sync::CancellationToken,
+    /// Where the pool's steps run, and the clock its waits are read on.
+    rt: Background,
 }
 
 pub struct ProcPool<P = super::owner::JobSupervisor>(Arc<Inner<P>>);
@@ -330,7 +331,7 @@ impl<P: Send + Sync + 'static> Drop for Waiting<P> {
 }
 
 impl<P: Send + Sync + 'static> ProcPool<P> {
-    pub fn new(host: Arc<dyn Executors<Process = P>>, opts: PoolOptions) -> Self {
+    pub fn new(host: Arc<dyn Executors<Process = P>>, opts: PoolOptions, rt: Background) -> Self {
         // CPU discovery is runtime configuration; constructing a pool performs no filesystem I/O.
         Self(Arc::new(Inner {
             host,
@@ -357,6 +358,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                 released: Vec::new(),
             }),
             closed: tokio_util::sync::CancellationToken::new(),
+            rt,
         }))
     }
 
@@ -381,7 +383,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
     /// and wakes the waiters. No host call is made under the lock.
     fn update<R>(&self, f: impl FnOnce(&Self, &mut State<P>) -> R) -> R {
         let (result, released) = self.0.state.with(|st| {
-            if st.refill_paused_until.is_some_and(|until| Instant::now() >= until) {
+            if st.refill_paused_until.is_some_and(|until| self.now() >= until) {
                 st.refill_paused_until = None;
             }
             let result = f(self, st);
@@ -402,13 +404,22 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         result
     }
 
+    fn now(&self) -> Ts {
+        self.0.rt.clock.now()
+    }
+
+    async fn sleep(&self, duration: Duration) {
+        let clock = &self.0.rt.clock;
+        clock.wait_until(clock.now().saturating_add(duration)).await;
+    }
+
     /// Runs `step` as a task the pool owns until its close joined it.
     fn own(&self, st: &mut State<P>, step: impl Future<Output = ()> + Send + 'static) {
         let (finished, active) = std::mem::take(&mut st.tasks)
             .into_iter()
             .partition::<Vec<_>, _>(|task| task.is_finished());
         st.tasks = active;
-        st.tasks.push(TokioSpawner::current().spawn(step));
+        st.tasks.push(self.0.rt.spawner.spawn(step));
         for task in finished {
             if let Some(Err(error)) = task.now_or_never() {
                 log::error!(target: lk_agents_abi::LOG_TARGET, "process pool task failed: {error}");
@@ -431,7 +442,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             Readiness::Pending => None,
             readiness => Some(readiness),
         });
-        match tokio::time::timeout(wait, settled).await {
+        match lk_agents_abi::timeout(&*self.0.rt.clock, wait, settled).await {
             Ok(Readiness::Ready) => Ok(()),
             Ok(_) => Err(PoolStartError::Closed),
             Err(_) => Err(PoolStartError::WarmupTimedOut {
@@ -448,7 +459,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                 break;
             }
             self.update(|_, _| {});
-            tokio::time::sleep(REFILL_INTERVAL).await;
+            self.sleep(REFILL_INTERVAL).await;
         }
     }
 
@@ -534,7 +545,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             Process {
                 executor: None,
                 phase: Phase::Creating,
-                spawned: Instant::now(),
+                spawned: self.now(),
                 request,
                 job: None,
                 closed: false,
@@ -611,7 +622,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             entry.phase = Phase::Ready;
             entry.request = None;
             entry.joining = true;
-            let ready = entry.spawned.elapsed().as_secs_f64();
+            let ready = pool.now().saturating_duration_since(entry.spawned).as_secs_f64();
             pool.0.opts.instruments.observe::<telemetry::WorkerProcessReadyDuration>(ready);
             st.initializing.remove(&id);
             st.ready.push_back(id);
@@ -621,7 +632,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
     }
 
     fn spawn_failed(&self, st: &mut State<P>, id: ProcessId) {
-        st.refill_paused_until = Some(Instant::now() + REFILL_INTERVAL);
+        st.refill_paused_until = Some(self.now().saturating_add(REFILL_INTERVAL));
         self.retire(st, id);
     }
 
@@ -701,7 +712,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         let Some(executor) = st.executor(id) else { return };
         let pool = self.clone();
         self.own(st, async move {
-            tokio::time::sleep(after).await;
+            pool.sleep(after).await;
             match pool.0.host.join(&executor).await {
                 Ok(()) => pool.update(|pool, st| pool.joined(st, id)),
                 Err(error) => pool.join_failed(&executor, id, error),
@@ -738,7 +749,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         let Some(executor) = st.executor(id) else { return };
         let pool = self.clone();
         self.own(st, async move {
-            tokio::time::sleep(after).await;
+            pool.sleep(after).await;
             match pool.0.host.wait_exit(&executor).await {
                 Ok(()) => pool.update(|pool, st| pool.retire(st, id)),
                 Err(error) => pool.exit_watch_failed(&executor, id, error),
@@ -835,10 +846,10 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         let close_ready = self.update(|pool, st| {
             if pool.close_all(st) {
                 let (ready, cell) = signal::signal(false);
-                let pool = pool.clone();
+                let closing = pool.clone();
                 // A caller's cancellation cannot discard the join obligations: the pool owns them.
-                let cleanup = async move { pool.finish_close(ready).await };
-                st.cleanup = Some(TokioSpawner::current().spawn(cleanup));
+                let cleanup = async move { closing.finish_close(ready).await };
+                st.cleanup = Some(pool.0.rt.spawner.spawn(cleanup));
                 st.close_ready = Some(cell);
             }
             st.close_ready.clone()
@@ -876,7 +887,8 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
     async fn finish_close(&self, ready: signal::Producer<bool>) {
         let cleanup = self.join_owned_tasks();
         tokio::pin!(cleanup);
-        if tokio::time::timeout(self.0.cleanup_timeout, &mut cleanup).await.is_err() {
+        let clock = &*self.0.rt.clock;
+        if lk_agents_abi::timeout(clock, self.0.cleanup_timeout, &mut cleanup).await.is_err() {
             let processes = self.0.state.with(|st| st.processes.keys().copied().collect());
             self.0.host.cleanup_incomplete(PoolCleanupObservation { processes });
             ready.set(true);

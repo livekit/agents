@@ -350,4 +350,5 @@ from ._generated._core_worker import (
     init as init,
     ipc_pair as ipc_pair,
     room_join_token as room_join_token,
+    skip_host_time as skip_host_time,
 )

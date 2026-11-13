@@ -5,7 +5,7 @@ mod stream;
 use crate::abi::{AudioFrame, StreamInput, StreamOutput};
 use crate::telemetry;
 
-use lk_agents_abi::errors::{ApiError, Invalid, ProviderError};
+use lk_agents_abi::errors::{Invalid, ProviderError};
 use lk_agents_abi::inference::models::VadModelName;
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::vad::inference::VadModels;
@@ -53,7 +53,7 @@ impl LocalVad {
         models: Arc<dyn VadModels>,
         env: &ProcessEnv,
     ) -> Self {
-        let host = Arc::new(HostModels(models));
+        let host = Arc::new(HostModels { models, clock: env.clock.clone() });
         LocalVad::new(opts, crate::local_models::vad_factory_or(host), env)
     }
 
@@ -64,16 +64,11 @@ impl LocalVad {
 
     /// Input drops are measured under `cx`'s job.
     fn open(&self, cx: &telemetry::Cx) -> Result<(VadInput, VadOutputSource), ProviderError> {
-        let unavailable = |error: lk_agents_net::env::ProcessError| {
-            ProviderError::Local(ApiError::new(format!("VAD execution unavailable: {error}")))
-        };
-        let runtime = self.env.caller_runtime().map_err(unavailable)?;
         let (sink, source) = stream::open(
             self.opts.cell(),
             self.models.clone(),
             self.env.clock.clone(),
             lk_agents_media::pool::media_pool(),
-            runtime,
             cx,
         )?
         .split();
@@ -162,18 +157,22 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
     }
 }
 
-/// The host's model factory.
-struct HostModels(Arc<dyn VadModels>);
+/// The host's model factory; `clock` times each model's `predict`.
+struct HostModels {
+    models: Arc<dyn VadModels>,
+    clock: Arc<dyn lk_agents_abi::Clock>,
+}
 
 impl VadModelFactory for HostModels {
     /// A factory that raised gives a silent model rather than a panic on a native worker (never
     /// selected on a healthy path).
     fn create(&self) -> Box<dyn VadModel> {
-        match self.0.create() {
-            Ok(model) => Box::new(HostModel(Some(model))),
+        let clock = self.clock.clone();
+        match self.models.create() {
+            Ok(model) => Box::new(HostModel { model: Some(model), clock }),
             Err(error) => {
                 log::error!(target: lk_agents_abi::LOG_TARGET, "VAD model factory failed: {error}");
-                Box::new(HostModel(None))
+                Box::new(HostModel { model: None, clock })
             }
         }
     }
@@ -181,14 +180,20 @@ impl VadModelFactory for HostModels {
 
 /// One host model; its `predict` is timed here, as the reference does. A failed call answers
 /// `(0.0, 0.0)`.
-struct HostModel(Option<Arc<dyn lk_agents_abi::vad::inference::VadModel>>);
+struct HostModel {
+    model: Option<Arc<dyn lk_agents_abi::vad::inference::VadModel>>,
+    clock: Arc<dyn lk_agents_abi::Clock>,
+}
 
 impl VadModel for HostModel {
     fn predict(&mut self, window: &[i16]) -> (f32, f64) {
-        let Some(model) = &self.0 else { return (0.0, 0.0) };
-        let started = std::time::Instant::now();
+        let Some(model) = &self.model else { return (0.0, 0.0) };
+        let started = self.clock.now();
         match model.predict(window.to_vec()) {
-            Ok(probability) => (probability as f32, started.elapsed().as_secs_f64()),
+            Ok(probability) => {
+                let elapsed = self.clock.now().saturating_duration_since(started);
+                (probability as f32, elapsed.as_secs_f64())
+            }
             Err(error) => {
                 log::error!(target: lk_agents_abi::LOG_TARGET, "VAD model failed: {error}");
                 (0.0, 0.0)
@@ -197,7 +202,7 @@ impl VadModel for HostModel {
     }
 
     fn reset(&mut self) {
-        if let Some(model) = &self.0
+        if let Some(model) = &self.model
             && let Err(error) = model.reset()
         {
             log::error!(target: lk_agents_abi::LOG_TARGET, "VAD model reset failed: {error}");

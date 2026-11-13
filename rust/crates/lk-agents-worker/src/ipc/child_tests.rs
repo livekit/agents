@@ -2,6 +2,7 @@ use super::*;
 use crate::ipc::ipc_channel::{MAGIC, VERSION, memory};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::AsyncWriteExt;
+use tokio::time::Instant;
 
 type WatchedChannel = (
     tokio::sync::mpsc::Receiver<ToChild>,
@@ -12,12 +13,13 @@ type WatchedChannel = (
 
 /// The child's watch over a channel whose parent end the test drives.
 fn watched(health_timeout: Option<Duration>) -> WatchedChannel {
-    let (parent, child) = memory();
+    let (parent, child) = memory(&crate::test_rt());
     let orphaned = Arc::new(AtomicUsize::new(0));
     let count = orphaned.clone();
-    let (inbox, watching) = watch_parent(Arc::new(child), health_timeout, move || {
-        count.fetch_add(1, Ordering::SeqCst);
-    });
+    let (inbox, watching) =
+        watch_parent(Arc::new(child), health_timeout, &crate::test_rt(), move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
     (inbox, watching, parent, orphaned)
 }
 
@@ -44,8 +46,8 @@ async fn the_child_calls_itself_orphaned_when_the_parent_goes_quiet() {
 #[tokio::test]
 async fn the_child_stops_at_a_malformed_frame() {
     let (parent, child) = tokio::io::duplex(1 << 16);
-    let child = Arc::new(Channel::<ToParent, ToChild>::new(child));
-    let (mut inbox, watching) = watch_parent(child, None, || {});
+    let child = Arc::new(Channel::<ToParent, ToChild>::new(child, &crate::test_rt()));
+    let (mut inbox, watching) = watch_parent(child, None, &crate::test_rt(), || {});
     let mut parent = parent;
     parent.write_all(&MAGIC).await.unwrap();
     parent.write_all(&VERSION.to_be_bytes()).await.unwrap();

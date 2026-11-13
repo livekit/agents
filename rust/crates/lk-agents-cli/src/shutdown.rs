@@ -4,6 +4,16 @@ use parking_lot::{Condvar, Mutex};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
+/// The OS clock: the watchdog is the process's last resort, on a thread of its own, so it fires
+/// even when the async runtime and every clock on it are wedged.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the process shutdown watchdog's deadline is the OS's, not a session's time"
+)]
+fn now() -> Instant {
+    Instant::now()
+}
+
 #[derive(Default)]
 struct State {
     deadline: Option<Instant>,
@@ -51,9 +61,7 @@ impl CliShutdown for Shutdown {
         let state = self.watchdog.state.lock();
         state
             .deadline
-            .map_or(self.watchdog.options.total(), |at| {
-                at.saturating_duration_since(Instant::now())
-            })
+            .map_or(self.watchdog.options.total(), |at| at.saturating_duration_since(now()))
             .as_secs_f64()
     }
 
@@ -81,13 +89,13 @@ impl Watchdog {
         if state.closed || state.deadline.is_some() {
             return false;
         }
-        let deadline = Instant::now() + self.options.total();
+        let deadline = now() + self.options.total();
         state.deadline = Some(deadline);
         let watchdog = self.clone();
         let started = std::thread::Builder::new().name("agent-shutdown".into()).spawn(move || {
             let mut state = watchdog.state.lock();
             while !state.closed {
-                let remaining = deadline.saturating_duration_since(Instant::now());
+                let remaining = deadline.saturating_duration_since(now());
                 if remaining.is_zero() {
                     drop(state);
                     terminate(b"livekit.agents: shutdown deadline exceeded; terminating the CLI\n");

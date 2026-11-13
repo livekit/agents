@@ -4,7 +4,7 @@ use livekit_protocol::agent::ChatRole;
 use serde_json::json;
 
 use super::*;
-use crate::testing::Backend;
+use crate::testing::{Backend, background};
 use crate::thread::tests::{PARTITION_KEY, message, submitted};
 use crate::{CommitOptions, PartitionAccess, RunOptions, RunOutcome, StorageError};
 use crate::{TaskPickup, Thread, WhenHeld};
@@ -304,7 +304,8 @@ async fn slow_replies(
 }
 
 async fn slow_thread(connection: std::sync::Arc<SlowReplies>) -> crate::Thread {
-    crate::Thread::new(connection, "AT_timing", Default::default(), Default::default())
+    let background = crate::testing::background();
+    crate::Thread::new(connection, "AT_timing", Default::default(), Default::default(), background)
         .await
         .unwrap()
 }
@@ -402,7 +403,9 @@ async fn a_failing_renewal_retries_within_the_lease_and_is_lost_after_it() {
     let faulty = Arc::new(Faulty::new(Box::new(file.connect().await)));
     let timing = LeaseTiming::new(Duration::from_secs(10), Duration::from_secs(3)).unwrap();
     let thread =
-        Thread::new(faulty.clone(), "AT_renewal", timing, SchemaCell::default()).await.unwrap();
+        Thread::new(faulty.clone(), "AT_renewal", timing, SchemaCell::default(), background())
+            .await
+            .unwrap();
     let run = thread
         .partition(PARTITION_KEY)
         .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))

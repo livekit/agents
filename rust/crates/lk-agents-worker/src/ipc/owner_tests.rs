@@ -59,7 +59,7 @@ impl JobLauncher for Launcher {
 }
 
 async fn serve(endpoint: i64, launch: Arc<dyn LaunchReport>, child: Child) {
-    let channel = Channel::<ToParent, ToChild>::from_endpoint(endpoint).unwrap();
+    let channel = Channel::<ToParent, ToChild>::from_endpoint(endpoint, &crate::test_rt()).unwrap();
     while let Ok(message) = channel.recv().await {
         let reply = match message {
             ToChild::Hello(_) => ToParent::Ready { error: None },

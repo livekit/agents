@@ -11,8 +11,9 @@ use lk_agents_abi::{
     SynthesizedAudio, ToolChoice, ToolSpec, Tts, Vad,
 };
 use lk_agents_core::metrics::provider::TtsMetricState;
-use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::owned::Owned;
+use lk_agents_net::env::{ProcessEnv, ProcessError};
+use lk_agents_net::owned::{Background, Owned};
+use lk_agents_net::signal;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
@@ -20,12 +21,63 @@ use super::nodes::{NodeCalls, Opened};
 
 pub struct DefaultNodes;
 
-/// What a default node pumps into: read by the host as an async iterator.
-pub struct NodeOutput<T>(tokio::sync::Mutex<mpsc::Receiver<Result<T, ProviderError>>>);
+/// What a default node pumps into: read by the host as an async iterator. Its request runs as a
+/// task of the session (else the process) until the reader stops: dropped, or closed.
+pub struct NodeOutput<T> {
+    items: tokio::sync::Mutex<mpsc::Receiver<Result<T, ProviderError>>>,
+    /// Ends once the request's task is gone, its streams closed.
+    done: signal::Cell<Option<()>>,
+    clock: Arc<dyn Clock>,
+}
 
-impl<T> NodeOutput<T> {
+impl<T: Send + 'static> NodeOutput<T> {
+    /// `request` run on `owner`, which also owns its streams, fed the output's sender; refused,
+    /// the output yields the refusal.
+    fn spawn<F>(
+        owner: Result<Background, ProcessError>,
+        clock: Arc<dyn Clock>,
+        name: &str,
+        request: impl FnOnce(Background, mpsc::Sender<Result<T, ProviderError>>) -> F,
+    ) -> Self
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel(1);
+        let (finished, done) = signal::once();
+        let refused = tx.clone();
+        let spawned = match owner {
+            Ok(owner) => {
+                let request = request(owner.clone(), tx);
+                // The producer ends with the task, however it ends.
+                let task = async move {
+                    request.await;
+                    drop(finished);
+                };
+                owner.tasks.try_spawn(owner.spawner.as_ref(), name, task).then_some(()).ok_or_else(
+                    || lk_agents_abi::errors::ApiError::new("the session running the node closed"),
+                )
+            }
+            Err(error) => Err(lk_agents_abi::errors::ApiError::new(error.to_string())),
+        };
+        if let Err(error) = spawned {
+            let _ = refused.try_send(Err(error.into()));
+        }
+        NodeOutput { items: tokio::sync::Mutex::new(rx), done, clock }
+    }
+
     async fn recv(&self) -> Result<Option<T>, ProviderError> {
-        self.0.lock().await.recv().await.transpose()
+        self.items.lock().await.recv().await.transpose()
+    }
+
+    /// Stops reading, then waits for the request to end, bounded by the teardown limit.
+    async fn close(&self) {
+        let closed = async {
+            self.items.lock().await.close();
+            let _ = self.done.wait().await;
+        };
+        if lk_agents_abi::timeout(&*self.clock, HOST_TEARDOWN_TIMEOUT, closed).await.is_err() {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "a default node's request did not close in time");
+        }
     }
 }
 
@@ -33,11 +85,19 @@ impl lk_agents_abi::voice::nodes::LlmNodeChunks for NodeOutput<LlmChunk> {
     async fn next(&self) -> Result<Option<LlmChunk>, ProviderError> {
         self.recv().await
     }
+
+    async fn aclose(&self) {
+        self.close().await;
+    }
 }
 
 impl lk_agents_abi::voice::nodes::TtsNodeFrames for NodeOutput<NodeFrame> {
     async fn next(&self) -> Result<Option<NodeFrame>, ProviderError> {
         self.recv().await
+    }
+
+    async fn aclose(&self) {
+        self.close().await;
     }
 }
 
@@ -45,10 +105,23 @@ impl lk_agents_abi::voice::nodes::SttNodeEvents for NodeOutput<SpeechEvent> {
     async fn next(&self) -> Result<Option<SpeechEvent>, ProviderError> {
         self.recv().await
     }
+
+    async fn aclose(&self) {
+        self.close().await;
+    }
 }
 
 fn node_calls(calls: Option<Arc<dyn ProviderCalls>>) -> Option<Arc<NodeCalls>> {
     calls.and_then(|calls| (calls as Arc<dyn Any + Send + Sync>).downcast::<NodeCalls>().ok())
+}
+
+/// Where a default node's request runs: the session's tasks when a session's node runs it, else
+/// the process's (a node the host calls outside a session).
+fn owner(env: &ProcessEnv, calls: Option<&NodeCalls>) -> Result<Background, ProcessError> {
+    match calls.and_then(|calls| calls.owner.clone()) {
+        Some(owner) => Ok(owner),
+        None => env.background(),
+    }
 }
 
 /// Where a default node's request records: under the span current at the call (the node's, or an
@@ -91,22 +164,20 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
             conn_options,
             ..ChatRequest::default()
         };
-        let cx = request_cx(env, node_calls(calls).as_deref(), &cx);
+        let calls = node_calls(calls);
+        let cx = request_cx(env, calls.as_deref(), &cx);
         // One attempt per call: the node retries the request, as a reply's leg does.
         let llm = crate::voice::session::llm_leg(llm, Some(conn_options));
-        let (tx, rx) = mpsc::channel(1);
-        match env.background() {
-            // No session owns a node the host calls: dropping the output closes `tx`, which ends
-            // the request.
-            Ok(background) => {
-                background.spawn("default llm node", complete(llm, req, cx, env.clock.clone(), tx))
-            }
-            Err(error) => {
-                let error = lk_agents_abi::errors::ApiError::new(error.to_string());
-                let _ = tx.try_send(Err(error.into()));
-            }
-        }
-        Ok(NodeOutput(tokio::sync::Mutex::new(rx)))
+        let owner = owner(env, calls.as_deref());
+        // Dropping or closing the output closes `tx`, which ends the request.
+        Ok(NodeOutput::spawn(
+            owner,
+            env.clock.clone(),
+            "default llm node",
+            |owner, tx| async move {
+                complete(llm, req, cx, &owner, tx).await;
+            },
+        ))
     }
 
     fn tts_node(
@@ -127,7 +198,8 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         );
         let calls = node_calls(calls);
         let cx = request_cx(env, calls.as_deref(), &cx);
-        Ok(pumped(env, text, async move {
+        let owner = owner(env, calls.as_deref());
+        Ok(pumped(owner, &env.clock, text, async move {
             // One `tts_request`: the provider's own retries are its attempts, below it.
             let synthesis = Synthesis::start(&cx, tts.as_ref());
             let opened = lk_agents_inference::tts::stream(
@@ -172,7 +244,8 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
             Arc::clone(&clock),
         );
         let calls = node_calls(calls);
-        Ok(pumped(env, audio, async move {
+        let owner = owner(env, calls.as_deref());
+        Ok(pumped(owner, &env.clock, audio, async move {
             let label = stt.label();
             let opened = lk_agents_inference::stt::stream(stt.clone(), conn_options, clock.clone(), &telemetry::Cx::NONE, None, None).await.and_then(|opened| {
                 opened.ok_or_else(|| {
@@ -204,20 +277,22 @@ fn policy(
 }
 
 /// The default `llm_node`'s request: the provider's completion, retried while it has produced
-/// nothing, its chunks handed to the node until the node stops reading.
+/// nothing, its chunks handed to the node until the node stops reading. Its stream is `owner`'s
+/// from the start, so a cancelled request still closes it.
 async fn complete(
     llm: Arc<dyn Llm>,
     req: ChatRequest,
     cx: telemetry::Cx,
-    clock: Arc<dyn Clock>,
+    owner: &Background,
     tx: mpsc::Sender<Result<LlmChunk, ProviderError>>,
 ) {
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &req);
     let attempt = trace.attempt();
-    let opened = lk_agents_inference::llm::chat(llm, trace.cx(), &req, clock.clone(), None).await;
+    let clock = owner.clock.clone();
+    let opened = lk_agents_inference::llm::chat(llm, trace.cx(), &req, clock, None).await;
     let result = match opened {
         Err(error) => Err(error),
-        Ok(stream) => forward_chunks(stream, &tx, &mut trace, clock.as_ref()).await,
+        Ok(stream) => forward_chunks(Owned::stream(owner, stream), &tx, &mut trace).await,
     };
     trace.end_attempt(attempt, result.as_ref().err());
     match result {
@@ -246,10 +321,9 @@ enum CompletionEnd {
 /// One attempt's chunks handed to the node, then the stream closed. On failure, the error with
 /// whether the attempt produced output.
 async fn forward_chunks(
-    mut stream: lk_agents_abi::LlmStream,
+    mut stream: Owned<lk_agents_abi::LlmStream>,
     tx: &mpsc::Sender<Result<LlmChunk, ProviderError>>,
     trace: &mut telemetry::LlmTrace,
-    clock: &dyn Clock,
 ) -> Result<CompletionEnd, ProviderError> {
     let ended = loop {
         let next = tokio::select! {
@@ -268,7 +342,7 @@ async fn forward_chunks(
             Err(error) => break Err(error),
         }
     };
-    let _ = stream.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+    let _ = stream.close().await;
     ended
 }
 
@@ -339,11 +413,12 @@ impl Request<String, SynthesizedAudio> for Synthesis {
 }
 
 /// The provider's stream, once `open` opens it, fed from the caller's `input` and drained into
-/// the returned output until either side stops, its request recording both. The process owns it:
-/// the pump ends once the caller's input ends or its reader is gone. Both streams are owned from
-/// the start, so however the pump ends, each is closed.
+/// the returned output until either side stops, its request recording both. `owner` runs it: the
+/// pump ends once the caller's input ends or its reader is gone. Both streams are owned from the
+/// start, so however the pump ends, each is closed.
 fn pumped<I, O, T, F, M, R>(
-    env: &ProcessEnv,
+    owner: Result<Background, ProcessError>,
+    clock: &Arc<dyn Clock>,
     input: Box<dyn StreamOutput<I>>,
     open: F,
 ) -> NodeOutput<T>
@@ -355,44 +430,48 @@ where
     M: Fn(O) -> T + Send + Sync + 'static,
     R: Request<I, O>,
 {
-    let (tx, rx) = mpsc::channel(1);
-    let background = match env.background() {
-        Ok(background) => background,
-        Err(error) => {
-            let error = lk_agents_abi::errors::ApiError::new(error.to_string());
-            let _ = tx.try_send(Err(error.into()));
-            return NodeOutput(tokio::sync::Mutex::new(rx));
+    NodeOutput::spawn(owner, Arc::clone(clock), "default node pump", move |owner, tx| {
+        let input = Owned::stream(&owner, input);
+        pump(owner, input, open, tx)
+    })
+}
+
+/// [`pumped`]'s task: the provider's stream opened, fed and drained, then both closed.
+async fn pump<I, O, T, F, M, R>(
+    owner: Background,
+    input: Owned<Box<dyn StreamOutput<I>>>,
+    open: F,
+    tx: mpsc::Sender<Result<T, ProviderError>>,
+) where
+    I: Send + 'static,
+    O: Send + 'static,
+    T: Send + 'static,
+    F: std::future::Future<Output = (Opened<I, O>, M, R)> + Send + 'static,
+    M: Fn(O) -> T + Send + Sync + 'static,
+    R: Request<I, O>,
+{
+    let (opened, map, request) = open.await;
+    let (sink, source) = match opened {
+        Ok(stream) => stream.split(),
+        Err(e) => {
+            request.ended(Some(&e), false);
+            let _ = tx.send(Err(e)).await;
+            return;
         }
     };
-    let input = Owned::stream(&background, input);
-    let owner = background.clone();
-    let pump = async move {
-        let (opened, map, request) = open.await;
-        let (sink, source) = match opened {
-            Ok(stream) => stream.split(),
-            Err(e) => {
-                request.ended(Some(&e), false);
-                let _ = tx.send(Err(e)).await;
-                return;
-            }
-        };
-        let mut source = Owned::stream(&owner, source);
-        // Locked only between awaits, by the feed and the drain of this one task.
-        let request = Mutex::new(request);
-        // `None`: the reader went first.
-        let ended = tokio::select! {
-            biased;
-            () = tx.closed() => None,
-            ended = drain_provider(&mut **source, &tx, &request, &map) => ended,
-            () = feed_provider(input, &*sink, &request) => None,
-        };
-        source.close().await;
-        let failed = ended.as_ref().and_then(Option::as_ref);
-        request.into_inner().ended(failed, ended.is_none());
+    let mut source = Owned::stream(&owner, source);
+    // Locked only between awaits, by the feed and the drain of this one task.
+    let request = Mutex::new(request);
+    // `None`: the reader went first.
+    let ended = tokio::select! {
+        biased;
+        () = tx.closed() => None,
+        ended = drain_provider(&mut **source, &tx, &request, &map) => ended,
+        () = feed_provider(input, &*sink, &request) => None,
     };
-    // Dropping the returned output closes `tx`, which ends the pump.
-    background.spawn("default node pump", pump);
-    NodeOutput(tokio::sync::Mutex::new(rx))
+    source.close().await;
+    let failed = ended.as_ref().and_then(Option::as_ref);
+    request.into_inner().ended(failed, ended.is_none());
 }
 
 /// The caller's input pushed to the provider, then its input ended and closed. Never completes:

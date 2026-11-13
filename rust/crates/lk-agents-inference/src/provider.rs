@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
+use lk_agents_abi::Clock;
 use lk_agents_abi::HostRef;
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError};
 use lk_agents_abi::invoke::CallContext;
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::signal::{self, Cell};
 use lk_agents_net::task::Cancellation;
 use parking_lot::Mutex;
-use tokio::time::Instant;
 
 use crate::telemetry;
 use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
@@ -278,12 +279,14 @@ impl AttemptMachine {
 /// `run` waits until the machine permits an attempt, runs the host's attempt while racing it
 /// against the next deadline and the host's observations, and turns a failure into the machine's
 /// decision: retry after its delay, raise the attempt's own error, raise `APIConnectionError`
-/// once retries are exhausted, or stop. Time is this request's monotonic clock.
+/// once retries are exhausted, or stop. Time is the process clock, from this request's start.
 pub struct ProviderAttempts {
     host: Arc<dyn AttemptHost>,
     context: CallContext,
     kind: RequestKind,
-    epoch: Instant,
+    /// The running attempt is a task of the process: it outlives a dropped `run`.
+    env: ProcessEnv,
+    epoch: Ts,
     state: Mutex<State>,
     /// Counts observations, so a deadline the host moved is re-read.
     changed: signal::Shared<u64>,
@@ -293,14 +296,19 @@ struct State {
     machine: AttemptMachine,
     /// The session owns retries: `run` executes exactly one attempt.
     core: bool,
-    /// The running attempt's settlement: ends with its host task.
-    inflight: Option<Cell<Option<()>>>,
+    /// The running attempt's outcome: set, or ended, with its task.
+    inflight: Option<Cell<Option<Outcome>>>,
     /// Retries were exhausted.
     exhausted: bool,
 }
 
+type Outcome = Result<Option<HostRef>, ProviderError>;
+
 impl Port for ProviderAttempts {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         kind: RequestKind,
         conn_options: ApiConnectOptions,
         host: Arc<dyn AttemptHost>,
@@ -311,7 +319,8 @@ impl Port for ProviderAttempts {
             host,
             context,
             kind,
-            epoch: Instant::now(),
+            epoch: env.clock.now(),
+            env: env.clone(),
             state: Mutex::new(State { machine, core: false, inflight: None, exhausted: false }),
             changed: signal::Shared::new(0),
         })
@@ -369,9 +378,10 @@ impl Port for ProviderAttempts {
 
     async fn settled(&self) {
         let inflight = self.state.lock().inflight.clone();
-        if let Some(settled) = inflight {
+        if let Some(outcome) = inflight {
             let cleanup = std::time::Duration::from_secs_f64(self.cleanup_timeout());
-            if tokio::time::timeout(cleanup, settled.wait()).await.is_err() {
+            let settled = outcome.wait_map(|outcome| outcome.as_ref().map(drop));
+            if lk_agents_abi::timeout(self.clock(), cleanup, settled).await.is_err() {
                 stalled_cleanup();
             }
         }
@@ -383,12 +393,16 @@ impl Port for ProviderAttempts {
 }
 
 impl ProviderAttempts {
-    fn now(&self) -> u64 {
-        u64::try_from(self.epoch.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    fn clock(&self) -> &dyn Clock {
+        self.env.clock.as_ref()
     }
 
-    fn at(&self, ns: u64) -> Instant {
-        self.epoch + std::time::Duration::from_nanos(ns)
+    fn now(&self) -> u64 {
+        self.clock().now().as_nanos().saturating_sub(self.epoch.as_nanos())
+    }
+
+    fn at(&self, ns: u64) -> Ts {
+        Ts::from_nanos(self.epoch.as_nanos().saturating_add(ns))
     }
 
     fn observed(&self, observe: impl FnOnce(&mut AttemptMachine, u64)) {
@@ -413,7 +427,7 @@ impl ProviderAttempts {
                     .with_retryable(false)
                     .into());
             };
-            tokio::time::sleep_until(self.at(at)).await;
+            self.clock().wait_until(self.at(at)).await;
         }
     }
 
@@ -470,20 +484,25 @@ impl ProviderAttempts {
         cx: &telemetry::Cx,
         retry: bool,
     ) -> Result<Option<HostRef>, ProviderError> {
+        let background = self.env.background().map_err(ApiError::from)?;
         let cancel = Arc::new(Cancellation::default());
-        // The attempt runs in its own task: a dropped `run` leaves it to the host, which cancels
-        // it in the same turn (`_bindings.run_attempts`), and `settled` waits for its cleanup.
-        let (done, settled) = signal::once::<()>();
-        self.state.lock().inflight = Some(settled);
+        // The attempt is a task of the process: a dropped `run` leaves it to the host, which
+        // cancels it in the same turn (`_bindings.run_attempts`), and `settled` waits for its
+        // cleanup.
+        let (done, outcome) = signal::once::<Outcome>();
+        self.state.lock().inflight = Some(outcome.clone());
         let (host, context, signal, cx) =
             (self.host.clone(), self.context.clone(), cancel.clone(), cx.clone());
-        let mut attempt = tokio::spawn(async move {
-            let _settles = done;
-            host.attempt(&cx, &context, signal, retry).await
-        });
-        let joined = |result: Result<_, tokio::task::JoinError>| {
-            result.unwrap_or_else(|error| {
-                Err(ApiError::new(format!("provider attempt task failed: {error}"))
+        background.tasks.spawn_settling(
+            background.spawner.as_ref(),
+            "provider attempt",
+            done,
+            async move { host.attempt(&cx, &context, signal, retry).await },
+        );
+        let mut attempt = std::pin::pin!(outcome.wait());
+        let joined = |result: Result<Outcome, signal::Ended>| {
+            result.unwrap_or_else(|signal::Ended| {
+                Err(ApiError::new("provider attempt task ended without a result")
                     .with_retryable(false)
                     .into())
             })
@@ -493,7 +512,7 @@ impl ProviderAttempts {
             let wake = self.state.lock().machine.wake_at().map(|at| self.at(at));
             tokio::select! {
                 biased;
-                result = &mut attempt => {
+                result = attempt.as_mut() => {
                     let now = self.now();
                     self.state.lock().machine.ready(now)?;
                     return joined(result);
@@ -501,7 +520,7 @@ impl ProviderAttempts {
                 () = self.changed.wait_until(|n| (*n != seen).then_some(())) => {}
                 () = async {
                     match wake {
-                        Some(at) => tokio::time::sleep_until(at).await,
+                        Some(at) => self.clock().wait_until(at).await,
                         None => std::future::pending().await,
                     }
                 } => {}
@@ -513,12 +532,12 @@ impl ProviderAttempts {
         };
         // An attempt already finishing on its own (a provider's own timeout racing this one) is
         // not interrupted in its cleanup; its outcome is rejected all the same.
-        if tokio::time::timeout(DEADLINE_GRACE, &mut attempt).await.is_ok() {
+        if lk_agents_abi::timeout(self.clock(), DEADLINE_GRACE, attempt.as_mut()).await.is_ok() {
             return Err(interrupted.into());
         }
         cancel.cancel();
         let cleanup = std::time::Duration::from_secs_f64(self.cleanup_timeout());
-        if tokio::time::timeout(cleanup, attempt).await.is_err() {
+        if lk_agents_abi::timeout(self.clock(), cleanup, attempt).await.is_err() {
             stalled_cleanup();
         }
         Err(interrupted.into())

@@ -86,6 +86,12 @@ class ServerOptions:
     """Total process shutdown budget in seconds, draining and cleanup included; 3610. Must
     exceed `drain_timeout`.
     """
+    reconnect_grace: NotGivenOr[float] = NOT_GIVEN
+    """Seconds a registered worker may stay disconnected from LiveKit before `/` fails
+    (`disconnected`): a short reconnect stays live, a longer one is what a restart fixes; 30.
+    """
+    stuck_timeout: NotGivenOr[float] = NOT_GIVEN
+    """Seconds the host may leave the worker's heartbeat unanswered before `/` fails (`stuck`); 5."""
     job_memory_warn_mb: NotGivenOr[float] = NOT_GIVEN
     """A job process's memory warning threshold in MB; 1000."""
     job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN
@@ -119,6 +125,12 @@ class ServerOptionsKwargs(TypedDict, total=False):
     """Total process shutdown budget in seconds, draining and cleanup included; 3610. Must
     exceed `drain_timeout`.
     """
+    reconnect_grace: float
+    """Seconds a registered worker may stay disconnected from LiveKit before `/` fails
+    (`disconnected`): a short reconnect stays live, a longer one is what a restart fixes; 30.
+    """
+    stuck_timeout: float
+    """Seconds the host may leave the worker's heartbeat unanswered before `/` fails (`stuck`); 5."""
     job_memory_warn_mb: float
     """A job process's memory warning threshold in MB; 1000."""
     job_memory_limit_mb: float

@@ -143,7 +143,7 @@ fn options() -> ServerStart {
 #[tokio::test]
 async fn server_drain_close_callers_join_without_holding_a_lifecycle_lock() {
     let host = Host::new();
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()), crate::test_rt());
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -175,7 +175,7 @@ async fn a_drain_asked_during_startup_starts_once_the_server_runs() {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     host.start_gate = Some(gate.clone());
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()), crate::test_rt());
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -205,7 +205,7 @@ async fn a_panicking_startup_still_ends_run_drain_and_close() {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     host.start_gate = Some(gate.clone());
     host.panic_start = true;
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()), crate::test_rt());
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -223,7 +223,7 @@ async fn a_panicking_startup_still_ends_run_drain_and_close() {
 async fn failed_registration_is_reported_by_run_and_close_joins_cleanup() {
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()), crate::test_rt());
     let mut start = options();
     start.unregistered = false;
     start.settings.ws_url = "ws://127.0.0.1:1".into();
@@ -245,7 +245,7 @@ async fn server_startup_lifecycle_reports_warmup_failure_and_joins_cleanup() {
     let mut host = Host::new();
     host.fail_start = true;
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()), crate::test_rt());
     assert_eq!(runtime.run(options()).await, Err("pool warmup timed out".into()));
     assert_eq!(runtime.close().await, Ok(()));
     assert_eq!(runtime.close().await, Ok(()));
@@ -262,7 +262,7 @@ async fn an_occupied_port_fails_the_run_before_the_job_processes_start() {
     let mut host = Host::new();
     host.fail_start = true; // a pool start fails the run with its own error instead
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()), crate::test_rt());
     let mut start = options();
     start.settings.listeners.prometheus = Some(lk_agents_abi::worker::types::ListenerAddress {
         host: Some("127.0.0.1".into()),
@@ -278,7 +278,7 @@ async fn an_occupied_port_fails_the_run_before_the_job_processes_start() {
 #[tokio::test]
 async fn server_cleanup_deadline_returns_while_the_actor_retains_the_pool() {
     let host = Host::new();
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io()), crate::test_rt());
     let mut start = options();
     start.settings.shutdown_process_timeout = 0.02;
     let run = runtime.run(start);
@@ -303,7 +303,7 @@ async fn server_startup_waits_for_sampling_capacity() {
     }
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io.clone()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io.clone()), crate::test_rt());
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -324,7 +324,7 @@ async fn close_interrupts_a_server_waiting_for_sampling_capacity() {
     let held: Vec<_> = (0..4).map(|_| blocking_io.try_admit(()).unwrap()).collect();
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io), crate::test_rt());
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -342,7 +342,7 @@ async fn server_setup_capacity_timeout_keeps_close_successful() {
     let held: Vec<_> = (0..4).map(|_| blocking_io.try_admit(()).unwrap()).collect();
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io), crate::test_rt());
     let mut start = options();
     start.settings.initialize_process_timeout = 0.01;
     assert_eq!(runtime.run(start).await, Err("server setup capacity wait timed out".into()));

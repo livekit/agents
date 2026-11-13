@@ -27,7 +27,6 @@ use crate::http::{BodyReader, GatewayHttp};
 use crate::signal;
 use crate::source::{Pulled, SharedStream};
 use crate::sse::{SseDecoder, SseEvent};
-use crate::task::TokioSpawner;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
 use parking_lot::Mutex;
 
@@ -69,7 +68,7 @@ struct Operation {
 struct Inner {
     core: Mutex<Client>,
     http: Arc<GatewayHttp>,
-    runtime: tokio::runtime::Handle,
+    spawner: Arc<dyn lk_agents_abi::Spawner>,
     clock: Arc<dyn Clock>,
     connect: AsyncMutex<()>,
     closing: CancellationToken,
@@ -100,7 +99,7 @@ impl AgentClient {
             inner: Arc::new(Inner {
                 core: Mutex::new(core),
                 http: (env.http)().map_err(unavailable)?,
-                runtime: (env.runtime)().map_err(unavailable)?,
+                spawner: (env.spawner)().map_err(unavailable)?,
                 clock: env.clock.clone(),
                 endpoint: endpoint_url,
                 options,
@@ -235,19 +234,14 @@ impl AgentClient {
         };
         let inner = self.inner.clone();
         let remote = acknowledged.clone();
-        let task = TokioSpawner::new(self.inner.runtime.clone()).spawn_settled(
-            call.run(request),
-            move |outcome| async move {
-                let admitted = admitted.get().is_some();
-                inner
-                    .cancel_unfinished_call(id, message.as_ref(), outcome, admitted, &remote)
-                    .await;
-                inner.forget_call(id);
-                // The client is released before the call is announced settled.
-                drop(inner);
-                settle.resolve(());
-            },
-        );
+        let task = self.inner.spawner.spawn_settled(call.run(request), move |outcome| async move {
+            let admitted = admitted.get().is_some();
+            inner.cancel_unfinished_call(id, message.as_ref(), outcome, admitted, &remote).await;
+            inner.forget_call(id);
+            // The client is released before the call is announced settled.
+            drop(inner);
+            settle.resolve(());
+        });
         {
             let mut operations = self.inner.operations.lock();
             self.inner.ensure_open()?;

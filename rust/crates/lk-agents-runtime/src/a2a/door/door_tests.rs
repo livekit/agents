@@ -465,7 +465,10 @@ async fn the_caller_is_authenticated_in_order(backend: Backend) {
     assert_eq!(get(serving(), card(), bearer(&project)).await.status, 200);
     let mixed = vec![("AUTHORIZATION", format!("Bearer {project}"))];
     assert_eq!(get(serving(), card(), mixed).await.status, 200);
-    assert_eq!(get(serving(), format!("{CARD}?access_token={project}"), Vec::new()).await.status, 200);
+    assert_eq!(
+        get(serving(), format!("{CARD}?access_token={project}"), Vec::new()).await.status,
+        200
+    );
     let other = <lk_agents_net::a2a_auth::Credentials as Credentials>::new(
         "APIother".into(),
         SECRET.into(),

@@ -39,6 +39,8 @@ pub struct JobSupervisor {
     context: CallContext,
     logger: JobLogger,
     spawner: TokioSpawner,
+    /// Where the runner's channel and supervision run, and the clock their deadlines are read on.
+    rt: lk_agents_net::owned::Background,
     state: Arc<Mutex<RunnerState>>,
     /// Set by `start()`.
     sup: Mutex<Option<RunnerSupervisor>>,
@@ -101,6 +103,8 @@ impl ipc_host::JobSupervisor for JobSupervisor {
         }
         let state = Arc::new(Mutex::new(RunnerState::default()));
         let logger = JobLogger { state: state.clone() };
+        let failed =
+            |error: lk_agents_net::env::ProcessError| WorkerError::Failed(error.to_string());
         Ok(Self {
             id: lk_agents_net::strings::shortuuid(if options.thread {
                 "THEXEC_"
@@ -111,9 +115,8 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             launcher,
             context,
             logger,
-            spawner: TokioSpawner::new(
-                (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?,
-            ),
+            spawner: TokioSpawner::new((env.runtime)().map_err(failed)?),
+            rt: env.background().map_err(failed)?,
             state,
             sup: Mutex::new(None),
             initialized: Mutex::new(Settlement::Pending),
@@ -183,16 +186,18 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             }
             let (launcher, context) = (self.launcher.clone(), self.context.clone());
             let _runtime = self.spawner.handle().enter();
+            let rt = self.rt.clone();
             let executor: Arc<dyn RunnerExecutor> = if self.options.thread {
-                Arc::new(ThreadExecutor::new(launcher, context))
+                Arc::new(ThreadExecutor::new(launcher, context, rt))
             } else {
-                Arc::new(ProcessExecutor::new(launcher, context, self.logger.clone()))
+                Arc::new(ProcessExecutor::new(launcher, context, self.logger.clone(), rt))
             };
             let sup = RunnerSupervisor::new(
                 executor,
                 self.logger.clone(),
                 self.options.clone(),
                 lk_agents_net::blocking_io::blocking_io(),
+                &self.rt,
             );
             *slot = Some(sup.clone());
             let (ran, cell) = signal::once();

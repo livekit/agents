@@ -1,4 +1,11 @@
 //! Async thread storage: shared execution over Cloud AgentDB or local SQLite.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "tests drive Tokio's paused clock and spawn directly; the library is linted without"
+    )
+)]
 
 pub mod backends;
 pub mod context;

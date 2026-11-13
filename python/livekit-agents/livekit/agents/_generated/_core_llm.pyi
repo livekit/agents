@@ -338,12 +338,14 @@ class McpSession:
 class _core_McpToolsetLifecycle:
     """An `MCPToolset`'s lifecycle (docs/tools.md "MCP servers"): one listing at a time; an
     unreachable server leaves the toolset without tools and is listed again in the background at
-    the session's backoff until it answers; the connection closes [`MCP_IDLE_CLOSE_SECONDS`] after the
+    the session's backoff until it answers; the connection closes `idle_timeout` seconds after the
     last run released the toolset unless a run sets it up again first. `host` is the toolset,
-    held only while a recovery or an idle close is pending.
+    held only while a recovery or an idle close is pending; both end when the lifecycle drops.
     """
-    def __new__(cls, server: str, session: McpSession) -> Self:
-        """`server` names the server in logs; `session` owns the reconnect backoff."""
+    def __new__(cls, server: str, session: McpSession, idle_timeout: float) -> Self:
+        """`server` names the server in logs; `session` owns the reconnect backoff; `idle_timeout`
+        is the seconds an unused connection stays open ([`MCP_IDLE_CLOSE_SECONDS`] by default).
+        """
     async def setup(self, host: MCPToolset) -> None:
         """Disarm a pending idle close, then list the tools unless they are listed or a recovery
         is under way. A failed listing is logged and recovered in the background; a cancelled

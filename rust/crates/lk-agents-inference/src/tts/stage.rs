@@ -9,6 +9,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use futures_util::FutureExt;
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::tokenize::bindings::{SentenceSettings, SentenceTokenizerLeg};
@@ -20,7 +21,6 @@ use lk_agents_abi::utils::stream::Entry;
 use lk_agents_core::lexer::Vocabulary;
 use lk_agents_core::markup::{Markup, MarkupExt, markup_vocabulary};
 use lk_agents_core::tokenize::sentences::{SentenceOptions, SentenceStream, speakable_alone};
-use tokio::sync::mpsc;
 
 use super::fed::TextLog;
 use super::pacing::{SentencePacer, sent, trim_python_whitespace};
@@ -65,28 +65,26 @@ pub(crate) fn one_shot(tts: &dyn Tts, text: &str) -> Vec<SpeechChunk> {
         .collect()
 }
 
-/// A host sentence stream read by a task of its own, so a wait elsewhere never cancels a pending
-/// read of the host's stream.
+type Read = BoxFuture<'static, Result<Option<String>, ProviderError>>;
+
+/// A host sentence stream and its pending read, held here so a wait elsewhere never cancels a
+/// pending read of the host's stream.
 pub(crate) struct HostSentences {
     stream: Arc<dyn HostSentenceStream>,
-    out: mpsc::UnboundedReceiver<Result<Option<String>, ProviderError>>,
-    reader: tokio::task::JoinHandle<()>,
+    cx: telemetry::Cx,
+    /// `None` once the stream ended or failed.
+    reading: Option<Read>,
 }
 
 impl HostSentences {
     pub(crate) fn read(stream: Arc<dyn HostSentenceStream>, cx: &telemetry::Cx) -> Self {
-        let (tx, out) = mpsc::unbounded_channel();
-        let (host, cx) = (stream.clone(), cx.clone());
-        let reader = tokio::spawn(lk_agents_net::task::inherit(async move {
-            loop {
-                let next = host.next(&cx).await.map(|sentence| sentence.map(|s| s.token));
-                let more = matches!(next, Ok(Some(_)));
-                if tx.send(next).is_err() || !more {
-                    return;
-                }
-            }
-        }));
-        Self { stream, out, reader }
+        let reading = Some(Self::start(&stream, cx));
+        Self { stream, cx: cx.clone(), reading }
+    }
+
+    fn start(stream: &Arc<dyn HostSentenceStream>, cx: &telemetry::Cx) -> Read {
+        let (stream, cx) = (stream.clone(), cx.clone());
+        Box::pin(async move { stream.next(&cx).await.map(|sentence| sentence.map(|s| s.token)) })
     }
 
     pub(crate) fn stream(&self) -> &dyn HostSentenceStream {
@@ -95,21 +93,20 @@ impl HostSentences {
 
     /// The next sentence read, without waiting; `Some(Ok(None))` once the stream ended.
     pub(crate) fn try_next(&mut self) -> Option<Result<Option<String>, ProviderError>> {
-        match self.out.try_recv() {
-            Ok(next) => Some(next),
-            Err(mpsc::error::TryRecvError::Empty) => None,
-            Err(mpsc::error::TryRecvError::Disconnected) => Some(Ok(None)),
-        }
+        self.next().now_or_never()
     }
 
-    /// The next sentence, `None` once the stream ended. Cancel-safe.
+    /// The next sentence, `None` once the stream ended. Cancel-safe: the read stays pending.
     pub(crate) async fn next(&mut self) -> Result<Option<String>, ProviderError> {
-        self.out.recv().await.unwrap_or(Ok(None))
+        let Some(reading) = self.reading.as_mut() else { return Ok(None) };
+        let next = reading.await;
+        self.reading = matches!(next, Ok(Some(_))).then(|| Self::start(&self.stream, &self.cx));
+        next
     }
 
     /// Stop reading and close the host stream, its close bounded by `deadline`.
-    pub(crate) async fn close(&self, cx: &telemetry::Cx, clock: &dyn Clock, deadline: Ts) {
-        self.reader.abort();
+    pub(crate) async fn close(mut self, cx: &telemetry::Cx, clock: &dyn Clock, deadline: Ts) {
+        self.reading = None;
         let closed = self.stream.aclose(cx);
         if before(clock, Some(deadline), closed).await.is_err() {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "sentence stream close timed out");
@@ -126,7 +123,7 @@ enum Split {
     /// ended with it, so its end tells the segment's last sentence apart.
     Host {
         tokenizer: Arc<dyn HostSentenceTokenizer>,
-        current: Option<HostSentences>,
+        current: Option<Box<HostSentences>>,
         opening: Option<BoxFuture<'static, Result<Arc<dyn HostSentenceStream>, ProviderError>>>,
         /// Text pushed before the segment's stream opened.
         early: Vec<Entry<String>>,
@@ -281,7 +278,7 @@ impl Stage {
     /// Stop reading the host tokenizer's streams and close them, by `deadline`.
     pub(crate) async fn close(&mut self, deadline: Ts) {
         if let Split::Host { current, ended, .. } = &mut self.split {
-            for host in ended.drain(..).chain(current.take()) {
+            for host in ended.drain(..).chain(current.take().map(|host| *host)) {
                 host.close(&self.cx, &*self.clock, deadline).await;
             }
         }
@@ -418,7 +415,7 @@ impl Stage {
                 Entry::Flush | Entry::EndInput => stream.end_input(),
             }
         }
-        *current = Some(HostSentences::read(stream, &self.cx));
+        *current = Some(Box::new(HostSentences::read(stream, &self.cx)));
     }
 
     fn split_read(&mut self, next: Result<Option<String>, ProviderError>) {
@@ -437,7 +434,7 @@ impl Stage {
                 }
                 self.split_done = true;
                 if let Split::Host { current, ended, .. } = &mut self.split {
-                    ended.extend(current.take());
+                    ended.extend(current.take().map(|host| *host));
                 }
             }
             Err(error) => {

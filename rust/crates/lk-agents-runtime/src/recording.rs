@@ -1,13 +1,12 @@
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use std::io::Write;
-#[cfg(feature = "media-ffmpeg")]
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::recorder::AudioRecorder;
+use lk_agents_abi::{Clock, Spawner};
 use lk_agents_media::media_queue::AudioSender;
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use lk_agents_media::media_queue::{self, AudioReceiver, Item, Policy};
@@ -18,7 +17,7 @@ use lk_agents_media::recorder::{FileLimits, OggOpusEncoder, RecordingFile};
 use lk_agents_media::recorder::{RESYNC_TOLERANCE, RecordingCommand, RecordingLimits};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::signal;
-use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::task::TaskSet;
 use tokio::sync::{RwLock, mpsc, oneshot};
 
 pub use lk_agents_abi::recorder::{RecordingFailure, RecordingStatus, RecordingSummary};
@@ -90,7 +89,9 @@ pub struct SessionRecorder {
     tx: mpsc::Sender<Queued>,
     input: parking_lot::Mutex<Input>,
     shared: Arc<Shared>,
-    runtime: tokio::runtime::Handle,
+    /// The owner's executor and clock: the supervisor and the finalization run on them.
+    spawner: Arc<dyn Spawner>,
+    clock: Arc<dyn Clock>,
     /// The worker's supervisor and the finalization, which the recording owns past any waiter.
     tasks: Arc<TaskSet>,
 }
@@ -113,21 +114,6 @@ impl Shared {
 }
 
 impl SessionRecorder {
-    #[cfg(feature = "media-ffmpeg")]
-    fn start(
-        media_pool: &MediaPool,
-        runtime: tokio::runtime::Handle,
-        path: PathBuf,
-        sample_rate: u32,
-        t0: Option<f64>,
-        bitrate: u32,
-        limits: RecordingLimits,
-    ) -> Result<Self, RecordingFailure> {
-        Self::start_with(media_pool, runtime, sample_rate, t0, limits, move |file| {
-            RecordingFile::create(&path, sample_rate, bitrate, t0, file)
-        })
-    }
-
     #[cfg(test)]
     pub(crate) async fn open_with<E, W>(
         media_pool: &MediaPool,
@@ -140,10 +126,12 @@ impl SessionRecorder {
         E: OggOpusEncoder + Send + 'static,
         W: Write + Send + 'static,
     {
-        let runtime = tokio::runtime::Handle::current();
+        let env = ProcessEnv::current_runtime();
+        let spawner = (env.spawner)().expect("a test runs on a Tokio runtime");
         let recorder = Arc::new(Self::start_with(
             media_pool,
-            runtime,
+            spawner,
+            env.clock,
             sample_rate,
             t0,
             limits,
@@ -159,7 +147,8 @@ impl SessionRecorder {
     #[cfg(any(test, feature = "media-ffmpeg"))]
     fn start_with<E, W>(
         media_pool: &MediaPool,
-        runtime: tokio::runtime::Handle,
+        spawner: Arc<dyn Spawner>,
+        clock: Arc<dyn Clock>,
         sample_rate: u32,
         t0: Option<f64>,
         limits: RecordingLimits,
@@ -190,17 +179,17 @@ impl SessionRecorder {
             limits,
         });
         let (tx, rx) = mpsc::channel(limits.queued_commands + 1);
-        let clock = Arc::new(lk_agents_net::clock::RealClock::new());
         let (audio, input) =
-            media_queue::audio(INPUT_POLICY, telemetry::AudioConsumer::Recording, clock);
+            media_queue::audio(INPUT_POLICY, telemetry::AudioConsumer::Recording, clock.clone());
         let recorder = Self {
             tx,
             input: parking_lot::Mutex::new(Input { audio, until: None, head: false }),
             shared: shared.clone(),
-            runtime: runtime.clone(),
+            spawner: spawner.clone(),
+            clock,
             tasks: Arc::default(),
         };
-        let (worker_shared, worker_runtime) = (shared.clone(), runtime.clone());
+        let worker_shared = shared.clone();
         let worker = media_pool
             .try_spawn(JobClass::Recording, move || {
                 let file = limits.file();
@@ -212,10 +201,9 @@ impl SessionRecorder {
                     }
                 };
                 ready_tx.resolve(Ok(()));
-                run(file, rx, input, worker_shared, &worker_runtime)
+                run(file, rx, input, worker_shared)
             })
             .map_err(|error| RecordingFailure::Worker(error.to_string()))?;
-        let spawner = TokioSpawner::new(runtime.clone());
         let supervise = async move {
             let outcome = worker
                 .await
@@ -238,7 +226,7 @@ impl SessionRecorder {
             }
             outcome
         };
-        recorder.tasks.spawn_settling(&spawner, "recording worker", terminal_tx, supervise);
+        recorder.tasks.spawn_settling(&*spawner, "recording worker", terminal_tx, supervise);
         Ok(recorder)
     }
 
@@ -384,8 +372,7 @@ impl SessionRecorder {
             let tx = self.tx.clone();
             // Finalization is owned by the recording, so cancellation of this waiter cannot
             // strand admission closed without delivering the reserved finish barrier.
-            let spawner = TokioSpawner::new(self.runtime.clone());
-            self.tasks.spawn(&spawner, "recording finalization", async move {
+            self.tasks.spawn(&*self.spawner, "recording finalization", async move {
                 let _admission = shared.admission.write().await;
                 if shared.terminal.ended() {
                     return;
@@ -420,7 +407,7 @@ impl SessionRecorder {
 
     async fn close(&self, now: Option<f64>, deadline: Duration) -> Outcome {
         self.request_finish(now)?;
-        match tokio::time::timeout(deadline, self.terminal()).await {
+        match lk_agents_abi::timeout(&*self.clock, deadline, self.terminal()).await {
             Ok(outcome) => outcome,
             Err(_) => Err(RecordingFailure::IncompleteCleanup),
         }
@@ -483,9 +470,8 @@ fn run<E: OggOpusEncoder, W: Write>(
     rx: mpsc::Receiver<Queued>,
     input: AudioReceiver<f64>,
     shared: Arc<Shared>,
-    runtime: &tokio::runtime::Handle,
 ) -> Outcome {
-    let outcome = runtime.block_on(process(&mut file, rx, input, &shared));
+    let outcome = park_on(process(&mut file, rx, input, &shared));
     if let Err(error) = &outcome {
         shared.fail(error.clone());
     }
@@ -493,6 +479,27 @@ fn run<E: OggOpusEncoder, W: Write>(
     // publish Failed from the supervisor after this function actually exits.
     drop(file);
     outcome
+}
+
+/// Drives `work` on the calling media worker thread, parking it between wakes: the worker's
+/// channels and queues need no reactor.
+#[cfg(any(test, feature = "media-ffmpeg"))]
+fn park_on<F: std::future::Future>(work: F) -> F::Output {
+    struct Unpark(std::thread::Thread);
+    impl std::task::Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut cx = std::task::Context::from_waker(&waker);
+    let mut work = std::pin::pin!(work);
+    loop {
+        if let std::task::Poll::Ready(output) = work.as_mut().poll(&mut cx) {
+            return output;
+        }
+        std::thread::park();
+    }
 }
 
 /// What the worker takes next: microphone audio, ahead of the commands queued after it.
@@ -682,17 +689,17 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
     ) -> Result<Self, RecordingFailure> {
         #[cfg(feature = "media-ffmpeg")]
         {
-            let runtime = env
-                .caller_runtime()
-                .map_err(|error| RecordingFailure::Worker(error.to_string()))?;
-            Self::start(
+            let spawner =
+                (env.spawner)().map_err(|error| RecordingFailure::Worker(error.to_string()))?;
+            let path = std::path::PathBuf::from(path);
+            Self::start_with(
                 &lk_agents_media::pool::media_pool(),
-                runtime,
-                path.into(),
+                spawner,
+                env.clock.clone(),
                 sample_rate,
                 t0,
-                bitrate,
                 RecordingLimits::default(),
+                move |file| RecordingFile::create(&path, sample_rate, bitrate, t0, file),
             )
         }
         #[cfg(not(feature = "media-ffmpeg"))]

@@ -235,6 +235,12 @@ def ipc_pair() -> tuple[int, int]: ...
 
 def init(role: Role) -> None: ...
 
+def skip_host_time(seconds: float) -> None:
+    """Moves every host clock of this process `seconds` forward at once (a negative or NaN value
+    moves nothing): each wait whose instant it passes ends now. For tests, so a grace period, a
+    watchdog or an idle close fires without the test waiting it out.
+    """
+
 class ServerConfig:
     def __new__(cls, options: ServerOptions, process: ProcessOptions, version: str) -> Self:
         """Options left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else

@@ -1,6 +1,6 @@
-use lk_agents_abi::SpawnerExt;
+use lk_agents_abi::{Clock, timeout};
+use lk_agents_net::owned::Background;
 use lk_agents_net::signal::Shared;
-use lk_agents_net::task::TokioSpawner;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,14 +64,16 @@ impl TransportReceipt {
     }
 }
 
-/// The same owner closes a failed/cancelled handshake and an established SDK service.
+/// The same owner closes a failed/cancelled handshake and an established SDK service; one
+/// dropped unclosed finishes as a cleanup of the session's background.
 pub(super) struct Observed<T: Transport<RoleClient> + 'static> {
     inner: Option<T>,
     receipt: Arc<TransportReceipt>,
+    background: Background,
 }
 impl<T: Transport<RoleClient> + 'static> Observed<T> {
-    pub fn new(inner: T, receipt: Arc<TransportReceipt>) -> Self {
-        Self { inner: Some(inner), receipt }
+    pub fn new(inner: T, receipt: Arc<TransportReceipt>, background: Background) -> Self {
+        Self { inner: Some(inner), receipt, background }
     }
 }
 impl<T: Transport<RoleClient> + 'static> Transport<RoleClient> for Observed<T> {
@@ -116,17 +118,21 @@ impl<T: Transport<RoleClient> + 'static> Drop for Observed<T> {
     fn drop(&mut self) {
         if let Some(mut inner) = self.inner.take() {
             let receipt = self.receipt.clone();
-            // Detached: the transport is being dropped; finishing settles its receipt.
-            TokioSpawner::current().spawn_detached(async move {
+            // Bounded by the transport's own close; finishing settles its receipt.
+            self.background.cleanup("MCP transport close", async move {
                 finish(&mut inner, &receipt).await;
             });
         }
     }
 }
 
+/// How long a stdio server whose input closed may take to exit before it is killed.
+const STDIO_EXIT_GRACE: Duration = Duration::from_secs(3);
+
 pub(super) struct StdioTransport {
     io: AsyncRwTransport<RoleClient, tokio::process::ChildStdout, tokio::process::ChildStdin>,
     child: tokio::process::Child,
+    clock: Arc<dyn Clock>,
 }
 impl StdioTransport {
     pub fn spawn(
@@ -134,6 +140,7 @@ impl StdioTransport {
         args: Vec<String>,
         env: Vec<(String, String)>,
         cwd: Option<String>,
+        clock: Arc<dyn Clock>,
     ) -> Result<Self, McpError> {
         let inherited = if cfg!(windows) {
             "APPDATA HOMEDRIVE HOMEPATH LOCALAPPDATA PATH PATHEXT PROCESSOR_ARCHITECTURE SYSTEMDRIVE SYSTEMROOT TEMP USERNAME USERPROFILE"
@@ -159,7 +166,7 @@ impl StdioTransport {
         let stdout = child.stdout.take().expect("stdout is piped");
         let stdin = child.stdin.take().expect("stdin is piped");
         let io = AsyncRwTransport::new(stdout, stdin);
-        Ok(Self { io, child })
+        Ok(Self { io, child, clock })
     }
 }
 impl Transport<RoleClient> for StdioTransport {
@@ -176,7 +183,8 @@ impl Transport<RoleClient> for StdioTransport {
     }
     async fn close(&mut self) -> Result<(), McpError> {
         self.io.close().await.map_err(conn)?;
-        if let Ok(status) = tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await {
+        let exited = timeout(&*self.clock, STDIO_EXIT_GRACE, self.child.wait()).await;
+        if let Ok(status) = exited {
             return status.map(drop).map_err(conn);
         }
         self.child.start_kill().map_err(conn)?;

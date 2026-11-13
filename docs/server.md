@@ -170,6 +170,8 @@ if __name__ == "__main__":
 | `job_memory_warn_mb`, `job_memory_limit_mb` | a job process's memory warning and kill thresholds in MB; default 1000 and none |
 | `drain_timeout` | maximum seconds to wait for active work after stopping admission; default 3600; zero skips waiting |
 | `shutdown_timeout` | total process shutdown budget in seconds, including draining and cleanup; default 3610; must exceed `drain_timeout` |
+| `reconnect_grace` | seconds a registered worker may stay disconnected from LiveKit before `/` fails; default 30; see [Health and metrics](#health-and-metrics) |
+| `stuck_timeout` | seconds the host may leave the worker's heartbeat unanswered before `/` fails; default 5 |
 | `listeners` | the worker's `public`, `health` and `prometheus` listeners; see [Listeners](#listeners) |
 
 Every option but `storage` and `preload_modules` is a key of
@@ -252,14 +254,15 @@ should receive traffic, for readiness probes. A failure is `503` with the state 
 | starting: not registered yet, or the job process pool has not filled for the first time | `503 starting` | `503 starting` |
 | ready: registered, and the pool has warmed its idle processes once | `200 OK` | `200 OK` |
 | reconnecting after a dropped connection | `200 OK` | `503 reconnecting` |
+| disconnected: reconnecting for longer than `reconnect_grace` (30 s) | `503 disconnected` | `503 disconnected` |
 | draining | `200 OK` | `503 draining` |
 | failed: reconnection gave up, or the pool cannot start | `503 failed` | `503 failed` |
-| stuck: the host's event loop has not responded for 5 seconds | `503 stuck` | `503 stuck` |
+| stuck: the host's event loop has not responded for `stuck_timeout` (5 s) | `503 stuck` | `503 stuck` |
 
 The pool counts once: later refills after dispatches leave readiness unchanged, and with no
 idle processes (development) a started pool is enough. Load does not change readiness; a
 full worker reports it to LiveKit through its status, and dispatch avoids it. `/` fails only
-on a failure a restart can fix, never on a drain or a dropped connection, so a LiveKit
+on a failure a restart can fix, never on a drain or a short reconnect, so a brief LiveKit
 outage never restarts workers. The host refreshes a heartbeat every 500 ms and the probes
 read it without waiting on the host. `/ready` fails as soon as draining starts, so the pod
 leaves rotation before it stops; set `terminationGracePeriodSeconds` above

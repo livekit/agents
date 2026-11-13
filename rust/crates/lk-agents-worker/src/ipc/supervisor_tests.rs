@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::watch;
+use tokio::time::Instant;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
@@ -70,7 +71,7 @@ mod supervision {
     #[tokio::test(start_paused = true)]
     async fn a_kill_during_the_launch_stops_the_runner_once_it_exists() {
         let host = Arc::new(FakeHost::default());
-        let (parent, _child) = memory();
+        let (parent, _child) = memory(&crate::test_rt());
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
         let executor = FakeExecutor { gate: Some(gate.clone()), ..executor(parent, &host) };
         let sup = start(executor, &host, short(60.0));
@@ -99,7 +100,7 @@ mod supervision {
     #[tokio::test(start_paused = true)]
     async fn launch_rejection_without_a_process_is_not_reported_as_os_exit_or_reaping() {
         let host = Arc::new(FakeHost::default());
-        let (parent, _child) = memory();
+        let (parent, _child) = memory(&crate::test_rt());
         let refusal = Some(HostError::new("spawn refused"));
         let sup = start(FakeExecutor { refusal, ..executor(parent, &host) }, &host, short(60.0));
         let initialized = sup.initialize(hello()).await;
@@ -168,7 +169,7 @@ mod supervision {
     #[tokio::test(start_paused = true)]
     async fn a_version_refusal_queued_before_exit_keeps_its_typed_cause() {
         let (parent, mut child) = tokio::io::duplex(1 << 16);
-        let (sup, host) = supervise(Channel::new(parent), short(60.0));
+        let (sup, host) = supervise(Channel::new(parent, &crate::test_rt()), short(60.0));
         let init = waits(&sup).await;
         finish(&sup, &host, 0).await;
         let theirs = VERSION + 1;
@@ -319,7 +320,7 @@ mod supervision {
     #[tokio::test(start_paused = true)]
     async fn no_job_is_accepted_after_a_version_refusal() {
         let (parent, mut child) = tokio::io::duplex(1 << 16);
-        let (sup, host) = supervise(Channel::new(parent), short(60.0));
+        let (sup, host) = supervise(Channel::new(parent, &crate::test_rt()), short(60.0));
         let init = waits(&sup).await;
         child.write_all(&MAGIC).await.unwrap();
         child.write_all(&(VERSION + 1).to_be_bytes()).await.unwrap();
@@ -516,7 +517,7 @@ fn executor(parent: Channel<ToChild, ToParent>, host: &Arc<FakeHost>) -> FakeExe
 
 fn start(executor: FakeExecutor, host: &Arc<FakeHost>, opts: JobRunnerOptions) -> RunnerSupervisor {
     let blocking_io = blocking_io();
-    RunnerSupervisor::new(Arc::new(executor), host.clone(), opts, blocking_io)
+    RunnerSupervisor::new(Arc::new(executor), host.clone(), opts, blocking_io, &crate::test_rt())
 }
 
 fn supervise(
@@ -531,7 +532,7 @@ fn supervise(
 type Child = Channel<ToParent, ToChild>;
 
 fn setup(opts: JobRunnerOptions) -> (RunnerSupervisor, Arc<FakeHost>, Child) {
-    let (parent, child) = memory();
+    let (parent, child) = memory(&crate::test_rt());
     let (sup, host) = supervise(parent, opts);
     (sup, host, child)
 }
@@ -539,7 +540,7 @@ fn setup(opts: JobRunnerOptions) -> (RunnerSupervisor, Arc<FakeHost>, Child) {
 /// A child writing raw bytes: its preamble is written, the parent's is read.
 async fn setup_raw(opts: JobRunnerOptions) -> (RunnerSupervisor, Arc<FakeHost>, DuplexStream) {
     let (parent, mut child) = tokio::io::duplex(1 << 16);
-    let (sup, host) = supervise(Channel::new(parent), opts);
+    let (sup, host) = supervise(Channel::new(parent, &crate::test_rt()), opts);
     child.write_all(&MAGIC).await.unwrap();
     child.write_all(&VERSION.to_be_bytes()).await.unwrap();
     child.read_exact(&mut [0; 8]).await.unwrap();
@@ -606,7 +607,7 @@ async fn initialize_raises_the_child_error_and_a_version_mismatch() {
     );
 
     let (parent, mut child) = tokio::io::duplex(1 << 16);
-    let (sup, _host) = supervise(Channel::new(parent), opts());
+    let (sup, _host) = supervise(Channel::new(parent, &crate::test_rt()), opts());
     let init = waits(&sup).await;
     child.write_all(&MAGIC).await.unwrap();
     child.write_all(&(VERSION + 1).to_be_bytes()).await.unwrap();

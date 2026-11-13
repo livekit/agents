@@ -5,11 +5,11 @@ use std::time::Duration;
 
 use lk_agents_abi::worker::ipc_host::{ChildInitialize, JobProcess, WorkerError};
 use lk_agents_abi::worker::job::ShutdownCause;
-use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_abi::{Clock, OwnedTask, SpawnerExt, Ts};
+use lk_agents_net::owned::Background;
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
-use tokio::time::Instant;
 
 use super::ipc_channel::{Channel, ChannelError};
 use super::job_run::JobRun;
@@ -41,18 +41,15 @@ pub struct ChildChannel {
 pub fn watch_parent<F: FnOnce() + Send + 'static>(
     channel: Arc<Channel<ToParent, ToChild>>,
     health_timeout: Option<Duration>,
+    rt: &Background,
     on_orphan: F,
 ) -> (mpsc::Receiver<ToChild>, OwnedTask<Result<(), ChannelError>>) {
     let (inbox, received) = mpsc::channel(INBOX);
-    let timeout = health_timeout.map(|t| t.min(FAR_DEADLINE));
-    let mut watch = ParentWatch {
-        channel,
-        inbox,
-        timeout,
-        deadline: Instant::now() + timeout.unwrap_or(FAR_DEADLINE),
-        pending: None,
-    };
-    let watching = TokioSpawner::current().spawn(async move {
+    let clock = rt.clock.clone();
+    let deadline = health_timeout.map(|timeout| clock.now().saturating_add(timeout));
+    let mut watch =
+        ParentWatch { channel, inbox, timeout: health_timeout, deadline, pending: None, clock };
+    let watching = rt.spawner.spawn(async move {
         let watched = watch.run().await;
         if watched.is_err() {
             on_orphan();
@@ -62,17 +59,16 @@ pub fn watch_parent<F: FnOnce() + Send + 'static>(
     (received, watching)
 }
 
-/// The deadline that stands for none, kept small enough to add to an `Instant`.
-const FAR_DEADLINE: Duration = Duration::from_secs(1 << 30);
-
 /// [`watch_parent`]'s task: one message at a time from the parent into the inbox.
 struct ParentWatch {
     channel: Arc<Channel<ToParent, ToChild>>,
     inbox: mpsc::Sender<ToChild>,
     timeout: Option<Duration>,
-    deadline: Instant,
+    /// When the parent counts as gone unless it sends something; `None` without a timeout.
+    deadline: Option<Ts>,
     /// The message read but not yet admitted to the inbox.
     pending: Option<ToChild>,
+    clock: Arc<dyn Clock>,
 }
 
 impl ParentWatch {
@@ -82,7 +78,7 @@ impl ParentWatch {
         loop {
             tokio::select! {
                 biased;
-                () = tokio::time::sleep_until(self.deadline), if self.timeout.is_some() => {
+                () = wait_until(&*self.clock, self.deadline) => {
                     return Err(ChannelError::Io {
                         kind: std::io::ErrorKind::TimedOut,
                         os_error: None,
@@ -96,11 +92,19 @@ impl ParentWatch {
                 msg = self.channel.recv(), if self.pending.is_none() => {
                     self.pending = Some(msg?);
                     if let Some(timeout) = self.timeout {
-                        self.deadline = Instant::now() + timeout;
+                        self.deadline = Some(self.clock.now().saturating_add(timeout));
                     }
                 }
             }
         }
+    }
+}
+
+/// Until `deadline`; never without one.
+async fn wait_until(clock: &dyn Clock, deadline: Option<Ts>) {
+    match deadline {
+        Some(at) => clock.wait_until(at).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -180,12 +184,14 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
         initialize: Arc<dyn ChildInitialize>,
         process: bool,
     ) -> Result<Self, WorkerError> {
-        let runtime = (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?;
-        let spawner = TokioSpawner::new(runtime);
+        let failed =
+            |error: lk_agents_net::env::ProcessError| WorkerError::Failed(error.to_string());
+        let spawner = TokioSpawner::new((env.runtime)().map_err(failed)?);
+        let rt = env.background().map_err(failed)?;
         let runtime = spawner.handle().clone();
         let _runtime = runtime.enter();
         let channel = Arc::new(
-            Channel::<ToParent, ToChild>::from_endpoint(fd)
+            Channel::<ToParent, ToChild>::from_endpoint(fd, &rt)
                 .map_err(|error| WorkerError::Invalid(error.to_string()))?,
         );
         let hello = match runtime.block_on(channel.recv()) {
@@ -198,7 +204,7 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
             }
         };
         let health_timeout = hello.health_timeout_ms.map(Duration::from_millis);
-        let (inbox, watching) = watch_parent(channel.clone(), health_timeout, move || {
+        let (inbox, watching) = watch_parent(channel.clone(), health_timeout, &rt, move || {
             if process {
                 super::process::terminate_current_process();
             }

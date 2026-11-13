@@ -1,8 +1,8 @@
 use lk_agents_abi::BoxFuture;
-use lk_agents_abi::SpawnerExt;
+use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_net::env::ProcessError;
-use lk_agents_net::task::TokioSpawner;
 use std::io;
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Independent halves, so a consumer can read while another task writes.
@@ -15,30 +15,33 @@ pub trait Connector: Send + Sync {
     fn connect<'a>(&'a self, addr: &'a str) -> BoxFuture<'a, io::Result<Connection>>;
 }
 
-/// Connects on the reactor `runtime` returns, called at connection so constructing a client
+/// The process's executor (`ProcessEnv::spawner`).
+type Executor = fn() -> Result<Arc<dyn Spawner>, ProcessError>;
+
+/// Connects on the executor `spawner` returns, called at connection so constructing a client
 /// starts nothing.
 pub struct Tcp {
-    runtime: fn() -> Result<tokio::runtime::Handle, ProcessError>,
+    spawner: Executor,
 }
 
 impl Tcp {
-    pub fn new(runtime: fn() -> Result<tokio::runtime::Handle, ProcessError>) -> Self {
-        Self { runtime }
+    pub fn new(spawner: Executor) -> Self {
+        Self { spawner }
     }
 }
 
 impl Connector for Tcp {
     fn connect<'a>(&'a self, addr: &'a str) -> BoxFuture<'a, io::Result<Connection>> {
         Box::pin(async move {
-            let runtime = (self.runtime)().map_err(io::Error::other)?;
-            connect_on(&runtime, addr.to_owned()).await
+            let spawner = (self.spawner)().map_err(io::Error::other)?;
+            connect_on(&*spawner, addr.to_owned()).await
         })
     }
 }
 
-async fn connect_on(runtime: &tokio::runtime::Handle, addr: String) -> io::Result<Connection> {
+async fn connect_on(spawner: &dyn Spawner, addr: String) -> io::Result<Connection> {
     // Opened on the owning reactor, wherever the caller polls; dropping the wait cancels it.
-    let connecting = TokioSpawner::new(runtime.clone()).spawn(async move {
+    let connecting = spawner.spawn(async move {
         let stream = lk_agents_net::dns::connect(addr).await?;
         let (read, write) = stream.into_split();
         Ok(Connection { read: Box::new(read), write: Box::new(write) })
@@ -95,7 +98,8 @@ mod tests {
             socket.write_all(b"pong").await.unwrap();
         });
         outside_reactor(async {
-            let mut connection = connect_on(runtime.handle(), addr).await.unwrap();
+            let spawner = lk_agents_net::task::TokioSpawner::new(runtime.handle().clone());
+            let mut connection = connect_on(&spawner, addr).await.unwrap();
             connection.write.write_all(b"ping").await.unwrap();
             let mut bytes = [0; 4];
             connection.read.read_exact(&mut bytes).await.unwrap();
@@ -110,7 +114,8 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
         let addr = listener.local_addr().unwrap().to_string();
-        let mut opening = Box::pin(connect_on(runtime.handle(), addr));
+        let spawner = lk_agents_net::task::TokioSpawner::new(runtime.handle().clone());
+        let mut opening = Box::pin(connect_on(&spawner, addr));
         let mut context = Context::from_waker(Waker::noop());
         assert!(opening.as_mut().poll(&mut context).is_pending());
         drop(opening);

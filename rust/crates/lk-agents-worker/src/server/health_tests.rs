@@ -6,11 +6,23 @@ use hyper::{Method, StatusCode};
 use lk_agents_abi::worker::server_host::HealthState;
 use lk_agents_telemetry::process::Instruments;
 
+const GRACE: Duration = Duration::from_secs(30);
+const STUCK: Duration = Duration::from_secs(5);
+
+/// Tokio's clock, paused in a paused test.
+fn clock() -> Arc<dyn lk_agents_abi::Clock> {
+    Arc::new(lk_agents_net::clock::RealClock::new())
+}
+
+fn status() -> ServerStatus {
+    ServerStatus::new(clock(), GRACE, STUCK, &telemetry::process::INSTRUMENTS)
+}
+
 // Catches: a drain or a dropped connection restarting the pod, or traffic before the pool filled.
 #[test]
 fn health_states_answer_liveness_and_readiness() {
     use std::sync::atomic::Ordering::Release;
-    let status = ServerStatus::default();
+    let status = status();
     assert_eq!(status.state(), HealthState::Starting);
     status.registered.store(true, Release);
     assert_eq!(status.state(), HealthState::Starting, "the pool has not filled");
@@ -39,7 +51,7 @@ fn health_states_answer_liveness_and_readiness() {
 #[tokio::test(start_paused = true)]
 async fn a_host_that_stops_answering_reads_as_stuck() {
     use std::sync::atomic::Ordering::Release;
-    let status = ServerStatus::default();
+    let status = status();
     for flag in [&status.registered, &status.started] {
         flag.store(true, Release);
     }
@@ -60,13 +72,13 @@ async fn a_host_that_stops_answering_reads_as_stuck() {
 #[tokio::test(start_paused = true)]
 async fn a_disconnection_fails_liveness_only_past_the_reconnect_grace() {
     use std::sync::atomic::Ordering::Release;
-    let status = ServerStatus::default();
+    let status = status();
     for flag in [&status.registered, &status.started] {
         flag.store(true, Release);
     }
     status.set_connected(true);
     status.set_connected(false);
-    for _ in 0..RECONNECT_GRACE.as_secs() {
+    for _ in 0..GRACE.as_secs() {
         tokio::time::advance(Duration::from_secs(1)).await;
         status.heartbeat();
         status.set_connected(false);
@@ -97,7 +109,7 @@ impl HealthProbe for Probe {
 #[tokio::test]
 async fn endpoint_route_inventory_health_listener_serves_no_content() {
     use std::sync::atomic::Ordering::Release;
-    let status = ServerStatus::default();
+    let status = status();
     assert_eq!(
         health_route(&Method::GET, "/", &settings(), &status, &Probe).await.status(),
         StatusCode::SERVICE_UNAVAILABLE
@@ -132,7 +144,8 @@ async fn scrape(instruments: &'static Instruments, request: &[u8]) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (listener, port) = bind_listener("127.0.0.1", 0).await.unwrap();
     let stop = tokio_util::sync::CancellationToken::new();
-    let serving = tokio::spawn(serve_metrics(listener, instruments, stop.clone()));
+    let serving =
+        tokio::spawn(serve_metrics(listener, crate::test_rt(), instruments, stop.clone()));
     let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
     client.write_all(request).await.unwrap();
     let mut response = String::new();
@@ -150,7 +163,7 @@ async fn scrape(instruments: &'static Instruments, request: &[u8]) -> String {
 #[tokio::test]
 async fn the_metrics_listener_serves_the_worker_load_over_http() {
     let instruments: &'static Instruments = Box::leak(Box::new(Instruments::new()));
-    let status = ServerStatus::new(instruments);
+    let status = ServerStatus::new(clock(), GRACE, STUCK, instruments);
     status.set_load(0.5);
     for method in ["GET", "HEAD"] {
         let request = format!("{method} /metrics?format=text HTTP/1.1\r\nHost: localhost\r\n\r\n");
@@ -175,8 +188,7 @@ async fn the_metrics_listener_serves_the_worker_load_over_http() {
 // no agent, no deployment support and no active jobs.
 #[tokio::test]
 async fn the_worker_endpoint_uses_proto_field_names() {
-    let response =
-        health_route(&Method::GET, "/worker", &settings(), &ServerStatus::default(), &Probe).await;
+    let response = health_route(&Method::GET, "/worker", &settings(), &status(), &Probe).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["content-type"], "application/json");
     let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -199,8 +211,12 @@ async fn server_shutdown_resources_joins_stalled_health_and_metrics_connections(
     for count in [1, 8, 32, 64] {
         let (listener, port) = bind_listener("127.0.0.1", 0).await.unwrap();
         let stop = tokio_util::sync::CancellationToken::new();
-        let serving =
-            serve_metrics(listener, Box::leak(Box::new(Instruments::new())), stop.clone());
+        let serving = serve_metrics(
+            listener,
+            crate::test_rt(),
+            Box::leak(Box::new(Instruments::new())),
+            stop.clone(),
+        );
         tokio::pin!(serving);
         let mut peers = Vec::new();
         for _ in 0..count {

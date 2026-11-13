@@ -296,7 +296,7 @@ class DefaultPipeline:
         conn_options = session.conn_options.tts_conn_options
         calls = _NodeCallsVar.get(None)
         frames = _core.tts_node(session.tts, text, conn_options=conn_options, calls=calls)
-        return (_stamped(frame) async for frame in frames)
+        return _stamped_frames(frames)
 
     async def transcription_node(
         self,
@@ -314,6 +314,14 @@ class DefaultPipeline:
             user_input=ev.transcript,
             **_core.user_turn_exceeded_reply(),
         )
+
+
+async def _stamped_frames(frames: _core.TtsNodeFrames) -> AsyncIterator[rtc.AudioFrame]:
+    try:
+        async for frame in frames:
+            yield _stamped(frame)
+    finally:
+        await frames.aclose()
 
 
 def _stamped(node_frame: Any) -> rtc.AudioFrame:

@@ -596,8 +596,9 @@ impl Run {
                 Err(e) => Err(StorageError::Unavailable(format!("resolving: {e}"))),
             }
         };
-        let cx = &self.partition_key.thread.cx;
-        Resend::after_lost(wait, cx, crate::telemetry::StorageWrite::Commit, lost)
+        let thread = &self.partition_key.thread;
+        let (clock, cx) = (thread.background.clock.clone(), &thread.cx);
+        Resend::after_lost(clock, wait, cx, crate::telemetry::StorageWrite::Commit, lost)
             .probed(|| self.send(commit, lease), probe)
             .await
     }
