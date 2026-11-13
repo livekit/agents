@@ -147,7 +147,7 @@ RealtimeModel(
 | --- | --- | --- | --- |
 | `name` | `str` | — | Tool this config applies to (required) |
 | `require_speech_before_tool_call` | `bool` | `False` | Require the agent to speak before the tool can be called |
-| `forbid_speech_after_tool_call` | `bool` | `False` | Suppress the auto-generated spoken reply after the tool. Use for tools that always hand off to another agent (a non-handoff tool set here would leave the agent silent) |
+| `forbid_speech_after_tool_call` | `bool` | `False` | Suppress the auto-generated spoken reply after the tool. Use for tools that always hand off to another agent (a non-handoff tool set here would leave the agent silent). An async tool with `wait_for_response` still speaks its result. |
 | `forbid_tool_call_after_speech` | `bool` | `False` | Drop the tool call if the agent already spoke this turn |
 | `allow_tool_chaining` | `bool` | `False` | Allow another tool call immediately after this tool's output |
 | `execution_mode` | `str` | `"sync"` | `"sync"` or `"async"`. The agent waits for a sync tool's output before it continues, and a caller interruption marks the call interrupted. With an async tool it keeps talking while the tool runs and replies when the output arrives. |
@@ -159,6 +159,21 @@ RealtimeModel(
 | `speech_before_tool_call` | `str` | — | **`keypad_input` / `natural_conversation_ending` only.** `required` \| `optional` \| `suppressed`. |
 
 The plugin always sends tool calls with `wait_for_speech_before_tool_call` on; this is not configurable per tool.
+
+For a slow lookup the agent should wait on, use an async tool with `wait_for_response` and `forbid_speech_after_tool_call`, and leave `allow_tool_chaining` off. The agent acknowledges the request, keeps the caller engaged without calling other tools, and speaks the result when it arrives. Without `forbid_speech_after_tool_call`, the agent may keep talking after the acknowledgement and guess at the result.
+
+```python
+RealtimeModel(
+    configs_for_tools=[
+        {
+            "name": "check_order_status",
+            "execution_mode": "async",
+            "wait_for_response": True,
+            "forbid_speech_after_tool_call": True,
+        },
+    ],
+)
+```
 
 > **Deprecated:** the top-level `forbid_speech_after_tool_call: list[str]` option still works but is deprecated — it now folds each listed tool into `configs_for_tools` as `forbid_speech_after_tool_call=True` (an explicit `configs_for_tools` entry wins) and logs a warning. Prefer `configs_for_tools`.
 
