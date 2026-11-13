@@ -20,3 +20,16 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+async def test_stream_language_overrides_stt_default():
+    from livekit.plugins.fireworksai.stt import STT
+
+    provider = STT(api_key="test-key", language="en", http_session=object())  # type: ignore[arg-type]
+    stream = provider.stream(language="fr")
+    try:
+        assert stream._opts.language == "fr"
+        assert provider._opts.language == "en"
+        assert provider.stream()._opts.language == "en"
+    finally:
+        await stream.aclose()
