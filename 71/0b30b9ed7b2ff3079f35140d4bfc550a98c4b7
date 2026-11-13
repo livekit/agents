@@ -1,0 +1,21 @@
+tests/test_audio_recognition_turn_detection.py
+  s_93b6ba4269a7f8::t_88c3710d982d2f 14,549-551,556-561,563-570
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_93b6ba4269a7f8::t_b7ad38076a1f55 1702-1705,1711,1800
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "710b30b9ed7b2ff3079f35140d4bfc550a98c4b7",
+  "prompts": {},
+  "sessions": {
+    "s_93b6ba4269a7f8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1d474-88e2-78e1-b99d-3d95e6a4caa2",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
