@@ -38,9 +38,10 @@ impl From<WsdbError> for StorageError {
                 StorageError::Unavailable(e.to_string())
             }
             WsdbError::Server { code, message } => match code {
-                WsdbCode::Unavailable | WsdbCode::ResourceExhausted => {
-                    StorageError::Unavailable(message)
-                }
+                WsdbCode::Unavailable
+                | WsdbCode::ResourceExhausted
+                | WsdbCode::Retry
+                | WsdbCode::OutcomeUnknown => StorageError::Unavailable(message),
                 WsdbCode::NotFound => StorageError::NotFound(message),
                 WsdbCode::Unauthenticated => StorageError::Unauthorized(message),
                 WsdbCode::Protocol
@@ -57,15 +58,16 @@ impl From<WsdbError> for StorageError {
     }
 }
 
-/// A write the server answered was refused and rolled back; one sent and never answered (a
-/// dropped or closed socket, a timeout, a malformed answer, a server going away) may have
-/// committed: `Uncertain`. Only a sent write can be.
+/// A write the server answered was refused and rolled back (`retry` among them, retryable); one
+/// sent and never answered (a dropped or closed socket, a timeout, a malformed answer, a server
+/// going away) or answered `outcome_unknown` may have committed: `Uncertain`. Only a sent write
+/// can be.
 impl From<WriteError> for StorageError {
     fn from(e: WriteError) -> Self {
         match e {
             WriteError::NotSent(e) => e.into(),
             WriteError::Sent(e @ WsdbError::Server { code, .. })
-                if code != WsdbCode::Unavailable =>
+                if !matches!(code, WsdbCode::Unavailable | WsdbCode::OutcomeUnknown) =>
             {
                 e.into()
             }

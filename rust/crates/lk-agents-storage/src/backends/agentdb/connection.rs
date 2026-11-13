@@ -154,7 +154,8 @@ pub enum WsdbError {
     /// The connection dropped with this request in flight; a write's outcome is unknown.
     #[error("agentdb client: connection lost, request outcome unknown")]
     Disconnected,
-    /// A server-reported error with its stable code (`not_found`, `unauthenticated`, `unavailable`, ..).
+    /// A server-reported error with its stable code (`not_found`, `unauthenticated`, `unavailable`,
+    /// `retry`, `outcome_unknown`, ..).
     #[error("agentdb {}: {message}", code.as_str())]
     Server { code: WsdbCode, message: String },
     #[error("agentdb client: protocol: {0}")]
@@ -183,7 +184,10 @@ impl WsdbError {
     fn is_final(&self) -> bool {
         match self {
             Self::Server { code, .. } => match code {
-                WsdbCode::Unavailable | WsdbCode::ResourceExhausted => false,
+                WsdbCode::Unavailable
+                | WsdbCode::ResourceExhausted
+                | WsdbCode::Retry
+                | WsdbCode::OutcomeUnknown => false,
                 WsdbCode::Protocol
                 | WsdbCode::Unauthenticated
                 | WsdbCode::NotFound

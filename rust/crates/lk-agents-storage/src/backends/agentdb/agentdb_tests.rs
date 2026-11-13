@@ -46,6 +46,53 @@ async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
     pooled.conn.aclose().await;
 }
 
+/// agent-store answers `retry` when a write applied nothing and `outcome_unknown` when its durable
+/// flush failed after SQLite committed: the first is a retryable refusal, the second `Uncertain`.
+/// Before, both were unknown codes, so a write failed `Invalid` and was never retried.
+#[tokio::test]
+async fn retry_refuses_a_sent_write_and_outcome_unknown_leaves_it_uncertain() {
+    use connection::tests::{dial, hello_ok, reply, serve};
+    use connection::wire as pb;
+    fn answers(code: &str, message: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        match &message.message {
+            Some(pb::client_message::Message::Hello(_)) => vec![hello_ok()],
+            Some(pb::client_message::Message::Batch(_)) => {
+                vec![reply(pb::server_message::Message::Error(pb::Error {
+                    code: code.into(),
+                    message: code.into(),
+                }))]
+            }
+            _ => Vec::new(),
+        }
+    }
+    fn retry(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        answers("retry", m)
+    }
+    fn outcome_unknown(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        answers("outcome_unknown", m)
+    }
+    type Script = fn(&pb::ClientMessage) -> Vec<pb::ServerMessage>;
+    for (code, script) in [("retry", retry as Script), ("outcome_unknown", outcome_unknown)] {
+        let (url, _) = serve(script, false).await;
+        let conn = dial(&url, "DB_1").await.unwrap();
+        let pooled = Pooled {
+            conn,
+            schema: SchemaCell::default(),
+            pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
+            closed: AtomicBool::new(false),
+        };
+        let result = pooled.batch(vec![Statement::raw("UPDATE partitions SET version = 2")]).await;
+        match code {
+            "retry" => assert!(
+                matches!(result, Err(StorageError::Unavailable(ref e)) if e.contains("retry")),
+                "{result:?}"
+            ),
+            _ => assert!(matches!(result, Err(StorageError::Uncertain(_))), "{result:?}"),
+        }
+        pooled.conn.aclose().await;
+    }
+}
+
 /// A fake `wsdb` server that answers `Hello`, then closes the socket on the next request it
 /// reads, unanswered: the frame was written and read, the answer never comes.
 async fn closes_after_reading() -> String {
