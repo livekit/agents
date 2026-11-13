@@ -130,12 +130,13 @@ async def test_expressive_markup_becomes_speech_metadata(mock_genai_client_class
 
     assert _request_body(mock_stream)["contents"] == [
         {
+            "role": "user",
             "parts": [
                 {
                     "text": '"Sienna?"',
                     "speech_metadata": {"style": "Thoughtful, Quiet, American accent"},
                 }
-            ]
+            ],
         }
     ]
 
@@ -204,7 +205,10 @@ async def test_markers_reach_the_plugin_through_the_stream_adapter(
         await adapter.aclose()
 
     assert _request_body(mock_stream)["contents"] == [
-        {"parts": [{"text": '"Hey there."', "speech_metadata": {"style": "Warm, Welcoming"}}]}
+        {
+            "role": "user",
+            "parts": [{"text": '"Hey there."', "speech_metadata": {"style": "Warm, Welcoming"}}],
+        }
     ]
 
 
@@ -236,7 +240,10 @@ async def test_instructions_ride_the_style_not_the_spoken_text(mock_genai_client
         await stream.aclose()
 
     assert _request_body(mock_stream)["contents"] == [
-        {"parts": [{"text": '"Sienna?"', "speech_metadata": {"style": "Speak slowly, Wistful"}}]}
+        {
+            "role": "user",
+            "parts": [{"text": '"Sienna?"', "speech_metadata": {"style": "Speak slowly, Wistful"}}],
+        }
     ]
 
 
@@ -268,12 +275,13 @@ async def test_inline_events_stay_in_the_words(mock_genai_client_class) -> None:
 
     assert _request_body(mock_stream)["contents"] == [
         {
+            "role": "user",
             "parts": [
                 {
                     "text": '"Yeah, <chuckle> I get that a lot."',
                     "speech_metadata": {"style": "Easygoing, Warm"},
                 }
-            ]
+            ],
         }
     ]
 
@@ -359,7 +367,7 @@ async def test_every_multi_speaker_turn_names_its_speaker(mock_genai_client_clas
         await stream.aclose()
 
     assert _request_body(mock_stream)["contents"] == [
-        {"parts": [{"text": '"Sienna?"', "speech_metadata": {"speaker": "Sienna"}}]}
+        {"role": "user", "parts": [{"text": '"Sienna?"', "speech_metadata": {"speaker": "Sienna"}}]}
     ]
 
     speech = mock_stream.call_args.kwargs["config"].speech_config
@@ -393,12 +401,13 @@ async def test_speaker_and_style_travel_together(mock_genai_client_class) -> Non
 
     assert _request_body(mock_stream)["contents"] == [
         {
+            "role": "user",
             "parts": [
                 {
                     "text": '"Sienna?"',
                     "speech_metadata": {"style": "Wistful", "speaker": "Sienna"},
                 }
-            ]
+            ],
         }
     ]
 
@@ -430,11 +439,12 @@ async def test_each_styled_sentence_gets_its_own_part(mock_genai_client_class) -
 
     assert _request_body(mock_stream)["contents"] == [
         {
+            "role": "user",
             "parts": [
                 {"text": '"Hello."', "speech_metadata": {"style": "Warm"}},
                 # the inline event stays in the words it belongs to
                 {"text": '"<sigh> Goodbye."', "speech_metadata": {"style": "Sad"}},
-            ]
+            ],
         }
     ]
 
@@ -462,10 +472,11 @@ async def test_an_unstyled_span_does_not_sink_the_request(mock_genai_client_clas
 
     assert _request_body(mock_stream)["contents"] == [
         {
+            "role": "user",
             "parts": [
                 {"text": '"Hello."'},  # no direction of its own, and no metadata key
                 {"text": '"Goodbye."', "speech_metadata": {"style": "Sad"}},
-            ]
+            ],
         }
     ]
 
@@ -502,4 +513,4 @@ async def test_lowered_markup_travels_even_without_a_style(
         await stream.aclose()
 
     # no style to carry, so no speech_metadata -- but the lowered words still travel
-    assert _request_body(mock_stream)["contents"] == [{"parts": [{"text": spoken}]}]
+    assert _request_body(mock_stream)["contents"] == [{"role": "user", "parts": [{"text": spoken}]}]
