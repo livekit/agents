@@ -172,6 +172,9 @@ class LLM(
     def _core_failed(self, error: Exception, recoverable: bool) -> None:
         self._emit_error(error, recoverable)
 
+    def _core_retries_itself(self) -> bool:
+        return False
+
     async def _core_chat(
         self, req: _core.ChatRequest, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> LLMStream:

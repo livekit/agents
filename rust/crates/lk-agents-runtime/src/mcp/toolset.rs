@@ -9,6 +9,7 @@ use lk_agents_abi::llm::mcp::{
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::{Clock, timeout};
 use lk_agents_core::mcp::timeout_duration;
+use lk_agents_core::request::retrying;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
@@ -72,8 +73,12 @@ async fn list(
     }
 }
 
-/// List again at the session's backoff until the server answers or `stop` fires.
+/// List again at the session's backoff until the server answers or `stop` fires. The first failure
+/// was a warning; each further one is logged at info, since the agent already runs without the
+/// server's tools and the recovery repeats for as long as the server is down.
+#[allow(clippy::too_many_arguments, reason = "the recovery's owner, inputs and its host")]
 async fn recover(
+    subject: String,
     host: Arc<dyn McpToolsetHost>,
     session: Arc<McpSession>,
     clock: Arc<dyn Clock>,
@@ -82,8 +87,9 @@ async fn recover(
     context: CallContext,
     cx: telemetry::Cx,
 ) {
-    loop {
-        let at = clock.now().saturating_add(session.retry_delay());
+    let mut delay = session.retry_delay();
+    for attempt in 2_u32.. {
+        let at = clock.now().saturating_add(delay);
         tokio::select! {
             biased;
             () = stop.cancelled() => return,
@@ -100,7 +106,10 @@ async fn recover(
                 return;
             }
             Ok(false) => return,
-            Err(_) => {}
+            Err(error) => {
+                delay = session.retry_delay();
+                retrying(log::Level::Info, &subject, attempt, delay, &error);
+            }
         }
     }
 }
@@ -174,14 +183,12 @@ impl Port for McpToolsetLifecycle {
         match list(&*host, clock, &cx, &context, None).await {
             Ok(_) => self.state.lock().listed = true,
             Err(error) => {
-                log::warn!(
-                    target: lk_agents_abi::LOG_TARGET,
-                    "MCP server unavailable, continuing without its tools: {error}, mcp_server={}",
-                    self.server
-                );
+                let subject = format!("MCP server {} (continuing without its tools)", self.server);
+                retrying(log::Level::Warn, &subject, 1, self.session.retry_delay(), &error);
                 let stop = CancellationToken::new();
                 let (finished, done) = signal::once();
                 let recovery = recover(
+                    subject,
                     host,
                     self.session.clone(),
                     self.background.clock.clone(),

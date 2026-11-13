@@ -162,6 +162,11 @@ impl Stt for StreamAdapter {
         self.stt.push_conversation_item(role, text);
     }
 
+    /// Each utterance's recognition is retried on its own.
+    fn retries_itself(&self) -> bool {
+        true
+    }
+
     /// The options go to the wrapped STT's recognitions; the adapter's stream does not retry.
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         Some(Arc::new(self.configured(Some(*conn))))

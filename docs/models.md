@@ -52,7 +52,11 @@ with `InterruptionDetectionError`. A realtime model's `inference_class` is an
 `llm.RealtimeModelFallbackAdapter` try a list of models in order; each emits an
 `AvailabilityChangedEvent` (`llm.realtime.RealtimeAvailabilityChangedEvent` for the realtime
 adapter) when a model goes down or comes back. `tts.StreamAdapter` and
-`stt.StreamAdapter` give a non-streaming TTS or STT a streaming interface.
+`stt.StreamAdapter` give a non-streaming TTS or STT a streaming interface. An adapter retries on
+its own (a chain its members, a stream adapter each sentence or utterance), so a request over it
+runs once and hands it the whole `conn_options`. Each member attempt the chain moves past is a
+recoverable `error` event on that member; the attempt it gives up after is that member's
+non-recoverable one, and the adapter emits its own once.
 
 ### Sentences and pacing
 
@@ -272,7 +276,10 @@ enforces `conn_options` itself.
   reported as stalled and keeps running.
 - **Inside a session.** The session owns retries and fallback: it opens the
   stream again itself, so there `_run` runs exactly once per stream, still
-  under its deadlines.
+  under its deadlines. Exactly one layer retries a request, and each retry is
+  logged once as a warning
+  (`"<provider>: attempt N failed, retrying in Xs: <error>"`, keyed `lk.retry.subject`,
+  `lk.retry.attempt` and `lk.retry.delay`).
 
 In a plugin's own retry loop, `async with conn_options.total_deadline():`
 bounds the operation by `total_timeout`, and `conn_options.interval_for_retry(n)`

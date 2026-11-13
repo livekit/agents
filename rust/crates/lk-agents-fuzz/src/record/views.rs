@@ -1054,6 +1054,11 @@ impl<'a> InferenceView<'a> {
 
     /// What each realtime socket's server refused of the driver, or answered from the wrong
     /// state, by socket.
+    /// Each failed attempt the framework reported to a fake provider, and its `recoverable`.
+    pub fn provider_failed(&self) -> &'a [(Observed, Kind, bool)] {
+        &self.r.provider_failed
+    }
+
     pub fn realtime_breaches(&self) -> &'a [(Observed, u32, Breach)] {
         &self.r.breaches
     }

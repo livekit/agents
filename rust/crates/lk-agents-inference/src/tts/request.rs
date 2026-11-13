@@ -32,6 +32,7 @@ pub async fn synthesize(
     let open = synthesis(tts.clone(), cx, chunk, options);
     let (_, options) = attempts(&tts, options);
     Ok(retry::stream(
+        tts.label(),
         &options,
         clock,
         open,
@@ -112,28 +113,26 @@ pub fn start(
             Ok(Box::new(Fed::new(stage, sink, source)) as TtsSource)
         }) as BoxFuture<'static, _>
     });
+    let subject = tts.label();
     let report = report(tts, observer);
     // the request's failure, once it gave up, is what its input answers from then on
     let opening = async move {
         let stop = tokio_util::sync::CancellationToken::new();
-        let source = retry::stream(&options, clock, open, |_| true, report, stop).await;
+        let source = retry::stream(subject, &options, clock, open, |_| true, report, stop).await;
         Box::new(Gated::new(source, gate)) as TtsSource
     };
     Ok((Box::new(Sink(input)) as TextSink, Box::pin(opening)))
 }
 
-/// The provider each attempt runs on, and the request's own retry policy: a single attempt's view
-/// under the request's retries, or, for a TTS that retries itself, the whole policy handed to it
-/// and one attempt.
+/// The provider each attempt runs on, and the request's own retry policy ([`retry::owner`]).
 fn attempts(tts: &Arc<dyn Tts>, options: ApiConnectOptions) -> (Arc<dyn Tts>, ApiConnectOptions) {
-    let once = ApiConnectOptions { max_retry: 0, ..options };
-    let (given, request) = if tts.retries_itself() { (options, once) } else { (once, options) };
+    let (given, request) = retry::owner(tts.retries_itself(), options);
     (tts.with_conn_options(&given).unwrap_or_else(|| tts.clone()), request)
 }
 
 fn report(tts: Arc<dyn Tts>, observer: Option<retry::Observer>) -> retry::Observer {
     Arc::new(move |error, retry, attempt| {
-        tts.failed(error.clone(), matches!(retry, lk_agents_core::request::Retry::At(_)));
+        tts.failed(error.clone(), retry.is_some());
         if let Some(observer) = &observer {
             observer(error, retry, attempt);
         }

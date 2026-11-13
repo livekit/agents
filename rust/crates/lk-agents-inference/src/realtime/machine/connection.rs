@@ -150,7 +150,7 @@ impl RealtimeConnection {
                         .with_retryable(false),
                 }];
             }
-            let mut effects = vec![RealtimeConnectionEffect::Retry { error }];
+            let mut effects = vec![RealtimeConnectionEffect::Reconnect { error }];
             let mut policy = self.policy;
             policy.max_retry = policy.max_retry.saturating_sub(1);
             effects.extend(self.acquire(policy, now));
@@ -169,8 +169,8 @@ impl RealtimeConnection {
         self.translate(steps)
             .into_iter()
             .map(|effect| match effect {
-                RealtimeConnectionEffect::Retry { .. } => {
-                    RealtimeConnectionEffect::Retry { error: error.clone() }
+                RealtimeConnectionEffect::Retry { backoff, .. } => {
+                    RealtimeConnectionEffect::Retry { error: error.clone(), backoff }
                 }
                 RealtimeConnectionEffect::Failed { .. } => {
                     RealtimeConnectionEffect::Failed { error: error.clone() }
@@ -288,9 +288,10 @@ impl RealtimeConnection {
                         *socket = Socket::Waiting;
                     }
                 }
-                Step::Retry { error, .. } => {
-                    effects.push(RealtimeConnectionEffect::Retry { error })
-                }
+                Step::Retry(backoff) => effects.push(RealtimeConnectionEffect::Retry {
+                    error: backoff.error().clone(),
+                    backoff,
+                }),
                 Step::GiveUp(error) => {
                     let _socket = self.phase.close();
                     effects.push(RealtimeConnectionEffect::Failed { error });
@@ -332,7 +333,9 @@ mod tests {
         let effects = connection.tick(at(1000));
         assert!(effects.contains(&RealtimeConnectionEffect::Close { generation: 1 }));
         assert!(
-            effects.iter().any(|effect| matches!(effect, RealtimeConnectionEffect::Retry { error }
+            effects
+                .iter()
+                .any(|effect| matches!(effect, RealtimeConnectionEffect::Retry { error, .. }
             if error.kind == ApiErrorKind::Timeout && error.timeout == Some(Timeout::Connect)))
         );
         assert_eq!(connection.next_deadline(), Some(at(1100)));

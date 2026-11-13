@@ -114,6 +114,7 @@ impl GatewayLlm {
             cleanup_incomplete: false,
             now: self.clock.now(),
             host: self.events.clone(),
+            label: self.label.clone(),
         })
     }
 }
@@ -386,6 +387,8 @@ pub struct LlmChunks {
     now: Ts,
     /// The host object the client was built as, which hears each retried attempt fail.
     host: Option<Arc<dyn ProviderEvents>>,
+    /// What its retries are announced as.
+    label: String,
 }
 
 impl LlmChunks {
@@ -549,8 +552,9 @@ impl LlmChunks {
                         task.cancel();
                     }
                 }
-                Step::Retry { attempt, error } => {
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, attempt, error = error.message.as_str(); "LLM request attempt failed, retrying");
+                Step::Retry(backoff) => {
+                    let error = backoff.error().clone();
+                    let _ = backoff.announce(&self.label, &error);
                     if let Some(host) = &self.host {
                         host.failed(ProviderError::Local(error), true);
                     }

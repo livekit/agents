@@ -6,7 +6,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError, Timeout};
 use lk_agents_abi::resources::ResourceId;
 
-use lk_agents_core::request::{Policy, Request, Step};
+use lk_agents_core::request::{Policy, Request, Retry, Step};
 
 /// The `conn_options` fields the chain rewrites before handing a request to a child.
 /// Visible output always forbids replay. `max_retry` defaults per modality (LLM 0, STT 1, TTS 2); the hard 0s
@@ -259,7 +259,7 @@ impl ChainRequest {
             }
             (
                 ChainEvent::Failed { attempt, error, produced_output },
-                Phase::Active { attempt: active, mut attempts, id },
+                Phase::Active { attempt: active, mut attempts, .. },
             ) if active == attempt => {
                 let cancelled = error.api_kind() == Some(ApiErrorKind::Cancelled);
                 self.failures.push(error.clone());
@@ -267,15 +267,24 @@ impl ChainRequest {
                     self.phase = Phase::Finished;
                     return vec![FallbackChainEffect::Finished(Err(error.into_final()))];
                 }
-                let mut steps = Vec::new();
-                let api_error = error.attempt_error();
-                attempts.failed_error(id, api_error, now, &mut steps);
-                attempts.closed(id, now, &mut steps);
-                if let Some(at) = attempts.wake_at(None) {
+                let label = self.entries[self.cursor].2.clone();
+                if let Retry::At(backoff) = attempts.attempt_failed(error.attempt_error(), now) {
+                    let at = backoff.announce(&label, &error);
                     self.phase = Phase::Waiting(attempts);
                     return vec![FallbackChainEffect::WakeAt(at)];
                 }
                 self.cursor += 1;
+                if let Some((_, _, next)) = self.entries.get(self.cursor) {
+                    let subject = format!("{label}, falling back to {next}");
+                    let attempt = u32::try_from(self.failures.len()).unwrap_or(u32::MAX);
+                    lk_agents_core::request::retrying(
+                        log::Level::Warn,
+                        &subject,
+                        attempt,
+                        Duration::ZERO,
+                        &error,
+                    );
+                }
                 if self.cursor >= self.entries.len() {
                     self.phase = Phase::Finished;
                     let detail = self
@@ -325,8 +334,15 @@ impl ChainRequest {
     fn retry(&mut self, mut attempts: Request, now: Ts) -> Vec<FallbackChainEffect> {
         let mut steps = Vec::new();
         attempts.wake(now, None, &mut steps);
+        let label = self.entries.get(self.cursor).map(|(_, _, label)| label.clone());
         if let Some(id) = steps.into_iter().find_map(|step| match step {
             Step::Launch(id) => Some(id),
+            // no phase is timed here: a wake never fails an attempt
+            Step::Retry(backoff) => {
+                let error = backoff.error().clone();
+                let _ = backoff.announce(label.as_deref().unwrap_or_default(), &error);
+                None
+            }
             _ => None,
         }) {
             self.launch_effect(attempts, id)

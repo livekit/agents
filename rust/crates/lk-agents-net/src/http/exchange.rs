@@ -281,7 +281,12 @@ impl Exchange {
                 Step::Launch(attempt) => self.launch(attempt),
                 Step::Stop(attempt) => self.stop(attempt),
                 Step::GiveUp(error) => self.error = Some(error),
-                Step::Retry { .. } => {}
+                Step::Retry(backoff) => {
+                    // the URL without its query, which may carry credentials
+                    let subject = self.request.url.split('?').next().unwrap_or_default();
+                    let error = backoff.error().clone();
+                    let _ = backoff.announce(subject, &error);
+                }
                 Step::CleanupIncomplete(_) | Step::Unresolved => {
                     unreachable!("directly owned HTTP exchanges release synchronously")
                 }

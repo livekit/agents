@@ -6,15 +6,32 @@ use lk_agents_abi::{
 use lk_agents_core::request::{Policy, Request, Retry};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-pub type Observer = Arc<dyn Fn(&ProviderError, &Retry, u32) + Send + Sync>;
+/// Each failed attempt: the delay before its retry, `None` once the request gave up, and the
+/// retries consumed.
+pub type Observer = Arc<dyn Fn(&ProviderError, Option<Duration>, u32) + Send + Sync>;
 pub type Open<T> = Arc<
     dyn Fn() -> BoxFuture<'static, Result<Box<dyn ProviderStream<T>>, ProviderError>> + Send + Sync,
 >;
 
-/// No provider wrapper: the request returns this single stream across all its attempts.
+/// The one retry owner of a provider request. A provider that retries itself (a fallback chain,
+/// a stream adapter retrying each chunk) is handed the whole policy and the request runs once;
+/// any other is handed one attempt's view (`max_retry = 0`) and the request retries it. Returns
+/// the provider's options, then the request's.
+pub fn owner(
+    retries_itself: bool,
+    options: ApiConnectOptions,
+) -> (ApiConnectOptions, ApiConnectOptions) {
+    let once = ApiConnectOptions { max_retry: 0, ..options };
+    if retries_itself { (options, once) } else { (once, options) }
+}
+
+/// No provider wrapper: the request returns this single stream across all its attempts. Each
+/// retry is announced as `subject`'s.
 pub async fn stream<T: Send + 'static>(
+    subject: String,
     options: &ApiConnectOptions,
     clock: Arc<dyn Clock>,
     open: Open<T>,
@@ -47,6 +64,7 @@ pub async fn stream<T: Send + 'static>(
     let ledger = source.as_ref().and_then(|source| source.call_ledger());
     Box::new(Output {
         state: Some(State {
+            subject,
             request,
             clock,
             open,
@@ -67,6 +85,7 @@ pub async fn stream<T: Send + 'static>(
 }
 
 struct State<T> {
+    subject: String,
     request: Request,
     clock: Arc<dyn Clock>,
     open: Open<T>,
@@ -100,11 +119,7 @@ impl<T: Send + 'static> State<T> {
                 )
                 .with_retryable(false)
                 .into();
-                (self.observer)(
-                    &error,
-                    &Retry::GiveUp(error.attempt_error()),
-                    self.request.retries(),
-                );
+                (self.observer)(&error, None, self.request.retries());
                 Err(error)
             }
         }
@@ -153,22 +168,20 @@ impl<T: Send + 'static> State<T> {
                     .await;
             }
             let now = self.clock.now();
-            let decision = self.request.attempt_failed(error.attempt_error(), now);
-            (self.observer)(&error, &decision, self.request.retries());
-            match decision {
-                Retry::At(at) => {
+            match self.request.attempt_failed(error.attempt_error(), now) {
+                Retry::At(backoff) => {
+                    let at = backoff.announce(&self.subject, &error);
+                    let delay = at.saturating_duration_since(now);
+                    (self.observer)(&error, Some(delay), self.request.retries());
                     let hook = self.hook.lock().clone();
                     if let Some(hook) = hook {
-                        hook(
-                            error.clone(),
-                            self.request.retries(),
-                            at.saturating_duration_since(now),
-                        );
+                        hook(error.clone(), self.request.retries(), delay);
                     }
                     self.clock.wait_until(at).await;
                     self.request.wake(self.clock.now(), None, &mut Vec::new());
                 }
                 Retry::GiveUp(_) => {
+                    (self.observer)(&error, None, self.request.retries());
                     self.ended = true;
                     return Err(error);
                 }

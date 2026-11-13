@@ -15,7 +15,7 @@ pub mod wire;
 use crate::abi::{AudioFrame, StreamInput, StreamOutput, Stt, SttCapabilities};
 use crate::headers::{Headers, gateway_headers};
 use crate::telemetry;
-use lk_agents_core::request::{Policy, Request, Step};
+use lk_agents_core::request::{Policy, Request, Retry, Step};
 use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsSender, WsTransport, connect_error, join_url, open_ws, to_ws_url,
@@ -365,6 +365,8 @@ impl GatewayStt {
         self.shared.live.lock().push(Arc::downgrade(&control));
 
         let executor = SttStreamExecutor {
+            label: Stt::label(self),
+            events: self.events.clone(),
             ws: self.shared.ws.clone(),
             cx: cx.clone(),
             clock: self.shared.clock.clone(),
@@ -619,10 +621,8 @@ impl Stt for GatewayStt {
         let cx = cx.clone();
         Box::pin(async move {
             let offset = start_time_offset.unwrap_or(0.0);
-            let options = self.conn_options.unwrap_or_else(|| self.shared.opts.lock().conn_options);
-            let provider = self.configured(Some(ApiConnectOptions { max_retry: 0, ..options }));
             let language = language.as_ref().map(|l| l.as_str());
-            provider.stream_native(&cx, language, offset).map(|stream| {
+            self.stream_native(&cx, language, offset).map(|stream| {
                 let (sink, source) = stream.split();
                 sink.audio.observe(cx);
                 Some(lk_agents_abi::DuplexStream::new(

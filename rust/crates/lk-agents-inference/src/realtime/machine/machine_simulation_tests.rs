@@ -332,7 +332,8 @@ impl Sim {
                 let opens_at = self.now.saturating_add(self.setup.connect);
                 self.link = Link::Connecting { generation, started: self.now, opens_at };
             }
-            RealtimeConnectionEffect::Retry { error } => self.emit_error(error, true),
+            RealtimeConnectionEffect::Retry { error, .. }
+            | RealtimeConnectionEffect::Reconnect { error } => self.emit_error(error, true),
             RealtimeConnectionEffect::Failed { error } => {
                 self.emit_error(error, false);
                 self.end(true);

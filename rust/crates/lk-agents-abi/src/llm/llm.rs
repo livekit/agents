@@ -275,6 +275,13 @@ pub trait Llm: Send + Sync {
     #[host(notify, name = "_core_prewarm")]
     fn prewarm(&self, _cx: &crate::telemetry::Cx) {}
 
+    // Whether it retries its own attempts within the connection policy it is given (a fallback
+    // chain its members). See [`Tts::retries_itself`](crate::Tts::retries_itself).
+    #[host(read_once, name = "_core_retries_itself")]
+    fn retries_itself(&self) -> bool {
+        false
+    }
+
     // A view of this provider whose calls carry `conn` (a host plugin's `conn_options`: the
     // request's own are the chain's). See [`Stt::with_conn_options`](crate::Stt::with_conn_options).
     #[host(bind)]

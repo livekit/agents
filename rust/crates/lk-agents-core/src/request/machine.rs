@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use super::{AttemptFailure, Policy, Retry, Step};
+use super::{AttemptFailure, Backoff, Policy, Retry, Step};
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, Timeout};
 use lk_agents_abi::{ApiConnectOptions, HOST_TEARDOWN_TIMEOUT, Ts};
 
@@ -99,7 +99,11 @@ impl Request {
         self.closed(attempt, now, &mut steps);
         for step in steps {
             match step {
-                Step::Retry { .. } => return Retry::At(self.wake_at(None).expect("retry wake")),
+                // the total deadline may come first: its wake ends the request
+                Step::Retry(backoff) => {
+                    let at = self.wake_at(None).expect("retry wake");
+                    return Retry::At(Backoff { at, ..backoff });
+                }
                 Step::GiveUp(error) => return Retry::GiveUp(error),
                 _ => {}
             }
@@ -396,8 +400,9 @@ impl Request {
         if let Some(delay) = self.policy.retry_delay(self.failures, retryable) {
             let delay = delay.max(at_least);
             self.failures += 1;
-            self.phase = Phase::Waiting { attempt: attempt + 1, at: now.saturating_add(delay) };
-            steps.push(Step::Retry { attempt, error });
+            let at = now.saturating_add(delay);
+            self.phase = Phase::Waiting { attempt: attempt + 1, at };
+            steps.push(Step::Retry(Backoff { attempt, at, delay, error }));
         } else {
             self.phase = Phase::Settled;
             steps.push(Step::GiveUp(error.with_retryable(retryable)));

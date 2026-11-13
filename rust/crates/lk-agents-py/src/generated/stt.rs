@@ -860,6 +860,7 @@ pub struct SttProxy {
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::SttCapabilities,
     id: ::lk_agents_abi::ProviderId,
+    retries_itself: bool,
     conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
     /// Appended to every awaited call once bound.
     conn: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
@@ -926,6 +927,10 @@ impl SttProxy {
             let v = crate::py_calls::read(obj, "_core_id")?;
             crate::generated::records::types::provider_id_from_py(v.as_any())?
         };
+        let retries_itself = {
+            let v = crate::py_calls::read(obj, "_core_retries_itself")?;
+            v.extract::<bool>()?
+        };
         let conn_options = {
             let v = crate::py_calls::read(obj, "_core_conn_options")?;
             if v.is_none() {
@@ -943,6 +948,7 @@ impl SttProxy {
             label,
             capabilities,
             id,
+            retries_itself,
             conn_options,
             conn: None,
         })
@@ -1062,6 +1068,10 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 ))
             }),
         );
+    }
+
+    fn retries_itself(&self) -> bool {
+        ::std::clone::Clone::clone(&self.retries_itself)
     }
 
     fn with_conn_options(

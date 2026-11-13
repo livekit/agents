@@ -16,12 +16,39 @@ use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, HOST_TEARDOWN_TIMEOUT,
 use lk_agents_core::request::{Policy, Request, Retry, Step};
 use lk_agents_media::media_queue::{AudioReceiver, Item};
 
+/// Who hears a recognition's failures: each attempt it retries is a recoverable `error` event of
+/// its provider; its give-up is the provider's one non-recoverable event, unless a fallback chain
+/// opened it, which retries or falls back past it and reports the member's failure itself.
+#[derive(Clone, Copy)]
+pub(crate) enum GiveUp {
+    Reported,
+    ByChain,
+}
+
+#[derive(Clone, Copy)]
+struct Report<'a> {
+    stt: &'a dyn Stt,
+    give_up: GiveUp,
+}
+
+impl Report<'_> {
+    fn retrying(&self, error: ProviderError) {
+        self.stt.failed(error, true);
+    }
+
+    fn gave_up(&self, error: ProviderError) {
+        if let GiveUp::Reported = self.give_up {
+            self.stt.failed(error, false);
+        }
+    }
+}
+
 /// Connect/write/read are observed by the underlying provider. This owner authorizes retries
 /// and the one acceptance deadline across every reopened stream.
 fn attempts(
     options: &ApiConnectOptions,
     now: Ts,
-    report: &dyn Stt,
+    report: Report<'_>,
 ) -> Result<Request, ProviderError> {
     options.validate().map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
     let mut policy = Policy::from_options(options);
@@ -33,7 +60,7 @@ fn attempts(
     for step in steps {
         if let Step::GiveUp(error) = step {
             let error = ProviderError::from(error);
-            report.failed(error.clone(), false);
+            report.gave_up(error.clone());
             return Err(error);
         }
     }
@@ -46,7 +73,7 @@ struct Failure<'a> {
     attempts: &'a mut Request,
     now: Ts,
     error: ProviderError,
-    report: &'a dyn Stt,
+    report: Report<'a>,
     label: &'a str,
     options: &'a ApiConnectOptions,
 }
@@ -57,17 +84,15 @@ impl Failure<'_> {
         let Failure { kind, attempts, now, error, report, label, options } = self;
         let retries = attempts.retries();
         let adapted = error.attempt_error();
-        if let Retry::At(at) = attempts.attempt_failed(adapted.clone(), now) {
-            let delay = at.saturating_duration_since(now);
-            report.failed(error.clone(), true);
+        if let Retry::At(backoff) = attempts.attempt_failed(adapted.clone(), now) {
+            let delay = backoff.announce(label, &error).saturating_duration_since(now);
+            report.retrying(error.clone());
             if let Some(hook) = hook {
                 hook(error.clone(), retries + 1, delay);
             }
-            log::warn!(target: lk_agents_abi::LOG_TARGET, stt = label, streamed = kind == RequestKind::SttStream;
-                "failed to recognize speech: {error}, retrying in {}s", delay.as_secs_f64());
             Ok(())
         } else {
-            report.failed(error.clone(), false);
+            report.gave_up(error.clone());
             if let RetryDecision::Exhausted(message) = lk_agents_core::request::terminal_failure(
                 kind,
                 &adapted,
@@ -87,13 +112,13 @@ impl Failure<'_> {
 }
 
 /// Observe supplied time before executing any provider work, including ready futures.
-fn wake_attempts(attempts: &mut Request, now: Ts, report: &dyn Stt) -> Result<(), ProviderError> {
+fn wake_attempts(attempts: &mut Request, now: Ts, report: Report<'_>) -> Result<(), ProviderError> {
     let mut steps = Vec::new();
     attempts.wake(now, None, &mut steps);
     for step in steps {
         if let Step::GiveUp(error) = step {
             let error = ProviderError::from(error);
-            report.failed(error.clone(), false);
+            report.gave_up(error.clone());
             return Err(error);
         }
     }
@@ -101,7 +126,7 @@ fn wake_attempts(attempts: &mut Request, now: Ts, report: &dyn Stt) -> Result<()
 }
 
 /// The runtime's deadline wait completed: the core produces the terminal failure.
-fn total_expired(attempts: &mut Request, now: Ts, report: &dyn Stt) -> ProviderError {
+fn total_expired(attempts: &mut Request, now: Ts, report: Report<'_>) -> ProviderError {
     wake_attempts(attempts, now, report).expect_err("the operation deadline elapsed")
 }
 
@@ -109,7 +134,7 @@ fn total_expired(attempts: &mut Request, now: Ts, report: &dyn Stt) -> ProviderE
 async fn wait_for_retry(
     attempts: &mut Request,
     clock: &dyn Clock,
-    report: &dyn Stt,
+    report: Report<'_>,
 ) -> Result<(), ProviderError> {
     loop {
         let at = attempts.wake_at(None).expect("retry has a wake");
@@ -121,6 +146,16 @@ async fn wait_for_retry(
     }
 }
 
+/// The provider each attempt runs on, and the recognition's own retry policy
+/// ([`crate::retry::owner`]).
+fn attempt_view(
+    stt: Arc<dyn Stt>,
+    options: ApiConnectOptions,
+) -> (Arc<dyn Stt>, ApiConnectOptions) {
+    let (given, request) = crate::retry::owner(stt.retries_itself(), options);
+    (stt.with_conn_options(&given).unwrap_or(stt), request)
+}
+
 /// Retried within `total_timeout`, which spans every attempt and wait.
 pub async fn recognize(
     stt: Arc<dyn Stt>,
@@ -130,18 +165,31 @@ pub async fn recognize(
     buffer: &[AudioFrame],
     language: Option<&LanguageCode>,
 ) -> Result<SpeechEvent, ProviderError> {
-    let stt = stt.with_conn_options(&options).unwrap_or(stt);
-    let mut attempts = attempts(&options, clock.now(), &*stt)?;
+    recognize_reported(stt, options, clock, cx, buffer, language, GiveUp::Reported).await
+}
+
+pub(crate) async fn recognize_reported(
+    stt: Arc<dyn Stt>,
+    options: ApiConnectOptions,
+    clock: Arc<dyn Clock>,
+    cx: &telemetry::Cx,
+    buffer: &[AudioFrame],
+    language: Option<&LanguageCode>,
+    give_up: GiveUp,
+) -> Result<SpeechEvent, ProviderError> {
+    let (stt, options) = attempt_view(stt, options);
+    let report = Report { stt: &*stt, give_up };
+    let mut attempts = attempts(&options, clock.now(), report)?;
     let deadline = attempts.wake_at(None);
     match before(
         &*clock,
         deadline,
-        recognize_attempts(&*stt, &options, &*clock, cx, buffer, language, &mut attempts),
+        recognize_attempts(report, &options, &*clock, cx, buffer, language, &mut attempts),
     )
     .await
     {
         Ok(result) => result,
-        Err(_) => Err(total_expired(&mut attempts, clock.now(), &*stt)),
+        Err(_) => Err(total_expired(&mut attempts, clock.now(), report)),
     }
 }
 
@@ -153,11 +201,24 @@ pub async fn stream(
     language: Option<&LanguageCode>,
     start_time_offset: Option<f64>,
 ) -> Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError> {
-    let stt = stt.with_conn_options(&options).unwrap_or(stt);
+    stream_reported(stt, options, clock, cx, language, start_time_offset, GiveUp::Reported).await
+}
+
+pub(crate) async fn stream_reported(
+    stt: Arc<dyn Stt>,
+    options: ApiConnectOptions,
+    clock: Arc<dyn Clock>,
+    cx: &telemetry::Cx,
+    language: Option<&LanguageCode>,
+    start_time_offset: Option<f64>,
+    give_up: GiveUp,
+) -> Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError> {
+    let (stt, options) = attempt_view(stt, options);
+    let report = Report { stt: &*stt, give_up };
     let accepted = clock.now();
-    let mut attempts = attempts(&options, accepted, &*stt)?;
+    let mut attempts = attempts(&options, accepted, report)?;
     let deadline = attempts.wake_at(None);
-    wake_attempts(&mut attempts, clock.now(), &*stt)?;
+    wake_attempts(&mut attempts, clock.now(), report)?;
     let offset = start_time_offset.unwrap_or(0.0);
     let gate = lk_agents_net::source::InputGate::default();
     let (input, audio) = AudioInput::new(clock.clone(), gate.clone());
@@ -165,7 +226,7 @@ pub async fn stream(
     let mut pump = Pump { audio, sink: None, sending: None, ended: false, gaps: Gaps::default() };
     let opened = before(&*clock, deadline, stt.stream(cx, language, Some(offset))).await;
     let (current, failed) = match opened {
-        Err(_) => return Err(total_expired(&mut attempts, clock.now(), &*stt)),
+        Err(_) => return Err(total_expired(&mut attempts, clock.now(), report)),
         Ok(Ok(None)) => return Ok(None),
         Ok(Ok(Some(stream))) => {
             let (sink, source) = stream.split();
@@ -190,6 +251,7 @@ pub async fn stream(
         offset,
         deadline,
         hook: None,
+        give_up,
     };
     // once the recognition gave up, its failure is what the input answers
     Ok(Some(lk_agents_abi::DuplexStream::new(
@@ -199,7 +261,7 @@ pub async fn stream(
 }
 
 async fn recognize_attempts(
-    stt: &dyn Stt,
+    report: Report<'_>,
     options: &ApiConnectOptions,
     clock: &dyn Clock,
     cx: &telemetry::Cx,
@@ -207,9 +269,9 @@ async fn recognize_attempts(
     language: Option<&LanguageCode>,
     attempts: &mut Request,
 ) -> Result<SpeechEvent, ProviderError> {
-    let label = stt.label();
+    let (stt, label) = (report.stt, report.stt.label());
     loop {
-        wake_attempts(attempts, clock.now(), stt)?;
+        wake_attempts(attempts, clock.now(), report)?;
         let error = match stt.recognize(cx, buffer, language).await {
             Ok(event) => return Ok(event),
             Err(error) => error,
@@ -219,12 +281,12 @@ async fn recognize_attempts(
             attempts,
             now: clock.now(),
             error,
-            report: stt,
+            report,
             label: &label,
             options,
         };
         failure.decide(None)?;
-        wait_for_retry(attempts, clock, stt).await?;
+        wait_for_retry(attempts, clock, report).await?;
     }
 }
 
@@ -337,6 +399,7 @@ struct RetrySource {
     /// `total_timeout` from the stream's opening: no reconnect or pull extends it.
     deadline: Option<Ts>,
     hook: Option<RetryReport>,
+    give_up: GiveUp,
 }
 
 impl RetrySource {
@@ -351,7 +414,8 @@ impl RetrySource {
 
     async fn next_attempted(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
         loop {
-            wake_attempts(&mut self.attempts, self.clock.now(), &*self.stt)?;
+            let report = Report { stt: &*self.stt, give_up: self.give_up };
+            wake_attempts(&mut self.attempts, self.clock.now(), report)?;
             match self.read_current().await {
                 Ok(event) => return Ok(event),
                 Err(error) => {
@@ -422,12 +486,13 @@ impl RetrySource {
             attempts: &mut self.attempts,
             now: self.clock.now(),
             error,
-            report: &*self.stt,
+            report: Report { stt: &*self.stt, give_up: self.give_up },
             label: &self.label,
             options: &self.options,
         };
         failure.decide(self.hook.as_ref())?;
-        wait_for_retry(&mut self.attempts, &*self.clock, &*self.stt).await?;
+        let report = Report { stt: &*self.stt, give_up: self.give_up };
+        wait_for_retry(&mut self.attempts, &*self.clock, report).await?;
         let now = self.clock.now();
         self.offset += now.saturating_duration_since(self.began).as_secs_f64();
         self.began = now;
@@ -452,7 +517,8 @@ impl StreamOutput<SpeechEvent> for RetrySource {
                 Ok(next) => next,
                 Err(_) => {
                     self.close_current().await;
-                    Err(total_expired(&mut self.attempts, self.clock.now(), &*self.stt))
+                    let report = Report { stt: &*self.stt, give_up: self.give_up };
+                    Err(total_expired(&mut self.attempts, self.clock.now(), report))
                 }
             }
         })

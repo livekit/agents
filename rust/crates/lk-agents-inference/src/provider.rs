@@ -14,7 +14,7 @@ use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
 use lk_agents_abi::types::provider::{AttemptHost, ProviderAttempts as Port, ResponseObservation};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts};
-use lk_agents_core::request::{Policy, Request, Retry, Step, terminal_failure};
+use lk_agents_core::request::{Backoff, Policy, Request, Retry, Step, terminal_failure};
 
 /// The decisions of one request's attempts, on supplied time.
 #[derive(Debug)]
@@ -22,7 +22,9 @@ pub struct AttemptMachine {
     kind: RequestKind,
     options: ApiConnectOptions,
     attempt_started: Ts,
-    interrupted: Option<ApiError>,
+    /// A phase deadline stopped the attempt; the retry it was decided for runs unless the
+    /// failure that follows is not replayable.
+    interrupted: Option<Backoff>,
     attempts: Request,
     permit: bool,
     expecting: Option<Ts>,
@@ -92,11 +94,12 @@ impl AttemptMachine {
         if let Some(error) = &self.error {
             return Err(error.clone());
         }
-        if self.interrupted.take().is_some() {
+        if let Some(backoff) = self.interrupted.take() {
             // A read deadline the machine retries replays the request: not after delivered output.
             if produced_output && self.kind != RequestKind::SttStream {
                 return Ok(RetryDecision::Raise);
             }
+            let _ = backoff.announce(self.kind.as_str(), &error);
             return Ok(RetryDecision::Retry(self.retry_delay(now)));
         }
         let error = error.attempt_error();
@@ -114,8 +117,9 @@ impl AttemptMachine {
         if produced_output && self.kind != RequestKind::SttStream {
             self.attempts.delivered();
         }
-        match self.attempts.attempt_failed(error, now) {
-            Retry::At(at) => {
+        match self.attempts.attempt_failed(error.clone(), now) {
+            Retry::At(backoff) => {
+                let at = backoff.announce(self.kind.as_str(), &error);
                 Ok(RetryDecision::Retry(at.saturating_duration_since(now).as_secs_f64()))
             }
             Retry::GiveUp(error) if error.kind == ApiErrorKind::Cancelled => {
@@ -231,7 +235,7 @@ impl AttemptMachine {
 
     fn poll(&mut self, now: Ts) -> Result<(), ApiError> {
         self.poll_machine(now);
-        match self.error.as_ref().or(self.interrupted.as_ref()) {
+        match self.error.as_ref().or(self.interrupted.as_ref().map(Backoff::error)) {
             Some(error) => Err(error.clone()),
             None => Ok(()),
         }
@@ -248,18 +252,21 @@ impl AttemptMachine {
                 }
                 // The provider consumed the whole input and never answered: a reconnect has
                 // nothing left to send, so the transcript is lost rather than retried.
-                Step::Retry { error, .. }
+                Step::Retry(backoff)
                     if stopped
-                        && error.kind == ApiErrorKind::Timeout
+                        && backoff.error().kind == ApiErrorKind::Timeout
                         && self.input_ended
                         && self.kind == RequestKind::SttStream =>
                 {
                     self.permit = false;
                     self.attempts.cancel(now, &mut Vec::new());
-                    self.error = Some(error.with_retryable(false));
+                    self.error = Some(backoff.abandon().with_retryable(false));
                 }
-                Step::Retry { error, .. } if stopped && error.kind == ApiErrorKind::Timeout => {
-                    self.interrupted = Some(error);
+                // announced by `failure`, once the attempt's own outcome shows it replayable
+                Step::Retry(backoff)
+                    if stopped && backoff.error().kind == ApiErrorKind::Timeout =>
+                {
+                    self.interrupted = Some(backoff);
                 }
                 Step::GiveUp(error) => {
                     self.permit = false;
@@ -283,7 +290,6 @@ impl AttemptMachine {
 pub struct ProviderAttempts {
     host: Arc<dyn AttemptHost>,
     context: CallContext,
-    kind: RequestKind,
     /// The running attempt is a task of the process: it outlives a dropped `run`.
     env: ProcessEnv,
     epoch: Ts,
@@ -318,7 +324,6 @@ impl Port for ProviderAttempts {
         Ok(Self {
             host,
             context,
-            kind,
             epoch: env.clock.now(),
             env: env.clone(),
             state: Mutex::new(State { machine, core: false, inflight: None, exhausted: false }),
@@ -464,12 +469,7 @@ impl ProviderAttempts {
                     self.state.lock().exhausted = true;
                     return Err(terminal.into());
                 }
-                RetryDecision::Retry(delay) => {
-                    log::warn!(
-                        target: lk_agents_abi::LOG_TARGET,
-                        "{} attempt failed: {error}, retrying in {delay}s",
-                        self.kind.as_str()
-                    );
+                RetryDecision::Retry(_) => {
                     self.host.retrying(error);
                     retrying = true;
                 }

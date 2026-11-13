@@ -202,6 +202,10 @@ impl Tts for FakeTts {
         "fake::tts".into()
     }
 
+    fn failed(&self, _error: ProviderError, recoverable: bool) {
+        self.registry.record_failed(Kind::Tts, recoverable);
+    }
+
     fn capabilities(&self) -> TtsCapabilities {
         TtsCapabilities {
             streaming: self.streaming,

@@ -329,6 +329,9 @@ class STT(
     def _core_failed(self, error: Exception, recoverable: bool) -> None:
         self._emit_error(error, recoverable)
 
+    def _core_retries_itself(self) -> bool:
+        return False
+
     def _core_conn_options(self) -> APIConnectOptions | None:
         return None
 

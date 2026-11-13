@@ -42,6 +42,10 @@ impl Llm for FakeLlm {
         "fake::llm".into()
     }
 
+    fn failed(&self, _error: ProviderError, recoverable: bool) {
+        self.registry.record_failed(Kind::Chat, recoverable);
+    }
+
     fn chat<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,

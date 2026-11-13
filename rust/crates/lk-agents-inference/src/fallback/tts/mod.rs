@@ -219,6 +219,10 @@ impl Backend for TtsBackend {
         self.label.clone()
     }
 
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.inner.failed(error, recoverable);
+    }
+
     async fn open(
         &self,
         req: &Self::Req,

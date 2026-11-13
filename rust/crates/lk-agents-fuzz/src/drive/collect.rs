@@ -213,6 +213,9 @@ impl Run {
                 Record::CancelRefused { at, call_id } => {
                     self.record.record_cancel_refused(at, call_id);
                 }
+                Record::ProviderFailed { at, kind, recoverable } => {
+                    self.record.record_provider_failed(at, kind, recoverable);
+                }
                 Record::Breach { at, socket, breach } => {
                     self.record.record_breach(at, socket, breach);
                 }

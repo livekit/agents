@@ -16,6 +16,9 @@ __all__ += _public.__all__
 class FallbackAdapter(_facades.FallbackAdapter):
     """Several STT behind one: a failed one is skipped until it recovers."""
 
+    def _core_retries_itself(self) -> bool:
+        return True
+
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         for stt in self._members:
             stt._update_session_keyterms(keyterms)
@@ -43,6 +46,9 @@ class FallbackAdapter(_facades.FallbackAdapter):
 class StreamAdapter(_facades.StreamAdapter):
     """A recognize-only STT as a streaming one: the VAD cuts the audio into utterances, each
     recognized on its own."""
+
+    def _core_retries_itself(self) -> bool:
+        return True
 
     @property
     def model(self) -> str:

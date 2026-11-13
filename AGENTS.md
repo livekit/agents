@@ -398,6 +398,15 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 - A re-sent write that finds itself already applied reports success. [review]
 - `Uncertain` reaches the caller only when retries ran out and the outcome is still unknown. [review]
 - Local pressure is never a non-retryable error. [review]
+- One layer retries a provider request: `retry::owner` hands a provider that retries itself (a
+  fallback chain, a stream adapter) the whole policy and runs once, any other one attempt's view
+  (`max_retry = 0`). [review]
+- A request's decided retry (`Step::Retry`, `Retry::At`) is applied only through
+  `Backoff::announce`, its one warning keyed `lk.retry.*`, or abandoned or handed on in its arm;
+  no `_` arm or `matches!` swallows one. A loop no request drives logs through
+  `types::retry::retrying`. [check]
+- Each retried attempt is one recoverable `error` event on the provider that failed; a give-up is
+  one non-recoverable event per provider: the chain member it gave up after, and the adapter. [review]
 - After a provider fails, every input call on its stream returns that failure; "input is
   closed" is only for a stream that ended or was closed, and lives only in `InputState`. [check]
 

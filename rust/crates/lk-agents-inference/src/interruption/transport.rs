@@ -379,6 +379,9 @@ async fn join_task(
     }
 }
 
+/// What the stream's retries are announced as.
+const SUBJECT: &str = "interruption detection";
+
 /// `_main_task` (`inference/interruption.py:462`): the retry ladder around [`run`].
 async fn main_task(ctx: StreamContext, input_rx: InputRx) -> Result<(), ApiError> {
     let result = main_task_inner(&ctx, input_rx).await;
@@ -395,7 +398,8 @@ async fn main_task_inner(ctx: &StreamContext, mut input_rx: InputRx) -> Result<(
             Ok(()) => return Ok(()),
             Err(e) => e,
         };
-        if let Retry::At(resume) = request.attempt_failed(err.error.clone(), ctx.clock.now()) {
+        if let Retry::At(backoff) = request.attempt_failed(err.error.clone(), ctx.clock.now()) {
+            let resume = backoff.announce(SUBJECT, &err.error);
             ctx.emit_error(err.request, err.error, true);
             if let Err(error) = while_input_open(ctx, ctx.clock.wait_until(resume)).await {
                 ctx.emit_error(error.request, error.error.clone(), false);

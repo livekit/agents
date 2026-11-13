@@ -35,3 +35,25 @@ pub enum RetryDecision {
     #[host(field = "delay")]
     Retry(f64),
 }
+
+/// The one log of a retry: `attempt` (from 1) of `subject` failed with `error`, and the next runs
+/// in `delay`. A request's retry is announced through `lk_agents_core::request::Backoff`, as a
+/// warning; a loop no request drives (a background renewal, a reconnecting session) calls this
+/// directly and says why its level differs.
+pub fn retrying(
+    level: log::Level,
+    subject: &str,
+    attempt: u32,
+    delay: std::time::Duration,
+    error: &dyn std::fmt::Display,
+) {
+    log::log!(
+        target: crate::LOG_TARGET,
+        level,
+        (crate::telemetry::spans::common::log_keys::RETRY_SUBJECT) = subject,
+        (crate::telemetry::spans::common::log_keys::RETRY_ATTEMPT) = attempt,
+        (crate::telemetry::spans::common::log_keys::RETRY_DELAY) = delay.as_secs_f64();
+        "{subject}: attempt {attempt} failed, retrying in {:.2}s: {error}",
+        delay.as_secs_f64()
+    );
+}

@@ -90,6 +90,10 @@ impl Backend for LlmBackend {
         self.inner.label()
     }
 
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.inner.failed(error, recoverable);
+    }
+
     async fn open(
         &self,
         req: &Self::Req,
@@ -260,6 +264,16 @@ impl StreamOutput<LlmChunk> for FallbackLlmChunks {
 impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for FallbackLlmChunks {}
 
 impl Llm for FallbackLlm {
+    /// The chain retries and falls back on its own.
+    fn retries_itself(&self) -> bool {
+        true
+    }
+
+    /// The adapter's `error` event.
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.chain.report(error, recoverable);
+    }
+
     fn label(&self) -> String {
         self.label.clone()
     }

@@ -98,14 +98,14 @@ pub fn last_call(future: &[TokenTree]) -> Option<String> {
         .and_then(|at| ident(future.get(at - 1)))
 }
 
-fn single_eq(level: &[TokenTree], at: usize) -> bool {
+pub fn single_eq(level: &[TokenTree], at: usize) -> bool {
     let after_joint =
         at > 0 && matches!(&level[at - 1], TokenTree::Punct(p) if p.spacing() == Spacing::Joint);
     matches!(&level[at], TokenTree::Punct(p) if p.as_char() == '=' && p.spacing() == Spacing::Alone)
         && !after_joint
 }
 
-fn fat_arrow(level: &[TokenTree], at: usize) -> bool {
+pub fn fat_arrow(level: &[TokenTree], at: usize) -> bool {
     matches!(&level[at], TokenTree::Punct(p) if p.as_char() == '=' && p.spacing() == Spacing::Joint)
         && punct(level.get(at + 1), '>')
 }

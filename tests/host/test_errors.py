@@ -42,6 +42,7 @@ from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.ipc import JobLauncher, JobRunnerOptions
 from livekit.agents.llm import Toolset
 from livekit.agents.storage import StorageUnavailable
+from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.agents.voice.events import ErrorEvent
 from livekit.agents.voice.io import AudioOutputError
 from tests.fakes import (
@@ -857,3 +858,81 @@ async def test_an_llm_node_over_the_default_runs_the_native_llm(rejecting_gatewa
 
     assert errors
     assert all(isinstance(e.error, APIStatusError) and e.error.status_code == 401 for e in errors)
+
+
+# -- one retry owner per request, each failure reported once
+
+
+async def test_a_native_stt_in_a_session_connects_once_per_attempt_and_reports_each_once() -> None:
+    """The session owns the gateway STT's retries: it connects once per attempt of the session's
+    policy (never the session's retries times the gateway's own), each retried attempt is one
+    recoverable ``error`` and the give-up one final one."""
+    requests = 0
+
+    async def refuse(request: web.Request) -> web.Response:
+        nonlocal requests
+        requests += 1
+        return web.json_response({"error": "busy"}, status=429)
+
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", refuse)
+    async with TestServer(app) as server:
+        model = inference.STT(
+            "deepgram/nova-3",
+            base_url=str(server.make_url("/v1")),
+            api_key="key",
+            api_secret="secret",
+        )
+        events: list[stt.STTError] = []
+        model.on("error", events.append)
+        microphone = FakeAudioInput()
+        conn = SessionConnectOptions(
+            stt_conn_options=APIConnectOptions(max_retry=2, retry_interval=0)
+        )
+        async with VoiceSession(stt=model, llm=FakeLLM(["Hi!"]), conn_options=conn) as session:
+            session.input.audio = microphone
+            await session.start(Agent(instructions="Help."))
+            microphone.speak(0.5)
+            await until(lambda: any(not e.recoverable for e in events), "no final STT error")
+            assert requests == 3
+        await model.aclose()
+
+    assert [e.recoverable for e in events] == [True, True, False]
+
+
+async def test_an_stt_fallback_runs_once_and_each_provider_reports_one_final_error() -> None:
+    """``recognize()`` over a fallback runs the chain once: each member's attempt the chain moves
+    past is a recoverable ``error`` on that member, the attempt it gives up after a final one, and
+    the adapter reports the give-up once."""
+    down = APIError("the provider is down", retryable=True)
+    members = [FakeSTT([down] * 8), FakeSTT([down] * 8)]
+    reports: list[list[bool]] = [[], [], []]
+    fallback = stt.FallbackAdapter(members, max_retry_per_stt=1, retry_interval=0)
+    for provider, seen in zip([*members, fallback], reports, strict=True):
+        provider.on("error", lambda event, seen=seen: seen.append(event.recoverable))
+
+    with pytest.raises(APIConnectionError, match="all backends failed"):
+        await fallback.recognize(
+            [audio_frame(0.2)], conn_options=APIConnectOptions(max_retry=3, retry_interval=0)
+        )
+    await fallback.aclose()
+
+    assert reports == [[True, True], [True, False], [False]]
+
+
+async def test_an_llm_fallback_runs_once_and_each_provider_reports_one_final_error() -> None:
+    """A run over an LLM fallback runs the chain once: each member's attempt the chain moves past
+    is a recoverable ``error`` on that member, the attempt it gives up after a final one, and the
+    adapter reports the give-up once."""
+    down = APIError("the provider is down", retryable=True)
+    members = [FakeLLM([down] * 8), FakeLLM([down] * 8)]
+    reports: list[list[bool]] = [[], [], []]
+    fallback = llm.FallbackAdapter(members, max_retry_per_llm=1, retry_interval=0)
+    for provider, seen in zip([*members, fallback], reports, strict=True):
+        provider.on("error", lambda event, seen=seen: seen.append(event.recoverable))
+
+    with pytest.raises(APIConnectionError, match="all backends failed"):
+        await Agent(instructions="Help.", llm=fallback).run("hello")
+    await fallback.aclose()
+
+    assert reports == [[True, True], [True, False], [False]]

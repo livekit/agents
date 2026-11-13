@@ -196,6 +196,12 @@ pub enum Record {
         at: Observed,
         call_id: String,
     },
+    /// The framework reported a failed attempt of a request to a fake provider (`failed`).
+    ProviderFailed {
+        at: Observed,
+        kind: Kind,
+        recoverable: bool,
+    },
     /// What the n-th realtime socket's server refused, or answered from the wrong state.
     Breach {
         at: Observed,
@@ -633,6 +639,11 @@ impl Registry {
     fn record_delivered(&self, slot: Slot) {
         let at = self.stamps.next();
         self.write(Record::Delivered { at, slot });
+    }
+
+    pub(super) fn record_failed(&self, kind: Kind, recoverable: bool) {
+        let at = self.stamps.next();
+        self.write(Record::ProviderFailed { at, kind, recoverable });
     }
 
     pub(super) fn record_breach(&self, socket: u32, breach: crate::record::Breach) {

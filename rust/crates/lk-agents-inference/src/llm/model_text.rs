@@ -48,6 +48,10 @@ impl Llm for ModelText {
         self.inner.prewarm(cx);
     }
 
+    fn retries_itself(&self) -> bool {
+        self.inner.retries_itself()
+    }
+
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Llm>> {
         let inner = self.inner.with_conn_options(conn)?;
         Some(Arc::new(ModelText { inner, syntax: self.syntax }))

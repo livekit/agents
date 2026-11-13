@@ -319,7 +319,7 @@ pub trait Tts: Send + Sync {
 
     // Whether it retries its own attempts within the connection policy it is given (a stream
     // adapter retries each chunk, a fallback chain its members): a request over it runs once and
-    // hands it the whole policy. `_core_native_retries`, for a TTS.
+    // hands it the whole policy; any other gets one attempt's view (`retry::owner`).
     #[host(read_once, name = "_core_retries_itself")]
     fn retries_itself(&self) -> bool {
         false

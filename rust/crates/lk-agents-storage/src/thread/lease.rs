@@ -319,6 +319,7 @@ impl Lease {
             db: self.inner.db.clone(),
             fence: self.inner.fence.clone(),
             ownership: self.inner.ownership.clone(),
+            failures: 0,
         };
         *renewal = Some(self.inner.db.background.spawner.spawn(work.run()));
     }
@@ -422,12 +423,14 @@ struct LeaseRenewal {
     db: Thread,
     fence: Fence,
     ownership: Arc<Ownership>,
+    /// Consecutive failed extends.
+    failures: u32,
 }
 
 impl LeaseRenewal {
-    async fn run(self) {
+    async fn run(mut self) {
         let LeaseTiming { ttl, renew_interval: interval } = self.db.timing;
-        let clock = self.db.clock();
+        let clock = self.db.background.clock.clone();
         let mut next = self.ownership.deadline.lock().saturating_sub(ttl).saturating_add(interval);
         loop {
             let deadline = *self.ownership.deadline.lock();
@@ -446,7 +449,7 @@ impl LeaseRenewal {
     /// One extend, bounded by `until`; breaks once ownership is lost. Keyed by the token, an
     /// extend whose answer was lost is sent again until the ownership deadline.
     async fn renew_once(
-        &self,
+        &mut self,
         started: Ts,
         until: Ts,
         ttl: std::time::Duration,
@@ -462,6 +465,7 @@ impl LeaseRenewal {
         }
         match outcome {
             Ok(rows) if rows > 0 => {
+                self.failures = 0;
                 if self.ownership.renewed(started, ttl).is_err() {
                     return ControlFlow::Break(());
                 }
@@ -470,8 +474,19 @@ impl LeaseRenewal {
                 self.ownership.lose("the lease was taken or released".into());
                 return ControlFlow::Break(());
             }
+            // A warning, as any retry: a renewal that keeps failing loses the lease at its
+            // deadline, and these lines are what precede that loss.
             Err(error) if error.retryable() => {
-                log::debug!(target: lk_agents_abi::LOG_TARGET, partition_key = self.fence.partition_key.as_str(); "lease extend failed, retrying: {error}");
+                self.failures += 1;
+                let subject = format!("lease renewal ({})", self.fence.partition_key);
+                let delay = until.saturating_duration_since(self.db.clock().now());
+                lk_agents_abi::types::retry::retrying(
+                    log::Level::Warn,
+                    &subject,
+                    self.failures,
+                    delay,
+                    &error,
+                );
             }
             Err(error) => {
                 self.ownership.lose(format!("lease renewal failed: {error}"));

@@ -312,7 +312,7 @@ pub(super) fn give_up_observer(
 ) -> lk_agents_inference::retry::Observer {
     let (shared, handle) = (shared.clone(), handle.clone());
     Arc::new(move |error, retry, _| {
-        if matches!(retry, lk_agents_core::request::Retry::GiveUp(_)) {
+        if retry.is_none() {
             shared.report(GenEvent::ProviderFailed {
                 speech: handle.id(),
                 leg,

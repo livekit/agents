@@ -167,11 +167,17 @@ pub const GENAI_CONTENT: &[&str] = &[
     otel::GEN_AI_EVALUATION_EXPLANATION,
 ];
 
-/// Content keys of process log lines and session diagnostics. Logs never reach OTLP; the hosted
-/// log sidecar redacts them by their `lk.pii.` prefix.
+/// Keys of process log lines and session diagnostics. Logs never reach OTLP; the hosted log
+/// sidecar redacts content keys by their `lk.pii.` prefix.
 pub mod log_keys {
     pub const USER_INPUT: &str = "lk.pii.user_input";
     pub const RAW_ARGUMENTS: &str = "lk.pii.raw_arguments";
     pub const REPAIRED: &str = "lk.pii.repaired";
     pub const ERROR: &str = "lk.pii.error";
+    /// What a retried request is to: a provider's label, a transport, a background renewal.
+    pub const RETRY_SUBJECT: &str = "lk.retry.subject";
+    /// The failed attempt a retry follows, counted from 1.
+    pub const RETRY_ATTEMPT: &str = "lk.retry.attempt";
+    /// The seconds until the retry.
+    pub const RETRY_DELAY: &str = "lk.retry.delay";
 }

@@ -1148,3 +1148,31 @@ async fn a_reconnect_opens_with_the_options_updated_so_far() {
     assert_eq!(create["settings"]["language"], json!("fr"), "{create}");
     assert_eq!(create["settings"]["extra"]["endpointing"], json!(300), "{create}");
 }
+
+// Catches: the voice session's recognition (`retrying::stream`) handing the gateway its whole
+// retry budget, so the gateway's own reconnects nest inside the session's: (N+1)² connects.
+#[tokio::test]
+async fn a_refused_recognition_connects_once_per_attempt_of_one_policy() {
+    let ws = Arc::new(FakeWs::failing(TransportError::Connect("refused".into())));
+    let client: Arc<dyn Stt> = Arc::new(stt(ws.clone()));
+    let options = ApiConnectOptions { max_retry: 2, retry_interval: 0.0, ..Default::default() };
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::RealClock::new());
+    let (_sink, mut source) = super::retrying::stream(
+        client,
+        options,
+        clock.clone(),
+        &lk_agents_abi::telemetry::Cx::NONE,
+        None,
+        None,
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .split();
+    let error = lk_agents_abi::timeout(&*clock, Duration::from_secs(5), source.next())
+        .await
+        .expect("the retries settle")
+        .expect_err("every attempt failed");
+    assert_eq!(ws.connect_count(), 3, "one connect per attempt: {error}");
+    source.close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
+}

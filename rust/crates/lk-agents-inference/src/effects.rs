@@ -26,11 +26,27 @@ pub enum FallbackChainEffect {
 /// by the OpenAI realtime session adapter.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RealtimeConnectionEffect {
-    Connect { generation: u64 },
-    Close { generation: u64 },
-    Retry { error: ApiError },
-    Failed { error: ApiError },
-    CleanupIncomplete { generation: u64 },
+    Connect {
+        generation: u64,
+    },
+    Close {
+        generation: u64,
+    },
+    /// A connect attempt failed and is retried after `backoff`, which the session announces.
+    Retry {
+        error: ApiError,
+        backoff: lk_agents_core::request::Backoff,
+    },
+    /// The connected session dropped and is reconnected now.
+    Reconnect {
+        error: ApiError,
+    },
+    Failed {
+        error: ApiError,
+    },
+    CleanupIncomplete {
+        generation: u64,
+    },
 }
 
 /// Adaptive-interruption work from

@@ -151,6 +151,14 @@ pub trait Stt: Send + Sync {
     #[host(notify, name = "_core_failed")]
     fn failed(&self, _error: ProviderError, _recoverable: bool) {}
 
+    // Whether it retries its own attempts within the connection policy it is given (a stream
+    // adapter retries each utterance, a fallback chain its members). See
+    // [`Tts::retries_itself`](crate::Tts::retries_itself).
+    #[host(read_once, name = "_core_retries_itself")]
+    fn retries_itself(&self) -> bool {
+        false
+    }
+
     // A view of this provider whose calls carry `conn` -- how a fallback chain gives each entry
     // its per-attempt retry budget and timeout. `None`: the provider takes no per-call options,
     // and the chain uses it as it is. Inference's recognition entry points own retries.

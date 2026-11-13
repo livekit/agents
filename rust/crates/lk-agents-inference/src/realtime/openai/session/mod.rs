@@ -501,7 +501,20 @@ impl Pump {
                         self.settle_connection(outcome, &mut connection, generation, &mut follow_up)
                             .await
                     }
-                    RealtimeConnectionEffect::Retry { error } => {
+                    RealtimeConnectionEffect::Retry { error, backoff } => {
+                        let _ = backoff.announce(&self.label, &error);
+                        self.emit_error(error, true);
+                        ControlFlow::Continue(())
+                    }
+                    RealtimeConnectionEffect::Reconnect { error } => {
+                        let subject = &self.label;
+                        lk_agents_core::request::retrying(
+                            log::Level::Warn,
+                            subject,
+                            1,
+                            std::time::Duration::ZERO,
+                            &error,
+                        );
                         self.emit_error(error, true);
                         ControlFlow::Continue(())
                     }

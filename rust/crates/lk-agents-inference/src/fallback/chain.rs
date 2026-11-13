@@ -44,6 +44,10 @@ pub trait Backend: Send + Sync + 'static {
         conn: &ApiConnectOptions,
     ) -> Result<Self::Session, ProviderError>;
 
+    /// This entry's failed attempt: its `error` event, `recoverable` when the chain moves past it
+    /// (it retries the entry or falls back). The chain's own give-up is also its adapter's.
+    fn failed(&self, error: ProviderError, recoverable: bool);
+
     /// `Ok(false)` is a clean decline (`stt/fallback_adapter.py:465-466`).
     /// `stop` is cancelled when the adapter closes: a probe then closes what it opened and returns
     /// (the reference cancels the probe task, whose `async with stream` closes the stream).
@@ -178,6 +182,11 @@ impl<B: Backend> FallbackChain<B> {
 
     pub(crate) fn clock(&self) -> Arc<dyn Clock> {
         Arc::clone(&self.clock)
+    }
+
+    /// The adapter's `error` event: a failure of a call over the chain.
+    pub fn report(&self, error: ProviderError, recoverable: bool) {
+        self.observer.failed(error, recoverable);
     }
 
     pub fn entries(&self) -> &[Arc<B>] {
@@ -564,11 +573,31 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
                 }
             }
         };
-        let settled = matches!(event, ChainEvent::Succeeded { .. } | ChainEvent::Failed { .. });
+        let (settled, index) = (
+            matches!(event, ChainEvent::Succeeded { .. } | ChainEvent::Failed { .. }),
+            active.index,
+        );
         if !settled && self.served.is_none() {
             self.active = Some(active);
         }
+        // A cancellation, or the request's own deadline, is not the entry's failure.
+        let reported = match &event {
+            ChainEvent::Failed { error, .. }
+                if error.api_kind() != Some(ApiErrorKind::Cancelled)
+                    && !self.deadline.is_some_and(|at| self.chain.clock.now() >= at) =>
+            {
+                Some(error.clone())
+            }
+            _ => None,
+        };
         self.handle(event);
+        if let Some(error) = reported {
+            let gave_up = self
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, FallbackChainEffect::Finished(Err(_))));
+            self.chain.entries[index].failed(error, !gave_up);
+        }
     }
 
     fn served(&mut self, active: &RunningAttempt<T, S>, value: T) -> ChainEvent {

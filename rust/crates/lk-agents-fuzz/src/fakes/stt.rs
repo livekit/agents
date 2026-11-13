@@ -62,6 +62,10 @@ impl Stt for FakeStt {
         "fake::stt".into()
     }
 
+    fn failed(&self, _error: ProviderError, recoverable: bool) {
+        self.registry.record_failed(Kind::Stt, recoverable);
+    }
+
     fn capabilities(&self) -> SttCapabilities {
         SttCapabilities {
             streaming: true,

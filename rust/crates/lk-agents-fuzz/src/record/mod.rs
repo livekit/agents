@@ -662,6 +662,8 @@ pub struct Recording {
     first_audio_due: BTreeMap<u32, u64>,
     /// What each realtime socket's server refused or answered wrongly, by socket.
     breaches: Vec<(Observed, u32, Breach)>,
+    /// Each failed attempt the framework reported to a fake provider, and its `recoverable`.
+    provider_failed: Vec<(Observed, Kind, bool)>,
     /// Realtime audio the person heard, by generation (`Tag::generated`'s id) and milliseconds:
     /// what the speaker reported played of it, as each segment finished or was cut.
     heard_generations: Vec<(Observed, u32, u64, bool)>,
@@ -997,6 +999,10 @@ impl Recording {
     /// The product was handed a source's first audio.
     pub fn record_delivered(&mut self, at: Observed, kind: Kind, nth: u32) {
         self.delivered.entry((kind, nth)).or_insert(at);
+    }
+
+    pub fn record_provider_failed(&mut self, at: Observed, kind: Kind, recoverable: bool) {
+        self.provider_failed.push((at, kind, recoverable));
     }
 
     /// The n-th realtime socket's server refused a frame, or answered from the wrong state.

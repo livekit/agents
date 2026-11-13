@@ -23,8 +23,13 @@
 //!    ([`INPUT_STATE`]): a stream's input answers from its `InputState`, so after a provider's
 //!    failure every input call returns that failure, never a generic close ("Errors"). A typed
 //!    error's `#[error(..)]` message is a closed set, not a literal an input picks.
+//! 8. A retry a request decided (`Step::Retry(backoff)`, `Retry::At(backoff)`) is announced
+//!    (`backoff.announce(..)`, the one retry log), abandoned (`backoff.abandon()`) or handed on
+//!    (the binding moved as a value) in its arm; `matches!` and `_` never swallow one, and a
+//!    `match` over a request's steps with a wildcard arm names `Step::Retry`. Only
+//!    [`REQUEST`], where retries are decided, is exempt ("Errors").
 //!
-//! Rules 4 to 7 skip test files, benches, examples and `#[cfg(test)]` items. pyo3 and `#[host]`
+//! Rules 4 to 8 skip test files, benches, examples and `#[cfg(test)]` items. pyo3 and `#[host]`
 //! placement need no rule here: the crate graph ([`crate::graph`]) leaves the compiler to reject
 //! them.
 
@@ -35,7 +40,8 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
 
 use crate::tokens::{
-    attribute, group, ident, last_call, levels, line, path_segment, punct, select_futures,
+    attribute, fat_arrow, group, ident, last_call, levels, line, path_segment, punct,
+    select_futures, single_eq,
 };
 
 const MAX_LINES: usize = 1250;
@@ -51,6 +57,13 @@ const GENERATED: &str = "//! GENERATED FILE -- DO NOT EDIT.";
 const INPUT_STATE: &str = "crates/lk-agents-abi/src/utils/stream.rs";
 /// What a literal of a refused input says (rule 7), lowercased.
 const INPUT_CLOSED: &[&str] = &["input is closed", "input closed"];
+
+/// Where a request decides its retries (rule 8).
+const REQUEST: &str = "crates/lk-agents-core/src/request/";
+/// A request's steps other than `Retry` (rule 8).
+const STEPS: &[&str] = &["Launch", "Stop", "GiveUp", "Unresolved", "CleanupIncomplete"];
+/// What applies a retry in its arm (rule 8).
+const APPLY_RETRY: &[&str] = &["announce", "abandon"];
 
 /// Where Rust calls Python: HostInvoker's entry and log forwarding (rule 3).
 const HOST_ENTRY: &[&str] = &["py_calls.rs", "py_streams.rs", "py_logging.rs"];
@@ -219,6 +232,10 @@ fn check_source(source: &Source) -> Vec<String> {
     if !source.test() && source.path != INPUT_STATE {
         input_closed(source, without_tests(&source.text), &mut errors);
     }
+    let steps = source.text.contains("Retry") || source.text.contains("Step::");
+    if steps && !source.test() && !source.path.starts_with(REQUEST) {
+        retries(source, without_tests(&source.text), &mut errors);
+    }
     if ASYNC.contains(&crate_name) && !source.test() {
         let product = without_tests(&source.text);
         unowned(source, product.clone(), &mut errors);
@@ -272,6 +289,98 @@ fn input_closed(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) 
         // `#[..]` and `#![..]`
         attribute = punct(Some(&token), '#') || (attribute && punct(Some(&token), '!'));
     }
+}
+
+/// A request's retry that its arm does not apply, or a step `match` whose wildcard would swallow
+/// one. Rule 8.
+fn retries(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) {
+    levels(tokens, &mut |level| {
+        let mut steps = false;
+        let mut retry = false;
+        let mut wildcard = None;
+        for (at, token) in level.iter().enumerate() {
+            if ident(Some(token)).as_deref() == Some("_")
+                && at + 1 < level.len()
+                && fat_arrow(level, at + 1)
+            {
+                wildcard = Some(line(token));
+            }
+            let (Some(head), Some(variant)) = (ident(Some(token)), path_segment(level, at + 1))
+            else {
+                continue;
+            };
+            match (head.as_str(), variant.as_str()) {
+                ("Step", "Retry") | ("Retry", "At") => {}
+                ("Step", step) if STEPS.contains(&step) => {
+                    steps = true;
+                    continue;
+                }
+                _ => continue,
+            }
+            retry |= head == "Step";
+            if !applied(level, at + 4) {
+                errors.push(source.error(
+                    line(token),
+                    "a retry not applied: announce it (`backoff.announce(..)`, the one retry log), \
+                     abandon it or hand it on in its arm",
+                ));
+            }
+        }
+        if let (true, false, Some(at)) = (steps, retry, wildcard) {
+            errors.push(source.error(
+                at,
+                "a wildcard arm over a request's steps swallows its retries: name `Step::Retry`",
+            ));
+        }
+    });
+}
+
+/// Whether the arm of the pattern binding a retry at `at` (its `(binding)` group) applies it.
+fn applied(level: &[TokenTree], at: usize) -> bool {
+    let Some(binding) = group(level.get(at), Delimiter::Parenthesis).and_then(|binding| {
+        let tokens: Vec<TokenTree> = binding.stream().into_iter().collect();
+        ident(tokens.first()).filter(|name| tokens.len() == 1 && name != "_")
+    }) else {
+        return false;
+    };
+    let mut body = None;
+    for at in at + 1..level.len() {
+        if punct(level.get(at), ';') {
+            break;
+        }
+        if fat_arrow(level, at) {
+            body = Some(match group(level.get(at + 2), Delimiter::Brace) {
+                Some(block) => block.stream(),
+                None => level
+                    .get(at + 2..)
+                    .unwrap_or_default()
+                    .iter()
+                    .take_while(|token| !punct(Some(token), ','))
+                    .cloned()
+                    .collect(),
+            });
+            break;
+        }
+        if single_eq(level, at) {
+            body = level[at + 1..]
+                .iter()
+                .find_map(|token| group(Some(token), Delimiter::Brace))
+                .map(proc_macro2::Group::stream);
+            break;
+        }
+    }
+    let mut applies = false;
+    if let Some(body) = body {
+        levels(body, &mut |level| {
+            for (at, token) in level.iter().enumerate() {
+                let name = ident(Some(token));
+                applies |= name.as_deref().is_some_and(|name| APPLY_RETRY.contains(&name))
+                    || (name.as_deref() == Some(binding.as_str())
+                        && !punct(level.get(at + 1), '.'));
+            }
+        });
+    }
+    applies
 }
 
 /// pyo3 and `#[py*]` only in `lk-agents-py`; `#[host]` only in ABI; host calls only in the entry.
@@ -578,6 +687,33 @@ mod tests {
         assert!(errors("crates/lk-agents-inference/src/x.rs", typed).is_empty());
         let test = "#[cfg(test)] mod tests { const S: &str = \"input is closed\"; }";
         assert!(errors("crates/lk-agents-net/src/x.rs", test).is_empty());
+    }
+
+    // Catches: a retry applied without its one log, or swallowed by a wildcard or `matches!`.
+    #[test]
+    fn a_retry_not_applied_in_its_arm_fails() {
+        let path = "crates/lk-agents-inference/src/x.rs";
+        let applied = [
+            "fn f() { match r { Retry::At(b) => { let at = b.announce(s, &e); w(at) } _ => {} } }",
+            "fn f() { if let Retry::At(b) = r { b.announce(s, &e); } }",
+            "fn f() { match s { Step::Retry(b) if t => self.held = Some(b), _ => {} } }",
+            "fn f() { match s { Step::Retry(b) => fail(b.abandon()), Step::Launch(i) => go(i), \
+             _ => {} } }",
+        ];
+        for text in applied {
+            assert!(errors(path, text).is_empty(), "{text}");
+        }
+        let swallowed = [
+            "fn f() { match r { Retry::At(b) => wait(b.error()), _ => {} } }",
+            "fn f() { if let Retry::At(_) = r { report(); } }",
+            "fn f() { matches!(s, Step::Retry(_)); }",
+            "fn f() { match s { Step::Launch(i) => go(i), _ => {} } }",
+        ];
+        for text in swallowed {
+            assert_eq!(errors(path, text).len(), 1, "{text}");
+        }
+        let decided = "fn f() { match s { Step::Retry(b) => {} _ => {} } }";
+        assert!(errors("crates/lk-agents-core/src/request/machine.rs", decided).is_empty());
     }
 
     #[test]

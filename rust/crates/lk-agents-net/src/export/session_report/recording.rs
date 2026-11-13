@@ -46,6 +46,10 @@ pub(crate) async fn upload(
             match step {
                 Step::Launch(attempt) => launched = Some(attempt),
                 Step::GiveUp(_) => return Err(failure),
+                Step::Retry(backoff) => {
+                    let error = backoff.error().clone();
+                    let _ = backoff.announce("recording upload", &error);
+                }
                 _ => {}
             }
         }

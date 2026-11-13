@@ -417,19 +417,9 @@ impl Generation<'_> {
                 self.unvoice().await;
                 None
             }
-            // The voice is lost: report it as the session's error.
-            Err(error) => {
-                if let Some(tts) = &self.tts {
-                    tts.failed(error.clone(), false);
-                }
-                self.shared.report(GenEvent::ProviderFailed {
-                    speech: self.handle.id(),
-                    leg: lk_agents_voice::trace::ProviderKind::Tts,
-                    recoverable: false,
-                    error: Box::new(error.clone()),
-                });
-                Some(Err(DriverError::from(error)))
-            }
+            // The voice is lost: its request already reported the give-up, to the provider and as
+            // the session's error (`give_up_observer`).
+            Err(error) => Some(Err(DriverError::from(error))),
         }
     }
 

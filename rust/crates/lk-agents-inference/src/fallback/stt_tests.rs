@@ -578,3 +578,103 @@ async fn fallback_stt_resolves_each_operation_for_batch_and_stream() {
         assert_eq!(actual, ApiConnectOptions { max_retry: 0, ..policy(read) });
     }
 }
+
+/// A member that refuses every recognition, counting its opens and hearing its `error` events.
+#[derive(Default)]
+struct Refusing {
+    opens: AtomicUsize,
+    /// Each reported failure's `recoverable`.
+    reports: Mutex<Vec<bool>>,
+}
+
+impl Stt for Refusing {
+    fn label(&self) -> String {
+        "refusing".into()
+    }
+    fn capabilities(&self) -> SttCapabilities {
+        SttCapabilities { streaming: true, ..Default::default() }
+    }
+    fn failed(&self, _error: ProviderError, recoverable: bool) {
+        self.reports.lock().push(recoverable);
+    }
+    fn recognize(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _buffer: &[AudioFrame],
+        _language: Option<&LanguageCode>,
+    ) -> BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        self.opens.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Err(lk_agents_abi::errors::ApiError::connection(None).into()) })
+    }
+    fn stream(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _language: Option<&LanguageCode>,
+        _start_time_offset: Option<f64>,
+    ) -> BoxFuture<'_, Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>>
+    {
+        self.opens.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Err(lk_agents_abi::errors::ApiError::connection(None).into()) })
+    }
+}
+
+/// The adapter's own `error` events.
+#[derive(Default)]
+struct AdapterEvents(Mutex<Vec<bool>>);
+
+impl crate::fallback::ChainObserver for AdapterEvents {
+    fn availability_changed(&self, _ev: crate::fallback::AvailabilityChanged) {}
+    fn failed(&self, _error: ProviderError, recoverable: bool) {
+        self.0.lock().push(recoverable);
+    }
+}
+
+// Catches: a request over the chain retrying the whole chain (its own retries nested over the
+// chain's), a member's failed attempt reported as final although the chain moves past it, or a
+// probe's failure reported as a request's.
+#[tokio::test]
+async fn a_request_over_the_chain_runs_it_once_and_each_provider_reports_one_give_up() {
+    for streaming in [false, true] {
+        let members = [Arc::new(Refusing::default()), Arc::new(Refusing::default())];
+        let (clock, spawner, _) = parts();
+        let adapter = Arc::new(AdapterEvents::default());
+        let entries: Vec<Arc<dyn Stt>> =
+            members.iter().map(|m| m.clone() as Arc<dyn Stt>).collect();
+        let policy = ChainPolicy {
+            max_retry_per_backend: 1,
+            retry_interval: Some(0.0),
+            ..ChainPolicy::stt_defaults()
+        };
+        let fb: Arc<dyn Stt> = Arc::new(
+            FallbackStt::new(entries, policy, clock.clone(), spawner, adapter.clone()).unwrap(),
+        );
+        let options = ApiConnectOptions { max_retry: 2, retry_interval: 0.0, ..Default::default() };
+        let cx = lk_agents_abi::telemetry::Cx::NONE;
+        let failed = if streaming {
+            let (_sink, mut source) = crate::stt::stream(fb, options, clock, &cx, None, None)
+                .await
+                .unwrap()
+                .unwrap()
+                .split();
+            let failed = within("the chain gives up", source.next()).await.is_err();
+            source.close(NO_DEADLINE).await;
+            failed
+        } else {
+            let frame = AudioFrame::new(vec![0u8; 4], 16_000, 1, 2);
+            within(
+                "the chain gives up",
+                crate::stt::recognize(fb, options, clock, &cx, &[frame], None),
+            )
+            .await
+            .is_err()
+        };
+        assert!(failed);
+        // the chain's two attempts at each; the last ends the chain; recovery probes report
+        // nothing
+        for (member, reports) in members.iter().zip([[true, true], [true, false]]) {
+            until("the member's attempts", || member.opens.load(Ordering::SeqCst) >= 2).await;
+            assert_eq!(*member.reports.lock(), reports, "streaming: {streaming}");
+        }
+        assert_eq!(*adapter.0.lock(), [false], "streaming: {streaming}");
+    }
+}

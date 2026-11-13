@@ -4914,6 +4914,7 @@ pub struct LlmProxy {
     label: ::std::string::String,
     model: ::std::string::String,
     id: ::lk_agents_abi::ProviderId,
+    retries_itself: bool,
     /// Appended to every awaited call once bound.
     conn: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
 }
@@ -4979,6 +4980,10 @@ impl LlmProxy {
             let v = crate::py_calls::read(obj, "_core_id")?;
             crate::generated::records::types::provider_id_from_py(v.as_any())?
         };
+        let retries_itself = {
+            let v = crate::py_calls::read(obj, "_core_retries_itself")?;
+            v.extract::<bool>()?
+        };
         Ok(LlmProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
             context,
@@ -4987,6 +4992,7 @@ impl LlmProxy {
             label,
             model,
             id,
+            retries_itself,
             conn: None,
         })
     }
@@ -5026,6 +5032,10 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                 ))
             }),
         );
+    }
+
+    fn retries_itself(&self) -> bool {
+        ::std::clone::Clone::clone(&self.retries_itself)
     }
 
     fn with_conn_options(

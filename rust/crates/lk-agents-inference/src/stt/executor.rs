@@ -19,6 +19,10 @@ use wire::Incoming;
 pub(super) const FINAL_TRANSCRIPT_QUIET: Duration = Duration::from_secs(3);
 
 pub(super) struct SttStreamExecutor {
+    /// What its retries are announced as.
+    pub(super) label: String,
+    /// The host object it was built as, which hears each retried failure.
+    pub(super) events: Option<Arc<dyn lk_agents_abi::types::provider::ProviderEvents>>,
     pub(super) ws: Arc<dyn WsTransport>,
     /// The context the stream was opened under: its connections carry the identity of its job.
     pub(super) cx: telemetry::Cx,
@@ -66,8 +70,14 @@ impl SttStreamExecutor {
             }
             let started = self.clock.now();
             attempts.wake(started, None, &mut steps);
-            if let Some(error) = steps.iter().find_map(|step| match step {
-                Step::GiveUp(error) => Some(error.clone()),
+            // no phase is timed here: a wake only launches the retry or ends at the total deadline
+            if let Some(error) = steps.drain(..).find_map(|step| match step {
+                Step::GiveUp(error) => Some(error),
+                Step::Retry(backoff) => {
+                    let error = backoff.error().clone();
+                    let _ = backoff.announce(&self.label, &error);
+                    None
+                }
                 _ => None,
             }) {
                 self.failed(error).await;
@@ -90,25 +100,30 @@ impl SttStreamExecutor {
             {
                 attempts.reset_retries();
             }
-            steps.clear();
-            attempts.failed_error(id, error.clone(), now, &mut steps);
-            attempts.closed(id, now, &mut steps);
-            if !steps.iter().any(|step| matches!(step, Step::Retry { .. })) {
-                let error = match lk_agents_core::request::terminal_failure(
-                    lk_agents_abi::types::retry::RequestKind::SttStream,
-                    &error,
-                    self.opts.conn_options.max_retry,
-                    attempts.retries(),
-                ) {
-                    lk_agents_abi::types::retry::RetryDecision::Exhausted(message) => {
-                        ApiError::connection(Some(format!("{message}: {error}")))
+            let at = match attempts.attempt_failed(error.clone(), now) {
+                Retry::At(backoff) => {
+                    let at = backoff.announce(&self.label, &error);
+                    if let Some(events) = &self.events {
+                        events.failed(error.into(), true);
                     }
-                    _ => error,
-                };
-                self.failed(error).await;
-                return;
-            }
-            let at = attempts.wake_at(None).expect("authorized retry wake");
+                    at
+                }
+                Retry::GiveUp(_) => {
+                    let error = match lk_agents_core::request::terminal_failure(
+                        lk_agents_abi::types::retry::RequestKind::SttStream,
+                        &error,
+                        self.opts.conn_options.max_retry,
+                        attempts.retries(),
+                    ) {
+                        lk_agents_abi::types::retry::RetryDecision::Exhausted(message) => {
+                            ApiError::connection(Some(format!("{message}: {error}")))
+                        }
+                        _ => error,
+                    };
+                    self.failed(error).await;
+                    return;
+                }
+            };
             use futures_util::future::{Either, select};
             if matches!(
                 select(Box::pin(self.clock.wait_until(at)), Box::pin(self.stop.cancelled())).await,

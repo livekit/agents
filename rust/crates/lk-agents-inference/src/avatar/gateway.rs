@@ -671,8 +671,9 @@ impl Driver {
                         task.cancel();
                     }
                 }
-                Step::Retry { attempt, error } => {
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, provider, attempt, error = error.message.as_str(); "avatar gateway request failed, retrying");
+                Step::Retry(backoff) => {
+                    let error = backoff.error().clone();
+                    let _ = backoff.announce(&format!("avatar gateway ({provider})"), &error);
                 }
                 Step::CleanupIncomplete(attempt) => {
                     // The runtime still owns the attempt.

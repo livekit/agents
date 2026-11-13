@@ -764,8 +764,10 @@ impl Llm for Node<dyn Llm> {
         self.below.prewarm(cx);
     }
 
-    fn failed(&self, error: ProviderError, recoverable: bool) {
-        self.below.failed(error, recoverable);
+    /// The node's own requests retry and report on their providers: a request over the node
+    /// runs it once, and its give-up is not the provider's to hear again.
+    fn retries_itself(&self) -> bool {
+        true
     }
 
     fn request_span(&self) -> telemetry::RequestSpan {
@@ -803,8 +805,10 @@ impl Tts for Node<dyn Tts> {
         self.below.prewarm(cx);
     }
 
-    fn failed(&self, error: ProviderError, recoverable: bool) {
-        self.below.failed(error, recoverable);
+    /// The node's own requests retry and report on their providers: a request over the node
+    /// runs it once, and its give-up is not the provider's to hear again.
+    fn retries_itself(&self) -> bool {
+        true
     }
 
     fn request_span(&self) -> telemetry::RequestSpan {
@@ -903,8 +907,10 @@ impl Stt for Node<dyn Stt> {
         self.below.prewarm(cx);
     }
 
-    fn failed(&self, error: ProviderError, recoverable: bool) {
-        self.below.failed(error, recoverable);
+    /// The node's own requests retry and report on their providers: a request over the node
+    /// runs it once, and its give-up is not the provider's to hear again.
+    fn retries_itself(&self) -> bool {
+        true
     }
 
     fn update_keyterms(&self, keyterms: &[String]) {

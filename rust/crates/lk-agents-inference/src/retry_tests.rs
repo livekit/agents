@@ -25,6 +25,7 @@ async fn a_panicked_pull_still_closes_its_source() {
         Box::pin(async move { Ok(Box::new(Panicking(source)) as Box<dyn ProviderStream<u32>>) })
     });
     let mut stream = stream(
+        "panicking".into(),
         &ApiConnectOptions::default(),
         Arc::new(VirtualClock::new()),
         open,

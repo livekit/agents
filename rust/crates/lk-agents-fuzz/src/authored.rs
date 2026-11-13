@@ -344,6 +344,13 @@ impl Authored {
         self
     }
 
+    /// The framework reported a failed attempt to a fake provider.
+    pub fn provider_failed(mut self, kind: Kind, recoverable: bool) -> Self {
+        let at = self.next();
+        self.recording.record_provider_failed(at, kind, recoverable);
+        self
+    }
+
     /// The n-th realtime socket's server refused a frame, or answered from the wrong state.
     pub fn breach(mut self, socket: u32, breach: Breach) -> Self {
         let at = self.next();

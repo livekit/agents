@@ -227,7 +227,11 @@ class _Recognition:
         conn_options: APIConnectOptions,
     ) -> None:
         self._stt, self._buffer, self._language, self._conn = stt, buffer, language, conn_options
-        self._attempts = _core.ProviderAttempts("stt_batch", conn_options, self)
+        # one retry owner: an STT that retries itself is handed the whole policy and run once
+        attempted = conn_options
+        if stt._core_retries_itself():
+            attempted = dataclasses.replace(conn_options, max_retry=0)
+        self._attempts = _core.ProviderAttempts("stt_batch", attempted, self)
         self._core_attempt_task: asyncio.Task[object] | None = None
         self._core_cancelled = False
 

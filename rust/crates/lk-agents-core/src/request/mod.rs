@@ -6,7 +6,8 @@ use std::time::Duration;
 mod effects;
 mod machine;
 
-pub use effects::{Retry, Step};
+pub use effects::{Backoff, Retry, Step};
+pub use lk_agents_abi::types::retry::retrying;
 pub use machine::Request;
 
 /// The resolved per-request policy. `None` disables a limit. There is no pool limit: the

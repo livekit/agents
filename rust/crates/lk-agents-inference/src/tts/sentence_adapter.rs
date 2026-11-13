@@ -367,12 +367,12 @@ impl AdapterSource {
     async fn open_chunk(&mut self) -> Result<(), ProviderError> {
         let Some(chunk) = self.chunk.clone() else { return Ok(()) };
         let start = lk_agents_abi::unix_secs(self.clock.wall());
-        let (report, clock, tts) = (self.report.clone(), self.clock.clone(), self.tts.clone());
+        let (report, tts) = (self.report.clone(), self.tts.clone());
         let observer: crate::retry::Observer = Arc::new(move |error, retry, attempt| {
-            if let lk_agents_core::request::Retry::At(at) = retry {
+            if let Some(delay) = retry {
                 tts.failed(error.clone(), true);
                 if let Some(report) = &report {
-                    report(error.clone(), attempt, at.saturating_duration_since(clock.now()));
+                    report(error.clone(), attempt, delay);
                 }
             }
         });
@@ -380,6 +380,7 @@ impl AdapterSource {
         let open = super::request::synthesis(self.tts.clone(), &self.cx, chunk, self.budget);
         self.current = Some(
             crate::retry::stream(
+                self.tts.label(),
                 &self.budget,
                 self.clock.clone(),
                 open,

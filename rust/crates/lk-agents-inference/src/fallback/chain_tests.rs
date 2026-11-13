@@ -148,6 +148,8 @@ impl Backend for Fake {
         self.label.clone()
     }
 
+    fn failed(&self, _error: ProviderError, _recoverable: bool) {}
+
     async fn open(
         &self,
         _req: &Self::Req,

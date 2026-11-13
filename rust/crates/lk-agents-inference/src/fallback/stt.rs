@@ -1,3 +1,5 @@
+use crate::stt::retrying::GiveUp::ByChain;
+use crate::stt::retrying::{recognize_reported, stream_reported};
 use crate::telemetry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -306,6 +308,10 @@ impl Backend for SttBackend {
         self.inner.label()
     }
 
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.inner.failed(error, recoverable);
+    }
+
     async fn open(
         &self,
         req: &Self::Req,
@@ -313,13 +319,16 @@ impl Backend for SttBackend {
     ) -> Result<Self::Session, ProviderError> {
         let (stt, clock) = (self.inner.clone(), self.clock.clone());
         match req {
-            SttReq::Batch { frames, language, cx } => Ok(SttSession::Batch(
-                crate::stt::recognize(stt, *conn, clock, cx, frames, language.as_ref()).await?,
-            )),
+            SttReq::Batch { frames, language, cx } => {
+                let language = language.as_ref();
+                Ok(SttSession::Batch(
+                    recognize_reported(stt, *conn, clock, cx, frames, language, ByChain).await?,
+                ))
+            }
             SttReq::Stream { language, tee, offset, cx } => {
                 let offset = offset.map(|o| o.at(self.clock.now()));
                 let (sink, source) =
-                    crate::stt::stream(stt, *conn, clock, cx, language.as_ref(), offset)
+                    stream_reported(stt, *conn, clock, cx, language.as_ref(), offset, ByChain)
                         .await?
                         .ok_or_else(|| no_duplex(&self.inner.label()))?
                         .split();
@@ -342,7 +351,8 @@ impl Backend for SttBackend {
                 // `_try_recognize(recovering=True)`: one call, output discarded, in the job past
                 // the request it recovers for, under no span.
                 let cx = cx.clone().continuing(None);
-                crate::stt::recognize(stt, *conn, clock, &cx, frames, language.as_ref()).await?;
+                let language = language.as_ref();
+                recognize_reported(stt, *conn, clock, &cx, frames, language, ByChain).await?;
                 Ok(true)
             }
             (SttReq::Stream { language, tee, cx, .. }, _) => {
@@ -366,7 +376,7 @@ impl SttBackend {
         stop: CancellationToken,
     ) -> Result<bool, ProviderError> {
         let (sink, mut source) =
-            crate::stt::stream(stt, *conn, self.clock.clone(), cx, language, None)
+            stream_reported(stt, *conn, self.clock.clone(), cx, language, None, ByChain)
                 .await?
                 .ok_or_else(|| no_duplex(&self.inner.label()))?
                 .split();
@@ -571,6 +581,16 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
 }
 
 impl Stt for FallbackStt {
+    /// The chain retries and falls back on its own.
+    fn retries_itself(&self) -> bool {
+        true
+    }
+
+    /// The adapter's `error` event.
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.chain.report(error, recoverable);
+    }
+
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }
