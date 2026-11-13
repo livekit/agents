@@ -3,7 +3,7 @@ from base64 import b64decode
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 from xml.etree import ElementTree
 
 import aiohttp
@@ -463,5 +463,10 @@ async def test_consultation_setup_releases_resources_on_failure(
 
     assert caught.value is error
     session.shutdown.assert_called_once_with(drain=False)
-    room.off.assert_called_once_with("disconnected", task._on_human_agent_room_close)
+    room.off.assert_has_calls(
+        [
+            call("disconnected", task._on_human_agent_room_close),
+            call("participant_disconnected", task._on_human_agent_participant_disconnected),
+        ]
+    )
     room.disconnect.assert_awaited_once()
