@@ -3,6 +3,8 @@
 Support for text-to-speech with [Finesse](https://finesse.flamapp.ai) by Flam: realtime speech in
 60 languages, including 22 Indian languages, in your own cloned voices or from the voice catalog.
 
+See the [Finesse TTS docs](https://docs.livekit.io/agents/models/tts/finesse/) for more information.
+
 ## Installation
 
 ```bash
