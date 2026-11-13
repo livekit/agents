@@ -9,6 +9,7 @@ from google.protobuf.message import Message
 
 from livekit.agents import llm
 from livekit.agents._proto import (
+    FIELDS,
     USAGE_VARIANTS,
     encode_by_name,
     encode_chat_item,
@@ -133,6 +134,16 @@ def test_map_values_are_stringified() -> None:
     extra = {"livekit": {"inference_deployment": "d"}, "flag": True}
     msg = encode_by_name(agent_pb.ChatMessage, {"extra": extra})
     assert dict(msg.extra) == {k: str(v) for k, v in extra.items()}
+
+
+def test_a_field_the_sdk_does_not_list_stays_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    # livekit-protocol 1.1.28 added FunctionCall.extra; agents 1.7.0-1.8.8 read it off the
+    # installed descriptor and every session report with a tool call failed to encode
+    listed = tuple(f for f in FIELDS[agent_pb.FunctionCall] if f != "extra")
+    monkeypatch.setitem(FIELDS, agent_pb.FunctionCall, listed)
+    msg = encode_chat_item(SATURATED_ITEMS[1]).function_call
+    assert not msg.extra
+    assert msg.name == "fn"
 
 
 def _saturated(src_type: Any, msg_type: type[Message]) -> Any:
