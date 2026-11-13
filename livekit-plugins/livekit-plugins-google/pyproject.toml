@@ -33,7 +33,7 @@ dependencies = [
     # LiveClientContextUpdate / AsyncSession.send_context_update. 3.2 is the floor for
     # client.aio.decisions, used by DecisionModel.
     "google-genai >= 3.2.0; python_version >= '3.10'",
-    "livekit-agents>=1.8.11",
+    "livekit-agents>=1.8.12",
     # Vertex AI uses an httpx2 client (OpenAI SDK 3), as google-genai 3 does.
     "httpx2>=2.12,<3",
 ]
