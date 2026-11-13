@@ -638,8 +638,9 @@ class RealtimeSession(llm.RealtimeSession):
                     # the tool forbids speech after its call, or the result wants no reply
                     if cfg.get("forbid_speech_after_tool_call", False) or not item.reply_required:
                         forbid_speech = True
-                    # An async result can land while the agent is still speaking, so its reply
-                    # opens on assistant_started_speaking instead of cutting that speech short.
+                    # Only a sync tool's reply starts right away. The agent may still be talking
+                    # when an async tool's output arrives, and opening a turn now would cut it off,
+                    # so that reply's turn opens on assistant_started_speaking.
                     if cfg.get("execution_mode", "sync") == "sync":
                         open_reply_turn = True
 
