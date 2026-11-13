@@ -36,7 +36,7 @@ from livekit.plugins import silma
 session = AgentSession(
     tts=silma.TTS(
         model="silma-tts-v2-msa",
-        voice="sarah",
+        voice="maryam",
     ),
     # ... stt, llm, vad
 )
@@ -46,8 +46,8 @@ session = AgentSession(
 
 | Model | Language | Voices |
 | --- | --- | --- |
-| `silma-tts-v2-english` | English | `james`, `emma` |
-| `silma-tts-v2-msa` | Modern Standard Arabic | `sarah`, `salma`, `salwa`, `saja`, `sultan`, `salman`, `sulaiman`, `salim` |
+| `silma-tts-v2-english` | English | `james`, `emma`, `isabella`, `oliver` |
+| `silma-tts-v2-msa` | Modern Standard Arabic | `abdulaziz`, `fahd`, `layla`, `maryam`, `nouf`, `noura`, `omar`, `reema`, `yusuf`, `khalid`, `sarah`, `salma`, `salwa`, `saja`, `sultan`, `salman`, `sulaiman`, `salim` |
 | `silma-tts-v2-ksa` | Arabic, Saudi (Najdi) dialect | same as MSA |
 
 ### Cloned voices
@@ -58,7 +58,7 @@ its id along with your user id:
 ```python
 silma.TTS(
     model="silma-tts-v2-ksa",
-    voice="sarah",
+    voice="maryam",
     user_id="...",
     custom_audio_id="voice_1769817467123",
 )
@@ -96,10 +96,3 @@ segment.
 SILMA returns a 24 kHz mono float32 waveform; the plugin converts it to 16-bit
 PCM for the agent pipeline.
 
-Requests carry a `User-Agent` of
-`LiveKit-Agents-SILMA/<plugin version> livekit-agents/<framework version>` on
-both transports, so SILMA can tell plugin traffic apart from direct API use.
-
-WebSocket connections are pooled and reused across turns. If a pooled
-connection has gone stale, the plugin reconnects once and replays the utterance,
-which is safe because no audio has reached the caller at that point.

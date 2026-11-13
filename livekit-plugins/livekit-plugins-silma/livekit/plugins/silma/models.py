@@ -32,10 +32,20 @@ TTSModels = Literal[
 - ``silma-tts-v2-ksa``: Saudi (Najdi) Arabic dialect.
 """
 
-TTSEnglishVoices = Literal["james", "emma"]
+TTSEnglishVoices = Literal["james", "emma", "isabella", "oliver"]
 """Voices available on the English model."""
 
 TTSArabicVoices = Literal[
+    "abdulaziz",
+    "fahd", 
+    "layla",
+    "maryam",
+    "nouf", 
+    "noura",
+    "omar",
+    "reema",
+    "yusuf",
+    "khalid",
     "sarah",
     "salma",
     "salwa",
@@ -44,7 +54,9 @@ TTSArabicVoices = Literal[
     "salman",
     "sulaiman",
     "salim",
-]
+    ]
+
+
 """Voices available on the Arabic (MSA and KSA) models."""
 
 TTSVoices = Literal[TTSEnglishVoices, TTSArabicVoices]
@@ -52,7 +64,7 @@ TTSVoices = Literal[TTSEnglishVoices, TTSArabicVoices]
 
 DEFAULT_BASE_URL = "https://api.silma.ai/tts/v2"
 DEFAULT_MODEL: TTSModels = "silma-tts-v2-msa"
-DEFAULT_VOICE: TTSVoices = "sarah"
+DEFAULT_VOICE: TTSVoices = "maryam"
 
 # SILMA v2 renders a 24 kHz mono float32 waveform.
 SAMPLE_RATE = 24000
