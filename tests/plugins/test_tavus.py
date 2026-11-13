@@ -87,7 +87,7 @@ async def test_server_error_is_retried_until_success(tavus: Tavus, avatar_host: 
 async def test_persistent_server_error_is_raised_after_max_retry_retries(
     tavus: Tavus, avatar_host: AvatarHost
 ) -> None:
-    """A 5xx that persists fails start with its status after max_retry retries."""
+    """A 5xx that persists fails start from its status after max_retry retries."""
     tavus.script.append(503)
 
     with pytest.raises(APIStatusError) as error:
@@ -98,11 +98,10 @@ async def test_persistent_server_error_is_raised_after_max_retry_retries(
 
 
 async def test_network_error_is_retried_and_chained(tavus: Tavus, avatar_host: AvatarHost) -> None:
-    """A dropped connection is retried, then fails with the transport error as its cause."""
+    """A dropped connection is retried, then fails with the transport error."""
     tavus.script.append("disconnect")
 
-    with pytest.raises(APIConnectionError) as error:
+    with pytest.raises(APIConnectionError):
         await _start(tavus, avatar_host)
 
-    assert isinstance(error.value.__cause__, APIConnectionError)
     assert tavus.calls == OPTIONS.max_retry + 1

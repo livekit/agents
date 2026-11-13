@@ -81,7 +81,7 @@ class TTS(tts.TTS):
             http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
         """  # noqa: E501
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, text_unit="words"),
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
         )
@@ -124,9 +124,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "xAI"
-
-    def _core_text_unit(self) -> str:
-        return "words"
 
     async def _connect_ws(
         self, conn_options: APIConnectOptions, opts: _TTSOptions
@@ -324,11 +321,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             while True:
                 msg = await ws.receive()
                 if msg.type == http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "xAI connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("xAI connection closed unexpectedly")
 
                 if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("Unexpected xAI message type %s", msg.type)
@@ -345,9 +338,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         break
                 elif msg_type == "error":
                     raise APIStatusError(
-                        data.get("message", "unknown xAI error"),
+                        "xAI TTS error",
                         status_code=-1,
                         body=str(data),
+                        detail=data.get("message"),
                     )
                 else:
                     logger.warning("Unexpected xAI message", extra={"lk.pii.data": data})

@@ -18,9 +18,10 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
 from aiobotocore.config import AioConfig
 from aiobotocore.session import AioSession
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from livekit.agents import APIConnectionError, APIStatusError, TokenUsage, llm
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
@@ -309,13 +310,12 @@ class LLMStream(llm.LLMStream):
         self._opts = extra_kwargs
         self._cache_system = cache_system
         self._session = session
+
+    async def _run(self) -> None:
+        # per attempt: a retry never inherits a half-streamed tool call
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
-        self._text: str = ""
-
-    async def _run(self) -> None:
-        retryable = True
         try:
             messages, extra_data = await self._chat_ctx.to_provider_format(format="aws")
             self._opts["messages"] = messages
@@ -335,18 +335,7 @@ class LLMStream(llm.LLMStream):
             )
             # Other services in this SDK overload set have no generated return stub.
             async with self._session.create_client("bedrock-runtime", config=config) as client:  # pyright: ignore[reportUnknownMemberType]
-                try:
-                    response = await client.converse_stream(**self._opts)
-                except ClientError as e:
-                    # Bedrock rejected the request itself, e.g. a ValidationException
-                    # ("This model doesn't support the temperature field."). Keep the HTTP
-                    # status so a 4xx is not retried; throttling and 5xx still are.
-                    meta = e.response.get("ResponseMetadata", {})
-                    raise APIStatusError(
-                        f"aws bedrock llm: error generating content: {e}",
-                        status_code=meta.get("HTTPStatusCode", -1),
-                        request_id=meta.get("RequestId"),
-                    ) from e
+                response = await client.converse_stream(**self._opts)
                 request_id = response["ResponseMetadata"]["RequestId"]
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                     raise APIStatusError(
@@ -361,15 +350,22 @@ class LLMStream(llm.LLMStream):
                 async for chunk in response["stream"]:
                     chat_chunk = self._parse_chunk(request_id, chunk)
                     if chat_chunk is not None:
-                        retryable = False
                         self.send(chat_chunk)
 
-        except APIStatusError:
-            raise
-        except Exception as e:
+        except ClientError as e:
+            # Bedrock rejected the request, e.g. a ValidationException ("This model doesn't
+            # support the temperature field."). Keep the HTTP status so a 4xx is not retried;
+            # throttling and 5xx still are.
+            meta = e.response.get("ResponseMetadata", {})
+            raise APIStatusError(
+                "aws bedrock llm: error generating content",
+                status_code=meta.get("HTTPStatusCode", -1),
+                request_id=meta.get("RequestId"),
+                detail=str(e),
+            ) from e
+        except (BotoCoreError, aiohttp.ClientError) as e:
             raise APIConnectionError(
-                f"aws bedrock llm: error generating content: {e}",
-                retryable=retryable,
+                "aws bedrock llm: error generating content", detail=str(e)
             ) from e
 
     def _parse_chunk(

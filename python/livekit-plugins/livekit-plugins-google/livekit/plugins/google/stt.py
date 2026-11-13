@@ -279,6 +279,8 @@ class STT(stt.STT):
                 aligned_transcript="word" if enable_word_time_offsets and use_streaming else False,
                 # adaptation shadows keywords (see build_adaptation), so keyterms can't be applied
                 keyterms=not is_given(adaptation),
+                # usage events carry Google's billed duration
+                reports_usage=True,
             )
         )
 
@@ -1161,7 +1163,6 @@ def _recognize_response_to_speech_event(
     return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=alternatives)
 
 
-@utils.log_exceptions(logger=logger)
 def _streaming_recognize_response_to_speech_data(
     resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
     *,

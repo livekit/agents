@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::realtime::{
-    CancelReply, Event, GenerateReplyFailed, HostRealtime, HostRealtimeSession,
+    CancelReply, Event, GenerateReplyFailed, HostRealtime, HostRealtimeError, HostRealtimeSession,
     RealtimeCapabilities,
 };
 use lk_agents_abi::{Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
@@ -95,6 +95,30 @@ impl Realtime for HostRealtimeModel {
     }
 }
 
+/// A host call that raised for the session (a drain whose streams raised, a cancel): one
+/// recoverable error the core reports, for the request it served. The drain still ends its
+/// generation, so nothing waits on it.
+#[derive(Clone)]
+struct Failures {
+    events: tokio::sync::mpsc::UnboundedSender<Event>,
+    anchor: lk_agents_abi::WallAnchor,
+}
+
+impl Failures {
+    fn report(&self, req_id: Option<String>, result: Result<(), HostError>) {
+        let Err(error) = result else { return };
+        let error = HostRealtimeError {
+            label: "RealtimeSession".into(),
+            message: error.message,
+            recoverable: true,
+            timestamp: lk_agents_net::clock::unix_now(),
+            req_id,
+            code: None,
+        };
+        let _ = self.events.send(Event::HostError(error).anchored(Some(self.anchor)));
+    }
+}
+
 /// Requests between being asked for and their generation: a cancelled one is dropped before it is
 /// sent, or its pending future cancelled after.
 #[derive(Default)]
@@ -114,6 +138,8 @@ pub struct HostRealtimeLeg {
     lane: tokio::sync::mpsc::UnboundedSender<RealtimeCommand>,
     requests: Arc<parking_lot::Mutex<Requests>>,
     events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<Event>>,
+    /// Where a failed host call is reported, as one recoverable error.
+    failures: Failures,
     spawner: Arc<dyn lk_agents_abi::Spawner>,
     tasks: parking_lot::Mutex<Vec<lk_agents_abi::OwnedTask>>,
     /// The host's event pump, apart from `tasks`: it runs until the host reports the end, so a
@@ -138,6 +164,7 @@ impl HostRealtimeLeg {
             lane,
             requests: Default::default(),
             events: tokio::sync::Mutex::new(events),
+            failures: Failures { events: events_tx.clone(), anchor },
             spawner: Arc::clone(spawner),
             tasks: Default::default(),
             forward: Default::default(),
@@ -171,8 +198,11 @@ impl HostRealtimeLeg {
             match host.next_event(&cx).await {
                 Ok(Some(Event::ServerGeneration(g))) => {
                     let Some(leg) = leg.upgrade() else { return };
-                    let (host, cx) = (Arc::clone(&host), cx.clone());
-                    leg.spawn(async move { host.drain(&cx, g.generation, None).await });
+                    let (host, cx, failures) =
+                        (Arc::clone(&host), cx.clone(), leg.failures.clone());
+                    leg.spawn(async move {
+                        failures.report(None, host.drain(&cx, g.generation, None).await);
+                    });
                 }
                 Ok(Some(ev)) => {
                     if events.send(ev.anchored(Some(anchor))).is_err() {
@@ -228,7 +258,7 @@ impl HostRealtimeLeg {
         };
         // Cancelled while it was being sent: the future is cancelled instead of awaited.
         if self.requests.lock().cancelled.remove(&req_id) {
-            self.host.cancel(&self.cx, request).await;
+            self.failures.report(Some(req_id), self.host.cancel(&self.cx, request).await);
             return;
         }
         self.requests.lock().pending.insert(req_id.clone(), request.clone());
@@ -236,18 +266,20 @@ impl HostRealtimeLeg {
             Arc::clone(&self.host),
             self.cx.clone(),
             Arc::clone(&self.requests),
-            events.clone(),
+            self.failures.clone(),
             req_id,
             request,
         ));
     }
 
     /// Awaits the request's generation and drains it; a failure is reported unless cancelled.
+    /// The wait is bounded by the core: a request unanswered within its timeout is cancelled
+    /// (`CancelReply`), which ends `generation`.
     async fn deliver_reply(
         host: Arc<dyn HostRealtimeSession>,
         cx: telemetry::Cx,
         requests: Arc<parking_lot::Mutex<Requests>>,
-        events: tokio::sync::mpsc::UnboundedSender<Event>,
+        failures: Failures,
         req_id: String,
         request: lk_agents_abi::HostRef,
     ) {
@@ -255,10 +287,13 @@ impl HostRealtimeLeg {
         // Gone from `pending`: cancelled, and a cancelled request reports nothing.
         let asked = requests.lock().pending.remove(&req_id).is_some();
         match generation {
-            Ok(generation) => host.drain(&cx, generation, Some(req_id)).await,
+            Ok(generation) => {
+                let drained = host.drain(&cx, generation, Some(req_id.clone())).await;
+                failures.report(Some(req_id), drained);
+            }
             Err(error) if asked => {
-                let _ =
-                    events.send(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
+                let failed = Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error });
+                let _ = failures.events.send(failed);
             }
             Err(_) => {}
         }
@@ -299,13 +334,16 @@ impl RealtimeSession for HostRealtimeLeg {
                     let mut requests = self.requests.lock();
                     let pending = requests.pending.remove(&req_id);
                     if pending.is_none() {
-                        requests.cancelled.insert(req_id);
+                        requests.cancelled.insert(req_id.clone());
                     }
                     pending
                 };
                 if let Some(request) = pending {
                     let (host, cx) = (Arc::clone(&self.host), self.cx.clone());
-                    self.spawn(async move { host.cancel(&cx, request).await });
+                    let failures = self.failures.clone();
+                    self.spawn(async move {
+                        failures.report(Some(req_id), host.cancel(&cx, request).await);
+                    });
                 }
             }
             RealtimeCommand::UpdateInstructions(_)
@@ -345,7 +383,13 @@ impl RealtimeSession for HostRealtimeLeg {
             // As the reference's `_core_aclose`: the drains and updates are cancelled, then the
             // session closes.
             drop(std::mem::take(&mut *self.tasks.lock()));
-            self.host.aclose(&self.cx).await;
+            if let Err(e) = self.host.aclose(&self.cx).await {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.message.as_str(); "the realtime session did not close");
+            }
         })
     }
 }
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;

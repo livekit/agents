@@ -84,6 +84,12 @@ pub struct ProviderErrorMetadata {
     pub status_code: Option<i64>,
     #[host(lenient)]
     pub retryable: Option<bool>,
+    /// `APIError.detail`: the provider's own message.
+    #[host(lenient)]
+    pub detail: Option<String>,
+    /// `APIStatusError.retry_after`, in seconds.
+    #[host(lenient)]
+    pub retry_after: Option<f64>,
 }
 
 #[crate::host(record(

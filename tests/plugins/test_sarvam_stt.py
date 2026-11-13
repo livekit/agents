@@ -11,7 +11,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, http, stt
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, http, stt
 from livekit.plugins.sarvam import stt as sarvam_stt
 from tests.fakes import until
 
@@ -181,17 +181,13 @@ async def test_a_rejecting_close_raises_with_the_close_code_and_reason(
         await ws.close(code=4000, message=b"Invalid model 'saarass:v3'.")
 
     async with _streaming_stt(monkeypatch, peer) as model:
-        with pytest.raises(APIStatusError) as caught:
+        with pytest.raises(APIConnectionError) as caught:
             async with model.stream(conn_options=NO_RETRY) as stream:
                 async for _ in stream:
                     pass
 
-    assert caught.value.status_code == 4000
-    assert caught.value.body == {
-        "msg_type": "CLOSE",
-        "close_code": 4000,
-        "close_reason": "Invalid model 'saarass:v3'.",
-    }
+    assert "(close code 4000)" in caught.value.message
+    assert caught.value.detail == "Invalid model 'saarass:v3'."
 
 
 async def test_closing_the_stt_closes_every_open_stream(monkeypatch: pytest.MonkeyPatch) -> None:

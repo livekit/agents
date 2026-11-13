@@ -510,8 +510,7 @@ impl TaskSet {
                 return true;
             }
             let Some(at) = deadline else {
-                // The set is borrowed for the wait, so its producer outlives it.
-                let _ = left.changed().await;
+                left.changed().await.expect("the borrowed set keeps its producer");
                 continue;
             };
             tokio::select! {

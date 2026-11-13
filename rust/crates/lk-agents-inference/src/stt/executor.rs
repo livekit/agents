@@ -38,7 +38,7 @@ pub(super) struct SttStreamExecutor {
     pub(super) update_rx: mpsc::UnboundedReceiver<serde_json::Value>,
     pub(super) deferred: Arc<DeferredExtra>,
     pub(super) update_tx: mpsc::UnboundedSender<serde_json::Value>,
-    pub(super) event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
+    pub(super) event_tx: lk_agents_net::outbox::Outbox<Result<SpeechEvent, ApiError>>,
     pub(super) gate: lk_agents_net::source::InputGate,
     pub(super) stop: tokio_util::sync::CancellationToken,
     pub(super) accepted: lk_agents_abi::Ts,
@@ -47,7 +47,7 @@ pub(super) struct SttStreamExecutor {
 impl SttStreamExecutor {
     async fn failed(&self, error: ApiError) {
         self.gate.fail(error.clone().into());
-        let _ = self.event_tx.send(Err(error)).await;
+        self.event_tx.send(Err(error)).await;
     }
 
     /// `RecognizeStream._main_task`: each failed attempt reconnects, under `conn_options`, with the
@@ -511,10 +511,12 @@ impl AudioUplink {
         self.finish_input().await
     }
 
-    /// "failed to send session.update, ws may be closing" -- swallowed, as in the reference.
+    /// A lost update is not a failure: a reconnect sends the current options.
     async fn send_update(&mut self, frame: serde_json::Value) {
-        if !self.sender.is_closed() {
-            let _ = self.sender.send_text(frame.to_string()).await;
+        if !self.sender.is_closed()
+            && let Err(error) = self.sender.send_text(frame.to_string()).await
+        {
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "failed to send session.update, ws may be closing: {error}");
         }
     }
 
@@ -605,7 +607,7 @@ impl AudioUplink {
 
 /// The receive half of one connection: gateway messages assembled into transcripts.
 struct RecvCtx {
-    event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
+    event_tx: lk_agents_net::outbox::Outbox<Result<SpeechEvent, ApiError>>,
     deferred: Arc<DeferredExtra>,
     update_tx: mpsc::UnboundedSender<serde_json::Value>,
     clock: Arc<dyn Clock>,
@@ -710,7 +712,8 @@ impl RecvCtx {
             usage.connection = self.connection.take();
         }
         let event = self.gaps.lock().shift(shifted(event, self.offset));
-        if self.event_tx.send(Ok(event)).await.is_err() {
+        self.event_tx.send(Ok(event)).await;
+        if self.event_tx.is_closed() {
             return ControlFlow::Break(());
         }
         ControlFlow::Continue(())

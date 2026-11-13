@@ -22,22 +22,20 @@ so this plugin does not wrap ``vakyamai``.
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
-if TYPE_CHECKING:
-    from websockets.asyncio.client import ClientConnection
-
 from livekit.agents import (
     APIConnectionError,
+    APIConnectOptions,
+    APIError,
     APIStatusError,
-    APITimeoutError,
     __version__ as livekit_version,
+    http,
 )
 
 from ._utils import (
@@ -171,6 +169,7 @@ class AsyncStreamingTTSSession:
         *,
         api_key: str,
         config: TTSSessionConfig,
+        session: http.HttpSession,
         base_url: str | None = None,
         allow_insecure_base_url: bool = False,
     ) -> None:
@@ -189,7 +188,8 @@ class AsyncStreamingTTSSession:
         self._api_key = api_key
         self._config = config
         self._url = websocket_url(resolved_base)
-        self._connection: ClientConnection | None = None
+        self._session = session
+        self._connection: http.WebSocket | None = None
         self._utterance_active = False
         self.last_result: WebSocketSpeechResult | None = None
 
@@ -206,64 +206,30 @@ class AsyncStreamingTTSSession:
         """True while waiting for ``end_of_utterance`` or ``cancellation``."""
         return self._utterance_active
 
-    async def __aenter__(self) -> AsyncStreamingTTSSession:
-        await self.connect()
-        return self
-
-    async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: object
-    ) -> None:
-        await self.close()
-
-    async def connect(self, *, timeout: float | None = 10.0) -> None:
+    async def connect(self, conn_options: APIConnectOptions) -> None:
         if self._connection is not None:
             return
+        self._connection = await self._session.ws_connect(
+            self._url,
+            headers={"Authorization": f"Bearer {self._api_key}", "User-Agent": USER_AGENT},
+            conn_options=conn_options,
+        )
         try:
-            from websockets.asyncio.client import connect
-        except ImportError as exc:
-            raise APIConnectionError("websockets is required for Vakyam TTS streaming") from exc
-
-        async def _connect_and_configure() -> None:
-            self._connection = await connect(
-                self._url,
-                additional_headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "User-Agent": USER_AGENT,
-                },
-                open_timeout=timeout,
-                close_timeout=timeout,
-            )
-            connected = _decode_message(await self._connection.recv())
+            connected = await self._recv_control(conn_options.read_timeout)
             if connected.type != "connected":
                 raise APIConnectionError("Unexpected WebSocket handshake response")
-
-            await self._connection.send(json.dumps(self._config.to_wire_message()))
-            configured = _decode_message(await self._connection.recv())
+            await self._connection.send_json(self._config.to_wire_message())
+            configured = await self._recv_control(conn_options.read_timeout)
             if configured.type == "error":
                 raise_ws_error(configured)
             if configured.type != "configured":
                 raise APIConnectionError("Unexpected WebSocket config response")
-
-        try:
-            await asyncio.wait_for(_connect_and_configure(), timeout=timeout)
-        except TimeoutError as exc:
-            await self.close()
-            raise APITimeoutError("Vakyam TTS WebSocket connection timed out") from exc
-        except (APIStatusError, APIConnectionError):
+        except BaseException:
             await self.close()
             raise
-        except Exception as exc:
-            await self.close()
-            raise _websocket_connection_error(
-                exc, message="Vakyam TTS WebSocket connection failed"
-            ) from exc
 
     async def synthesize_stream(
-        self,
-        text: str,
-        *,
-        timeout: float | None = 10.0,
-        write_timeout: float | None = None,
+        self, text: str, *, timeout: float | None = 10.0
     ) -> AsyncIterator[bytes]:
         """Send one utterance and yield raw audio until EOU or cancellation.
 
@@ -271,43 +237,29 @@ class AsyncStreamingTTSSession:
         ``cancel``, drains until ``cancellation``, then re-raises so the
         WebSocket can be reused.
         """
-        if self._connection is None:
-            raise APIConnectionError("WebSocket session is not connected")
-
-        payload = json.dumps(text_message(text))
+        ws = self._socket()
+        payload = text_message(text)
         self.last_result = None
         self._utterance_active = True
-
         try:
-            await asyncio.wait_for(self._connection.send(payload), timeout=write_timeout)
+            await ws.send_json(payload)
             while True:
-                message = await asyncio.wait_for(self._connection.recv(), timeout=timeout)
+                message = await self._recv(timeout)
                 if isinstance(message, bytes):
                     if message:
                         yield message
                     continue
-
-                data = _decode_message(message)
-                msg_type = data.type
-                if msg_type == "error":
-                    raise_ws_error(data)
-                if msg_type == "pong":
+                if message.type == "error":
+                    raise_ws_error(message)
+                if message.type == "pong":
                     continue
-                if isinstance(data, (_EndOfUtterance, _Cancellation)):
-                    self.last_result = speech_result_from_terminal(data)
+                if isinstance(message, (_EndOfUtterance, _Cancellation)):
+                    self.last_result = speech_result_from_terminal(message)
                     return
-                raise APIConnectionError(f"Unexpected WebSocket message type: {msg_type}")
+                raise APIConnectionError(f"Unexpected WebSocket message type: {message.type}")
         except asyncio.CancelledError:
             await asyncio.shield(self._abort_and_drain(timeout=timeout))
             raise
-        except TimeoutError as exc:
-            raise APITimeoutError("Vakyam TTS WebSocket receive timed out") from exc
-        except (APIStatusError, APIConnectionError, APITimeoutError):
-            raise
-        except Exception as exc:
-            raise _websocket_connection_error(
-                exc, message="Vakyam TTS WebSocket synthesis failed"
-            ) from exc
         finally:
             self._utterance_active = False
 
@@ -315,38 +267,14 @@ class AsyncStreamingTTSSession:
         self, *, drain: bool = True, timeout: float | None = 10.0
     ) -> WebSocketSpeechResult | None:
         """Send barge-in ``cancel`` and optionally drain until ``cancellation``."""
-        if self._connection is None:
-            raise APIConnectionError("WebSocket session is not connected")
-
-        try:
-            await asyncio.wait_for(
-                self._connection.send(json.dumps(cancel_message())), timeout=timeout
-            )
-        except TimeoutError as exc:
-            raise APITimeoutError("Vakyam TTS WebSocket cancellation timed out") from exc
+        await self._socket().send_json(cancel_message())
         if not drain:
             return None
         return await self._drain_until_terminal(timeout=timeout)
 
     async def ping(self, *, timeout: float | None = 10.0) -> bool:
-        if self._connection is None:
-            raise APIConnectionError("WebSocket session is not connected")
-        try:
-            await asyncio.wait_for(
-                self._connection.send(json.dumps(ping_message())), timeout=timeout
-            )
-            response = _decode_message(
-                await asyncio.wait_for(self._connection.recv(), timeout=timeout)
-            )
-        except TimeoutError as exc:
-            raise APITimeoutError("Vakyam TTS WebSocket ping timed out") from exc
-        except (APIConnectionError, APIStatusError):
-            raise
-        except Exception as exc:
-            raise _websocket_connection_error(
-                exc, message="Vakyam TTS WebSocket ping failed"
-            ) from exc
-
+        await self._socket().send_json(ping_message())
+        response = await self._recv_control(timeout)
         if response.type == "error":
             raise_ws_error(response)
         if response.type != "pong":
@@ -355,76 +283,64 @@ class AsyncStreamingTTSSession:
             )
         return True
 
-    async def close(self, *, timeout: float | None = 10.0) -> None:
+    async def close(self) -> None:
         if self._connection is None:
             return
-        try:
-            with suppress(Exception):
-                await asyncio.wait_for(
-                    self._connection.send(json.dumps(disconnect_message())), timeout=timeout
-                )
-            with suppress(Exception):
-                await asyncio.wait_for(self._connection.close(), timeout=timeout)
-        finally:
-            self._connection = None
-            self._utterance_active = False
+        connection, self._connection = self._connection, None
+        self._utterance_active = False
+        with suppress(APIError):
+            await connection.send_json(disconnect_message())
+        await connection.close()
+
+    def _socket(self) -> http.WebSocket:
+        if self._connection is None:
+            raise APIConnectionError("WebSocket session is not connected")
+        return self._connection
+
+    async def _recv(
+        self, timeout: float | None
+    ) -> bytes | _ControlMessage | _Cancellation | _EndOfUtterance:
+        ws = self._socket()
+        message = await ws.receive(timeout=timeout)
+        if message.type is http.WebSocketMessageType.BINARY:
+            return message.binary
+        if message.type is http.WebSocketMessageType.TEXT:
+            return _decode_message(message.text)
+        if ws.close_code == _AUTH_FAILED:
+            raise APIStatusError("Vakyam TTS authentication failed", status_code=401)
+        raise ws.close_error("Vakyam TTS WebSocket closed")
+
+    async def _recv_control(
+        self, timeout: float | None
+    ) -> _ControlMessage | _Cancellation | _EndOfUtterance:
+        message = await self._recv(timeout)
+        if isinstance(message, bytes):
+            raise APIConnectionError("Unexpected binary WebSocket message", retryable=False)
+        return message
 
     async def _abort_and_drain(self, *, timeout: float | None) -> None:
         """Best-effort cancel + drain after the consumer task was cancelled."""
         if self._connection is None:
             return
-        with suppress(Exception):
-            await asyncio.wait_for(
-                self._connection.send(json.dumps(cancel_message())), timeout=timeout
-            )
-        with suppress(Exception):
+        with suppress(APIError):
+            await self._connection.send_json(cancel_message())
             self.last_result = await self._drain_until_terminal(timeout=timeout)
 
     async def _drain_until_terminal(self, *, timeout: float | None) -> WebSocketSpeechResult:
-        if self._connection is None:
-            raise APIConnectionError("WebSocket session is not connected")
-
         while True:
-            try:
-                message = await asyncio.wait_for(self._connection.recv(), timeout=timeout)
-            except TimeoutError as exc:
-                raise APITimeoutError("Vakyam TTS WebSocket cancellation timed out") from exc
-            if isinstance(message, bytes):
+            message = await self._recv(timeout)
+            if isinstance(message, bytes) or message.type == "pong":
                 continue
-            data = _decode_message(message)
-            msg_type = data.type
-            if msg_type == "error":
-                raise_ws_error(data)
-            if msg_type == "pong":
-                continue
-            if isinstance(data, (_EndOfUtterance, _Cancellation)):
-                result = speech_result_from_terminal(data)
+            if message.type == "error":
+                raise_ws_error(message)
+            if isinstance(message, (_EndOfUtterance, _Cancellation)):
+                result = speech_result_from_terminal(message)
                 self.last_result = result
                 return result
             raise APIConnectionError(
-                f"Unexpected WebSocket message type while draining: {msg_type}"
+                f"Unexpected WebSocket message type while draining: {message.type}"
             )
 
 
-def _websocket_connection_error(
-    exc: Exception, *, message: str
-) -> APIConnectionError | APIStatusError:
-    """Translate WebSocket close codes without exposing request headers."""
-    received = getattr(exc, "rcvd", None)
-    code = getattr(received, "code", None)
-    if code is None:
-        code = getattr(exc, "code", None)
-
-    if code == 4001:
-        return APIStatusError(
-            "Vakyam TTS authentication failed",
-            status_code=401,
-            retryable=False,
-        )
-    if isinstance(code, int):
-        return APIStatusError(
-            f"{message} (WebSocket closed with code {code})",
-            status_code=code,
-            retryable=code in {1011, 4002},
-        )
-    return APIConnectionError(f"{message}: {type(exc).__name__}")
+# Vakyam's documented close code for a rejected API key: the shared close-code rule would retry it.
+_AUTH_FAILED = 4001

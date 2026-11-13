@@ -16,6 +16,10 @@ from typing_extensions import TypedDict
 #     rust/crates/lk-agents-abi/src/types/identity.rs
 
 
+CloseKind: TypeAlias = Literal["normal", "final", "retryable"]
+"""What a websocket close code says about the failure that closed the socket."""
+
+
 Timeout: TypeAlias = Literal["pool", "connect", "read", "write", "total"]
 """The wait an `APITimeoutError` bounded, as `APIConnectOptions` names its limits. Absent when the
 failing layer does not say (a foreign SDK timeout), never guessed. Its wire string is the

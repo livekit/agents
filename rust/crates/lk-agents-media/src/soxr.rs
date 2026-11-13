@@ -20,7 +20,7 @@ static FFT_CACHE: RwLock<()> = RwLock::new(());
 /// `Quality`'s discriminants are protobuf ordinals, mapped to soxr recipes as the SDK maps them.
 use lk_agents_abi::{Quality, ResampleError};
 
-/// Not `Sync`; distinct handles on distinct threads are safe only because of `FFT_CACHE`.
+/// Distinct handles on distinct threads are safe only because of `FFT_CACHE`.
 pub struct Resampler {
     ptr: soxr_sys::soxr_t,
     out: Vec<i16>,
@@ -32,6 +32,10 @@ pub struct Resampler {
 // SAFETY: the handle is owned solely by this value and used only through `&mut self`; soxr
 // keeps no thread affinity, and `FFT_CACHE` serializes the one state handles share.
 unsafe impl Send for Resampler {}
+
+// SAFETY: no `&self` method reads or writes through the handle; sharing a reference exposes only
+// the plain rate and channel fields.
+unsafe impl Sync for Resampler {}
 
 /// Takes a non-null error soxr returned.
 fn message(err: *const c_char) -> String {

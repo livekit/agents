@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from json import JSONDecodeError
 from types import TracebackType
 
@@ -8,13 +7,10 @@ from pydantic import BaseModel, JsonValue, ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     http,
 )
-
-from .log import logger
 
 DEFAULT_API_URL = "https://api.keyframelabs.com"
 
@@ -86,37 +82,17 @@ class KeyframeAPI:
     ) -> SessionResponse:
         url = f"{self._api_url}{endpoint}"
         session = self._session or http.http_session()
-        async with self._conn_options.total_deadline():
-            for i in range(self._conn_options.max_retry + 1):
+
+        async def request() -> SessionResponse:
+            async with session.post(
+                url, headers=headers, json=payload, conn_options=self._conn_options
+            ) as response:
+                await response.raise_for_status()
                 try:
-                    async with session.post(
-                        url, headers=headers, json=payload, conn_options=self._conn_options
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise APIStatusError(
-                                f"Keyframe API error for {url}: {response.status}",
-                                status_code=response.status,
-                                body=text,
-                            )
-                        return SessionResponse.model_validate(await response.json())
+                    return SessionResponse.model_validate(await response.json())
                 except (ValidationError, JSONDecodeError) as exc:
-                    raise APIConnectionError(
+                    raise APIError(
                         "Keyframe returned an invalid response", retryable=False
                     ) from exc
-                except Exception as e:
-                    if isinstance(e, APIStatusError) and not e.retryable:
-                        raise APIConnectionError(
-                            f"Failed to call Keyframe API at {url} with non-retryable error",
-                            retryable=False,
-                        ) from e
 
-                    if isinstance(e, APIConnectionError):
-                        logger.warning("Failed to call Keyframe API", extra={"error": str(e)})
-                    else:
-                        logger.exception("Failed to call Keyframe API")
-
-                    if i < self._conn_options.max_retry:
-                        await asyncio.sleep(self._conn_options.interval_for_retry(i))
-
-        raise APIConnectionError("Failed to call Keyframe API after all retries.")
+        return await http.retry_request(request, conn_options=self._conn_options)

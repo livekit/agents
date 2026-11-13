@@ -1,4 +1,3 @@
-import asyncio
 import os
 from json import JSONDecodeError
 from typing import TypeVar
@@ -8,15 +7,12 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     NotGivenOr,
     http,
     utils,
 )
-
-from .log import logger
 
 
 class TavusException(Exception):
@@ -133,55 +129,22 @@ class TavusAPI:
             Response data as a dictionary
 
         Raises:
-            APIStatusError: If Tavus returns a non-retryable error, or a retryable one
-                persists after all retries
+            APIStatusError: If Tavus returns a non-retryable error
             APIConnectionError: If the request fails after all retries
         """
-        async with self._conn_options.total_deadline():
-            for attempt in range(self._conn_options.max_retry + 1):
-                try:
-                    async with self._session.post(
-                        f"{self._api_url}/{endpoint}",
-                        headers={
-                            "Content-Type": "application/json",
-                            "x-api-key": self._api_key,
-                        },
-                        json=payload,
-                        conn_options=self._conn_options,
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise APIStatusError(
-                                "Server returned an error", status_code=response.status, body=text
-                            )
-                        try:
-                            return response_type.model_validate(await response.json())
-                        except (ValidationError, JSONDecodeError) as e:
-                            # Tavus already accepted the POST; retrying could create a duplicate.
-                            raise APIConnectionError(
-                                "Tavus returned an invalid response", retryable=False
-                            ) from e
-                except APIStatusError as e:
-                    # A 4xx such as a bad API key will fail the same way every time.
-                    if not e.retryable:
-                        raise
-                    logger.warning(
-                        "failed to call tavus api",
-                        extra={"attempt": attempt + 1, "status_code": e.status_code},
-                    )
-                    if attempt >= self._conn_options.max_retry:
-                        raise
-                    await asyncio.sleep(self._conn_options.retry_interval)
-                except APIConnectionError as e:
-                    if not e.retryable:
-                        raise
-                    logger.warning(
-                        "failed to call tavus api", extra={"attempt": attempt + 1, "error": str(e)}
-                    )
-                    if attempt >= self._conn_options.max_retry:
-                        raise APIConnectionError(
-                            "Failed to call Tavus API after all retries"
-                        ) from e
-                    await asyncio.sleep(self._conn_options.retry_interval)
 
-        raise APIConnectionError("Failed to call Tavus API after all retries")
+        async def request() -> _ResponseT:
+            async with self._session.post(
+                f"{self._api_url}/{endpoint}",
+                headers={"Content-Type": "application/json", "x-api-key": self._api_key},
+                json=payload,
+                conn_options=self._conn_options,
+            ) as response:
+                await response.raise_for_status()
+                try:
+                    return response_type.model_validate(await response.json())
+                except (ValidationError, JSONDecodeError) as exc:
+                    # Tavus already accepted the POST; retrying could create a duplicate.
+                    raise APIError("Tavus returned an invalid response", retryable=False) from exc
+
+        return await http.retry_request(request, conn_options=self._conn_options)

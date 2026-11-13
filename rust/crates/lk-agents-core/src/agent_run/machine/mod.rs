@@ -131,10 +131,10 @@ pub enum AgentRunEvent {
         call: CallId,
         result: Result<ReadBackAnswer, HostError>,
     },
-    /// The host rendered the call's template; `None` keeps the framework's text.
+    /// The host rendered the call's template; `Ok(None)` keeps the framework's text.
     ToolHandlingTemplateRendered {
         call: CallId,
-        text: Option<String>,
+        text: Result<Option<String>, HostError>,
     },
     /// `ctx.update(text)`.
     ToolProgress {

@@ -17,7 +17,7 @@ from pydantic import BaseModel, ValidationError
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     APITimeoutError,
     http,
     tts,
@@ -135,7 +135,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(tasks.spawn(_collect_segments()), tasks.spawn(_run_segments()))
         except TimeoutError:
             raise APITimeoutError() from None
-        except (APIConnectionError, APIStatusError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -200,7 +200,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         except TimeoutError:
             raise APITimeoutError() from None
-        except (APIConnectionError, APIStatusError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e

@@ -9,7 +9,13 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APITimeoutError, http
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    http,
+)
 from livekit.plugins.gladia import STT
 
 
@@ -33,9 +39,34 @@ async def test_startup_timeout_reaches_consumer() -> None:
                 ) as stream:
                     await asyncio.wait_for(anext(stream), 2)
             assert caught.value.retryable
-            assert isinstance(caught.value.__cause__, APITimeoutError)
+            assert isinstance(caught.value, APITimeoutError)
         finally:
             release.set()
+            await model.aclose()
+
+
+async def test_rejected_initialization_is_not_retried() -> None:
+    """A 401 at session initialization fails once, not retried as a connection error."""
+    attempts = 0
+
+    async def initialize(request: web.Request) -> web.StreamResponse:
+        nonlocal attempts
+        attempts += 1
+        return web.Response(status=401, text="invalid key")
+
+    app = web.Application()
+    app.router.add_post("/live", initialize)
+    async with TestServer(app) as server, http.open() as session:
+        model = STT(api_key="test", http_session=session, base_url=str(server.make_url("/live")))
+        try:
+            with pytest.raises(APIStatusError) as caught:
+                async with model.stream(
+                    conn_options=APIConnectOptions(max_retry=3, retry_interval=0)
+                ) as stream:
+                    await asyncio.wait_for(anext(stream), 2)
+            assert caught.value.status_code == 401 and not caught.value.retryable
+            assert attempts == 1
+        finally:
             await model.aclose()
 
 

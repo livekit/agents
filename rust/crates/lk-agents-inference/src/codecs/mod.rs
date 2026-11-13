@@ -389,17 +389,15 @@ impl Drop for DecoderInput {
 }
 
 /// `utils.media.AudioStreamDecoder`: input is queued without waiting, frames are awaited, and
-/// EOF never blocks the host loop. A failure is logged and ends the stream; `None` is a decoder
-/// that failed to open.
-pub struct StreamDecoder(Option<OpenDecoder>);
-
-struct OpenDecoder {
+/// EOF never blocks the host loop. A failure is the caller's, as a non-retryable error.
+pub struct StreamDecoder {
     input: DecoderInput,
     output: tokio::sync::Mutex<AudioDecoder>,
 }
 
-fn log_failure(error: &dyn std::fmt::Display) {
-    log::error!(target: lk_agents_abi::LOG_TARGET, "error decoding audio: {error}");
+fn decode_failed(error: DecoderError) -> lk_agents_abi::errors::ApiError {
+    lk_agents_abi::errors::ApiError::new(format!("error decoding audio: {error}"))
+        .with_retryable(false)
 }
 
 impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
@@ -410,57 +408,41 @@ impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
         sample_rate: Option<u32>,
         num_channels: u16,
         format: Option<String>,
-    ) -> Self {
+    ) -> Result<Self, lk_agents_abi::errors::ApiError> {
         let media_pool = lk_agents_media::pool::media_pool();
         let limits = decoder_limits(sample_rate.unwrap_or(48_000), num_channels);
         let mime = format.unwrap_or_default().to_lowercase();
-        let opened =
-            source::check_stream(&mime).map_err(DecoderError::from).and_then(|container| {
-                AudioDecoder::open_stream(&media_pool, container, sample_rate, num_channels, limits)
-            });
-        match opened {
-            Ok((output, input)) => {
-                Self(Some(OpenDecoder { input, output: tokio::sync::Mutex::new(output) }))
-            }
-            Err(error) => {
-                log_failure(&error);
-                Self(None)
-            }
-        }
+        let container = source::check_stream(&mime).map_err(|e| decode_failed(e.into()))?;
+        let (output, input) =
+            AudioDecoder::open_stream(&media_pool, container, sample_rate, num_channels, limits)
+                .map_err(decode_failed)?;
+        Ok(Self { input, output: tokio::sync::Mutex::new(output) })
     }
 
-    fn push(&self, chunk: &[u8]) {
-        let Some(decoder) = &self.0 else { return };
-        match decoder.input.push(chunk) {
+    fn push(&self, chunk: &[u8]) -> Result<(), lk_agents_abi::errors::ApiError> {
+        match self.input.push(chunk) {
             // Closed input: ended, cancelled, or a decode failure the output side reports.
-            Ok(()) | Err(DecoderError::InputClosed) => {}
+            Ok(()) | Err(DecoderError::InputClosed) => Ok(()),
             Err(error) => {
-                log_failure(&error);
-                decoder.input.end_input();
+                self.input.end_input();
+                Err(decode_failed(error))
             }
         }
     }
 
     fn end_input(&self) {
-        if let Some(decoder) = &self.0 {
-            decoder.input.end_input();
-        }
+        self.input.end_input();
     }
 
-    async fn next(&self) -> Option<AudioFrame> {
-        let decoder = self.0.as_ref()?;
-        decoder.output.lock().await.next().await.unwrap_or_else(|error| {
-            log_failure(&error);
-            None
-        })
+    async fn next(&self) -> Result<Option<AudioFrame>, lk_agents_abi::errors::ApiError> {
+        self.output.lock().await.next().await.map_err(decode_failed)
     }
 
     async fn aclose(&self) {
-        let Some(decoder) = &self.0 else { return };
         // Cancelling first ends a pending `next`, which releases the output to close it.
-        decoder.input.cancel();
-        if let Err(error) = decoder.output.lock().await.close().await {
-            log_failure(&error);
+        self.input.cancel();
+        if let Err(error) = self.output.lock().await.close().await {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the audio decoder did not close: {error}");
         }
     }
 }

@@ -234,7 +234,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         if m.kind == ProxyCall::Notify && matches!(q.ty, Ty::Error(_)) {
             // A later raise may consume the captured host exception before this notice drains.
             moved.push_str(&format!(
-                "        let {name}_arg = match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {{ Ok(({value}).unbind()) }}) {{\n            Ok(value) => value,\n            Err(error) => {{\n                log::warn!(\"{label} failed: {{error}}\");\n                return;\n            }}\n        }};\n",
+                "        let {name}_arg = match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {{ Ok(({value}).unbind()) }}) {{\n            Ok(value) => value,\n            Err(error) => {{\n                log::warn!(target: ::lk_agents_abi::LOG_TARGET, \"{label} failed: {{error}}\");\n                return;\n            }}\n        }};\n",
                 name = q.name,
             ));
             args.push(format!("{}_arg.into_bound(py)", q.name));
@@ -403,14 +403,9 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     // Dispatched before `context` is rebound: the call's own context parameter may share its name.
     let head = format!("{host}{moved}        let started = {dispatch};\n{context}");
     match m.kind {
-        ProxyCall::Await if m.ret.err.is_none() => Ok(awaited(
-            m,
-            &sig,
-            "()",
-            &head,
-            &format!(
-                "        if let Err(e) = started.await {{\n            log::warn!(\"{label} failed: {{e}}\");\n        }}\n"
-            ),
+        // Its caller learns the failure: nothing is swallowed into a log here.
+        ProxyCall::Await if m.ret.err.is_none() => Err(format!(
+            "{label}: an awaited host call returns a `Result`, so its caller learns a failure"
         )),
         ProxyCall::Await => {
             let (ret, refused, wrap, err) = result_shape(m, &at)?;

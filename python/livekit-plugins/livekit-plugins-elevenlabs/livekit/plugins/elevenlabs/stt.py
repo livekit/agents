@@ -44,7 +44,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
-from ._utils import TRACE_ID_HEADER, PeriodicCollector, trace_id_from_headers
+from ._utils import TRACE_ID_HEADER, trace_id_from_headers
 from .log import logger
 from .models import STTBatchResponse, STTRealtimeSampleRates, STTResponse, STTWord
 
@@ -308,12 +308,12 @@ class STT(stt.STT):
                         body: object = json.loads(text)
                     except ValueError:
                         body = text
-                    detail = _http_error_detail(body)
                     raise APIStatusError(
-                        message=str(detail or text or "Unknown ElevenLabs error"),
+                        "ElevenLabs STT request failed",
                         status_code=response.status,
                         request_id=trace_id_from_headers(response.headers),
                         body=body,
+                        detail=_http_error_detail(body) or text or None,
                     )
                 response_data = STTBatchResponse.model_validate(await response.json())
                 extracted_text = response_data.text
@@ -451,10 +451,6 @@ class SpeechStream(stt.RecognizeStream):
         self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
         self._last_partial_text = ""
-        self._audio_duration_collector = PeriodicCollector(
-            callback=self._on_audio_duration_report,
-            duration=5.0,
-        )
 
     def update_options(
         self,
@@ -478,14 +474,6 @@ class SpeechStream(stt.RecognizeStream):
                 LanguageCode(language) for language in secondary_languages
             ]
             self._reconnect_event.set()
-
-    def _on_audio_duration_report(self, duration: float) -> None:
-        usage_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.RECOGNITION_USAGE,
-            alternatives=[],
-            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-        )
-        self.send(usage_event)
 
     @property
     def _server_vad(self) -> VADOptions | None:
@@ -536,7 +524,6 @@ class SpeechStream(stt.RecognizeStream):
             except Exception:
                 return
 
-        @utils.log_exceptions(logger=logger)
         async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
@@ -560,7 +547,6 @@ class SpeechStream(stt.RecognizeStream):
                         has_ended = True
 
                     for frame in frames:
-                        self._audio_duration_collector.push(frame.duration)
                         audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                         await ws.send_str(
                             json.dumps(
@@ -574,7 +560,6 @@ class SpeechStream(stt.RecognizeStream):
                         )
 
                     if has_ended:
-                        self._audio_duration_collector.flush()
                         await ws.send_str(
                             json.dumps(
                                 {
@@ -593,7 +578,6 @@ class SpeechStream(stt.RecognizeStream):
                     return
                 raise APIConnectionError("ElevenLabs STT connection closed unexpectedly") from e
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
@@ -603,25 +587,20 @@ class SpeechStream(stt.RecognizeStream):
                 if msg.type == http.WebSocketMessageType.CLOSE:
                     if closing_ws or self._session.closed:
                         return
-                    raise APIStatusError(
-                        message="ElevenLabs STT connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("ElevenLabs STT connection closed unexpectedly")
 
                 if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected ElevenLabs STT message type %s", msg.type)
                     continue
 
-                try:
-                    parsed = json.loads(msg.data)
-                    self._process_stream_event(parsed)
-                except Exception:
-                    logger.exception("failed to process ElevenLabs STT message")
+                self._process_stream_event(json.loads(msg.data))
 
         ws: http.WebSocket | None = None
 
         while True:
+            if self._speaking:  # a new connection starts outside any speech
+                self._speaking = False
+                self.send(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
             try:
                 ws = await self._connect_ws()
                 self._last_partial_text = ""
@@ -639,11 +618,9 @@ class SpeechStream(stt.RecognizeStream):
                         )
                     )
                 async with utils.aio.TaskSet() as tasks:
-                    io = asyncio.gather(
-                        tasks.spawn(send_task(ws)),
-                        tasks.spawn(recv_task(ws)),
-                        tasks.spawn(keepalive_task(ws)),
-                    )
+                    # the keepalive is cancelled with the set: it never keeps a session running
+                    tasks.spawn(keepalive_task(ws))
+                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
                     reconnect = tasks.spawn(self._reconnect_event.wait())
                     if await tasks.first_completed(io, reconnect) is not reconnect:
                         break
@@ -805,16 +782,14 @@ class SpeechStream(stt.RecognizeStream):
             "input_error",
             "error",
         ):
-            error_msg = response.message
-            error_details = response.details
-            details_suffix = " - " + error_details if error_details else ""
-            logger.error(
-                "ElevenLabs STT error [%s]: %s%s",
-                message_type,
-                error_msg,
-                details_suffix,
+            details_suffix = " - " + response.details if response.details else ""
+            # a rejected key, an exhausted quota or bad input fail the same way on a retry
+            raise APIError(
+                f"ElevenLabs STT {message_type}",
+                body=data,
+                retryable=message_type in ("transcriber_error", "error"),
+                detail=f"{response.message}{details_suffix}",
             )
-            raise APIConnectionError(f"{message_type}: {error_msg}{details_suffix}")
         else:
             logger.warning(
                 "ElevenLabs STT unknown message type: %s",

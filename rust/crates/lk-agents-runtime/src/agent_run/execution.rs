@@ -15,8 +15,10 @@ pub(crate) struct Reporter {
 }
 
 impl Reporter {
-    async fn send(&self, report: Report) -> Result<(), ()> {
-        self.tx.send((self.id.clone(), report)).await.map_err(|_| ())
+    /// Reports to the run's driver. A report nobody reads is dropped: the driver left with the
+    /// run, and dropping the run cancels its requests and callbacks.
+    async fn send(&self, report: Report) {
+        drop(self.tx.send((self.id.clone(), report)).await);
     }
 }
 
@@ -217,7 +219,7 @@ impl Execution {
         self.invoke(Work::Checkpoint(checkpoint), None, None, move |inv, events| async move {
             let (should_yield, tools) = checkpoint_host(host.as_ref(), &cx, &inv, list_tools).await;
             let event = AgentRunEvent::HostCheckpointDone { checkpoint, should_yield, tools };
-            let _ = events.send(Report::Core(event)).await;
+            events.send(Report::Core(event)).await;
         });
     }
 
@@ -246,7 +248,7 @@ impl Execution {
         let task = self.spawner.spawn_settled(stream, move |outcome| async move {
             if !matches!(outcome, lk_agents_abi::TaskOutcome::Completed) {
                 let error = ApiError::new("the model request ended without reporting").into();
-                let _ = lost.send(Report::LlmFailed { request, error }).await;
+                lost.send(Report::LlmFailed { request, error }).await;
             }
         });
         self.requests.insert(request, Request { stop: cancelled.drop_guard(), _task: task });
@@ -258,7 +260,7 @@ impl Execution {
         self.invoke(Work::Render(render), None, None, move |inv, events| async move {
             let result = host.render_instructions(&cx, &inv).await;
             let event = AgentRunEvent::InstructionsRendered { render, result };
-            let _ = events.send(Report::Core(event)).await;
+            events.send(Report::Core(event)).await;
         });
     }
 
@@ -275,7 +277,7 @@ impl Execution {
         let work = Work::Call(call);
         self.invoke(work, Some(function_call), None, move |inv, events| async move {
             let prepared = host.prepare_tool(&cx, &inv, arguments).await;
-            let _ = events.send(prepare_report(call, resource, prepared)).await;
+            events.send(prepare_report(call, resource, prepared)).await;
         });
     }
 
@@ -288,7 +290,7 @@ impl Execution {
         self.invoke(Work::Call(call), function_call, None, move |inv, events| async move {
             let result = host.read_back(&cx, &inv, &args).await;
             let event = AgentRunEvent::ReadBackRendered { call, result };
-            let _ = events.send(Report::Core(event)).await;
+            events.send(Report::Core(event)).await;
         });
         Some(())
     }
@@ -298,12 +300,9 @@ impl Execution {
         let cx = self.cx.clone();
         let function_call = self.calls.get(&call).cloned();
         self.invoke(Work::Call(call), function_call, None, move |inv, events| async move {
-            let text = host.render_template(&cx, &inv, template.key(), template).await.unwrap_or_else(|e| {
-                log::error!(target: lk_agents_abi::LOG_TARGET, "a tool_handling template failed: {e}");
-                None
-            });
+            let text = host.render_template(&cx, &inv, template.key(), template).await;
             let event = AgentRunEvent::ToolHandlingTemplateRendered { call, text };
-            let _ = events.send(Report::Core(event)).await;
+            events.send(Report::Core(event)).await;
         });
     }
 
@@ -344,7 +343,7 @@ impl Execution {
         self.invoke(Work::Validation(validation), None, None, move |inv, events| async move {
             let (verdict, value, serialized) =
                 crate::output_validation::project(host.validate_output(&cx, &inv, candidate).await);
-            let _ = events.send(Report::Validated { validation, verdict, value, serialized }).await;
+            events.send(Report::Validated { validation, verdict, value, serialized }).await;
         });
     }
 
@@ -439,7 +438,7 @@ impl Execution {
         let events = self.events_tx.clone();
         let lost = self.events_tx.clone();
         let lost = async move {
-            let _ = lost.send(work.lost()).await;
+            lost.send(work.lost()).await;
         };
         let operation = self.invoker.invoke(
             function_call,
@@ -494,10 +493,7 @@ fn prepare_report(
     let failure = match prepared {
         Ok(Ok(prepared)) => return Report::Prepared { call, resource, prepared },
         Ok(Err(e)) => PrepareFailure::Refused(e.message),
-        Err(e) => {
-            log::error!(target: lk_agents_abi::LOG_TARGET, "preparing a tool call failed: {e}");
-            PrepareFailure::Internal
-        }
+        Err(e) => PrepareFailure::Host(e),
     };
     Report::Core(AgentRunEvent::ToolPrepareFailed { call, failure })
 }
@@ -543,16 +539,15 @@ impl ToolRun {
         }
         let event = match ran {
             Ok(lk_agents_abi::agent::ToolCompletion { report, extra, usage }) => {
-                let _ =
-                    events.send(Report::Core(AgentRunEvent::ToolCallUpdated { call, extra })).await;
+                events.send(Report::Core(AgentRunEvent::ToolCallUpdated { call, extra })).await;
                 if let Some(usage) = usage {
-                    let _ = events.send(Report::Core(AgentRunEvent::DelegateUsage { usage })).await;
+                    events.send(Report::Core(AgentRunEvent::DelegateUsage { usage })).await;
                 }
                 AgentRunEvent::ToolSettled { call, outcome: report.outcome }
             }
             Err(error) => AgentRunEvent::ToolLaunchFailed { call, error },
         };
-        let _ = events.send(Report::Core(event)).await;
+        events.send(Report::Core(event)).await;
     }
 }
 
@@ -580,13 +575,13 @@ async fn stream_request(
     let mut stream = match opened {
         None => {
             let error = ApiError::cancelled("the request was cancelled").into();
-            let _ = events.send(Report::Core(AgentRunEvent::LlmFailed { request, error })).await;
+            events.send(Report::Core(AgentRunEvent::LlmFailed { request, error })).await;
             return;
         }
         Some(Err(error)) => {
             trace.end_attempt(attempt, Some(&error));
             trace.fail(&error);
-            let _ = events.send(Report::LlmFailed { request, error }).await;
+            events.send(Report::LlmFailed { request, error }).await;
             return;
         }
         Some(Ok(stream)) => stream,
@@ -611,13 +606,7 @@ async fn stream_request(
             }
             Some(Ok(Some(chunk))) => {
                 trace.observe(&chunk);
-                if events
-                    .send(Report::Core(AgentRunEvent::LlmChunk { request, chunk }))
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
+                events.send(Report::Core(AgentRunEvent::LlmChunk { request, chunk })).await;
                 continue;
             }
             Some(Ok(None)) => {
@@ -632,8 +621,7 @@ async fn stream_request(
             }
         }
     };
-    // A dropped run no longer consumes its terminal report.
-    let _ = events.send(report).await;
+    events.send(report).await;
 }
 
 #[cfg(test)]

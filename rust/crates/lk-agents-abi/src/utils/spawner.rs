@@ -94,6 +94,17 @@ impl<T: 'static> OwnedTask<T> {
     }
 }
 
+impl OwnedTask {
+    /// Until the task settled, for an owner that only needs it over (usually after cancelling
+    /// it): the work yields nothing, a cancellation is the owner's own, and a panic already
+    /// unwound into the executor, which reports it.
+    pub async fn settled(self) {
+        match self.await {
+            Ok(()) | Err(TaskError::Cancelled | TaskError::Panicked(_)) => {}
+        }
+    }
+}
+
 impl<T> Future for OwnedTask<T> {
     type Output = Result<T, TaskError>;
 

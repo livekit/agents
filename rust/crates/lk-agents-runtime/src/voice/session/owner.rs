@@ -252,7 +252,7 @@ impl Inner {
         let closed = self.closed.clone();
         Ok(Box::pin(async move {
             // Ended: the close owner is gone, so there is nothing left to wait for.
-            let _ = closed.wait_for(|closed| *closed).await;
+            closed.until(|closed| *closed).await;
         }))
     }
 
@@ -452,7 +452,9 @@ impl Inner {
         }
         if let Some(startup) = self.startup.get() {
             startup.storage.aclose().await;
-            startup.host.closed(&startup.trace).await;
+            if let Err(error) = startup.host.closed(&startup.trace).await {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "the session's closed callback raised: {error}");
+            }
         }
         if let Err(error) = self.finish_recording().await {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "the session recording could not finish: {error}");
@@ -646,8 +648,11 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         let id = self.0.select(Some(agent));
         let inner = self.0.clone();
         self.0.tasks.spawn(spawner.as_ref(), "agent selection", async move {
-            let _ = installed.await;
-            inner.selected(id);
+            match installed.await {
+                // Either answer leaves the session's own agent current: the new one, or the one
+                // a refused handoff kept.
+                true | false => inner.selected(id),
+            }
         });
         Ok(())
     }

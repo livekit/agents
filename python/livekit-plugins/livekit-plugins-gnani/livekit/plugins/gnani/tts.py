@@ -26,7 +26,6 @@ token-by-token streaming input.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import os
@@ -35,10 +34,8 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
-    APITimeoutError,
+    APIError,
     http,
     tokenize,
     tts,
@@ -46,7 +43,6 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
-from .log import logger
 from .models import (
     DEFAULT_MODEL,
     GnaniTTSBitrates,
@@ -269,38 +265,23 @@ class RESTChunkedStream(tts.ChunkedStream):
         self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        try:
-            async with self._get_session().post(
-                f"{self._opts.base_url}/api/v1/tts/inference",
-                json=_build_payload(self._opts, self._input_text),
-                headers=_build_headers(self._opts),
-                conn_options=self._conn_options,
-            ) as res:
-                if res.status != 200:
-                    error_text = await res.text()
-                    logger.error("Gnani TTS REST error: %s - %s", res.status, error_text)
-                    raise APIStatusError(
-                        message=f"Gnani TTS API Error ({res.status}): {error_text}",
-                        status_code=res.status,
-                        body=error_text,
-                    )
+        async with self._get_session().post(
+            f"{self._opts.base_url}/api/v1/tts/inference",
+            json=_build_payload(self._opts, self._input_text),
+            headers=_build_headers(self._opts),
+            conn_options=self._conn_options,
+        ) as res:
+            await res.raise_for_status()
+            audio_bytes = await res.read()
 
-                audio_bytes = await res.read()
-
-                request_id = utils.shortuuid()
-                output_emitter.initialize(
-                    request_id=request_id,
-                    sample_rate=self._tts.sample_rate,
-                    num_channels=self._tts.num_channels,
-                    mime_type=_mime_type(self._opts),
-                )
-                output_emitter.push(audio_bytes)
-                output_emitter.flush()
-
-        except (APIStatusError, APIConnectionError, APITimeoutError):
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"Gnani TTS REST error: {e}") from e
+            output_emitter.initialize(
+                request_id=utils.shortuuid(),
+                sample_rate=self._tts.sample_rate,
+                num_channels=self._tts.num_channels,
+                mime_type=_mime_type(self._opts),
+            )
+            output_emitter.push(audio_bytes)
+            output_emitter.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -332,76 +313,62 @@ class SSEChunkedStream(tts.ChunkedStream):
         self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        try:
-            async with self._get_session().post(
-                f"{self._opts.base_url}/api/v1/tts/sse",
-                json=_build_payload(self._opts, self._input_text),
-                headers=_build_headers(self._opts),
-                conn_options=self._conn_options,
-            ) as res:
-                if res.status != 200:
-                    error_text = await res.text()
-                    logger.error("Gnani TTS SSE error: %s - %s", res.status, error_text)
-                    raise APIStatusError(
-                        message=f"Gnani TTS SSE Error ({res.status}): {error_text}",
-                        status_code=res.status,
-                        body=error_text,
-                    )
+        async with self._get_session().post(
+            f"{self._opts.base_url}/api/v1/tts/sse",
+            json=_build_payload(self._opts, self._input_text),
+            headers=_build_headers(self._opts),
+            conn_options=self._conn_options,
+        ) as res:
+            await res.raise_for_status()
 
-                output_emitter.initialize(
-                    request_id=request_id,
-                    sample_rate=self._tts.sample_rate,
-                    num_channels=self._tts.num_channels,
-                    mime_type=_mime_type(self._opts),
-                )
+            output_emitter.initialize(
+                request_id=utils.shortuuid(),
+                sample_rate=self._tts.sample_rate,
+                num_channels=self._tts.num_channels,
+                mime_type=_mime_type(self._opts),
+            )
 
-                buf = ""
-                async for raw_bytes in res.iter_lines():
-                    raw_line = raw_bytes.decode("utf-8").strip()
+            buf = ""
+            async for raw_bytes in res.iter_lines():
+                raw_line = raw_bytes.decode("utf-8").strip()
+                if not raw_line:
+                    continue
+                # Ignore SSE keep-alive comments (":") and non-data metadata
+                # fields; appending them would corrupt the JSON accumulator
+                # and drop the remaining audio for this request.
+                if raw_line.startswith((":", "event:", "id:", "retry:")):
+                    continue
+                if raw_line.startswith("data:"):
+                    raw_line = raw_line[5:].strip()
                     if not raw_line:
                         continue
-                    # Ignore SSE keep-alive comments (":") and non-data metadata
-                    # fields; appending them would corrupt the JSON accumulator
-                    # and drop the remaining audio for this request.
-                    if raw_line.startswith((":", "event:", "id:", "retry:")):
-                        continue
-                    if raw_line.startswith("data:"):
-                        raw_line = raw_line[5:].strip()
-                        if not raw_line:
-                            continue
 
-                    buf += raw_line
-                    try:
-                        payload = json.loads(buf)
-                    except json.JSONDecodeError:
-                        continue
-                    buf = ""
+                buf += raw_line
+                try:
+                    payload = json.loads(buf)
+                except json.JSONDecodeError:
+                    continue
+                buf = ""
 
-                    if payload.get("status") == "error" or "error" in payload:
-                        raise APIStatusError(
-                            message=payload.get("message", json.dumps(payload)),
-                            status_code=500,
-                            body=payload,
-                        )
-                    if payload.get("status") == "streaming_started":
-                        continue
-                    if payload.get("is_final", False):
-                        audio_b64 = payload.get("audio", "")
-                        if audio_b64:
-                            output_emitter.push(base64.b64decode(audio_b64))
-                        break
-
+                if payload.get("status") == "error" or "error" in payload:
+                    raise APIError(
+                        "Gnani TTS error",
+                        body=payload,
+                        detail=payload.get("message", json.dumps(payload)),
+                    )
+                if payload.get("status") == "streaming_started":
+                    continue
+                if payload.get("is_final", False):
                     audio_b64 = payload.get("audio", "")
                     if audio_b64:
                         output_emitter.push(base64.b64decode(audio_b64))
+                    break
 
-                output_emitter.flush()
+                audio_b64 = payload.get("audio", "")
+                if audio_b64:
+                    output_emitter.push(base64.b64decode(audio_b64))
 
-        except (APIStatusError, APIConnectionError, APITimeoutError):
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"Gnani TTS SSE error: {e}") from e
+            output_emitter.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -425,82 +392,21 @@ class WebSocketChunkedStream(tts.ChunkedStream):
         self._tts: TTS = tts
         self._opts = opts
 
-    def _build_ws_url(self) -> str:
-        base = self._opts.base_url
-        if base.startswith("https://"):
-            ws_base = "wss://" + base[len("https://") :]
-        elif base.startswith("http://"):
-            ws_base = "ws://" + base[len("http://") :]
-        else:
-            ws_base = "wss://" + base
-        return f"{ws_base}/api/v1/tts"
-
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        import websockets
-
-        request_id = utils.shortuuid()
-        try:
-            ws_url = self._build_ws_url()
-            async with websockets.connect(
-                ws_url,
-                additional_headers=_build_headers(self._opts),
-                open_timeout=self._conn_options.connect_timeout,
-                ping_interval=20,
-                ping_timeout=20,
-                close_timeout=10,
-            ) as ws:
-                request_body = _build_payload(self._opts, self._input_text)
-                await ws.send(json.dumps(request_body))
-
-                output_emitter.initialize(
-                    request_id=request_id,
-                    sample_rate=self._tts.sample_rate,
-                    num_channels=self._tts.num_channels,
-                    mime_type=_mime_type(self._opts),
-                )
-
-                while True:
-                    msg = await asyncio.wait_for(ws.recv(), self._conn_options.read_timeout)
-                    if isinstance(msg, bytes):
-                        output_emitter.push(msg)
-                        continue
-
-                    payload = json.loads(msg)
-                    msg_type = payload.get("type", "")
-
-                    if msg_type == "audio":
-                        inner = payload.get("data", {})
-                        audio_b64 = inner.get("audio", "")
-                        if audio_b64:
-                            output_emitter.push(base64.b64decode(audio_b64))
-
-                    elif msg_type == "complete":
-                        inner = payload.get("data")
-                        if inner is not None:
-                            audio_b64 = inner.get("audio", "")
-                            if audio_b64:
-                                output_emitter.push(base64.b64decode(audio_b64))
-                        break
-
-                    elif msg_type == "error":
-                        error_msg = payload.get("message", "Unknown error")
-                        logger.error("Gnani TTS WS error: %s", error_msg)
-                        raise APIStatusError(
-                            message=f"Gnani TTS stream error: {error_msg}",
-                            status_code=500,
-                            body=error_msg,
-                        )
-
-                output_emitter.flush()
-
-        except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(f"Gnani TTS WebSocket closed: {e}") from e
-        except TimeoutError as e:
-            raise APITimeoutError("Gnani TTS WebSocket timed out") from e
-        except (APIStatusError, APIConnectionError, APITimeoutError):
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"Gnani TTS WebSocket error: {e}") from e
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+            mime_type=_mime_type(self._opts),
+        )
+        await _synthesize_ws(
+            self._tts._ensure_session(),
+            self._opts,
+            self._conn_options,
+            self._input_text,
+            output_emitter,
+        )
+        output_emitter.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -516,22 +422,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
         self._opts = opts
 
-    def _build_ws_url(self) -> str:
-        base = self._opts.base_url
-        if base.startswith("https://"):
-            ws_base = "wss://" + base[len("https://") :]
-        elif base.startswith("http://"):
-            ws_base = "ws://" + base[len("http://") :]
-        else:
-            ws_base = "wss://" + base
-        return f"{ws_base}/api/v1/tts"
-
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        import websockets
-
-        request_id = utils.shortuuid()
         output_emitter.initialize(
-            request_id=request_id,
+            request_id=utils.shortuuid(),
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
             mime_type=_mime_type(self._opts),
@@ -549,70 +442,64 @@ class SynthesizeStream(tts.SynthesizeStream):
         if not full_text:
             return
 
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
-
-        try:
-            ws_url = self._build_ws_url()
-            async with websockets.connect(
-                ws_url,
-                additional_headers=_build_headers(self._opts),
-                open_timeout=self._conn_options.connect_timeout,
-                ping_interval=20,
-                ping_timeout=20,
-                close_timeout=10,
-            ) as ws:
-                request_body = _build_payload(self._opts, full_text)
-                await ws.send(json.dumps(request_body))
-
-                self.mark_started()
-
-                while True:
-                    msg = await asyncio.wait_for(ws.recv(), self._conn_options.read_timeout)
-                    if isinstance(msg, bytes):
-                        output_emitter.push(msg)
-                        continue
-
-                    payload = json.loads(msg)
-                    msg_type = payload.get("type", "")
-
-                    if msg_type == "audio":
-                        inner = payload.get("data", {})
-                        audio_b64 = inner.get("audio", "")
-                        if audio_b64:
-                            output_emitter.push(base64.b64decode(audio_b64))
-
-                    elif msg_type == "complete":
-                        inner = payload.get("data")
-                        if inner is not None:
-                            audio_b64 = inner.get("audio", "")
-                            if audio_b64:
-                                output_emitter.push(base64.b64decode(audio_b64))
-                        break
-
-                    elif msg_type == "error":
-                        error_msg = payload.get("message", "Unknown error")
-                        logger.error("Gnani TTS WS error: %s", error_msg)
-                        raise APIStatusError(
-                            message=f"Gnani TTS stream error: {error_msg}",
-                            status_code=500,
-                            body=error_msg,
-                        )
-
-        except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(f"Gnani TTS WebSocket closed: {e}") from e
-        except TimeoutError as e:
-            raise APITimeoutError("Gnani TTS WebSocket timed out") from e
-        except (APIStatusError, APIConnectionError, APITimeoutError):
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"Gnani TTS WebSocket error: {e}") from e
+        output_emitter.start_segment(segment_id=utils.shortuuid())
+        self.mark_started()
+        await _synthesize_ws(
+            self._tts._ensure_session(), self._opts, self._conn_options, full_text, output_emitter
+        )
 
         # Only flush/close the segment on the success path. On error the
         # per-attempt output_emitter is discarded before retry, so flushing or
         # ending the segment here would only add an unnecessary final frame.
         output_emitter.flush()
         output_emitter.end_segment()
+
+
+async def _synthesize_ws(
+    session: http.HttpSession,
+    opts: GnaniTTSOptions,
+    conn_options: APIConnectOptions,
+    text: str,
+    output_emitter: tts.AudioEmitter,
+) -> None:
+    """One websocket synthesis of ``text``, its audio pushed to ``output_emitter``."""
+    base = opts.base_url
+    if base.startswith("https://"):
+        ws_base = "wss://" + base[len("https://") :]
+    elif base.startswith("http://"):
+        ws_base = "ws://" + base[len("http://") :]
+    else:
+        ws_base = "wss://" + base
+    ws = await session.ws_connect(
+        f"{ws_base}/api/v1/tts",
+        headers=_build_headers(opts),
+        heartbeat=20,
+        conn_options=conn_options,
+    )
+    try:
+        await ws.send_json(_build_payload(opts, text))
+        while True:
+            # the whole text was sent: a response is owed, so the read is bounded
+            msg = await ws.receive(timeout=conn_options.read_timeout)
+            if msg.type is http.WebSocketMessageType.BINARY:
+                output_emitter.push(msg.binary)
+                continue
+            if msg.type is http.WebSocketMessageType.CLOSE:
+                raise ws.close_error("Gnani TTS WebSocket closed")
+
+            payload = json.loads(msg.text)
+            msg_type = payload.get("type", "")
+            if msg_type in ("audio", "complete"):
+                if audio_b64 := (payload.get("data") or {}).get("audio"):
+                    output_emitter.push(base64.b64decode(audio_b64))
+                if msg_type == "complete":
+                    return
+            elif msg_type == "error":
+                raise APIError(
+                    "Gnani TTS stream error", body=payload, detail=payload.get("message")
+                )
+    finally:
+        await ws.close()
 
 
 __all__ = ["TTS", "SynthesizeStream"]

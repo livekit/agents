@@ -442,6 +442,8 @@ class STT(stt.STT):
                 interim_results=True,
                 # chunk timestamps don't seem to work despite the docs saying they do
                 aligned_transcript=False,
+                # streaming usage is the audio_duration Sarvam reports with each transcript
+                reports_usage=True,
             )
         )
 
@@ -606,11 +608,11 @@ class STT(stt.STT):
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
-                    self._logger.error(f"Sarvam API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message=f"Sarvam API Error ({res.status}): {error_text}",
+                        "Sarvam STT request failed",
                         status_code=res.status,
                         body=error_text,
+                        detail=error_text,
                     )
 
                 response_json = TranscriptionData.model_validate(await res.json())
@@ -661,7 +663,6 @@ class STT(stt.STT):
             # Preserve provider-originated status/body/retry metadata.
             raise
         except Exception as e:
-            self._logger.error(f"Error during Sarvam STT processing: {e}")
             raise APIConnectionError(f"Unexpected error in Sarvam STT: {e}") from e
 
     def stream(
@@ -978,14 +979,11 @@ class SpeechStream(stt.RecognizeStream):
         self._pending_eos = False
 
     async def _emit_pending_eos_after_timeout(self) -> None:
-        try:
-            timeout = self._eos_fallback_timeout
-            if timeout > 0:
-                await asyncio.sleep(timeout)
-            if self._pending_eos and not self._eos_emitted_for_utterance:
-                self._emit_end_of_speech()
-        except asyncio.CancelledError:
-            raise
+        timeout = self._eos_fallback_timeout
+        if timeout > 0:
+            await asyncio.sleep(timeout)
+        if self._pending_eos and not self._eos_emitted_for_utterance:
+            self._emit_end_of_speech()
 
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
@@ -1082,11 +1080,6 @@ class SpeechStream(stt.RecognizeStream):
                 extra={**self._build_log_context(), "lk.pii.prompt": self._opts.prompt},
             )
         except Exception as e:
-            self._logger.error(
-                f"Failed to send initial configuration: {e}",
-                extra=self._build_log_context(),
-                exc_info=True,
-            )
             raise APIConnectionError(f"Failed to send initial config: {e}") from e
 
     async def _run(self) -> None:
@@ -1104,11 +1097,6 @@ class SpeechStream(stt.RecognizeStream):
         except Exception as e:
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED
-            self._logger.error(
-                f"Unexpected error in STT WebSocket session: {e}",
-                extra=self._build_log_context(),
-                exc_info=True,
-            )
             raise APIStatusError(f"STT WebSocket session failed: {e}") from e
 
     async def _run_connection(self) -> None:
@@ -1196,7 +1184,6 @@ class SpeechStream(stt.RecognizeStream):
                     extra=self._build_log_context(),
                 )
 
-    @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: http.WebSocket) -> None:
         """Process audio frames and send them in chunks."""
         import base64
@@ -1216,50 +1203,41 @@ class SpeechStream(stt.RecognizeStream):
         try:
             async for frame in self.input:
                 if isinstance(frame, rtc.AudioFrame):
-                    try:
-                        # Convert audio frame to Int16 data
-                        audio_data = frame.data.tobytes()
-                        # NumPy's Buffer/ArrayLike overloads contain Unknown.
-                        audio_array = np.frombuffer(audio_data, dtype=np.int16)  # pyright: ignore[reportUnknownMemberType]
-                        audio_buffer.extend(audio_array)
+                    # Convert audio frame to Int16 data
+                    audio_data = frame.data.tobytes()
+                    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+                    audio_array = np.frombuffer(audio_data, dtype=np.int16)  # pyright: ignore[reportUnknownMemberType]
+                    audio_buffer.extend(audio_array)
 
-                        # Check if we have enough data for a chunk
-                        while len(audio_buffer) >= chunk_size:
-                            # Convert to Int16Array
-                            chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
+                    # Check if we have enough data for a chunk
+                    while len(audio_buffer) >= chunk_size:
+                        # Convert to Int16Array
+                        chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
 
-                            # Convert to base64
-                            base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
+                        # Convert to base64
+                        base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
 
-                            # Send audio in the required format
-                            audio_message = {
-                                "audio": {
-                                    "data": base64_audio,
-                                    "encoding": self._audio_encoding,
-                                    "sample_rate": self._opts.sample_rate,
-                                }
+                        # Send audio in the required format
+                        audio_message = {
+                            "audio": {
+                                "data": base64_audio,
+                                "encoding": self._audio_encoding,
+                                "sample_rate": self._opts.sample_rate,
                             }
+                        }
 
-                            await ws.send_str(json.dumps(audio_message))
-                            chunks_sent += 1
+                        await ws.send_str(json.dumps(audio_message))
+                        chunks_sent += 1
 
-                            # Remove sent data from buffer
-                            audio_buffer = audio_buffer[chunk_size:]
+                        # Remove sent data from buffer
+                        audio_buffer = audio_buffer[chunk_size:]
 
-                            # Log progress periodically
-                            if chunks_sent % 100 == 0:
-                                self._logger.debug(
-                                    f"Sent {chunks_sent} audio chunks",
-                                    extra=self._build_log_context(),
-                                )
-
-                    except Exception as e:
-                        self._logger.error(
-                            f"Error processing audio frame: {e}",
-                            extra=self._build_log_context(),
-                            exc_info=True,
-                        )
-                        raise
+                        # Log progress periodically
+                        if chunks_sent % 100 == 0:
+                            self._logger.debug(
+                                f"Sent {chunks_sent} audio chunks",
+                                extra=self._build_log_context(),
+                            )
 
                 else:
                     # LiveKit VAD FlushSentinel - handles stream termination
@@ -1280,20 +1258,12 @@ class SpeechStream(stt.RecognizeStream):
                     await ws.send_str(json.dumps(flush_message))
                     self._should_flush = False  # Reset flag
 
-        except Exception as e:
-            self._logger.error(
-                f"Error in audio processing: {e}",
-                extra={**self._build_log_context(), "chunks_sent": chunks_sent},
-                exc_info=True,
-            )
-            raise
         finally:
             self._logger.debug(
                 f"Audio processing completed, sent {chunks_sent} chunks",
                 extra=self._build_log_context(),
             )
 
-    @utils.log_exceptions(logger=logger)
     async def _process_messages(self, ws: http.WebSocket) -> None:
         """Process incoming messages from the WebSocket."""
         self._logger.info(
@@ -1301,100 +1271,64 @@ class SpeechStream(stt.RecognizeStream):
             extra={**self._build_log_context(), "ws_closed": ws.closed},
         )
 
-        try:
-            while True:
-                msg = await ws.receive()
-                if msg.type == http.WebSocketMessageType.TEXT:
-                    try:
-                        await self._handle_message(STT_MESSAGE.validate_json(msg.data))
-                    except ValidationError as e:
-                        if any(error["type"] != "json_invalid" for error in e.errors()):
-                            raise APIConnectionError(
-                                "Sarvam STT sent an invalid event", retryable=False
-                            ) from e
-                        if looks_like_error_text(msg.data):
-                            raise APIStatusError(
-                                message=(f"Sarvam STT non-JSON error message: {msg.data!s}"),
-                                body={"raw_message": msg.data},
-                            ) from e
-                        self._logger.warning(
-                            "Invalid JSON received from WebSocket",
-                            extra={
-                                **self._build_log_context(),
-                                "lk.pii.raw_data": msg.data,
-                                "error": str(e),
-                            },
-                        )
-                        continue  # Skip malformed message
-                    except (APIStatusError, APIConnectionError):
-                        # Let API errors propagate without re-wrapping
-                        raise
-                    except Exception as e:
-                        self._logger.error(
-                            "Error processing WebSocket message",
-                            extra={**self._build_log_context(), "error": str(e)},
-                            exc_info=True,
-                        )
-                        raise APIStatusError(
-                            message=f"Message processing error: {e}. Raw server message: {msg.data!s}",
-                            body={"raw_message": msg.data},
+        while True:
+            msg = await ws.receive()
+            if msg.type == http.WebSocketMessageType.TEXT:
+                try:
+                    await self._handle_message(STT_MESSAGE.validate_json(msg.data))
+                except ValidationError as e:
+                    if any(error["type"] != "json_invalid" for error in e.errors()):
+                        raise APIConnectionError(
+                            "Sarvam STT sent an invalid event", retryable=False
                         ) from e
-
-                elif msg.type == http.WebSocketMessageType.CLOSE:
-                    close_code = ws.close_code
-                    close_reason = msg.data
-                    is_expected_close = close_code in (1000, 1001, None)
-                    has_error_reason = looks_like_error_text(close_reason)
-
-                    if not is_expected_close or has_error_reason:
-                        self._logger.error(
-                            f"WebSocket closed: {msg.type}",
-                            extra={
-                                **self._build_log_context(),
-                                "close_code": close_code,
-                                "close_reason": close_reason,
-                            },
-                        )
-                        msg_type = getattr(msg.type, "name", str(msg.type))
-                        raw_close = {
-                            "msg_type": msg_type,
-                            "close_code": close_code,
-                            "close_reason": close_reason,
-                        }
+                    if looks_like_error_text(msg.data):
                         raise APIStatusError(
-                            message=(
-                                "Sarvam STT WebSocket closed unexpectedly: "
-                                f"{json.dumps(raw_close, ensure_ascii=False)}"
-                            ),
-                            status_code=int(close_code) if isinstance(close_code, int) else -1,
-                            body=raw_close,
-                        )
-                    self._logger.info(
-                        f"WebSocket closed: {msg.type}",
+                            "Sarvam STT sent a non-JSON error",
+                            body={"raw_message": msg.data},
+                            detail=msg.text,
+                        ) from e
+                    self._logger.warning(
+                        "Invalid JSON received from WebSocket",
                         extra={
                             **self._build_log_context(),
-                            "close_code": close_code,
-                            "close_reason": close_reason,
+                            "lk.pii.raw_data": msg.data,
+                            "error": str(e),
                         },
                     )
-                    break
+                    continue  # Skip malformed message
+                except (APIStatusError, APIConnectionError):
+                    # Let API errors propagate without re-wrapping
+                    raise
+                except Exception as e:
+                    raise APIStatusError(
+                        "Sarvam STT message processing error",
+                        body={"raw_message": msg.data},
+                        detail=msg.text,
+                    ) from e
 
-                else:
-                    self._logger.debug(
-                        f"Unknown WebSocket message type: {msg.type}",
-                        extra=self._build_log_context(),
-                    )
+            elif msg.type == http.WebSocketMessageType.CLOSE:
+                close_code = ws.close_code
+                close_reason = msg.data
+                is_expected_close = close_code in (1000, 1001, None)
+                has_error_reason = looks_like_error_text(close_reason)
 
-        except (APIStatusError, APIConnectionError, APITimeoutError):
-            # Already logged at origin — just propagate
-            raise
-        except Exception as e:
-            self._logger.error(
-                f"Error in message processing loop: {e}",
-                extra=self._build_log_context(),
-                exc_info=True,
-            )
-            raise
+                if not is_expected_close or has_error_reason:
+                    raise ws.close_error("Sarvam STT WebSocket closed unexpectedly")
+                self._logger.info(
+                    f"WebSocket closed: {msg.type}",
+                    extra={
+                        **self._build_log_context(),
+                        "close_code": close_code,
+                        "close_reason": close_reason,
+                    },
+                )
+                break
+
+            else:
+                self._logger.debug(
+                    f"Unknown WebSocket message type: {msg.type}",
+                    extra=self._build_log_context(),
+                )
 
     async def _handle_message(self, data: STTMessage) -> None:
         """Handle different types of messages from Sarvam streaming API."""
@@ -1434,11 +1368,6 @@ class SpeechStream(stt.RecognizeStream):
             # Let API errors propagate without re-wrapping
             raise
         except Exception as e:
-            self._logger.error(
-                f"Unexpected error handling message: {e}",
-                extra={**self._build_log_context(), "lk.pii.data": data},
-                exc_info=True,
-            )
             raise APIStatusError(f"Message processing error: {e}") from e
 
     async def _handle_transcript_data(self, data: TranscriptMessage) -> None:
@@ -1457,49 +1386,37 @@ class SpeechStream(stt.RecognizeStream):
             self._logger.debug("Received empty transcript", extra=self._build_log_context())
             return
 
-        try:
             # Create usage event with proper metrics extraction
-            metrics = transcript_data.metrics
-            # request_data = {
-            #     "original_id": request_id,
-            #     "processing_latency": metrics.get("processing_latency", 0.0),
-            # }
-            usage_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=request_id,
-                recognition_usage=stt.RecognitionUsage(
-                    audio_duration=metrics.audio_duration,
-                ),
-            )
-            self.send(usage_event)
+        metrics = transcript_data.metrics
+        # request_data = {
+        #     "original_id": request_id,
+        #     "processing_latency": metrics.get("processing_latency", 0.0),
+        # }
+        usage_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.RECOGNITION_USAGE,
+            request_id=request_id,
+            recognition_usage=stt.RecognitionUsage(
+                audio_duration=metrics.audio_duration,
+            ),
+        )
+        self.send(usage_event)
 
-            if self._pending_eos:
-                self._pending_final_data = transcript_data
+        if self._pending_eos:
+            self._pending_final_data = transcript_data
+            self._final_received_for_utterance = True
+            self._try_commit_utterance()
+        else:
+            if self._send_final_transcript(transcript_data):
                 self._final_received_for_utterance = True
-                self._try_commit_utterance()
-            else:
-                if self._send_final_transcript(transcript_data):
-                    self._final_received_for_utterance = True
 
-            self._logger.debug(
-                "Transcript processed successfully",
-                extra={
-                    **self._build_log_context(),
-                    "text_length": len(transcript_text),
-                    "language": self._opts.language,
-                },
-            )
-
-        except Exception as e:
-            self._logger.error(
-                f"Error processing transcript data: {e}",
-                extra={
-                    **self._build_log_context(),
-                    "lk.pii.transcript_data": transcript_data,
-                },
-                exc_info=True,
-            )
-            raise
+        self._logger.debug(
+            "Transcript processed successfully",
+            extra={
+                **self._build_log_context(),
+                "text_length": len(transcript_text),
+                "language": self._opts.language,
+            },
+        )
 
     async def _handle_events(self, data: EventMessage) -> None:
         """Handle VAD (Voice Activity Detection) events."""
@@ -1522,53 +1439,44 @@ class SpeechStream(stt.RecognizeStream):
             extra={**self._build_log_context(), "signal_type": signal_type},
         )
 
-        try:
-            if signal_type == "START_SPEECH":
-                if not self._speaking:
-                    self._reset_utterance_state()
-                    self._speaking = True
-                    start_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.START_OF_SPEECH,
-                        request_id=self._server_request_id or "",
-                        speech_start_time=self._utterance_speech_start_wall,
-                    )
-                    self.send(start_event)
-                    self._logger.debug("Speech started", extra=self._build_log_context())
+        if signal_type == "START_SPEECH":
+            if not self._speaking:
+                self._reset_utterance_state()
+                self._speaking = True
+                start_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.START_OF_SPEECH,
+                    request_id=self._server_request_id or "",
+                    speech_start_time=self._utterance_speech_start_wall,
+                )
+                self.send(start_event)
+                self._logger.debug("Speech started", extra=self._build_log_context())
 
-            elif signal_type == "END_SPEECH":
-                if self._speaking:
-                    self._speaking = False
-                    self._pending_eos = True
-                    self._try_commit_utterance()
-                    if not self._eos_emitted_for_utterance and self._pending_final_data is None:
-                        if self._final_received_for_utterance:
-                            self._emit_end_of_speech()
-                        elif self._eos_fallback_task is None or self._eos_fallback_task.done():
-                            # Give Sarvam a short grace period to deliver the
-                            # final transcript so LiveKit sees FINAL before EOS.
-                            self._eos_fallback_task = self._tasks.spawn(
-                                self._emit_pending_eos_after_timeout()
-                            )
+        elif signal_type == "END_SPEECH":
+            if self._speaking:
+                self._speaking = False
+                self._pending_eos = True
+                self._try_commit_utterance()
+                if not self._eos_emitted_for_utterance and self._pending_final_data is None:
+                    if self._final_received_for_utterance:
+                        self._emit_end_of_speech()
+                    elif self._eos_fallback_task is None or self._eos_fallback_task.done():
+                        # Give Sarvam a short grace period to deliver the
+                        # final transcript so LiveKit sees FINAL before EOS.
+                        self._eos_fallback_task = self._tasks.spawn(
+                            self._emit_pending_eos_after_timeout()
+                        )
 
-                    # Set flag to trigger flush when Sarvam detects end of speech
-                    self._should_flush = True
-                    self._logger.debug(
-                        "Speech ended, flush triggered",
-                        extra=self._build_log_context(),
-                    )
-            else:
+                # Set flag to trigger flush when Sarvam detects end of speech
+                self._should_flush = True
                 self._logger.debug(
-                    f"Unknown VAD signal type: {signal_type}",
+                    "Speech ended, flush triggered",
                     extra=self._build_log_context(),
                 )
-
-        except Exception as e:
-            self._logger.error(
-                f"Error processing VAD event: {e}",
-                extra={**self._build_log_context(), "lk.pii.event_data": event_data},
-                exc_info=True,
+        else:
+            self._logger.debug(
+                f"Unknown VAD signal type: {signal_type}",
+                extra=self._build_log_context(),
             )
-            raise
 
     async def _handle_error_message(self, message: STTMessage) -> None:
         """Preserve provider error details and request identity."""
@@ -1583,7 +1491,8 @@ class SpeechStream(stt.RecognizeStream):
         if isinstance(error_code, str) and error_code.isdigit():
             status_code = int(error_code)
         raise APIStatusError(
-            message=f"Sarvam streaming API error: {raw_error_message}",
+            "Sarvam streaming API error",
             status_code=status_code,
             body=raw,
+            detail=raw_error_message,
         )

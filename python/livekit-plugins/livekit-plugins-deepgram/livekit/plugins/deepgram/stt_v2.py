@@ -27,7 +27,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     LanguageCode,
     http,
     stt,
@@ -40,7 +40,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
-from ._utils import PeriodicCollector, to_deepgram_url
+from ._utils import to_deepgram_url
 from .log import logger
 from .models import FluxResponse, V2Models
 
@@ -315,10 +315,6 @@ class SpeechStreamv2(stt.RecognizeStream):
         self._session = http_session
         self._opts.endpoint_url = base_url
         self._speaking = False
-        self._audio_duration_collector = PeriodicCollector(
-            callback=self._on_audio_duration_report,
-            duration=5.0,
-        )
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
@@ -436,7 +432,6 @@ class SpeechStreamv2(stt.RecognizeStream):
     async def _run(self) -> None:
         closing_ws = False
 
-        @utils.log_exceptions(logger=logger)
         async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
@@ -448,7 +443,6 @@ class SpeechStreamv2(stt.RecognizeStream):
                 samples_per_channel=samples_50ms,
             )
 
-            has_ended = False
             try:
                 async for data in self.input:
                     frames: list[rtc.AudioFrame] = []
@@ -456,15 +450,9 @@ class SpeechStreamv2(stt.RecognizeStream):
                         frames.extend(audio_bstream.push(data.data.tobytes()))
                     else:
                         frames.extend(audio_bstream.flush())
-                        has_ended = True
 
                     for frame in frames:
-                        self._audio_duration_collector.push(frame.duration)
                         await ws.send_bytes(frame.data.tobytes())
-
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        has_ended = False
 
                 # tell deepgram we are done sending audio/inputs
                 closing_ws = True
@@ -478,7 +466,6 @@ class SpeechStreamv2(stt.RecognizeStream):
                     return
                 raise APIConnectionError("deepgram connection closed unexpectedly") from e
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
@@ -496,25 +483,20 @@ class SpeechStreamv2(stt.RecognizeStream):
                     if closing_ws or self._session.closed:
                         return
 
-                    # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="deepgram connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("deepgram connection closed unexpectedly")
 
                 if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
                     continue
 
-                try:
-                    self._process_stream_event(json.loads(msg.data))
-                except Exception:
-                    logger.exception("failed to process deepgram message")
+                self._process_stream_event(json.loads(msg.data))
 
         ws: http.WebSocket | None = None
 
         while True:
+            if self._speaking:  # a new connection starts outside any turn
+                self._speaking = False
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
             try:
                 ws = await self._connect_ws()
                 # expose the connection for in-band Configure updates
@@ -588,15 +570,6 @@ class SpeechStreamv2(stt.RecognizeStream):
         )
         return ws
 
-    def _on_audio_duration_report(self, duration: float) -> None:
-        usage_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.RECOGNITION_USAGE,
-            request_id=self._request_id,
-            alternatives=[],
-            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-        )
-        self.send(usage_event)
-
     def _send_transcript_event(self, event_type: stt.SpeechEventType, data: object) -> None:
         alts = _parse_transcription(self._opts.language, data, self.start_time_offset)
         if alts:
@@ -664,10 +637,7 @@ class SpeechStreamv2(stt.RecognizeStream):
             logger.warning("deepgram rejected Configure update", extra={"lk.pii.data": data})
 
         elif event.type == "Error":
-            logger.warning("deepgram sent an error", extra={"lk.pii.data": data})
-            desc = event.description or "unknown error from deepgram"
-            code = -1
-            raise APIStatusError(message=desc, status_code=code)
+            raise APIError("deepgram returned an error", detail=event.description)
 
 
 def _parse_transcription(

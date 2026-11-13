@@ -71,6 +71,8 @@ impl Stt for FakeStt {
             streaming: true,
             interim_results: true,
             keyterms: self.keyterms,
+            // the corpus models send their own `recognition_usage` (`Input::SttUsage`)
+            reports_usage: true,
             ..Default::default()
         }
     }

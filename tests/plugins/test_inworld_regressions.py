@@ -333,8 +333,9 @@ async def test_rejected_context_fails_promptly_and_next_request_recovers(
                     stream.end_input()
                     async with asyncio.timeout(2):
                         if attempt == 0:
-                            with pytest.raises(APIError, match=diagnostic):
+                            with pytest.raises(APIError) as caught:
                                 _ = [ev async for ev in stream]
+                            assert caught.value.detail == diagnostic
                         else:
                             audio = b"".join([bytes(ev.frame.data) async for ev in stream])
                             assert audio[: len(PCM)] == PCM

@@ -72,7 +72,10 @@ impl Checkout {
     }
 
     async fn close(self) {
-        let _ = self.held.close().await;
+        let closed = self.held.close().await;
+        if closed != lk_agents_abi::Closed::Clean {
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "TTS connection close: {closed:?}");
+        }
     }
 }
 

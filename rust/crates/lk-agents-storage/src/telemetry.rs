@@ -101,3 +101,15 @@ pub(crate) fn write_uncertain(cx: &Cx, clock: &dyn Clock, write: StorageWrite) {
 #[cfg(test)]
 #[path = "telemetry_tests.rs"]
 mod tests;
+
+/// A cleanup after a failure the caller is already returned: the first failure is the one
+/// returned, the cleanup's own is logged.
+pub(crate) fn cleanup_failed(
+    partition_key: &str,
+    cleanup: &str,
+    result: Result<(), crate::StorageError>,
+) {
+    if let Err(error) = result {
+        log::warn!(target: LOG_TARGET, partition_key; "{cleanup} failed after an earlier failure: {error}");
+    }
+}

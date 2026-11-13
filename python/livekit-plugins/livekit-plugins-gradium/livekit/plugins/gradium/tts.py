@@ -73,7 +73,7 @@ class TTS(tts.TTS):
             pronunciation_id (str): Optional pronunciation ID for controlling TTS pronunciation.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, text_unit="words"),
             sample_rate=SUPPORTED_SAMPLE_RATE,
             num_channels=1,
         )
@@ -112,9 +112,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Gradium"
-
-    def _core_text_unit(self) -> str:
-        return "words"
 
     async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         return await self._ensure_session().ws_connect(

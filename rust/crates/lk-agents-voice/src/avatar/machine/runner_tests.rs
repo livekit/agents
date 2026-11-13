@@ -146,6 +146,58 @@ fn a_cut_segments_end_after_a_clear_is_not_the_next_segments() {
     assert_eq!(ops(&end), vec![AvatarIoOperation::PushAudio(AudioReceiverFrame::SegmentEnd)]);
 }
 
+// Catches: the next segment's first audio, stamped with a clear the runner has not seen yet,
+// pushed as the cut segment's: the clear then swallowed the next segment's end and it never ended.
+#[test]
+fn audio_stamped_with_an_unseen_clear_applies_that_clear_first() {
+    let mut core = running();
+    core.handle(audio_input(&core, Ok(Some(AudioReceiverFrame::Audio(pcm(1, 0.1))))));
+    core.handle(AvatarEvent::AudioPushed(Ok(())));
+    let first = AudioReceiverFrame::Audio(pcm(2, 0.1));
+    let early = core.handle(AvatarEvent::Audio(Ok((1, true, Some(token(2)), Some(first.clone())))));
+    assert!(
+        !ops(&early).iter().any(|op| matches!(op, AvatarIoOperation::PushAudio(_))),
+        "held behind its clear: {early:?}"
+    );
+    assert!(core.handle(AvatarEvent::ClearBuffer { epoch: 1 }).is_empty(), "already applied");
+    core.handle(AvatarEvent::GeneratorCleared { clear: 1, result: Ok(()) });
+    let delivered = core.handle(AvatarEvent::Reported { finished: true, result: Ok(()) });
+    assert_eq!(ops(&delivered), vec![AvatarIoOperation::PushAudio(first)]);
+    core.handle(AvatarEvent::AudioPushed(Ok(())));
+    let end = core.handle(AvatarEvent::Audio(Ok((
+        1,
+        false,
+        Some(token(2)),
+        Some(AudioReceiverFrame::SegmentEnd),
+    ))));
+    assert_eq!(ops(&end), vec![AvatarIoOperation::PushAudio(AudioReceiverFrame::SegmentEnd)]);
+}
+
+// Catches: a clear deferred until audio stamped with it arrives: with none ready, the generator
+// kept playing the cut segment until the next reply's audio came.
+#[test]
+fn a_clear_before_any_audio_stamped_with_it_clears_the_generator_at_once() {
+    let mut core = running();
+    core.handle(audio_input(&core, Ok(Some(AudioReceiverFrame::Audio(pcm(1, 0.1))))));
+    core.handle(AvatarEvent::AudioPushed(Ok(())));
+    let clear = core.handle(AvatarEvent::ClearBuffer { epoch: 1 });
+    assert_eq!(ops(&clear), vec![AvatarIoOperation::ClearGenerator { clear: 1 }]);
+    core.handle(AvatarEvent::GeneratorCleared { clear: 1, result: Ok(()) });
+    core.handle(AvatarEvent::Reported { finished: true, result: Ok(()) });
+    // the next segment's audio, stamped with the clear already applied, is not cleared again
+    let first = AudioReceiverFrame::Audio(pcm(2, 0.1));
+    let next = core.handle(AvatarEvent::Audio(Ok((1, true, Some(token(2)), Some(first.clone())))));
+    assert_eq!(ops(&next), vec![AvatarIoOperation::PushAudio(first)]);
+    core.handle(AvatarEvent::AudioPushed(Ok(())));
+    let end = core.handle(AvatarEvent::Audio(Ok((
+        1,
+        false,
+        Some(token(2)),
+        Some(AudioReceiverFrame::SegmentEnd),
+    ))));
+    assert_eq!(ops(&end), vec![AvatarIoOperation::PushAudio(AudioReceiverFrame::SegmentEnd)]);
+}
+
 // Catches: one playing flag for a generator holding two segments: the first segment's end, out
 // after the second segment's audio was read, took the flag and the second was never reported.
 #[test]

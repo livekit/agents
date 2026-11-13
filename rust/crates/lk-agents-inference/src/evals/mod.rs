@@ -183,7 +183,10 @@ impl Judges {
         {
             Ok(mut stream) => {
                 let read = first_call(stream.as_mut(), &mut trace).await;
-                let _ = stream.close(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+                let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+                if stream.close(deadline).await == lk_agents_abi::Closed::TimedOut {
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "judge stream cleanup incomplete");
+                }
                 read
             }
             Err(error) => Err(error),

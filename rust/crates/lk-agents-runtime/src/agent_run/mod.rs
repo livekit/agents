@@ -1,3 +1,4 @@
+use lk_agents_net::outbox::{Outbox, outbox};
 use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
 use std::collections::BTreeMap;
@@ -122,7 +123,7 @@ pub fn start(
     let input_id = input.invocation_id.clone();
     let run = AgentRun::new(agent, input)?.with_checkpoints();
     let cancel = CancellationToken::new();
-    let (update_tx, update_rx) = mpsc::channel(updates.max(1));
+    let (update_tx, update_rx) = outbox(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
     let (progress_tx, progress) = mpsc::channel(PROGRESS_QUEUE);
     let (usage_tx, usage) = signal::signal(run.usage());
@@ -154,7 +155,8 @@ struct Driver {
     usage: signal::Producer<Usage>,
     accepted: Accepted,
     work: Execution,
-    updates: mpsc::Sender<RunUpdate>,
+    /// The caller may stop reading, and the run still ends on its own.
+    updates: Outbox<RunUpdate>,
     /// The ledger revision `usage` holds.
     published: u64,
     finished: bool,
@@ -178,7 +180,7 @@ impl Driver {
                 if let Some(update) = self.work.execute(effect).await {
                     self.finished |=
                         matches!(update, RunUpdate::Finished(_) | RunUpdate::Failed { .. });
-                    let _ = self.updates.send(update).await;
+                    self.updates.send(update).await;
                 }
             }
             if self.finished && self.work.idle() {

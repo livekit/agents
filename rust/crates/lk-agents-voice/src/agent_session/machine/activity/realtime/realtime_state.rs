@@ -463,7 +463,9 @@ impl RealtimeSessionState {
     /// other than `req_id` went out and has not been answered (a cancelled one too: the
     /// server creates its response before it is cancelled).
     fn busy(&self, req_id: &str) -> bool {
-        self.open.iter().any(|o| !o.cancelled)
+        // A swapped-in session is asked nothing before its frame.
+        self.swap.is_some()
+            || self.open.iter().any(|o| !o.cancelled)
             || !self.cancelled_requests.is_empty()
             || self.pending.iter().any(|(id, p)| id != req_id && matches!(p.phase, Phase::Sent(_)))
     }
@@ -492,6 +494,19 @@ impl RealtimeSessionState {
         p.phase = Phase::Queued(cmd.clone());
         self.queue.push_front(req_id.to_owned());
         Some(p.key)
+    }
+
+    /// A swapped-in session never heard the requests on the wire: each goes back to the queue,
+    /// in the order asked. Their timer keys, to cancel.
+    pub(super) fn requeue_all(&mut self) -> Vec<RequestKey> {
+        let mut keys = Vec::new();
+        for (req_id, p) in self.pending.iter_mut().rev() {
+            let Phase::Sent(cmd) = &p.phase else { continue };
+            p.phase = Phase::Queued(cmd.clone());
+            self.queue.push_front(req_id.clone());
+            keys.push(p.key);
+        }
+        keys
     }
 
     /// The queue's next request, once the server is free: its command and timer key.

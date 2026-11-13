@@ -22,10 +22,9 @@ pub trait ConnectionPoolState: Send + Sized + 'static {
     fn invalidate(&mut self);
     #[host(call)]
     fn close_all(&mut self);
+    /// Every connection queued for closing, taken off the queue: the caller now owns each close.
     #[host(call)]
-    fn next_closing(&self) -> Option<u64>;
-    #[host(call)]
-    fn closed(&mut self, id: u64);
+    fn take_to_close(&mut self) -> Vec<u64>;
 }
 
 /// `utils.ConnectionPool`'s reads of its native bookkeeping.

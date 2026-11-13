@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import io
 import os
@@ -20,9 +19,7 @@ from livekit import api
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     NotGivenOr,
     VoiceSession,
     get_job_context,
@@ -679,48 +676,20 @@ class AvatarSession(BaseAvatarSession):
         json_data: dict[str, str] | None = None,
         form_data: http.FormData | None = None,
     ) -> None:
-        """
-        Send HTTP request with retry logic.
+        """Send the session request, retrying transient failures under ``conn_options``."""
+        session = self._ensure_http_session()
 
-        Handles both JSON and FormData request formats with configurable retry behavior.
+        async def request() -> None:
+            async with session.post(
+                self._api_url,
+                headers=headers,
+                json=json_data,
+                data=form_data,
+                conn_options=self._conn_options,
+            ) as response:
+                await response.raise_for_status()
 
-        Args:
-            headers: HTTP headers to include in the request
-            json_data: JSON payload (mutually exclusive with form_data)
-            form_data: FormData payload (mutually exclusive with json_data)
-
-        Raises:
-            APIConnectionError: If all retry attempts fail
-        """
-        async with self._conn_options.total_deadline():
-            for i in range(self._conn_options.max_retry + 1):
-                try:
-                    async with self._ensure_http_session().post(
-                        self._api_url,
-                        headers=headers,
-                        json=json_data,
-                        data=form_data,
-                        conn_options=self._conn_options,
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise APIStatusError(
-                                "Server returned an error", status_code=response.status, body=text
-                            )
-                        return
-
-                except Exception as e:
-                    if isinstance(e, APIConnectionError):
-                        logger.warning(
-                            "failed to call bithuman avatar api", extra={"error": str(e)}
-                        )
-                    else:
-                        logger.exception("failed to call bithuman avatar api")
-
-                    if i < self._conn_options.max_retry:
-                        await asyncio.sleep(self._conn_options.retry_interval)
-
-        raise APIConnectionError("Failed to start Bithuman Avatar Session after all retries")
+        await http.retry_request(request, conn_options=self._conn_options)
 
     def _ensure_http_session(self) -> http.HttpSession:
         if self._http_session is None:
@@ -771,7 +740,6 @@ class BithumanGenerator(VideoGenerator):
     def audio_sample_rate(self) -> int:
         return self._runtime.settings.INPUT_SAMPLE_RATE
 
-    @utils.log_exceptions(logger=logger)
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
         if isinstance(frame, AudioSegmentEnd):
             await self._runtime.flush()

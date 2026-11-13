@@ -14,7 +14,7 @@ from typing import Literal, Required, TypedDict
 from pydantic import JsonValue
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, llm, utils
+from livekit.agents import APIConnectionError, APITimeoutError, llm, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -472,7 +472,11 @@ class RealtimeModel(llm.RealtimeModel):
 
 class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel, *, options: _RealtimeOptions) -> None:
-        super().__init__(realtime_model)
+        super().__init__(
+            realtime_model,
+            input_sample_rate=PHONIC_INPUT_SAMPLE_RATE,
+            input_num_channels=PHONIC_NUM_CHANNELS,
+        )
         self._opts = options
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
@@ -482,8 +486,6 @@ class RealtimeSession(llm.RealtimeSession):
             num_channels=PHONIC_NUM_CHANNELS,
             samples_per_channel=PHONIC_INPUT_SAMPLE_RATE * PHONIC_INPUT_FRAME_MS // 1000,
         )
-        self._input_resampler: rtc.AudioResampler | None = None
-        self._input_resampler_rate: int | None = None
 
         self._client = AsyncPhonic(
             api_key=self._opts.api_key,
@@ -980,10 +982,9 @@ class RealtimeSession(llm.RealtimeSession):
         ):
             return
 
-        for f in self._resample_audio(frame):
-            for nf in self._bstream.push(f.data.tobytes()):
-                b64_audio = base64.b64encode(nf.data.tobytes()).decode("utf-8")
-                self._send_ch.send_nowait(AudioChunkPayload(audio=b64_audio))
+        for nf in self._bstream.push(frame.data.tobytes()):
+            b64_audio = base64.b64encode(nf.data.tobytes()).decode("utf-8")
+            self._send_ch.send_nowait(AudioChunkPayload(audio=b64_audio))
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         logger.warning("push_video is not supported by the Phonic realtime model.")
@@ -1194,80 +1195,84 @@ class RealtimeSession(llm.RealtimeSession):
                 ConfigPayload.model_validate({"type": "config", **config_options})
             )
 
+            async def _ready_then_run() -> None:
+                try:
+                    async with asyncio.timeout(self._opts.conn_options.connect_timeout):
+                        await self._ready_to_start.wait()
+                except TimeoutError:
+                    raise APITimeoutError("Phonic did not become ready to start") from None
+                await self._session_should_close.wait()
+
             async with utils.aio.TaskSet() as tasks:
                 await tasks.first_completed(
                     tasks.spawn(self._recv_task(self._socket), name="phonic-recv"),
                     tasks.spawn(self._send_task(self._socket), name="phonic-send"),
-                    self._session_should_close.wait(),
+                    _ready_then_run(),
                 )
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"Phonic Realtime API error: {e}", exc_info=e)
             self._emit_error(e, recoverable=False)
         finally:
+            # the session is over: release everything waiting for it to become ready
+            self._session_should_close.set()
+            self._ready_to_start.set()
             await self._close_active_session()
             self._close_current_generation(interrupted=False)
 
-    @utils.log_exceptions(logger=logger)
     async def _send_task(
         self, socket: AsyncConversationsSocketClient | ReconnectableAsyncConversationsSocketClient
     ) -> None:
         async for payload in self._send_ch:
             await socket.send_audio_chunk(payload)
 
-    @utils.log_exceptions(logger=logger)
     async def _recv_task(
         self, socket: AsyncConversationsSocketClient | ReconnectableAsyncConversationsSocketClient
     ) -> None:
-        try:
-            async for message in socket:
-                if self._session_should_close.is_set():
-                    break
+        async for message in socket:
+            if self._session_should_close.is_set():
+                break
 
-                if isinstance(message, bytes):
-                    raise APIConnectionError("Unexpected binary frame from Phonic")
-                msg_type = message.type
+            if isinstance(message, bytes):
+                raise APIConnectionError("Unexpected binary frame from Phonic")
+            msg_type = message.type
 
-                if msg_type == "assistant_started_speaking":
-                    self._start_new_assistant_turn()
-                elif msg_type == "assistant_finished_speaking":
-                    self._close_current_generation(interrupted=False)
-                elif msg_type == "audio_chunk":
-                    self._handle_audio_chunk(message)
-                elif msg_type == "input_text":
-                    self._handle_input_text(message)
-                elif msg_type == "user_started_speaking":
-                    self._handle_input_speech_started()
-                elif msg_type == "user_finished_speaking":
-                    self._handle_input_speech_stopped()
-                elif msg_type == "tool_call":
-                    self._handle_tool_call(message)
-                elif msg_type == "warning":
-                    logger.warning(f"Phonic warning: {message.warning.message}")
-                elif msg_type == "error":
-                    self._emit_error(Exception(message.error.message), recoverable=False)
-                elif msg_type == "assistant_ended_conversation":
-                    self._emit_error(
-                        Exception(
-                            "assistant_ended_conversation is not supported by "
-                            "the Phonic realtime model with LiveKit Agents."
-                        ),
-                        recoverable=False,
-                    )
-                elif msg_type == "conversation_created":
-                    self._conversation_id = message.conversation_id
-                    logger.info(f"Phonic Conversation began with ID: {self._conversation_id}")
-                elif msg_type == "tool_call_interrupted":
-                    self._handle_tool_call_interrupted(message)
-                elif msg_type == "ready_to_start_conversation":
-                    self._ready_to_start.set()
-        except Exception as e:
-            if not self._session_should_close.is_set():
-                logger.error(f"Error in Phonic receive loop: {e}", exc_info=e)
-                self._emit_error(e, recoverable=True)
-                raise e
+            if msg_type == "assistant_started_speaking":
+                self._start_new_assistant_turn()
+            elif msg_type == "assistant_finished_speaking":
+                self._close_current_generation(interrupted=False)
+            elif msg_type == "audio_chunk":
+                self._handle_audio_chunk(message)
+            elif msg_type == "input_text":
+                self._handle_input_text(message)
+            elif msg_type == "user_started_speaking":
+                self._handle_input_speech_started()
+            elif msg_type == "user_finished_speaking":
+                self._handle_input_speech_stopped()
+            elif msg_type == "tool_call":
+                self._handle_tool_call(message)
+            elif msg_type == "warning":
+                logger.warning(f"Phonic warning: {message.warning.message}")
+            elif msg_type == "error":
+                self._emit_error(Exception(message.error.message), recoverable=False)
+            elif msg_type == "assistant_ended_conversation":
+                self._emit_error(
+                    Exception(
+                        "assistant_ended_conversation is not supported by "
+                        "the Phonic realtime model with LiveKit Agents."
+                    ),
+                    recoverable=False,
+                )
+            elif msg_type == "conversation_created":
+                self._conversation_id = message.conversation_id
+                logger.info(f"Phonic Conversation began with ID: {self._conversation_id}")
+            elif msg_type == "tool_call_interrupted":
+                self._handle_tool_call_interrupted(message)
+            elif msg_type == "ready_to_start_conversation":
+                self._ready_to_start.set()
+        if not self._session_should_close.is_set():
+            raise APIConnectionError("Phonic closed the connection")
 
     def _start_new_assistant_turn(self, user_initiated: bool = False) -> llm.GenerationCreatedEvent:
         if self._current_generation:
@@ -1447,28 +1452,6 @@ class RealtimeSession(llm.RealtimeSession):
             "input_speech_stopped",
             llm.InputSpeechStoppedEvent(user_transcription_enabled=True),
         )
-
-    def _resample_audio(self, frame: rtc.AudioFrame) -> typing.Iterator[rtc.AudioFrame]:
-        if self._input_resampler is not None:
-            if frame.sample_rate != self._input_resampler_rate:
-                self._input_resampler = None
-                self._input_resampler_rate = None
-
-        if self._input_resampler is None and (
-            frame.sample_rate != PHONIC_INPUT_SAMPLE_RATE
-            or frame.num_channels != PHONIC_NUM_CHANNELS
-        ):
-            self._input_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=PHONIC_INPUT_SAMPLE_RATE,
-                num_channels=PHONIC_NUM_CHANNELS,
-            )
-            self._input_resampler_rate = frame.sample_rate
-
-        if self._input_resampler is not None:
-            yield from self._input_resampler.push(frame)
-        else:
-            yield frame
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(

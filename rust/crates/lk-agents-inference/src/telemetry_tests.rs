@@ -295,7 +295,11 @@ impl lk_agents_abi::Tts for Speaker {
         self.label.into()
     }
     fn capabilities(&self) -> lk_agents_abi::TtsCapabilities {
-        lk_agents_abi::TtsCapabilities { streaming: true, aligned_transcript: false }
+        lk_agents_abi::TtsCapabilities {
+            streaming: true,
+            aligned_transcript: false,
+            ..Default::default()
+        }
     }
     fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
         Ok(24_000)

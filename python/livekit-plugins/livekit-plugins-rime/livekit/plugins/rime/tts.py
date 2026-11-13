@@ -50,7 +50,6 @@ from ._websocket_v1 import (
 )
 from ._websocket_v1_adapter import V1SynthesisOptions, WebSocketV1Adapter
 from .langs import TTSLangs
-from .log import logger
 from .models import (
     MODEL_CODA,
     MODEL_MIST_V3,
@@ -667,9 +666,9 @@ class ChunkedStream(tts.ChunkedStream):
                     ) from redacted_cause(e)
 
                 if not resp.content_type.startswith("audio"):
-                    content = await resp.text()
-                    logger.error("Rime returned non-audio data", extra={"lk.pii.data": content})
-                    raise APIError("Rime returned non-audio data", retryable=False)
+                    raise APIError(
+                        "Rime returned non-audio data", retryable=False, detail=await resp.text()
+                    )
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),

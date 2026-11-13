@@ -167,6 +167,8 @@ pub fn capabilities(
         offline_recognize: false,
         keyterms: keyterms_extra_for_model(model, None, &[]).is_some(),
         chat_context: supports_agent_context_carryover(model),
+        // each final transcript is preceded by the audio sent for it
+        reports_usage: true,
     }
 }
 

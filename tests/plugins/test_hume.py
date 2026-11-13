@@ -80,7 +80,8 @@ async def test_http_error_keeps_status_and_body(status: int | str) -> None:
             with pytest.raises(APIError) as error:
                 _ = [ev async for ev in stream]
         if status == "stream":
-            assert "provider diagnostic" in str(error.value.__cause__)
+            assert error.value.detail == "provider diagnostic"
+            assert "provider diagnostic" not in str(error.value)
         else:
             assert isinstance(error.value, APIStatusError)
             assert error.value.status_code == status

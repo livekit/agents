@@ -287,6 +287,22 @@ async fn a_lost_direct_save_resolves_before_the_next_save() {
     assert_eq!(reloaded.fields["draft"], json!("second"));
 }
 
+/// A refused direct save leaves nothing staged, even when the database cannot be read right
+/// after: the next save never carries the refused values.
+#[tokio::test(start_paused = true)]
+async fn a_refused_direct_save_keeps_none_of_its_values() {
+    use crate::testing::WriteFault;
+    let (storage, faulty, thread, _dir) = faulty_store().await;
+    let store = ContextStore::bound(storage, thread, "desk".into(), Cx::NONE).await.unwrap();
+    let fields = vec![field("draft", json!("refused"))];
+    let loaded = store.load("root:desk".into(), "Booking".into(), fields.clone()).await.unwrap();
+    faulty.fail_next_commit(WriteFault::Refuse);
+    faulty.unreachable_after_commit_for(std::time::Duration::from_secs(1));
+    let refused = store.save("root:desk".into(), "Booking".into(), loaded.revision, fields).await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(store.writes().is_empty(), "the refused values stayed staged");
+}
+
 /// An application transaction whose acknowledgment was lost after it applied is sent again
 /// under its request id: it commits once and reports the commit.
 #[tokio::test(start_paused = true)]

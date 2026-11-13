@@ -454,20 +454,20 @@ impl<B: Backend> FallbackChain<B> {
     /// The host's `aclose()` (`cancel_and_wait` on each recovery task): every probe closes what it
     /// opened, awaited up to the teardown deadline. Late cleanup remains owned by its task.
     pub async fn close(&self) {
-        let mut probes = self.begin_close();
+        let probes = self.begin_close();
         let closed = lk_agents_abi::Closed::bounded(
             self.clock.as_ref(),
             self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT),
             async {
-                for probe in &mut probes {
-                    let _ = (&mut probe.task).await;
+                for probe in probes {
+                    probe.task.settled().await;
                 }
             },
         )
         .await;
         if closed == lk_agents_abi::Closed::TimedOut {
+            // the probes left were told to stop; their executor owns them until they settle
             log::error!(target: lk_agents_abi::LOG_TARGET, "fallback cleanup incomplete; tasks retain ownership until settlement");
-            self.retain(probes);
         }
     }
 
@@ -808,19 +808,21 @@ impl<B: Backend> RecoveryProbe<B> {
             Either::Right((_, recovery)) => recovery,
         };
         stop.cancel();
-        let cleanup = lk_agents_abi::Closed::bounded(
-            self.clock.as_ref(),
-            self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT),
-            async {
-                let _ = (&mut recovery).await;
-            },
-        )
-        .await;
-        if cleanup == lk_agents_abi::Closed::TimedOut {
-            log::error!(target: lk_agents_abi::LOG_TARGET,
-                "fallback probe cleanup incomplete; task retains ownership until settlement"
-            );
-            let _ = recovery.await;
+        let verdict =
+            match lk_agents_abi::timeout(self.clock.as_ref(), HOST_TEARDOWN_TIMEOUT, &mut recovery)
+                .await
+            {
+                Ok(verdict) => verdict,
+                Err(_) => {
+                    log::error!(target: lk_agents_abi::LOG_TARGET,
+                        "fallback probe cleanup incomplete; task retains ownership until settlement"
+                    );
+                    recovery.await
+                }
+            };
+        // a verdict reached after the deadline or the close is no longer the probe's to report
+        if let Err(error) = verdict {
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "fallback probe failed while stopping: {error}");
         }
         None
     }

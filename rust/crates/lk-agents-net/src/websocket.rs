@@ -142,7 +142,15 @@ impl WsSender for TungsteniteSender {
 
     async fn close(&self) {
         self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
-        let _ = self.sink.lock().await.close().await;
+        // The close frame is the peer's courtesy; a broken connection has nothing left to close.
+        if let Err(error) = self.sink.lock().await.close().await {
+            match classify_tungstenite(error) {
+                TransportError::Closed => {}
+                error => {
+                    log::debug!(target: lk_agents_abi::LOG_TARGET, "websocket close failed: {error}")
+                }
+            }
+        }
     }
 }
 

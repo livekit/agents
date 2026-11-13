@@ -104,8 +104,9 @@ async def server() -> AsyncIterator[str]:
         ws.headers["x-request-id"] = "req-1"
         await ws.prepare(request)
         async for msg in ws:
-            if msg.data == "close":
-                await ws.close(code=4000, message=b"bye")
+            if isinstance(msg.data, str) and msg.data.startswith("close"):
+                code = int(msg.data.partition(":")[2] or 4000)
+                await ws.close(code=code, message=b"bye")
             elif msg.type is aiohttp.WSMsgType.TEXT:
                 await ws.send_str(msg.data)
             else:
@@ -364,6 +365,25 @@ async def test_websocket_messages_and_close(server: str, session: HttpSession) -
     assert ws.close_code == 4000
 
 
+@pytest.mark.parametrize(("code", "retryable"), [(1008, False), (4401, False), (1011, True)])
+async def test_a_provider_close_is_an_error_its_code_makes_final_or_retryable(
+    server: str, session: HttpSession, code: int, retryable: bool
+) -> None:
+    """An auth or policy close is final (it used to be retried like any close), a server error
+    is retried; the provider's close reason is the error's detail, never its text."""
+    ws = await session.ws_connect(f"{server}/echo")
+    await ws.send_str(f"close:{code}")
+    assert (await ws.receive()).type is WebSocketMessageType.CLOSE
+
+    error = ws.close_error("provider closed")
+
+    assert (str(error), error.retryable, error.detail) == (
+        f"provider closed (close code {code})",
+        retryable,
+        "bye",
+    )
+
+
 def _assert_redacted(err: BaseException) -> None:
     assert isinstance(err, APIStatusError) and err.status_code == 401
     chain: BaseException | None = err
@@ -544,16 +564,15 @@ async def test_a_prewarm_after_a_failed_one_connects_and_is_reused() -> None:
 
 
 async def test_a_connection_removed_after_invalidate_is_closed() -> None:
-    """A checked-out connection removed after `invalidate()` is closed at the next drain.
+    """A checked-out connection removed after `invalidate()` is closed.
     https://github.com/livekit/agents/pull/7139"""
     pool = Pool()
     in_use = await pool.get()
 
     pool.pool.invalidate()
     pool.pool.remove(in_use)
-    await pool.get()
 
-    assert pool.closed == [in_use]
+    await until(lambda: pool.closed == [in_use], "the removed connection was never closed")
 
 
 async def test_invalidate_lets_a_stream_in_flight_finish_on_its_connection() -> None:
@@ -570,7 +589,7 @@ async def test_invalidate_lets_a_stream_in_flight_finish_on_its_connection() -> 
     pool.pool.put(fresh)
 
     assert await pool.get() is fresh
-    assert pool.closed == [speaking]
+    await until(lambda: pool.closed == [speaking], "the retired connection was never closed")
 
 
 async def test_a_handshake_in_flight_during_invalidate_is_discarded() -> None:
@@ -597,12 +616,12 @@ async def test_a_handshake_in_flight_during_invalidate_is_discarded() -> None:
     release.set()
 
     assert await acquiring == Connection(2)
-    assert closed == [Connection(1)]
+    await until(lambda: closed == [Connection(1)], "the stale handshake was never closed")
 
 
-async def test_a_cancelled_drain_leaves_the_connection_to_a_later_close() -> None:
-    """Cancelling a `get` while it closes a retired connection leaves that connection queued:
-    the pool's own close still closes it. https://github.com/livekit/agents/pull/7139"""
+async def test_aclose_waits_for_a_close_in_flight() -> None:
+    """A close runs on the pool's own task from the moment the pool lets the connection go, so
+    no caller can abandon it, and `aclose()` waits for it. https://github.com/livekit/agents/pull/7139"""
     closing, finish = asyncio.Event(), asyncio.Event()
     closed: list[Connection] = []
 
@@ -615,13 +634,83 @@ async def test_a_cancelled_drain_leaves_the_connection_to_a_later_close() -> Non
     retired = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.put(retired)
     pool.invalidate()
-    acquiring = asyncio.create_task(pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS))
     await closing.wait()
 
-    acquiring.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await acquiring
+    closing_pool = asyncio.create_task(pool.aclose())
+    await asyncio.sleep(0)
+    assert not closing_pool.done()
     finish.set()
-    await pool.aclose()
+    await closing_pool
 
     assert closed == [retired]
+
+
+# --- retry_request ----------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def start_peer() -> AsyncIterator[tuple[str, list[str]]]:
+    """``POST /start`` answers 503 with ``Retry-After: 0`` once, then 200; ``POST /stall`` never
+    answers. Each request's path is recorded."""
+    seen: list[str] = []
+    release = asyncio.Event()
+
+    async def start(request: web.Request) -> web.Response:
+        seen.append(request.path)
+        if seen.count("/start") == 1:
+            return web.Response(status=503, headers={"Retry-After": "0"})
+        return web.json_response({"session": "s-1"})
+
+    async def stall(request: web.Request) -> web.Response:
+        seen.append(request.path)
+        await release.wait()
+        return web.Response()
+
+    app = web.Application()
+    app.router.add_post("/start", start)
+    app.router.add_post("/stall", stall)
+    runner = web.AppRunner(app, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    try:
+        yield f"http://127.0.0.1:{port}", seen
+    finally:
+        release.set()
+        await runner.cleanup()
+
+
+async def _post_json(session: HttpSession, url: str, options: APIConnectOptions) -> Any:
+    async with session.post(url, json={}, conn_options=options) as response:
+        await response.raise_for_status()
+        return await response.json()
+
+
+async def test_a_session_start_is_retried_after_a_server_error(
+    start_peer: tuple[str, list[str]], session: HttpSession
+) -> None:
+    """A 503 with Retry-After is retried and the second answer is returned."""
+    url, seen = start_peer
+    options = APIConnectOptions(max_retry=2, retry_interval=0)
+
+    result = await http.retry_request(
+        lambda: _post_json(session, f"{url}/start", options), conn_options=options
+    )
+
+    assert (result, seen) == ({"session": "s-1"}, ["/start", "/start"])
+
+
+async def test_a_session_start_whose_answer_timed_out_is_never_sent_again(
+    start_peer: tuple[str, list[str]], session: HttpSession
+) -> None:
+    """A POST the provider may have accepted is not repeated (a second avatar session)."""
+    url, seen = start_peer
+    options = APIConnectOptions(max_retry=3, retry_interval=0, read_timeout=FAST)
+
+    with pytest.raises(APITimeoutError) as raised:
+        await http.retry_request(
+            lambda: _post_json(session, f"{url}/stall", options), conn_options=options
+        )
+
+    assert (raised.value.timeout, raised.value.retryable, seen) == ("read", False, ["/stall"])

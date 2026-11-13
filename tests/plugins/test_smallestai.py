@@ -1,12 +1,14 @@
 """Smallest AI STT plugin: speech events at the public streaming boundary."""
 
 import asyncio
+import struct
 
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectOptions, http, stt
-from livekit.plugins.smallestai import STT
+from livekit.plugins.smallestai import STT, TTS
 
 
 async def test_malformed_frame_does_not_drop_following_transcript_and_speech_boundaries() -> None:
@@ -131,3 +133,29 @@ async def test_finalize_and_close_stream_deliver_last_transcript() -> None:
     assert sum(ev.type == stt.SpeechEventType.END_OF_SPEECH for ev in events) == 2
     assert query[0]["language"] == "es" and query[0]["sample_rate"] == "24000"
     assert query[0]["diarize"] == "true" and query[0]["keywords"] == "LiveKit:2"
+
+
+@pytest.mark.parametrize(
+    ("output_format", "encoded", "sample"), [("ulaw", 0x00, -32124), ("alaw", 0x55, -8)]
+)
+async def test_g711_synthesis_decodes_to_pcm(output_format: str, encoded: int, sample: int) -> None:
+    """The ulaw/alaw output formats play as PCM instead of failing the decoder."""
+
+    async def synthesize(request: web.Request) -> web.Response:
+        return web.Response(body=bytes([encoded]) * 800, content_type="audio/basic")
+
+    app = web.Application()
+    app.router.add_post("/tts", synthesize)
+    async with TestServer(app) as server, http.open() as session:
+        provider = TTS(
+            api_key="key",
+            sample_rate=8000,
+            output_format=output_format,
+            base_url=str(server.make_url("")).rstrip("/"),
+            http_session=session,
+        )
+        async with provider.synthesize("Hello.", conn_options=APIConnectOptions(max_retry=0)) as s:
+            pcm = b"".join([event.frame.data.tobytes() async for event in s])
+        await provider.aclose()
+
+    assert pcm[: 800 * 2] == struct.pack("<h", sample) * 800

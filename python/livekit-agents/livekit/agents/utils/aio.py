@@ -461,18 +461,19 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
             if self._native.connected(id(conn), time.time(), generation, elapsed):
                 return conn
             # options changed during the handshake: the state queued this socket for closing
-            await self._drain_to_close()
+            self._close_queued()
 
-    async def _drain_to_close(self) -> None:
-        while (cid := self._native.next_closing()) is not None:
-            conn = self._conns[cid]
-            try:
-                if self._close_cb is not None:
-                    await self._close_cb(conn)
-            except Exception as e:
-                logger.warning("error closing connection %s: %s", conn, e)
-            self._native.closed(cid)
-            del self._conns[cid]
+    def _close_queued(self) -> None:
+        # each taken id gets its close task in this same step: a cancelled caller cannot drop one
+        for cid in self._native.take_to_close():
+            self._tasks.spawn(self._close(self._conns.pop(cid)), name="ConnectionPool.close")
+
+    async def _close(self, conn: T) -> None:
+        try:
+            if self._close_cb is not None:
+                await self._close_cb(conn)
+        except Exception as e:
+            logger.warning("error closing connection %s: %s", conn, e)
 
     @asynccontextmanager
     async def connection(self, *, conn_options: APIConnectOptions) -> AsyncGenerator[T, None]:
@@ -491,6 +492,7 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
 
         Waiting for the pool runs under ``conn_options.pool_timeout``.
         """
+        self._close_queued()
         try:
             async with asyncio.timeout(conn_options.pool_timeout):
                 await self._connect_lock.acquire()
@@ -499,7 +501,6 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
                 "Timed out waiting for connection capacity", timeout="pool"
             ) from exc
         try:
-            await self._drain_to_close()
             if (cid := self._native.get(time.time())) is not None:
                 return self._conns[cid]
             try:
@@ -516,19 +517,22 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
         """Make a connection available for reuse; one removed or retired by :meth:`invalidate`
         is closed instead."""
         self._native.put(id(conn))
+        self._close_queued()
 
     def remove(self, conn: T) -> None:
-        """Remove a connection from the pool; it is closed on the next drain."""
+        """Remove a connection from the pool and close it."""
         self._native.remove(id(conn))
+        self._close_queued()
 
     def invalidate(self) -> None:
         """Stop reusing every existing connection.
 
-        Idle connections are closed on the next drain. Checked-out ones keep working for their
-        holder and are closed when returned, so a request in flight is not interrupted. A
-        handshake in flight is discarded and retried, since its socket has the old settings.
+        Idle connections are closed. Checked-out ones keep working for their holder and are
+        closed when returned, so a request in flight is not interrupted. A handshake in flight is
+        discarded and retried, since its socket has the old settings.
         """
         self._native.invalidate()
+        self._close_queued()
 
     def prewarm(self) -> None:
         """Open a connection in the background if the pool has none."""
@@ -552,10 +556,15 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
 
     async def aclose(self) -> None:
         """Close every connection, including checked-out ones."""
-        await self._tasks.aclose()
+        if self._prewarm_task is not None:
+            await cancel_and_wait(self._prewarm_task)
         # the retired connections too, rather than waiting for holders that may never return them
         self._native.close_all()
-        await self._drain_to_close()
+        self._close_queued()
+        # the closes run to completion, each bounded by close_cb; then the set closes
+        if closing := [task for task in self._tasks._tasks if not task.done()]:
+            await asyncio.wait(closing)
+        await self._tasks.aclose()
 
 
 # A close nobody awaits (a dropped stream's ``aclose()``), by loop: held until it finishes, since

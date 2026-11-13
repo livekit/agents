@@ -11,7 +11,7 @@ import contextlib
 import os
 import time
 import weakref
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Literal
 from urllib.parse import quote, urlencode
@@ -20,7 +20,7 @@ import numpy as np
 import sphn
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, http, llm, utils
+from livekit.agents import APIConnectionError, APITimeoutError, http, llm, utils
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 
@@ -174,7 +174,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         options: _PersonaplexOptions,
         http_session: Callable[[], http.HttpSession],
     ) -> None:
-        super().__init__(realtime_model)
+        super().__init__(
+            realtime_model, input_sample_rate=SAMPLE_RATE, input_num_channels=NUM_CHANNELS
+        )
         self._realtime_model: RealtimeModel = realtime_model
         self._get_http_session = http_session
         self._opts = replace(options)
@@ -183,8 +185,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[bytes]()
 
-        self._input_resampler: rtc.AudioResampler | None = None
-        self._input_resampler_rate: int | None = None
         self._bstream = utils.media.AudioByteStream(
             SAMPLE_RATE,
             NUM_CHANNELS,
@@ -223,9 +223,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         if self._closed:
             return
 
-        for resampled_frame in self._resample_audio(frame):
-            for audio_frame in self._bstream.push(resampled_frame.data):
-                self._encode_and_send(audio_frame)
+        for audio_frame in self._bstream.push(frame.data):
+            self._encode_and_send(audio_frame)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         pass  # PersonaPlex is audio-only
@@ -386,8 +385,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                     )
 
             except Exception as e:
-                logger.error(f"PersonaPlex WebSocket error: {e}", exc_info=True)
-
                 # Clean up any active generation and silence timer
                 if self._current_generation and not self._current_generation.done:
                     self._finalize_generation(interrupted=True)
@@ -398,12 +395,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 old_ch.close()
                 self._msg_ch = utils.aio.Chan[bytes]()
 
-                is_recoverable = isinstance(e, asyncio.TimeoutError | APIConnectionError)
+                is_recoverable = isinstance(e, asyncio.TimeoutError) or (
+                    isinstance(e, APIConnectionError) and e.retryable
+                )
 
                 if isinstance(e, APIConnectionError):
                     error = e
                 else:
-                    error = APIConnectionError(f"Connection failed: {e}")
+                    error = APIConnectionError("PersonaPlex connection failed", detail=str(e))
 
                 self.emit(
                     "error",
@@ -422,27 +421,25 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
 
-    @utils.log_exceptions(logger=logger)
     async def _send_task(self, ws_conn: http.WebSocket) -> None:
         # The server's is_alive() check consumes WS messages during system
         # prompt processing without feeding them to the opus decoder.  Wait
         # for the handshake before sending audio so nothing gets dropped.
         # Queued frames are sent immediately — they're the first audio the
         # server's recv_loop will see.
-        await self._handshake_event.wait()
+        try:
+            async with asyncio.timeout(DEFAULT_API_CONNECT_OPTIONS.connect_timeout):
+                await self._handshake_event.wait()
+        except TimeoutError:
+            raise APITimeoutError("PersonaPlex handshake timed out", timeout="connect") from None
 
         async for msg in self._msg_ch:
             if self._session_should_close.is_set():
                 break
-
-            try:
-                await ws_conn.send_bytes(msg)
-            except Exception:
-                raise
+            await ws_conn.send_bytes(msg)
 
         self._closing = True
 
-    @utils.log_exceptions(logger=logger)
     async def _recv_task(self, ws_conn: http.WebSocket) -> None:
         while True:
             if self._session_should_close.is_set():
@@ -458,21 +455,15 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 msg_type = data[0]
                 payload = data[1:]
 
-                try:
-                    if msg_type == MSG_HANDSHAKE:
-                        logger.debug("PersonaPlex handshake received")
-                        self._handshake_event.set()
-
-                    elif msg_type == MSG_AUDIO:
-                        self._handle_audio_data(payload)
-
-                    elif msg_type == MSG_TEXT:
-                        self._handle_text_token(payload)
-
-                    else:
-                        logger.warning(f"Unknown PersonaPlex message type: 0x{msg_type:02x}")
-                except Exception:
-                    logger.exception("Error handling PersonaPlex message")
+                if msg_type == MSG_HANDSHAKE:
+                    logger.debug("PersonaPlex handshake received")
+                    self._handshake_event.set()
+                elif msg_type == MSG_AUDIO:
+                    self._handle_audio_data(payload)
+                elif msg_type == MSG_TEXT:
+                    self._handle_text_token(payload)
+                else:
+                    logger.warning(f"Unknown PersonaPlex message type: 0x{msg_type:02x}")
 
             elif msg.type == http.WebSocketMessageType.CLOSE:
                 if self._closing:
@@ -486,7 +477,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                         self._finalize_generation(interrupted=False)
                     return
 
-                raise APIConnectionError(message="PersonaPlex connection closed unexpectedly")
+                raise ws_conn.close_error("PersonaPlex connection closed unexpectedly")
 
     # -- Internal: audio encode/decode --
 
@@ -695,25 +686,3 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         if self._current_generation and not self._current_generation.done:
             logger.debug("Silence detected, finalizing generation")
             self._finalize_generation(interrupted=False)
-
-    # -- Internal: audio resampling --
-
-    def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
-        if self._input_resampler:
-            if frame.sample_rate != self._input_resampler_rate:
-                self._input_resampler = None
-
-        if self._input_resampler is None and (
-            frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS
-        ):
-            self._input_resampler_rate = frame.sample_rate
-            self._input_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=SAMPLE_RATE,
-                num_channels=NUM_CHANNELS,
-            )
-
-        if self._input_resampler:
-            yield from self._input_resampler.push(frame)
-        else:
-            yield frame

@@ -23,8 +23,56 @@ pub fn mime_container(mime: &str) -> Option<Container> {
 pub enum AudioDecoding {
     /// `audio/pcm` or `audio/raw`: no decoder is built.
     Passthrough,
+    /// G.711 bytes, expanded sample by sample to PCM.
+    G711(G711),
     /// The container the decoder reads.
     Decode(Container),
+}
+
+/// The G.711 companding laws (ITU-T G.711): one byte per sample, at the declared rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum G711 {
+    MuLaw,
+    ALaw,
+}
+
+impl G711 {
+    /// The law a media type names, parameters stripped.
+    pub fn of(mime: &str) -> Option<G711> {
+        let base = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        match base.as_str() {
+            "audio/basic" | "audio/x-mulaw" | "audio/pcmu" => Some(G711::MuLaw),
+            "audio/pcma" | "audio/x-alaw" => Some(G711::ALaw),
+            _ => None,
+        }
+    }
+
+    /// Little-endian PCM bytes, two per input byte.
+    pub fn decode(self, bytes: &[u8]) -> Vec<u8> {
+        let expand = match self {
+            G711::MuLaw => mulaw,
+            G711::ALaw => alaw,
+        };
+        bytes.iter().flat_map(|&b| expand(b).to_le_bytes()).collect()
+    }
+}
+
+fn mulaw(byte: u8) -> i16 {
+    const BIAS: i16 = 0x84;
+    let u = !byte;
+    let magnitude = ((i16::from(u & 0x0F) << 3) + BIAS) << ((u >> 4) & 0x07);
+    if u & 0x80 != 0 { BIAS - magnitude } else { magnitude - BIAS }
+}
+
+fn alaw(byte: u8) -> i16 {
+    let a = byte ^ 0x55;
+    let mut t = i16::from(a & 0x0F) << 4;
+    match (a & 0x70) >> 4 {
+        0 => t += 8,
+        1 => t += 0x108,
+        segment => t = (t + 0x108) << (segment - 1),
+    }
+    if a & 0x80 != 0 { t } else { -t }
 }
 
 /// `Display` is the refusal's sentence.
@@ -36,7 +84,8 @@ impl std::fmt::Display for UnknownMime {
         write!(
             f,
             "mime type {:?} is not one this build recognises. audio/pcm and audio/raw need no \
-             decoder; mp3, aac, flac, wav, ogg/opus, webm and mp4 are decoded.",
+             decoder; G.711 (audio/pcmu, audio/pcma), mp3, aac, flac, wav, ogg/opus, webm and mp4 \
+             are decoded.",
             self.0
         )
     }
@@ -49,6 +98,10 @@ impl std::error::Error for UnknownMime {}
 /// prefix match, as the reference's is.
 pub fn audio_decoding(mime_type: &str) -> Result<AudioDecoding, UnknownMime> {
     let mt = mime_type.trim().to_ascii_lowercase();
+    // before the PCM prefix test, which `audio/pcmu` and `audio/pcma` would match
+    if let Some(law) = G711::of(&mt) {
+        return Ok(AudioDecoding::G711(law));
+    }
     if mt.starts_with("audio/pcm") || mt.starts_with("audio/raw") {
         return Ok(AudioDecoding::Passthrough);
     }
@@ -84,6 +137,28 @@ mod tests {
             "the provider's own spelling is reported"
         );
         assert!(audio_decoding("").is_err(), "an empty declaration is not PCM");
+    }
+
+    // Catches: `audio/pcmu` taken for raw PCM by the prefix test, or a wrong expansion table
+    // (silence must decode to 0 and the extremes to the G.711 peaks).
+    #[test]
+    fn g711_is_decoded_not_passed_through_as_pcm() {
+        for mime in ["audio/pcmu", "audio/basic", "AUDIO/X-MULAW", "audio/pcmu;rate=8000"] {
+            assert_eq!(audio_decoding(mime), Ok(AudioDecoding::G711(G711::MuLaw)), "{mime}");
+        }
+        for mime in ["audio/pcma", "audio/x-alaw"] {
+            assert_eq!(audio_decoding(mime), Ok(AudioDecoding::G711(G711::ALaw)), "{mime}");
+        }
+        let pcm = |law: G711, b: u8| i16::from_le_bytes(law.decode(&[b]).try_into().unwrap());
+        assert_eq!(pcm(G711::MuLaw, 0xFF), 0);
+        assert_eq!(pcm(G711::MuLaw, 0x7F), 0);
+        assert_eq!(pcm(G711::MuLaw, 0x80), 32124);
+        assert_eq!(pcm(G711::MuLaw, 0x00), -32124);
+        assert_eq!(pcm(G711::ALaw, 0xD5), 8);
+        assert_eq!(pcm(G711::ALaw, 0x55), -8);
+        assert_eq!(pcm(G711::ALaw, 0xAA), 32256);
+        assert_eq!(pcm(G711::ALaw, 0x2A), -32256);
+        assert_eq!(G711::MuLaw.decode(&[0xFF, 0x80]).len(), 4, "two bytes per sample");
     }
 
     // Every alias row, also upper-cased, with media-type parameters stripped; an unknown type

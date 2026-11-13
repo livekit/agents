@@ -44,7 +44,6 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from ._utils import PeriodicCollector
 from .log import logger
 from .types import STTLanguages
 
@@ -297,10 +296,6 @@ class SpeechStream(stt.RecognizeStream):
         self._session = http_session
         self._speaking = False
         self._emitted_chunk_final = False
-        self._audio_duration_collector = PeriodicCollector(
-            callback=self._on_audio_duration_report,
-            duration=5.0,
-        )
 
         self._request_id = str(uuid.uuid4())
         self._reconnect_event = asyncio.Event()
@@ -351,7 +346,6 @@ class SpeechStream(stt.RecognizeStream):
     async def _run(self) -> None:
         closing_ws = False
 
-        @utils.log_exceptions(logger=logger)
         async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
@@ -372,14 +366,11 @@ class SpeechStream(stt.RecognizeStream):
                     frames.extend(audio_bstream.flush())
 
                 for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
-            self._audio_duration_collector.flush()
             await ws.send_str(json.dumps({"type": "audio.done"}))
             closing_ws = True
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
@@ -394,22 +385,25 @@ class SpeechStream(stt.RecognizeStream):
                     if closing_ws or self._session.closed:
                         return
 
-                    raise APIStatusError(message="xAI connection closed unexpectedly")
+                    raise ws.close_error("xAI connection closed unexpectedly")
 
                 if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected xAI message type %s", msg.type)
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
-                except Exception:
-                    logger.exception("failed to process xAI message")
+                    raw = json.loads(msg.data)
+                except json.JSONDecodeError as e:
+                    raise APIConnectionError("xAI sent a malformed message", retryable=False) from e
+                self._process_stream_event(raw)
 
         ws: http.WebSocket | None = None
 
         while True:
             try:
                 closing_ws = False
+                self._speaking = False
+                self._emitted_chunk_final = False
                 ws = await self._connect_ws()
                 self._server_ready.clear()
                 async with utils.aio.TaskSet() as tasks:
@@ -450,15 +444,6 @@ class SpeechStream(stt.RecognizeStream):
             # Deepgram and Muse STT plugins.
             heartbeat=30.0,
             conn_options=self._conn_options,
-        )
-
-    def _on_audio_duration_report(self, duration: float) -> None:
-        self.send(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=self._request_id,
-                recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-            )
         )
 
     def _process_stream_event(self, raw_data: object) -> None:
@@ -554,7 +539,7 @@ class SpeechStream(stt.RecognizeStream):
                 self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif msg_type == "error":
-            logger.error("xAI STT error: %s", data.message)
+            raise APIConnectionError("xAI STT error", detail=data.message)
 
         else:
             logger.warning("received unexpected message from xAI: %s", msg_type)

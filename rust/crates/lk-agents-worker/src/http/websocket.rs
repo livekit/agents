@@ -392,7 +392,7 @@ impl Connection {
                     let ended = self.0.tasks.lock().reader_ended.clone();
                     let replied = async {
                         if let Some(ended) = ended {
-                            let _ = ended.wait().await;
+                            ended.until(Option::is_some).await;
                         }
                     };
                     if timeout(clock, limit, replied).await.is_err() {

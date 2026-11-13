@@ -188,7 +188,7 @@ impl<Q: ReaderSink> Readers<Q> {
             if !self.state.lock().readers.producing(generation) {
                 return;
             }
-            let _ = changed.changed().await;
+            changed.changed().await.expect("the producer is a field of self");
         }
     }
 
@@ -217,7 +217,7 @@ impl<Q: ReaderSink> Readers<Q> {
                 if let Some(outcome) = self.state.lock().readers.settled() {
                     return outcome;
                 }
-                let _ = changed.changed().await;
+                changed.changed().await.expect("the producer is a field of self");
             }
         };
         let remaining = deadline.saturating_duration_since(clock.now());
@@ -476,7 +476,7 @@ pub struct ParticipantAudioInput {
     config: AudioInputConfig,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
     /// Where a processor's failing span is reported to the session.
-    failures: tokio::sync::mpsc::Sender<ProcessorFailure>,
+    failures: lk_agents_net::outbox::Outbox<ProcessorFailure>,
     readers: Readers<AudioSender<InputEvent>>,
     /// A track's pump, which ends once its generation is replaced or its stream ends.
     pumps: Arc<TaskSet>,
@@ -501,7 +501,7 @@ impl ParticipantAudioInput {
         clock: Arc<dyn Clock>,
         config: AudioInputConfig,
         pre_connect: Option<Arc<PreConnectAudioHandler>>,
-        failures: tokio::sync::mpsc::Sender<ProcessorFailure>,
+        failures: lk_agents_net::outbox::Outbox<ProcessorFailure>,
     ) -> Arc<Self> {
         let audio =
             media_queue::audio(AUDIO_POLICY, telemetry::AudioConsumer::RoomInput, clock.clone());
@@ -573,10 +573,9 @@ impl ParticipantAudioInput {
                 Some(frame)
             }
             AudioStreamItem::ProcessorFailed(failure) => {
-                // A span reports once, so its report waits for room rather than drop; a closed
-                // channel is a session that is gone.
+                // A span reports once, so its report waits for room rather than drop.
                 if spans.lock().failed(&failure.label) {
-                    let _ = self.failures.send(failure).await;
+                    self.failures.send(failure).await;
                 }
                 None
             }

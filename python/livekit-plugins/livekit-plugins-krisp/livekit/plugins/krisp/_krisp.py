@@ -258,8 +258,7 @@ class KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         try:
             self._module = _KrispLicenseSDKManager.acquire(license_key)
             self._sdk_acquired = True
-        except Exception as e:
-            logger.error(f"Failed to acquire Krisp SDK: {e}")
+        except Exception:
             raise
 
         try:
@@ -316,8 +315,7 @@ class KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             self._in_buf = np.empty(0, dtype=np.int16)
             self._out_buf = np.empty(0, dtype=np.int16)
             logger.info("Krisp session created successfully")
-        except Exception as e:
-            logger.error(f"Failed to create Krisp session: {e}")
+        except Exception:
             raise
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:

@@ -290,6 +290,8 @@ class LlmChoiceParser:
     def __new__(cls) -> Self: ...
     def parse(self, id: str, choice: object) -> ChatChunk | None:
         """The chunk `choice` (one streamed choice of completion `id`) completes, if any."""
+    def finish(self) -> ChatChunk | None:
+        """The stream ended: the chunk closing a call no `finish_reason` closed."""
 
 def llm_usage_chunk(chunk: object) -> ChatChunk | None:
     """The usage chunk of a streamed completion chunk, when it reports usage."""

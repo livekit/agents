@@ -12,7 +12,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectionError, APIConnectOptions, http
+from livekit.agents import APIConnectOptions, APIError, http
 from livekit.agents.voice.avatar import AvatarSession
 from livekit.plugins import (
     anam,
@@ -100,7 +100,7 @@ async def test_invalid_success_response_does_not_repeat_creation(
     requests: list[object] = []
     options = APIConnectOptions(max_retry=2, retry_interval=0)
 
-    with pytest.raises(APIConnectionError) as error:
+    with pytest.raises(APIError) as error:
         await _start(provider, [], options, requests, avatar_host, monkeypatch)
 
     assert error.value.retryable is False

@@ -224,7 +224,7 @@ impl Port for McpToolsetLifecycle {
         let recovery = self.state.lock().recovery.take();
         if let Some(Recovery { stop, task, done }) = recovery {
             stop.cancel();
-            let _ = done.wait().await;
+            done.until(Option::is_some).await;
             drop(task);
         }
         let mut state = self.state.lock();

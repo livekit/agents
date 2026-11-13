@@ -158,10 +158,8 @@ class _ResponsesWebsocket:
             while True:
                 raw_msg = await ws.receive()
                 if raw_msg.type is http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "OpenAI Responses WebSocket connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{raw_msg.data=}",
+                    raise ws.close_error(
+                        "OpenAI Responses WebSocket connection closed unexpectedly"
                     )
                 if raw_msg.type is not http.WebSocketMessageType.TEXT:
                     continue
@@ -539,7 +537,6 @@ class LLMStream(llm.LLMStream):
         )
 
         if self._options.use_websocket is not False:
-            retryable = True
             try:
                 if self._websocket is None:
                     raise RuntimeError("use_websocket is True but _ws is None")
@@ -554,23 +551,19 @@ class LLMStream(llm.LLMStream):
                 async for raw_event in self._websocket.generate_response(
                     payload, attempts=self._core_attempts, conn_options=self._conn_options
                 ):
-                    parsed_ev = self._parse_ws_event(raw_event)
-                    chunk = self._process_event(parsed_ev)
-                    if chunk is not None and chunk.has_response():
-                        retryable = False
+                    self._process_event(self._parse_ws_event(raw_event))
 
                 if not self._response_completed:
-                    raise APIConnectionError(retryable=True)
+                    raise APIConnectionError()
             except APIError:
                 raise
             except Exception as e:
-                raise APIConnectionError(retryable=retryable) from e
+                raise APIConnectionError() from e
 
         else:
             assert self._client is not None
             timeout = http_timeout(self._conn_options)
             self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
-            retryable = True
             try:
                 self._oai_stream = stream = await self._client.with_options(
                     max_retries=0
@@ -585,24 +578,21 @@ class LLMStream(llm.LLMStream):
 
                 async with stream:
                     async for event in stream:
-                        chunk = self._process_event(event)
-                        if chunk is not None and chunk.has_response():
-                            retryable = False
+                        self._process_event(event)
 
             except openai.APITimeoutError:
-                raise APITimeoutError(retryable=retryable)  # noqa: B904
+                raise APITimeoutError()  # noqa: B904
             except openai.APIStatusError as e:
                 raise APIStatusError(  # noqa: B904
                     e.message,
                     status_code=e.status_code,
                     request_id=e.request_id,
                     body=e.body,
-                    retryable=retryable,
                 )
             except APIError:
                 raise
             except Exception as e:
-                raise APIConnectionError(retryable=retryable) from e
+                raise APIConnectionError() from e
 
     def _parse_ws_event(self, event: dict[str, JsonValue]) -> ResponseStreamEvent | None:
         # Strip prompt_cache_retention from any response object before validation:

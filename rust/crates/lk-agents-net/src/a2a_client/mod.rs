@@ -274,7 +274,7 @@ impl AgentClient {
         self.inner.closing.cancel();
         let waiting = self.inner.cancel_all();
         for settled in waiting {
-            let _ = settled.wait().await;
+            settled.until(Option::is_some).await;
         }
         let operations = self.inner.operations.lock();
         if operations.is_empty() {
@@ -697,7 +697,7 @@ impl StreamOutput<TaskUpdate> for ReplyUpdates {
             self.operation.cancel();
             let clock = self.clock.clone();
             Closed::bounded(&*clock, deadline, async move {
-                let _ = self.operation.settled.wait().await;
+                self.operation.settled.until(Option::is_some).await;
             })
             .await
         })
@@ -854,8 +854,10 @@ impl<'a> ReplyReader<'a> {
             self.state.decode(self.body.as_bytes(), &self.id)?
         };
         if let Some(update) = update {
-            // the body's one update: nothing follows it to stop
-            let _ = updates.deliver(exchange, update).await?;
+            match updates.deliver(exchange, update).await? {
+                // the body's one update: nothing follows it to stop
+                ControlFlow::Continue(()) | ControlFlow::Break(()) => {}
+            }
         }
         self.state.finish()
     }

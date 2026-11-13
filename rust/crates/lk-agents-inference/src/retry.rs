@@ -285,3 +285,12 @@ impl<T> Drop for Output<T> {
 #[cfg(test)]
 #[path = "retry_tests.rs"]
 mod tests;
+
+/// The host's websocket helpers: a provider's close code as a retry decision.
+pub struct WebSocketCloses;
+
+impl lk_agents_abi::errors::WebSocketFunctions for WebSocketCloses {
+    fn websocket_close_kind(code: Option<u16>) -> lk_agents_abi::errors::CloseKind {
+        lk_agents_abi::errors::CloseKind::of(code)
+    }
+}

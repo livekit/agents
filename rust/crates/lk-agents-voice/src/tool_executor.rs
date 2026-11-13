@@ -755,6 +755,18 @@ pub enum ToolCompletion {
     CallOutput,
 }
 
+/// A tool host call's report. The host failing outside the tool's own error handling (`what`
+/// failed) is logged, and the call settles as an internal failure the model is told nothing about.
+pub fn host_report(
+    ran: Result<ToolReport, lk_agents_abi::errors::HostError>,
+    what: &str,
+) -> ToolReport {
+    ran.unwrap_or_else(|error| {
+        log::error!(target: lk_agents_abi::LOG_TARGET, "{what}: {error}");
+        ToolOutcome::Internal.into()
+    })
+}
+
 pub fn validates_completion(completion: ToolCompletion, report: &ToolReport) -> bool {
     completion == ToolCompletion::EndsTask
         && matches!(report.outcome, ToolOutcome::Completed { .. })

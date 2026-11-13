@@ -293,6 +293,7 @@ impl Fake {
                 api_kind: None,
                 retryable: true,
                 status_code: None,
+                said: None,
             }),
             Behavior::Slow { entered, gate, output } => {
                 entered.set();

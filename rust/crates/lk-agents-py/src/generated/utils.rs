@@ -210,14 +210,7 @@ fn _extract_connection_pool_state_remove_id(
     crate::py_values::number_from_py::<u64>(obj.as_any(), "id")
 }
 type ConnectionPoolStateRemoveIdInput = u64;
-type ConnectionPoolStateNextClosingOutput = ::std::option::Option<u64>;
-
-fn _extract_connection_pool_state_closed_id(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<ConnectionPoolStateClosedIdInput> {
-    crate::py_values::number_from_py::<u64>(obj.as_any(), "id")
-}
-type ConnectionPoolStateClosedIdInput = u64;
+type ConnectionPoolStateTakeToCloseOutput = ::std::vec::Vec<u64>;
 
 #[pyclass(name = "ConnectionPoolState", module = "livekit.agents._core")]
 pub struct ConnectionPoolState(pub(crate) ConnectionPoolStateImpl);
@@ -314,19 +307,10 @@ impl ConnectionPoolState {
         Ok(())
     }
 
-    fn next_closing(&self) -> PyResult<ConnectionPoolStateNextClosingOutput> {
-        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::next_closing(&self.0);
+    /// Every connection queued for closing, taken off the queue: the caller now owns each close.
+    fn take_to_close(&mut self) -> PyResult<ConnectionPoolStateTakeToCloseOutput> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::take_to_close(&mut self.0);
         ::pyo3::PyResult::Ok(out)
-    }
-
-    #[pyo3(signature = (id))]
-    fn closed(
-        &mut self,
-        #[pyo3(from_py_with = _extract_connection_pool_state_closed_id)]
-        id: ConnectionPoolStateClosedIdInput,
-    ) -> PyResult<()> {
-        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::closed(&mut self.0, id);
-        Ok(())
     }
 }
 
@@ -510,6 +494,96 @@ impl MovingAverage {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/utils/resample.rs.
+type AudioConverterImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::AudioConverter;
+
+fn _extract_audio_converter_new_sample_rate(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<AudioConverterNewSampleRateInput> {
+    crate::py_values::number_from_py::<u32>(obj.as_any(), "sample_rate")
+}
+type AudioConverterNewSampleRateInput = u32;
+
+fn _extract_audio_converter_new_num_channels(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<AudioConverterNewNumChannelsInput> {
+    crate::py_values::number_from_py::<u16>(obj.as_any(), "num_channels")
+}
+type AudioConverterNewNumChannelsInput = u16;
+
+/// `utils.media.AudioConverter`: frames of any rate and channel count, converted to one format
+/// (resampled, and averaged to mono or copied across channels). A frame already in that format
+/// passes through untouched; a change of input format ends the previous stream first.
+#[pyclass(name = "AudioConverter", module = "livekit.agents.utils.media")]
+pub struct AudioConverter(pub(crate) AudioConverterImpl);
+
+#[pymethods]
+impl AudioConverter {
+    #[new]
+    #[pyo3(signature = (sample_rate, num_channels))]
+    fn new(
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_audio_converter_new_sample_rate)]
+        sample_rate: AudioConverterNewSampleRateInput,
+        #[pyo3(from_py_with = _extract_audio_converter_new_num_channels)]
+        num_channels: AudioConverterNewNumChannelsInput,
+    ) -> PyResult<AudioConverter> {
+        let out = py.detach(|| {
+            <AudioConverterImpl as ::lk_agents_abi::utils::resample::AudioConverter>::new(
+                sample_rate,
+                num_channels,
+            )
+        });
+        ::pyo3::PyResult::Ok(AudioConverter(out))
+    }
+
+    /// The converted audio `frame` completes, after the tail of a stream it ends.
+    #[pyo3(signature = (frame))]
+    fn push<'py>(
+        &mut self,
+        py: Python<'py>,
+        frame: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let frame = crate::generated::records::rtc_frames::audio_frame_from_py(frame.as_any())?;
+        let out = <AudioConverterImpl as ::lk_agents_abi::utils::resample::AudioConverter>::push(
+            &mut self.0,
+            frame,
+        )
+        .map_err(|e: ::lk_agents_abi::ResampleError| {
+            <::lk_agents_abi::ResampleError as crate::py_errors::HostException>::to_py_err(&e)
+        })?;
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::generated::records::rtc_frames::audio_frame_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
+    }
+
+    /// The audio still held by the resampler, at the end of a segment or stream.
+    fn flush<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out = <AudioConverterImpl as ::lk_agents_abi::utils::resample::AudioConverter>::flush(
+            &mut self.0,
+        )
+        .map_err(|e: ::lk_agents_abi::ResampleError| {
+            <::lk_agents_abi::ResampleError as crate::py_errors::HostException>::to_py_err(&e)
+        })?;
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::generated::records::rtc_frames::audio_frame_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/utils/video.rs.
 
 /// [`::lk_agents_abi::utils::video::RtcVideoFrame`] over a host `livekit.rtc.VideoFrame`.
@@ -646,5 +720,11 @@ impl crate::py_errors::HostException for ::lk_agents_abi::utils::filters::Filter
 impl crate::py_errors::HostException for ::lk_agents_abi::utils::host_ref::StaleHostRef {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         StaleHandle::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::ResampleError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }

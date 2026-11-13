@@ -13,7 +13,7 @@ use crate::telemetry;
 use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
 use lk_agents_abi::types::provider::{AttemptHost, ProviderAttempts as Port, ResponseObservation};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
-use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts};
+use lk_agents_abi::{RecognitionUsage, SpeechEvent, SpeechEventType, Ts};
 use lk_agents_core::request::{Backoff, Policy, Request, Retry, Step, terminal_failure};
 
 /// The decisions of one request's attempts, on supplied time.
@@ -31,7 +31,13 @@ pub struct AttemptMachine {
     input_ended: bool,
     pending_transcript: bool,
     error: Option<ApiError>,
+    /// Seconds of audio the recognition's attempts took that no usage report covers yet.
+    unreported_audio: f64,
 }
+
+/// Seconds of audio between the usage reports of a recognition the provider does not measure;
+/// the rest is reported when its attempt ends.
+const USAGE_INTERVAL: f64 = 5.0;
 
 impl AttemptMachine {
     pub fn new(
@@ -68,6 +74,7 @@ impl AttemptMachine {
             input_ended: false,
             pending_transcript: false,
             error: None,
+            unreported_audio: 0.0,
         };
         result.apply(steps, now);
         result.reading(now);
@@ -157,6 +164,28 @@ impl AttemptMachine {
             SpeechEventType::FinalTranscript => self.response(true, now_ns),
             _ => {}
         }
+    }
+
+    /// Audio an attempt took: the usage to report once `USAGE_INTERVAL` seconds accumulated.
+    pub fn audio_taken(&mut self, seconds: f64) -> Option<SpeechEvent> {
+        self.unreported_audio += seconds;
+        if self.unreported_audio < USAGE_INTERVAL {
+            return None;
+        }
+        self.unreported_usage()
+    }
+
+    /// The usage of the audio taken since the last report.
+    pub fn unreported_usage(&mut self) -> Option<SpeechEvent> {
+        let seconds = std::mem::take(&mut self.unreported_audio);
+        (seconds > 0.0).then(|| {
+            let mut event = SpeechEvent::new(SpeechEventType::RecognitionUsage);
+            event.recognition_usage = Some(Box::new(RecognitionUsage {
+                audio_duration: Some(seconds),
+                ..Default::default()
+            }));
+            event
+        })
     }
 
     pub fn observe_response(&mut self, observation: ResponseObservation, now_ns: u64) {
@@ -375,6 +404,14 @@ impl Port for ProviderAttempts {
 
     fn observe(&self, event: SpeechEvent) {
         self.observed(|machine, now| machine.observe(event, now));
+    }
+
+    fn audio_taken(&self, seconds: f64) -> Option<SpeechEvent> {
+        self.state.lock().machine.audio_taken(seconds)
+    }
+
+    fn unreported_usage(&self) -> Option<SpeechEvent> {
+        self.state.lock().machine.unreported_usage()
     }
 
     fn exhausted(&self) -> bool {
@@ -788,6 +825,22 @@ mod tests {
         assert_eq!(operation.ready(at(100)), Ok(false));
         operation.input_ended(at(100));
         assert_eq!(operation.succeeded(at(100)), Ok(()));
+    }
+
+    // Catches: the audio a recognition's attempts took reported before 5 seconds accumulated,
+    // never reported, or its remainder lost or reported twice when an attempt ends.
+    #[test]
+    fn the_audio_taken_is_reported_every_five_seconds_and_the_rest_once() {
+        let mut operation =
+            AttemptMachine::new(RequestKind::SttStream, ApiConnectOptions::default(), 0).unwrap();
+        let seconds = |event: Option<SpeechEvent>| {
+            event.and_then(|event| event.recognition_usage).and_then(|usage| usage.audio_duration)
+        };
+        assert_eq!(seconds(operation.audio_taken(3.0)), None);
+        assert_eq!(seconds(operation.audio_taken(2.5)), Some(5.5));
+        assert_eq!(seconds(operation.audio_taken(1.0)), None);
+        assert_eq!(seconds(operation.unreported_usage()), Some(1.0));
+        assert_eq!(seconds(operation.unreported_usage()), None);
     }
 
     #[test]

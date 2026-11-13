@@ -148,11 +148,6 @@ async def test_realtime_fallback_answers_on_the_backup_when_the_primary_dies() -
     assert said == ["Hello from the backup."]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a swap asks again only while the agent is speaking or thinking: a reply asked of the "
-    "primary but not yet started is cut and never asked of the backup",
-)
 async def test_a_reply_the_primary_dies_on_is_asked_again_on_the_backup() -> None:
     """A reply the primary dies on before answering is asked again on the backup, which speaks
     it (regenerate_on_swap)."""

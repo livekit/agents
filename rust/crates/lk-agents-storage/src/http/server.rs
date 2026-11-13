@@ -68,7 +68,7 @@ impl lk_agents_abi::storage::http::ThreadServer for ThreadServer {
         self.stop.cancel();
         let mut task = self.task.lock().await;
         if let Some(task) = task.take() {
-            let _ = task.await;
+            task.settled().await;
         }
     }
 }

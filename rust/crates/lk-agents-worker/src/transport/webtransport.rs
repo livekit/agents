@@ -437,7 +437,10 @@ impl WorkerSink for WtSink {
     }
 
     async fn close(&self) {
-        let _ = self.send.lock().await.finish();
+        // The session closes either way; a stream it already lost has nothing left to finish.
+        if let Err(error) = self.send.lock().await.finish() {
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "webtransport control stream finish failed: {error}");
+        }
         self.session.close(SESSION_CLOSE_OK, b"");
     }
 }

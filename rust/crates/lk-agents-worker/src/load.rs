@@ -3,6 +3,29 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 pub(crate) const STALE_AFTER: Duration = Duration::from_secs(5);
+
+/// Why a `load_fnc` sample was not taken: the worker keeps its last load, which goes stale.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum LoadError {
+    #[error("load_fnc raised: {0}")]
+    Raised(lk_agents_abi::errors::HostError),
+    #[error("load_fnc did not answer within {STALE_AFTER:?}")]
+    TimedOut,
+    #[error("load_fnc returned {0}, outside 0.0..=1.0")]
+    Invalid(f32),
+}
+
+/// A `load_fnc` sample: `None` when it did not answer in time.
+pub(crate) fn user_load(
+    sample: Option<Result<f32, lk_agents_abi::errors::HostError>>,
+) -> Result<f32, LoadError> {
+    match sample {
+        None => Err(LoadError::TimedOut),
+        Some(Err(raised)) => Err(LoadError::Raised(raised)),
+        Some(Ok(load)) if load.is_finite() && (0.0..=1.0).contains(&load) => Ok(load),
+        Some(Ok(load)) => Err(LoadError::Invalid(load)),
+    }
+}
 pub(crate) const STARTUP_WINDOW: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
@@ -163,6 +186,17 @@ pub enum WorkerStatus {
 
 #[cfg(test)]
 mod tests {
+    // Catches: a raising `load_fnc` folded into a NaN sample, indistinguishable from a bad value.
+    #[test]
+    fn a_user_load_sample_keeps_why_it_failed() {
+        use lk_agents_abi::errors::HostError;
+        assert_eq!(super::user_load(Some(Ok(0.5))).ok(), Some(0.5));
+        assert!(matches!(super::user_load(None), Err(LoadError::TimedOut)));
+        let raised = super::user_load(Some(Err(HostError::new("boom"))));
+        assert!(matches!(raised, Err(LoadError::Raised(_))));
+        assert!(matches!(super::user_load(Some(Ok(f32::NAN))), Err(LoadError::Invalid(_))));
+    }
+
     use super::*;
     use crate::config::{DEFAULT_LOAD_THRESHOLD_DEV, DEFAULT_LOAD_THRESHOLD_PROD};
 

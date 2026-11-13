@@ -13,7 +13,6 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
     http,
     tokenize,
     tts,
@@ -443,15 +442,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             while True:
                 msg = await ws.receive()
                 if msg.type is http.WebSocketMessageType.CLOSE:
-                    error_msg = (
+                    raise ws.close_error(
                         f"MiniMax connection closed unexpectedly (trace_id: {current_trace_id})"
-                    )
-                    logger.error(error_msg)
-                    raise APIStatusError(
-                        error_msg,
-                        request_id=current_trace_id,
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
                     )
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
@@ -470,19 +462,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 base_resp = data.get("base_resp", {})
                 status_code = base_resp.get("status_code", 0)
                 if status_code != 0:
-                    status_msg = base_resp.get("status_msg", "Unknown error")
-                    error_trace_id = msg_trace_id or current_trace_id
-
-                    logger.error(
-                        f"MiniMax WebSocket error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
-                        extra={"request_id": request_id, "lk.pii.full_response": data},
-                    )
-
-                    raise APIStatusError(
-                        f"MiniMax error [{status_code}]: {status_msg} (trace_id: {error_trace_id})",
-                        request_id=error_trace_id,
-                        status_code=status_code,
-                        body=data,
+                    raise _status_error(
+                        status_code,
+                        base_resp.get("status_msg"),
+                        msg_trace_id or current_trace_id,
+                        data,
                     )
 
                 if data.get("event") == "connected_success":
@@ -511,9 +495,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
 
                 elif data.get("event") == "task_failed":
-                    error_msg = f"MiniMax returned task failed (trace_id: {current_trace_id})"
-                    logger.error(error_msg, extra={"lk.pii.data": msg.data})
-                    raise APIError(error_msg)
+                    raise APIError(
+                        f"MiniMax returned task failed (trace_id: {current_trace_id})",
+                        detail=msg.data,
+                    )
 
                 else:
                     logger.warning("unexpected Minimax message", extra={"lk.pii.data": msg.data})
@@ -529,11 +514,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         except APIError:
             raise
         except Exception as e:
-            if not isinstance(e, (APIStatusError, APITimeoutError, APIConnectionError)):
-                logger.error(
-                    f"MiniMax WebSocket unexpected error: {type(e).__name__}: {e}, trace_id={trace_id}",
-                    exc_info=True,
-                )
             raise APIConnectionError(
                 f"WebSocket connection failed: {type(e).__name__}: {e} (trace_id: {trace_id})"
             ) from e
@@ -627,30 +607,37 @@ class ChunkedStream(tts.ChunkedStream):
                         base_resp = data.get("base_resp", {})
                         status_code = base_resp.get("status_code", 0)
                         if status_code != 0:
-                            status_msg = base_resp.get("status_msg", "Unknown error")
                             # trace_id priority: response body top level > response headers
-                            error_trace_id = body_trace_id or trace_id
-
-                            logger.error(
-                                f"MiniMax HTTP stream error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
-                                extra={"lk.pii.full_response": data},
-                            )
-
-                            raise APIStatusError(
-                                f"MiniMax error [{status_code}]: {status_msg} (trace_id: {error_trace_id})",
-                                request_id=error_trace_id,
-                                body=data,
+                            raise _status_error(
+                                status_code,
+                                base_resp.get("status_msg"),
+                                body_trace_id or trace_id,
+                                data,
                             )
                 output_emitter.flush()
 
         except APIError:
             raise
         except Exception as e:
-            if not isinstance(e, (APIStatusError, APITimeoutError, APIConnectionError)):
-                logger.error(
-                    f"Minimax TTS unexpected error: {type(e).__name__}: {e}", exc_info=True
-                )
             raise APIConnectionError(f"Connection failed: {type(e).__name__}: {e}") from e
+
+
+# MiniMax status codes worth retrying: unknown/internal errors, timeouts and rate limits;
+# auth, balance, content and parameter errors are not
+_RETRYABLE_STATUS_CODES = frozenset((1000, 1001, 1002, 1024, 1033, 1039, 1041, 2045))
+
+
+def _status_error(
+    status_code: int, status_msg: str | None, trace_id: str | None, body: object
+) -> APIStatusError:
+    return APIStatusError(
+        f"MiniMax error [{status_code}] (trace_id: {trace_id})",
+        request_id=trace_id,
+        status_code=status_code,
+        body=body,
+        retryable=status_code in _RETRYABLE_STATUS_CODES,
+        detail=status_msg,
+    )
 
 
 def _to_minimax_options(opts: _TTSOptions) -> dict[str, Any]:

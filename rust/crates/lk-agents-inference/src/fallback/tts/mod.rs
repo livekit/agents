@@ -322,10 +322,13 @@ async fn one_shot_member(
 }
 
 /// `tts:92-95`: `streaming` is `any`, `aligned_transcript` is `all`, over the members as given.
+/// The chain takes the text as written: each member's is prepared for it by its own attempt.
 pub fn merge_capabilities(entries: &[TtsCapabilities]) -> TtsCapabilities {
     TtsCapabilities {
         streaming: entries.iter().any(|c| c.streaming),
         aligned_transcript: entries.iter().all(|c| c.aligned_transcript),
+        text_unit: lk_agents_abi::tts::types::TextUnit::Text,
+        max_text_len: None,
     }
 }
 
@@ -566,11 +569,6 @@ impl FallbackTts {
 }
 
 impl Tts for FallbackTts {
-    /// Each member's text is prepared for it, by the stage of the attempt that member runs.
-    fn text_unit(&self) -> lk_agents_abi::tts::types::TextUnit {
-        lk_agents_abi::tts::types::TextUnit::Text
-    }
-
     /// The chain retries and falls back on its own.
     fn retries_itself(&self) -> bool {
         true

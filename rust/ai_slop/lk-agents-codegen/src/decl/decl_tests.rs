@@ -909,7 +909,7 @@ fn a_proxy_without_async_trait_returns_boxed_futures() {
         #[crate::host(proxy(host = "livekit.agents.Callbacks"))]
         pub trait Callbacks: Send + Sync {
             #[host(await)] fn next(&self, cx: &Cx, id: &str) -> crate::BoxFuture<'_, Result<Chunk, HostError>>;
-            #[host(await)] fn close(self: Box<Self>, cx: &Cx) -> crate::BoxFuture<'static, ()>;
+            #[host(await)] fn close(self: Box<Self>, cx: &Cx) -> crate::BoxFuture<'static, Result<(), HostError>>;
         }"#,
     )
     .expect("resolves");
@@ -918,7 +918,7 @@ fn a_proxy_without_async_trait_returns_boxed_futures() {
     assert!(!llm.contains("async_trait") && !llm.contains("async fn"), "{llm}");
     assert!(
         llm.contains("fn next(&self, cx: &::lk_agents_abi::telemetry::Cx, id: &str) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::llm::chat::Chunk, ::lk_agents_abi::errors::HostError>> {")
-            && llm.contains("fn close(self: ::std::boxed::Box<Self>, cx: &::lk_agents_abi::telemetry::Cx) -> ::lk_agents_abi::BoxFuture<'static, ()> {")
+            && llm.contains("fn close(self: ::std::boxed::Box<Self>, cx: &::lk_agents_abi::telemetry::Cx) -> ::lk_agents_abi::BoxFuture<'static, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {")
             && llm.contains("::std::boxed::Box::pin(async move {"),
         "{llm}"
     );
@@ -980,7 +980,6 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
         #[host(await)] async fn close(self: Box<Self>, cx: &Cx) -> Result<(), HostError>;
         #[host(read_once, name = "_core_conn_options")] fn conn(&self) -> &Conn;
         #[host(await)] async fn open_writer(&self, cx: &Cx) -> Result<Box<dyn Callbacks>, HostError>;
-        #[host(await)] async fn release(&self, cx: &Cx);
         "#,
     ))
     .expect("resolves");
@@ -999,12 +998,10 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
         ),
         "{llm}"
     );
-    // An awaited close returning nothing still reports its failure.
-    assert!(
-        llm.contains("async fn release(&self, cx: &::lk_agents_abi::telemetry::Cx) {")
-            && llm.contains("log::warn!(\"Callbacks.release failed: {e}\");"),
-        "{llm}"
-    );
+    // An awaited call returning nothing is refused: its failure would be swallowed.
+    let unit = read(&proxy("#[host(await)] async fn release(&self, cx: &Cx);"))
+        .and_then(|decls| crate::adapter::emit(&decls).map(drop));
+    assert!(unit.unwrap_err().contains("an awaited host call returns a `Result`"));
     // An owned host object is taken in its call's context: the reply is read off the host loop.
     assert!(
         llm.contains("-> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>")

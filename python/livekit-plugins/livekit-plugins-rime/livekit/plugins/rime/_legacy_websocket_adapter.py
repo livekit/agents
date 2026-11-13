@@ -26,7 +26,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     APITimeoutError,
     http,
     redacted_cause,
@@ -204,18 +203,17 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                 output_emitter.end_input()
                 return
             await websocket.send_str(json.dumps({"operation": "flush", "contextId": context_id}))
+            # the read deadline runs only from here: before, a pause in the text owes nothing
+            self._core_attempts.expect_response(final=True)
 
         async def _recv_task(websocket: http.WebSocket) -> None:
             await input_sent_event.wait()
             if empty_input:
                 return
             while True:
-                message = await websocket.receive(timeout=self._conn_options.read_timeout)
+                message = await websocket.receive()
                 if message.type is http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "Rime ws closed unexpectedly",
-                        request_id=request_id,
-                    )
+                    raise websocket.close_error("Rime ws closed unexpectedly")
                 if message.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Rime ws message type %s", message.type)
                     continue
@@ -227,6 +225,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                     ) from redacted_cause(cause)
                 message_type = data.type
                 if message_type == "chunk":
+                    self._core_attempts.audio_received()
                     output_emitter.push(base64.b64decode(data.data))
                 elif message_type == "timestamps" and data.word_timestamps is not None:
                     timestamps = data.word_timestamps
@@ -240,7 +239,8 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                     output_emitter.end_input()
                     break
                 elif message_type == "error":
-                    raise APIError("Rime WebSocket request failed")
+                    # auth fails the handshake, so an in-band error rejects the request itself
+                    raise APIError("Rime WebSocket request failed", retryable=False)
 
         try:
             async with self._pool.connection(conn_options=self._conn_options) as websocket:

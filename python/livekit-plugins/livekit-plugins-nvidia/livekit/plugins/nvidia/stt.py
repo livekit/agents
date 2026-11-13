@@ -7,15 +7,18 @@ from collections import Counter
 from collections.abc import Generator
 from dataclasses import dataclass
 
+import grpc
 import riva.client
 from riva.client.proto import riva_asr_pb2 as asr_proto
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     LanguageCode,
     stt,
+    utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -24,6 +27,13 @@ from livekit.agents.voice.io import TranscriptChunk
 from . import auth
 
 logger = logging.getLogger(__name__)
+
+_NON_RETRYABLE_CODES = (
+    grpc.StatusCode.UNAUTHENTICATED,
+    grpc.StatusCode.PERMISSION_DENIED,
+    grpc.StatusCode.INVALID_ARGUMENT,
+    grpc.StatusCode.NOT_FOUND,
+)
 
 
 @dataclass
@@ -149,9 +159,6 @@ class SpeechStream(stt.RecognizeStream):
         self._opts = opts
         self._language = language
 
-        self._audio_queue: queue.Queue[bytes | None] = queue.Queue()
-        self._recognition_thread: threading.Thread | None = None
-
         self._speaking = False
         self._request_id = ""
 
@@ -164,25 +171,32 @@ class SpeechStream(stt.RecognizeStream):
         self._asr_service = riva.client.ASRService(self._auth)
 
         self._event_loop = asyncio.get_running_loop()
-        self._done_fut: asyncio.Future[None] = asyncio.Future()
 
     async def _run(self) -> None:
-        config = self._create_streaming_config()
-
-        self._recognition_thread = threading.Thread(
+        # per attempt: a retry starts a fresh recognition thread
+        self._speaking = False
+        audio_queue: queue.Queue[bytes | None] = queue.Queue()
+        done_fut: asyncio.Future[None] = self._event_loop.create_future()
+        threading.Thread(
             target=self._recognition_worker,
-            args=(config,),
+            args=(self._create_streaming_config(), audio_queue, done_fut),
             name="nvidia-asr-recognition",
             daemon=True,
-        )
-        self._recognition_thread.start()
+        ).start()
+
+        async def push_audio() -> None:
+            async for data in self.input:
+                if isinstance(data, rtc.AudioFrame) and (audio_bytes := data.data.tobytes()):
+                    audio_queue.put(audio_bytes)
+            audio_queue.put(None)
 
         try:
-            await self._collect_audio()
-
+            # a recognition failure ends the attempt without waiting for the input to end
+            async with utils.aio.TaskSet() as tasks:
+                await tasks.first_completed(tasks.spawn(push_audio()), asyncio.shield(done_fut))
         finally:
-            self._audio_queue.put(None)
-            await self._done_fut
+            audio_queue.put(None)
+            await done_fut
 
     def _create_streaming_config(self) -> riva.client.StreamingRecognitionConfig:
         recognition_config = riva.client.RecognitionConfig(
@@ -208,98 +222,88 @@ class SpeechStream(stt.RecognizeStream):
             interim_results=True,
         )
 
-    async def _collect_audio(self) -> None:
-        async for data in self.input:
-            if isinstance(data, rtc.AudioFrame):
-                audio_bytes = data.data.tobytes()
-                if audio_bytes:
-                    self._audio_queue.put(audio_bytes)
+    def _recognition_worker(
+        self,
+        config: riva.client.StreamingRecognitionConfig,
+        audio_queue: queue.Queue[bytes | None],
+        done_fut: asyncio.Future[None],
+    ) -> None:
+        def audio_chunks() -> Generator[bytes, None, None]:
+            while audio_chunk := audio_queue.get():
+                yield audio_chunk
+
+        def settle(error: BaseException | None) -> None:
+            if done_fut.done():
+                return
+            if error is None:
+                done_fut.set_result(None)
             else:
-                break
+                done_fut.set_exception(error)
 
-    def _recognition_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
+        error: BaseException | None = None
         try:
-            audio_generator = self._audio_chunk_generator()
-
-            response_generator = self._asr_service.streaming_response_generator(
-                audio_generator, config
-            )
-
-            for response in response_generator:
+            for response in self._asr_service.streaming_response_generator(audio_chunks(), config):
                 self._handle_response(response)
-
-        except Exception:
-            logger.exception("Error in NVIDIA recognition thread")
-        finally:
-            self._event_loop.call_soon_threadsafe(self._done_fut.set_result, None)
-
-    def _audio_chunk_generator(self) -> Generator[bytes, None, None]:
-        """
-        The nvidia riva SDK requires a generator for realtime STT - so we have to
-        wrap the
-        """
-        while True:
-            audio_chunk = self._audio_queue.get()
-
-            if not audio_chunk:
-                break
-
-            yield audio_chunk
+        except grpc.RpcError as e:
+            error = APIConnectionError(
+                f"NVIDIA Riva recognition failed: {e.code()}",
+                retryable=e.code() not in _NON_RETRYABLE_CODES,
+            )
+        except Exception as e:
+            error = APIConnectionError(f"NVIDIA Riva recognition failed: {e}")
+        self._event_loop.call_soon_threadsafe(settle, error)
 
     def _handle_response(self, response: asr_proto.StreamingRecognizeResponse) -> None:
-        try:
-            if not response.results:
-                return
+        if not response.results:
+            return
 
-            for result in response.results:
-                if not result.alternatives:
-                    continue
+        for result in response.results:
+            if not result.alternatives:
+                continue
 
-                alternative = result.alternatives[0]
-                transcript = alternative.transcript
-                is_final = result.is_final
+            alternative = result.alternatives[0]
+            transcript = alternative.transcript
+            is_final = result.is_final
 
-                if not transcript.strip():
-                    continue
+            if not transcript.strip():
+                continue
 
-                self._request_id = f"nvidia-{id(response)}"
+            self._request_id = f"nvidia-{id(response)}"
 
-                if not self._speaking and transcript.strip():
-                    self._speaking = True
+            if not self._speaking and transcript.strip():
+                self._speaking = True
+                self._event_loop.call_soon_threadsafe(
+                    self.send,
+                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
+                )
+
+            speech_data = self._convert_to_speech_data(alternative, is_final=is_final)
+
+            if is_final:
+                self._event_loop.call_soon_threadsafe(
+                    self.send,
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        request_id=self._request_id,
+                        alternatives=[speech_data],
+                    ),
+                )
+
+                if self._speaking:
+                    self._speaking = False
                     self._event_loop.call_soon_threadsafe(
                         self.send,
-                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
+                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
                     )
-
-                speech_data = self._convert_to_speech_data(alternative, is_final=is_final)
-
-                if is_final:
-                    self._event_loop.call_soon_threadsafe(
-                        self.send,
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            request_id=self._request_id,
-                            alternatives=[speech_data],
-                        ),
-                    )
-
-                    if self._speaking:
-                        self._event_loop.call_soon_threadsafe(
-                            self.send,
-                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
-                        )
-                else:
-                    self._event_loop.call_soon_threadsafe(
-                        self.send,
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            request_id=self._request_id,
-                            alternatives=[speech_data],
-                        ),
-                    )
-
-        except Exception:
-            logger.exception("Error handling response")
+            else:
+                self._event_loop.call_soon_threadsafe(
+                    self.send,
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                        request_id=self._request_id,
+                        alternatives=[speech_data],
+                    ),
+                )
 
     def _convert_to_speech_data(
         self, alternative: asr_proto.SpeechRecognitionAlternative, *, is_final: bool

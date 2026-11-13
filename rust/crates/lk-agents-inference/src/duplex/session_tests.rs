@@ -92,11 +92,14 @@ impl abi::DuplexSession for FakeSession {
             }
         })
     }
-    fn close_plugin(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, ()> {
-        Box::pin(async {})
+    fn close_plugin(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async { Ok(()) })
     }
-    fn aclose(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, ()> {
-        Box::pin(async {})
+    fn aclose(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async { Ok(()) })
     }
 }
 

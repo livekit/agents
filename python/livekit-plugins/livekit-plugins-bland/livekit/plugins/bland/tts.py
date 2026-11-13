@@ -22,13 +22,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     http,
     tokenize,
     tts,
@@ -331,13 +330,7 @@ class ChunkedStream(tts.ChunkedStream):
                 json=body,
                 conn_options=self._conn_options,
             ) as resp:
-                if resp.status != 200:
-                    raise APIStatusError(
-                        message=await _error_message(resp),
-                        status_code=resp.status,
-                        request_id=resp.headers.get("x-request-id"),
-                        body=None,
-                    )
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=resp.headers.get("x-request-id") or utils.shortuuid(),
@@ -393,6 +386,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=context_id)
         input_sent = asyncio.Event()
         text_sent = False
+        # reads time out only while a response is owed, never while waiting for more text
+        read_deadline = self._core_attempts
 
         async def send_task(ws: http.WebSocket) -> None:
             nonlocal text_sent
@@ -405,6 +400,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws.send_str(
                     json.dumps({"type": "speak", "context_id": context_id, "text": data.text + " "})
                 )
+                read_deadline.expect_response()
                 input_sent.set()
 
             if not text_sent:
@@ -414,6 +410,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             # Bland holds a short tail back waiting for more context; this releases it.
             await ws.send_str(json.dumps({"type": "end_of_turn", "context_id": context_id}))
+            read_deadline.expect_response(final=True)
             input_sent.set()
 
         async def recv_task(ws: http.WebSocket) -> None:
@@ -421,15 +418,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             if not text_sent:
                 return
             while True:
-                msg = await ws.receive(timeout=self._conn_options.read_timeout)
+                msg = await ws.receive()
                 if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "Bland connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("Bland connection closed unexpectedly")
 
                 if msg.type is http.WebSocketMessageType.BINARY:
+                    read_deadline.audio_received()
                     output_emitter.push(msg.binary)
                     continue
 
@@ -461,11 +455,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             while True:
                 msg = await ws.receive()
                 if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "Bland connection closed while cancelling a turn",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("Bland connection closed unexpectedly")
                 if msg.type is http.WebSocketMessageType.BINARY:
                     continue
                 if msg.type is not http.WebSocketMessageType.TEXT:
@@ -579,35 +569,11 @@ class _ErrorDetails(BaseModel):
     message: str | None = None
 
 
-class _ErrorEnvelope(BaseModel):
-    error: _ErrorDetails | None = None
-
-
 def _api_error(data: object) -> APIError:
     error = _ErrorDetails.model_validate(data)
-    code = error.code
-    message = error.message or "Bland returned an error"
     return APIError(
-        f"{code}: {message}" if code else message,
+        f"Bland returned an error ({error.code})" if error.code else "Bland returned an error",
         body=data,
-        retryable=code not in _FATAL_ERROR_CODES,
+        retryable=error.code not in _FATAL_ERROR_CODES,
+        detail=error.message,
     )
-
-
-async def _error_message(resp: http.HttpResponse) -> str:
-    """Unwrap the v2 ``{"error": {"code", "message"}}`` envelope, falling back to the raw body."""
-    try:
-        payload = await resp.json()
-    except Exception:
-        return resp.reason or "request failed"
-
-    try:
-        error = _ErrorEnvelope.model_validate(payload).error
-    except ValidationError:
-        return str(payload)
-    if error is not None:
-        if error.code and error.message:
-            return f"{error.code}: {error.message}"
-        if error.message:
-            return error.message
-    return str(payload)

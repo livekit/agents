@@ -89,8 +89,9 @@ class AudioEmitter:
 class AudioStreamDecoder:
     """`utils.media.AudioStreamDecoder`: container bytes decoded on one admitted native worker into
     PCM frames, which come out as soon as they are decoded. Input is queued without waiting for
-    the decoder. One decoder decodes one stream. A failure (an unknown format, no worker admitted,
-    invalid audio) is logged and ends the stream.
+    the decoder. One decoder decodes one stream. A failure raises a non-retryable `APIError`: an
+    unknown format or no worker admitted from the constructor, too much queued input from `push`,
+    invalid audio from the iteration; only `None` ends the stream cleanly.
     """
     def __new__(
         cls,

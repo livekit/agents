@@ -44,7 +44,8 @@ pub struct HostError {
     pub message: String,
     pub host_ref: Option<CapturedError>,
     /// The host's formatted traceback, for the span that records the failure.
-    pub traceback: Option<String>,
+    // Boxed: a provider failure carrying one stays small.
+    pub traceback: Option<Box<str>>,
 }
 
 impl HostError {
@@ -80,7 +81,7 @@ impl HostError {
     }
 
     pub fn with_traceback(self, traceback: Option<String>) -> Self {
-        Self { traceback, ..self }
+        Self { traceback: traceback.map(String::into_boxed_str), ..self }
     }
 
     /// The failure as Python's `logging` prints an exception (a record's `exc_text`): its

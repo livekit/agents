@@ -601,7 +601,7 @@ fn session_input(
     handler: Option<Arc<PreConnectAudioHandler>>,
 ) -> (Arc<ParticipantAudioInput>, tokio::sync::mpsc::Receiver<ProcessorFailure>) {
     let spawner = Arc::new(TokioSpawner::current());
-    let (failures, reported) = tokio::sync::mpsc::channel(1);
+    let (failures, reported) = lk_agents_runtime::net::outbox::outbox(1);
     (ParticipantAudioInput::new(room.clone(), spawner, clock, config, handler, failures), reported)
 }
 

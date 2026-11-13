@@ -12,6 +12,7 @@ from livekit.agents import (
     VAD,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -40,7 +41,6 @@ from mistralai.client.models import (
 from mistralai.extra.realtime import RealtimeConnection, RealtimeTranscription
 
 from ._http import close_client, request_timeout_ms
-from .log import logger
 from .models import STTModels
 
 
@@ -96,6 +96,8 @@ class STT(stt.STT):
                 interim_results=is_realtime,
                 aligned_transcript=False,
                 offline_recognize=not is_realtime,
+                # usage events carry Mistral's billed prompt audio seconds
+                reports_usage=True,
             )
         )
         self._opts = _STTOptions(
@@ -427,13 +429,17 @@ class SpeechStream(stt.RecognizeStream):
 
             elif isinstance(event, RealtimeTranscriptionError):
                 raise APIStatusError(
-                    message=str(event.error.message), status_code=event.error.code, body=event.error
+                    "Mistral transcription error",
+                    status_code=event.error.code,
+                    body=event.error,
+                    detail=str(event.error.message),
                 )
 
-    @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
         try:
             while True:
+                # a segment left open across a reconnect would block the next START_OF_SPEECH
+                self._speaking = False
                 async with self._pool.connection(conn_options=self._conn_options) as connection:
                     vad_stream = self._vad.stream() if self._vad else None
 
@@ -455,7 +461,7 @@ class SpeechStream(stt.RecognizeStream):
                         if vad_stream is not None:
                             await vad_stream.aclose()
 
-        except (APIStatusError, APITimeoutError, APIConnectionError):
+        except APIError:
             raise
         except (TimeoutError, httpx.TimeoutException) as e:
             raise APITimeoutError() from e

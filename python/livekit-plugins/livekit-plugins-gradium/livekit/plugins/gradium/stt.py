@@ -211,7 +211,6 @@ class SpeechStream(stt.RecognizeStream):
         self._model_endpoint = model_endpoint
         self._model_name = model_name
         self._session = http_session
-        self._speech_duration: float = 0
 
         self._reconnect_event = asyncio.Event()
         self._ready_msg: dict[str, Any] | None = None
@@ -247,6 +246,7 @@ class SpeechStream(stt.RecognizeStream):
         closing_ws = False
 
         async def send_task(ws: http.WebSocket) -> None:
+            nonlocal closing_ws
             samples_per_buffer = 1920
 
             audio_bstream = utils.media.AudioByteStream(
@@ -272,6 +272,9 @@ class SpeechStream(stt.RecognizeStream):
                     }
                     await ws.send_str(json.dumps(audio_msg))
 
+            closing_ws = True
+            await ws.send_str(json.dumps({"type": "end_of_stream"}))
+
         async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             buffered_text: list[str] = []
@@ -288,91 +291,92 @@ class SpeechStream(stt.RecognizeStream):
                 if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing_ws:
                         return
-                    raise APIStatusError(
-                        "Gradium connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("Gradium connection closed unexpectedly")
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.error("Unexpected Gradium message type: %s", msg.type)
                     continue
 
-                try:
-                    data = json.loads(msg.data)
+                data = json.loads(msg.data)
 
-                    type_ = data.get("type", "")
+                type_ = data.get("type", "")
 
-                    if type_ == "text":
-                        if speaking is False:
-                            speaking = True
-                            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                            self.send(start_event)
-                        buffered_text.append(data["text"])
-                        event = stt.SpeechEvent(
-                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[
-                                stt.SpeechData(
-                                    text=data["text"],
-                                    language=self._opts.language,
-                                    start_time=data["start_s"] + self.start_time_offset,
-                                )
-                            ],
-                        )
-                        self.send(event)
-
-                    elif type_ == "step":
-                        if not speaking:
-                            continue
-                        if vad_bucket := self._opts.vad_bucket:
-                            positive_vad = (
-                                data["vad"][vad_bucket]["inactivity_prob"]
-                                > self._opts.vad_threshold
+                if type_ == "text":
+                    if speaking is False:
+                        speaking = True
+                        start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                        self.send(start_event)
+                    buffered_text.append(data["text"])
+                    event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                        alternatives=[
+                            stt.SpeechData(
+                                text=data["text"],
+                                language=self._opts.language,
+                                start_time=data["start_s"] + self.start_time_offset,
                             )
-                            if positive_vad:
-                                if remaining_vad_steps is None:
-                                    remaining_vad_steps = self.delay_in_tokens
-                                    if self._opts.vad_flush:
-                                        samples_per_channel = self.frame_size * self.delay_in_tokens
-                                        zeros = AudioFrame.create(
-                                            sample_rate=self._opts.sample_rate,
-                                            num_channels=1,
-                                            samples_per_channel=samples_per_channel,
-                                        )
-                                        await self.input.send(zeros)
-                                else:
-                                    remaining_vad_steps -= 1
-                                    if remaining_vad_steps <= 0:
-                                        speaking = False
-                                        remaining_vad_steps = None
-                                        event = stt.SpeechEvent(
-                                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                            alternatives=[
-                                                stt.SpeechData(
-                                                    text=" ".join(buffered_text),
-                                                    language=self._opts.language,
-                                                )
-                                            ],
-                                        )
-                                        self.send(event)
+                        ],
+                    )
+                    self.send(event)
 
-                                        buffered_text = []
-                                        self.send(
-                                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                                        )
+                elif type_ == "step":
+                    if not speaking:
+                        continue
+                    if vad_bucket := self._opts.vad_bucket:
+                        positive_vad = (
+                            data["vad"][vad_bucket]["inactivity_prob"] > self._opts.vad_threshold
+                        )
+                        if positive_vad:
+                            if remaining_vad_steps is None:
+                                remaining_vad_steps = self.delay_in_tokens
+                                if self._opts.vad_flush:
+                                    samples_per_channel = self.frame_size * self.delay_in_tokens
+                                    zeros = AudioFrame.create(
+                                        sample_rate=self._opts.sample_rate,
+                                        num_channels=1,
+                                        samples_per_channel=samples_per_channel,
+                                    )
+                                    await self.input.send(zeros)
                             else:
-                                remaining_vad_steps = None
+                                remaining_vad_steps -= 1
+                                if remaining_vad_steps <= 0:
+                                    speaking = False
+                                    remaining_vad_steps = None
+                                    event = stt.SpeechEvent(
+                                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                        alternatives=[
+                                            stt.SpeechData(
+                                                text=" ".join(buffered_text),
+                                                language=self._opts.language,
+                                            )
+                                        ],
+                                    )
+                                    self.send(event)
 
-                    elif type_ == "ready":
-                        self._ready_msg = data
-                    elif type_ == "end_text":
-                        # This message provides the end timestamp of the previous word in the stop_s field.
-                        pass
-                    else:
-                        logger.warning(f"Unknown message type from Gradium {type_}")
+                                    buffered_text = []
+                                    self.send(
+                                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                                    )
+                        else:
+                            remaining_vad_steps = None
 
-                except Exception:
-                    logger.exception("Failed to process message from Gradium")
+                elif type_ == "ready":
+                    self._ready_msg = data
+                elif type_ == "end_text":
+                    # This message provides the end timestamp of the previous word in the stop_s field.
+                    pass
+                elif type_ == "end_of_stream":
+                    return
+                elif type_ == "error":
+                    # the code is an HTTP status: 429 is retried, a rejected request is not
+                    raise APIStatusError(
+                        "Gradium error",
+                        status_code=data.get("code", -1),
+                        body=data,
+                        detail=data.get("message"),
+                    )
+                else:
+                    logger.warning(f"Unknown message type from Gradium {type_}")
 
         ws: http.WebSocket | None = None
 

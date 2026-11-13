@@ -98,9 +98,9 @@ impl WorkerHost for LoadHost {
     async fn terminate_job(&self, _id: JobId) -> Result<(), HostError> {
         Ok(())
     }
-    async fn user_load(&self) -> Option<f32> {
+    async fn user_load(&self) -> Option<HostResult<f32>> {
         *self.user_calls.lock() += 1;
-        self.user
+        self.user.map(Ok)
     }
 }
 
@@ -325,12 +325,12 @@ impl WorkerHost for GatedHost {
     async fn terminate_job(&self, _: JobId) -> HostResult {
         Ok(())
     }
-    async fn user_load(&self) -> Option<f32> {
+    async fn user_load(&self) -> Option<HostResult<f32>> {
         if self.load.gated.load(std::sync::atomic::Ordering::SeqCst) {
             self.load.gate.acquire().await.unwrap().forget();
         }
         self.load.samples.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Some(*self.load.value.lock())
+        Some(Ok(*self.load.value.lock()))
     }
 }
 

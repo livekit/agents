@@ -64,13 +64,35 @@ struct Chain {
     output: Arc<KeyedPlayback>,
 }
 
+/// A transcript sink below the synchroniser that refuses every word, counting the refusals.
+struct RefusingText(watch::Sender<usize>);
+
+impl TranscriptionOutput for RefusingText {
+    fn label(&self) -> &str {
+        "refusing text"
+    }
+    fn capture_text<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        self.0.send_modify(|refused| *refused += 1);
+        Box::pin(async { Err(IoError::TranscriptionCapacity("text".into())) })
+    }
+    fn flush(&self) {}
+}
+
 impl Chain {
     fn new() -> Chain {
+        Chain::with_text(None)
+    }
+
+    fn with_text(text_next: Option<Arc<dyn TranscriptionOutput>>) -> Chain {
         let output = Arc::new(KeyedPlayback::default());
         let leaf = output.tracker().clone();
         let sync = TranscriptSynchronizer::new(TranscriptSyncConfig {
             audio_next: output.clone() as Arc<dyn AudioOutput>,
-            text_next: None,
+            text_next,
             speed: 1.0,
             clock: Arc::new(lk_agents_net::clock::RealClock::new()),
             spawner: Arc::new(lk_agents_net::task::TokioSpawner::current()),
@@ -192,6 +214,20 @@ async fn a_segment_with_no_audio_shows_its_text_and_pairs_with_nothing() {
     shown.extend(c.take_shown());
     let shown: String = shown.into_iter().map(|(w, _)| w).collect();
     assert_eq!(shown.split_whitespace().collect::<Vec<_>>(), ["after", "words"]);
+}
+
+// Catches: a word the transcript sink below refused dropped silently, so the speech reported its
+// transcript delivered; the refusal is what the segment's flush wait answers.
+#[tokio::test]
+async fn a_word_the_sink_below_refused_fails_the_segments_flush() {
+    let (refusals, mut refused) = watch::channel(0);
+    let c = Chain::with_text(Some(Arc::new(RefusingText(refusals))));
+    c.text("Refused.").await;
+    c.sync.audio_output().flush();
+    refused.wait_for(|refused| *refused > 0).await.unwrap();
+    let flushed = c.sync.transcription_output().wait_for_flush().await;
+    assert!(matches!(flushed, Err(IoError::TranscriptionCapacity(_))), "{flushed:?}");
+    assert!(c.sync.transcription_output().wait_for_flush().await.is_ok(), "reported once");
 }
 
 // Catches: a speech cut before any audio leaves its segment cleared with no

@@ -128,7 +128,11 @@ impl OutputBinding {
         let sink = (self.binding.outputs.transcription.as_ref())
             .filter(|_| self.binding.outputs.transcription_enabled)
             .and_then(|r| self.shared.resources.transcription_output(r.id));
-        self.text = transcription_output(&self.nodes, sink);
+        self.text = transcription_output(&self.nodes, sink).map_err(|e| {
+            lk_agents_voice::agent_session::DriverError::TranscriptionOutput(
+                lk_agents_abi::voice::io::IoError::Host(e),
+            )
+        })?;
         self.activated =
             self.audio().is_none_or(|audio| audio.begin_segment(self.binding.segment).is_ok());
         if !self.activated {
@@ -227,21 +231,17 @@ impl PlaybackObserver for OutputSettlement {
     }
 }
 
-/// Bind the agent's transcription node to this segment's admitted transcription output.
+/// Bind the agent's transcription node to this segment's admitted transcription output. A node
+/// that raises as it opens fails the speech, as one that raises on its text does.
 fn transcription_output(
     nodes: &OutputNodes,
     below: Option<Arc<dyn TranscriptionOutput>>,
-) -> Option<Arc<dyn TranscriptionOutput>> {
-    let below: Arc<dyn TranscriptionOutput> = Arc::new(SegmentGate::new(below?));
-    let Some(factory) = &nodes.transcription else { return Some(below) };
-    match factory.text_node(Arc::clone(&below)) {
-        Ok(node) => Some(Arc::new(NodeTranscriptionOutput::new(node, below))),
-        Err(e) => {
-            log::error!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str();
-                    "failed to open the transcription_node");
-            None
-        }
-    }
+) -> Result<Option<Arc<dyn TranscriptionOutput>>, lk_agents_abi::errors::HostError> {
+    let Some(below) = below else { return Ok(None) };
+    let below: Arc<dyn TranscriptionOutput> = Arc::new(SegmentGate::new(below));
+    let Some(factory) = &nodes.transcription else { return Ok(Some(below)) };
+    let node = factory.text_node(Arc::clone(&below))?;
+    Ok(Some(Arc::new(NodeTranscriptionOutput::new(node, below))))
 }
 
 /// The session's transcription output as the generation (or its node) writes into it: a flush

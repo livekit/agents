@@ -284,7 +284,9 @@ impl Inner {
                 .is_err()
         {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "entrypoint did not exit in time, cancelling");
-            let _ = entry.cancel(shutdown.cx(), cx).await;
+            if let Err(error) = entry.cancel(shutdown.cx(), cx).await {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "cancelling the entrypoint failed: {error}");
+            }
             telemetry::event(root, telemetry::EntrypointCancelled);
         }
         self.close_session(host, cx, shutdown.cx()).await;
@@ -395,13 +397,16 @@ impl Inner {
 
     /// The parent learns the job is ending, then why.
     async fn announce_exit(&self, reason: &str, cause: ShutdownCause) {
-        if let Some(parent) = self.parent.get() {
-            let _ = parent.send(ToParent::ShuttingDown).await;
-        }
         let user_initiated = cause == ShutdownCause::Application;
         log::debug!(target: lk_agents_abi::LOG_TARGET, reason = reason, user_initiated = user_initiated; "shutting down job task");
-        if let Some(parent) = self.parent.get() {
-            let _ = parent.send(ToParent::Exiting { reason: bounded(reason.to_owned()) }).await;
+        let Some(parent) = self.parent.get() else { return };
+        let announced = match parent.send(ToParent::ShuttingDown).await {
+            Ok(()) => parent.send(ToParent::Exiting { reason: bounded(reason.to_owned()) }).await,
+            failed => failed,
+        };
+        // The job exits either way; a parent already gone needs no notice.
+        if let Err(error) = announced {
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "the IPC parent did not hear the job exit: {error}");
         }
     }
 
@@ -425,8 +430,15 @@ impl Inner {
             })
             .collect();
         for (name, run) in runs {
-            if let Ok(Err(error)) = run.await {
-                log::error!(target: lk_agents_abi::LOG_TARGET, callback = name.as_str(), exc_text:% = error.exc_text(); "error while shutting down the job");
+            match run.await {
+                Ok(Err(error)) => {
+                    log::error!(target: lk_agents_abi::LOG_TARGET, callback = name.as_str(), exc_text:% = error.exc_text(); "error while shutting down the job");
+                }
+                // A panic unwound into the executor, which reports it.
+                Ok(Ok(()))
+                | Err(
+                    lk_agents_abi::TaskError::Cancelled | lk_agents_abi::TaskError::Panicked(_),
+                ) => {}
             }
         }
     }
@@ -611,7 +623,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         self.inner.tasks_closed.cancel();
         let tasks = std::mem::take(&mut self.inner.state.lock().tasks);
         for task in tasks {
-            let _ = task.await;
+            task.settled().await;
         }
     }
 

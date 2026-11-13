@@ -174,6 +174,8 @@ pub mod log_keys {
     pub const RAW_ARGUMENTS: &str = "lk.pii.raw_arguments";
     pub const REPAIRED: &str = "lk.pii.repaired";
     pub const ERROR: &str = "lk.pii.error";
+    /// A provider's own message for a failure (`APIError.detail`).
+    pub const PROVIDER_DETAIL: &str = "lk.pii.provider_detail";
     /// What a retried request is to: a provider's label, a transport, a background renewal.
     pub const RETRY_SUBJECT: &str = "lk.retry.subject";
     /// The failed attempt a retry follows, counted from 1.

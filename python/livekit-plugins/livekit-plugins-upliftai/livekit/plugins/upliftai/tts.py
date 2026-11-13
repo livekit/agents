@@ -65,9 +65,14 @@ def get_content_type_from_output_format(output_format: OutputFormat) -> str:
     elif output_format.startswith("OGG"):
         return "audio/ogg"
     elif output_format == "ULAW_8000_8":
-        return "audio/x-mulaw"
+        return "audio/pcmu"
     else:
         raise ValueError(f"Unsupported output format: {output_format}")
+
+
+def _provider_sample_rate(opts: _TTSOptions) -> int:
+    """G.711 is sent at 8 kHz and decoded without resampling; every other format at 22.05 kHz."""
+    return 8000 if opts.voice_settings.output_format == "ULAW_8000_8" else opts.sample_rate
 
 
 @dataclass
@@ -451,7 +456,7 @@ class ChunkedStream(tts.ChunkedStream):
             # Initialize emitter
             output_emitter.initialize(
                 request_id=request_id,
-                sample_rate=self._opts.sample_rate,
+                sample_rate=_provider_sample_rate(self._opts),
                 num_channels=self._opts.num_channels,
                 mime_type=get_content_type_from_output_format(
                     self._opts.voice_settings.output_format
@@ -502,7 +507,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         output_emitter.initialize(
             request_id=request_id,
-            sample_rate=self._opts.sample_rate,
+            sample_rate=_provider_sample_rate(self._opts),
             num_channels=self._opts.num_channels,
             stream=True,
             mime_type=get_content_type_from_output_format(self._opts.voice_settings.output_format),

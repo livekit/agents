@@ -40,8 +40,8 @@ NUM_CHANNELS: Final[int] = 1
 MIME_TYPE: dict[str, str] = {
     "aac": "audio/aac",
     "mp3": "audio/mpeg",
-    "mulaw": "audio/basic",
-    "raw": "application/octet-stream",
+    "mulaw": "audio/pcmu",
+    "raw": "audio/pcm",
     "wav": "audio/wav",
 }
 

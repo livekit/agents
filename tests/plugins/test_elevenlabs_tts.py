@@ -15,7 +15,15 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 from typing_extensions import Unpack
 
-from livekit.agents import APIConnectOptions, APIError, APIStatusError, http, tts
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    http,
+    tts,
+)
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 from livekit.plugins.elevenlabs import TTS, TTSEncoding, VoiceSettings
 
@@ -321,17 +329,20 @@ async def test_socket_closed_mid_synthesis_raises_its_close_code() -> None:
         async with provider.stream(conn_options=OPTIONS) as stream:
             stream.push_text("Hello.")
             stream.end_input()
-            with pytest.raises(APIStatusError) as error:
+            with pytest.raises(APIConnectionError) as error:
                 await collect(stream)
         await provider.aclose()
 
-    assert error.value.status_code == 1011
+    # a close code is not an HTTP status
+    assert not isinstance(error.value, APIStatusError)
+    assert "(close code 1011)" in error.value.message
+    assert error.value.retryable
     assert closed.is_set()
 
 
 @pytest.mark.parametrize("model", [FLASH, DIALOGUE])
 async def test_provider_error_reaches_the_caller(model: str) -> None:
-    """A context error fails the synthesis with the provider's diagnostic. https://github.com/livekit/agents/pull/6838"""
+    """A context error fails the synthesis, its diagnostic kept out of the message. https://github.com/livekit/agents/pull/6838"""
 
     async def speak(request: web.Request) -> web.StreamResponse:
         ws = web.WebSocketResponse()
@@ -353,7 +364,8 @@ async def test_provider_error_reaches_the_caller(model: str) -> None:
                 await collect(stream)
         await provider.aclose()
 
-    assert "voice diagnostic" in str(error.value.__cause__)
+    assert error.value.detail == "voice diagnostic"
+    assert "voice diagnostic" not in str(error.value)
 
 
 @pytest.mark.parametrize("audio_first", [False, True])
@@ -384,7 +396,7 @@ async def test_silence_after_the_last_input_times_out(model: str, audio_first: b
                 await collect(stream)
         await provider.aclose()
 
-    assert "timed out" in str(error.value.__cause__)
+    assert isinstance(error.value, APITimeoutError) and "timed out" in error.value.message
 
 
 @pytest.mark.parametrize("model", [FLASH, DIALOGUE])

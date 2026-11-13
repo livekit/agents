@@ -93,6 +93,7 @@ def test_tasks_are_never_spawned_around_the_task_set() -> None:
         f"{path}:{number}"
         for path in sources
         if path.endswith(".py") and "/_generated/" not in path and not path.endswith("utils/aio.py")
+        and (ROOT / path).exists()  # a deletion not yet committed is still listed
         for number, line in enumerate((ROOT / path).read_text().splitlines(), 1)
         if pattern.search(line) and "noqa: TID251" not in line
     ]

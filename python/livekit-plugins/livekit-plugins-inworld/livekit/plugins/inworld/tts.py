@@ -137,6 +137,10 @@ class _ContextInfo:
     # monotonically increasing timestamps within an agent turn.
     cumulative_time: float = 0.0
     generation_end_time: float = 0.0
+    # PCM byte rate (0 for compressed encodings) and the audio received so far: a generation's
+    # audio can run past its last word, so the next generation starts where the audio ended
+    pcm_byte_rate: int = 0
+    audio_time: float = 0.0
     # On the WebSocket, `usage.processedCharactersCount` is the characters processed so far.
     billed_characters: int | None = None
 
@@ -319,6 +323,11 @@ class _InworldConnection:
                         emitter=emitter,
                         waiter=waiter,
                         flush_after_push=opts.encoding == "PCM",
+                        pcm_byte_rate=(
+                            opts.sample_rate * 2 * NUM_CHANNELS
+                            if opts.encoding in ("PCM", "LINEAR16")
+                            else 0
+                        ),
                     )
                     self._contexts[ctx_id] = ctx_info
                     # Release reservation now that we have a real context
@@ -477,14 +486,12 @@ class _InworldConnection:
                 # Check for errors in status
                 status = result.get("status", {})
                 if status.get("code", 0) != 0:
-                    error_msg = status.get("message", "Unknown error")
-                    error = APIError(f"Inworld error: {error_msg}")
+                    error = APIError("Inworld TTS context error", detail=status.get("message"))
                     logger.warning(
                         "Received error from Inworld",
                         extra={
                             "context_id": context_id,
                             "error_code": status.get("code"),
-                            "error_message": error_msg,
                             "context_state": ctx.state.value if ctx else "unknown",
                             "context_known": ctx is not None,
                         },
@@ -563,7 +570,11 @@ class _InworldConnection:
                                 usage.get("processedCharactersCount", 0),
                             )
                         if audio_content := audio_chunk.get("audioContent"):
-                            ctx.emitter.push(base64.b64decode(audio_content))
+                            audio = base64.b64decode(audio_content)
+                            if ctx.pcm_byte_rate:
+                                pcm_len = len(audio) - (44 if audio[:4] == b"RIFF" else 0)
+                                ctx.audio_time += pcm_len / ctx.pcm_byte_rate
+                            ctx.emitter.push(audio)
                             if ctx.flush_after_push:
                                 ctx.emitter.flush()
                     continue
@@ -574,15 +585,9 @@ class _InworldConnection:
                     # will reset offset to 0. We need to update the cumulative time to the
                     # generation end time to maintain monotonically increasing timestamps
                     # within the agent turn.
-                    if ctx.generation_end_time > 0:
-                        logger.debug(
-                            "flushCompleted - updating cumulative time",
-                            extra={
-                                "context_id": context_id,
-                                "old_cumulative_time": ctx.cumulative_time,
-                                "new_cumulative_time": ctx.generation_end_time,
-                            },
-                        )
+                    if ctx.pcm_byte_rate:
+                        ctx.cumulative_time = ctx.audio_time
+                    elif ctx.generation_end_time > 0:
                         ctx.cumulative_time = ctx.generation_end_time
                     continue
 
@@ -1174,10 +1179,11 @@ class TTS(tts.TTS):
             if not resp.ok:
                 error_body = cast(dict[str, Any], await resp.json())
                 raise APIStatusError(
-                    message=str(error_body.get("message")),
+                    "Inworld list voices failed",
                     status_code=resp.status,
                     request_id=None,
                     body=None,
+                    detail=error_body.get("message"),
                 )
 
             data = cast(dict[str, Any], await resp.json())
@@ -1257,11 +1263,10 @@ class ChunkedStream(tts.ChunkedStream):
 
                     try:
                         data = json.loads(line)
-                    except json.JSONDecodeError:
-                        logger.warning(
-                            "failed to parse Inworld response line", extra={"lk.pii.line": line}
-                        )
-                        continue
+                    except json.JSONDecodeError as e:
+                        raise APIConnectionError(
+                            "Inworld TTS sent a malformed response line", retryable=False
+                        ) from e
 
                     if result := data.get("result"):
                         # Handle timestamp info if present
@@ -1282,10 +1287,11 @@ class ChunkedStream(tts.ChunkedStream):
                                 output_emitter.flush()
                     elif error := data.get("error"):
                         raise APIStatusError(
-                            message=error.get("message"),
+                            "Inworld TTS error",
                             status_code=error.get("code"),
                             request_id=x_request_id,
                             body=None,
+                            detail=error.get("message"),
                         )
         except TimeoutError:
             raise APITimeoutError() from None
@@ -1352,9 +1358,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection.close_context(context_id)
             raise
         except Exception as e:
-            logger.error("Inworld stream error", extra={"context_id": context_id, "error": e})
             connection.close_context(context_id)
-            raise APIConnectionError() from e
+            raise APIConnectionError("Inworld TTS stream failed", detail=str(e)) from e
         finally:
             await tasks.aclose()
             output_emitter.end_input()
@@ -1388,18 +1393,33 @@ def _parse_timestamp_info(
                 )
             )
 
-    # Handle character-level alignment
-    if char_align := timestamp_info.get("characterAlignment"):
+    # Character-level alignment, grouped into words (each word keeps its trailing space)
+    elif char_align := timestamp_info.get("characterAlignment"):
         chars = char_align.get("characters", [])
         starts = char_align.get("characterStartTimeSeconds", [])
         ends = char_align.get("characterEndTimeSeconds", [])
 
+        word, word_start, word_end = "", 0.0, 0.0
         for char, start, end in zip(chars, starts, ends, strict=False):
+            if not word:
+                word_start = start
+            word += char
+            word_end = end
+            if char.isspace():
+                timed_strings.append(
+                    TranscriptChunk(
+                        word,
+                        start_time=cumulative_time + word_start,
+                        end_time=cumulative_time + word_end,
+                    )
+                )
+                word = ""
+        if word:
             timed_strings.append(
                 TranscriptChunk(
-                    char,
-                    start_time=cumulative_time + start,
-                    end_time=cumulative_time + end,
+                    word,
+                    start_time=cumulative_time + word_start,
+                    end_time=cumulative_time + word_end,
                 )
             )
 

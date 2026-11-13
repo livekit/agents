@@ -14,7 +14,9 @@ PYO3_PYTHON ?= $(VIRTUAL_ENV)/Scripts/python.exe
 else
 PYO3_PYTHON ?= $(VIRTUAL_ENV)/bin/python
 endif
-export PYO3_PYTHON VIRTUAL_ENV
+# the MCP lifecycle tests run tests/host/mcp_peer.py, which needs the project's dependencies
+MCP_TEST_PYTHON ?= $(PYO3_PYTHON)
+export PYO3_PYTHON VIRTUAL_ENV MCP_TEST_PYTHON
 BUILD_ARGS ?=
 
 help:

@@ -62,9 +62,11 @@ impl<E> Clone for Reporter<E> {
 }
 
 impl<E> Reporter<E> {
+    /// Waits for room; a closed queue is a request that stopped listening, owed nothing.
     pub async fn report(&self, event: E) {
-        // A closed queue is a request that stopped listening; nothing is owed to it.
-        let _ = self.tx.send(Stamped { at: self.clock.now(), event }).await;
+        match self.tx.send(Stamped { at: self.clock.now(), event }).await {
+            Ok(()) | Err(mpsc::error::SendError(_)) => {}
+        }
     }
 }
 

@@ -12,10 +12,10 @@ use lk_agents_abi::{
 };
 use lk_agents_core::metrics::provider::TtsMetricState;
 use lk_agents_net::env::{ProcessEnv, ProcessError};
+use lk_agents_net::outbox::{Outbox, outbox};
 use lk_agents_net::owned::{Background, Owned};
 use lk_agents_net::signal;
 use parking_lot::Mutex;
-use tokio::sync::mpsc;
 
 use super::nodes::{NodeCalls, Opened};
 
@@ -24,7 +24,7 @@ pub struct DefaultNodes;
 /// What a default node pumps into: read by the host as an async iterator. Its request runs as a
 /// task of the session (else the process) until the reader stops: dropped, or closed.
 pub struct NodeOutput<T> {
-    items: tokio::sync::Mutex<mpsc::Receiver<Result<T, ProviderError>>>,
+    items: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Result<T, ProviderError>>>,
     /// Ends once the request's task is gone, its streams closed.
     done: signal::Cell<Option<()>>,
     clock: Arc<dyn Clock>,
@@ -37,12 +37,12 @@ impl<T: Send + 'static> NodeOutput<T> {
         owner: Result<Background, ProcessError>,
         clock: Arc<dyn Clock>,
         name: &str,
-        request: impl FnOnce(Background, mpsc::Sender<Result<T, ProviderError>>) -> F,
+        request: impl FnOnce(Background, Outbox<Result<T, ProviderError>>) -> F,
     ) -> Self
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        let (tx, rx) = mpsc::channel(1);
+        let (tx, rx) = outbox(1);
         let (finished, done) = signal::once();
         let refused = tx.clone();
         let spawned = match owner {
@@ -60,7 +60,8 @@ impl<T: Send + 'static> NodeOutput<T> {
             Err(error) => Err(lk_agents_abi::errors::ApiError::new(error.to_string())),
         };
         if let Err(error) = spawned {
-            let _ = refused.try_send(Err(error.into()));
+            let sent = refused.try_send(Err(error.into()));
+            debug_assert!(sent, "a request that never ran sent nothing");
         }
         NodeOutput { items: tokio::sync::Mutex::new(rx), done, clock }
     }
@@ -73,7 +74,7 @@ impl<T: Send + 'static> NodeOutput<T> {
     async fn close(&self) {
         let closed = async {
             self.items.lock().await.close();
-            let _ = self.done.wait().await;
+            self.done.until(Option::is_some).await;
         };
         if lk_agents_abi::timeout(&*self.clock, HOST_TEARDOWN_TIMEOUT, closed).await.is_err() {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "a default node's request did not close in time");
@@ -284,7 +285,7 @@ async fn complete(
     req: ChatRequest,
     cx: telemetry::Cx,
     owner: &Background,
-    tx: mpsc::Sender<Result<LlmChunk, ProviderError>>,
+    tx: Outbox<Result<LlmChunk, ProviderError>>,
 ) {
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &req);
     let attempt = trace.attempt();
@@ -305,7 +306,7 @@ async fn complete(
         Err(error) => {
             trace.fail(&error);
             trace.end(Default::default());
-            let _ = tx.send(Err(error)).await;
+            tx.send(Err(error)).await;
         }
     }
 }
@@ -322,7 +323,7 @@ enum CompletionEnd {
 /// whether the attempt produced output.
 async fn forward_chunks(
     mut stream: Owned<lk_agents_abi::LlmStream>,
-    tx: &mpsc::Sender<Result<LlmChunk, ProviderError>>,
+    tx: &Outbox<Result<LlmChunk, ProviderError>>,
     trace: &mut telemetry::LlmTrace,
 ) -> Result<CompletionEnd, ProviderError> {
     let ended = loop {
@@ -334,15 +335,14 @@ async fn forward_chunks(
         match next {
             Ok(Some(chunk)) => {
                 trace.observe(&chunk);
-                if tx.send(Ok(chunk)).await.is_err() {
-                    break Ok(CompletionEnd::Cut);
-                }
+                // A reader that left is seen by the `closed` branch.
+                tx.send(Ok(chunk)).await;
             }
             Ok(None) => break Ok(CompletionEnd::Finished),
             Err(error) => break Err(error),
         }
     };
-    let _ = stream.close().await;
+    stream.close().await;
     ended
 }
 
@@ -441,7 +441,7 @@ async fn pump<I, O, T, F, M, R>(
     owner: Background,
     input: Owned<Box<dyn StreamOutput<I>>>,
     open: F,
-    tx: mpsc::Sender<Result<T, ProviderError>>,
+    tx: Outbox<Result<T, ProviderError>>,
 ) where
     I: Send + 'static,
     O: Send + 'static,
@@ -455,7 +455,7 @@ async fn pump<I, O, T, F, M, R>(
         Ok(stream) => stream.split(),
         Err(e) => {
             request.ended(Some(&e), false);
-            let _ = tx.send(Err(e)).await;
+            tx.send(Err(e)).await;
             return;
         }
     };
@@ -466,7 +466,7 @@ async fn pump<I, O, T, F, M, R>(
     let ended = tokio::select! {
         biased;
         () = tx.closed() => None,
-        ended = drain_provider(&mut **source, &tx, &request, &map) => ended,
+        failed = drain_provider(&mut **source, &tx, &request, &map) => Some(failed),
         () = feed_provider(input, &*sink, &request) => None,
     };
     source.close().await;
@@ -492,29 +492,28 @@ async fn feed_provider<I: 'static, O, R: Request<I, O>>(
     std::future::pending::<()>().await
 }
 
-/// The provider's output handed to the reader. `None` once the reader is gone, else
-/// `Some(failed)` with the error that ended it, if any.
+/// The provider's output handed to the reader, until it ends: with the error that ended it, if
+/// any.
 async fn drain_provider<I, O, T, R: Request<I, O>>(
     source: &mut dyn lk_agents_abi::ProviderStream<O>,
-    tx: &mpsc::Sender<Result<T, ProviderError>>,
+    tx: &Outbox<Result<T, ProviderError>>,
     request: &Mutex<R>,
     map: &impl Fn(O) -> T,
-) -> Option<Option<ProviderError>> {
+) -> Option<ProviderError> {
     loop {
         let item = match source.next().await {
             Ok(Some(item)) => {
                 request.lock().produced(&item);
                 Ok(map(item))
             }
-            Ok(None) => return Some(None),
+            Ok(None) => return None,
             Err(e) => Err(e),
         };
         let failed = item.as_ref().err().cloned();
-        if tx.send(item).await.is_err() {
-            return None;
-        }
+        // A reader that left is seen by the caller's `closed` branch.
+        tx.send(item).await;
         if failed.is_some() {
-            return Some(failed);
+            return failed;
         }
     }
 }

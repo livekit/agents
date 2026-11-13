@@ -3,7 +3,8 @@ use std::sync::Arc;
 use crate::fallback::chain::StreamTask;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
-use tokio::sync::{mpsc, oneshot};
+use lk_agents_net::signal;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::fallback::chain::{Attempt, Backend, ChainCall, FallbackChain};
@@ -12,7 +13,7 @@ use lk_agents_abi::BoxFuture;
 /// The task closes its member on stop rather than being aborted.
 pub(crate) struct ChainTask {
     pub(crate) stop: CancellationToken,
-    pub(crate) done: Option<oneshot::Receiver<()>>,
+    pub(crate) done: Option<signal::Cell<Option<()>>>,
     pub(crate) clock: Arc<dyn Clock>,
 }
 
@@ -21,8 +22,8 @@ impl ChainTask {
     pub(crate) fn pair(
         clock: Arc<dyn Clock>,
         stop: CancellationToken,
-    ) -> (oneshot::Sender<()>, ChainTask) {
-        let (done_tx, done_rx) = oneshot::channel();
+    ) -> (signal::Producer<Option<()>>, ChainTask) {
+        let (done_tx, done_rx) = signal::once();
         (done_tx, ChainTask { stop, done: Some(done_rx), clock })
     }
 }
@@ -117,9 +118,10 @@ impl<B: Backend> FallbackChain<B> {
                 .await;
             settled(&chain, result.as_ref().map(|_| ()));
             if let Err(error) = result {
-                let _ = tx.send(Err(error)).await;
+                // a consumer that left needs no failure
+                lk_agents_net::outbox::Outbox::from(tx).send(Err(error)).await;
             }
-            let _ = done_tx.send(());
+            done_tx.resolve(());
         });
         ChannelSource { rx, task: Some(task), chain: chain_task }
     }
@@ -213,7 +215,7 @@ impl<T: Send + 'static> StreamOutput<T> for ChannelSource<T> {
             let done = self.chain.done.take();
             let closed = Closed::bounded(self.chain.clock.as_ref(), deadline, async move {
                 if let Some(done) = done {
-                    let _ = done.await;
+                    done.until(Option::is_some).await;
                 }
             })
             .await;

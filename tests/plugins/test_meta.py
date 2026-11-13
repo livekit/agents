@@ -121,22 +121,20 @@ async def test_handshake_precedes_audio_and_matches_contract(muse: Muse) -> None
     assert all(event.recognition_usage is None for event in events)
 
 
-async def test_post_consumption_failure_is_not_retried(muse: Muse) -> None:
-    """A connection lost after audio was sent fails the stream instead of reconnecting."""
+async def test_connection_lost_after_audio_reconnects(muse: Muse) -> None:
+    """A connection lost after audio was sent reconnects, as every streaming STT does."""
     muse.script = ["drop"]
     provider = meta.STT(api_key="key", url=muse.url)
     options = APIConnectOptions(max_retry=1, retry_interval=0.0, read_timeout=1.0)
 
-    with pytest.raises(APIError) as caught:
-        async with provider.stream(conn_options=options) as stream:
-            stream.push_frame(AUDIO)
-            stream.end_input()
-            async for _ in stream:
-                pass
+    async with provider.stream(conn_options=options) as stream:
+        stream.push_frame(AUDIO)
+        stream.end_input()
+        async for _ in stream:
+            pass
     await provider.aclose()
 
-    assert caught.value.retryable is False
-    assert len(muse.requests) == 1
+    assert len(muse.requests) == 2
 
 
 @pytest.mark.parametrize(

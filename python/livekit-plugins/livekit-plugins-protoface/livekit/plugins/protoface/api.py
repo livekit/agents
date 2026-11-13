@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 
 from pydantic import JsonValue, TypeAdapter
@@ -8,16 +7,14 @@ from pydantic import JsonValue, TypeAdapter
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     NotGivenOr,
     http,
     utils,
 )
 
 from .errors import ProtofaceException
-from .log import logger
 from .version import __version__
 
 _JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
@@ -130,67 +127,31 @@ class ProtofaceAPI:
             **(headers or {}),
         }
         url = f"{self._api_url}{path}"
-        error: Exception | None = None
-        async with self._conn_options.total_deadline():
-            for attempt in range(self._conn_options.max_retry + 1):
+        session = self._ensure_http_session()
+
+        async def request() -> dict[str, JsonValue]:
+            async with session.request(
+                method, url, json=json, headers=request_headers, conn_options=self._conn_options
+            ) as response:
+                await response.raise_for_status()
+                text = await response.text()
                 try:
-                    async with self._ensure_http_session().request(
-                        method,
-                        url,
-                        json=json,
-                        headers=request_headers,
-                        conn_options=self._conn_options,
-                    ) as response:
-                        payload = await _read_payload(response)
-                        if response.ok:
-                            if not isinstance(payload, dict):
-                                raise APIStatusError(
-                                    "Protoface API returned a non-object JSON response",
-                                    status_code=response.status,
-                                    body=payload,
-                                    retryable=False,
-                                )
-                            return payload
+                    payload = _JSON_VALUE.validate_json(text) if text else {}
+                except ValueError as exc:
+                    raise APIError(
+                        "Protoface returned an invalid response", retryable=False
+                    ) from exc
+                if not isinstance(payload, dict):
+                    raise APIError("Protoface returned a non-object JSON response", retryable=False)
+                return payload
 
-                        raise APIStatusError(
-                            "Protoface API returned an error",
-                            status_code=response.status,
-                            body=payload,
-                        )
-                except APIConnectionError as exc:
-                    error = exc
-                except APIStatusError as exc:
-                    if not exc.retryable:
-                        raise
-                    error = exc
-
-                if attempt == self._conn_options.max_retry:
-                    break
-
-                logger.warning(
-                    "protoface api request failed, retrying",
-                    extra={"attempt": attempt + 1, "method": method, "path": path},
-                )
-                await asyncio.sleep(self._conn_options.interval_for_retry(attempt))
-
-        raise APIConnectionError("Failed to call Protoface API after all retries.") from error
+        return await http.retry_request(request, conn_options=self._conn_options)
 
 
 def _resolve_optional_string(value: NotGivenOr[str | None], env_name: str) -> str | None:
     if utils.is_given(value) and value is not None:
         return value
     return os.getenv(env_name)
-
-
-async def _read_payload(response: http.HttpResponse) -> JsonValue:
-    text = await response.text()
-    if not text:
-        return {}
-
-    try:
-        return _JSON_VALUE.validate_python(await response.json())
-    except ValueError:
-        return {"raw": text}
 
 
 __all__ = ["DEFAULT_API_URL", "ProtofaceAPI"]

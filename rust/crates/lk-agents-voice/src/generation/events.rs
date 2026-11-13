@@ -159,10 +159,10 @@ pub enum GenEvent {
         verdict: lk_agents_core::agent_run::OutputVerdict,
         value: Option<lk_agents_abi::HostRef>,
     },
-    /// The host rendered a `tool_handling` template; `None` keeps the framework's text.
+    /// The host rendered a `tool_handling` template; `Ok(None)` keeps the framework's text.
     ToolHandlingTemplateRendered {
         rendering: crate::tool_executor::Rendering,
-        text: Option<String>,
+        text: Result<Option<String>, lk_agents_abi::errors::HostError>,
     },
     /// The speech's audio output raised on a frame: the forwarding stops there, and the speech
     /// is cut and done with `error`.

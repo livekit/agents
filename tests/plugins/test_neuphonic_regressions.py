@@ -110,8 +110,10 @@ async def test_streaming_failure_is_mapped_and_next_request_recovers(failure: st
                     stream.end_input()
                     async with asyncio.timeout(2):
                         if attempt == 0:
-                            with pytest.raises(APIError):
+                            with pytest.raises(APIError) as raised:
                                 _ = [ev async for ev in stream]
+                            if failure == "error":
+                                assert raised.value.detail == "quota exhausted"
                         else:
                             assert b"".join([bytes(ev.frame.data) async for ev in stream]) == PCM
             assert connections == 2

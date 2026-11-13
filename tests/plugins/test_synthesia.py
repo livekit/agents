@@ -23,7 +23,8 @@ if TYPE_CHECKING:
     from tests.plugins.conftest import AvatarHost
 
 API_KEY = "sk-secret-key"
-NO_SLEEP = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
+# the avatar launches its session with one attempt
+ONE_ATTEMPT = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
 
 
 @dataclasses.dataclass
@@ -65,7 +66,7 @@ def _reply(peer: _Peer, status: int, body: object, content_type: str = "applicat
 
 async def _start(peer: _Peer) -> StartSessionResponse:
     client = SynthesiaAPI(
-        api_key=API_KEY, api_url=peer.url, session=peer.session, conn_options=NO_SLEEP
+        api_key=API_KEY, api_url=peer.url, session=peer.session, conn_options=ONE_ATTEMPT
     )
     return await client.start_session(
         StartSessionRequest(

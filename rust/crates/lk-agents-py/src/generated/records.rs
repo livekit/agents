@@ -7276,7 +7276,42 @@ pub mod host_errors {
                 (if v.is_none() { Ok(None) } else { (v.extract::<bool>()).map(Some) }).ok()
             })
             .flatten();
-        let value = ::lk_agents_abi::errors::ProviderErrorMetadata { status_code, retryable };
+        let detail = obj
+            .getattr("detail")
+            .ok()
+            .and_then(|v| {
+                let v = &v;
+                (if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                })
+                .ok()
+            })
+            .flatten();
+        let retry_after = obj
+            .getattr("retry_after")
+            .ok()
+            .and_then(|v| {
+                let v = &v;
+                (if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(
+                        v,
+                        "ProviderErrorMetadata.retry_after",
+                    ))
+                    .map(Some)
+                })
+                .ok()
+            })
+            .flatten();
+        let value = ::lk_agents_abi::errors::ProviderErrorMetadata {
+            status_code,
+            retryable,
+            detail,
+            retry_after,
+        };
         Ok(value)
     }
 
@@ -19417,6 +19452,12 @@ pub mod stt {
                 "chat_context",
                 |v| v.extract::<bool>(),
             )?,
+            reports_usage: crate::py_values::attr_with(
+                obj,
+                "STTCapabilities",
+                "reports_usage",
+                |v| v.extract::<bool>(),
+            )?,
         })
     }
 
@@ -19432,6 +19473,7 @@ pub mod stt {
             offline_recognize,
             keyterms,
             chat_context,
+            reports_usage,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("streaming", ::pyo3::IntoPyObjectExt::into_bound_py_any(streaming, py)?)?;
@@ -19455,6 +19497,10 @@ pub mod stt {
         kwargs.set_item(
             "chat_context",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(chat_context, py)?,
+        )?;
+        kwargs.set_item(
+            "reports_usage",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(reports_usage, py)?,
         )?;
         crate::py_calls::call(
             STT_CAPABILITIES
@@ -22968,6 +23014,25 @@ pub mod tts {
                 "aligned_transcript",
                 |v| v.extract::<bool>(),
             )?,
+            text_unit: crate::py_values::attr_with(obj, "TTSCapabilities", "text_unit", |v| {
+                crate::py_values::str_from_py(v)
+            })?,
+            max_text_len: crate::py_values::attr_with(
+                obj,
+                "TTSCapabilities",
+                "max_text_len",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (crate::py_values::number_from_py::<usize>(
+                            v,
+                            "TTSCapabilities.max_text_len",
+                        ))
+                        .map(Some)
+                    }
+                },
+            )?,
         })
     }
 
@@ -22975,12 +23040,25 @@ pub mod tts {
         py: Python<'py>,
         value: ::lk_agents_abi::TtsCapabilities,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::TtsCapabilities { streaming, aligned_transcript } = value;
+        let ::lk_agents_abi::TtsCapabilities {
+            streaming,
+            aligned_transcript,
+            text_unit,
+            max_text_len,
+        } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("streaming", ::pyo3::IntoPyObjectExt::into_bound_py_any(streaming, py)?)?;
         kwargs.set_item(
             "aligned_transcript",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(aligned_transcript, py)?,
+        )?;
+        kwargs.set_item("text_unit", crate::py_values::str_to_py(py, &text_unit))?;
+        kwargs.set_item(
+            "max_text_len",
+            match max_text_len {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
         )?;
         crate::py_calls::call(
             TTS_CAPABILITIES
@@ -23895,6 +23973,20 @@ pub mod turn_events {
 
 pub mod types {
     use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/errors/api.rs.
+
+    pub fn close_kind_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::errors::CloseKind,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::errors::CloseKind::Normal => "normal",
+            ::lk_agents_abi::errors::CloseKind::Final => "final",
+            ::lk_agents_abi::errors::CloseKind::Retryable => "retryable",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
 
     // Declared in rust/crates/lk-agents-abi/src/errors/api.rs.
 

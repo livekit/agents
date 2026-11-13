@@ -344,7 +344,8 @@ impl GatewayStt {
 
         let gate = lk_agents_net::source::InputGate::default();
         let (audio, audio_rx) = AudioInput::new(self.shared.clock.clone(), gate.clone());
-        let (event_tx, event_rx) = mpsc::channel::<Result<SpeechEvent, ApiError>>(STREAM_QUEUE);
+        let (event_tx, event_rx) =
+            lk_agents_net::outbox::outbox::<Result<SpeechEvent, ApiError>>(STREAM_QUEUE);
         let (update_tx, update_rx) = mpsc::unbounded_channel::<serde_json::Value>();
         let stop = tokio_util::sync::CancellationToken::new();
         let stop_guard = Arc::new(stop.clone().drop_guard());

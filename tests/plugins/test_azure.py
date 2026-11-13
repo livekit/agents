@@ -278,8 +278,10 @@ async def test_an_error_cancellation_fails_the_stream_instead_of_hanging(sdk: Sp
 
         recognizer.canceled.fire(SimpleNamespace(cancellation_details=details))
 
-        with pytest.raises(APIError, match="service timeout"):
+        with pytest.raises(APIError) as caught:
             await finals(stream)
+
+    assert caught.value.detail == "service timeout"
 
 
 # REST TTS

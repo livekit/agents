@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::{Clock, OwnedTask, SpawnerExt, timeout};
+use lk_agents_net::outbox::Outbox;
 use lk_agents_net::owned::Background;
 use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
@@ -77,7 +78,7 @@ impl<Out: Serialize, In: DeserializeOwned + Send + 'static> Channel<Out, In> {
     pub fn new<S: AsyncRead + AsyncWrite + Send + 'static>(stream: S, rt: &Background) -> Self {
         let (reader, writer) = tokio::io::split(stream);
         let (outbox, queued) = mpsc::channel(QUEUE);
-        let (received, inbox) = mpsc::channel(QUEUE);
+        let (received, inbox) = lk_agents_net::outbox::outbox(QUEUE);
         let (reading, finished) = oneshot::channel();
         let spawner = &rt.spawner;
         let writer = spawner.spawn(write_frames(writer, queued, finished, received.clone()));
@@ -130,7 +131,7 @@ impl<Out: Serialize, In: DeserializeOwned + Send + 'static> Channel<Out, In> {
         {
             log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = CLOSE_TIMEOUT.as_millis() as u64; "IPC writer close timed out");
             writer.cancel();
-            let _ = writer.await;
+            writer.settled().await;
         }
         if timeout(&*self.clock, CLOSE_TIMEOUT, async {
             let mut inbox = self.inbox.lock().await;
@@ -144,7 +145,7 @@ impl<Out: Serialize, In: DeserializeOwned + Send + 'static> Channel<Out, In> {
         let reader = self.reader.lock().take();
         if let Some(reader) = reader {
             reader.cancel();
-            let _ = reader.await;
+            reader.settled().await;
         }
     }
 }
@@ -247,7 +248,7 @@ async fn read_frame<In: DeserializeOwned, R: AsyncRead + Unpin>(
 /// The peer's preamble, then its messages until the first error; `finished` drops when it ends.
 async fn read_frames<In: DeserializeOwned, R: AsyncRead + Unpin>(
     mut r: R,
-    received: mpsc::Sender<Result<In, ChannelError>>,
+    received: Outbox<Result<In, ChannelError>>,
     finished: oneshot::Sender<()>,
 ) {
     let mut peer = [0; PREAMBLE];
@@ -260,20 +261,23 @@ async fn read_frames<In: DeserializeOwned, R: AsyncRead + Unpin>(
         },
     };
     drop(finished);
-    let _ = received.send(Err(error)).await;
+    received.send(Err(error)).await;
 }
 
 /// The peer's messages to `received` until the first error; `None` once nobody receives them.
 async fn forward_frames<In: DeserializeOwned, R: AsyncRead + Unpin>(
     r: &mut R,
-    received: &mpsc::Sender<Result<In, ChannelError>>,
+    received: &Outbox<Result<In, ChannelError>>,
 ) -> Option<ChannelError> {
     loop {
         let msg = match read_frame(r).await {
             Ok(msg) => msg,
             Err(error) => return Some(error),
         };
-        received.send(Ok(msg)).await.ok()?;
+        received.send(Ok(msg)).await;
+        if received.is_closed() {
+            return None;
+        }
     }
 }
 
@@ -284,12 +288,12 @@ async fn write_frames<In, W: AsyncWrite + Unpin>(
     mut w: W,
     mut queued: mpsc::Receiver<Vec<u8>>,
     mut peer_finished: oneshot::Receiver<()>,
-    received: mpsc::Sender<Result<In, ChannelError>>,
+    received: Outbox<Result<In, ChannelError>>,
 ) {
     let Err(error) = write_queued(&mut w, &mut queued, &mut peer_finished).await else { return };
     let error = failure(error, false);
     if !matches!(error, ChannelError::Closed) {
-        let _ = received.send(Err(error)).await;
+        received.send(Err(error)).await;
     }
 }
 

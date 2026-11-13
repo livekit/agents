@@ -70,6 +70,8 @@ class _WebSocket(Protocol):
 
     async def close(self) -> None: ...
 
+    def close_error(self, message: str) -> APIConnectionError: ...
+
 
 def _session_update(model: str, language: str | None) -> dict[str, object]:
     transcription = {"model": model}
@@ -283,7 +285,6 @@ class SpeechStream(stt.RecognizeStream):
         self._input_duration = 0.0
         self._processed_samples = 0
         self._segment_samples = 0
-        self._input_consumed = False
         self._input_error: APIError | None = None
         self._closed = False
         self._speaking = False
@@ -334,14 +335,9 @@ class SpeechStream(stt.RecognizeStream):
         return event
 
     async def _run(self) -> None:
-        try:
-            if self._input_error is not None:
-                raise self._input_error
-            await self._attempt()
-        except APIError as error:
-            if self._input_consumed:
-                error.retryable = False
-            raise
+        if self._input_error is not None:
+            raise self._input_error
+        await self._attempt()
 
     async def _attempt(self) -> None:
         tasks = utils.aio.TaskSet()
@@ -389,7 +385,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _receive_event(self, ws: _WebSocket) -> _Event:
         message = await ws.receive()
         if message.type is http.WebSocketMessageType.CLOSE:
-            raise APIConnectionError("Microsoft AI STT connection closed unexpectedly")
+            raise ws.close_error("Microsoft AI STT connection closed unexpectedly")
         if message.type is not http.WebSocketMessageType.TEXT:
             raise APIError("Microsoft AI STT expected a JSON text event", retryable=False)
         try:
@@ -442,7 +438,6 @@ class SpeechStream(stt.RecognizeStream):
                 if isinstance(data, self.Flush):
                     await self._commit(ws, buffer)
                 else:
-                    self._input_consumed = True
                     for frame in buffer.push(data.data.cast("B")):
                         await self._append(ws, frame)
         else:
@@ -474,7 +469,6 @@ class SpeechStream(stt.RecognizeStream):
                     raise self._input_error
                 if isinstance(data, self.Flush):
                     break
-                self._input_consumed = True
                 pending.extend(data.data.cast("B"))
                 fed_samples += data.samples_per_channel
                 vad_stream.push_frame(data)
@@ -658,18 +652,9 @@ class SpeechStream(stt.RecognizeStream):
             raise APIError(
                 "Microsoft AI STT completed without an acknowledged commit", retryable=False
             )
-        # A completion can legitimately retract the revisable interim hypothesis.
-        if transcript:
+        # A completion can retract the interim hypothesis: an empty final then clears it.
+        if transcript or item.last_interim:
             self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, item, transcript)
-        self.send(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=item.id,
-                recognition_usage=stt.RecognitionUsage(
-                    audio_duration=self._segment_samples / SAMPLE_RATE
-                ),
-            )
-        )
         if self._speaking:
             self._speaking = False
             self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=item.id))

@@ -301,8 +301,9 @@ impl Pump<'_> {
         let heard = match segment {
             Ok(heard) => heard,
             Err(error) => {
-                if synthesis {
-                    let _ = playback.flush_text(shared, self.handle).await;
+                // The segment's own failure is the one the speech reports.
+                if synthesis && let Err(flush) = playback.flush_text(shared, self.handle).await {
+                    log::debug!(target: lk_agents_abi::LOG_TARGET, "failed segment's text flush failed too: {flush}");
                 }
                 return Err(error);
             }
@@ -310,6 +311,9 @@ impl Pump<'_> {
         // A voice lost before activation activates the binding here, opening its transcript chain.
         if synthesis {
             playback.flush_text(shared, self.handle).await?;
+        }
+        if let Some(leg) = text_out {
+            leg.result()?;
         }
         // Both legs end every segment, including one whose words had no audio.
         let leg_state = text_out.map(|leg| *leg.state());
@@ -400,6 +404,8 @@ pub(super) struct TextLeg<'a> {
     out: Option<Arc<dyn TranscriptionOutput>>,
     buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
     state: parking_lot::Mutex<TextLegState>,
+    /// The first chunk the output refused: the segment fails with it once its audio is done.
+    failed: parking_lot::Mutex<Option<lk_agents_abi::voice::io::IoError>>,
     shared: &'a Arc<SessionShared>,
     speech: SpeechId,
 }
@@ -411,14 +417,29 @@ impl<'a> TextLeg<'a> {
         shared: &'a Arc<SessionShared>,
         speech: SpeechId,
     ) -> Self {
-        TextLeg { out, buffered, state: Default::default(), shared, speech }
+        TextLeg {
+            out,
+            buffered,
+            state: Default::default(),
+            failed: Default::default(),
+            shared,
+            speech,
+        }
+    }
+
+    /// The segment's transcript went through, or the output's first refusal.
+    pub(super) fn result(&self) -> Result<(), DriverError> {
+        self.failed
+            .lock()
+            .take()
+            .map_or(Ok(()), |error| Err(DriverError::TranscriptionOutput(error)))
     }
 
     fn state(&self) -> parking_lot::MutexGuard<'_, TextLegState> {
         self.state.lock()
     }
 
-    /// Errors are dropped: a text stream that will not open must not silence the agent.
+    /// A refused chunk does not silence the agent: it fails the segment at its end (`result`).
     pub(super) async fn capture(&self, chunk: &lk_agents_abi::TranscriptChunk) {
         let empty = chunk.text.is_empty() && chunk.expression.is_none();
         if self.state().should_forward(empty) {
@@ -442,19 +463,20 @@ impl<'a> TextLeg<'a> {
             return;
         }
         let Some(out) = self.out.as_deref() else { return };
-        let (text, start_time, spoken) = match event {
+        let (chunk, start_time) = match event {
             // a piece of the transcript, spoken or not, with no timing of its own
-            SynthesisEvent::Text(chunk) => {
-                let _ = out.capture_timed(&telemetry::Cx::NONE, &chunk).await;
-                (chunk.text, None, chunk.spoken)
-            }
+            SynthesisEvent::Text(chunk) => (chunk, None),
             SynthesisEvent::TimedText(word) => {
-                let _ = out.capture_timed(&telemetry::Cx::NONE, &word).await;
-                (word.text, word.start_time, word.spoken)
+                let start_time = word.start_time;
+                (word, start_time)
             }
             SynthesisEvent::FlushText => return out.flush(),
             SynthesisEvent::Audio(..) => return,
         };
+        if let Err(error) = out.capture_timed(&telemetry::Cx::NONE, &chunk).await {
+            self.failed.lock().get_or_insert(error);
+        }
+        let (text, spoken) = (chunk.text, chunk.spoken);
         let speech = self.speech;
         self.shared.trace(PlayoutStep::TranscriptForwarded { speech, text, start_time, spoken });
     }

@@ -793,8 +793,14 @@ impl Tts for Node<dyn Tts> {
         self.below.label()
     }
 
+    /// The node takes the text as written: its own synthesis prepares it for its provider.
     fn capabilities(&self) -> TtsCapabilities {
-        TtsCapabilities { streaming: true, ..self.below.capabilities() }
+        TtsCapabilities {
+            streaming: true,
+            text_unit: lk_agents_abi::tts::types::TextUnit::Text,
+            max_text_len: None,
+            ..self.below.capabilities()
+        }
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
@@ -825,11 +831,6 @@ impl Tts for Node<dyn Tts> {
 
     fn markup_provider(&self) -> String {
         self.below.markup_provider()
-    }
-
-    /// The node takes the text as written: its own synthesis prepares it for its provider.
-    fn text_unit(&self) -> lk_agents_abi::tts::types::TextUnit {
-        lk_agents_abi::tts::types::TextUnit::Text
     }
 
     /// One text, through the node all the same.

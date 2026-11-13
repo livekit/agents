@@ -45,6 +45,11 @@ impl From<AlignedTranscript> for serde_json::Value {
 }
 
 // Field `///`s are the reference's. `impl Default` and the model's defaults agree on purpose.
+/// What an STT supports, fixed at construction.
+///
+/// Usage: a figure the provider reports always wins. The framework reports the audio it
+/// measures as it goes and cannot take that back, so a provider that reports its own usage
+/// says so with `reports_usage`.
 #[crate::host(record(
     module = "stt",
     path = "livekit.agents.stt",
@@ -70,6 +75,9 @@ pub struct SttCapabilities {
     /// Whether the STT can natively consume conversation context (see STT._push_conversation_item)
     #[host(default = false)]
     pub chat_context: bool,
+    /// True when the provider reports its own usage events, so the framework does not measure audio
+    #[host(default = false)]
+    pub reports_usage: bool,
 }
 
 impl Default for SttCapabilities {
@@ -82,6 +90,7 @@ impl Default for SttCapabilities {
             offline_recognize: true,
             keyterms: false,
             chat_context: false,
+            reports_usage: false,
         }
     }
 }

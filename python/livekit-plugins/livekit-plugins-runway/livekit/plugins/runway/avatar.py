@@ -11,9 +11,8 @@ from livekit import api
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     NotGivenOr,
     VoiceSession,
     get_job_context,
@@ -168,47 +167,28 @@ class AvatarSession(BaseAvatarSession):
 
         if is_given(self._max_duration):
             body["maxDuration"] = self._max_duration
-        async with self._conn_options.total_deadline():
-            for attempt in range(self._conn_options.max_retry + 1):
+        session = self._ensure_http_session()
+
+        async def request() -> JsonValue:
+            async with session.post(
+                f"{self._api_url}/v1/realtime_sessions",
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "X-Runway-Version": API_VERSION,
+                },
+                json=body,
+                conn_options=self._conn_options,
+            ) as response:
+                await response.raise_for_status()
                 try:
-                    async with self._ensure_http_session().post(
-                        f"{self._api_url}/v1/realtime_sessions",
-                        headers={
-                            "Authorization": f"Bearer {self._api_key}",
-                            "X-Runway-Version": API_VERSION,
-                        },
-                        json=body,
-                        conn_options=self._conn_options,
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise APIStatusError(
-                                "Runway API returned an error",
-                                status_code=response.status,
-                                body=text,
-                            )
-                        payload = _JSON_VALUE.validate_python(await response.json())
-                        session_id = payload.get("id") if isinstance(payload, dict) else None
-                        if isinstance(session_id, str):
-                            self._realtime_session_id = session_id
-                        return
+                    return _JSON_VALUE.validate_json(await response.read())
+                except ValueError as exc:
+                    raise APIError("Runway returned an invalid response", retryable=False) from exc
 
-                except Exception as error:
-                    if isinstance(error, APIStatusError) and not error.retryable:
-                        raise
-
-                    if isinstance(error, APIConnectionError):
-                        logger.warning(
-                            "failed to call Runway avatar API",
-                            extra={"error": str(error)},
-                        )
-                    else:
-                        logger.exception("failed to call Runway avatar API")
-
-                    if attempt < self._conn_options.max_retry:
-                        await asyncio.sleep(self._conn_options.retry_interval)
-
-        raise APIConnectionError("Failed to start Runway Avatar Session after all retries")
+        payload = await http.retry_request(request, conn_options=self._conn_options)
+        session_id = payload.get("id") if isinstance(payload, dict) else None
+        if isinstance(session_id, str):
+            self._realtime_session_id = session_id
 
     def _ensure_end_session_task(self) -> asyncio.Task[None] | None:
         if self._end_session_task is not None:

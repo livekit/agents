@@ -78,6 +78,42 @@ pub trait ApiErrorFunctions {
     fn retryable_for_status(status_code: i64, retryable: Option<bool>) -> bool;
 }
 
+/// What a websocket close code says about the failure that closed the socket.
+#[crate::host(record(module = "types", emit))]
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CloseKind {
+    /// 1000: the peer ended the session on purpose.
+    Normal,
+    /// The peer refused what was sent or who sent it: a new connection fails the same way.
+    Final,
+    /// Going away, a server error, an abnormal close or no code: a new connection may succeed.
+    Retryable,
+}
+
+impl CloseKind {
+    /// The one place close codes are classified (RFC 6455 section 7.4, IANA's 3000 range, and a
+    /// private 44xx code read as its HTTP status).
+    pub fn of(code: Option<u16>) -> CloseKind {
+        match code {
+            Some(1000) => CloseKind::Normal,
+            Some(1002 | 1003 | 1007 | 1008 | 1009 | 1010 | 1015 | 3000 | 3003) => CloseKind::Final,
+            Some(code @ 4400..=4499) if !retryable_for_status(i64::from(code) - 4000, None) => {
+                CloseKind::Final
+            }
+            _ => CloseKind::Retryable,
+        }
+    }
+}
+
+/// The host's websocket helpers.
+#[crate::host(functions(pid = false))]
+pub trait WebSocketFunctions {
+    /// What a close code says about the failure: `http.WebSocket.close_error`'s retryability.
+    #[host(function)]
+    fn websocket_close_kind(code: Option<u16>) -> CloseKind;
+}
+
 /// The wait an `APITimeoutError` bounded, as `APIConnectOptions` names its limits. Absent when the
 /// failing layer does not say (a foreign SDK timeout), never guessed. Its wire string is the
 /// Python value of `APITimeoutError.timeout`.
@@ -126,6 +162,29 @@ pub struct ApiError {
     /// The failure this one was raised from: the host exception's `__cause__`.
     #[source]
     pub cause: Option<Box<ProviderError>>,
+    /// What the provider itself said: its message and the wait it asked for.
+    pub said: Option<Box<ProviderSaid>>,
+}
+
+/// What a provider said about its failure beyond the status, boxed so an error stays small.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderSaid {
+    /// Its own message (`APIError.detail`): content, logged once when the failure is retried or
+    /// given up, never part of the error's text.
+    pub detail: Option<String>,
+    /// How long it asked to wait before a retry (`Retry-After`).
+    pub retry_after: Option<std::time::Duration>,
+}
+
+impl ProviderSaid {
+    /// `None` when it said nothing.
+    pub fn boxed(
+        detail: Option<String>,
+        retry_after: Option<std::time::Duration>,
+    ) -> Option<Box<Self>> {
+        (detail.is_some() || retry_after.is_some())
+            .then(|| Box::new(ProviderSaid { detail, retry_after }))
+    }
 }
 
 impl ApiError {
@@ -139,6 +198,7 @@ impl ApiError {
             request_id: None,
             timeout: None,
             cause: None,
+            said: None,
         }
     }
 
@@ -157,6 +217,7 @@ impl ApiError {
             request_id,
             timeout: None,
             cause: None,
+            said: None,
         }
     }
 
@@ -169,6 +230,7 @@ impl ApiError {
             request_id: None,
             timeout: None,
             cause: None,
+            said: None,
         }
     }
 
@@ -181,6 +243,7 @@ impl ApiError {
             request_id: None,
             timeout: None,
             cause: None,
+            said: None,
         }
     }
 
@@ -210,6 +273,25 @@ impl ApiError {
     pub fn with_retryable(mut self, retryable: bool) -> Self {
         self.retryable = retryable;
         self
+    }
+
+    /// The wait the provider asked for before a retry.
+    pub fn retry_after(&self) -> Option<std::time::Duration> {
+        self.said.as_ref().and_then(|said| said.retry_after)
+    }
+
+    /// The one log of the provider's own message, under an `lk.pii.*` key: by the retry
+    /// announcement or the give-up of the failure it came with.
+    pub fn log_detail(&self) {
+        if let Some(detail) = self.said.as_ref().and_then(|said| said.detail.as_ref()) {
+            log::warn!(
+                target: crate::LOG_TARGET,
+                (crate::telemetry::spans::common::log_keys::PROVIDER_DETAIL) = detail.as_str();
+                "{}: the provider's message is attached as {}",
+                self.message,
+                crate::telemetry::spans::common::log_keys::PROVIDER_DETAIL
+            );
+        }
     }
 }
 
@@ -358,6 +440,30 @@ mod tests {
         assert!(PHRASES.windows(2).all(|w| w[0].0 < w[1].0), "PHRASES must be sorted by code");
         assert_eq!(http_reason(429), Some("Too Many Requests"));
         assert_eq!(http_reason(499), None, "499 is nginx's, not IANA's");
+    }
+
+    // Catches: an auth or policy close retried forever (every code counted retryable), or a
+    // going-away / server-error close made fatal.
+    #[test]
+    fn close_codes_split_into_normal_final_and_retryable() {
+        for (code, want) in [
+            (Some(1000), CloseKind::Normal),
+            (Some(1001), CloseKind::Retryable),
+            (Some(1006), CloseKind::Retryable),
+            (Some(1011), CloseKind::Retryable),
+            (Some(1013), CloseKind::Retryable),
+            (None, CloseKind::Retryable),
+            (Some(1008), CloseKind::Final),
+            (Some(1003), CloseKind::Final),
+            (Some(1007), CloseKind::Final),
+            (Some(3000), CloseKind::Final),
+            (Some(4401), CloseKind::Final),
+            (Some(4403), CloseKind::Final),
+            (Some(4429), CloseKind::Retryable),
+            (Some(4000), CloseKind::Retryable),
+        ] {
+            assert_eq!(CloseKind::of(code), want, "{code:?}");
+        }
     }
 
     // Catches: a `kind == Connection` test that misses `APITimeoutError`.

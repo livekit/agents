@@ -75,6 +75,15 @@ class ProviderAttempts:
         """No response is outstanding: the read deadline disarms."""
     def observe(self, event: SpeechEvent) -> None:
         """A recognition event, for the stream's read deadline and transcript completion."""
+    def audio_taken(self, seconds: float) -> SpeechEvent | None:
+        """Seconds of audio an attempt of a recognition took from its input, measured for a
+        provider that does not report its own usage: the `RECOGNITION_USAGE` to send once
+        5 seconds accumulated.
+        """
+    def unreported_usage(self) -> SpeechEvent | None:
+        """The `RECOGNITION_USAGE` of the audio taken since the last report, sent when an attempt
+        ends, failed or not.
+        """
     @property
     def exhausted(self) -> bool:
         """Whether retries were exhausted: `run()` then raised `APIConnectionError` from the last

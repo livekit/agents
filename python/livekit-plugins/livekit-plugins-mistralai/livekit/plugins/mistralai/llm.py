@@ -10,7 +10,14 @@ from typing import Any
 import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
 from pydantic import JsonValue, TypeAdapter
 
-from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, TokenUsage, llm
+from livekit.agents import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    TokenUsage,
+    llm,
+)
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
@@ -279,7 +286,6 @@ class LLMStream(llm.LLMStream):
         self._provider_tool_args: dict[str, str] = {}
 
     async def _run(self) -> None:
-        request_timeout_ms(self._conn_options)
         if self._api_mode == ApiMode.CHAT_COMPLETIONS:
             await self._run_chat_completions()
         else:
@@ -288,8 +294,6 @@ class LLMStream(llm.LLMStream):
     async def _run_conversations(self) -> None:
         self._emitted_tool_calls = set()
         self._provider_tool_args = {}
-        retryable = True
-
         try:
             entries, extra_data = await self._chat_ctx.to_provider_format(format="mistralai")
             tools_list = self._tool_ctx.parse_function_tools("openai", strict=True)
@@ -316,34 +320,24 @@ class LLMStream(llm.LLMStream):
             async for ev in async_response:
                 chunks = self._parse_event(ev, pending_fnc_calls)
                 for chat_chunk in chunks:
-                    retryable = False
                     self.send(chat_chunk)
 
             for chat_chunk in self._flush_pending_fnc_calls(pending_fnc_calls):
                 self.send(chat_chunk)
 
-        except APITimeoutError:
-            raise APITimeoutError(retryable=retryable) from None
+        except APIError:
+            raise
         except (TimeoutError, httpx.TimeoutException) as e:
-            raise APITimeoutError(retryable=retryable) from e
-        except APIStatusError as e:
-            raise APIStatusError(
-                e.message,
-                status_code=e.status_code,
-                request_id=e.request_id,
-                body=e.body,
-                retryable=retryable,
-            ) from None
+            raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
                 request_id=e.headers.get("x-request-id"),
                 body=e.body,
-                retryable=retryable,
             ) from e
         except Exception as e:
-            raise APIConnectionError(retryable=retryable) from e
+            raise APIConnectionError() from e
 
     async def _run_chat_completions(self) -> None:
         if any(isinstance(t, MistralTool) for t in self._tool_ctx.provider_tools):
@@ -352,8 +346,6 @@ class LLMStream(llm.LLMStream):
                 "Connector) are not supported with api_mode='chat_completions'. "
                 "Use api_mode='conversations' or remove provider tools."
             )
-
-        retryable = True
 
         try:
             messages, _ = await self._chat_ctx.to_provider_format(format="openai")
@@ -413,7 +405,6 @@ class LLMStream(llm.LLMStream):
                         pending_fnc_calls=pending_fnc_calls,
                     )
                     for cc in chat_chunks:
-                        retryable = False
                         self.send(cc)
 
                 if chunk.usage is not None:
@@ -430,28 +421,16 @@ class LLMStream(llm.LLMStream):
             for cc in _flush_pending_by_index(pending_fnc_calls):
                 self.send(cc)
 
-        except APITimeoutError:
-            raise APITimeoutError(retryable=retryable) from None
+        except APIError:
+            raise
         except (TimeoutError, httpx.TimeoutException) as e:
-            raise APITimeoutError(retryable=retryable) from e
-        except APIStatusError as e:
-            raise APIStatusError(
-                e.message,
-                status_code=e.status_code,
-                request_id=e.request_id,
-                body=e.body,
-                retryable=retryable,
-            ) from None
+            raise APITimeoutError() from e
         except MistralError as e:
             raise APIStatusError(
-                e.message,
-                status_code=e.status_code,
-                request_id=None,
-                body=e.body,
-                retryable=retryable and (e.status_code in (408, 429) or e.status_code >= 500),
+                e.message, status_code=e.status_code, request_id=None, body=e.body
             ) from e
         except Exception as e:
-            raise APIConnectionError(retryable=retryable) from e
+            raise APIConnectionError() from e
 
     def _flush_pending_fnc_calls(self, pending: dict[str, _PendingFunctionCall]) -> list[ChatChunk]:
         """Emit completed FunctionToolCalls from the pending buffer."""

@@ -12823,7 +12823,11 @@ impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
         })
     }
 
-    fn closed(&self, cx: &::lk_agents_abi::telemetry::Cx) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+    fn closed(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -12837,9 +12841,18 @@ impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
             }),
         );
         ::std::boxed::Box::pin(async move {
-            if let Err(e) = started.await {
-                log::warn!("SessionHost.closed failed: {e}");
-            }
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
         })
     }
 

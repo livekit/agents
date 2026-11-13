@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 import os
 from collections.abc import Mapping
 from json import JSONDecodeError
@@ -15,13 +13,10 @@ if TYPE_CHECKING:
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     http,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class LiveAvatarException(Exception):
@@ -153,35 +148,18 @@ class LiveAvatarAPI:
         response_type: type[_ResponseT],
     ) -> _ResponseT:
         url = self._api_url + endpoint
-        for i in range(self._conn_options.max_retry + 1):
-            try:
-                async with self.http_session().post(
-                    url, headers=headers, json=payload, conn_options=self._conn_options
-                ) as response:
-                    if not response.ok:
-                        text = await response.text()
-                        raise APIStatusError(
-                            f"Server returned an error for {url}: {response.status}",
-                            status_code=response.status,
-                            body=text,
-                        )
+        session = self.http_session()
+
+        async def request() -> _ResponseT:
+            async with session.post(
+                url, headers=headers, json=payload, conn_options=self._conn_options
+            ) as response:
+                await response.raise_for_status()
+                try:
                     return response_type.model_validate(await response.json())
-            except (ValidationError, JSONDecodeError) as exc:
-                raise APIConnectionError(
-                    "LiveAvatar returned an invalid response", retryable=False
-                ) from exc
-            except APIStatusError as e:
-                if not e.retryable or i >= self._conn_options.max_retry:
-                    raise
-            except APIConnectionError as e:
-                logger.warning(
-                    f"API request to {url} failed on attempt {i}",
-                    extra={"error": str(e)},
-                )
-            except Exception:
-                logger.exception("failed to call LiveAvatar API")
+                except (ValidationError, JSONDecodeError) as exc:
+                    raise APIError(
+                        "LiveAvatar returned an invalid response", retryable=False
+                    ) from exc
 
-            if i < self._conn_options.max_retry:
-                await asyncio.sleep(self._conn_options.retry_interval)
-
-        raise APIConnectionError("Failed to call LiveAvatar API after all retries.")
+        return await http.retry_request(request, conn_options=self._conn_options)

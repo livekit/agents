@@ -24,14 +24,12 @@ import weakref
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-import numpy as np
-
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     LanguageCode,
     http,
     stt,
@@ -397,7 +395,6 @@ class SpeechStream(stt.RecognizeStream):
         self._api_key = api_key
         self._model_endpoint = model_endpoint
         self._session = http_session
-        self._speech_duration: float = 0
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: list[SpeechEvent] = []
@@ -454,11 +451,7 @@ class SpeechStream(stt.RecognizeStream):
                         frames = audio_bstream.push(data.data.tobytes())
 
                     for frame in frames:
-                        if len(frame.data) % 2 != 0:
-                            logger.warning("Frame data size not aligned to float32 (multiple of 4)")
-
-                        int16_array = np.frombuffer(frame.data, dtype=np.int16)
-                        await ws.send_bytes(int16_array.tobytes())
+                        await ws.send_bytes(frame.data.tobytes())
                 closing_ws = True
                 await ws.send_str(self._CLOSE_MSG)
             except APIConnectionError:
@@ -479,11 +472,7 @@ class SpeechStream(stt.RecognizeStream):
                 if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing_ws:
                         return
-                    raise APIStatusError(
-                        "Baseten connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=msg.data,
-                    )
+                    raise ws.close_error("Baseten connection closed unexpectedly")
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.error("Unexpected Baseten message type: %s", msg.type)
@@ -491,8 +480,10 @@ class SpeechStream(stt.RecognizeStream):
 
                 data = decode_transcript(msg.text)
 
-                # Skip non-transcription messages (e.g. error, status)
                 msg_type = data.type
+                if msg_type == "error":
+                    raise APIError("Baseten STT error", body=msg.text, detail=data.message)
+                # Skip other non-transcription messages (e.g. status)
                 if msg_type and msg_type not in ("transcription",):
                     logger.debug("Ignoring message type: %s", msg_type)
                     continue

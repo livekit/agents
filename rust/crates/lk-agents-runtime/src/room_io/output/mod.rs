@@ -153,7 +153,7 @@ impl Shared {
             if let Some(outcome) = observe(&self.lock()) {
                 return outcome;
             }
-            let _ = parked.changed().await;
+            parked.changed().await.expect("the producer is a field of self");
         }
     }
 
@@ -171,7 +171,7 @@ impl Shared {
                         break frame;
                     }
                 }
-                let _ = parked.changed().await;
+                parked.changed().await.expect("the producer is a field of self");
             };
 
             let src = self.lock().source.clone();
@@ -636,14 +636,11 @@ async fn retire_publication(
     unpublished.and(closing.await.unwrap_or(Closed::Failed))
 }
 
+/// A `Closed` carries no error, so a failed cleanup is logged here, where it happened.
 fn cleanup_outcome(result: std::result::Result<(), RtcError>, resource: &str) -> Closed {
-    match result {
-        Ok(()) => Closed::Clean,
-        Err(error) => {
-            log::error!(target: lk_agents_abi::LOG_TARGET, "room {resource} cleanup failed: {error}");
-            Closed::Failed
-        }
-    }
+    let Err(error) = result else { return Closed::Clean };
+    log::error!(target: lk_agents_abi::LOG_TARGET, "room {resource} cleanup failed: {error}");
+    Closed::Failed
 }
 
 impl AudioOutput for ParticipantAudioOutput {

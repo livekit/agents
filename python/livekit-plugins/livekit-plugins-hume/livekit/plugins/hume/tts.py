@@ -310,7 +310,17 @@ class ChunkedStream(tts.ChunkedStream):
 
                     data = json.loads(line.decode())
                     if data.get("type") == "error":
-                        raise APIError(message=str(data))
+                        # an in-band error follows an accepted request: retry only on a
+                        # status that says retrying can help
+                        code = data.get("status_code")
+                        detail = data.get("message")
+                        if isinstance(code, int):
+                            raise APIStatusError(
+                                "Hume returned an error", status_code=code, body=data, detail=detail
+                            )
+                        raise APIError(
+                            "Hume returned an error", body=data, retryable=False, detail=detail
+                        )
 
                     audio_b64 = data.get("audio")
                     if audio_b64:
@@ -318,7 +328,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.flush()
 
-        except (APIStatusError, APIConnectionError):
+        except APIError:
             raise
         except TimeoutError:
             raise APITimeoutError() from None

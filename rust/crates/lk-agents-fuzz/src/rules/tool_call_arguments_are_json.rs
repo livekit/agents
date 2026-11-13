@@ -14,9 +14,9 @@ pub struct ToolCallArgumentsAreJson;
 impl Rule for ToolCallArgumentsAreJson {
     const CONTRACT: Contract = Contract {
         id: "tool_call_arguments_are_json",
-        guarantee: "Every tool call in the history carries JSON arguments, repaired when the model wrote them malformed.",
+        guarantee: "Every tool call in the history carries JSON arguments, repaired when the model wrote them malformed and `{}` when it streamed none.",
         examples: &[a_repaired_call],
-        counterexamples: &[a_malformed_call],
+        counterexamples: &[a_malformed_call, a_call_with_no_arguments],
         probe: None,
     };
 
@@ -26,8 +26,7 @@ impl Rule for ToolCallArgumentsAreJson {
                 continue;
             };
             let ChatItem::FunctionCall(call) = &**item else { continue };
-            let valid = call.arguments.trim().is_empty()
-                || serde_json::from_str::<serde_json::Value>(&call.arguments).is_ok();
+            let valid = serde_json::from_str::<serde_json::Value>(&call.arguments).is_ok();
             check.expect_with(Subject::Session, valid, || {
                 format!(
                     "{} {} recorded with arguments {:?}",
@@ -65,4 +64,8 @@ fn a_repaired_call() -> Recording {
 
 fn a_malformed_call() -> Recording {
     call(r#"{"label":"human<|im_end|>"#)
+}
+
+fn a_call_with_no_arguments() -> Recording {
+    call("")
 }

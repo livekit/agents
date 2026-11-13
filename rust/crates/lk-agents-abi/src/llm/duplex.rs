@@ -289,10 +289,13 @@ pub trait DuplexSession: Send + Sync {
 
     /// Closes the plugin's session, as a failed startup configuration does.
     #[host(await, name = "plugin.aclose")]
-    fn close_plugin(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()>;
+    fn close_plugin(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
     #[host(await, name = "_core_aclose")]
-    fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()>;
+    fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
 }
 
 /// The adapter's own gate (`gate=`): called once per session, in place of the model's.

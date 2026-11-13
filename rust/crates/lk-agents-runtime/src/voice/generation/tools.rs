@@ -176,10 +176,7 @@ impl HostedCall<'_> {
                 Ok(args.identity)
             }
             Ok(Err(refused)) => Err(PrepareFailure::Refused(refused.message)),
-            Err(e) => {
-                log::error!(target: lk_agents_abi::LOG_TARGET, "preparing a tool call failed: {e}");
-                Err(PrepareFailure::Internal)
-            }
+            Err(e) => Err(PrepareFailure::Host(e)),
         }
     }
 
@@ -336,25 +333,23 @@ impl ToolBody {
         span: Option<telemetry::ScopedSpan<telemetry::FunctionTool>>,
     ) -> ToolReport {
         let (host, invocation, prepared) = (&self.host, &self.invocation, &self.prepared);
-        let mut report = match host.run_tool(&self.cx, invocation, prepared).await {
-            Ok(ran) => {
-                // What an agent tool's child consumed is the session's, counted once.
-                if let Some(usage) = ran.usage {
-                    use lk_agents_voice::agent_session::{Command, VoiceCommandOrigin};
-                    let origin = VoiceCommandOrigin::Tool {
-                        invocation_id: invocation.invocation_id.clone(),
-                        operation: invocation.operation,
-                        call_id: self.call.call_id.clone(),
-                    };
-                    let _ = self.shared.queue.send_from(origin, Command::DelegateUsage(usage));
-                }
-                ran.report
+        let ran = host.run_tool(&self.cx, invocation, prepared).await.map(|ran| {
+            // What an agent tool's child consumed is the session's, counted once.
+            if let Some(usage) = ran.usage {
+                use lk_agents_voice::agent_session::{Command, VoiceCommandOrigin};
+                let origin = VoiceCommandOrigin::Tool {
+                    invocation_id: invocation.invocation_id.clone(),
+                    operation: invocation.operation,
+                    call_id: self.call.call_id.clone(),
+                };
+                let _ = self.shared.queue.send_from(origin, Command::DelegateUsage(usage));
             }
-            Err(error) => {
-                log::error!(target: lk_agents_abi::LOG_TARGET, "the tool's host failed outside its error handling: {error}");
-                ToolOutcome::Internal.into()
-            }
-        };
+            ran.report
+        });
+        let mut report = lk_agents_voice::tool_executor::host_report(
+            ran,
+            "the tool's host failed outside its error handling",
+        );
         // A refusing callable may still succeed while it unwinds; that must not start a new
         // callback under an operation the core already cancelled.
         let tool_bodies = &self.shared.tool_bodies;
@@ -362,13 +357,12 @@ impl ToolBody {
             return ToolOutcome::Cancelled.into();
         }
         if lk_agents_voice::tool_executor::validates_completion(self.completion, &report) {
-            report = host
-                .validate_tool_completion(&self.cx, invocation, prepared, report)
-                .await
-                .unwrap_or_else(|error| {
-                    log::error!(target: lk_agents_abi::LOG_TARGET, "the task's completion validator failed: {error}");
-                    ToolOutcome::Internal.into()
-                });
+            let validated =
+                host.validate_tool_completion(&self.cx, invocation, prepared, report).await;
+            report = lk_agents_voice::tool_executor::host_report(
+                validated,
+                "the task's completion validator failed",
+            );
         }
         let report = lk_agents_voice::tool_executor::completion(self.completion, report);
         if let Some(span) = span {
@@ -397,17 +391,46 @@ impl ToolBody {
     }
 }
 
-/// Awaits the step's executions in the model's order and hands them to the driver, which decides
-/// the step; a model reply's step waits for what its run does next when the task `continues`.
-/// `None` when the task does not go on from it.
+/// Hands the step's executions to the driver, which decides the step, then waits for what the
+/// model reply's run does next. `None` when the task does not go on from it.
 pub(crate) async fn run_tools(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyExecution,
     tools: ToolStep,
     forwarded_text_empty: bool,
-    continues: bool,
 ) -> Option<StepNext> {
+    let end = tool_step_end(shared, handle, ctx, tools, forwarded_text_empty).await?;
+    let (speech, step) = (handle.id(), ctx.plan.step);
+    let (call, next) = shared.open_call(Answer::tool_step);
+    let finished = GenEvent::ToolsFinished { speech, step, end, answer: Some(call.id) };
+    shared.report_awaited(finished, call);
+    // A loop gone answers nothing: the reply ends.
+    next.await.ok()
+}
+
+/// Answers the calls of a step the reply ends at: every call the model made is answered, or the
+/// next request would make it again.
+pub(crate) async fn answer_tools(
+    shared: &Arc<SessionShared>,
+    handle: &Arc<SpeechHandle>,
+    ctx: &ReplyExecution,
+    tools: ToolStep,
+) {
+    if let Some(end) = tool_step_end(shared, handle, ctx, tools, true).await {
+        let (speech, step) = (handle.id(), ctx.plan.step);
+        shared.report(GenEvent::ToolsFinished { speech, step, end, answer: None });
+    }
+}
+
+/// The step's executions awaited in the model's order; `None` when the speech owes none.
+async fn tool_step_end(
+    shared: &Arc<SessionShared>,
+    handle: &Arc<SpeechHandle>,
+    ctx: &ReplyExecution,
+    tools: ToolStep,
+    forwarded_text_empty: bool,
+) -> Option<Box<StepEnd>> {
     // A never-adopted preemptive generation owes nothing; a `say` has no run.
     let model = matches!(ctx.plan.source, ReplySource::Llm | ReplySource::Realtime);
     if !handle.scheduled() || (tools.is_empty() && !model) {
@@ -443,22 +466,12 @@ pub(crate) async fn run_tools(
         };
         executions.push(execution);
     }
-    let end = Box::new(StepEnd {
+    Some(Box::new(StepEnd {
         executions,
         interrupted_before_tools,
         interrupted: handle.interrupted(),
         forwarded_text_empty,
         max_tool_steps: ctx.plan.speech.max_tool_steps(),
         user_metrics: ctx.plan.user_metrics.clone(),
-    });
-    let (speech, step) = (handle.id(), ctx.plan.step);
-    if !continues {
-        shared.report(GenEvent::ToolsFinished { speech, step, end, answer: None });
-        return None;
-    }
-    let (call, next) = shared.open_call(Answer::tool_step);
-    let finished = GenEvent::ToolsFinished { speech, step, end, answer: Some(call.id) };
-    shared.report_awaited(finished, call);
-    // A loop gone answers nothing: the reply ends.
-    next.await.ok()
+    }))
 }

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 
 import livekit.rtc as rtc
@@ -8,9 +7,7 @@ from livekit import api
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     NotGivenOr,
     VoiceSession,
     get_job_context,
@@ -126,46 +123,21 @@ class AvatarSession(BaseAvatarSession):
         )
 
     async def _start_session(self, livekit_url: str, livekit_token: str) -> None:
-        assert self._api_key is not None
         api_key = self._api_key
         assert isinstance(api_key, str)
-        async with self._conn_options.total_deadline():
-            for i in range(self._conn_options.max_retry + 1):
-                try:
-                    async with self._ensure_http_session().post(
-                        f"{_BASE_API_URL}/v1/sessions",
-                        headers={
-                            "x-api-key": api_key,
-                        },
-                        json={
-                            "avatar_id": self._avatar_id,
-                            "livekit_url": livekit_url,
-                            "livekit_token": livekit_token,
-                        },
-                        conn_options=self._conn_options,
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise APIStatusError(
-                                "Server returned an error", status_code=response.status, body=text
-                            )
-                        return
+        session = self._ensure_http_session()
 
-                except Exception as e:
-                    if isinstance(e, APIStatusError):
-                        logger.warning(
-                            "API Error; Unable to trigger TruGen.AI API backend.",
-                            extra={"status_code": e.status_code, "body": e.body},
-                        )
-                        if not e.retryable:
-                            raise
-                    else:
-                        logger.warning(
-                            "API Error; Unable to trigger TruGen.AI API backend.",
-                            extra={"error": str(e)},
-                        )
+        async def request() -> None:
+            async with session.post(
+                f"{_BASE_API_URL}/v1/sessions",
+                headers={"x-api-key": api_key},
+                json={
+                    "avatar_id": self._avatar_id,
+                    "livekit_url": livekit_url,
+                    "livekit_token": livekit_token,
+                },
+                conn_options=self._conn_options,
+            ) as response:
+                await response.raise_for_status()
 
-                    if i < self._conn_options.max_retry:
-                        await asyncio.sleep(self._conn_options.retry_interval)
-
-        raise APIConnectionError("Max retries exhausted; Unable to start TruGen.AI Avatar Session.")
+        await http.retry_request(request, conn_options=self._conn_options)

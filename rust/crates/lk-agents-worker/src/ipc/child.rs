@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use lk_agents_abi::worker::ipc_host::{ChildInitialize, JobProcess, WorkerError};
 use lk_agents_abi::worker::job::ShutdownCause;
-use lk_agents_abi::{Clock, OwnedTask, SpawnerExt, Ts};
+use lk_agents_abi::{Clock, OwnedTask, SpawnerExt, TaskError, Ts};
 use lk_agents_net::owned::Background;
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
@@ -132,7 +132,10 @@ impl ChildChannel {
                     return Ok(false);
                 }
                 let Some(run) = self.run.get() else {
-                    let _ = self.channel.send(ToParent::ShuttingDown).await;
+                    // The child ends either way; a parent already gone needs no notice.
+                    if let Err(error) = self.channel.send(ToParent::ShuttingDown).await {
+                        log::debug!(target: lk_agents_abi::LOG_TARGET, "the IPC parent did not hear the shutdown: {error}");
+                    }
                     return Ok(false);
                 };
                 let reason =
@@ -269,7 +272,13 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
             .run(async move {
                 if let Some(watching) = watching {
                     watching.cancel();
-                    let _ = watching.await;
+                    // Closing ends the watch: only a parent lost before it is worth a note.
+                    match watching.await {
+                        Ok(Err(error)) => {
+                            log::debug!(target: lk_agents_abi::LOG_TARGET, "the parent watch had ended: {error}");
+                        }
+                        Ok(Ok(())) | Err(TaskError::Cancelled | TaskError::Panicked(_)) => {}
+                    }
                 }
                 channel.close().await;
             })

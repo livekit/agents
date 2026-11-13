@@ -35,7 +35,7 @@ impl Stt for FakeStt {
         }))
     }
     fn capabilities(&self) -> SttCapabilities {
-        SttCapabilities { streaming: true, ..Default::default() }
+        SttCapabilities { streaming: true, reports_usage: true, ..Default::default() }
     }
     fn recognize(
         &self,
@@ -212,7 +212,12 @@ impl Stt for DuplexStt {
         self.label.clone()
     }
     fn capabilities(&self) -> SttCapabilities {
-        SttCapabilities { streaming: self.streaming, interim_results: true, ..Default::default() }
+        SttCapabilities {
+            streaming: self.streaming,
+            interim_results: true,
+            reports_usage: true,
+            ..Default::default()
+        }
     }
     fn recognize(
         &self,
@@ -511,6 +516,7 @@ fn merging_stt_capabilities_uses_a_different_rule_per_field() {
         offline_recognize: true,
         keyterms: true,
         chat_context: false,
+        reports_usage: false,
     };
     let plain = SttCapabilities {
         streaming: true,
@@ -520,6 +526,7 @@ fn merging_stt_capabilities_uses_a_different_rule_per_field() {
         offline_recognize: true,
         keyterms: false,
         chat_context: true,
+        reports_usage: false,
     };
 
     let merged = crate::fallback::stt::merge_capabilities(&[rich, plain]);
@@ -534,6 +541,7 @@ fn merging_stt_capabilities_uses_a_different_rule_per_field() {
     assert!(merged.keyterms, "any");
     assert!(merged.chat_context, "any");
     assert!(merged.offline_recognize, "not merged -- the reference takes the field default");
+    assert!(merged.reports_usage, "each entry is measured inside the chain");
 
     let unaligned = SttCapabilities { aligned_transcript: AlignedTranscript::None, ..plain };
     assert_eq!(
@@ -592,7 +600,7 @@ impl Stt for Refusing {
         "refusing".into()
     }
     fn capabilities(&self) -> SttCapabilities {
-        SttCapabilities { streaming: true, ..Default::default() }
+        SttCapabilities { streaming: true, reports_usage: true, ..Default::default() }
     }
     fn failed(&self, _error: ProviderError, recoverable: bool) {
         self.reports.lock().push(recoverable);

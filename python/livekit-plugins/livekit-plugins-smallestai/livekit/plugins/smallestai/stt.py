@@ -37,10 +37,8 @@ import json
 import math
 import os
 import re
-import time
 import weakref
 from collections import Counter
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from urllib.parse import urlencode
 
@@ -81,30 +79,6 @@ _STREAMING_MODELS: frozenset[str] = frozenset({"pulse"})
 
 # Any letter or digit in any script; a transcript with none is punctuation only.
 _WORD_RE = re.compile(r"\w")
-
-
-class _PeriodicCollector:
-    """Flushes every `duration`."""
-
-    def __init__(self, callback: Callable[[float], None], *, duration: float) -> None:
-        self._duration = duration
-        self._callback = callback
-        self._last_flush_time = time.monotonic()
-        self._total: float | None = None
-
-    def push(self, value: float) -> None:
-        if self._total is None:
-            self._total = value
-        else:
-            self._total += value
-        if time.monotonic() - self._last_flush_time >= self._duration:
-            self.flush()
-
-    def flush(self) -> None:
-        if self._total is not None:
-            self._callback(self._total)
-            self._total = None
-        self._last_flush_time = time.monotonic()
 
 
 class _Word(BaseModel):
@@ -528,9 +502,6 @@ class SpeechStream(stt.RecognizeStream):
         self._speaking = False
         self._session_id = ""
         self._reconnect_event = asyncio.Event()
-        self._audio_duration_collector = _PeriodicCollector(
-            callback=self._on_audio_duration_report, duration=5.0
-        )
 
     def update_options(
         self,
@@ -578,20 +549,17 @@ class SpeechStream(stt.RecognizeStream):
             # Resets the public API's inactivity timer while no audio flows; the server
             # answers with a pong that recv_task ignores.
             interval = self._opts.keepalive_interval
-            if interval is None or interval <= 0:
-                await asyncio.Event().wait()  # disabled: idle for the life of the connection
-                return
             try:
-                while True:
+                while interval and interval > 0 and not closing_ws:
                     await asyncio.sleep(interval)
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
-            except APIConnectionError as e:
+            except APIConnectionError:
                 # With no audio flowing this write is where a dropped socket shows first.
-                if closing_ws or self._session.closed:
-                    return
-                raise APIConnectionError("Smallest AI STT connection closed unexpectedly") from e
+                if not (closing_ws or self._session.closed):
+                    raise
+            # never ends on its own: that would end the session before recv_task reads is_last
+            await asyncio.Event().wait()
 
-        @utils.log_exceptions(logger=logger)
         async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
@@ -614,14 +582,12 @@ class SpeechStream(stt.RecognizeStream):
                         flushed = True
 
                     for frame in frames:
-                        self._audio_duration_collector.push(frame.duration)
                         await ws.send_bytes(frame.data.tobytes())
 
                     if flushed:
                         # The framework marked a segment end: the buffered tail is on the
                         # wire, now ask for it back as a final instead of leaving it to
                         # the server's endpointing.
-                        self._audio_duration_collector.flush()
                         if self._opts.finalize_on_flush:
                             await ws.send_str(SpeechStream._FINALIZE_MSG)
 
@@ -635,7 +601,6 @@ class SpeechStream(stt.RecognizeStream):
                     return
                 raise APIConnectionError("Smallest AI STT connection closed unexpectedly") from e
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
@@ -649,11 +614,7 @@ class SpeechStream(stt.RecognizeStream):
                 if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing_ws or self._session.closed:
                         return
-                    raise APIStatusError(
-                        message="Smallest AI STT connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=msg.data,
-                    )
+                    raise ws.close_error("Smallest AI STT connection closed unexpectedly")
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Smallest AI STT message type: %s", msg.type)
@@ -674,18 +635,13 @@ class SpeechStream(stt.RecognizeStream):
                     and "transcript" not in data.model_fields_set
                     and "transcription" not in data.model_fields_set
                 ):
-                    # The payload may echo user content; it goes only in the PII-marked
-                    # log field and the exception body, not in the message the retry
-                    # logger prints.
-                    logger.error(
-                        "Smallest AI STT error",
-                        extra={"lk.pii.data": data.model_dump(mode="json", exclude_unset=True)},
-                    )
+                    payload = data.model_dump(mode="json", exclude_unset=True)
                     raise APIStatusError(
-                        message=f"Smallest AI STT error ({data.status or 'error'})",
+                        f"Smallest AI STT error ({data.status or 'error'})",
                         status_code=-1,
                         request_id=self._session_id or None,
-                        body=data.model_dump(mode="json", exclude_unset=True),
+                        body=payload,
+                        detail=json.dumps(payload),
                     )
                 if data.type == "pong":
                     continue
@@ -713,7 +669,6 @@ class SpeechStream(stt.RecognizeStream):
             finally:
                 if ws is not None:
                     await ws.close()
-                self._audio_duration_collector.flush()
                 # A socket that ends mid-utterance (reconnect, drop) takes the server's
                 # speech_ended with it: close the turn here so START/END stay paired.
                 self._end_speech()
@@ -769,16 +724,6 @@ class SpeechStream(stt.RecognizeStream):
         )
         logger.debug("established Smallest AI STT WebSocket connection")
         return ws
-
-    def _on_audio_duration_report(self, duration: float) -> None:
-        self.send(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=self._session_id,
-                alternatives=[],
-                recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-            )
-        )
 
     def _start_speech(self) -> None:
         if not self._speaking:

@@ -150,6 +150,13 @@ pub fn shortuuid(py: Python<'_>, prefix: ::std::string::String) -> PyResult<::st
 type ProviderAttemptsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ProviderAttempts;
 
+fn _extract_provider_attempts_audio_taken_seconds(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<ProviderAttemptsAudioTakenSecondsInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "seconds")
+}
+type ProviderAttemptsAudioTakenSecondsInput = f64;
+
 /// The attempts of one host provider request (`livekit.agents.ProviderAttempts`).
 ///
 /// `run()` drives them: it waits until an attempt may start, runs the host's attempt, races it
@@ -282,6 +289,32 @@ impl ProviderAttempts {
         Ok(())
     }
 
+    /// Seconds of audio an attempt of a recognition took from its input, measured for a
+    /// provider that does not report its own usage: the `RECOGNITION_USAGE` to send once
+    /// 5 seconds accumulated.
+    #[pyo3(signature = (seconds))]
+    fn audio_taken<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = _extract_provider_attempts_audio_taken_seconds)]
+        seconds: ProviderAttemptsAudioTakenSecondsInput,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <ProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::audio_taken(&self.0, seconds));
+        out.map(|value| crate::generated::records::stt::speech_event_to_py(py, value)).transpose()
+    }
+
+    /// The `RECOGNITION_USAGE` of the audio taken since the last report, sent when an attempt
+    /// ends, failed or not.
+    fn unreported_usage<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <ProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::unreported_usage(&self.0));
+        out.map(|value| crate::generated::records::stt::speech_event_to_py(py, value)).transpose()
+    }
+
     /// Whether retries were exhausted: `run()` then raised `APIConnectionError` from the last
     /// attempt's error, which the request's ending `error` event carries.
     #[getter]
@@ -363,16 +396,17 @@ impl ::lk_agents_abi::types::provider::ProviderEvents for ProviderEventsProxy {
             return;
         };
         let error_arg = error;
-        let error_arg =
-            match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+        let error_arg = match ::pyo3::Python::attach(
+            |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
                 Ok((crate::py_errors::ExceptionValue::to_exception(error_arg, py)?).unbind())
-            }) {
-                Ok(value) => value,
-                Err(error) => {
-                    log::warn!("ProviderEvents._core_failed failed: {error}");
-                    return;
-                }
-            };
+            },
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!(target: ::lk_agents_abi::LOG_TARGET, "ProviderEvents._core_failed failed: {error}");
+                return;
+            }
+        };
         let recoverable_arg = recoverable;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -547,16 +581,17 @@ impl ::lk_agents_abi::types::provider::AttemptHost for AttemptHostProxy {
     fn retrying(&self, error: ::lk_agents_abi::errors::ProviderError) {
         let host = ::std::sync::Arc::clone(&self.host);
         let error_arg = error;
-        let error_arg =
-            match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+        let error_arg = match ::pyo3::Python::attach(
+            |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
                 Ok((crate::py_errors::ExceptionValue::to_exception(error_arg, py)?).unbind())
-            }) {
-                Ok(value) => value,
-                Err(error) => {
-                    log::warn!("AttemptHost._core_retrying failed: {error}");
-                    return;
-                }
-            };
+            },
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!(target: ::lk_agents_abi::LOG_TARGET, "AttemptHost._core_retrying failed: {error}");
+                return;
+            }
+        };
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "AttemptHost._core_retrying",

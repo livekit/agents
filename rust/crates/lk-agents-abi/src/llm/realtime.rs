@@ -764,7 +764,7 @@ pub trait HostRealtimeSession: Send + Sync {
         &self,
         cx: &crate::telemetry::Cx,
         request: crate::HostRef,
-    ) -> crate::BoxFuture<'_, ()>;
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
     /// Report a generation's messages and function calls as events; `req_id` names the request it
     /// answers, `None` for one the server started.
@@ -774,7 +774,7 @@ pub trait HostRealtimeSession: Send + Sync {
         cx: &crate::telemetry::Cx,
         generation: crate::HostRef,
         req_id: Option<String>,
-    ) -> crate::BoxFuture<'_, ()>;
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
     /// The next event; `None` once the session is closed. An `Err` is one event the host could
     /// not report, not the end.
@@ -785,7 +785,10 @@ pub trait HostRealtimeSession: Send + Sync {
     ) -> crate::BoxFuture<'_, Result<Option<Event>, crate::errors::HostError>>;
 
     #[host(await, name = "_core_aclose")]
-    fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()>;
+    fn aclose(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 }
 
 /// A plugin's realtime model as the core's own: its session opens when the driver first asks and

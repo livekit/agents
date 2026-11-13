@@ -234,11 +234,43 @@ impl TransferTool {
     }
 }
 
-/// Whether a participant leaving the caller's room after the merge ends the call (the room is
-/// deleted): the caller or the human agent, not an agent or egress.
-pub fn ends_merged_call(kind: lk_agents_abi::voice::rtc::ParticipantKind) -> bool {
-    use lk_agents_abi::voice::rtc::ParticipantKind;
-    matches!(kind, ParticipantKind::Connector | ParticipantKind::Sip | ParticipantKind::Standard)
+/// What the merged call's follower does with the caller room's next event.
+#[derive(Debug, PartialEq, Eq)]
+pub enum MergedCall {
+    Continues,
+    /// The caller or the human agent left: the call ends and its room is deleted.
+    Ends {
+        identity: String,
+    },
+    /// The room's events ended or failed (logged): nothing follows the call any more.
+    Unfollowed,
+}
+
+/// A participant leaving the caller's room after the merge ends the call when it is the caller
+/// or the human agent, not an agent or egress.
+pub fn follow_merged_call(
+    next: Result<
+        Option<&lk_agents_abi::voice::rtc::RoomEvent>,
+        &lk_agents_abi::errors::ProviderError,
+    >,
+) -> MergedCall {
+    use lk_agents_abi::voice::rtc::{ParticipantKind, RoomEvent};
+    match next {
+        Ok(Some(RoomEvent::ParticipantDisconnected { participant, .. }))
+            if matches!(
+                participant.kind(),
+                ParticipantKind::Connector | ParticipantKind::Sip | ParticipantKind::Standard
+            ) =>
+        {
+            MergedCall::Ends { identity: participant.identity().to_string() }
+        }
+        Ok(Some(_)) => MergedCall::Continues,
+        Ok(None) => MergedCall::Unfollowed,
+        Err(error) => {
+            log::error!(target: lk_agents_abi::LOG_TARGET, "caller room event stream failed after transfer: {error}");
+            MergedCall::Unfollowed
+        }
+    }
 }
 
 /// The active transfer's phase, original I/O flags, and one correlated outcome.

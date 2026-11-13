@@ -34,7 +34,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     APITimeoutError,
     LanguageCode,
     NotGivenOr,
@@ -45,7 +44,6 @@ from livekit.agents import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
-from ._utils import PeriodicCollector
 from .log import logger
 from .models import (
     GladiaModels,
@@ -363,114 +361,90 @@ class STT(stt.STT):
         config = self._sanitize_options(languages=[language] if is_given(language) else None)
         streaming_config = _build_streaming_config(config)
 
+        # Initialize a session with Gladia
+        session_response = await self._init_live_session(streaming_config, conn_options)
+        session_id = session_response.id
+        session_url = session_response.url
+
+        # Connect to the WebSocket
+        receive_timeout = conn_options.read_timeout
+        ws = await self._ensure_session().ws_connect(session_url, conn_options=conn_options)
         try:
-            # Initialize a session with Gladia
-            session_response = await self._init_live_session(streaming_config, conn_options)
-            session_id = session_response.id
-            session_url = session_response.url
+            # Combine audio frames to get a single frame with all raw PCM data
+            combined_frame = rtc.combine_audio_frames(buffer)
+            # Get the raw bytes from the combined frame
+            pcm_data = combined_frame.data.tobytes()
 
-            # Connect to the WebSocket
-            receive_timeout = conn_options.read_timeout
-            ws = await self._ensure_session().ws_connect(session_url, conn_options=conn_options)
+            bytes_per_second = config.sample_rate * config.channels * (config.bit_depth // 8)
+            chunk_size = (bytes_per_second * 150) // 1000
+            chunk_size = max(chunk_size, 1024)
+
+            # Send raw PCM audio data in chunks
+            for i in range(0, len(pcm_data), chunk_size):
+                chunk = pcm_data[i : i + chunk_size]
+                chunk_b64 = base64.b64encode(chunk).decode("utf-8")
+                await ws.send_str(json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}}))
+
+            # Tell Gladia we're done sending audio
+            await ws.send_str(json.dumps({"type": "stop_recording"}))
+
+            # Wait for final transcript
+            utterances: list[TranscriptionUtterance] = []
+
+            # Receive messages until we get the post_final_transcript message
             try:
-                # Combine audio frames to get a single frame with all raw PCM data
-                combined_frame = rtc.combine_audio_frames(buffer)
-                # Get the raw bytes from the combined frame
-                pcm_data = combined_frame.data.tobytes()
-
-                bytes_per_second = config.sample_rate * config.channels * (config.bit_depth // 8)
-                chunk_size = (bytes_per_second * 150) // 1000
-                chunk_size = max(chunk_size, 1024)
-
-                # Send raw PCM audio data in chunks
-                for i in range(0, len(pcm_data), chunk_size):
-                    chunk = pcm_data[i : i + chunk_size]
-                    chunk_b64 = base64.b64encode(chunk).decode("utf-8")
-                    await ws.send_str(
-                        json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
-                    )
-
-                # Tell Gladia we're done sending audio
-                await ws.send_str(json.dumps({"type": "stop_recording"}))
-
-                # Wait for final transcript
-                utterances: list[TranscriptionUtterance] = []
-
-                # Receive messages until we get the post_final_transcript message
-                try:
-                    # Set a timeout for waiting for the final results after sending stop_recording
-                    while True:
-                        msg = await ws.receive(timeout=receive_timeout)
-                        if msg.type == http.WebSocketMessageType.TEXT:
-                            message = StreamMessage.model_validate_json(msg.data)
-                            if message.type == "transcript":
-                                transcript = TranscriptMessage.model_validate(message.data)
-                                if transcript.is_final:
-                                    utterances.append(transcript.utterance)
-                            elif message.type == "post_final_transcript":
-                                break
-                            elif message.type == "error":
-                                raise APIConnectionError(
-                                    f"Gladia WebSocket error: {message.data}"
-                                ) from None
-
-                        elif msg.type == http.WebSocketMessageType.CLOSE:
-                            logger.warning(
-                                "Gladia WebSocket closed unexpectedly during result receiving: "
-                                f"type={msg.type}"
-                            )
+                # Set a timeout for waiting for the final results after sending stop_recording
+                while True:
+                    msg = await ws.receive(timeout=receive_timeout)
+                    if msg.type == http.WebSocketMessageType.TEXT:
+                        message = StreamMessage.model_validate_json(msg.data)
+                        if message.type == "transcript":
+                            transcript = TranscriptMessage.model_validate(message.data)
+                            if transcript.is_final:
+                                utterances.append(transcript.utterance)
+                        elif message.type == "post_final_transcript":
                             break
+                        elif message.type == "error":
+                            raise APIError(
+                                "Gladia WebSocket error", detail=str(message.data)
+                            ) from None
 
-                except APITimeoutError:
-                    logger.warning(
+                    elif msg.type == http.WebSocketMessageType.CLOSE:
+                        logger.warning(
+                            "Gladia WebSocket closed unexpectedly during result receiving: "
+                            f"type={msg.type}"
+                        )
+                        break
+
+            except APITimeoutError:
+                logger.warning(f"Timeout waiting for Gladia final transcript ({receive_timeout}s)")
+                if not utterances:
+                    raise APITimeoutError(
                         f"Timeout waiting for Gladia final transcript ({receive_timeout}s)"
-                    )
-                    if not utterances:
-                        raise APITimeoutError(
-                            f"Timeout waiting for Gladia final transcript ({receive_timeout}s)"
-                        ) from None
+                    ) from None
 
-                # Create a speech event from the collected final utterances
-                return self._create_speech_event(
-                    utterances, session_id, config.language_config.languages
-                )
-            finally:
-                await ws.close()
-
-        except APIError:
-            raise
-        except Exception as e:
-            # Catch-all for other unexpected errors
-            logger.exception(
-                f"Unexpected error during Gladia synchronous recognition: {e}"
-            )  # Use logger.exception to include stack trace
-            raise APIConnectionError(f"An unexpected error occurred: {e}") from e
+            # Create a speech event from the collected final utterances
+            return self._create_speech_event(
+                utterances, session_id, config.language_config.languages
+            )
+        finally:
+            await ws.close()
 
     async def _init_live_session(
         self, config: dict[str, Any], conn_options: APIConnectOptions
     ) -> LiveSession:
         """Initialize a live transcription session with Gladia."""
-        try:
-            url = f"{self._base_url}?{urlencode({'region': config['region']})}"
-            config = {k: v for k, v in config.items() if k != "region"}
-            async with self._ensure_session().post(
-                url,
-                json=config,
-                headers={"X-Gladia-Key": self._api_key},
-                conn_options=conn_options,
-            ) as res:
-                # Gladia returns 201 Created when successfully creating a session
-                if res.status not in (200, 201):
-                    raise APIStatusError(
-                        message=f"Failed to initialize Gladia session: {res.status}",
-                        status_code=res.status,
-                        request_id=None,
-                        body=await res.text(),
-                    )
-                return LiveSession.model_validate(await res.json())
-        except Exception as e:
-            logger.exception(f"Failed to initialize Gladia session: {e}")
-            raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
+        url = f"{self._base_url}?{urlencode({'region': config['region']})}"
+        config = {k: v for k, v in config.items() if k != "region"}
+        async with self._ensure_session().post(
+            url,
+            json=config,
+            headers={"X-Gladia-Key": self._api_key},
+            conn_options=conn_options,
+        ) as res:
+            # a 4xx other than 408/429 is not retryable: the status decides
+            await res.raise_for_status()
+            return LiveSession.model_validate(await res.json())
 
     def _create_speech_event(
         self, utterances: list[TranscriptionUtterance], session_id: str, languages: list[str] | None
@@ -534,9 +508,7 @@ class STT(stt.STT):
             stt=self,
             conn_options=conn_options,
             opts=config,
-            api_key=self._api_key,
             http_session=self._ensure_session(),
-            base_url=self._base_url,
         )
         self._streams.add(stream)
         return stream
@@ -698,21 +670,14 @@ class SpeechStream(stt.RecognizeStream):
         stt: STT,
         opts: STTOptions,
         conn_options: APIConnectOptions,
-        api_key: str,
         http_session: http.HttpSession,
-        base_url: str,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
+        self._gladia_stt = stt
         self._opts = opts
-        self._api_key = api_key
         self._session = http_session
-        self._base_url = base_url
         self._speaking = False
-        self._audio_duration_collector = PeriodicCollector(
-            callback=self._on_audio_duration_report,
-            duration=5.0,
-        )
 
         self._audio_energy_filter: AudioEnergyFilter | None = None
         if opts.energy_filter:
@@ -840,69 +805,31 @@ class SpeechStream(stt.RecognizeStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        backoff_time = 1.0
-        max_backoff = 30.0
-
+        # failures (a 429 included) fail the attempt: the framework retries under conn_options
         while True:
+            if self._speaking:  # a new session starts outside any speech
+                self._speaking = False
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            self._reconnect_event.clear()
+            session_info = await self._gladia_stt._init_live_session(
+                _build_streaming_config(self._opts), self._conn_options
+            )
+            self._request_id = session_info.id
+            ws = await self._session.ws_connect(session_info.url, conn_options=self._conn_options)
             try:
-                # Initialize the Gladia session
-                session_info = await self._init_live_session()
-                session_url = session_info.url
-                self._request_id = session_info.id
-
-                # Reset backoff on success
-                backoff_time = 1.0
-
-                # Connect to the WebSocket
-                ws = await self._session.ws_connect(session_url, conn_options=self._conn_options)
-                try:
-                    self._ws = ws
-                    logger.info(f"Connected to Gladia session {self._request_id}")
-
-                    try:
-                        async with utils.aio.TaskSet() as tasks:
-                            reconnect = tasks.spawn(self._reconnect_event.wait())
-                            first = await tasks.first_completed(
-                                self._send_audio_task(), self._recv_messages_task(), reconnect
-                            )
-                            if first is not reconnect:
-                                break
-
-                        self._reconnect_event.clear()
-                        logger.info("Reconnecting Gladia session due to options change")
-                    finally:
-                        self._ws = None
-                finally:
-                    await ws.close()
-            except APIStatusError as e:
-                if e.status_code == 429:
-                    logger.warning(
-                        f"Rate limited by Gladia API. Backing off for {backoff_time} seconds."
+                self._ws = ws
+                logger.info(f"Connected to Gladia session {self._request_id}")
+                async with utils.aio.TaskSet() as tasks:
+                    reconnect = tasks.spawn(self._reconnect_event.wait())
+                    first = await tasks.first_completed(
+                        self._send_audio_task(), self._recv_messages_task(), reconnect
                     )
-                    await asyncio.sleep(backoff_time)
-                    backoff_time = min(backoff_time * 2, max_backoff)
-                else:
-                    raise APIStatusError(f"Error in speech stream: {e}", retryable=True) from e
-
-    async def _init_live_session(self) -> LiveSession:
-        """Initialize a live session with Gladia."""
-        streaming_config = _build_streaming_config(self._opts)
-        try:
-            from urllib.parse import urlencode
-
-            url = f"{self._base_url}?{urlencode({'region': streaming_config['region']})}"
-            streaming_config = {k: v for k, v in streaming_config.items() if k != "region"}
-            async with self._session.post(
-                url,
-                json=streaming_config,
-                headers={"X-Gladia-Key": self._api_key},
-                conn_options=self._conn_options,
-            ) as res:
-                await res.raise_for_status()
-                return LiveSession.model_validate(await res.json())
-
-        except Exception as e:
-            raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
+                    if first is not reconnect:
+                        break
+                logger.info("Reconnecting Gladia session due to options change")
+            finally:
+                self._ws = None
+                await ws.close()
 
     async def _send_audio_task(self) -> None:
         """Send audio data to Gladia WebSocket."""
@@ -947,14 +874,12 @@ class SpeechStream(stt.RecognizeStream):
                     has_ended = True
 
                 for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
                     # Encode the audio data as base64
                     chunk_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                     message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
                     await self._ws.send_str(message)
 
                     if has_ended:
-                        self._audio_duration_collector.flush()
                         await self._ws.send_str(json.dumps({"type": "stop_recording"}))
                         has_ended = False
 
@@ -974,11 +899,7 @@ class SpeechStream(stt.RecognizeStream):
 
         async for msg in self._ws:
             if msg.type == http.WebSocketMessageType.TEXT:
-                try:
-                    data = json.loads(msg.data)
-                    self._process_gladia_message(data)
-                except Exception as e:
-                    logger.exception(f"Error processing Gladia message: {e}")
+                self._process_gladia_message(json.loads(msg.data))
             else:
                 logger.warning(f"Unexpected message type from Gladia: {msg.type}")
 
@@ -1140,13 +1061,3 @@ class SpeechStream(stt.RecognizeStream):
         if self._audio_energy_filter:
             return self._audio_energy_filter.update(frame)
         return AudioEnergyFilter.State.SPEAKING
-
-    def _on_audio_duration_report(self, duration: float) -> None:
-        """Report the audio duration for usage tracking."""
-        usage_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.RECOGNITION_USAGE,
-            request_id=self._request_id,
-            alternatives=[],
-            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-        )
-        self.send(usage_event)

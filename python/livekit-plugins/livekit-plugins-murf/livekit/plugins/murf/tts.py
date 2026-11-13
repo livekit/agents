@@ -27,7 +27,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     http,
     tokenize,
     tts,
@@ -356,9 +355,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             while True:
                 msg = await ws.receive()
                 if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "Murf AI connection closed unexpectedly", request_id=request_id
-                    )
+                    raise ws.close_error("Murf AI connection closed unexpectedly")
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Murf AI message type %s", msg.type)

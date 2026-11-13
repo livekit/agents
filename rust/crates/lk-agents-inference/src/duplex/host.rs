@@ -246,7 +246,9 @@ impl HostSession {
                 req_id: None,
                 code: None,
             }))));
-            view.close_plugin(&telemetry::Cx::NONE).await;
+            if let Err(e) = view.close_plugin(&telemetry::Cx::NONE).await {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.message.as_str(); "the duplex plugin did not close");
+            }
         }
     }
 
@@ -322,7 +324,9 @@ impl HostSession {
         // Cancelled, not awaited.
         drop(std::mem::take(&mut *self.tasks.lock()));
         let cx = self.job_cx();
-        self.view.aclose(&cx).await;
+        if let Err(e) = self.view.aclose(&cx).await {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.message.as_str(); "the duplex session did not close");
+        }
     }
 }
 

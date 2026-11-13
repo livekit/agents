@@ -591,21 +591,28 @@ impl std::fmt::Debug for ReplyContext {
 
 pub use lk_agents_abi::agent::HostInstructions;
 
-/// Append dynamic instructions to the request's static prompt.
-pub fn append_instructions(ctx: &mut ChatContext, dynamic: &str) {
+/// The agent's instructions functions, rendered for a request, appended to its static prompt.
+/// A failed render fails the speech, as it aborts a text run: a reply never goes out on the
+/// static instructions alone.
+pub fn append_instructions(
+    ctx: &mut ChatContext,
+    rendered: Result<String, lk_agents_abi::errors::HostError>,
+) -> Result<(), ProviderError> {
+    let dynamic = rendered?;
     if dynamic.is_empty() {
-        return;
+        return Ok(());
     }
     let Some(ChatItem::Message(prompt)) =
         ctx.items.iter_mut().find(|item| item.id() == INSTRUCTIONS_MESSAGE_ID)
     else {
-        return;
+        return Ok(());
     };
     let text = match prompt.raw_text_content() {
         Some(base) if !base.is_empty() => format!("{base}\n\n{dynamic}"),
-        _ => dynamic.to_owned(),
+        _ => dynamic,
     };
     prompt.content = vec![lk_agents_abi::ChatContent::Text(text)];
+    Ok(())
 }
 
 /// Snapshotted at creation: a reply in flight keeps the providers it started with.
@@ -666,6 +673,20 @@ pub struct PlannedReply {
 /// A local generation failure that cannot be retried.
 pub fn fatal(message: impl Into<String>) -> ProviderError {
     ProviderError::Local(lk_agents_abi::errors::ApiError::new(message).with_retryable(false))
+}
+
+#[cfg(test)]
+mod instructions_tests {
+    use super::*;
+
+    // Catches: a raising `@agent.instructions` function leaving the reply on the static prompt.
+    #[test]
+    fn a_failed_instructions_render_fails_the_request() {
+        let mut ctx = ChatContext::default();
+        let raised = lk_agents_abi::errors::HostError::new("boom");
+        assert!(append_instructions(&mut ctx, Err(raised)).is_err());
+        assert!(append_instructions(&mut ctx, Ok(String::new())).is_ok());
+    }
 }
 
 #[cfg(test)]

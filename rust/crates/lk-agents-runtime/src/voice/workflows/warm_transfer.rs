@@ -23,10 +23,10 @@ use std::time::Duration;
 
 use super::twilio as twilio_http;
 use lk_agents_voice::workflows::machine::warm_transfer::{
-    Origination, Transfer, TransferOutcome, TransferPlan, TransferTool, ends_merged_call,
-    human_agent_room_name, transfer_tools,
+    MergedCall, Origination, Transfer, TransferOutcome, TransferPlan, TransferTool,
+    follow_merged_call, human_agent_room_name, transfer_tools,
 };
-use lk_agents_voice::workflows::twilio::{self, TwilioError};
+use lk_agents_voice::workflows::twilio::{self, Abandon, Creation, TwilioError};
 
 use lk_agents_net::env::ProcessEnv;
 pub use lk_agents_voice::workflows::machine::warm_transfer::TransferConfig;
@@ -235,7 +235,9 @@ impl TransferRun {
             if let Some(outcome) = self.lock().core.take_outcome() {
                 return outcome;
             }
-            let _ = settled.changed().await;
+            if settled.changed().await.is_err() {
+                return Err(TransferFailed::NotRunning);
+            }
         }
     }
 
@@ -453,27 +455,17 @@ impl TransferRun {
         let mut events = caller.events();
         self.tasks.spawn(self.spawner.as_ref(), "warm transfer caller follower", async move {
             loop {
-                let event = match events.next().await {
-                    Ok(Some(event)) => event,
-                    Ok(None) => return,
-                    Err(error) => {
-                        log::error!(target: lk_agents_abi::LOG_TARGET, "caller room event stream failed after transfer: {error}");
+                let next = events.next().await;
+                match follow_merged_call(next.as_ref().map(Option::as_ref)) {
+                    MergedCall::Continues => {}
+                    MergedCall::Unfollowed => return,
+                    MergedCall::Ends { identity } => {
+                        log::info!(target: lk_agents_abi::LOG_TARGET, "participant disconnected from caller room: {identity}, closing");
+                        if let Err(err) = api.delete_room(caller_room).await {
+                            log::warn!(target: lk_agents_abi::LOG_TARGET, "failed to delete the caller's room: {err}");
+                        }
                         return;
                     }
-                };
-                let RoomEvent::ParticipantDisconnected { participant, .. } = event else {
-                    continue;
-                };
-                if ends_merged_call(participant.kind()) {
-                    log::info!(
-                        target: lk_agents_abi::LOG_TARGET,
-                        "participant disconnected from caller room: {}, closing",
-                        participant.identity()
-                    );
-                    if let Err(err) = api.delete_room(caller_room).await {
-                        log::warn!(target: lk_agents_abi::LOG_TARGET, "failed to delete the caller's room: {err}");
-                    }
-                    return;
                 }
             }
         });
@@ -536,60 +528,80 @@ async fn twilio_cancel(api: Arc<dyn TransferApi>, dial: TwilioDial, sid: String)
     }
 }
 
-/// The outbound call while the dial waits on it: still being created, or created.
+/// The outbound call while the dial waits on it: still being created, or how its creation ended.
 enum Call {
     Creating(tokio::sync::oneshot::Receiver<Result<String, DialError>>),
-    Created(String),
+    Settled(Creation),
 }
 
-/// Cancels the call when the dial does not get past it, however it ends (a failure or the run
-/// dropped): Twilio can create the call after the transfer gave up.
+/// What the dial heard of a creation: a transport failure or a creation task lost may follow a
+/// committed call.
+fn creation(result: &Result<String, DialError>) -> Creation {
+    match result {
+        Ok(sid) => Creation::Created(sid.clone()),
+        Err(DialError::Twilio(error)) => Creation::Failed(error.clone()),
+        Err(_) => Creation::Lost,
+    }
+}
+
+/// Retires the call when the dial does not get past it, however it ends (a failure or the run
+/// dropped), as [`twilio::abandon`] decides: Twilio can create the call after the transfer gave
+/// up, or create it and lose the answer.
 struct CancelOnDrop {
     background: Background,
     api: Arc<dyn TransferApi>,
     dial: TwilioDial,
+    /// The transfer's own human-agent room, the only room its call streams into.
+    room: String,
     call: Option<Call>,
 }
 
 impl CancelOnDrop {
-    /// The creation's outcome; the guard then holds the call it made, if any. Awaited in place,
-    /// so a dial dropped meanwhile still cancels what the creation goes on to make.
+    /// The creation's outcome, which the guard then holds. Awaited in place, so a dial dropped
+    /// meanwhile still retires what the creation goes on to make.
     async fn created(&mut self) -> Result<String, DialError> {
         let Some(Call::Creating(task)) = &mut self.call else {
             unreachable!("a creation is pending")
         };
         let result =
             task.await.unwrap_or_else(|err| Err(DialError::Host(HostError::new(err.to_string()))));
-        self.call = result.as_ref().ok().map(|sid| Call::Created(sid.clone()));
+        self.call = Some(Call::Settled(creation(&result)));
         result
     }
 }
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
-        let (api, dial, clock) =
-            (self.api.clone(), self.dial.clone(), self.background.clock.clone());
-        let cancel = |sid| async move {
-            let cancel = twilio_cancel(api, dial, sid);
-            if lk_agents_abi::timeout(&*clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, cancel)
+        let Some(call) = self.call.take() else { return };
+        let (api, dial, room, clock) =
+            (self.api.clone(), self.dial.clone(), self.room.clone(), self.background.clock.clone());
+        // The dial's owner is being dropped, and the call must still be retired.
+        self.background.cleanup("twilio call cancel", async move {
+            let creation = match call {
+                Call::Settled(creation) => creation,
+                Call::Creating(task) => match task.await {
+                    Ok(result) => creation(&result),
+                    Err(_) => Creation::Lost,
+                },
+            };
+            let retire = async move {
+                match twilio::abandon(creation) {
+                    Abandon::Nothing => {}
+                    Abandon::Cancel(sid) => twilio_cancel(api, dial, sid).await,
+                    Abandon::DeleteRoom => {
+                        if let Err(error) = api.delete_room(room).await {
+                            log::warn!(target: lk_agents_abi::LOG_TARGET, "could not delete the room of a Twilio call whose creation was lost: {error}");
+                        }
+                    }
+                }
+            };
+            if lk_agents_abi::timeout(&*clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, retire)
                 .await
                 .is_err()
             {
                 log::warn!(target: lk_agents_abi::LOG_TARGET, "Twilio call cancel timed out");
             }
-        };
-        match self.call.take() {
-            // The dial's owner is being dropped, and the call must still be cancelled.
-            Some(Call::Creating(task)) => {
-                self.background.cleanup("twilio call cancel", async move {
-                    if let Ok(Ok(sid)) = task.await {
-                        cancel(sid).await;
-                    }
-                });
-            }
-            Some(Call::Created(sid)) => self.background.cleanup("twilio call cancel", cancel(sid)),
-            None => {}
-        }
+        });
     }
 }
 
@@ -624,6 +636,7 @@ async fn twilio_originate(
         background: background.clone(),
         api: api.clone(),
         dial: dial.clone(),
+        room: room_name.to_owned(),
         call: Some(Call::Creating(create(from, token.clone()))),
     };
     let mut created = guard.created().await;
@@ -861,12 +874,26 @@ mod tests {
         }
     }
 
-    /// The project's services: the connector's URL, Twilio's answers as `twilio` gives them.
+    /// The project's services over one Twilio account that several transfers share. A creation
+    /// commits its call, streaming into the room its TwiML names, before it answers;
+    /// `lose_answer` then loses that answer. A call ends when cancelled by its SID, or once its
+    /// room is deleted (answered, it has nowhere to stream).
     #[derive(Default)]
     struct FakeApi {
         create_release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
         call_statuses: Mutex<Vec<String>>,
         create_reply: Mutex<Option<(u16, String)>>,
+        lose_answer: std::sync::atomic::AtomicBool,
+        /// The calls ringing or running: each SID with the room it streams into.
+        live: Mutex<Vec<(String, String)>>,
+        deleted_rooms: Mutex<Vec<String>>,
+        created: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FakeApi {
+        fn live_rooms(&self) -> Vec<String> {
+            self.live.lock().iter().map(|(_, room)| room.clone()).collect()
+        }
     }
 
     impl TransferApi for FakeApi {
@@ -875,29 +902,44 @@ mod tests {
         }
         fn connect_twilio_call(
             &self,
-            _: String,
+            room: String,
             _: String,
         ) -> BoxFuture<'_, Result<String, ApiError>> {
-            Box::pin(async { Ok("wss://connector.test".to_owned()) })
+            Box::pin(async move { Ok(format!("wss://connector.test/{room}")) })
         }
         fn post_form(
             &self,
             request: twilio_http::Request,
         ) -> BoxFuture<'_, Result<(u16, String), ApiError>> {
             Box::pin(async move {
-                if request.url.ends_with("/Calls.json") {
-                    let release = self.create_release.lock().take();
-                    if let Some(release) = release {
-                        let _ = release.await;
-                    }
-                    let reply = self.create_reply.lock().take();
-                    Ok(reply.unwrap_or((200, r#"{"sid":"late-call"}"#.to_owned())))
-                } else {
-                    let form = request.form;
-                    let status = form.iter().find(|(key, _)| key == "Status").unwrap().1.clone();
-                    self.call_statuses.lock().push(status);
-                    Ok((200, "{}".to_owned()))
+                let field = |name: &str| {
+                    let found = request.form.iter().find(|(key, _)| key == name);
+                    found.map(|(_, value)| value.clone()).unwrap()
+                };
+                if !request.url.ends_with("/Calls.json") {
+                    let sid = request.url.rsplit('/').next().unwrap().trim_end_matches(".json");
+                    self.live.lock().retain(|(live, _)| live != sid);
+                    self.call_statuses.lock().push(field("Status"));
+                    return Ok((200, "{}".to_owned()));
                 }
+                let release = self.create_release.lock().take();
+                if let Some(release) = release {
+                    release.await.expect("the test releases the creation");
+                }
+                let n = self.created.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let sid = format!("CA{n}");
+                let reply = self.create_reply.lock().take();
+                let reply = reply.unwrap_or((200, serde_json::json!({ "sid": sid }).to_string()));
+                if (200..300).contains(&reply.0) {
+                    let twiml = field("Twiml");
+                    let room = twiml.split("connector.test/").nth(1).unwrap();
+                    let room = room.split('"').next().unwrap().to_owned();
+                    self.live.lock().push((sid, room));
+                }
+                if self.lose_answer.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(ApiError::connection(None));
+                }
+                Ok(reply)
             })
         }
         fn move_participant(
@@ -908,9 +950,35 @@ mod tests {
         ) -> BoxFuture<'_, Result<(), ApiError>> {
             Box::pin(async move { unreachable!() })
         }
-        fn delete_room(&self, _: String) -> BoxFuture<'_, Result<(), ApiError>> {
-            Box::pin(async move { unreachable!() })
+        fn delete_room(&self, room: String) -> BoxFuture<'_, Result<(), ApiError>> {
+            Box::pin(async move {
+                self.live.lock().retain(|(_, live)| *live != room);
+                self.deleted_rooms.lock().push(room);
+                Ok(())
+            })
         }
+    }
+
+    fn dial() -> TwilioDial {
+        TwilioDial {
+            phone_number: "+15550100".to_owned(),
+            from_number: "+15550200".to_owned(),
+            account_sid: "account".to_owned(),
+            auth_token: "secret".to_owned(),
+            call_token: None,
+            original_caller_number: None,
+        }
+    }
+
+    /// Until `done` holds of the fake, as the dial's background cleanup runs.
+    async fn until(api: &FakeApi, done: impl Fn(&FakeApi) -> bool) {
+        for _ in 0..64 {
+            if done(api) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("the dial's cleanup did not run");
     }
 
     #[tokio::test]
@@ -967,14 +1035,7 @@ mod tests {
         let api =
             Arc::new(FakeApi { create_release: Mutex::new(Some(pending)), ..Default::default() });
         let port: Arc<dyn TransferApi> = api.clone();
-        let dial = TwilioDial {
-            phone_number: "+15550100".to_owned(),
-            from_number: "+15550200".to_owned(),
-            account_sid: "account".to_owned(),
-            auth_token: "secret".to_owned(),
-            call_token: None,
-            original_caller_number: None,
-        };
+        let dial = dial();
         let clock = lk_agents_abi::VirtualClock::new();
         let room: Arc<dyn RtcRoom> = Arc::new(Untouched);
         let mut dialing = Box::pin(twilio_originate(
@@ -997,13 +1058,35 @@ mod tests {
         drop(dialing);
         assert_eq!(spawner.started.load(std::sync::atomic::Ordering::SeqCst), 2);
         release.send(()).unwrap();
-        for _ in 0..64 {
-            if !api.call_statuses.lock().is_empty() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+        until(&api, |api| !api.call_statuses.lock().is_empty()).await;
         assert_eq!(*api.call_statuses.lock(), ["canceled"]);
+        assert!(api.live.lock().is_empty(), "the known SID is cancelled directly");
+        assert!(api.deleted_rooms.lock().is_empty(), "no room is deleted for a known call");
+    }
+
+    // Catches: a creation Twilio committed whose answer was lost leaking a ringing leg, or its
+    // cleanup reaching another transfer's call from the same caller id to the same number: the
+    // dial fails, its own human-agent room is deleted, and the other call rings on.
+    #[tokio::test]
+    async fn a_lost_creation_deletes_its_own_room_and_leaves_a_concurrent_call() {
+        let api = Arc::new(FakeApi::default());
+        let port: Arc<dyn TransferApi> = api.clone();
+        let clock = lk_agents_abi::VirtualClock::new();
+        let room: Arc<dyn RtcRoom> = Arc::new(Untouched);
+        let spawner: Arc<dyn Spawner> = Arc::new(lk_agents_net::task::TokioSpawner::current());
+        let background =
+            Background::new(Arc::default(), spawner, Arc::new(lk_agents_abi::VirtualClock::new()));
+        // Another transfer's call from the same caller id to the same number, still ringing.
+        api.live.lock().push(("CA-other".to_owned(), "other".to_owned()));
+
+        api.lose_answer.store(true, std::sync::atomic::Ordering::SeqCst);
+        let dial = dial();
+        let lost = twilio_originate(&port, &dial, "lost", &room, None, &clock, background);
+        assert!(matches!(lost.await, Err(DialError::Api(_))), "the dial fails on the lost answer");
+        until(&api, |api| !api.deleted_rooms.lock().is_empty()).await;
+        assert_eq!(*api.deleted_rooms.lock(), ["lost"]);
+        assert_eq!(api.live_rooms(), ["other"], "only the lost creation's call ended");
+        assert!(api.call_statuses.lock().is_empty(), "no call was cancelled by a guessed SID");
     }
 
     // Catches: a Twilio redirect or error reply taken as a created call, or its error text lost:
@@ -1013,16 +1096,8 @@ mod tests {
         let api = FakeApi::default();
         *api.create_reply.lock() = Some((302, r#"{"code":20003}"#.to_owned()));
         let api: Arc<dyn TransferApi> = Arc::new(api);
-        let dial = TwilioDial {
-            phone_number: "+15550100".to_owned(),
-            from_number: "+15550200".to_owned(),
-            account_sid: "account".to_owned(),
-            auth_token: "secret".to_owned(),
-            call_token: None,
-            original_caller_number: None,
-        };
         let error =
-            twilio_create_call(api, dial, "+15550200".to_owned(), "<Response/>".into(), None)
+            twilio_create_call(api, dial(), "+15550200".to_owned(), "<Response/>".into(), None)
                 .await
                 .unwrap_err();
         assert_eq!(error.to_string(), "Twilio request failed (HTTP 302, code 20003)");

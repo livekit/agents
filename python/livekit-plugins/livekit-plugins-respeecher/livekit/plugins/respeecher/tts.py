@@ -174,7 +174,6 @@ class TTS(tts.TTS):
         # WebSocket protocol does not support custom headers, using query parameter
         ws_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
         if not ws_url.startswith("wss://"):
-            logger.error("Insecure WebSocket connection detected, wss:// required")
             raise APIConnectionError("Secure WebSocket connection (wss://) required")
 
         full_ws_url = f"{ws_url}{self._opts.model}/tts/websocket?api_key={self._opts.api_key}&source={API_VERSION_HEADER}&version={API_VERSION}"
@@ -381,14 +380,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
             )
             input_ended = True
+            # the read deadline runs only from here: before, a pause in the text owes nothing
+            self._core_attempts.expect_response(final=True)
 
         async def _recv_task(ws: http.WebSocket) -> None:
             while True:
-                msg = await ws.receive(timeout=self._conn_options.read_timeout)
+                msg = await ws.receive()
                 if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "Respeecher connection closed unexpectedly", request_id=context_id
-                    )
+                    raise ws.close_error("Respeecher connection closed unexpectedly")
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("Unexpected Respeecher message type %s", msg.type)
@@ -405,11 +404,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 if data.get("type") == "error":
-                    raise APIError(f"Respeecher returned error: {data.get('error')}")
+                    # in-band errors reject the request (voice, format, quota): retrying repeats it
+                    raise APIError(
+                        "Respeecher returned an error",
+                        retryable=False,
+                        detail=str(data.get("error")),
+                    )
 
                 if data.get("type") == "chunk":
-                    audio_data = base64.b64decode(data["data"])
-                    output_emitter.push(audio_data)
+                    self._core_attempts.audio_received()
+                    output_emitter.push(base64.b64decode(data["data"]))
 
                 elif data.get("type") == "done":
                     if input_ended:

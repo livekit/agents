@@ -542,7 +542,11 @@ async def test_gemini_stt_emits_the_finalized_transcript_on_arrival(gemini_live:
     )
     await gemini_live.send(serverContent={"generationComplete": True, "turnComplete": True})
     async with stream:
-        events = [(e.type, e.alternatives[0].text) async for e in stream]
+        events = [
+            (e.type, e.alternatives[0].text)
+            async for e in stream
+            if e.type != stt.SpeechEventType.RECOGNITION_USAGE
+        ]
 
     assert events == [
         (stt.SpeechEventType.INTERIM_TRANSCRIPT, "Greetings."),

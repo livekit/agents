@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from json import JSONDecodeError
 from types import TracebackType
 
@@ -8,13 +7,11 @@ from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     http,
 )
 
-from .log import logger
 from .types import PersonaConfig, SessionOptions
 
 DEFAULT_API_URL = "https://api.anam.ai"
@@ -28,7 +25,7 @@ class AnamAPI:
     """
     An asynchronous client for interacting with the Anam API.
 
-    This class handles authentication, request signing, and retries.
+    This class handles authentication and retries.
     """
 
     def __init__(
@@ -144,46 +141,17 @@ class AnamAPI:
     async def _post(
         self, endpoint: str, payload: dict[str, JsonValue], headers: dict[str, str]
     ) -> SessionResponse:
-        """
-        Internal method to make a POST request with retry logic.
-        """
         url = f"{self._api_url}{endpoint}"
         session = self._session or http.http_session()
-        async with self._conn_options.total_deadline():
-            for attempt in range(self._conn_options.max_retry + 1):
-                try:
-                    async with session.post(
-                        url, headers=headers, json=payload, conn_options=self._conn_options
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise APIStatusError(
-                                f"Server returned an error for {url}: {response.status}",
-                                status_code=response.status,
-                                body=text,
-                            )
-                        return SessionResponse.model_validate(await response.json())
-                except (ValidationError, JSONDecodeError) as exc:
-                    raise APIConnectionError(
-                        "Anam returned an invalid response", retryable=False
-                    ) from exc
-                except APIStatusError as e:
-                    if not e.retryable:
-                        raise
-                    logger.warning(
-                        f"API request to {url} failed on attempt {attempt + 1}",
-                        extra={"error": str(e)},
-                    )
-                    if attempt >= self._conn_options.max_retry:
-                        raise
-                    await asyncio.sleep(self._conn_options.retry_interval)
-                except APIConnectionError as e:
-                    logger.warning(
-                        f"API request to {url} failed on attempt {attempt + 1}",
-                        extra={"error": str(e)},
-                    )
-                    if attempt >= self._conn_options.max_retry:
-                        raise APIConnectionError(f"Failed to connect to Anam API at {url}") from e
-                    await asyncio.sleep(self._conn_options.retry_interval)
 
-        raise APIConnectionError("Failed to call Anam API after all retries.")
+        async def request() -> SessionResponse:
+            async with session.post(
+                url, headers=headers, json=payload, conn_options=self._conn_options
+            ) as response:
+                await response.raise_for_status()
+                try:
+                    return SessionResponse.model_validate(await response.json())
+                except (ValidationError, JSONDecodeError) as exc:
+                    raise APIError("Anam returned an invalid response", retryable=False) from exc
+
+        return await http.retry_request(request, conn_options=self._conn_options)

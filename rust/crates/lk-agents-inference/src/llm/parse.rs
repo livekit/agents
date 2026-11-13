@@ -97,6 +97,8 @@ pub struct ChoiceAccumulator {
     fnc_raw_arguments: Option<String>,
     tool_extra: Option<Extra>,
     tool_index: Option<i64>,
+    /// The completion's id, for the chunk [`finish`](Self::finish) closes a call with.
+    id: String,
 }
 
 impl ChoiceAccumulator {
@@ -107,6 +109,7 @@ impl ChoiceAccumulator {
     /// `_parse_choice`. `None` means "this choice produced nothing to forward".
     pub fn parse_choice(&mut self, id: &str, choice: &WireChoice) -> Option<LlmChunk> {
         // livekit/agents#688: Azure content filtering sends a choice with no delta.
+        id.clone_into(&mut self.id);
         let delta = choice.delta.as_ref()?;
         let content = delta.content.clone();
 
@@ -141,23 +144,11 @@ impl ChoiceAccumulator {
             }
         }
 
-        let finished_with_call = matches!(choice.finish_reason.as_deref(), Some("tool_calls") | Some("stop"))
-            // An empty accumulated id means there is no call to close.
-            && self.tool_call_id.as_deref().is_some_and(|s| !s.is_empty());
-        if finished_with_call {
-            closed.push(self.take_call());
+        if matches!(choice.finish_reason.as_deref(), Some("tool_calls") | Some("stop")) {
+            closed.extend(self.open_call());
         }
         if !closed.is_empty() {
-            return Some(LlmChunk {
-                id: id.to_owned(),
-                delta: Some(ChoiceDelta {
-                    role: Some(Role::Assistant),
-                    content,
-                    tool_calls: closed,
-                    extra: delta.extra_content.clone(),
-                }),
-                ..Default::default()
-            });
+            return Some(calls_chunk(id, content, closed, delta.extra_content.clone()));
         }
 
         // `if not delta.content and not delta_extra`: an empty delta would start the TTFT clock.
@@ -179,6 +170,17 @@ impl ChoiceAccumulator {
         })
     }
 
+    /// The stream ended: a call still open closes, though no `finish_reason` came.
+    pub fn finish(&mut self) -> Option<LlmChunk> {
+        let call = self.open_call()?;
+        Some(calls_chunk(&self.id, None, vec![call], None))
+    }
+
+    /// The call accumulated so far; an empty id means there is none.
+    fn open_call(&mut self) -> Option<FunctionToolCall> {
+        self.tool_call_id.as_deref().is_some_and(|s| !s.is_empty()).then(|| self.take_call())
+    }
+
     /// `tool_index` is not cleared: the next boundary compares against it.
     fn take_call(&mut self) -> FunctionToolCall {
         FunctionToolCall {
@@ -187,6 +189,19 @@ impl ChoiceAccumulator {
             call_id: self.tool_call_id.take().unwrap_or_default(),
             extra: self.tool_extra.take(),
         }
+    }
+}
+
+fn calls_chunk(
+    id: &str,
+    content: Option<String>,
+    tool_calls: Vec<FunctionToolCall>,
+    extra: Option<Extra>,
+) -> LlmChunk {
+    LlmChunk {
+        id: id.to_owned(),
+        delta: Some(ChoiceDelta { role: Some(Role::Assistant), content, tool_calls, extra }),
+        ..Default::default()
     }
 }
 
@@ -234,6 +249,10 @@ impl lk_agents_abi::llm::inference::ChoiceParser for ChoiceParser {
         let choice: WireChoice =
             serde_json::from_value(choice).map_err(|e| Invalid(format!("choice: {e}")))?;
         Ok(self.accumulator.parse_choice(&id, &choice))
+    }
+
+    fn finish(&mut self) -> Option<LlmChunk> {
+        self.accumulator.finish()
     }
 }
 

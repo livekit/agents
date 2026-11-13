@@ -674,8 +674,12 @@ impl Http {
             self.phase.wait_until(|p| (*p == Phase::Done).then_some(())).await;
             return Ok(ExchangeEvent::Disconnected);
         }
-        if std::mem::take(&mut request.expect_continue) {
-            self.response.lock().await.interim_continue().await;
+        // A client that cannot hear the `100 Continue` is gone.
+        if std::mem::take(&mut request.expect_continue)
+            && self.response.lock().await.interim_continue().await.is_err()
+        {
+            request.disconnected = true;
+            return Ok(ExchangeEvent::Disconnected);
         }
         match request.next().await {
             Ok((data, more)) => Ok(ExchangeEvent::Body { data, more }),
@@ -900,10 +904,11 @@ impl Response {
         Ok(!more)
     }
 
-    async fn interim_continue(&mut self) {
+    async fn interim_continue(&mut self) -> Result<(), ExchangeError> {
         if self.state == State::Waiting && self.version_11 {
-            let _ = self.write_all(&[b"HTTP/1.1 100 Continue\r\n\r\n"]).await;
+            return self.write_all(&[b"HTTP/1.1 100 Continue\r\n\r\n"]).await;
         }
+        Ok(())
     }
 
     async fn fail(&mut self, completion: HttpCompletion, reason: &str) -> Failure {

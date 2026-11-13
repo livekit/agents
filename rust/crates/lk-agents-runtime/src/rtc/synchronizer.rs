@@ -261,13 +261,17 @@ impl lk_agents_abi::voice::rtc::media::AVSynchronizer for AVSynchronizer {
             let inner = self.inner.clone();
             self.close_tasks.spawn(&*self.spawner, "RTC synchronizer close", async move {
                 let close = async {
+                    let mut stopped = Ok(());
                     if let Some(worker) = worker {
                         worker.cancel();
-                        let _ = worker.await;
+                        if let Err(lk_agents_abi::TaskError::Panicked(message)) = worker.await {
+                            let message = format!("AVSynchronizer worker panicked: {message}");
+                            stopped = Err(RtcError::host(message));
+                        }
                     }
                     let audio = inner.audio.close(&telemetry::Cx::NONE).await;
                     let video = inner.video.close(&telemetry::Cx::NONE).await;
-                    audio.and(video)
+                    stopped.and(audio).and(video)
                 };
                 let bound = lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
                 let outcome = lk_agents_abi::timeout(&*inner.clock, bound, close).await;

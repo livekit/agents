@@ -456,7 +456,10 @@ impl VoiceRuntime {
             let queue = queue.clone();
             let speech = Arc::clone(&handle);
             let reload = async move {
-                let _ = reload_history(&speech, storage, local, &queue).await;
+                match reload_history(&speech, storage, local, &queue).await {
+                    // Reported to the core either way, which hands it to the playing speech.
+                    Ok(_) | Err(_) => {}
+                }
             };
             self.speeches.spawn(handle.id(), "speech partition_key reload", reload);
         }
@@ -684,18 +687,14 @@ impl VoiceRuntime {
         cx: telemetry::Cx,
     ) {
         let shared = Arc::clone(&self.shared);
-        let cancelled = GenEvent::ToolHandlingTemplateRendered { rendering, text: None };
+        let cancelled = GenEvent::ToolHandlingTemplateRendered { rendering, text: Ok(None) };
         let mut callback = PendingHostCallback::bind(&shared, hosted, cancelled);
         let work = async move {
             let hosted = callback.hosted.as_ref().expect("callback is pending");
-            let rendered = hosted
+            let text = hosted
                 .host
                 .render_template(&cx, &hosted.invocation, template.key(), template)
                 .await;
-            let text = rendered.unwrap_or_else(|e| {
-                log::error!(target: lk_agents_abi::LOG_TARGET, "a tool_handling template failed: {e}");
-                None
-            });
             callback.completed();
             shared.report(GenEvent::ToolHandlingTemplateRendered { rendering, text });
         };

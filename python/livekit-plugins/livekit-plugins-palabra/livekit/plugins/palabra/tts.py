@@ -121,7 +121,8 @@ class TTS(tts.TTS):
             ValueError: no ``api_key`` argument and no ``PALABRA_API_KEY`` in the environment.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            # the server caps a single text message at 1024 characters
+            capabilities=tts.TTSCapabilities(streaming=True, max_text_len=1024),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -182,10 +183,6 @@ class TTS(tts.TTS):
             self._opts.deaccent_strength = deaccent_strength
         if is_given(model):
             self._opts.model = model
-
-    def _core_max_text_len(self) -> int | None:
-        # the server caps a single text message at 1024 characters
-        return 1024
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
@@ -294,7 +291,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if event is None:
                     raise APIConnectionError("palabra tts session closed unexpectedly")
                 if isinstance(event, ServerError):
-                    logger.error("palabra tts error: %s", event.code)
                     raise APIError(
                         f"palabra tts error: {event.code}",
                         retryable=event.code in _RETRYABLE_ERROR_CODES,
@@ -341,8 +337,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(str(e), status_code=401, request_id=None, body=None) from None
         except TaskError as e:
             # `code` is a short server enum (e.g. VALIDATION_ERROR); `desc` is free-form
-            # server text, so only the code is surfaced.
-            raise APIConnectionError(f"palabra tts error: {e.code}") from None
+            # server text.
+            raise APIConnectionError(f"palabra tts error: {e.code}", detail=e.desc) from None
         except (SessionError, PalabraError) as e:
             # The SDK interpolates the underlying websockets error into its message, and the
             # connect URL carries the API key as a ?token= query parameter -- so neither

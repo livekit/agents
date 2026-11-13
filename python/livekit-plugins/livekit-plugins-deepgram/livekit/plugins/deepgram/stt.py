@@ -18,7 +18,6 @@ import asyncio
 import dataclasses
 import json
 import os
-import time
 import weakref
 from collections import Counter
 from collections.abc import Sequence
@@ -30,7 +29,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     LanguageCode,
     http,
     stt,
@@ -43,7 +41,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
-from ._utils import PeriodicCollector, to_deepgram_url
+from ._utils import to_deepgram_url
 from .log import logger
 from .models import (
     STREAM_RESPONSE,
@@ -463,21 +461,13 @@ class SpeechStream(stt.RecognizeStream):
         self._session = http_session
         self._opts.endpoint_url = base_url
         self._speaking = False
-        self._audio_duration_collector = PeriodicCollector(
-            callback=self._on_audio_duration_report,
-            duration=5.0,
-        )
+        self._interim_shown = False  # an interim is on screen that no final replaced yet
+        self._heard_text = False  # the current speech produced words
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         # keyterms set while the user is speaking; applied at END_OF_SPEECH (latest wins)
         self._pending_keyterm: list[str] | None = None
-
-        # Track how much duration has already been reported so we can emit
-        # the connection-lifetime remainder on close, matching what Deepgram
-        # actually bills (which includes WebSocket open/teardown overhead
-        # beyond the pushed audio frames).
-        self._reported_duration: float = 0.0
 
     def update_options(
         self,
@@ -565,10 +555,16 @@ class SpeechStream(stt.RecognizeStream):
         else:
             self.update_options(keyterm=keyterms)
 
-    def _on_end_of_speech(self) -> None:
+    def _end_speech(self) -> None:
+        self._interim_shown = False
+        self._heard_text = False
+        if self._speaking:
+            self._speaking = False
+            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
         if self._pending_keyterm is not None:
-            self.update_options(keyterm=self._pending_keyterm)
+            self._opts.keyterm = self._pending_keyterm
             self._pending_keyterm = None
+            self._reconnect_event.set()
 
     async def _run(self) -> None:
         closing_ws = False
@@ -599,7 +595,6 @@ class SpeechStream(stt.RecognizeStream):
                 logger.warning(f"Deepgram keepalive task exited: {e}")
                 return
 
-        @utils.log_exceptions(logger=logger)
         async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
@@ -622,11 +617,9 @@ class SpeechStream(stt.RecognizeStream):
                         has_ended = True
 
                     for frame in frames:
-                        self._audio_duration_collector.push(frame.duration)
                         await ws.send_bytes(frame.data.tobytes())
 
                     if has_ended:
-                        self._audio_duration_collector.flush()
                         await ws.send_str(SpeechStream._FINALIZE_MSG)
                         has_ended = False
 
@@ -643,7 +636,6 @@ class SpeechStream(stt.RecognizeStream):
                     return
                 raise APIConnectionError("deepgram connection closed unexpectedly") from e
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
@@ -661,29 +653,22 @@ class SpeechStream(stt.RecognizeStream):
                     if closing_ws or self._session.closed:
                         return
 
-                    # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="deepgram connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("deepgram connection closed unexpectedly")
 
                 if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
                     continue
 
-                try:
-                    self._process_stream_event(STREAM_RESPONSE.validate_json(msg.data))
-                except Exception:
-                    logger.exception("failed to process deepgram message")
+                self._process_stream_event(STREAM_RESPONSE.validate_json(msg.data))
 
         ws: http.WebSocket | None = None
 
         while True:
-            conn_start_time = 0.0
+            # a new connection starts outside any speech, with the current options
+            self._end_speech()
+            self._reconnect_event.clear()
             try:
                 ws = await self._connect_ws()
-                conn_start_time = time.perf_counter()
                 async with utils.aio.TaskSet() as tasks:
                     io = asyncio.gather(
                         tasks.spawn(send_task(ws)),
@@ -698,18 +683,6 @@ class SpeechStream(stt.RecognizeStream):
             finally:
                 if ws is not None:
                     await ws.close()
-                    # Deepgram bills WebSocket lifetime, not just audio
-                    # frames pushed.  Emit the remainder between the
-                    # connection's wall-clock lifetime and the frame
-                    # durations we've already reported so usage reflects
-                    # what the provider actually charges for.
-                    if conn_start_time:
-                        self._audio_duration_collector.flush()
-                        lifetime = time.perf_counter() - conn_start_time
-                        remainder = lifetime - self._reported_duration
-                        if remainder > 0:
-                            self._on_audio_duration_report(remainder)
-                        self._reported_duration = 0.0
 
     async def _connect_ws(self) -> http.WebSocket:
         live_config: dict[str, object] = {
@@ -771,16 +744,6 @@ class SpeechStream(stt.RecognizeStream):
         )
         return ws
 
-    def _on_audio_duration_report(self, duration: float) -> None:
-        self._reported_duration += duration
-        usage_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.RECOGNITION_USAGE,
-            request_id=self._request_id,
-            alternatives=[],
-            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-        )
-        self.send(usage_event)
-
     def _process_stream_event(self, event: StreamResponse) -> None:
         assert self._opts.language is not None
 
@@ -817,6 +780,8 @@ class SpeechStream(stt.RecognizeStream):
             # a transcript with text, we should start speaking. It's rare but has
             # been observed.
             if len(alts) > 0 and alts[0].text:
+                self._heard_text = True
+                self._interim_shown = not is_final_transcript
                 if not self._speaking:
                     self._speaking = True
                     start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
@@ -837,21 +802,29 @@ class SpeechStream(stt.RecognizeStream):
                     )
                     self.send(interim_event)
 
-            # if we receive an endpoint, only end the speech if
-            # we either had a SpeechStarted event or we have a seen
-            # a non-empty transcript (deepgram doesn't have a SpeechEnded event)
-            if is_endpoint and self._speaking:
-                self._speaking = False
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-                self._on_end_of_speech()
+            elif is_final_transcript:
+                if self._interim_shown:
+                    # the interim was retracted: clear it rather than leave it standing
+                    self._interim_shown = False
+                    self.send(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                            request_id=request_id,
+                            alternatives=[stt.SpeechData(language=self._opts.language, text="")],
+                        )
+                    )
+                if not self._heard_text:
+                    # a SpeechStarted no words followed: no endpoint will ever close it
+                    is_endpoint = True
+
+            # deepgram has no SpeechEnded event: an endpoint ends the speech
+            if is_endpoint:
+                self._end_speech()
 
         elif event.type == "UtteranceEnd":
             # Fired when utterance_end_ms is set and the configured silence duration has elapsed.
             # https://developers.deepgram.com/docs/understand-endpointing-interim-results
-            if self._speaking:
-                self._speaking = False
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-                self._on_end_of_speech()
+            self._end_speech()
         elif event.type == "Metadata":
             pass  # metadata is too noisy
         else:

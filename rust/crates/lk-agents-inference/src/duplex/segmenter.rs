@@ -173,7 +173,6 @@ impl Segmenter {
         let open = match gate_open {
             Ok(open) => open,
             Err(error) => {
-                log::error!(target: lk_agents_abi::LOG_TARGET, "duplex audio stream failed: {error}");
                 out.events.push(Event::Error(RealtimeModelError {
                     timestamp: now,
                     label: self.label.clone(),

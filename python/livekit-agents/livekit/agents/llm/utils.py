@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import inspect
-import json
 from collections.abc import Callable
 from typing import (
     TYPE_CHECKING,
@@ -13,7 +12,6 @@ from typing import (
     get_type_hints,
 )
 
-import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticSerializationError, PydanticUndefined, to_json
@@ -36,11 +34,10 @@ from .._generated.provider_format import DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE
 from .._generated.public_llm_utils import *  # noqa: F403
 from ..log import logger
 from .chat_context import ChatContext, ChatRole, ImageContent
-from .tool_context import FunctionTool, RawFunctionTool, ToolError
+from .tool_context import FunctionTool, RawFunctionTool
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
-    from .chat_context import FunctionCall
 
 _ContextT = TypeVar("_ContextT")
 
@@ -216,55 +213,6 @@ def parse_function_arguments(json_arguments: str) -> dict[str, object]:
     tokens stripped, double encoding unwrapped). Raises ``ValueError`` when unrecoverable or not
     a dict."""
     return _core.parse_function_arguments(json_arguments)
-
-
-def prepare_function_arguments(
-    *,
-    fnc: FunctionTool | RawFunctionTool,
-    json_arguments: str | dict[str, object],
-    call_ctx: RunContext[_ContextT] | None = None,
-    fnc_call: FunctionCall | None = None,
-) -> tuple[tuple[object, ...], dict[str, object]]:
-    """The positional and keyword arguments to call a function tool with the LLM's arguments.
-
-    Validation failures (bad JSON, invalid or missing parameters) raise :class:`ToolError` so
-    the LLM gets a concrete message and can self-correct. When ``fnc_call`` is given and
-    ``json_arguments`` is a string, the repaired JSON is written back to ``fnc_call.arguments``.
-    """
-    if isinstance(json_arguments, dict):
-        args_dict = json_arguments
-    else:
-        try:
-            args_dict = parse_function_arguments(json_arguments)
-        except ValueError as e:
-            logger.error(
-                f"error parsing arguments for `{fnc.info.name}`",
-                extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
-            )
-            raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
-
-        # before validation, so a validation failure still leaves valid JSON in the history
-        if fnc_call is not None:
-            canonical = json.dumps(args_dict, default=str)
-            if canonical != json_arguments:
-                fnc_call.arguments = canonical
-
-    try:
-        return bind_function_arguments(fnc, validated_arguments(fnc, args_dict), call_ctx)
-    except ToolError:
-        raise
-    except (pydantic.ValidationError, ValueError, TypeError) as e:
-        logger.error(
-            f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
-        )
-        raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
-    except Exception:
-        logger.exception(
-            f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
-        )
-        raise
 
 
 def validated_arguments(

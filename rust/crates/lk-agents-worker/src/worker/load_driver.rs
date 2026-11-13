@@ -1,6 +1,6 @@
 use super::{Completion, Outbox, Worker};
 use crate::CpuMonitor;
-use crate::load::{STALE_AFTER, STARTUP_WINDOW};
+use crate::load::{LoadError, STALE_AFTER, STARTUP_WINDOW};
 use futures_util::FutureExt;
 use std::time::Duration;
 
@@ -18,23 +18,40 @@ impl Worker {
         let (host, clock) = (self.host.clone(), self.clock.clone());
         self.operations.push(
             async move {
-                let load = lk_agents_abi::timeout(&*clock, STALE_AFTER, host.user_load())
-                    .await
-                    .unwrap_or(Some(f32::NAN));
-                Completion::Load(load)
+                let load = lk_agents_abi::timeout(&*clock, STALE_AFTER, host.user_load()).await;
+                // `Ok(None)`: no `load_fnc`, the CPU is sampled instead.
+                Completion::Load(match load {
+                    Ok(None) => None,
+                    sample => Some(crate::load::user_load(sample.ok().flatten())),
+                })
             }
             .boxed(),
         );
     }
 
-    pub(super) fn complete_user_load(&mut self, load: Option<f32>, outbox: &mut Outbox) {
+    /// A failing `load_fnc` is logged when it starts failing, or fails another way, and when
+    /// it recovers; never per sample.
+    pub(super) fn complete_user_load(
+        &mut self,
+        load: Option<Result<f32, LoadError>>,
+        outbox: &mut Outbox,
+    ) {
         if let Some(load) = load {
             self.load_pending = false;
-            if load.is_finite() && (0.0..=1.0).contains(&load) {
-                self.worker_load = load;
-                self.load_health.last_valid = Some(self.load_requested);
-            } else {
-                log::warn!(target: lk_agents_abi::LOG_TARGET, "invalid or timed out worker load sample");
+            match load {
+                Ok(load) => {
+                    self.worker_load = load;
+                    self.load_health.last_valid = Some(self.load_requested);
+                    if self.load_failure.take().is_some() {
+                        log::info!(target: lk_agents_abi::LOG_TARGET, "load_fnc recovered");
+                    }
+                }
+                Err(error) => {
+                    let failure = Some(std::mem::discriminant(&error));
+                    if std::mem::replace(&mut self.load_failure, failure) != failure {
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, "the worker keeps its last load: {error}");
+                    }
+                }
             }
             self.finish_load(outbox);
             return;

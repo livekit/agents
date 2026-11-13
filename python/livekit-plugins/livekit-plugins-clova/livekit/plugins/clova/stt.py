@@ -35,9 +35,9 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.utils.media import AudioConverter
 from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
 
-from .common import resample_audio
 from .log import logger
 from .models import ClovaSpeechAPIType, ClovaSttLanguages, clova_languages_mapping
 
@@ -113,10 +113,9 @@ class STT(stt.STT):
             lang = clova_languages_mapping.get(normalized, normalized)
         payload = json.dumps({"language": lang, "completion": "sync"})
 
-        buffer = rtc.combine_audio_frames(buffer)
-        buffer_bytes = resample_audio(
-            buffer.data.tobytes(), buffer.sample_rate, CLOVA_INPUT_SAMPLE_RATE
-        )
+        converter = AudioConverter(CLOVA_INPUT_SAMPLE_RATE, 1)
+        frames = [*converter.push(rtc.combine_audio_frames(buffer)), *converter.flush()]
+        buffer_bytes = b"".join(frame.data.tobytes() for frame in frames)
 
         io_buffer = io.BytesIO()
         with wave.open(io_buffer, "wb") as wav:

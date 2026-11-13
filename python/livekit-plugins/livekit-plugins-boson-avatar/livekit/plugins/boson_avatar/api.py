@@ -14,13 +14,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import os
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 from pydantic import JsonValue, TypeAdapter
@@ -28,10 +25,8 @@ from pydantic import JsonValue, TypeAdapter
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    APITimeoutError,
     NotGivenOr,
     http,
     utils,
@@ -252,74 +247,36 @@ class BosonAvatarAPI:
             **(headers or {}),
         }
         url = f"{self._api_url}{path}"
-        async with self._conn_options.total_deadline():
-            for attempt in range(self._conn_options.max_retry + 1):
-                retry_after: float | None = None
+        session = self._ensure_http_session().with_request_id("x-request-id")
+
+        async def request() -> tuple[int, dict[str, JsonValue]]:
+            async with session.request(
+                method, url, json=json, headers=request_headers, conn_options=self._conn_options
+            ) as response:
                 try:
-                    async with self._ensure_http_session().request(
-                        method,
-                        url,
-                        json=json,
-                        headers=request_headers,
-                        conn_options=self._conn_options,
-                    ) as response:
-                        payload = await _read_payload(response)
-                        if response.status in success_statuses:
-                            if payload is None and allow_empty and response.status == 204:
-                                return response.status, {}
-                            if not isinstance(payload, dict):
-                                raise APIStatusError(
-                                    "Boson Avatar API returned a non-object JSON response",
-                                    status_code=response.status,
-                                    body=payload,
-                                    retryable=False,
-                                )
-                            return response.status, payload
-
-                        request_id = response.headers.get("x-request-id")
-                        retry_after = _parse_retry_after(response.headers.get("Retry-After"))
-                        if isinstance(payload, dict):
-                            error_body = payload.get("error")
-                            if isinstance(error_body, dict):
-                                request_id = (
-                                    str(error_body.get("request_id") or request_id or "") or None
-                                )
-                        raise APIStatusError(
-                            "Boson Avatar API returned an error",
-                            status_code=response.status,
-                            request_id=request_id,
-                            body=payload,
-                            retryable=not 200 <= response.status < 400,
-                        )
-                except APITimeoutError:
-                    error_type = "timeout"
-                except APIConnectionError:
-                    error_type = "client_error"
+                    await response.raise_for_status()
                 except APIStatusError as exc:
-                    if not exc.retryable:
-                        raise
-                    error_type = type(exc).__name__
+                    exc.request_id = _error_request_id(exc.body) or exc.request_id
+                    raise
+                if response.status not in success_statuses:
+                    raise APIStatusError(
+                        "Boson Avatar API returned an unexpected status",
+                        status_code=response.status,
+                        retryable=False,
+                    )
+                payload = await _read_payload(response)
+                if payload is None and allow_empty and response.status == 204:
+                    return response.status, {}
+                if not isinstance(payload, dict):
+                    raise APIStatusError(
+                        "Boson Avatar API returned a non-object JSON response",
+                        status_code=response.status,
+                        body=payload,
+                        retryable=False,
+                    )
+                return response.status, payload
 
-                if attempt == self._conn_options.max_retry:
-                    break
-
-                logger.warning(
-                    "boson avatar api request failed, retrying",
-                    extra={
-                        "attempt": attempt + 1,
-                        "error_type": error_type,
-                        "method": method,
-                        "lk.pii.path": path,
-                    },
-                )
-                retry_delay = self._conn_options.interval_for_retry(attempt)
-                if retry_after is not None:
-                    retry_delay = max(retry_delay, retry_after)
-                await asyncio.sleep(retry_delay)
-
-        # Provider exceptions and status bodies can contain request payloads or
-        # credentials. Expose a stable SDK error without retaining that context.
-        raise APIConnectionError("Failed to call Boson Avatar API after all retries.") from None
+        return await http.retry_request(request, conn_options=self._conn_options)
 
 
 def _resolve_api_key(value: NotGivenOr[str]) -> str | None:
@@ -409,20 +366,15 @@ async def _read_payload(response: http.HttpResponse) -> JsonValue:
         return {"raw": text}
 
 
-def _parse_retry_after(value: str | None) -> float | None:
-    if not value:
-        return None
+def _error_request_id(body: object) -> str | None:
+    """The request id Boson puts in its error body."""
     try:
-        return max(0.0, float(value))
+        payload = _JSON_VALUE.validate_json(str(body))
     except ValueError:
-        pass
-    try:
-        retry_at = parsedate_to_datetime(value)
-    except (TypeError, ValueError, OverflowError):
         return None
-    if retry_at.tzinfo is None:
-        retry_at = retry_at.replace(tzinfo=UTC)
-    return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
+    error = payload.get("error") if isinstance(payload, dict) else None
+    request_id = error.get("request_id") if isinstance(error, dict) else None
+    return str(request_id) if request_id else None
 
 
 __all__ = ["AvatarInfo", "AvatarSessionInfo", "BosonAvatarAPI", "list_avatars"]

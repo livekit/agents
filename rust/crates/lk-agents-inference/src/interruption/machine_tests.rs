@@ -512,7 +512,10 @@ fn a_server_error_carries_the_code_as_status_and_the_text_as_body() {
         .unwrap_err();
     assert_eq!(err.error.status_code, Some(503));
     assert_eq!(err.error.message, "LiveKit Adaptive Interruption returned error: 503");
-    assert_eq!(err.body.as_deref(), Some("model unavailable"));
+    assert_eq!(
+        err.error.said.as_ref().and_then(|said| said.detail.as_deref()),
+        Some("model unavailable")
+    );
     assert!(err.error.retryable, "a 5xx is worth reconnecting for");
 
     let err = c

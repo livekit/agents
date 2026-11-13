@@ -51,6 +51,7 @@ from ._generated._core_constants import (
 from ._generated._core_errors import (
     http_error_display as http_error_display,
     retryable_for_status as retryable_for_status,
+    websocket_close_kind as websocket_close_kind,
 )
 from ._generated._core_evals import (
     _core_evaluation_score as _core_evaluation_score,
@@ -238,6 +239,7 @@ from ._generated._core_types import (
 )
 from ._generated._core_utils import (
     AudioByteStream as AudioByteStream,
+    AudioConverter as AudioConverter,
     ConnectionPoolState as ConnectionPoolState,
     ExpFilter as ExpFilter,
     MovingAverage as MovingAverage,

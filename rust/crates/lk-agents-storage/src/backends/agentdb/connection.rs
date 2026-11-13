@@ -545,7 +545,10 @@ impl Conn {
                     return;
                 }
             }
-            let _ = lk_agents_abi::timeout(clock, ping_timeout, sink.close()).await;
+            // The peer's close frame is a courtesy: the socket drops either way.
+            if !matches!(lk_agents_abi::timeout(clock, ping_timeout, sink.close()).await, Ok(Ok(()))) {
+                log::debug!(target: lk_agents_abi::LOG_TARGET, "agentdb socket close not acknowledged");
+            }
         });
         {
             let mut st = self.0.state.lock();

@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::errors::{HostError, HostResult};
 use lk_agents_abi::worker::http::{EndpointHandler, EndpointKind};
 
 use crate::http::{EndpointServer, HttpServerLimits, TextDoors};
@@ -355,15 +355,12 @@ impl WorkerHost for ServerCallbacks {
         Ok(())
     }
 
-    /// A raising `load_fnc` must not read as idle (that over-schedules); `None` falls back to the
-    /// CPU monitor.
-    async fn user_load(&self) -> Option<f32> {
+    /// `None` falls back to the CPU monitor.
+    async fn user_load(&self) -> Option<HostResult<f32>> {
         if !self.user_load {
             return None;
         }
-        Some(
-            self.proxy.load(&telemetry::Cx::NONE).await.map(|load| load as f32).unwrap_or(f32::NAN),
-        )
+        Some(self.proxy.load(&telemetry::Cx::NONE).await.map(|load| load as f32))
     }
 
     async fn serve_endpoint(&self, request: IncomingRequest) {

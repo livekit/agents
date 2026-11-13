@@ -12,6 +12,7 @@ import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     TokenUsage,
@@ -202,11 +203,15 @@ class ChunkedStream(tts.ChunkedStream):
                     retries=None,
                     stream=True,
                 )
+            # float32 samples may straddle deltas: the partial tail waits for the next one
+            pcm_tail = b""
             async for ev in stream:
                 if isinstance(ev.data, SpeechStreamAudioDelta):
                     data = base64.b64decode(ev.data.audio_data)
                     if self._opts.response_format == "pcm":
-                        data = _f32le_to_s16le(data)
+                        data = pcm_tail + data
+                        cut = len(data) - len(data) % 4
+                        data, pcm_tail = _f32le_to_s16le(data[:cut]), data[cut:]
                     output_emitter.push(data)
                 elif isinstance(ev.data, SpeechStreamDone):
                     usage = ev.data.usage
@@ -219,6 +224,8 @@ class ChunkedStream(tts.ChunkedStream):
 
             output_emitter.flush()
 
+        except APIError:
+            raise
         except (TimeoutError, httpx.TimeoutException) as e:
             raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:

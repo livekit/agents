@@ -504,7 +504,6 @@ class SpeechStream(stt.RecognizeStream):
         self._model_options = model_options
         self._session = http_session
         self._extra_headers = dict(extra_headers)
-        self._speech_duration: float = 0
 
         self._reconnect_event = asyncio.Event()
         self._final_timeout_s = final_timeout_s
@@ -656,23 +655,6 @@ class SpeechStream(stt.RecognizeStream):
                 final_timeout_task.cancel()
             final_timeout_task = None
 
-        def audio_duration_from_bytes(payload: bytes | bytearray) -> float:
-            if self._opts.sample_rate <= 0:
-                return 0.0
-            return len(payload) / (self._opts.sample_rate * _BYTES_PER_SAMPLE)
-
-        def emit_recognition_usage() -> None:
-            if self._speech_duration <= 0:
-                return
-            self.send(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    alternatives=[],
-                    recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
-                )
-            )
-            self._speech_duration = 0
-
         def retrieve_task_exception(task: asyncio.Task[object]) -> None:
             if task.cancelled():
                 return
@@ -731,7 +713,7 @@ class SpeechStream(stt.RecognizeStream):
             ws: http.WebSocket,
             payload: bytes,
             *,
-            count_usage: bool,
+            replay: bool = False,
         ) -> None:
             nonlocal last_client_send_at, sent_audio_since_finalize
             nonlocal finalize_requested_for_buffer
@@ -739,10 +721,8 @@ class SpeechStream(stt.RecognizeStream):
                 await ws.send_bytes(payload)
                 last_client_send_at = asyncio.get_running_loop().time()
                 sent_audio_since_finalize = True
-                if count_usage:
+                if not replay:
                     finalize_requested_for_buffer = False
-            if count_usage:
-                self._speech_duration += audio_duration_from_bytes(payload)
 
         async def handle_user_state_change() -> None:
             nonlocal awaiting_final, pending_user_state_finalize
@@ -899,9 +879,7 @@ class SpeechStream(stt.RecognizeStream):
                 pending_replay = None
                 chunk_bytes = samples_per_buffer * bytes_per_sample
                 for i in range(0, len(replay_data), chunk_bytes):
-                    await send_audio_payload(
-                        ws, replay_data[i : i + chunk_bytes], count_usage=False
-                    )
+                    await send_audio_payload(ws, replay_data[i : i + chunk_bytes], replay=True)
                 if finalize_requested_for_buffer:
                     await send_finalize_if_needed(ws, reason="failover_replay")
                 if awaiting_final and self._final_timeout_s is not None:
@@ -913,7 +891,7 @@ class SpeechStream(stt.RecognizeStream):
                     if len(out.data) % bytes_per_sample != 0:
                         continue
                     payload = bytes(out.data)
-                    await send_audio_payload(ws, payload, count_usage=True)
+                    await send_audio_payload(ws, payload)
                     buffered_audio.extend(payload)
                     if len(buffered_audio) > max_buffer_bytes:
                         excess = len(buffered_audio) - max_buffer_bytes
@@ -930,7 +908,7 @@ class SpeechStream(stt.RecognizeStream):
                         continue
 
                     payload = bytes(frame.data)
-                    await send_audio_payload(ws, payload, count_usage=True)
+                    await send_audio_payload(ws, payload)
 
                     buffered_audio.extend(payload)
                     if len(buffered_audio) > max_buffer_bytes:
@@ -962,7 +940,7 @@ class SpeechStream(stt.RecognizeStream):
                     continue
 
                 payload = bytes(frame.data)
-                await send_audio_payload(ws, payload, count_usage=True)
+                await send_audio_payload(ws, payload)
                 buffered_audio.extend(payload)
                 if len(buffered_audio) > max_buffer_bytes:
                     excess = len(buffered_audio) - max_buffer_bytes
@@ -1050,8 +1028,10 @@ class SpeechStream(stt.RecognizeStream):
                     message = _extract_error_text(data)
                     status_code = _extract_error_code(data)
                     if status_code is not None:
-                        raise APIStatusError(f"SLNG STT error: {message}", status_code=status_code)
-                    raise APIStatusError(f"SLNG STT error: {message}")
+                        raise APIStatusError(
+                            "SLNG STT error", status_code=status_code, detail=message
+                        )
+                    raise APIStatusError("SLNG STT error", detail=message)
 
                 if msg_type in ("partial_transcript", "final_transcript"):
                     text = transcript_data.get("transcript")
@@ -1078,7 +1058,6 @@ class SpeechStream(stt.RecognizeStream):
                                 # clients never see a dangling START_OF_SPEECH.
                                 speech_started = False
                                 self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-                            emit_recognition_usage()
                             recover_primary_if_ready()
                         continue
 
@@ -1133,7 +1112,6 @@ class SpeechStream(stt.RecognizeStream):
                     if is_final:
                         speech_started = False
                         self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-                        emit_recognition_usage()
                         recover_primary_if_ready()
 
         while True:
@@ -1485,11 +1463,8 @@ class SpeechStream(stt.RecognizeStream):
                 message = _extract_error_text(data)
                 status_code = _extract_error_code(data)
                 if status_code is not None:
-                    raise APIStatusError(
-                        f"SLNG STT error: {message}",
-                        status_code=status_code,
-                    )
-                raise APIStatusError(f"SLNG STT error: {message}")
+                    raise APIStatusError("SLNG STT error", status_code=status_code, detail=message)
+                raise APIStatusError("SLNG STT error", detail=message)
 
     def _emit_session_event(self, data: _Message) -> None:
         self._emit_plugin_event(

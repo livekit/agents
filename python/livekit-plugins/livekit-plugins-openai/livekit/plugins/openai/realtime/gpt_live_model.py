@@ -12,7 +12,15 @@ from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, TokenUsage, http, llm, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    TokenUsage,
+    http,
+    llm,
+    utils,
+)
 from livekit.agents.metrics import LLMMetrics, Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -21,6 +29,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.utils.media import AudioConverter
 from openai.types.responses import ResponseTextConfigParam
 from openai.types.responses.response_input_item import FunctionCallOutput
 from openai.types.shared_params import Reasoning
@@ -407,8 +416,7 @@ class GPTVoiceSession(
         # commands; the caller's audio and mute changes are pulled from ``_input``
         self._msg_ch = utils.aio.Chan[types.ClientEvent | dict[str, Any]]()
         self._audio_ch = utils.aio.Chan[llm.DuplexAudioFrame]()
-        self._input_resampler: rtc.AudioResampler | None = None
-        self._input_resampler_rate: int | None = None
+        self._input_converter = AudioConverter(SAMPLE_RATE, NUM_CHANNELS)
 
         # session.start opens a connection and carries the config that is immutable after it
         self._session_start_sent = False
@@ -580,7 +588,7 @@ class GPTVoiceSession(
         # dropped one was carrying never arrives, and its input starts from the newest audio
         self._input.flush()
         self._bstream.clear()
-        self._input_resampler = None
+        self._input_converter = AudioConverter(SAMPLE_RATE, NUM_CHANNELS)
         self._session_started_fut = asyncio.Future()
         self._session_closed_fut = asyncio.Future()
         self._end_speech("user")
@@ -646,8 +654,13 @@ class GPTVoiceSession(
             self._session_start_sent = True
             await self._ws_send(ws_conn, start)
             # the protocol asks for session.started before any audio or command goes out
-            if not self._session_started_fut.done():
-                await self._session_started_fut
+            try:
+                async with asyncio.timeout(self._opts.conn_options.connect_timeout):
+                    await asyncio.shield(self._session_started_fut)
+            except TimeoutError:
+                raise APITimeoutError(
+                    f"{self._provider_label} did not start the session", timeout="connect"
+                ) from None
             if self._input_muted:
                 # a new connection is a new session, and a session starts unmuted, so the mute
                 # the app asked for is re-applied before this one can hear anything
@@ -676,7 +689,7 @@ class GPTVoiceSession(
                 if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing or self._session_closed_fut.done():
                         return
-                    raise APIConnectionError(
+                    raise ws_conn.close_error(
                         f"{self._provider_label} connection closed unexpectedly"
                     )
                 if msg.type is not http.WebSocketMessageType.TEXT:
@@ -1018,14 +1031,11 @@ class GPTVoiceSession(
         )
 
     def _handle_error(self, error: types.ErrorBody) -> None:
-        logger.error(
-            "gpt-live returned an error",
-            extra={"lk.pii.error": error.model_dump(exclude_none=True)},
-        )
         recoverable = (error.code or error.type or "") not in _FATAL_ERROR_CODES
         api_error = APIError(
             message="GPT-Live returned an error",
             retryable=recoverable,
+            detail=error.model_dump_json(exclude_none=True),
         )
         if not recoverable:
             raise api_error
@@ -1078,18 +1088,7 @@ class GPTVoiceSession(
         if isinstance(item, llm.DuplexInputGap):
             return
 
-        frame = item
-        if self._input_resampler and frame.sample_rate != self._input_resampler_rate:
-            self._input_resampler = None
-        if self._input_resampler is None and (
-            frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS
-        ):
-            self._input_resampler_rate = frame.sample_rate
-            self._input_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate, output_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS
-            )
-        frames = self._input_resampler.push(frame) if self._input_resampler else [frame]
-        for f in frames:
+        for f in self._input_converter.push(item):
             for nf in self._bstream.push(f.data.tobytes()):
                 yield types.InputAudioAppendEvent(audio=base64.b64encode(nf.data).decode("utf-8"))
 

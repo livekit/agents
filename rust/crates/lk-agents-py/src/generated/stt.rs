@@ -1075,16 +1075,17 @@ impl ::lk_agents_abi::Stt for SttProxy {
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
         let host = ::std::sync::Arc::clone(&self.host);
         let error_arg = error;
-        let error_arg =
-            match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+        let error_arg = match ::pyo3::Python::attach(
+            |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
                 Ok((crate::py_errors::ExceptionValue::to_exception(error_arg, py)?).unbind())
-            }) {
-                Ok(value) => value,
-                Err(error) => {
-                    log::warn!("Stt._core_failed failed: {error}");
-                    return;
-                }
-            };
+            },
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!(target: ::lk_agents_abi::LOG_TARGET, "Stt._core_failed failed: {error}");
+                return;
+            }
+        };
         let recoverable_arg = recoverable;
         ::lk_agents_runtime::host::notify(
             &self.notifier,

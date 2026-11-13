@@ -234,7 +234,8 @@ struct Status {
 /// Owns one supervisor actor. Control is coalesced independently of bounded work submission.
 #[derive(Clone)]
 pub struct RunnerSupervisor {
-    commands: mpsc::Sender<Command>,
+    /// Once the actor ended, a command's reply reports the runner closed.
+    commands: lk_agents_net::outbox::Outbox<Command>,
     control: Arc<signal::Shared<Control>>,
     /// Its producer moves into the actor: the actor's end, however it ends, ends every wait.
     status: signal::Cell<Status>,
@@ -252,7 +253,7 @@ impl RunnerSupervisor {
         rt: &Background,
     ) -> Self {
         let clock = rt.clock.clone();
-        let (commands, commands_rx) = mpsc::channel(QUEUE);
+        let (commands, commands_rx) = lk_agents_net::outbox::outbox(QUEUE);
         let control = Arc::new(signal::Shared::new(Control::default()));
         let control_rx = control.clone();
         let (status_tx, status) = signal::signal(Status::default());
@@ -297,26 +298,23 @@ impl RunnerSupervisor {
 
     /// Until the supervision is over, or its cleanup was reported incomplete.
     async fn settled(&self) {
-        let _ = self.status.wait_for(|s| s.cleaned || s.incomplete).await;
+        self.status.until(|s| s.cleaned || s.incomplete).await;
     }
 
     pub async fn initialize(&self, hello: Hello) -> Result<Duration, InitError> {
         let (tx, rx) = oneshot::channel();
-        self.commands.send(Command::Initialize(hello, tx)).await.map_err(|_| InitError::Closed)?;
+        self.commands.send(Command::Initialize(hello, tx)).await;
         rx.await.unwrap_or(Err(InitError::Closed))
     }
 
     pub async fn supervise(&self) {
-        let _ = self.commands.send(Command::Supervise).await;
+        self.commands.send(Command::Supervise).await;
     }
 
     pub async fn start_job(&self, job: StartJob) -> Result<(), StartJobError> {
         validate_start_job(&job)?;
         let (reply, result) = oneshot::channel();
-        self.commands
-            .send(Command::StartJob(Box::new(job), reply))
-            .await
-            .map_err(|_| StartJobError::Closed)?;
+        self.commands.send(Command::StartJob(Box::new(job), reply)).await;
         result.await.unwrap_or(Err(StartJobError::Closed))
     }
 
@@ -334,13 +332,13 @@ impl RunnerSupervisor {
 
     /// Whether a launched runner ended (`false`: none was launched).
     pub async fn wait_exit(&self) -> bool {
-        let _ = self.status.wait_for(|state| state.exit.is_some() || state.cleaned).await;
+        self.status.until(|state| state.exit.is_some() || state.cleaned).await;
         self.status.with(|status| status.exit.is_some())
     }
 
     /// Waits for the supervision's end: whether a launched runner ended.
     pub async fn wait_cleaned(&self) -> bool {
-        let _ = self.status.wait_for(|state| state.cleaned).await;
+        self.status.until(|state| state.cleaned).await;
         self.status.with(|status| status.exit.is_some())
     }
 }
@@ -488,7 +486,10 @@ impl Driver {
         {
             runner_log!(self.host.runner(), log::Level::Error; "memory sample did not settle; retaining the runner's host");
             self.status.modify(|s| s.incomplete = true);
-            let _ = sample.await;
+            match sample.await {
+                // Supervision is over: the reading has no reader.
+                Ok(_) | Err(lk_agents_net::blocking_io::JobLost) => {}
+            }
         }
         if let Some(init) = self.init_reply.take() {
             let _ = init.send(Err(InitError::Closed));

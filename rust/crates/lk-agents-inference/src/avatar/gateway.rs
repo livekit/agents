@@ -193,8 +193,11 @@ impl InferenceAvatar for GatewayAvatar {
     }
 
     async fn aclose(&self, cx: Cx) {
-        // Decision 14: a missed cleanup deadline was logged and reported; close returns.
-        let _ = self.close(cx).await;
+        // Decision 14: a missed cleanup deadline was logged by the worker, and the host's
+        // `aclose()` returns nothing either way.
+        match self.close(cx).await {
+            Closed::Clean | Closed::TimedOut | Closed::Failed => {}
+        }
     }
 }
 

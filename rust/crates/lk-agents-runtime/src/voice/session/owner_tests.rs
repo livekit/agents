@@ -104,9 +104,10 @@ impl SessionHost for FailingHost {
     fn started(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async { panic!("failed startup must not announce success") })
     }
-    fn closed(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, ()> {
+    fn closed(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async move {
             self.closed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         })
     }
     fn bind_providers(
@@ -494,7 +495,7 @@ impl SessionHost for JobHost {
     fn started(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         panic!("not started")
     }
-    fn closed(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, ()> {
+    fn closed(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         panic!("not started")
     }
     fn bind_providers(

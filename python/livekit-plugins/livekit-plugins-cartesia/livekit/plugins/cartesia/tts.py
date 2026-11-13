@@ -25,9 +25,7 @@ from dataclasses import dataclass, replace
 from typing import Any, cast
 
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     LanguageCode,
     http,
@@ -366,34 +364,29 @@ class ChunkedStream(tts.ChunkedStream):
         json = _to_cartesia_options(self._opts, streaming=False)
         json["transcript"] = self._input_text
 
-        try:
-            async with self._get_session().post(
-                self._opts.get_http_url("/tts/bytes"),
-                headers={
-                    API_AUTH_HEADER: self._opts.api_key,
-                    API_VERSION_HEADER: self._opts.api_version,
-                    "User-Agent": USER_AGENT,
-                },
-                json=json,
-                conn_options=self._conn_options,
-            ) as resp:
-                await resp.raise_for_status()
+        async with self._get_session().post(
+            self._opts.get_http_url("/tts/bytes"),
+            headers={
+                API_AUTH_HEADER: self._opts.api_key,
+                API_VERSION_HEADER: self._opts.api_version,
+                "User-Agent": USER_AGENT,
+            },
+            json=json,
+            conn_options=self._conn_options,
+        ) as resp:
+            await resp.raise_for_status()
 
-                output_emitter.initialize(
-                    request_id=utils.shortuuid(),
-                    sample_rate=self._opts.sample_rate,
-                    num_channels=1,
-                    mime_type="audio/pcm",
-                )
+            output_emitter.initialize(
+                request_id=utils.shortuuid(),
+                sample_rate=self._opts.sample_rate,
+                num_channels=1,
+                mime_type="audio/pcm",
+            )
 
-                async for data in resp.iter_bytes():
-                    output_emitter.push(data)
+            async for data in resp.iter_bytes():
+                output_emitter.push(data)
 
-                output_emitter.flush()
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
+            output_emitter.flush()
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -422,6 +415,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         input_sent_event = asyncio.Event()
         sent_tokens = deque[str]()
         input_done = False
+        # reads time out only while a response is owed, never while waiting for more text
+        read_deadline = self._core_attempts
 
         async def _send_task(ws: http.WebSocket, cartesia_context_id: str) -> None:
             nonlocal input_done
@@ -438,6 +433,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["continue"] = True
                 self.mark_started()
                 await ws.send_str(json.dumps(token_pkt))
+                read_deadline.expect_response()
                 input_sent_event.set()
 
             input_done = True
@@ -447,6 +443,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             sent_tokens.append(" ")
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
+            read_deadline.expect_response(final=True)
             input_sent_event.set()
 
         async def _recv_task(ws: http.WebSocket, cartesia_context_id: str) -> None:
@@ -454,17 +451,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             await input_sent_event.wait()
             skip_aligning = False
             while True:
-                msg = await ws.receive(timeout=self._conn_options.read_timeout)
+                msg = await ws.receive()
                 if msg.type is http.WebSocketMessageType.CLOSE:
-                    logger.error(
-                        "Cartesia connection closed unexpectedly. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
-                        extra={"cartesia_context_id": cartesia_context_id},
-                    )
-                    raise APIStatusError(
-                        "Cartesia connection closed unexpectedly",
-                        request_id=request_id,
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
+                    raise ws.close_error(
+                        "Cartesia connection closed unexpectedly "
+                        f"(cartesia_context_id={cartesia_context_id})"
                     )
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
@@ -482,12 +473,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                     output_emitter.start_segment(segment_id=cartesia_context_id)
                 if data.get("data"):
                     b64data = base64.b64decode(data["data"])
+                    read_deadline.audio_received()
                     output_emitter.push(b64data)
                 elif data.get("done"):
                     if input_done:
                         # close only if the input stream is closed
                         output_emitter.end_input()
                         break
+                    read_deadline.complete_response()
                 elif word_timestamps := data.get("word_timestamps"):
                     # assuming Cartesia echos the sent text in the original format and order.
                     for word, start, end in zip(
@@ -516,35 +509,29 @@ class SynthesizeStream(tts.SynthesizeStream):
                             TranscriptChunk(text=word, start_time=start, end_time=end)
                         )
                 elif data.get("type") == "error":
-                    logger.error(
-                        "Cartesia returned error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
-                        extra={"cartesia_context_id": cartesia_context_id, "error": data},
+                    # an HTTP-style status: a 5xx is retried, a rejected request is not
+                    raise APIStatusError(
+                        f"Cartesia returned error (cartesia_context_id={cartesia_context_id})",
+                        status_code=data.get("status_code") or 500,
+                        request_id=request_id,
+                        body=data,
+                        detail=data.get("error"),
                     )
-                    raise APIError(f"Cartesia returned error: {data}")
                 elif data.get("type") == "flush_done":
                     pass
                 else:
                     logger.warning("unexpected message", extra={"lk.pii.data": data})
 
         cartesia_context_id = utils.shortuuid()
-        try:
-            async with self._pool.connection(conn_options=self._conn_options) as ws:
-                async with utils.aio.TaskSet() as tasks:
-                    try:
-                        await asyncio.gather(
-                            tasks.spawn(_send_task(ws, cartesia_context_id)),
-                            tasks.spawn(_recv_task(ws, cartesia_context_id)),
-                        )
-                    finally:
-                        input_sent_event.set()
-        except APIError:
-            raise
-        except Exception as e:
-            logger.exception(
-                "Cartesia connection error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
-                extra={"cartesia_context_id": cartesia_context_id},
-            )
-            raise APIConnectionError() from e
+        async with self._pool.connection(conn_options=self._conn_options) as ws:
+            async with utils.aio.TaskSet() as tasks:
+                try:
+                    await asyncio.gather(
+                        tasks.spawn(_send_task(ws, cartesia_context_id)),
+                        tasks.spawn(_recv_task(ws, cartesia_context_id)),
+                    )
+                finally:
+                    input_sent_event.set()
 
 
 def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any]:

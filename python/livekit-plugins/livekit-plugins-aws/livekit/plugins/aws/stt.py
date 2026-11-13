@@ -17,7 +17,6 @@ import concurrent.futures
 import contextlib
 import os
 import sys
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -232,8 +231,6 @@ class SpeechStream(stt.RecognizeStream):
         self._opts = opts
         self._credentials = credentials
         self._http_client: AWSCRTHTTPClient | None = None
-        self._audio_duration = 0.0
-        self._last_audio_duration_report_time = time.monotonic()
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -358,12 +355,7 @@ class SpeechStream(stt.RecognizeStream):
                                         value=AudioEvent(audio_chunk=frame.data.tobytes())
                                     )
                                 )
-                                self._audio_duration += frame.duration
-                                self._maybe_emit_recognition_usage()
-                            else:
-                                self._emit_recognition_usage()
                     finally:
-                        self._emit_recognition_usage()
                         # Send empty frame to close (required by AWS Transcribe)
                         try:
                             await audio_stream.send(
@@ -436,25 +428,6 @@ class SpeechStream(stt.RecognizeStream):
                     with contextlib.suppress(Exception):
                         await gather_future
                 await owner.aclose()
-
-    def _maybe_emit_recognition_usage(self) -> None:
-        if time.monotonic() - self._last_audio_duration_report_time >= 5.0:
-            self._emit_recognition_usage()
-
-    def _emit_recognition_usage(self) -> None:
-        if self._audio_duration <= 0.0:
-            return
-
-        audio_duration = self._audio_duration
-        self._audio_duration = 0.0
-        self._last_audio_duration_report_time = time.monotonic()
-        with contextlib.suppress(utils.aio.ChanClosed):
-            self.send(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
-                )
-            )
 
     def _process_transcript_event(self, transcript_event: TranscriptEvent) -> None:
         if not transcript_event.transcript or not transcript_event.transcript.results:

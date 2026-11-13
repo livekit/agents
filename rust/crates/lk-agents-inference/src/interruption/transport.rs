@@ -516,7 +516,14 @@ async fn run_once(
 
     send_task.cancel();
     if !send_finished {
-        let _ = send_task.await;
+        match send_task.await {
+            Ok(Err(error)) => log::debug!(
+                target: lk_agents_abi::LOG_TARGET,
+                "interruption send failed after the connection ended: {error}"
+            ),
+            // cancelled here, or a panic the executor reported
+            Ok(Ok(())) | Err(TaskError::Cancelled | TaskError::Panicked(_)) => {}
+        }
     }
     sink.close().await;
     outcome.map_err(|mut error| {

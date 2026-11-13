@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 
 import livekit.rtc as rtc
@@ -8,9 +7,7 @@ from livekit import api
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     NotGivenOr,
     VoiceSession,
     get_job_context,
@@ -122,35 +119,20 @@ class AvatarSession(BaseAvatarSession):
 
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:
         assert self._api_key is not None
-        async with self._conn_options.total_deadline():
-            for i in range(self._conn_options.max_retry + 1):
-                try:
-                    async with self._ensure_http_session().post(
-                        f"{self._api_url}/v1/session",
-                        headers={
-                            "x-api-key": self._api_key,
-                        },
-                        json={
-                            "avatar_id": self._avatar_id,
-                            "livekit_url": livekit_url,
-                            "livekit_token": livekit_token,
-                        },
-                        conn_options=self._conn_options,
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise APIStatusError(
-                                "Server returned an error", status_code=response.status, body=text
-                            )
-                        return
+        api_key = self._api_key
+        session = self._ensure_http_session()
 
-                except Exception as e:
-                    if isinstance(e, APIConnectionError):
-                        logger.warning("failed to call bey presence api", extra={"error": str(e)})
-                    else:
-                        logger.exception("failed to call bey presence api")
+        async def request() -> None:
+            async with session.post(
+                f"{self._api_url}/v1/session",
+                headers={"x-api-key": api_key},
+                json={
+                    "avatar_id": self._avatar_id,
+                    "livekit_url": livekit_url,
+                    "livekit_token": livekit_token,
+                },
+                conn_options=self._conn_options,
+            ) as response:
+                await response.raise_for_status()
 
-                    if i < self._conn_options.max_retry:
-                        await asyncio.sleep(self._conn_options.retry_interval)
-
-        raise APIConnectionError("Failed to start Bey Avatar Session after all retries")
+        await http.retry_request(request, conn_options=self._conn_options)

@@ -6,7 +6,7 @@ use crate::interruption::event::{
 use crate::interruption::options::InterruptionOptions;
 use crate::interruption::proto::{ServerMessage, Verdict};
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ProviderSaid};
 use lk_agents_abi::turn::detector::ReqId;
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -87,19 +87,17 @@ struct Request {
     entry: CacheEntry,
 }
 
-/// An `APIStatusError` raised out of the stream, plus the server's `body` text (which
-/// [`ApiError`] does not carry).
+/// An `APIStatusError` raised out of the stream; the server's text is its `detail`.
 #[derive(Debug, Clone, PartialEq, Error)]
 #[error("{error}")]
 pub struct StreamError {
     pub request: Option<ReqId>,
     pub error: ApiError,
-    pub body: Option<String>,
 }
 
 impl StreamError {
     pub(super) fn with_body(mut self, body: String) -> Self {
-        self.body = Some(body);
+        self.error.said = ProviderSaid::boxed(Some(body), self.error.retry_after());
         self
     }
 
@@ -112,22 +110,21 @@ impl StreamError {
                 None,
                 None,
             ),
-            body: Some(format!("ws_msg.data={data:?} ws_msg.extra={extra:?}")),
         }
+        .with_body(format!("ws_msg.data={data:?} ws_msg.extra={extra:?}"))
     }
 
     fn status(message: String, status_code: i64, retryable: Option<bool>) -> Self {
         StreamError {
             request: None,
             error: ApiError::status(message, status_code, None, retryable),
-            body: None,
         }
     }
 }
 
 impl From<ApiError> for StreamError {
     fn from(error: ApiError) -> Self {
-        Self { request: None, error, body: None }
+        Self { request: None, error }
     }
 }
 
@@ -222,7 +219,6 @@ impl InterruptionMachine {
         let outcome = self.on_input(input, wall).map_err(|error| StreamError {
             request: None,
             error: ApiError::new(error.to_string()).with_retryable(false),
-            body: None,
         })?;
         match outcome {
             Some(InputOutcome::Infer(samples)) => self.admit_inference(samples, now),
@@ -286,11 +282,7 @@ impl InterruptionMachine {
     fn abandon(&mut self, message: &str) -> StreamError {
         let request = self.overlap_request;
         self.reset_state();
-        StreamError {
-            request,
-            error: ApiError::new(message.to_owned()).with_retryable(false),
-            body: None,
-        }
+        StreamError { request, error: ApiError::new(message.to_owned()).with_retryable(false) }
     }
 
     pub fn overlap_request(&self) -> Option<ReqId> {
@@ -544,8 +536,8 @@ impl InterruptionMachine {
                     None,
                     None,
                 ),
-                body: Some(message),
-            }),
+            }
+            .with_body(message)),
         }
     }
 

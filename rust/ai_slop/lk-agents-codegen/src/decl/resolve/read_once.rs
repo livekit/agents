@@ -33,12 +33,7 @@ const READ_ONCE: &[ReadOnce] = &[
          and `update_options` refuses to change it",
     ),
     any("_core_num_channels", "the channel count is a constructor argument of the base class"),
-    any("_core_text_unit", "how the provider takes text is its class's, never an option"),
     any("_core_retries_itself", "whether it retries itself is its class's (an adapter, a chain)"),
-    any(
-        "_core_max_text_len",
-        "the service's request limit, a class constant or constructor argument",
-    ),
     any(
         "_core_conn_options",
         "the connection policy given at construction; a bound view's is its binding",

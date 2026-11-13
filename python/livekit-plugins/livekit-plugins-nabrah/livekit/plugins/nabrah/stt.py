@@ -175,6 +175,8 @@ class STT(stt.STT):
                 interim_results=True,
                 aligned_transcript=False,
                 offline_recognize=False,
+                # usage events carry the audio the backend reports as processed
+                reports_usage=True,
             ),
         )
         nabrah_api_key = api_key if is_given(api_key) else os.environ.get("NABRAH_API_KEY")
@@ -467,18 +469,17 @@ class SpeechStream(stt.RecognizeStream):
                 )
             )
 
-        audio_clock = self._audio_clock()
-        usage_duration = audio_clock - self._reported_audio_position
-        if usage_duration > 0:
+        processed = self._latest_audio_processed
+        if processed is not None and processed > self._reported_audio_position:
             self._emit(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
                     recognition_usage=stt.RecognitionUsage(
-                        audio_duration=usage_duration,
+                        audio_duration=processed - self._reported_audio_position,
                     ),
                 )
             )
-            self._reported_audio_position = audio_clock
+            self._reported_audio_position = processed
 
         if self._is_speaking:
             self._emit(

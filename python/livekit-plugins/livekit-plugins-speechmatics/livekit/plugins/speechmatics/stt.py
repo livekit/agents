@@ -485,7 +485,6 @@ class SpeechStream(stt.RecognizeStream):
         self._turn_detection_mode: TurnDetectionMode = turn_detection_mode
         self._client: AgentSttAsyncClient | None = None
         self._msg_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-        self._speech_duration: float = 0
 
         self._vad: VAD | None = vad_instance
         self._vad_stream: VADStream | None = None
@@ -622,7 +621,9 @@ class SpeechStream(stt.RecognizeStream):
                         await utils.aio.cancel_and_wait(vad_task)
                 # SDK exit flushes final messages while the receiver is still running.
         except (TranscriptionError, SessionError) as e:
-            raise APIError(f"Speechmatics rejected the session: {e}", retryable=False) from e
+            raise APIError(
+                "Speechmatics rejected the session", retryable=False, detail=str(e)
+            ) from e
         except (SMConnectionError, SMTimeoutError, TransportError) as e:
             raise APIConnectionError(f"failed to connect to Speechmatics: {e}") from e
         finally:
@@ -664,9 +665,6 @@ class SpeechStream(stt.RecognizeStream):
                                     "lost connection to Speechmatics while sending audio"
                                 )
                             break
-
-                        # Only audio the service accepted counts towards usage.
-                        self._speech_duration += frame.duration
 
             # No more input — let the VAD flush any pending event
             if self._vad_stream is not None:
@@ -719,9 +717,10 @@ class SpeechStream(stt.RecognizeStream):
             reason = message.get("reason", "unknown")
             error_type = message.get("type", "error")
             raise APIError(
-                f"Speechmatics returned an error [{error_type}]: {reason}",
+                f"Speechmatics returned an error [{error_type}]",
                 body=message,
                 retryable=False,
+                detail=str(reason),
             )
 
         # Handle the messages
@@ -792,15 +791,6 @@ class SpeechStream(stt.RecognizeStream):
         """Handle EndOfTurn events."""
         logger.debug("EndOfTurn received")
         self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-
-        if self._speech_duration > 0.0:
-            usage_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                alternatives=[],
-                recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
-            )
-            self.send(usage_event)
-            self._speech_duration = 0
 
     def _handle_speakers_result(self, speakers: list[SpeakerIdentifier]) -> None:
         """Handle SpeakersResult events."""

@@ -86,7 +86,7 @@ pub trait SessionHost: Send + Sync {
     #[host(await, name = "started")]
     fn started(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "closed")]
-    fn closed(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, ()>;
+    fn closed(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>>;
     /// The running session's bindings of `providers`, the slots whose effective provider changed
     /// (`None`: removed), each under the current agent's node for its leg.
     #[host(call, name = "bind_providers")]

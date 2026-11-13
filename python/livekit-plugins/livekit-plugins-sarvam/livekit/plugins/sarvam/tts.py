@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import contextlib
 import enum
 import json
@@ -31,8 +32,6 @@ import weakref
 from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass, replace
 
-import numpy as np
-import numpy.typing as npt
 from pydantic import ValidationError
 
 from livekit.agents import (
@@ -108,13 +107,9 @@ _CODEC_TO_MIME: dict[str, str] = {
     "flac": "audio/flac",
     "aac": "audio/aac",
     "linear16": "audio/pcm",
-    # G.711 telephony codecs are decoded to linear 16-bit PCM in this plugin
-    # before being pushed to the AudioEmitter, so they advertise audio/pcm.
-    "mulaw": "audio/pcm",
-    "alaw": "audio/pcm",
+    "mulaw": "audio/pcmu",
+    "alaw": "audio/pcma",
 }
-
-_TELEPHONY_CODECS: frozenset[str] = frozenset({"mulaw", "alaw"})
 
 
 def _codec_to_mime_type(codec: str) -> str:
@@ -123,56 +118,6 @@ def _codec_to_mime_type(codec: str) -> str:
     if mime is None:
         raise ValueError(f"Unsupported output_audio_codec: {codec}")
     return mime
-
-
-def _build_mulaw_table() -> npt.NDArray[np.int16]:
-    """Build an ITU-T G.711 mu-law to linear 16-bit PCM lookup table."""
-    table = np.zeros(256, dtype=np.int16)
-    for i in range(256):
-        u = (~i) & 0xFF
-        sign = -1 if (u & 0x80) else 1
-        exponent = (u >> 4) & 0x07
-        mantissa = u & 0x0F
-        sample = ((mantissa << 3) + 0x84) << exponent
-        table[i] = sign * (sample - 0x84)
-    return table
-
-
-def _build_alaw_table() -> npt.NDArray[np.int16]:
-    """Build an ITU-T G.711 A-law to linear 16-bit PCM lookup table.
-
-    Note: A-law sign convention is inverted relative to mu-law -- when the
-    sign bit of the XOR'd byte is set, the sample is positive.
-    """
-    table = np.zeros(256, dtype=np.int16)
-    for i in range(256):
-        a = i ^ 0x55
-        sign = 1 if (a & 0x80) else -1
-        exponent = (a >> 4) & 0x07
-        mantissa = a & 0x0F
-        if exponent == 0:
-            sample = (mantissa << 4) + 8
-        else:
-            sample = ((mantissa << 4) + 0x108) << (exponent - 1)
-        table[i] = sign * sample
-    return table
-
-
-_MULAW_TABLE: npt.NDArray[np.int16] = _build_mulaw_table()
-_ALAW_TABLE: npt.NDArray[np.int16] = _build_alaw_table()
-
-
-def _decode_telephony(codec: str, data: bytes) -> bytes:
-    """Decode 8-bit G.711 mu-law/A-law samples to little-endian linear 16-bit PCM."""
-    if codec == "mulaw":
-        table = _MULAW_TABLE
-    elif codec == "alaw":
-        table = _ALAW_TABLE
-    else:
-        raise ValueError(f"_decode_telephony does not support codec: {codec}")
-    # NumPy's Buffer/ArrayLike overloads contain Unknown.
-    pcm = table[np.frombuffer(data, dtype=np.uint8)]  # pyright: ignore[reportUnknownMemberType]
-    return pcm.astype("<i2").tobytes()
 
 
 class ConnectionState(enum.Enum):
@@ -528,28 +473,18 @@ class TTS(tts.TTS):
 
         logger.info("Connecting to Sarvam TTS WebSocket")
 
-        try:
-            ws = await session.ws_connect(
-                ws_url,
-                headers=headers,
-                # Send protocol-level WebSocket PING frames every
-                # ``_WS_HEARTBEAT_INTERVAL`` seconds. The transport handles the
-                # PONG accounting on its own and will close the connection
-                # locally if the server stops responding -- this is what
-                # actually keeps the TCP connection alive while it sits
-                # idle in the pool (no ``receive()`` call to auto-pong).
-                heartbeat=_WS_HEARTBEAT_INTERVAL,
-                conn_options=conn_options,
-            )
-        except APITimeoutError:
-            raise
-        except Exception as e:
-            logger.error(
-                "Failed to connect to Sarvam TTS WebSocket",
-                extra={"error": str(e), "url": ws_url},
-                exc_info=True,
-            )
-            raise APIConnectionError(f"WebSocket connection failed: {e}") from e
+        ws = await session.ws_connect(
+            ws_url,
+            headers=headers,
+            # Send protocol-level WebSocket PING frames every
+            # ``_WS_HEARTBEAT_INTERVAL`` seconds. The transport handles the
+            # PONG accounting on its own and will close the connection
+            # locally if the server stops responding -- this is what
+            # actually keeps the TCP connection alive while it sits
+            # idle in the pool (no ``receive()`` call to auto-pong).
+            heartbeat=_WS_HEARTBEAT_INTERVAL,
+            conn_options=conn_options,
+        )
 
         self._start_keepalive(ws)
         self._open_ws_ids.add(id(ws))
@@ -883,11 +818,11 @@ class ChunkedStream(tts.ChunkedStream):
         ) as res:
             if res.status != 200:
                 error_text = await res.text()
-                logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
                 raise APIStatusError(
-                    message=f"Sarvam TTS API Error ({res.status}): {error_text}",
+                    "Sarvam TTS request failed",
                     status_code=res.status,
                     body=error_text,
+                    detail=error_text,
                 )
 
             response_json = TTSBatchResponse.model_validate(await res.json())
@@ -904,10 +839,7 @@ class ChunkedStream(tts.ChunkedStream):
             )
             # handle multiple audio chunks
             for b64 in audios:
-                wav_bytes = base64.b64decode(b64)
-                if self._opts.output_audio_codec in _TELEPHONY_CODECS:
-                    wav_bytes = _decode_telephony(self._opts.output_audio_codec, wav_bytes)
-                output_emitter.push(wav_bytes)
+                output_emitter.push(base64.b64decode(b64))
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -1053,67 +985,35 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
                 raise
             except Exception as e:
-                logger.error(
-                    f"Error in send task: {e}", extra=self._build_log_context(), exc_info=True
-                )
                 raise APIConnectionError(f"Send task failed: {e}") from e
             finally:
                 input_sent_event.set()
 
         async def recv_task(ws: http.WebSocket) -> None:
             await input_sent_event.wait()
-            try:
-                while True:
-                    msg = await ws.receive(timeout=self._conn_options.read_timeout)
+            while True:
+                msg = await ws.receive(timeout=self._conn_options.read_timeout)
 
-                    if msg.type == http.WebSocketMessageType.CLOSE:
-                        close_code = ws.close_code
-                        close_reason = msg.data
-                        is_expected_close = close_code in (1000, 1001, None)
-                        if not is_expected_close:
-                            logger.error(
-                                "WebSocket connection closed by server",
-                                extra={
-                                    **self._build_log_context(),
-                                    "close_code": close_code,
-                                    "close_reason": close_reason,
-                                },
-                            )
-                            raw_close = {
-                                "msg_type": str(msg.type),
-                                "close_code": close_code,
-                                "close_reason": close_reason,
-                            }
-                            raise APIStatusError(
-                                message=(
-                                    "Sarvam TTS WebSocket closed with non-graceful status: "
-                                    f"{json.dumps(raw_close, ensure_ascii=False)}"
-                                ),
-                                status_code=int(close_code) if isinstance(close_code, int) else -1,
-                                body=raw_close,
-                            )
-                        logger.info(
-                            "WebSocket connection closed by server",
-                            extra={
-                                **self._build_log_context(),
-                                "close_code": close_code,
-                                "close_reason": close_reason,
-                            },
-                        )
+                if msg.type == http.WebSocketMessageType.CLOSE:
+                    close_code = ws.close_code
+                    close_reason = msg.data
+                    is_expected_close = close_code in (1000, 1001, None)
+                    if not is_expected_close:
+                        raise ws.close_error("Sarvam TTS WebSocket closed with non-graceful status")
+                    logger.info(
+                        "WebSocket connection closed by server",
+                        extra={
+                            **self._build_log_context(),
+                            "close_code": close_code,
+                            "close_reason": close_reason,
+                        },
+                    )
+                    break
+
+                if msg.type == http.WebSocketMessageType.TEXT:
+                    success = await self._handle_websocket_message(msg.data, output_emitter)
+                    if not success:
                         break
-
-                    if msg.type == http.WebSocketMessageType.TEXT:
-                        success = await self._handle_websocket_message(msg.data, output_emitter)
-                        if not success:
-                            break
-
-            except (APIStatusError, APIConnectionError, APITimeoutError):
-                raise
-            except Exception as e:
-                logger.error(
-                    f"Error in receive task: {e}", extra=self._build_log_context(), exc_info=True
-                )
-                raise
 
         try:
             async with self._pool.connection(conn_options=self._conn_options) as ws:
@@ -1160,11 +1060,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
         except Exception as e:
             self._connection_state = ConnectionState.FAILED
-            logger.error(
-                f"Unexpected error in WebSocket session: {e}",
-                extra=self._build_log_context(),
-                exc_info=True,
-            )
             raise APIStatusError(f"TTS WebSocket session failed: {e}") from e
         finally:
             self._connection_state = ConnectionState.DISCONNECTED
@@ -1220,37 +1115,24 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Preserve provider-originated status/body/retry metadata.
             raise
         except Exception as e:
-            logger.error(
-                f"Error processing WebSocket message: {e}",
-                extra=self._build_log_context(),
-                exc_info=True,
-            )
             raise APIStatusError(
-                message=f"Message processing error: {e}. Raw server message: {msg_data!s}",
+                "Sarvam TTS message processing error",
                 body={"raw_message": msg_data},
+                detail=str(msg_data),
             ) from e
 
     async def _handle_audio_message(
         self, resp: AudioMessage, output_emitter: tts.AudioEmitter
     ) -> bool:
-        """Handle audio message with proper error handling."""
+        audio_data = resp.data.audio if resp.data is not None else ""
+        if not audio_data:
+            return True
         try:
-            audio_data = resp.data.audio if resp.data is not None else ""
-            if not audio_data:
-                logger.debug("Received empty audio data", extra=self._build_log_context())
-                return True
-
-            audio_bytes = base64.b64decode(audio_data)
-            if self._opts.output_audio_codec in _TELEPHONY_CODECS:
-                audio_bytes = _decode_telephony(self._opts.output_audio_codec, audio_bytes)
-            output_emitter.push(audio_bytes)
-
-            return True
-
-        except Exception as e:  # base64 decode error
-            logger.error(f"Invalid base64 audio data: {e}", extra=self._build_log_context())
-            # Don't stop processing for audio decode errors
-            return True
+            audio_bytes = base64.b64decode(audio_data, validate=True)
+        except binascii.Error as e:
+            raise APIConnectionError("Sarvam TTS sent malformed audio", retryable=False) from e
+        output_emitter.push(audio_bytes)
+        return True
 
     async def _handle_error_message(self, resp: ErrorMessage) -> None:
         """Handle error messages from the API."""
@@ -1258,30 +1140,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         error_msg = error_data.message
         error_code = _error_status_code(error_data)
 
-        # The provider decides what goes in these fields, so they are tagged for
-        # redaction and kept out of the log body, which collectors cannot redact.
-        # This is the one place the frame is recorded in full.
-        logger.error(
-            "TTS API error",
-            extra={
-                **self._build_log_context(),
-                "error_code": error_code,
-                "lk.pii.error_message": error_msg,
-                "lk.pii.raw_message": resp.model_dump(mode="json", exclude_unset=True),
-            },
-        )
-
         # APIStatusError derives retryability from the status code (4xx permanent
-        # except 408/429, 5xx transient), so forwarding Sarvam's own code is
-        # all that is needed -- an unrecognized frame stays retryable via -1.
-        #
-        # Nothing provider-written goes on the exception: its __str__ renders both
-        # message and body, and the framework logs that with %s when it retries,
-        # where no collector can redact it. status_code and request_id carry the
-        # non-PII identifiers a caller needs to correlate against Sarvam's logs.
+        # except 408/429, 5xx transient); an unrecognized frame stays retryable via -1.
         raise APIStatusError(
-            message=f"TTS API error from Sarvam (status {error_code})",
+            f"TTS API error from Sarvam (status {error_code})",
             status_code=error_code,
+            detail=error_msg,
             request_id=error_data.request_id,
         )
 

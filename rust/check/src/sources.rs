@@ -29,7 +29,14 @@
 //!    `match` over a request's steps with a wildcard arm names `Step::Retry`. Only
 //!    [`REQUEST`], where retries are decided, is exempt ("Errors").
 //!
-//! Rules 4 to 8 skip test files, benches, examples and `#[cfg(test)]` items. pyo3 and `#[host]`
+//! 9. In the async crates, an awaited call's outcome is read: no `let _ = ..await` and no
+//!    `if let Ok(..) = ..await { .. }` without `else`. A call whose failure is always safe to
+//!    drop says so once, in its own signature, by returning `()` ("Errors").
+//! 10. In `lk-agents-runtime`, no `log::error!` in a fallback (an `unwrap_or_else` closure or an
+//!     `Err(..) =>` arm): a fallback is a decision, which the core makes from a `Result` input
+//!     ("Sans-I/O cores").
+//!
+//! Rules 4 to 10 skip test files, benches, examples and `#[cfg(test)]` items. pyo3 and `#[host]`
 //! placement need no rule here: the crate graph ([`crate::graph`]) leaves the compiler to reject
 //! them.
 
@@ -238,6 +245,10 @@ fn check_source(source: &Source) -> Vec<String> {
     }
     if ASYNC.contains(&crate_name) && !source.test() {
         let product = without_tests(&source.text);
+        discarded(source, product.clone(), &mut errors);
+        if crate_name == "lk-agents-runtime" {
+            fallback_logged(source, product.clone(), &mut errors);
+        }
         unowned(source, product.clone(), &mut errors);
         if executor(source.path) {
             biased(source, product.clone(), &mut errors);
@@ -247,6 +258,107 @@ fn check_source(source: &Source) -> Vec<String> {
         }
     }
     errors
+}
+
+/// `.await` in `tokens`.
+fn awaits(tokens: &[TokenTree]) -> bool {
+    tokens
+        .windows(2)
+        .any(|w| punct(Some(&w[0]), '.') && ident(Some(&w[1])).as_deref() == Some("await"))
+}
+
+/// An awaited outcome dropped unread. Rule 9.
+fn discarded(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) {
+    levels(tokens, &mut |level| {
+        for (at, token) in level.iter().enumerate() {
+            let statement = |from: usize| {
+                let end =
+                    (from..level.len()).find(|&i| punct(level.get(i), ';')).unwrap_or(level.len());
+                &level[from..end]
+            };
+            let dropped = match ident(Some(token)).as_deref() {
+                Some("let") => {
+                    ident(level.get(at + 1)).as_deref() == Some("_")
+                        && single_eq(level, at + 2)
+                        && awaits(statement(at + 3))
+                }
+                Some("if") => {
+                    ident(level.get(at + 1)).as_deref() == Some("let")
+                        && ident(level.get(at + 2)).as_deref() == Some("Ok")
+                        && group(level.get(at + 3), Delimiter::Parenthesis).is_some()
+                        && single_eq(level, at + 4)
+                        && {
+                            let body = (at + 5..level.len())
+                                .find(|&i| group(level.get(i), Delimiter::Brace).is_some());
+                            body.is_some_and(|b| {
+                                awaits(&level[at + 5..b])
+                                    && ident(level.get(b + 1)).as_deref() != Some("else")
+                            })
+                        }
+                }
+                _ => false,
+            };
+            if dropped {
+                errors.push(source.error(
+                    line(token),
+                    "an awaited outcome dropped unread: return it, report it, or make the callee \
+                     return `()` if dropping is always right",
+                ));
+            }
+        }
+    });
+}
+
+/// `log::error!` in `tokens`, at any depth.
+fn logs_error(tokens: TokenStream) -> Option<usize> {
+    let mut found = None;
+    levels(tokens, &mut |level| {
+        for (at, token) in level.iter().enumerate() {
+            if found.is_none()
+                && ident(Some(token)).as_deref() == Some("log")
+                && path_segment(level, at + 1).as_deref() == Some("error")
+            {
+                found = Some(line(token));
+            }
+        }
+    });
+    found
+}
+
+/// A fallback that logs an error and goes on: a decision taken in the runtime. Rule 10.
+fn fallback_logged(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) {
+    levels(tokens, &mut |level| {
+        for (at, token) in level.iter().enumerate() {
+            let fallback = match ident(Some(token)).as_deref() {
+                Some("unwrap_or_else") => {
+                    group(level.get(at + 1), Delimiter::Parenthesis).map(|args| args.stream())
+                }
+                Some("Err")
+                    if group(level.get(at + 1), Delimiter::Parenthesis).is_some()
+                        && at + 2 < level.len()
+                        && fat_arrow(level, at + 2) =>
+                {
+                    match group(level.get(at + 4), Delimiter::Brace) {
+                        Some(body) => Some(body.stream()),
+                        None => {
+                            let end = (at + 4..level.len())
+                                .find(|&i| punct(level.get(i), ','))
+                                .unwrap_or(level.len());
+                            Some(level[at + 4..end].iter().cloned().collect())
+                        }
+                    }
+                }
+                _ => None,
+            };
+            if let Some(logged) = fallback.and_then(logs_error) {
+                errors.push(source.error(
+                    logged,
+                    "an error logged in a fallback: hand the `Result` to the core, which decides \
+                     the fallback",
+                ));
+            }
+        }
+    });
 }
 
 /// `Unacknowledged::sent` outside a connection: a write called uncertain that no connection
@@ -714,6 +826,45 @@ mod tests {
         }
         let decided = "fn f() { match s { Step::Retry(b) => {} _ => {} } }";
         assert!(errors("crates/lk-agents-core/src/request/machine.rs", decided).is_empty());
+    }
+
+    // Catches: an awaited host, storage or network failure dropped with `let _ =` or an
+    // `if let Ok` with no `else`.
+    #[test]
+    fn an_awaited_outcome_dropped_unread_fails() {
+        let path = "crates/lk-agents-storage/src/voice.rs";
+        assert_eq!(errors(path, "async fn f() { let _ = run.abandon(o).await; }").len(), 1);
+        let unread = "async fn f() { if let Ok(s) = db.snapshot().await { use_it(s); } }";
+        assert_eq!(errors(path, unread).len(), 1);
+        let read = [
+            "async fn f() { if let Ok(s) = db.snapshot().await { a(s) } else { b() } }",
+            "async fn f() { let _ = tx.send(x); }",
+            "async fn f() { notify(x).await; }",
+        ];
+        for text in read {
+            assert!(errors(path, text).is_empty(), "{text}");
+        }
+        assert!(
+            errors("crates/lk-agents-core/src/x.rs", "async fn f() { let _ = a.await; }")
+                .is_empty()
+        );
+    }
+
+    // Catches: a runtime fallback that logs and carries on, a decision the core never sees.
+    #[test]
+    fn an_error_logged_in_a_runtime_fallback_fails() {
+        let path = "crates/lk-agents-runtime/src/voice/x.rs";
+        let fallbacks = [
+            "fn f() { r.unwrap_or_else(|e| { log::error!(\"failed: {e}\"); None }); }",
+            "fn f() { match r { Ok(v) => v, Err(e) => { log::error!(\"{e}\"); d() } } }",
+            "fn f() { match r { Ok(v) => v, Err(e) => log::error!(\"{e}\"), } }",
+        ];
+        for text in fallbacks {
+            assert_eq!(errors(path, text).len(), 1, "{text}");
+        }
+        assert!(errors(path, "fn f() { match r { Err(e) => return Err(e), _ => {} } }").is_empty());
+        let inference = "crates/lk-agents-inference/src/x.rs";
+        assert!(errors(inference, fallbacks[0]).is_empty(), "only the runtime");
     }
 
     #[test]

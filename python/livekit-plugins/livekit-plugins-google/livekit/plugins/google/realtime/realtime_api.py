@@ -6,14 +6,13 @@ import json
 import os
 import time
 import weakref
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, cast
 
 from pydantic import Field
 
 import google.auth.credentials
-from google.genai import Client as GenAIClient, types
+from google.genai import Client as GenAIClient, errors as genai_errors, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, LanguageCode, TokenUsage, llm, utils
@@ -150,21 +149,11 @@ def _warn_vertex_scheduling_unsupported() -> None:
     )
 
 
-def _get_1008_error_hint(error_message: str) -> str | None:
-    """
-    Generate a hint for WebSocket 1008 policy violation errors.
-
-    This provides a generic hint when the connection fails with a 1008 error,
-    which often indicates the model name doesn't match the API being used.
-
-    Args:
-        error_message: The error message from the WebSocket exception
-
-    Returns:
-        A helpful hint string, or None if not a 1008 error
-    """
-    if "1008" not in error_message and "policy violation" not in error_message.lower():
-        return None
+def _get_1008_error_hint(error: Exception) -> str:
+    """A hint for a 1008 policy violation close, which often means the model name doesn't
+    match the API being used; empty for any other error."""
+    if not (isinstance(error, genai_errors.APIError) and error.code == 1008):
+        return ""
 
     return (
         "\n\nHint: A 1008 policy violation error often indicates that the model name "
@@ -516,15 +505,17 @@ class RealtimeModel(llm.RealtimeModel):
 
 class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel, *, options: _RealtimeOptions) -> None:
-        super().__init__(realtime_model)
+        super().__init__(
+            realtime_model,
+            input_sample_rate=INPUT_AUDIO_SAMPLE_RATE,
+            input_num_channels=INPUT_AUDIO_CHANNELS,
+        )
         self._opts = options
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[ClientEvents | _VideoInput]()
         self._pending_video: _VideoInput | None = None
         self._video_encode_warned = False
-        self._input_resampler: rtc.AudioResampler | None = None
-        self._input_resampler_rate: int | None = None
 
         # 50ms chunks
         self._bstream = audio_utils.AudioByteStream(
@@ -849,15 +840,14 @@ class RealtimeSession(llm.RealtimeSession):
         return self._session_resumption_handle
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        for f in self._resample_audio(frame):
-            for nf in self._bstream.push(f.data.tobytes()):
-                realtime_input = types.LiveClientRealtimeInput(
-                    audio=types.Blob(
-                        data=nf.data.tobytes(),
-                        mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
-                    )
+        for nf in self._bstream.push(frame.data.tobytes()):
+            realtime_input = types.LiveClientRealtimeInput(
+                audio=types.Blob(
+                    data=nf.data.tobytes(),
+                    mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
                 )
-                self._send_client_event(realtime_input)
+            )
+            self._send_client_event(realtime_input)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if self._msg_ch.closed:
@@ -1008,7 +998,6 @@ class RealtimeSession(llm.RealtimeSession):
         except Exception:
             logger.warning("failed to close the genai client", exc_info=True)
 
-    @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         max_retries = self._opts.conn_options.max_retry
 
@@ -1105,27 +1094,21 @@ class RealtimeSession(llm.RealtimeSession):
                 break
             except Exception as e:
                 # Provide a hint for 1008 errors (often model/API mismatch for unknown models)
-                hint = _get_1008_error_hint(str(e))
-                if hint:
+                hint = _get_1008_error_hint(e)
+                if self._msg_ch.closed:
+                    # nobody is listening for the error event anymore
                     logger.error(f"Gemini Realtime API error: {e}{hint}", exc_info=e)
                 else:
-                    logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
-
-                if not self._msg_ch.closed:
                     # Gemini Live closes with 1007 ("Request contains an invalid argument")
                     # when the session context is exhausted. Reconnecting replays the same
                     # oversized chat context and fails identically, producing a tight retry
                     # loop, so treat it as fatal to the session instead of retrying.
-                    if getattr(e, "code", None) == 1007 or "1007" in str(e):
-                        logger.error(
-                            "Gemini Live closed the session: context exhausted (1007). "
-                            "Reconnecting would replay the same context and fail again; "
-                            "terminating the session.",
-                            exc_info=e,
-                        )
+                    if isinstance(e, genai_errors.APIError) and e.code == 1007:
                         self._emit_error(e, recoverable=False)
                         raise APIConnectionError(
-                            message="Gemini Live session context exhausted (1007)"
+                            message="Gemini Live session context exhausted (1007): reconnecting "
+                            "would replay the same context",
+                            retryable=False,
                         ) from e
 
                     # we shouldn't retry when it's not connected, usually this means incorrect
@@ -1223,8 +1206,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         except Exception as e:
             if not self._session_should_close.is_set():
-                logger.error(f"error in send task: {e}", exc_info=e)
-                self._session_error = e
+                self._session_error = e  # reported once, by the session loop
                 self._mark_restart_needed(on_error=True)
         finally:
             logger.debug("send task finished.")
@@ -1316,8 +1298,7 @@ class RealtimeSession(llm.RealtimeSession):
                 # TODO(dz): a server-side turn is complete
         except Exception as e:
             if not self._session_should_close.is_set():
-                logger.error(f"error in receive task: {e}", exc_info=e)
-                self._session_error = e
+                self._session_error = e  # reported once, by the session loop
                 self._mark_restart_needed(on_error=True)
         finally:
             self._mark_current_generation_done()
@@ -1733,29 +1714,6 @@ class RealtimeSession(llm.RealtimeSession):
 
     def clear_audio(self) -> None:
         logger.warning("clear_audio is not supported by Gemini Realtime API.")
-
-    def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
-        if self._input_resampler:
-            if frame.sample_rate != self._input_resampler_rate:
-                # input audio changed to a different sample rate
-                self._input_resampler = None
-
-        if self._input_resampler is None and (
-            frame.sample_rate != INPUT_AUDIO_SAMPLE_RATE
-            or frame.num_channels != INPUT_AUDIO_CHANNELS
-        ):
-            self._input_resampler_rate = frame.sample_rate
-            self._input_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=INPUT_AUDIO_SAMPLE_RATE,
-                num_channels=INPUT_AUDIO_CHANNELS,
-            )
-
-        if self._input_resampler:
-            # TODO(long): flush the resampler when the input source is changed
-            yield from self._input_resampler.push(frame)
-        else:
-            yield frame
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(

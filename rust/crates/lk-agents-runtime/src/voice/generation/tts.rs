@@ -244,8 +244,7 @@ async fn synthesize(
     let StreamingTts { words, input_done, .. } = state;
     sink.end_input();
     let fed = words.said.clone();
-    // An interrupted reply leaves the close to finish as the session's cleanup.
-    let _ = super::llm::until_interrupted(handle, source.close()).await;
+    super::llm::close_until_interrupted(handle, source.close()).await;
     let produced = tts_data.produced();
     match heard {
         Ok(mut heard) => {
@@ -598,7 +597,7 @@ impl SynthesisPlayout<'_> {
         while let Ok(event) = self.rx.try_recv() {
             leg.forward(event).await;
         }
-        Ok(())
+        leg.result()
     }
 }
 

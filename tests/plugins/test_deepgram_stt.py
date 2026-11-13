@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from types import SimpleNamespace
 
 import pytest
 from aiohttp import web
@@ -368,45 +367,6 @@ def test_keywords_and_keyterms_are_refused_on_the_wrong_model_family() -> None:
         deepgram.STT(api_key="test", model="nova-3", keywords=[("LiveKit", 2.0)])
     with pytest.raises(ValueError, match="Nova-3"):
         deepgram.STT(api_key="test", model="nova-2-general", keyterm=["LiveKit"])
-
-
-async def test_usage_covers_the_connection_lifetime(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reported audio covers the whole billed socket lifetime, not just pushed frames.
-
-    https://github.com/livekit/agents/issues/3464 https://github.com/livekit/agents/issues/5498
-    """
-    # the plugin times the socket with the wall clock: the test moves it instead of waiting
-    clock = SimpleNamespace(now=1.0)
-    monkeypatch.setattr(
-        "livekit.plugins.deepgram.stt.time", SimpleNamespace(perf_counter=lambda: clock.now)
-    )
-    audio_arrived = asyncio.Event()
-
-    async def peer(request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        async for message in ws:
-            audio_arrived.set()
-            if message.type == web.WSMsgType.TEXT and message.json()["type"] == "CloseStream":
-                await ws.close()
-        return ws
-
-    async with _server(peer) as server, http.open():
-        model = deepgram.STT(api_key="test", base_url=str(server.make_url("/listen")))
-        async with model.stream(conn_options=NO_RETRY) as stream:
-            stream.push_frame(_audio(100))
-            await audio_arrived.wait()  # the socket is open
-            clock.now += 0.5  # the socket stays open, and billed, while idle
-            stream.end_input()
-            usage = [
-                event.recognition_usage.audio_duration
-                async for event in stream
-                if event.recognition_usage is not None
-                and event.recognition_usage.audio_duration is not None
-            ]
-        await model.aclose()
-
-    assert sum(usage) >= 0.5
 
 
 async def test_a_silent_handshake_fails_within_the_read_timeout() -> None:

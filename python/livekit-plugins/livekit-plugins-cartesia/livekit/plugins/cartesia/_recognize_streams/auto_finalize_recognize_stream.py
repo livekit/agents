@@ -22,6 +22,7 @@ from urllib.parse import urlencode
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
+    APIStatusError,
     LanguageCode,
     http,
     stt,
@@ -236,7 +237,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self._keyterm = keyterm
         self._request_id = ""
         self._speaking = False
-        self._speech_duration: float = 0.0
         self._closing_ws = False
         # cumulative transcript for the current turn; used to re-emit on turn.resume
         self._current_transcript = ""
@@ -245,7 +245,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         if self.input.closed:
             return
 
-        @utils.log_exceptions(logger=logger)
         async def send_task(ws: http.WebSocket) -> None:
             samples_per_chunk = self._sample_rate * self._audio_chunk_duration_ms // 1000
             audio_bstream = utils.media.AudioByteStream(
@@ -258,7 +257,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 async for data in self.input:
                     if isinstance(data, rtc.AudioFrame):
                         for frame in audio_bstream.push(data.data.tobytes()):
-                            self._speech_duration += frame.duration
                             await ws.send_bytes(frame.data.tobytes())
                     else:
                         if not self.input.closed:
@@ -267,7 +265,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                             )
 
                 for frame in audio_bstream.flush():
-                    self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
                 self._closing_ws = True
@@ -280,32 +277,20 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                     retryable=True,
                 ) from e
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: http.WebSocket) -> None:
             while True:
                 msg = await ws.receive()
                 if msg.type is http.WebSocketMessageType.CLOSE:
                     if self._closing_ws or self._session.closed:
                         return
-                    raise APIConnectionError(
-                        message=(
-                            "Cartesia STT connection closed unexpectedly "
-                            f"(close_code={ws.close_code}, "
-                            f"reason={msg.data!r})"
-                        ),
-                        retryable=True,
-                    )
+                    raise ws.close_error("Cartesia STT connection closed unexpectedly")
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Cartesia STT message type %s", msg.type)
                     continue
 
-                try:
-                    data: STTEventMessage = json.loads(msg.data)
-                except Exception:
-                    logger.exception("failed to parse Cartesia STT message")
-                else:
-                    self._process_stream_event(data)
+                data: STTEventMessage = json.loads(msg.data)
+                self._process_stream_event(data)
 
         # Reset per-connection state so a transport-error retry (a new _run
         # invocation by the base class) starts fresh. Without this, stale
@@ -315,7 +300,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         # suppress legitimate unexpected-close failures on the new connection.
         self._speaking = False
         self._current_transcript = ""
-        self._speech_duration = 0.0
         self._closing_ws = False
 
         ws: http.WebSocket | None = None
@@ -326,7 +310,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 async with utils.aio.TaskSet() as tasks:
                     await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
             finally:
-                self._send_recognition_usage_event()
                 # If the websocket dropped mid-turn, flush the partial
                 # transcript as a FINAL_TRANSCRIPT so the consumer can finalize
                 # the turn instead of losing it. In the normal close path the
@@ -396,19 +379,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
             )
         )
 
-    def _send_recognition_usage_event(self) -> None:
-        if self._speech_duration > 0 and not self.closed:
-            self.send(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    request_id=self._request_id,
-                    recognition_usage=stt.RecognitionUsage(
-                        audio_duration=self._speech_duration,
-                    ),
-                )
-            )
-            self._speech_duration = 0
-
     def _process_stream_event(self, data: STTEventMessage) -> None:
         if request_id := data.get("request_id"):
             self._request_id = request_id
@@ -464,7 +434,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 return
             transcript = data["transcript"] or self._current_transcript
 
-            self._send_recognition_usage_event()
             self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, transcript)
             if not self.closed:
                 self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
@@ -474,12 +443,13 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
             return
 
         if data["type"] == "error":
-            message = data.get("message") or data.get("title") or "unknown error from cartesia"
-            status_code = data.get("status_code") or 500
-            logger.warning("cartesia sent an error", extra={"lk.pii.data": data})
-            if status_code >= 500:
-                raise APIConnectionError(message=message, retryable=True)
-            return
+            # an HTTP-style status: a 5xx is retried, a rejected request is not
+            raise APIStatusError(
+                "Cartesia STT returned an error",
+                status_code=data.get("status_code") or 500,
+                body=data,
+                detail=data.get("message") or data.get("title"),
+            )
 
         logger.warning("received unexpected message from Cartesia STT", extra={"lk.pii.data": data})
 

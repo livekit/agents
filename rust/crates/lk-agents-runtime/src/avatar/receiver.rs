@@ -91,7 +91,7 @@ impl RxInner {
                 if self.ended() {
                     return Ok(());
                 }
-                let _ = wake.changed().await;
+                wake.changed().await.expect("the producer is a field of self");
                 continue;
             };
             let mut reader = self.state.lock().begin(&stream.info, self.frame_size);
@@ -382,7 +382,10 @@ impl DataStreamAudioReceiver {
         };
         if let Err(error) = routed {
             let deadline = inner.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-            let _ = streams.close(deadline).await;
+            let closed = streams.close(deadline).await;
+            if closed != lk_agents_abi::Closed::Clean {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, outcome:? = closed; "avatar audio streams cleanup incomplete");
+            }
             return Err(error);
         }
         let pump = Arc::clone(inner).admit_streams(streams);
@@ -408,7 +411,10 @@ impl DataStreamAudioReceiver {
         if let Err(error) = admitted {
             let _ = inner.room.unregister_byte_stream_handler(AUDIO_STREAM_TOPIC);
             let deadline = inner.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-            let _ = streams.close(deadline).await;
+            let closed = streams.close(deadline).await;
+            if closed != lk_agents_abi::Closed::Clean {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, outcome:? = closed; "avatar audio streams cleanup incomplete");
+            }
             return Err(error);
         }
         Ok(streams)
@@ -471,7 +477,7 @@ impl DataStreamAudioReceiver {
             if let Some(item) = self.inner.state.lock().take()? {
                 return Ok(item);
             }
-            let _ = wake.changed().await;
+            wake.changed().await.expect("the producer is a field of self");
         }
     }
 

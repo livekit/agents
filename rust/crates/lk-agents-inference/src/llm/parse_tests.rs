@@ -309,3 +309,18 @@ fn tool_boundary_is_visible_before_completion() {
     assert_eq!(calls(&done).len(), 1);
     assert_eq!(calls(&done)[0].arguments, r#"{"q":"x"}"#);
 }
+
+// Catches: a stream that ends without a `finish_reason` dropping the call it was streaming.
+#[test]
+fn a_call_still_open_when_the_stream_ends_is_closed() {
+    let mut acc = ChoiceAccumulator::new();
+    parse(
+        &mut acc,
+        json!({"id": "c", "choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_1", "function": {"name": "lookup", "arguments": "{}"}}
+        ]}}]}),
+    );
+    let done = acc.finish().expect("the open call closes at the end");
+    assert_eq!(calls(&done)[0].call_id, "call_1");
+    assert!(acc.finish().is_none(), "closed once");
+}

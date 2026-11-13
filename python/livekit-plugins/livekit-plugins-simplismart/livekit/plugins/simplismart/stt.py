@@ -19,9 +19,7 @@ This module provides an STT implementation that uses the SimpliSmart API.
 
 import asyncio
 import base64
-import json
 import os
-import traceback
 from collections.abc import Callable
 from typing import Any, Literal, cast
 from urllib.parse import urlparse
@@ -33,7 +31,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     LanguageCode,
     http,
     stt,
@@ -227,15 +224,7 @@ class STT(stt.STT):
                 },
                 conn_options=conn_options,
             ) as res:
-                if res.status != 200:
-                    error_text = await res.text()
-                    logger.error(f"Simplismart API error: {res.status} - {error_text}")
-                    raise APIStatusError(
-                        message=f"Simplismart API Error: {error_text}",
-                        status_code=res.status,
-                        request_id=None,
-                        body=error_text,
-                    )
+                await res.raise_for_status()
 
                 response_json = cast(dict[str, Any], await res.json())
                 timestamps = response_json.get("timestamps", [])
@@ -266,8 +255,7 @@ class STT(stt.STT):
         except APIError:
             raise
         except Exception as e:
-            logger.error(f"Error during Simplismart STT processing: {traceback.format_exc()}")
-            raise APIConnectionError(f"Unexpected error in Simplismart STT: {e}") from e
+            raise APIConnectionError("Unexpected error in Simplismart STT", detail=str(e)) from e
 
     def stream(
         self,
@@ -337,14 +325,11 @@ class SpeechStream(stt.RecognizeStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=self._SAMPLE_RATE)
         self._api_key = api_key
         self._session = http_session
-        self._reconnect_event = asyncio.Event()
         self._request_id = str(id(self))
         self.ws_url = base_url
         self._on_closed = on_closed
 
     async def _run(self) -> None:
-
-        @utils.log_exceptions(logger=logger)
         async def send_task(ws: http.WebSocket) -> None:
             # forward audio to simplismart in chunks of 50ms
             samples_50ms = self._SAMPLE_RATE // 20
@@ -364,63 +349,43 @@ class SpeechStream(stt.RecognizeStream):
                 for frame in frames:
                     await ws.send_bytes(frame.data.tobytes())
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: http.WebSocket) -> None:
             while True:
                 try:
                     msg = await ws.receive()
-                except APIConnectionError as e:
+                except APIConnectionError:
                     if self._session.closed:
                         return
-                    # the heartbeat closes the socket when a ping goes unanswered
-                    logger.warning("simplismart connection lost: %r", e)
-                    self._reconnect_event.set()
-                    return
-
+                    raise
                 if msg.type == http.WebSocketMessageType.CLOSE:
-                    # close is expected, see SpeechStream.aclose
-                    # or when the agent session ends, the http session is closed
+                    # the agent session ending closes the http session
                     if self._session.closed:
                         return
-
-                    # this will trigger a reconnection, see the _run loop
-                    self._reconnect_event.set()
-                    return
-
+                    raise ws.close_error("Simplismart STT connection closed")
                 if msg.type != http.WebSocketMessageType.BINARY:
                     logger.warning("unexpected simplismart message type %s", msg.type)
                     continue
-
                 try:
-                    self._handle_transcript_data(msg.binary.decode("utf-8"))
-                except Exception:
-                    logger.exception("failed to process simplismart message")
+                    transcript = msg.binary.decode("utf-8")
+                except UnicodeDecodeError as e:
+                    raise APIConnectionError(
+                        "Simplismart STT sent a malformed message", retryable=False
+                    ) from e
+                self._handle_transcript_data(transcript)
 
-        ws: http.WebSocket | None = None
-
-        while True:
-            try:
-                ws = await self._connect_ws()
-                await self._send_initial_config(ws)
-                async with utils.aio.TaskSet() as tasks:
-                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-                    reconnect = tasks.spawn(self._reconnect_event.wait())
-                    if await tasks.first_completed(io, reconnect) is not reconnect:
-                        break
-                    self._reconnect_event.clear()
-
-            finally:
-                if ws is not None:
-                    await ws.close()
+        ws = await self._connect_ws()
+        try:
+            await ws.send_json({"language": self._opts.language})
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
+        finally:
+            await ws.close()
 
     async def _connect_ws(self) -> http.WebSocket:
         return await self._session.ws_connect(
             self.ws_url,
             headers={"Authorization": f"Bearer {self._api_key}"},
-            # Without this a silently dropped socket (half-open TCP, no FIN/RST)
-            # is never noticed: recv_task parks on ws.receive() forever, and the
-            # reconnect in _run is only ever triggered by that task ending.
-            # Matches the Deepgram and Muse STT plugins.
+            # notices a silently dropped socket (half-open TCP, no FIN/RST)
             heartbeat=30.0,
             conn_options=self._conn_options,
         )
@@ -431,75 +396,15 @@ class SpeechStream(stt.RecognizeStream):
         # Release the STT's strong ownership only after session cleanup succeeds.
         self._on_closed(self)
 
-    async def _send_initial_config(self, ws: http.WebSocket) -> None:
-        """Send initial configuration message with language for Simplismart models."""
-        try:
-            config_message = {"language": self._opts.language}
-            await ws.send_json(config_message)
-            logger.info(
-                "Sent initial config for Simplismart model",
-                extra={"request_id": self._request_id, "language": self._opts.language},
-            )
-        except Exception as e:
-            logger.error(
-                f"Failed to send initial configuration: {e}",
-                extra={"request_id": self._request_id},
-                exc_info=True,
-            )
-            raise APIConnectionError(f"Failed to send initial config: {e}") from e
-
-    def _handle_transcript_data(self, data: str) -> None:
-        """Handle transcription result messages."""
-        transcript_text = data
-        request_id = self._request_id
-
-        try:
-            # Create usage event with proper metrics extraction
-            metrics: dict[str, float] = {}
-            request_data = {
-                "original_id": request_id,
-                "processing_latency": metrics.get("processing_latency", 0.0),
-            }
-            usage_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=json.dumps(request_data),
-                recognition_usage=stt.RecognitionUsage(
-                    audio_duration=metrics.get("audio_duration", 0.0),
-                ),
-            )
-            self.send(usage_event)
-
-            # Create speech data
-            speech_data = stt.SpeechData(
-                language=LanguageCode(self._opts.language or "en"),
-                text=transcript_text,
-            )
-
-            # Create final transcript event with request_id
-            speech_event = stt.SpeechEvent(
+    def _handle_transcript_data(self, transcript: str) -> None:
+        self.send(
+            stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                request_id=request_id,
-                alternatives=[speech_data],
+                request_id=self._request_id,
+                alternatives=[
+                    stt.SpeechData(
+                        language=LanguageCode(self._opts.language or "en"), text=transcript
+                    )
+                ],
             )
-            self.send(speech_event)
-
-            logger.debug(
-                "Transcript processed successfully",
-                extra={
-                    "request_id": self._request_id,
-                    "text_length": len(transcript_text),
-                    "language": self._opts.language,
-                    "confidence": speech_data.confidence,
-                },
-            )
-
-        except Exception as e:
-            logger.error(
-                f"Error processing transcript data: {e}",
-                extra={
-                    "request_id": self._request_id,
-                    "lk.pii.transcript_text": transcript_text,
-                },
-                exc_info=True,
-            )
-            raise
+        )

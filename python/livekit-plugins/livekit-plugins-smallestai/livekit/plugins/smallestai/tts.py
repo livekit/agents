@@ -30,7 +30,6 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
-    create_api_error_from_http,
     http,
     tokenize,
     tts,
@@ -40,13 +39,14 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
-from .log import logger
 from .models import TTSEncoding, TTSModels
 from .version import __version__
 
 NUM_CHANNELS = 1
 SMALLEST_BASE_URL = "https://api.smallest.ai/waves/v1"
 SMALLEST_WS_URL = "wss://api.smallest.ai/waves/v1/tts/live"
+# G.711 output_format values and the mime types the audio emitter decodes them as
+_OUTPUT_FORMAT_MIME = {"ulaw": "audio/pcmu", "alaw": "audio/pcma"}
 
 # Continuations gives no terminal marker for the last `complete` frame, so completion
 # is inferred: this many idle seconds after the closing fragment, with no further
@@ -320,15 +320,15 @@ class ChunkedStream(tts.ChunkedStream):
                 json=data,
                 conn_options=self._conn_options,
             ) as resp:
-                if resp.status >= 400:
-                    body = await resp.text()
-                    raise create_api_error_from_http(body, status=resp.status)
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    mime_type=f"audio/{self._opts.output_format}",
+                    mime_type=_OUTPUT_FORMAT_MIME.get(
+                        self._opts.output_format, f"audio/{self._opts.output_format}"
+                    ),
                 )
 
                 async for chunk in resp.iter_bytes():
@@ -494,6 +494,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 final_pkt["flush"] = True
             await ws.send_str(json.dumps(final_pkt))
             ctx_state["finalized"] = True
+            # the read deadline runs only from here: before, a pause in the text owes nothing
+            self._core_attempts.expect_response(final=True)
         return sent_any
 
     async def _recv_task(
@@ -508,7 +510,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         """
         if not self._opts.use_continuations:
             while True:
-                msg = await self._recv_one(ws, timeout=self._conn_options.read_timeout)
+                msg = await self._recv_one(ws, timeout=None)
                 status = self._parse_status_event(msg, output_emitter)
                 if status == "complete":
                     return True
@@ -525,25 +527,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         # underlying connection when this heuristic (rather than an explicit signal) is
         # what ended the loop - see _run.
         #
-        # Before the closing fragment is sent, `conn_options.read_timeout` bounds inactivity
-        # (like it does for legacy's single `ws.receive(timeout=...)`), not the whole
-        # pre-finalize phase: a long input segment can legitimately take longer than
-        # that to finish streaming from the caller, and each received frame proves the
-        # connection is still alive, so the deadline is pushed out on every frame
-        # instead of being measured once from task startup.
-        #
-        # `finalized` alone isn't enough to call it done, either: a short segment can
-        # finalize within milliseconds of the first token, well before the server's
-        # TTFB. If the idle timeout fired before any `chunk` ever arrived, that's the
-        # server still warming up, not silence after completion - keep polling (bounded
-        # by the same rolling `inactivity_deadline`) until either audio shows up or the
-        # deadline raises a real timeout, instead of returning a silent empty segment.
-        event_loop = asyncio.get_event_loop()
-        inactivity_deadline = (
-            None
-            if self._conn_options.read_timeout is None
-            else event_loop.time() + self._conn_options.read_timeout
-        )
+        # Inactivity is bounded by the read deadline, which runs only once the closing
+        # fragment is sent; a finalized segment with no audio yet is the server warming up.
         received_chunk = False
         while True:
             try:
@@ -551,16 +536,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             except APITimeoutError:
                 if ctx_state["finalized"] and received_chunk:
                     return False
-                if inactivity_deadline is not None and event_loop.time() >= inactivity_deadline:
-                    raise
                 continue
-            inactivity_deadline = (
-                None
-                if self._conn_options.read_timeout is None
-                else event_loop.time() + self._conn_options.read_timeout
-            )
-            status = self._parse_status_event(msg, output_emitter)
-            if status == "chunk":
+            if self._parse_status_event(msg, output_emitter) == "chunk":
                 received_chunk = True
 
     async def _recv_one(
@@ -568,11 +545,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> http.WebSocketMessage:
         msg = await ws.receive(timeout=timeout)
         if msg.type is http.WebSocketMessageType.CLOSE:
-            raise APIStatusError(
-                "SmallestAI WebSocket closed unexpectedly",
-                status_code=ws.close_code or -1,
-                body=str(msg.data),
-            )
+            raise ws.close_error("SmallestAI WebSocket closed unexpectedly")
         return msg
 
     def _parse_status_event(
@@ -587,6 +560,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         if status == "chunk":
             audio_b64 = parsed.data.audio
             if audio_b64:
+                self._core_attempts.audio_received()
                 output_emitter.push(base64.b64decode(audio_b64))
         elif status == "word_timestamp":
             word = parsed.data.word
@@ -597,15 +571,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     TranscriptChunk(text=word, start_time=start, end_time=end)
                 )
         elif status == "error":
-            # The provider's error message may echo back a fragment of the input text
-            # (e.g. "unsupported character in text: ..."), so it's logged separately
-            # under a PII-tagged key instead of being embedded in the exception message,
-            # which flows into TTS telemetry/traces.
-            provider_message = parsed.message
-            logger.error(
-                "SmallestAI TTS error", extra={"lk.pii.provider_message": provider_message}
-            )
-            raise APIConnectionError("SmallestAI TTS error")
+            raise APIConnectionError("SmallestAI TTS error", detail=parsed.message)
         return status
 
 

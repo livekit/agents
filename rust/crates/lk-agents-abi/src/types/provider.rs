@@ -145,6 +145,15 @@ pub trait ProviderAttempts: Send + Sync + Sized + 'static {
     /// A recognition event, for the stream's read deadline and transcript completion.
     #[host(call)]
     fn observe(&self, event: SpeechEvent);
+    /// Seconds of audio an attempt of a recognition took from its input, measured for a
+    /// provider that does not report its own usage: the `RECOGNITION_USAGE` to send once
+    /// 5 seconds accumulated.
+    #[host(call)]
+    fn audio_taken(&self, seconds: f64) -> Option<SpeechEvent>;
+    /// The `RECOGNITION_USAGE` of the audio taken since the last report, sent when an attempt
+    /// ends, failed or not.
+    #[host(call)]
+    fn unreported_usage(&self) -> Option<SpeechEvent>;
     /// Whether retries were exhausted: `run()` then raised `APIConnectionError` from the last
     /// attempt's error, which the request's ending `error` event carries.
     #[host(getter)]

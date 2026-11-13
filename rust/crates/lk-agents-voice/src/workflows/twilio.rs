@@ -36,6 +36,40 @@ pub fn complete_instead(error: &TwilioError) -> bool {
     matches!(error, TwilioError::Status { status: 400, code: Some(NOT_CANCELLABLE) })
 }
 
+/// How a call creation ended, as the dial heard it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Creation {
+    Created(String),
+    Failed(TwilioError),
+    /// The request may have reached Twilio, but its answer was lost.
+    Lost,
+}
+
+/// What a dial owes a call creation it gives up on.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Abandon {
+    /// Twilio made no call.
+    Nothing,
+    /// The call is known: cancel it.
+    Cancel(String),
+    /// Twilio may have made a call the dial cannot name. Only the transfer's own human-agent
+    /// room is that call's: deleting it ends the call once answered, and no other transfer's.
+    DeleteRoom,
+}
+
+/// A created call is cancelled; a refusal made none; a lost answer, a reply without a SID or a
+/// server error may follow a call Twilio committed.
+pub fn abandon(creation: Creation) -> Abandon {
+    match creation {
+        Creation::Created(sid) => Abandon::Cancel(sid),
+        Creation::Lost | Creation::Failed(TwilioError::NoCallSid) => Abandon::DeleteRoom,
+        Creation::Failed(TwilioError::Status { status, .. }) if status >= 500 => {
+            Abandon::DeleteRoom
+        }
+        Creation::Failed(TwilioError::Status { .. }) => Abandon::Nothing,
+    }
+}
+
 /// The call's TwiML: a stream to the connector's URL.
 pub fn twiml(connect_url: &str) -> String {
     format!("<Response><Connect><Stream url={}/></Connect></Response>", quoteattr(connect_url))
@@ -61,6 +95,19 @@ fn quoteattr(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: a creation whose answer was lost left ringing, or a refused one answered with a
+    // cleanup that could reach another transfer's call.
+    #[test]
+    fn only_a_creation_that_may_have_made_an_unnamed_call_deletes_the_room() {
+        let refused = TwilioError::Status { status: 400, code: Some(21210) };
+        let failed = TwilioError::Status { status: 503, code: None };
+        assert_eq!(abandon(Creation::Created("CA1".into())), Abandon::Cancel("CA1".into()));
+        assert_eq!(abandon(Creation::Lost), Abandon::DeleteRoom);
+        assert_eq!(abandon(Creation::Failed(TwilioError::NoCallSid)), Abandon::DeleteRoom);
+        assert_eq!(abandon(Creation::Failed(failed)), Abandon::DeleteRoom);
+        assert_eq!(abandon(Creation::Failed(refused)), Abandon::Nothing);
+    }
 
     #[test]
     fn twiml_attributes_are_quoted_as_saxutils() {

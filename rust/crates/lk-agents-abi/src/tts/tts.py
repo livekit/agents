@@ -266,12 +266,6 @@ class TTS(
     def _core_markup_provider(self) -> str:
         return self.markup._provider_key()
 
-    def _core_text_unit(self) -> str:
-        return "sentences"
-
-    def _core_max_text_len(self) -> int | None:
-        return None
-
     def _core_retries_itself(self) -> bool:
         return False
 
@@ -395,7 +389,9 @@ class ChunkedStream(ABC):
 
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
-        await aio.cancel_and_wait(self._synthesize_task)
+        await aio.cancel_and_wait(
+            self._synthesize_task, timeout=self._core_attempts.cleanup_timeout
+        )
         self._event_ch.close()
         # The reader is done with the stream: what was buffered for it is dropped, not returned.
         while not self._event_ch.empty():
@@ -580,7 +576,7 @@ class SynthesizeStream(ABC):
 
     async def aclose(self) -> None:
         """Close the stream immediately"""
-        await aio.cancel_and_wait(self._task)
+        await aio.cancel_and_wait(self._task, timeout=self._core_attempts.cleanup_timeout)
         self._event_ch.close()
         # The reader is done with the stream: what was buffered for it is dropped, not returned.
         while not self._event_ch.empty():

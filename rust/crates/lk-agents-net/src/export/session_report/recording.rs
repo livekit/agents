@@ -68,26 +68,28 @@ pub(crate) async fn upload(
                     .body(body.into_body())
             })
             .await;
-        let (error, retry_after) = match result {
+        let error = match result {
             Ok(()) => return Ok(()),
             Err(PostError::Refused { status, body }) => {
                 let message = format!("recording upload failed with HTTP {status}");
-                let retry_after = retry_delay(&body);
+                let retry_after = retry_delay(&body).map(Duration::from_millis);
                 let error = ApiError::from_http(&message, status.into(), None);
                 let retryable = error.retryable || retry_after.is_some();
                 failure = PostError::Refused { status, body };
-                (error.with_retryable(retryable), retry_after)
+                ApiError {
+                    said: lk_agents_abi::errors::ProviderSaid::boxed(None, retry_after),
+                    ..error.with_retryable(retryable)
+                }
             }
             Err(PostError::Transport(err)) => {
                 let message = format!("recording upload transport failed: {err}");
                 let retryable = err.is_connect() || err.is_timeout() || err.is_body();
                 failure = PostError::Transport(err);
-                (ApiError::connection(Some(message)).with_retryable(retryable), None)
+                ApiError::connection(Some(message)).with_retryable(retryable)
             }
             Err(error) => return Err(error),
         };
-        let retry_after = Duration::from_millis(retry_after.unwrap_or(0));
-        attempts.failed_retry_after(attempt, error, retry_after, clock.now(), &mut steps);
+        attempts.failed_error(attempt, error, clock.now(), &mut steps);
         attempts.closed(attempt, clock.now(), &mut steps);
     }
 }

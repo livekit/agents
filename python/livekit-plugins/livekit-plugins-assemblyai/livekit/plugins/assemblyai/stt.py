@@ -32,7 +32,6 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     APITimeoutError,
     LanguageCode,
     http,
@@ -523,7 +522,6 @@ class SpeechStream(stt.RecognizeStream):
         self._api_key = api_key
         self._session = http_session
         self._base_url = base_url
-        self._speech_duration: float = 0
         self._last_preflight_start_time: float = 0
         self._config_update_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         self._session_id: str | None = None
@@ -656,7 +654,6 @@ class SpeechStream(stt.RecognizeStream):
                             # SpeechStarted.timestamp.
                             self.start_time = time.time()
                             anchored = True
-                        self._speech_duration += frame.duration
                         await ws.send_bytes(frame.data.tobytes())
                         self._last_frame_sent_at = time.time()
 
@@ -704,16 +701,8 @@ class SpeechStream(stt.RecognizeStream):
                     if closing_ws:  # close is expected, see SpeechStream.aclose
                         return
 
-                    logger.warning(
-                        "AssemblyAI WebSocket closed unexpectedly session=%s code=%s data=%s",
-                        self._session_id,
-                        ws.close_code,
-                        msg.data,
-                    )
-                    raise APIStatusError(
-                        "AssemblyAI connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
+                    raise ws.close_error(
+                        f"AssemblyAI connection closed unexpectedly session={self._session_id}"
                     )
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
@@ -724,13 +713,10 @@ class SpeechStream(stt.RecognizeStream):
                     )
                     continue
 
-                try:
-                    self._process_stream_event(json.loads(msg.data))
-                except Exception:
-                    logger.exception(
-                        "failed to process AssemblyAI message session=%s",
-                        self._session_id,
-                    )
+                data = json.loads(msg.data)
+                if isinstance(data, dict) and "error" in data:
+                    continue  # the close that follows carries it as its reason
+                self._process_stream_event(data)
 
         async def send_config_task(ws: http.WebSocket) -> None:
             """Send config updates and control messages immediately, independent of audio."""
@@ -1058,12 +1044,4 @@ class SpeechStream(stt.RecognizeStream):
 
             self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
-            if self._speech_duration > 0.0:
-                usage_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    alternatives=[],
-                    recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
-                )
-                self.send(usage_event)
-                self._speech_duration = 0
-                self._last_preflight_start_time = 0.0
+            self._last_preflight_start_time = 0.0

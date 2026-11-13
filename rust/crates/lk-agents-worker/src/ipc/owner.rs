@@ -212,7 +212,11 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             if launched {
                 let completion = supervised.completion();
                 state.lock().completion = Some(completion.clone());
-                let _ = launcher.completed(&telemetry::Cx::NONE, &context, completion).await;
+                if let Err(error) =
+                    launcher.completed(&telemetry::Cx::NONE, &context, completion).await
+                {
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "the job launcher's completion callback raised: {error}");
+                }
             }
             launched
         });

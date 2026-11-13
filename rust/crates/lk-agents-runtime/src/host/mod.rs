@@ -132,7 +132,7 @@ impl HostInvoker {
             }
         });
         self.tasks.push(Box::pin(async move {
-            let _ = task.await;
+            task.settled().await;
             operation
         }));
         operation

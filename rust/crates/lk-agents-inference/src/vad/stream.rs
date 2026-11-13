@@ -114,15 +114,24 @@ impl StreamOutput<VadOutput> for Output {
         Box::pin(async move {
             self.cancelled.cancel();
             self.events.close();
-            let Some(mut worker) = self.worker.take() else { return Closed::Clean };
+            let Some(worker) = self.worker.take() else { return Closed::Clean };
             // A timed-out receipt transfers to Job's supervisor; its permit remains held
             // until a native model that ignored cancellation actually returns.
             let deadline =
                 deadline.min(self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT));
-            Closed::bounded(self.clock.as_ref(), deadline, async {
-                let _ = (&mut worker).await;
-            })
-            .await
+            let limit = deadline.saturating_duration_since(self.clock.now());
+            match lk_agents_abi::timeout(self.clock.as_ref(), limit, worker).await {
+                Ok(Ok(Ok(()))) => Closed::Clean,
+                Ok(Ok(Err(error))) => {
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "VAD worker failed while closing: {error}");
+                    Closed::Failed
+                }
+                Ok(Err(lost)) => {
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "VAD worker failed while closing: {lost}");
+                    Closed::Failed
+                }
+                Err(_) => Closed::TimedOut,
+            }
         })
     }
 }

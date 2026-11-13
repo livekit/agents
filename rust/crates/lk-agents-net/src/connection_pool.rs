@@ -120,21 +120,9 @@ impl lk_agents_abi::utils::connection_pool::ConnectionPoolState for ConnectionPo
         self.closing.extend(std::mem::take(&mut self.retired));
     }
 
-    /// The next connection to close; it stays queued until `closed`, so a close the host abandons
-    /// (cancelled) is not lost.
-    fn next_closing(&self) -> Option<u64> {
-        self.closing.last().copied()
-    }
-
-    fn closed(&mut self, id: u64) {
-        self.closing.retain(|c| *c != id);
-    }
-}
-
-impl ConnectionPool {
-    /// `next_closing` and `closed` in one, for a caller whose close cannot be abandoned.
-    pub fn pop_closing(&mut self) -> Option<u64> {
-        self.closing.pop()
+    /// The caller hands each one to a close it owns in the same step, so none is abandoned.
+    fn take_to_close(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.closing)
     }
 }
 
@@ -144,12 +132,7 @@ mod tests {
     use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
 
     fn drain(p: &mut ConnectionPool) -> Vec<u64> {
-        let mut out = vec![];
-        while let Some(id) = p.next_closing() {
-            p.closed(id);
-            out.push(id);
-        }
-        out
+        p.take_to_close()
     }
 
     #[test]
@@ -196,18 +179,16 @@ mod tests {
     }
 
     #[test]
-    fn close_all_takes_the_retired_and_an_abandoned_close_stays_queued() {
+    fn close_all_takes_the_retired_and_each_close_is_taken_once() {
         let mut p = ConnectionPool::new(None, false);
         p.connected(1, 0.0, 0, None);
         p.connected(2, 0.0, 0, None);
         p.put(2);
         p.close_all();
-        let first = p.next_closing().unwrap();
-        // not marked closed: still queued
-        assert_eq!(p.next_closing(), Some(first));
         let mut all = drain(&mut p);
         all.sort();
         assert_eq!(all, vec![1, 2]);
+        assert!(drain(&mut p).is_empty(), "a taken close is not handed out again");
         // a retired connection removed by its holder is closed once
         p.connected(3, 0.0, p.generation(), None);
         p.invalidate();

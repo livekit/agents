@@ -336,7 +336,11 @@ pub mod fallback {
             "policy-tts".into()
         }
         fn capabilities(&self) -> TtsCapabilities {
-            TtsCapabilities { streaming: self.streaming, aligned_transcript: false }
+            TtsCapabilities {
+                streaming: self.streaming,
+                aligned_transcript: false,
+                ..Default::default()
+            }
         }
         fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
             Ok(24_000)
@@ -392,7 +396,7 @@ pub mod fallback {
             "policy-stt".into()
         }
         fn capabilities(&self) -> SttCapabilities {
-            SttCapabilities { streaming: true, ..Default::default() }
+            SttCapabilities { streaming: true, reports_usage: true, ..Default::default() }
         }
         fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
             Some(Arc::new(Self { conn: *conn, ..self.clone() }))

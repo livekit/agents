@@ -1,6 +1,7 @@
 use lk_agents_abi::a2a::turn::{HandlerOutput, HandlerPort, TurnEvent, TurnHost};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{BoxFuture, Clock, Ts};
+use lk_agents_net::outbox::{Outbox, outbox};
 use lk_agents_net::task::Cancellation;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
@@ -26,16 +27,16 @@ pub struct SessionWrite {
 /// What the handler reports through.
 pub struct HandlerTurn {
     task_id: String,
-    reports: mpsc::Sender<Report>,
+    /// A turn that ended reads no more reports: a checkpoint then counts as a go-ahead and a
+    /// session write as refused, through their dropped reply.
+    reports: Outbox<Report>,
 }
 
 impl HandlerPort for HandlerTurn {
     fn checkpoint(&self) -> BoxFuture<'_, bool> {
         Box::pin(async move {
             let (verdict, answered) = oneshot::channel();
-            if self.reports.send(Report::Checkpoint(verdict)).await.is_err() {
-                return true;
-            }
+            self.reports.send(Report::Checkpoint(verdict)).await;
             answered.await.unwrap_or(true)
         })
     }
@@ -46,12 +47,7 @@ impl HandlerPort for HandlerTurn {
     ) -> BoxFuture<'_, Result<(), lk_agents_abi::storage::StorageError>> {
         Box::pin(async move {
             let (reply, received) = oneshot::channel();
-            self.reports
-                .send(Report::Session(SessionWrite { state, history, reply }))
-                .await
-                .map_err(|_| {
-                    lk_agents_abi::storage::StorageError::Invalid("the turn has ended".into())
-                })?;
+            self.reports.send(Report::Session(SessionWrite { state, history, reply })).await;
             received.await.map_err(|_| {
                 lk_agents_abi::storage::StorageError::Invalid("the turn has ended".into())
             })?
@@ -60,13 +56,13 @@ impl HandlerPort for HandlerTurn {
     fn progress(&self, text: String) -> BoxFuture<'_, ()> {
         let event = TurnEvent::Progress { task_id: self.task_id.clone(), text };
         Box::pin(async move {
-            let _ = self.reports.send(Report::Event(event)).await;
+            self.reports.send(Report::Event(event)).await;
         })
     }
     fn token(&self, delta: String) -> BoxFuture<'_, ()> {
         let event = TurnEvent::Token { task_id: self.task_id.clone(), delta };
         Box::pin(async move {
-            let _ = self.reports.send(Report::Event(event)).await;
+            self.reports.send(Report::Event(event)).await;
         })
     }
 }
@@ -115,7 +111,7 @@ impl Handler {
         cx: crate::telemetry::Cx,
         ctx: lk_agents_abi::a2a::turn::TurnContext,
     ) -> Self {
-        let (reports, unread) = mpsc::channel(REPORT_QUEUE);
+        let (reports, unread) = outbox(REPORT_QUEUE);
         let turn = Arc::new(HandlerTurn { task_id: ctx.task_id.clone(), reports });
         let cancel = Arc::new(Cancellation::default());
         let signal = cancel.clone();

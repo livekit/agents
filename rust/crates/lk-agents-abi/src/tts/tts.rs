@@ -9,6 +9,10 @@ use crate::{ApiConnectOptions, AudioFrame};
 
 // `TTSCapabilities` (`tts/tts.py`). The payload `FallbackTts`'s `capabilities` getter builds by
 // name is generated too, since a forgotten key would silently take the reference's default.
+/// What a TTS supports, fixed at construction.
+///
+/// Usage: a figure the provider reports always wins. The characters it reports it billed
+/// (`report_usage`) replace the ones the framework counts for that segment.
 #[crate::host(record(
     module = "tts",
     path = "livekit.agents.tts",
@@ -25,6 +29,12 @@ pub struct TtsCapabilities {
     /// Whether this TTS supports aligned transcripts with word timestamps
     #[host(default = false)]
     pub aligned_transcript: bool,
+    /// What each chunk of a stream's input holds: a provider that buffers text itself takes words
+    #[host(default = "sentences")]
+    pub text_unit: TextUnit,
+    /// The most characters one request may carry; None takes the markup's known limit
+    #[host(default = None)]
+    pub max_text_len: Option<usize>,
 }
 
 impl TtsCapabilities {
@@ -327,25 +337,12 @@ pub trait Tts: Send + Sync {
         Ok(String::new())
     }
 
-    // What each chunk of a stream's input holds: a provider that buffers text itself takes words.
-    #[host(read_once, name = "_core_text_unit")]
-    fn text_unit(&self) -> TextUnit {
-        TextUnit::Sentences
-    }
-
     // Whether it retries its own attempts within the connection policy it is given (a stream
     // adapter retries each chunk, a fallback chain its members): a request over it runs once and
     // hands it the whole policy; any other gets one attempt's view (`retry::owner`).
     #[host(read_once, name = "_core_retries_itself")]
     fn retries_itself(&self) -> bool {
         false
-    }
-
-    // The most characters one request may carry; `None` takes its dialect's known limit, else
-    // the stage's default ceiling.
-    #[host(read_once, name = "_core_max_text_len")]
-    fn max_text_len(&self) -> Option<usize> {
-        None
     }
 
     // How its text is split and paced: `tts.options`, which it shares with every synthesis over

@@ -1,4 +1,3 @@
-import asyncio
 import os
 from json import JSONDecodeError
 
@@ -7,16 +6,14 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     NotGivenOr,
     http,
     utils,
 )
 
 from .errors import DIDException
-from .log import logger
 
 DEFAULT_API_URL = "https://api.d-id.com"
 
@@ -63,37 +60,22 @@ class DIDAPI:
 
     async def _post(self, endpoint: str, payload: dict[str, JsonValue]) -> _JoinSessionResponse:
         url = f"{self._api_url}/{endpoint}"
-        num_attempts = self._conn_options.max_retry + 1
-        for attempt in range(num_attempts):
-            try:
-                async with (self._session or http.http_session()).post(
-                    url,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Basic {self._api_key}",
-                    },
-                    json=payload,
-                    conn_options=self._conn_options,
-                ) as response:
-                    if not response.ok:
-                        text = await response.text()
-                        raise APIStatusError(
-                            "D-ID API error",
-                            status_code=response.status,
-                            body=text,
-                        )
-                    return _JoinSessionResponse.model_validate(await response.json())
-            except (ValidationError, JSONDecodeError) as exc:
-                raise APIConnectionError(
-                    "Did returned an invalid response", retryable=False
-                ) from exc
-            except APIConnectionError as e:
-                logger.warning(
-                    f"D-ID API request failed (attempt {attempt + 1}/{num_attempts})",
-                    extra={"error": str(e)},
-                )
-                if attempt == num_attempts - 1:
-                    raise APIConnectionError(f"Failed to connect to D-ID API at {url}") from e
-                await asyncio.sleep(self._conn_options.retry_interval)
+        session = self._session or http.http_session()
 
-        raise APIConnectionError(f"Failed to connect to D-ID API at {url}")
+        async def request() -> _JoinSessionResponse:
+            async with session.post(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Basic {self._api_key}",
+                },
+                json=payload,
+                conn_options=self._conn_options,
+            ) as response:
+                await response.raise_for_status()
+                try:
+                    return _JoinSessionResponse.model_validate(await response.json())
+                except (ValidationError, JSONDecodeError) as exc:
+                    raise APIError("D-ID returned an invalid response", retryable=False) from exc
+
+        return await http.retry_request(request, conn_options=self._conn_options)

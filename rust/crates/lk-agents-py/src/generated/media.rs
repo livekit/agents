@@ -550,8 +550,9 @@ type AudioDecoderPushChunkInput = ::std::vec::Vec<u8>;
 
 /// `utils.media.AudioStreamDecoder`: container bytes decoded on one admitted native worker into
 /// PCM frames, which come out as soon as they are decoded. Input is queued without waiting for
-/// the decoder. One decoder decodes one stream. A failure (an unknown format, no worker admitted,
-/// invalid audio) is logged and ends the stream.
+/// the decoder. One decoder decodes one stream. A failure raises a non-retryable `APIError`: an
+/// unknown format or no worker admitted from the constructor, too much queued input from `push`,
+/// invalid audio from the iteration; only `None` ends the stream cleanly.
 #[pyclass(frozen, name = "AudioStreamDecoder", module = "livekit.agents.utils.media")]
 pub struct AudioStreamDecoder(pub(crate) ::std::sync::Arc<AudioStreamDecoderImpl>);
 
@@ -571,14 +572,20 @@ impl AudioStreamDecoder {
     ) -> PyResult<AudioStreamDecoder> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let out = py.detach(|| {
-            <AudioStreamDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::new(
-                &env,
-                sample_rate,
-                num_channels,
-                format,
-            )
-        });
+        let out = py
+            .detach(|| {
+                <AudioStreamDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::new(
+                    &env,
+                    sample_rate,
+                    num_channels,
+                    format,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::ApiError| {
+                <::lk_agents_abi::errors::ApiError as crate::py_errors::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
         ::pyo3::PyResult::Ok(AudioStreamDecoder(::std::sync::Arc::new(out)))
     }
 
@@ -594,7 +601,10 @@ impl AudioStreamDecoder {
             <AudioStreamDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::push(
                 &self.0, &chunk,
             )
-        });
+        })
+        .map_err(|e: ::lk_agents_abi::errors::ApiError| {
+            <::lk_agents_abi::errors::ApiError as crate::py_errors::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
@@ -622,7 +632,11 @@ impl AudioStreamDecoder {
                 &this,
             )
             .await
-            {
+            .map_err(|e: ::lk_agents_abi::errors::ApiError| {
+                <::lk_agents_abi::errors::ApiError as crate::py_errors::HostException>::to_py_err(
+                    &e,
+                )
+            })? {
                 Some(out) => Python::attach(|py| {
                     ::pyo3::IntoPyObjectExt::into_py_any(
                         crate::generated::records::rtc_frames::audio_frame_to_py(py, out)?,

@@ -7,9 +7,7 @@ from .._bindings import APIConnectionError, APIStatusError, APITimeoutError
 from .._generated import facades_inference_llm as _facades, public_inference_llm as _public
 from .._generated.public_inference_llm import *  # noqa: F403
 from ..llm.tool_context import Tool
-from ..log import logger
 from ..types import APIConnectOptions
-from . import extract_quota_usage
 
 if TYPE_CHECKING:
     import openai
@@ -107,7 +105,6 @@ class LLMStream(llm.LLMStream):
             pool=options.pool_timeout,
         )
         client = self._client.with_options(max_retries=0)
-        retryable = True
         parser = _core.LlmChoiceParser()
         try:
             messages, _ = await self._chat_ctx.to_provider_format(format="openai")
@@ -128,35 +125,21 @@ class LLMStream(llm.LLMStream):
                 async for chunk in stream:
                     for choice in chunk.choices:
                         if (parsed := parser.parse(chunk.id, choice.model_dump())) is not None:
-                            retryable = retryable and not parsed.has_response()
                             self.send(parsed)
                     if chunk.usage is not None and (
                         usage := _core.llm_usage_chunk(chunk.model_dump())
                     ):
                         self.send(usage)
-        except openai.APITimeoutError as e:
-            raise APITimeoutError(retryable=retryable) from e
-        except httpx.TimeoutException as e:
-            raise APITimeoutError(retryable=retryable) from e
+                if (closed := parser.finish()) is not None:
+                    self.send(closed)
+        except (openai.APITimeoutError, httpx.TimeoutException) as e:
+            raise APITimeoutError() from e
         except openai.APIStatusError as e:
-            if e.status_code == 429:
-                logger.warning(
-                    "LLM request rate limited by inference gateway",
-                    extra={
-                        "model": self._model,
-                        "request_id": e.request_id,
-                        **extract_quota_usage(e.response.headers),
-                    },
-                )
             raise APIStatusError(
-                e.message,
-                status_code=e.status_code,
-                request_id=e.request_id,
-                body=e.body,
-                retryable=retryable,
+                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
             ) from e
-        except Exception as e:
-            raise APIConnectionError(retryable=retryable) from e
+        except (openai.APIConnectionError, httpx.TransportError) as e:
+            raise APIConnectionError() from e
 
 
 def llm_from_model_string(model: str) -> llm.LLM | llm.RealtimeModel:

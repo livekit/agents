@@ -455,17 +455,14 @@ mod gil {
             "host-like".into()
         }
         fn capabilities(&self) -> TtsCapabilities {
-            TtsCapabilities { streaming: true, aligned_transcript: false }
+            // the text as pushed, unsplit: the replay reaches the sink with its first push
+            TtsCapabilities { streaming: true, text_unit: TextUnit::Text, ..Default::default() }
         }
         fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
             Ok(24_000)
         }
         fn num_channels(&self) -> u16 {
             1
-        }
-        /// The text as pushed, unsplit: the replay reaches the sink with its first push.
-        fn text_unit(&self) -> TextUnit {
-            TextUnit::Text
         }
         fn synthesize<'a>(
             &'a self,

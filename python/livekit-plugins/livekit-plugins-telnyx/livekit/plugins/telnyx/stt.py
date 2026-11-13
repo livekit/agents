@@ -12,13 +12,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     LanguageCode,
     http,
     stt,
@@ -190,8 +189,8 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _run(self) -> None:
         closing_ws = False
+        self._speaking = False
 
-        @utils.log_exceptions(logger=logger)
         async def send_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
 
@@ -220,7 +219,6 @@ class SpeechStream(stt.RecognizeStream):
             # transcript before the server closes the connection.
             closing_ws = True
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             while True:
@@ -235,19 +233,16 @@ class SpeechStream(stt.RecognizeStream):
                 if msg.type is http.WebSocketMessageType.CLOSE:
                     if closing_ws:
                         return
-                    raise APIStatusError(message="Telnyx STT WebSocket closed unexpectedly")
+                    raise ws.close_error("Telnyx STT WebSocket closed unexpectedly")
 
                 if msg.type is http.WebSocketMessageType.TEXT:
                     try:
                         data = _Transcript.model_validate_json(msg.data)
-                        logger.debug(
-                            "Telnyx STT received: is_final=%s, has_transcript=%s",
-                            data.is_final,
-                            bool(data.transcript),
-                        )
-                        self._process_stream_event(data)
-                    except Exception:
-                        logger.exception("Failed to process Telnyx STT message")
+                    except ValidationError as e:
+                        raise APIConnectionError(
+                            "Telnyx STT sent a malformed message", retryable=False
+                        ) from e
+                    self._process_stream_event(data)
 
         ws: http.WebSocket | None = None
         try:

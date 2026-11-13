@@ -17,10 +17,11 @@ from livekit.agents import (
     VoiceSession,
     inference,
     llm,
+    stt,
 )
 from livekit.agents.metrics import LLMMetrics
 from livekit.agents.types import FlushSentinel
-from tests.fakes import FakeLLM, Hang, until
+from tests.fakes import FakeLLM, FakeSTT, Hang, audio_frame, until
 
 
 @pytest.mark.parametrize("behind_fallback", [False, True])
@@ -116,3 +117,26 @@ async def test_closing_a_partial_llm_stream_exports_the_usage_already_received()
         await anext(stream)
 
     assert [(m.tokens.input_tokens, m.tokens.output_tokens) for m in metrics] == [(7, 2)]
+
+
+@pytest.mark.parametrize("behind_fallback", [False, True])
+async def test_a_directly_opened_stt_stream_reports_the_audio_it_took_once(
+    behind_fallback: bool,
+) -> None:
+    """A stream opened with `stream()`, outside a session, reports the audio its provider took as
+    usage; a `FallbackAdapter` is measured through its member, never twice."""
+    model = FakeSTT(["hello"])
+    provider = stt.FallbackAdapter([model]) if behind_fallback else model
+
+    async with provider.stream() as stream:
+        stream.push_frame(audio_frame(0.2))
+        stream.push_frame(audio_frame(0.3, level=0))
+        stream.end_input()
+        usage = [
+            event.recognition_usage.audio_duration or 0.0
+            async for event in stream
+            if event.recognition_usage is not None
+        ]
+    await provider.aclose()
+
+    assert sum(usage) == pytest.approx(0.5)

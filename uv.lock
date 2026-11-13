@@ -2906,14 +2906,10 @@ name = "livekit-plugins-gnani"
 source = { editable = "python/livekit-plugins/livekit-plugins-gnani" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "websockets" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "livekit-agents", editable = "python/livekit-agents" },
-    { name = "websockets", specifier = ">=14.0,<16.0" },
-]
+requires-dist = [{ name = "livekit-agents", editable = "python/livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-google"
@@ -3578,14 +3574,10 @@ name = "livekit-plugins-vakyam"
 source = { editable = "python/livekit-plugins/livekit-plugins-vakyam" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "websockets" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "livekit-agents", editable = "python/livekit-agents" },
-    { name = "websockets", specifier = ">=14.0,<16.0" },
-]
+requires-dist = [{ name = "livekit-agents", editable = "python/livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-xai"

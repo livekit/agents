@@ -351,7 +351,7 @@ impl ServerRuntime {
         if self.snapshot().incomplete_cleanup.is_empty() {
             let serving = self.serving.lock().take();
             if let Some(serving) = serving {
-                let _ = serving.await;
+                serving.settled().await;
             }
         }
         result

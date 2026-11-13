@@ -42,7 +42,6 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 
-from ._utils import PeriodicCollector
 from .log import logger
 
 DEFAULT_MODEL = "inworld/inworld-stt-1"
@@ -263,11 +262,8 @@ class SpeechStream(stt.RecognizeStream):
         self._ws: http.WebSocket | None = None
         self._reconnect_event = asyncio.Event()
         self._speaking = False
+        self._input_closed = False
         self._request_id = ""
-        self._audio_duration_collector: PeriodicCollector[float] = PeriodicCollector(
-            callback=self._on_audio_duration_report,
-            duration=5.0,
-        )
 
     def _build_transcribe_config(self) -> dict[str, object]:
         opts = self._opts
@@ -313,6 +309,7 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _run(self) -> None:
         while True:
+            self._input_closed = False
             try:
                 ws = await self._connect_ws()
                 self._ws = ws
@@ -329,14 +326,20 @@ class SpeechStream(stt.RecognizeStream):
                     self._reconnect_event.clear()
 
             except TimeoutError as e:
-                logger.error(f"Timeout during Inworld STT connection: {e}")
                 raise APITimeoutError("Timeout connecting to Inworld STT API") from e
             except (APIConnectionError, APIStatusError):
                 raise
             except Exception as e:
-                logger.exception(f"Unexpected error in Inworld STT: {e}")
                 raise APIConnectionError(f"Unexpected error: {e}") from e
             finally:
+                if self._speaking:
+                    self._speaking = False
+                    if not self.closed:
+                        self.send(
+                            stt.SpeechEvent(
+                                type=SpeechEventType.END_OF_SPEECH, request_id=self._request_id
+                            )
+                        )
                 if self._ws is not None:
                     await self._ws.close()
                     self._ws = None
@@ -347,57 +350,31 @@ class SpeechStream(stt.RecognizeStream):
 
         async for data in self.input:
             if isinstance(data, self.Flush):
-                self._audio_duration_collector.flush()
-                try:
-                    await self._ws.send_str(json.dumps({"endTurn": {}}))
-                except Exception as e:
-                    logger.error(f"Error sending endTurn: {e}")
-                    break
+                await self._ws.send_str(json.dumps({"endTurn": {}}))
             else:
-                self._audio_duration_collector.push(data.duration)
                 pcm_bytes = data.data.tobytes()
                 audio_b64 = base64.b64encode(pcm_bytes).decode()
-                try:
-                    await self._ws.send_str(json.dumps({"audioChunk": {"content": audio_b64}}))
-                except Exception as e:
-                    logger.error(f"Error sending audio chunk: {e}")
-                    break
+                await self._ws.send_str(json.dumps({"audioChunk": {"content": audio_b64}}))
 
-        self._audio_duration_collector.flush()
-        # Input channel closed — tell the server to close the stream
-        if self._ws:
-            try:
-                await self._ws.send_str(json.dumps({"closeStream": {}}))
-            except Exception:
-                pass
-
-    def _on_audio_duration_report(self, duration: float) -> None:
-        self.send(
-            stt.SpeechEvent(
-                type=SpeechEventType.RECOGNITION_USAGE,
-                request_id=self._request_id,
-                alternatives=[],
-                recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-            )
-        )
+        # Input channel closed: tell the server to close the stream
+        self._input_closed = True
+        await self._ws.send_str(json.dumps({"closeStream": {}}))
 
     async def _recv_messages_task(self) -> None:
         if not self._ws:
             return
 
-        try:
-            async for msg in self._ws:
-                if msg.type == http.WebSocketMessageType.TEXT:
-                    try:
-                        event = _StreamEvent.model_validate_json(msg.data)
-                    except ValidationError as exc:
-                        raise APIConnectionError(
-                            "Inworld STT sent an invalid event", retryable=False
-                        ) from exc
-                    self._process_stream_event(event)
-        except Exception as e:
-            logger.error(f"Unexpected error receiving messages: {e}")
-            raise
+        async for msg in self._ws:
+            if msg.type == http.WebSocketMessageType.TEXT:
+                try:
+                    event = _StreamEvent.model_validate_json(msg.data)
+                except ValidationError as exc:
+                    raise APIConnectionError(
+                        "Inworld STT sent an invalid event", retryable=False
+                    ) from exc
+                self._process_stream_event(event)
+        if not self._input_closed:
+            raise self._ws.close_error("Inworld STT connection closed unexpectedly")
 
     def _process_stream_event(self, event: _StreamEvent) -> None:
         result = event.result

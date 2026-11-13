@@ -26,9 +26,7 @@ BASES: dict[str, tuple[Path, frozenset[str]]] = {
                 "_core_label",
                 "_core_capabilities",
                 "_core_num_channels",
-                "_core_text_unit",
                 "_core_retries_itself",
-                "_core_max_text_len",
                 "_core_conn_options",
                 "_core_options",
             }
@@ -208,18 +206,18 @@ def test_the_check_finds_a_capability_changed_by_update_options(tmp_path: Path) 
     plugin.write_text(
         "from livekit.agents import tts\n"
         "class _Base(tts.TTS):\n"
-        "    def _core_text_unit(self):\n"
-        "        return 'words' if self._opts.words else 'sentences'\n"
+        "    def _core_num_channels(self):\n"
+        "        return 2 if self._opts.stereo else 1\n"
         "class TTS(_Base):\n"
         "    def __init__(self):\n"
         "        self._capabilities = None\n"
-        "    def update_options(self, *, streaming, words):\n"
+        "    def update_options(self, *, streaming, stereo):\n"
         "        self._capabilities.streaming = streaming\n"
-        "        self._opts.words = words\n"
+        "        self._opts.stereo = stereo\n"
         "        self._sample_rate = 16000\n"
     )
     found = "\n".join(_violations([plugin]))
     assert "TTS.update_options assigns self._capabilities.streaming" in found
-    assert "TTS.update_options assigns self._opts.words" in found
+    assert "TTS.update_options assigns self._opts.stereo" in found
     # the sample rate is read when each request is made, so changing it is fine
     assert "_sample_rate" not in found

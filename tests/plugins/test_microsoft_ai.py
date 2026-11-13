@@ -20,7 +20,7 @@ from aiohttp.test_utils import TestServer
 from multidict import CIMultiDict
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, http, stt
+from livekit.agents import APIConnectOptions, APIStatusError, http, stt
 from livekit.plugins import microsoft_ai
 from tests.fakes import until
 
@@ -157,6 +157,11 @@ def _finals(events: list[stt.SpeechEvent]) -> list[str]:
     return [event.alternatives[0].text for event in events if event.type == final]
 
 
+def _turn(events: list[stt.SpeechEvent]) -> list[stt.SpeechEvent]:
+    """The recognition's events, without the usage the framework reports."""
+    return [event for event in events if event.type != stt.SpeechEventType.RECOGNITION_USAGE]
+
+
 def _sent(peer: MicrosoftAI, kind: str) -> int:
     return sum(event["type"] == kind for event in peer.sent)
 
@@ -231,24 +236,42 @@ async def test_revisions_deltas_and_final_are_not_duplicated(microsoft: Microsof
     assert texts == ["helo", "hello", "hello ", "hello wurld", "hello world"]
     assert _finals(events) == ["hello world"]
     assert not any(event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT for event in events)
-    assert events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    assert _turn(events)[-1].type == stt.SpeechEventType.END_OF_SPEECH
 
 
-async def test_disconnect_after_audio_does_not_retry_or_replay(microsoft: MicrosoftAI) -> None:
-    """A socket lost after audio fails the stream without reconnecting or committing."""
+async def test_empty_completion_retracts_the_interim(microsoft: MicrosoftAI) -> None:
+    """A completion with no text after an interim ends the turn with an empty final."""
+    microsoft.auto_commit = False
+    instance = _stt(microsoft)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(_audio())
+        await until(lambda: _sent(microsoft, "input_audio_buffer.append"), "audio is appended")
+        socket = microsoft.socket
+        assert socket is not None
+        await _transcript(socket, "intermediate", intermediate="uh")
+        stream.end_input()
+        await until(lambda: microsoft.commits, "the turn is committed")
+        await socket.send_json({"type": "input_audio_buffer.committed", "item_id": "item-1"})
+        await _transcript(socket, "completed", transcript="")
+        events = [event async for event in stream]
+
+    assert _finals(events) == [""]
+    assert _turn(events)[-1].type == stt.SpeechEventType.END_OF_SPEECH
+
+
+async def test_disconnect_after_audio_reconnects(microsoft: MicrosoftAI) -> None:
+    """A socket lost after audio reconnects, as every streaming STT does."""
     microsoft.drop_after_audio = True
     instance = _stt(microsoft)
     options = APIConnectOptions(max_retry=3, connect_timeout=0.2, read_timeout=0.2)
 
     async with instance, instance.stream(conn_options=options) as stream:
         stream.push_frame(_audio(817))
-        with pytest.raises(APIConnectionError) as caught:
-            async for _ in stream:
-                pass
+        stream.end_input()
+        async for _ in stream:
+            pass
 
-    assert not caught.value.retryable
-    assert len(microsoft.connections) == 1
-    assert not microsoft.commits
+    assert len(microsoft.connections) == 2
 
 
 async def test_complete_wav_request_and_exact_audio_framing(microsoft: MicrosoftAI) -> None:

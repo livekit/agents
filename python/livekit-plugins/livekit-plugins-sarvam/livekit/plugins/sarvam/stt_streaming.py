@@ -33,7 +33,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
     __version__ as livekit_version,
     http,
@@ -43,7 +42,7 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from ._utils import PeriodicCollector, looks_like_error_text
+from ._utils import looks_like_error_text
 from .log import logger
 from .models import RealtimeMessage, message_request_id
 
@@ -528,13 +527,6 @@ class RealtimeSpeechStream(stt.RecognizeStream):
         self._eos_emitted_for_utterance = False
         self._stream_started_at = time.time()
         self._audio_position = 0.0
-        self._local_audio_duration = 0.0
-        self._total_reported_audio_duration = 0.0
-        self._server_audio_duration_reported = False
-        self._audio_duration_collector = PeriodicCollector(
-            callback=self._on_audio_duration_report,
-            duration=5.0,
-        )
         self._logger = logger
 
     @property
@@ -754,18 +746,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
             self._request_id = request_id
 
     async def aclose(self) -> None:
-        """Close the connection, reporting any audio duration not yet billed.
-
-        Agents normally end a stream here rather than waiting for ``session.end``, so
-        the pending duration is flushed before the base class cancels the tasks that
-        deliver usage metrics.
-        """
         try:
-            if not self.closed:
-                self._emit_local_usage_fallback()
-                # Give the metrics monitor a chance to consume the usage event before
-                # super().aclose() cancels it.
-                await asyncio.sleep(0)
             if self._ws and not self._ws.closed:
                 await self._ws.close()
         finally:
@@ -875,45 +856,17 @@ class RealtimeSpeechStream(stt.RecognizeStream):
         self._logger.debug(
             "Connecting to Sarvam realtime STT WebSocket", extra=self._build_log_context()
         )
-        try:
-            ws = await self._session.ws_connect(
-                ws_url,
-                headers=headers,
-                heartbeat=30.0,
-                conn_options=self._conn_options,
-            )
-        except (APIConnectionError, APITimeoutError) as e:
-            self._logger.error(
-                "Failed to connect to Sarvam realtime STT WebSocket",
-                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
-                exc_info=True,
-            )
-            raise
-        except APIStatusError as e:
-            self._logger.error(
-                "Sarvam realtime STT WebSocket handshake failed",
-                extra={
-                    **self._build_log_context(),
-                    "error": e.message,
-                    "status_code": e.status_code,
-                    "url": ws_url,
-                },
-                exc_info=True,
-            )
-            raise
-        except Exception as e:
-            self._logger.error(
-                "Unexpected Sarvam realtime STT WebSocket connection error",
-                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
-                exc_info=True,
-            )
-            raise APIConnectionError("failed to connect to Sarvam realtime STT") from e
+        ws = await self._session.ws_connect(
+            ws_url,
+            headers=headers,
+            heartbeat=30.0,
+            conn_options=self._conn_options,
+        )
         self._logger.debug(
             "Sarvam realtime STT WebSocket connected", extra=self._build_log_context()
         )
         return ws
 
-    @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: http.WebSocket) -> None:
         samples_per_channel = max(int(self._opts.sample_rate * AUDIO_CHUNK_MS / 1000), 1)
         audio_bstream = utils.media.AudioByteStream(
@@ -942,24 +895,20 @@ class RealtimeSpeechStream(stt.RecognizeStream):
                     self._manual_speech_started = True
                     self._begin_manual_utterance()
 
-                self._audio_duration_collector.push(frame.duration)
                 self._audio_position += frame.duration
                 await self._safe_send_bytes(
                     ws, _encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes())
                 )
 
             if isinstance(data, self.Flush):
-                self._audio_duration_collector.flush()
                 if self._active_endpointing == "manual" and self._manual_speech_started:
                     await self._safe_send_str(ws, {"event": "speech_end"})
                     self._manual_speech_started = False
                     self._end_manual_utterance()
 
-        self._emit_local_usage_fallback()
         if not self._session_ended:
             await self._safe_send_str(ws, {"event": "end"})
 
-    @utils.log_exceptions(logger=logger)
     async def _process_messages(self, ws: http.WebSocket) -> None:
         while True:
             msg = await ws.receive()
@@ -972,14 +921,11 @@ class RealtimeSpeechStream(stt.RecognizeStream):
                             "Sarvam realtime STT sent an invalid event", retryable=False
                         ) from e
                     if looks_like_error_text(msg.data):
-                        self._logger.error(
-                            "Sarvam realtime STT non-JSON error message",
-                            extra={**self._build_log_context(), "raw_message": msg.data},
-                        )
                         raise APIStatusError(
-                            message=f"Sarvam realtime STT non-JSON error message: {msg.data!s}",
+                            "Sarvam realtime STT sent a non-JSON error",
                             request_id=self._request_id or None,
                             body={"raw_message": msg.data},
+                            detail=msg.text,
                         ) from e
                     self._logger.warning(
                         "Invalid JSON received from Sarvam realtime STT",
@@ -993,50 +939,16 @@ class RealtimeSpeechStream(stt.RecognizeStream):
                 close_reason = msg.data
                 if self._session_ended and close_code in (1000, 1001, None):
                     self._flush_terminal_utterance()
-                    self._emit_local_usage_fallback()
                     break
                 if close_code in (1000, 1001, None) and not looks_like_error_text(close_reason):
                     self._flush_terminal_utterance()
-                    self._emit_local_usage_fallback()
                     break
-                self._logger.error(
-                    "Sarvam realtime STT WebSocket closed unexpectedly",
-                    extra={
-                        **self._build_log_context(),
-                        "close_code": close_code,
-                        "close_reason": close_reason,
-                    },
-                )
-                raise self._status_error_from_close(close_code, close_reason)
+                raise ws.close_error("Sarvam realtime STT WebSocket closed unexpectedly")
             else:
                 self._logger.debug(
                     "Unknown Sarvam realtime STT WebSocket message type",
                     extra={**self._build_log_context(), "message_type": str(msg.type)},
                 )
-
-    def _status_error_from_close(self, close_code: object, close_reason: object) -> APIStatusError:
-        status_code = int(close_code) if isinstance(close_code, int) else -1
-        retryable = close_code == 1013
-        message = f"Sarvam realtime STT WebSocket closed unexpectedly: {close_reason}"
-        if close_code == 1003:
-            message = "Sarvam realtime STT authentication, quota, or rate limit error"
-        elif close_code == 1008:
-            message = "Sarvam realtime STT session timed out or exceeded the maximum duration"
-        elif close_code == 1013:
-            message = "Sarvam realtime STT backend temporarily unavailable"
-        elif close_code == 4000:
-            message = f"Sarvam realtime STT rejected the session: {close_reason}"
-
-        return APIStatusError(
-            message=message,
-            status_code=status_code,
-            request_id=self._request_id or None,
-            body={
-                "close_code": close_code,
-                "close_reason": close_reason,
-            },
-            retryable=retryable,
-        )
 
     async def _handle_message(self, data: RealtimeMessage) -> None:
         event = data.event
@@ -1281,18 +1193,6 @@ class RealtimeSpeechStream(stt.RecognizeStream):
     def _handle_session_end(self, data: RealtimeMessage) -> None:
         self._capture_server_ids(data)
         self._flush_terminal_utterance()
-        audio_duration = data.audio_duration_s
-        if audio_duration is not None and not self._server_audio_duration_reported:
-            # Report whatever audio is still buffered locally, then top up to Sarvam's
-            # authoritative total so the session bills exactly once for it.
-            self._audio_duration_collector.flush()
-            server_audio_duration = max(float(audio_duration), 0.0)
-            delta = max(server_audio_duration - self._total_reported_audio_duration, 0.0)
-            if delta:
-                self._emit_usage(delta)
-            self._server_audio_duration_reported = True
-        else:
-            self._emit_local_usage_fallback()
         self._session_ended = True
 
     def _handle_error_event(self, data: RealtimeMessage) -> None:
@@ -1312,39 +1212,11 @@ class RealtimeSpeechStream(stt.RecognizeStream):
         code = data.code if "code" in data.model_fields_set else "unknown"
         error_message = data.message if "message" in data.model_fields_set else code
         status_code = data.status_code if data.status_code is not None else -1
-        self._logger.error(
-            "Fatal Sarvam realtime STT error",
-            extra={
-                **self._build_log_context(),
-                "error_code": code,
-                "error_message": error_message,
-                "status_code": status_code,
-                "raw_message": data.model_dump(exclude_unset=True),
-            },
-        )
         raise APIStatusError(
-            message=f"Sarvam realtime STT error: {error_message}",
+            "Sarvam realtime STT error",
             status_code=status_code,
             request_id=self._request_id or None,
             body=data.model_dump(exclude_unset=True),
             retryable=code == "model_unavailable",
-        )
-
-    def _on_audio_duration_report(self, duration: float) -> None:
-        self._local_audio_duration += duration
-        self._emit_usage(duration)
-
-    def _emit_local_usage_fallback(self) -> None:
-        if self._server_audio_duration_reported:
-            return
-        self._audio_duration_collector.flush()
-
-    def _emit_usage(self, duration: float) -> None:
-        self._total_reported_audio_duration += duration
-        self.send(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=self._request_id,
-                recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-            )
+            detail=str(error_message),
         )

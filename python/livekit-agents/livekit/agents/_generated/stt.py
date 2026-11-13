@@ -125,6 +125,13 @@ class SpeechEvent:
 
 @dataclass
 class STTCapabilities:
+    """What an STT supports, fixed at construction.
+
+    Usage: a figure the provider reports always wins. The framework reports the audio it
+    measures as it goes and cannot take that back, so a provider that reports its own usage
+    says so with `reports_usage`.
+    """
+
     streaming: bool
     interim_results: bool
     diarization: bool = False
@@ -135,6 +142,8 @@ class STTCapabilities:
     """Whether the STT supports keyterm prompting"""
     chat_context: bool = False
     """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
+    reports_usage: bool = False
+    """True when the provider reports its own usage events, so the framework does not measure audio"""
 
 
 class STTError(BaseModel):
@@ -401,6 +410,9 @@ class RecognizeStream(ABC):
         self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
+        # the audio its attempts take is the usage of a provider that does not report its own; a
+        # chain or an adapter is measured by the providers it drives
+        self._core_measured = not (stt.capabilities.reports_usage or stt._core_retries_itself())
         # a native recognition that retries on its own is attempted once
         attempted = conn_options
         if self._core_native_retries:
@@ -477,6 +489,9 @@ class RecognizeStream(ABC):
     def _input_received(self, item: rtc.AudioFrame | RecognizeStream.Flush) -> None:
         if isinstance(item, self.Flush):
             self._core_attempts.expect_response()
+        elif self._core_measured:
+            if (usage := self._core_attempts.audio_taken(item.duration)) is not None:
+                self.send(usage)
 
     def _input_ended(self) -> None:
         self._core_attempts.input_ended()
@@ -493,7 +508,13 @@ class RecognizeStream(ABC):
         now = time.time()
         self._start_time_offset += now - self._attempt_started
         self._start_time = self._attempt_started = now
-        await self._run()
+        try:
+            await self._run()
+        finally:
+            # the attempt's audio not yet reported, before the next attempt's events
+            usage = self._core_attempts.unreported_usage()
+            if usage is not None and not self._event_ch.closed:
+                self.send(usage)
 
     def _core_produced(self) -> bool:
         return False

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectOptions, http
+from livekit.agents.stt import SpeechEventType
 from livekit.plugins.fireworksai import STT
 
 
@@ -49,3 +52,46 @@ async def test_stream_language_applies_to_that_stream_only() -> None:
             await model.aclose()
 
     assert languages == ["fr", "en"]
+
+
+async def test_final_transcript_ends_the_speech() -> None:
+    """A final closes the speech, so turn_detection="stt" can commit the turn."""
+
+    async def transcribe(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        words = [{"word": "hello", "is_final": True}]
+        await ws.send_json({"segments": [{"id": 0, "text": "hello", "words": words}]})
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                break
+        await ws.close()
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/{path:.*}", transcribe)
+    async with TestServer(app) as server, http.open() as session:
+        model = STT(
+            api_key="test",
+            base_url=str(server.make_url("/v1").with_scheme("ws")),
+            http_session=session,
+        )
+        try:
+            types: list[SpeechEventType] = []
+            async with (
+                asyncio.timeout(2),
+                model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream,
+            ):
+                async for event in stream:
+                    types.append(event.type)
+                    if event.type == SpeechEventType.END_OF_SPEECH:
+                        stream.end_input()  # only the final's own END_OF_SPEECH gets here
+        finally:
+            await model.aclose()
+
+    speech = [t for t in types if t != SpeechEventType.RECOGNITION_USAGE]
+    assert speech == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+    ]

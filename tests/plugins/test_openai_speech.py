@@ -327,8 +327,8 @@ async def test_realtime_keeps_turn_boundaries_and_late_final_transcripts(local_v
     assert [u.audio_duration for u in usage] == pytest.approx([0.6, 0.3, 0.4])
 
 
-async def test_closing_the_model_closes_its_pooled_realtime_socket() -> None:
-    """A finished stream returns its socket to the pool; closing the model closes it.
+async def test_closing_a_stream_and_its_model_leaves_no_realtime_socket_open() -> None:
+    """A closed stream's socket is closed, never left with the pool after the model closes.
 
     https://github.com/livekit/agents/pull/7023
     """
@@ -338,11 +338,9 @@ async def test_closing_the_model_closes_its_pooled_realtime_socket() -> None:
         stream = model.stream(conn_options=NO_RETRY)
         await peer.configured()
         await stream.aclose()
-        assert not peer.sockets[0].closed
-
         await model.aclose()
 
-        await until(lambda: peer.sockets[0].closed, "the pooled socket closed")
+        await until(lambda: peer.sockets[0].closed, "the socket closed")
 
 
 # TTS

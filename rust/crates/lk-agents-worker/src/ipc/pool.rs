@@ -855,8 +855,8 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             st.close_ready.clone()
         });
         if let Some(ready) = close_ready {
-            // Ok once released at the deadline, Ended once the cleanup is over or died.
-            let _ = ready.wait_for(|ready| *ready).await;
+            // Released at the deadline, or the cleanup is over or died.
+            ready.until(|ready| *ready).await;
         }
     }
 

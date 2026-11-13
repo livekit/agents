@@ -31,13 +31,14 @@ use crate::telemetry;
 /// says; not paced. A TTS that prepares its text per provider ([`TextUnit::Text`]) takes it as
 /// written.
 pub(crate) fn one_shot(tts: &dyn Tts, text: &str) -> Vec<SpeechChunk> {
-    if tts.text_unit() == TextUnit::Text {
+    let caps = tts.capabilities();
+    if caps.text_unit == TextUnit::Text {
         return vec![SpeechChunk { text: text.to_owned(), said: String::new() }];
     }
     let key = tts.markup_provider();
     let dialect = Markup::from_provider_key(&key);
     let text = dialect.normalize(trim_python_whitespace(text));
-    let limit = tts.max_text_len().or_else(|| dialect.max_input_len());
+    let limit = caps.max_text_len.or_else(|| dialect.max_input_len());
     let pieces = match limit.filter(|limit| text.chars().count() > *limit) {
         Some(limit) => {
             let mut cut = SentenceStream::new(SentenceOptions {
@@ -180,8 +181,9 @@ impl Stage {
     ) -> Self {
         let key = tts.markup_provider();
         let dialect = Markup::from_provider_key(&key);
-        let unit = tts.text_unit();
-        let limit = tts.max_text_len().or_else(|| dialect.max_input_len());
+        let caps = tts.capabilities();
+        let unit = caps.text_unit;
+        let limit = caps.max_text_len.or_else(|| dialect.max_input_len());
         let TtsOptions { sentence_tokenizer, pacing } = tts.options().current();
         let pacing = pacing.filter(|_| paced && unit != TextUnit::Text);
         // a word provider takes words whatever splits the sentences

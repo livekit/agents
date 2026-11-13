@@ -293,11 +293,11 @@ async fn cancelling_one_refusal_reports_its_receipt_and_preserves_other_renderer
         .filter_map(|event| match event {
             crate::voice::VoiceRuntimeEvent::Input(VoiceEvent::Gen(
                 GenEvent::ToolHandlingTemplateRendered { rendering, text },
-            )) => Some((rendering, text)),
+            )) => Some((rendering, text.ok())),
             _ => None,
         })
         .collect();
-    assert_eq!(receipts, [(Rendering::Refusal { speech, call }, None)]);
+    assert_eq!(receipts, [(Rendering::Refusal { speech, call }, Some(None))]);
     for host in [&sibling, &another_speech, &deferred] {
         assert!(!host.future_dropped.load(Ordering::SeqCst));
         assert_eq!(host.cancellations.load(Ordering::SeqCst), 0);

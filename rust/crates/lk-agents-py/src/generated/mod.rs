@@ -69,6 +69,7 @@ pub trait Implementations: 'static {
     type Cli: ::lk_agents_abi::cli::Cli;
     type CliShutdown: ::lk_agents_abi::cli::CliShutdown;
     type ApiErrorFunctions: ::lk_agents_abi::errors::ApiErrorFunctions;
+    type WebSocketFunctions: ::lk_agents_abi::errors::WebSocketFunctions;
     type JudgeRunner: ::lk_agents_abi::evals::JudgeRunner;
     type Evaluations: ::lk_agents_abi::evals::Evaluations;
     type InferenceCredentials: ::lk_agents_abi::inference::InferenceCredentials;
@@ -169,6 +170,7 @@ pub trait Implementations: 'static {
     type ConnectionPoolState: ::lk_agents_abi::utils::connection_pool::ConnectionPoolState;
     type ExpFilter: ::lk_agents_abi::utils::filters::ExpFilter;
     type MovingAverage: ::lk_agents_abi::utils::filters::MovingAverage;
+    type AudioConverter: ::lk_agents_abi::utils::resample::AudioConverter;
     type InferenceVad: ::lk_agents_abi::vad::inference::InferenceVad;
     type AmdFunctions: ::lk_agents_abi::voice::amd::AmdFunctions;
     type HostAudioReceiver: ::lk_agents_abi::voice::avatar::HostAudioReceiver;
@@ -292,6 +294,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<cli::Shutdown>()?;
     m.add_function(wrap_pyfunction!(errors::http_error_display, m)?)?;
     m.add_function(wrap_pyfunction!(errors::retryable_for_status, m)?)?;
+    m.add_function(wrap_pyfunction!(errors::websocket_close_kind, m)?)?;
     m.add_class::<evals::CoreJudgeRunner>()?;
     m.add_function(wrap_pyfunction!(evals::_core_evaluation_score, m)?)?;
     m.add_function(wrap_pyfunction!(evals::_core_judgment_passed, m)?)?;
@@ -443,6 +446,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<utils::ConnectionPoolState>()?;
     m.add_class::<utils::ExpFilter>()?;
     m.add_class::<utils::MovingAverage>()?;
+    m.add_class::<utils::AudioConverter>()?;
     m.add_class::<vad::InferenceVad>()?;
     m.add_class::<vad::InferenceVadStream>()?;
     m.add_function(wrap_pyfunction!(voice::amd_resolve_max_endpointing_delay, m)?)?;

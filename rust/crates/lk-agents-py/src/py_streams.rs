@@ -263,7 +263,10 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
             let teardown = async {
                 if let Some(mut pull) = pending {
                     pull.cancel();
-                    let _ = pull.settled().await;
+                    // what the cancelled pull ends with is no reader's: the stream is closing
+                    if let Err(error) = pull.settled().await {
+                        log::debug!(target: lk_agents_abi::LOG_TARGET, "a pending pull ended while closing: {error}");
+                    }
                 }
                 match has_aclose {
                     Ok(true) => {}

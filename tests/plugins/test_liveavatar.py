@@ -18,6 +18,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     CloseEvent,
     VoiceSession,
@@ -215,6 +216,23 @@ async def test_speech_and_keepalives_wait_for_the_connected_state(
     assert len({c["event_id"] for c in speaks}) == 1
 
 
+async def test_speech_in_another_format_is_sent_whole_as_24khz_mono(
+    peer: LiveAvatarPeer, started: Started
+) -> None:
+    """48 kHz stereo speech reaches LiveAvatar as 24 kHz mono, its resampler tail included."""
+    _, _, audio = started
+    samples = 4800  # 0.1 s at 48 kHz
+    for _ in range(7):
+        await audio.capture_frame(rtc.AudioFrame(b"\0\0" * samples * 2, 48000, 2, samples))
+    audio.flush()
+
+    seen: list[Command] = []
+    await peer.command("agent.speak_end", seen)
+
+    sent = sum(len(base64.b64decode(c["audio"])) for c in seen if c["type"] == "agent.speak")
+    assert sent / (2 * SAMPLE_RATE) == pytest.approx(0.7, abs=0.001)
+
+
 @pytest.mark.parametrize(
     ("acks", "expected"),
     [
@@ -337,20 +355,32 @@ async def test_ending_stops_the_provider_session_quietly(
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
-@pytest.mark.parametrize(("status", "attempts"), [(400, 1), (401, 1), (503, OPTIONS.max_retry + 1)])
+@pytest.mark.parametrize(
+    ("status", "attempts", "raised_type"),
+    [
+        (400, 1, APIStatusError),
+        (401, 1, APIStatusError),
+        (503, OPTIONS.max_retry + 1, APIStatusError),
+    ],
+)
 async def test_provider_status_and_body_survive_and_only_transient_errors_retry(
-    peer: LiveAvatarPeer, status: int, attempts: int
+    peer: LiveAvatarPeer, status: int, attempts: int, raised_type: type[APIError]
 ) -> None:
-    """https://github.com/livekit/agents/pull/6306"""
+    """Exhausted retries raise from the provider's last answer.
+
+    https://github.com/livekit/agents/pull/6306
+    """
     peer.start_status = status
     api = LiveAvatarAPI("key", api_url=peer.api_url, conn_options=OPTIONS)
 
-    with pytest.raises(APIStatusError) as raised:
+    with pytest.raises(raised_type) as raised:
         await api.start_streaming_session("S1", "session-token")
 
-    assert raised.value.status_code == status
-    assert f"provider says {status}" in str(raised.value.body)
-    assert raised.value.retryable == (status >= 500)
+    refused = raised.value if isinstance(raised.value, APIStatusError) else raised.value.__cause__
+    assert isinstance(refused, APIStatusError)
+    assert refused.status_code == status
+    assert f"provider says {status}" in str(refused.body)
+    assert refused.retryable == (status >= 500)
     assert peer.starts == attempts
 
 

@@ -49,12 +49,14 @@ impl Backoff {
     /// The owner does not apply this retry (its replay would lose or repeat output): the failure
     /// it was decided for, which the owner raises instead.
     pub fn abandon(self) -> ApiError {
+        self.error.log_detail();
         self.error
     }
 
     /// Logs the retry of `subject` after `error` (the failure as its owner raised it) and returns
     /// when the next attempt runs.
     pub fn announce(self, subject: &str, error: &dyn std::fmt::Display) -> Ts {
+        self.error.log_detail();
         let attempt = self.attempt.saturating_add(1);
         lk_agents_abi::types::retry::retrying(
             log::Level::Warn,

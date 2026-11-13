@@ -526,6 +526,9 @@ impl LlmChunks {
                 }
             }
             Event::Ended { attempt } => {
+                if a.attempts.current() == Some(attempt) {
+                    self.ready.extend(a.choices.finish());
+                }
                 if a.attempts.succeeded(attempt, at) {
                     self.outcome = Some(Ok(()));
                 }

@@ -124,6 +124,7 @@ fn a_host_error_outside_the_api_taxonomy_does_not_retry_the_same_backend() {
                 api_kind: None,
                 retryable: true,
                 status_code: Some(503),
+                said: None,
             },
             produced_output: false,
         },

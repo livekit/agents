@@ -131,8 +131,19 @@ pub fn capture_value(value: &Bound<'_, PyAny>) -> ProviderError {
     let api_kind = matches.and_then(|m| ApiErrorKind::from_matches(m, status_code));
     let declared = metadata.retryable;
     let retryable = host_retryable(api_kind, matches.is_some(), declared);
-
-    ProviderError::Host { error: capture_host_value(value), api_kind, retryable, status_code }
+    ProviderError::Host {
+        error: capture_host_value(value),
+        api_kind,
+        retryable,
+        status_code,
+        said: lk_agents_abi::errors::ProviderSaid::boxed(
+            metadata.detail,
+            metadata
+                .retry_after
+                .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+                .map(std::time::Duration::from_secs_f64),
+        ),
+    }
 }
 
 /// Without inventing retry or fatality policy.

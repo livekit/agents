@@ -340,6 +340,7 @@ impl TurnHost for FakeHandler {
                         api_kind: None,
                         retryable: false,
                         status_code: None,
+                        said: None,
                     });
                 }
                 finished = finished => finished.unwrap_or(false),

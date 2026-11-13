@@ -1,6 +1,6 @@
 use crate::telemetry;
 use lk_agents_abi::voice::io::{
-    AudioOutput, AudioOutputCapabilities, AudioOutputExt, PlaybackEvent, PlaybackFinished,
+    AudioOutput, AudioOutputCapabilities, AudioOutputExt, IoError, PlaybackEvent, PlaybackFinished,
     PlaybackObserver, PlaybackSegment, PlaybackTracker, Result, TranscriptionOutput,
 };
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TranscriptChunk};
@@ -34,6 +34,8 @@ struct Synchronizer {
     /// ends).
     /// The forwarder task's: it ends with the task, however it ends.
     forwarder_done: signal::Cell<bool>,
+    /// The first word the sink below refused, which fails the segment at its flush.
+    failed: Arc<Mutex<Option<IoError>>>,
     /// The audio node's tracker; released words are raised on it as `transcript_shown`.
     tracker: Arc<dyn PlaybackTracker>,
 }
@@ -133,13 +135,16 @@ impl Synchronizer {
     async fn forward(
         next: Option<Arc<dyn TranscriptionOutput>>,
         mut rx: mpsc::UnboundedReceiver<TranscriptOutput>,
+        failed: Arc<Mutex<Option<IoError>>>,
     ) {
         while let Some(out) = rx.recv().await {
             let Some(next) = &next else { continue };
             match out {
-                // A failure is the sink's. Dropping it keeps the rest of the transcript flowing.
+                // The rest of the transcript still flows; the failure is the segment's.
                 TranscriptOutput::Word(t) => {
-                    let _ = next.capture_timed(&telemetry::Cx::NONE, &t).await;
+                    if let Err(error) = next.capture_timed(&telemetry::Cx::NONE, &t).await {
+                        failed.lock().get_or_insert(error);
+                    }
                 }
                 TranscriptOutput::Flush => next.flush(),
                 TranscriptOutput::Detached => next.on_detached(),
@@ -399,6 +404,11 @@ impl TranscriptionOutput for SyncedTranscriptionOutput {
         Box::pin(async move { self.capture(&chunk, false).await })
     }
 
+    fn wait_for_flush(&self) -> lk_agents_abi::BoxFuture<'_, Result<()>> {
+        let failed = self.sync.failed.lock().take();
+        Box::pin(async move { failed.map_or(Ok(()), Err) })
+    }
+
     fn flush(&self) {
         self.host.lock().reset();
         let effects = self.sync.state.lock().handle(TranscriptSyncEvent::FlushText);
@@ -476,6 +486,8 @@ impl TranscriptSynchronizer {
         let (tx, rx) = mpsc::unbounded_channel();
         let (done, forwarder_done) = signal::signal(false);
         let forwarder_spawner = Arc::clone(&spawner);
+        let failed = Arc::new(Mutex::new(None));
+        let forwarder_failed = Arc::clone(&failed);
         let sync = Arc::new_cyclic(|me| Synchronizer {
             state: Mutex::new(TranscriptSync::new(opts)),
             clock,
@@ -485,12 +497,13 @@ impl TranscriptSynchronizer {
             playing: Mutex::new(None),
             tx: Mutex::new(Some(tx)),
             forwarder_done,
+            failed,
             tracker: Arc::new(crate::voice::playback::Tracker::new()),
         });
         // The task holds only the done flag, so it never keeps the synchronizer alive.
         let sink = text_next.clone();
         let forwarder = forwarder_spawner.spawn(async move {
-            Synchronizer::forward(sink, rx).await;
+            Synchronizer::forward(sink, rx, forwarder_failed).await;
             done.set(true);
         });
 

@@ -401,6 +401,12 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 - Shared kinds: `ApiError`, `StorageError`, `HostError` (typed `HostErrorKind`), cancellation,
   and invalid input. A new variant needs a caller that matches on it. [review]
 - No `Result<_, String>`, and never decide anything from an error's message. [review]
+- In the async crates an awaited call's outcome is read: no `let _ = ..await` and no
+  `if let Ok(..) = ..await` without `else`. A call whose failure is always safe to drop returns
+  `()`, and its doc says why. [check]
+- In `lk-agents-runtime` no fallback logs an error and carries on (`log::error!` in an
+  `unwrap_or_else` or an `Err(..) =>` arm): the core decides the fallback from a `Result`
+  input. [check]
 - Only a storage connection that sent a write calls `Unacknowledged::sent`; every other
   `Uncertain` is passed on, never made. [check]
 - Every database write goes through `Resend` with a key that makes resending safe: an uncertain

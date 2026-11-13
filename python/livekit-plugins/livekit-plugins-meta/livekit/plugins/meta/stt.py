@@ -110,8 +110,6 @@ _LANGUAGE_CODES = {
     "zh": "Mandarin Chinese",
 }
 _MESSAGE = TypeAdapter(dict[str, object])
-_RETRYABLE_CLOSE_CODES = frozenset((1011, 1013))
-_NON_RETRYABLE_CLOSE_CODES = frozenset((1008,))
 
 
 def _normalize_hints(values: list[str] | None, *, name: str) -> list[str]:
@@ -180,43 +178,12 @@ def _server_error(*, phase: str) -> APIStatusError:
     )
 
 
-def _close_error(
-    close_code: int | None,
-    *,
-    phase: str,
-    retryable_on_normal_close: bool = False,
-) -> APIStatusError:
-    code = close_code or -1
-    if code == 1000:
-        retryable = retryable_on_normal_close
-    elif code in _NON_RETRYABLE_CLOSE_CODES:
-        retryable = False
-    elif code in _RETRYABLE_CLOSE_CODES:
-        retryable = True
-    else:
-        retryable = True
-    return APIStatusError(
-        f"Meta Muse realtime ASR closed during {phase}",
-        status_code=code,
-        body=None,
-        retryable=retryable,
-    )
-
-
 def _parse_ws_message(
-    raw: http.WebSocketMessage,
-    *,
-    phase: str,
-    close_code: int | None = None,
-    retryable_on_normal_close: bool = False,
+    raw: http.WebSocketMessage, ws: http.WebSocket, *, phase: str
 ) -> dict[str, object]:
     if raw.type is not http.WebSocketMessageType.TEXT or not isinstance(raw.data, str):
         if raw.type is http.WebSocketMessageType.CLOSE:
-            raise _close_error(
-                close_code,
-                phase=phase,
-                retryable_on_normal_close=retryable_on_normal_close,
-            )
+            raise ws.close_error(f"Meta Muse realtime ASR closed during {phase}")
         raise _protocol_error(f"unexpected message type during {phase}")
     try:
         message = json.loads(raw.data)
@@ -312,6 +279,8 @@ class STT(stt.STT[Never]):
                 aligned_transcript=False,
                 offline_recognize=False,
                 keyterms=False,
+                # usage events carry the audio the server reports as processed
+                reports_usage=True,
             )
         )
         self._api_key = _normalize_access_token(resolved_key)
@@ -408,7 +377,6 @@ class SpeechStream(stt.RecognizeStream):
         self._provider_active_turn_id: str | None = None
         self._completed_turn_ids: set[str] = set()
         self._completed_turn_order: deque[str] = deque()
-        self._audio_consumed = False
         self._end_stream_sent = False
         self._last_audio_processed_ms = 0.0
         self._pending_usage_seconds = 0.0
@@ -425,18 +393,11 @@ class SpeechStream(stt.RecognizeStream):
             await self._drive_tasks(tasks, sender, receiver)
         except asyncio.CancelledError:
             raise
-        except APIError as exc:
-            if self._audio_consumed and exc.retryable:
-                raise APIConnectionError(
-                    "Meta Muse realtime ASR failed after audio was consumed",
-                    retryable=False,
-                ) from None
+        except APIError:
             raise
         except Exception as exc:
-            phase = "audio streaming" if self._audio_consumed else "connection"
             raise APIConnectionError(
-                f"Meta Muse realtime ASR {phase} failed ({type(exc).__name__})",
-                retryable=not self._audio_consumed,
+                f"Meta Muse realtime ASR failed ({type(exc).__name__})"
             ) from None
         finally:
             await tasks.aclose()
@@ -455,12 +416,7 @@ class SpeechStream(stt.RecognizeStream):
         try:
             await ws.send_str(json.dumps(self._handshake(), separators=(",", ":")))
             raw = await asyncio.wait_for(ws.receive(), timeout=self._conn_options.read_timeout)
-            message = _parse_ws_message(
-                raw,
-                phase="handshake",
-                close_code=ws.close_code,
-                retryable_on_normal_close=True,
-            )
+            message = _parse_ws_message(raw, ws, phase="handshake")
             self._accept_handshake(message)
         except asyncio.CancelledError:
             await _close_quietly(ws)
@@ -516,10 +472,7 @@ class SpeechStream(stt.RecognizeStream):
         if receiver.done():
             receiver.result()
             if not self._end_stream_sent:
-                raise APIConnectionError(
-                    "Meta Muse realtime ASR closed before input ended",
-                    retryable=not self._audio_consumed,
-                )
+                raise APIConnectionError("Meta Muse realtime ASR closed before input ended")
             if not sender.done():
                 await sender
         else:
@@ -527,8 +480,7 @@ class SpeechStream(stt.RecognizeStream):
                 await asyncio.wait_for(receiver, timeout=self._conn_options.read_timeout)
             except TimeoutError:
                 raise APITimeoutError(
-                    "Meta Muse realtime ASR timed out while draining final events",
-                    retryable=not self._audio_consumed,
+                    "Meta Muse realtime ASR timed out while draining final events"
                 ) from None
         self._validate_clean_close()
 
@@ -548,13 +500,7 @@ class SpeechStream(stt.RecognizeStream):
             delay = deadline - loop.time()
             if delay > 0:
                 await asyncio.sleep(delay)
-            try:
-                await ws.send_bytes(packet)
-            except Exception as exc:
-                raise APIConnectionError(
-                    f"Meta Muse realtime ASR audio send failed ({type(exc).__name__})",
-                    retryable=False,
-                ) from None
+            await ws.send_bytes(packet)
             duration = len(packet) / (_SAMPLE_RATE * _CHANNELS * _SAMPLE_WIDTH_BYTES)
             sent_duration += duration
 
@@ -565,7 +511,6 @@ class SpeechStream(stt.RecognizeStream):
                     pending.clear()
                 continue
 
-            self._audio_consumed = True
             if item.num_channels != _CHANNELS:
                 raise APIError("Meta Muse realtime ASR requires mono audio", retryable=False)
             pending.extend(item.data.tobytes())
@@ -576,35 +521,17 @@ class SpeechStream(stt.RecognizeStream):
         if pending:
             await send_packet(bytes(pending))
         if not self._end_stream_sent:
-            try:
-                await ws.send_str('{"type":"endStream"}')
-            except Exception as exc:
-                raise APIConnectionError(
-                    f"Meta Muse realtime ASR end-of-input send failed ({type(exc).__name__})",
-                    retryable=False,
-                ) from None
+            await ws.send_str('{"type":"endStream"}')
             self._end_stream_sent = True
 
     async def _receive_events(self, ws: http.WebSocket) -> None:
         while True:
-            try:
-                raw = await ws.receive()
-            except Exception as exc:
-                raise APIConnectionError(
-                    f"Meta Muse realtime ASR receive failed ({type(exc).__name__})",
-                    retryable=not self._audio_consumed,
-                ) from None
-
+            raw = await ws.receive()
             if raw.type is http.WebSocketMessageType.CLOSE:
-                close_code = ws.close_code
-                if self._end_stream_sent and close_code == 1000:
+                if self._end_stream_sent and ws.close_code == 1000:
                     return
-                raise _close_error(
-                    close_code,
-                    phase="stream",
-                    retryable_on_normal_close=not self._audio_consumed,
-                )
-            message = _parse_ws_message(raw, phase="stream")
+                raise ws.close_error("Meta Muse realtime ASR closed during stream")
+            message = _parse_ws_message(raw, ws, phase="stream")
             event_type = message.get("type")
             if event_type == "error":
                 raise _server_error(phase="stream")

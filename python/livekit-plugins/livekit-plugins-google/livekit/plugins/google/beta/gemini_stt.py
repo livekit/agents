@@ -38,7 +38,6 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from ..log import logger
 from ..utils import genai_http_options
 
 # Must be a Live-capable model: the plain chat models (e.g. gemini-2.5-flash) are
@@ -49,18 +48,6 @@ DEFAULT_SAMPLE_RATE = 16000
 # The finalized transcript for the last turn lands after audio_stream_end, so teardown
 # waits briefly for it. Bounded so a silent session can't hang.
 FINALIZE_TIMEOUT = 2.0
-
-
-def _is_session_duration_close(e: BaseException) -> bool:
-    """True when the socket closed because a session hit its duration cap.
-
-    Live transcription sessions stream for up to 10 minutes, then the server sends a
-    GoAway and closes with 1008. The retry layer above reconnects within ~0.1s and
-    events keep flowing until the actual close, so this is routine rather than a
-    failure and shouldn't be logged as one every ten minutes.
-    """
-    text = str(e)
-    return "GoAway" in text or "session duration" in text
 
 
 @dataclass
@@ -290,29 +277,27 @@ class RecognizeStream(stt.RecognizeStream):
                     with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(asyncio.shield(receive_task), FINALIZE_TIMEOUT)
 
-        # Provider errors can quote the audio payload or transcript, so the text is logged
-        # as a redactable attribute and kept out of the raised message, whose body the
-        # framework interpolates into its retry log (see REVIEW.md).
+        # Provider errors can quote the audio payload or transcript: their text goes in detail.
         except (ClientError, ServerError, APIError) as e:
-            log = logger.debug if _is_session_duration_close(e) else logger.warning
-            log(
-                "Gemini STT request failed",
-                extra={"error_type": type(e).__name__, "lk.pii.error": str(e)},
-            )
+            code = getattr(e, "code", None)
+            if not isinstance(code, int) or not 100 <= code < 600:
+                # a websocket close code, not an HTTP status; the genai SDK owns the socket
+                raise APIConnectionError(
+                    f"Gemini STT connection closed ({type(e).__name__}, close code {code})",
+                    detail=str(e),
+                ) from None
             raise APIStatusError(
                 message=f"Gemini STT request failed ({type(e).__name__})",
-                status_code=getattr(e, "code", -1),
+                status_code=code,
                 body=None,
+                detail=str(e),
             ) from None
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            log = logger.debug if _is_session_duration_close(e) else logger.warning
-            log(
-                "Gemini STT connection failed",
-                extra={"error_type": type(e).__name__, "lk.pii.error": str(e)},
-            )
-            raise APIConnectionError(f"Gemini STT connection failed ({type(e).__name__})") from None
+            raise APIConnectionError(
+                f"Gemini STT connection failed ({type(e).__name__})", detail=str(e)
+            ) from None
 
     async def _send_loop(self, session: Any) -> None:
         sample_rate = self._opts.sample_rate
@@ -327,8 +312,6 @@ class RecognizeStream(stt.RecognizeStream):
                             mime_type=f"audio/pcm;rate={sample_rate}",
                         )
                     )
-            else:
-                pass
 
         # Tell Gemini the audio stream ended so it finalizes the pending transcript
         # rather than waiting for more frames that will never arrive.
@@ -400,22 +383,9 @@ class RecognizeStream(stt.RecognizeStream):
                     lang = default_lang
 
         except APIError as e:
-            # Provider errors can quote the audio payload or transcript, so the text stays
-            # out of the message body (see REVIEW.md).
-            if getattr(e, "code", None) == 1000 or "1000" in str(e):
-                logger.debug("Gemini ASR session closed normally", extra={"lk.pii.error": str(e)})
-            elif _is_session_duration_close(e):
-                logger.debug(
-                    "Gemini ASR session reached its duration limit, reconnecting",
-                    extra={"lk.pii.error": str(e)},
-                )
+            # a normal close ends the session; _run reports anything else
+            if e.code != 1000:
                 raise
-            else:
-                logger.warning("Gemini ASR receive error", extra={"lk.pii.error": str(e)})
-                raise
-        except Exception as e:
-            logger.debug("Gemini ASR receive loop ended", extra={"lk.pii.error": str(e)})
-            raise
 
         # the session closed mid-turn: its last interim is the turn's transcript
         if pending_interim:

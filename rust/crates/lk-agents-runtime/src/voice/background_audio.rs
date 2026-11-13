@@ -132,33 +132,23 @@ struct PublishedOutput {
     publication: Arc<dyn TrackPublication>,
     source: Arc<dyn AudioSource>,
     stop: CancellationToken,
-    pump: tokio::sync::oneshot::Receiver<()>,
+    pump: signal::Cell<Option<()>>,
 }
 
 impl PublishedOutput {
     /// Stops the pump, closes the source and unpublishes the track.
-    async fn retire(self) {
+    async fn retire(self) -> Result<(), RtcError> {
         self.stop.cancel();
-        let _ = self.pump.await;
+        self.pump.until(Option::is_some).await;
         if let Err(error) = self.source.close(&telemetry::Cx::NONE).await {
             log::warn!(target: lk_agents_abi::LOG_TARGET, error:% = error; "background audio source close failed");
         }
         // The SDK can replace the publication on reconnect; resolve the current SID.
-        let publications = match self.participant.track_publications() {
-            Ok(publications) => publications,
-            Err(error) => {
-                log::error!(target: lk_agents_abi::LOG_TARGET, "background audio publication lookup failed: {error}");
-                return;
-            }
-        };
+        let publications = self.participant.track_publications()?;
         let Some(publication) = publications.into_iter().find(|p| p.name() == TRACK_NAME) else {
-            return;
+            return Ok(());
         };
-        if let Err(error) =
-            self.participant.unpublish_track(&telemetry::Cx::NONE, publication.sid()).await
-        {
-            log::error!(target: lk_agents_abi::LOG_TARGET, "background audio publication cleanup failed: {error}");
-        }
+        self.participant.unpublish_track(&telemetry::Cx::NONE, publication.sid()).await
     }
 }
 
@@ -259,7 +249,10 @@ impl BackgroundAudioPlayer {
                 _ = woken.changed() => continue,
                 block = round => block,
             };
-            std::future::poll_fn(|cx| self.state.lock().poll_retired(cx)).await;
+            let retired = self.state.lock().retired.clone();
+            for done in &retired {
+                done.until(Option::is_some).await;
+            }
             if let Some(block) = block {
                 return Some(block);
             }
@@ -356,24 +349,24 @@ impl BackgroundAudioPlayer {
         self.closing.store(true, Ordering::Release);
         let mut reopen = Reopen(&self.closing, false);
         let this = self.clone();
-        let _ =
-            spawn_owned(
-                (&self.tasks, self.spawner.as_ref()),
-                async move { this.stop_sounds().await },
-            )
+        spawn_owned((&self.tasks, self.spawner.as_ref()), async move { this.stop_sounds().await })
+            .until(Option::is_some)
             .await;
         reopen.1 = true;
         self.closed.store(true, Ordering::Release);
         self.wake.set(());
         let this = self.clone();
-        let _ = spawn_owned((&self.tasks, self.spawner.as_ref()), async move {
+        spawn_owned((&self.tasks, self.spawner.as_ref()), async move {
             let mut output = this.output.lock().await;
-            if let Some(output) = output.take() {
-                output.retire().await;
+            if let Some(output) = output.take()
+                && let Err(error) = output.retire().await
+            {
+                log::error!(target: lk_agents_abi::LOG_TARGET, "background audio publication cleanup failed: {error}");
             }
             drop(output);
             this.stop_sounds().await;
         })
+        .until(Option::is_some)
         .await;
     }
 
@@ -389,8 +382,8 @@ impl BackgroundAudioPlayer {
             std::mem::take(&mut state.retired)
         };
         let sources = std::mem::take(&mut *self.queued.lock());
-        for task in retired {
-            let _ = task.await;
+        for done in retired {
+            done.until(Option::is_some).await;
         }
         for source in sources {
             source.close().await;
@@ -398,22 +391,21 @@ impl BackgroundAudioPlayer {
     }
 }
 
-/// The player's task set owns the work even if its waiter is cancelled.
-fn spawn_owned<T: Send + 'static>(
+/// The player's task set owns the work even if its waiter is cancelled; the cell holds its
+/// result, and ends without one if the set cancelled it.
+fn spawn_owned<T: Send + Sync + 'static>(
     (tasks, spawner): (&Arc<TaskSet>, &dyn Spawner),
     future: impl Future<Output = T> + Send + 'static,
-) -> tokio::sync::oneshot::Receiver<T> {
-    let (done, completed) = tokio::sync::oneshot::channel();
-    tasks.spawn(spawner, "background audio", async move {
-        let _ = done.send(future.await);
-    });
+) -> signal::Cell<Option<T>> {
+    let (done, completed) = signal::once();
+    tasks.spawn_settling(spawner, "background audio", done, future);
     completed
 }
 
 struct MixerState {
     mixer: Mixer,
     sources: BTreeMap<StreamId, SourceReader>,
-    retired: Vec<tokio::sync::oneshot::Receiver<()>>,
+    retired: Vec<signal::Cell<Option<()>>>,
 }
 
 struct SourceReader {
@@ -422,7 +414,7 @@ struct SourceReader {
     request: signal::Producer<()>,
     stop: CancellationToken,
     cancel_on_drop: tokio_util::sync::DropGuard,
-    done: tokio::sync::oneshot::Receiver<()>,
+    done: signal::Cell<Option<()>>,
     handle: Arc<PlaybackDone>,
     phase: ReadPhase,
 }
@@ -461,16 +453,9 @@ enum Input {
 }
 
 impl MixerState {
-    fn poll_retired(&mut self, cx: &mut Context<'_>) -> Poll<()> {
-        self.retired.retain_mut(|task| Pin::new(task).poll(cx).is_pending());
-        if self.retired.is_empty() { Poll::Ready(()) } else { Poll::Pending }
-    }
-
     fn retire(&mut self, source: SourceReader) {
         // Retain cleanup in mixer state so cancelling the pump cannot orphan a stream close.
-        self.retired.retain_mut(|task| {
-            matches!(task.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty))
-        });
+        self.retired.retain(|done| !done.ended());
         source.stop.cancel();
         drop(source.cancel_on_drop);
         self.retired.push(source.done);
@@ -546,6 +531,8 @@ enum Fetched {
     Pcm(Vec<i16>, u32, u16),
     Ended,
     TimedOut,
+    /// The stream or the decoder failed, which ends the sound.
+    Failed(String),
 }
 
 impl Source {
@@ -560,6 +547,10 @@ impl Source {
             }
             Fetched::Ended => FetchedState::Ended,
             Fetched::TimedOut => FetchedState::TimedOut,
+            Fetched::Failed(error) => {
+                log::error!(target: lk_agents_abi::LOG_TARGET, "background audio failed: {error}");
+                FetchedState::Ended
+            }
         };
         audio.event(state).is_ok() && !audio.is_closed()
     }
@@ -595,10 +586,7 @@ impl Source {
                 frame.num_channels,
             ),
             Ok(None) => Fetched::Ended,
-            Err(err) => {
-                log::error!(target: lk_agents_abi::LOG_TARGET, "background audio stream failed: {err}");
-                Fetched::Ended
-            }
+            Err(err) => Fetched::Failed(err.to_string()),
         }
     }
 
@@ -615,18 +603,21 @@ impl Source {
         (pcm, step.last)
     }
     async fn close(mut self) {
-        let _ = self.teardown().await;
+        self.teardown().until(Option::is_some).await;
     }
 
-    fn teardown(&mut self) -> tokio::sync::oneshot::Receiver<()> {
+    fn teardown(&mut self) -> signal::Cell<Option<()>> {
         if let Some(cancel) = self.cancel.take() {
             cancel.cancel();
         }
         let pending = self.pending.take();
         let input = std::mem::replace(&mut self.input, Input::Closed);
         spawn_owned((&self.tasks, self.spawner.as_ref()), async move {
-            if let Some(pending) = pending {
-                let _ = pending.await;
+            // The cancelled read settles before the input closes; nobody plays its frame.
+            if let Some(pending) = pending
+                && let Err(error) = pending.await
+            {
+                log::debug!(target: lk_agents_abi::LOG_TARGET, error:% = error; "background audio read ended on teardown");
             }
             match input {
                 Input::File(mut file) => {
@@ -667,10 +658,7 @@ impl FileInput {
         match lk_agents_abi::timeout(clock, timeout, self.next(rate, channels)).await {
             Ok(Some(Ok(pcm))) => Fetched::Pcm(pcm, rate, channels),
             Err(_) => Fetched::TimedOut,
-            Ok(Some(Err(err))) => {
-                log::error!(target: lk_agents_abi::LOG_TARGET, "background audio decode failed: {err}");
-                Fetched::Ended
-            }
+            Ok(Some(Err(err))) => Fetched::Failed(err.to_string()),
             Ok(None) => Fetched::Ended,
         }
     }
@@ -820,6 +808,7 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
             }
             Ok(publication.sid().clone())
         })
+        .wait()
         .await
         .map_err(|_| RtcError::host("background audio publication task stopped"))?
     }

@@ -437,10 +437,10 @@ async def _synthesize_text(
             output_emitter.report_usage(characters_count=event.billable_characters_count)
         elif isinstance(event, SpeechStreamEvent_SpeechError):
             raise APIStatusError(
-                message=event.error.message,
+                "Speechify returned a speech error",
                 status_code=-1,
                 request_id=event.request_id,
-                body=None,
+                detail=event.error.message,
             )
     return pushed
 
@@ -450,10 +450,9 @@ def _raise_from(e: Exception) -> None:
         raise e
     if isinstance(e, ApiError):
         raise APIStatusError(
-            message=str(e.body) if e.body is not None else "Speechify API error",
+            "Speechify API error",
             status_code=e.status_code or -1,
-            request_id=None,
-            body=None,
+            detail=str(e.body) if e.body is not None else None,
         ) from None
     if isinstance(e, asyncio.TimeoutError):
         raise APITimeoutError() from None

@@ -333,6 +333,8 @@ class LLMStream(llm.LLMStream):
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._create_anthropic_stream = create_anthropic_stream
 
+    async def _run(self) -> None:
+        # per attempt: a retry never inherits a half-streamed tool call or usage
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
@@ -344,16 +346,12 @@ class LLMStream(llm.LLMStream):
         self._cache_creation_tokens: int | None = None
         self._cache_read_tokens: int | None = None
         self._output_tokens = 0
-
-    async def _run(self) -> None:
-        retryable = True
         try:
             async with await self._create_anthropic_stream() as stream:
                 async for event in stream:
                     chat_chunk = self._parse_event(event)
                     if chat_chunk is not None:
                         self.send(chat_chunk)
-                        retryable = False
 
                 # Anthropic's input_tokens excludes cache reads and writes; ours includes them.
                 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
@@ -373,17 +371,18 @@ class LLMStream(llm.LLMStream):
                         ),
                     )
                 )
-        except anthropic.APITimeoutError as e:
-            raise APITimeoutError(retryable=retryable) from e
+        except (anthropic.APITimeoutError, httpx.TimeoutException) as e:
+            raise APITimeoutError() from e
         except anthropic.APIStatusError as e:
             raise APIStatusError(
-                e.message,
+                "Anthropic request failed",
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=e.body,
+                detail=e.message,
             ) from e
-        except Exception as e:
-            raise APIConnectionError(retryable=retryable) from e
+        except (anthropic.APIConnectionError, httpx.TransportError) as e:
+            raise APIConnectionError() from e
 
     def _parse_event(self, event: _MessageEvent) -> llm.ChatChunk | None:
         if event.type == "message_start":
@@ -440,7 +439,8 @@ class LLMStream(llm.LLMStream):
                         role="assistant",
                         tool_calls=[
                             llm.FunctionToolCall(
-                                arguments=self._fnc_raw_arguments or "",
+                                # a call without arguments streams no JSON: its arguments are {}
+                                arguments=self._fnc_raw_arguments or "{}",
                                 name=self._fnc_name or "",
                                 call_id=self._tool_call_id or "",
                             )

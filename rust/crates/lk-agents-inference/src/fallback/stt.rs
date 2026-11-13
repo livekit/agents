@@ -418,6 +418,8 @@ pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {
         offline_recognize: true,
         keyterms: any(|c| c.keyterms),
         chat_context: any(|c| c.chat_context),
+        // each member is measured inside the chain
+        reports_usage: true,
     }
 }
 

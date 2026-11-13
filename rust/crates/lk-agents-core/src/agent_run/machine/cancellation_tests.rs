@@ -88,7 +88,7 @@ fn duplicate_calls_follow_the_tool_policy() {
         run(DuplicateMode::Reject, DuplicateScope::Name, same.clone());
     assert_eq!(executed, [calls[0]]);
     d.send(AgentRunEvent::ToolSettled { call: calls[0], outcome: value("found") });
-    d.send(AgentRunEvent::ToolHandlingTemplateRendered { call: calls[1], text: None });
+    d.send(AgentRunEvent::ToolHandlingTemplateRendered { call: calls[1], text: Ok(None) });
     let (_, ctx, _) = d.request();
     assert!(
         transcript(&ctx.items)
@@ -114,7 +114,7 @@ fn duplicate_calls_follow_the_tool_policy() {
     d.send(AgentRunEvent::ToolSettled { call: calls[0], outcome: value("found") });
     d.send(AgentRunEvent::ToolHandlingTemplateRendered {
         call: calls[1],
-        text: Some("Still looking.".into()),
+        text: Ok(Some("Still looking.".into())),
     });
     let (_, ctx, _) = d.request();
     assert_eq!(transcript(&ctx.items).last().unwrap().1, "Still looking.");
@@ -289,11 +289,13 @@ fn cancellation_waits_for_the_refusal_renderer_to_report_its_end() {
     assert!(driver.finished().is_none(), "the host renderer still owns an invocation");
     assert_eq!(driver.run.wake_at(), Some(Ts::ZERO.saturating_add(Duration::from_secs(5))));
 
-    driver.send(AgentRunEvent::ToolHandlingTemplateRendered { call, text: None });
+    driver.send(AgentRunEvent::ToolHandlingTemplateRendered { call, text: Ok(None) });
     assert!(matches!(driver.finished(), Some(Err(RunError::Cancelled))));
     assert!(driver.run.wake_at().is_none());
     assert!(
-        driver.send(AgentRunEvent::ToolHandlingTemplateRendered { call, text: None }).is_empty(),
+        driver
+            .send(AgentRunEvent::ToolHandlingTemplateRendered { call, text: Ok(None) })
+            .is_empty(),
         "a duplicate receipt cannot settle the run again"
     );
 }
@@ -311,7 +313,9 @@ fn a_refusal_renderer_missing_its_cleanup_deadline_is_reported_incomplete() {
     ));
     assert!(matches!(driver.finished(), Some(Err(RunError::Cancelled))));
     assert!(
-        driver.send(AgentRunEvent::ToolHandlingTemplateRendered { call, text: None }).is_empty()
+        driver
+            .send(AgentRunEvent::ToolHandlingTemplateRendered { call, text: Ok(None) })
+            .is_empty()
     );
 }
 
@@ -321,7 +325,7 @@ fn a_refusal_renderer_settles_normally_before_the_next_model_step() {
     assert!(driver.finished().is_none());
     driver.send(AgentRunEvent::ToolHandlingTemplateRendered {
         call,
-        text: Some("This lookup is already running.".into()),
+        text: Ok(Some("This lookup is already running.".into())),
     });
     driver.reply("Found it.", &[]);
     assert_eq!(
@@ -329,6 +333,19 @@ fn a_refusal_renderer_settles_normally_before_the_next_model_step() {
         RunOutcome::Completed { output: Output::Text("Found it.".into()) }
     );
     assert!(driver.run.wake_at().is_none());
+}
+
+// Catches: a raising `tool_handling` template leaving its refused call unsettled.
+#[test]
+fn a_refusal_template_that_raised_settles_with_the_framework_text() {
+    let (mut driver, call) = waiting_for_refusal_template();
+    let raised = lk_agents_abi::errors::HostError::new("template raised");
+    driver.send(AgentRunEvent::ToolHandlingTemplateRendered { call, text: Err(raised) });
+    driver.reply("Found it.", &[]);
+    assert_eq!(
+        driver.result().outcome,
+        RunOutcome::Completed { output: Output::Text("Found it.".into()) }
+    );
 }
 
 /// Resuming a run interrupted mid-tools sends only answered calls and reruns no tool body.

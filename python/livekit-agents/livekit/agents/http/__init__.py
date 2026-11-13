@@ -9,6 +9,7 @@ from .client import (
     WebSocketMessageType,
     http_session,
     open,
+    retry_request,
 )
 from .server import AgentRoutes
 
@@ -22,5 +23,6 @@ __all__ = [
     "WebSocketMessageType",
     "http_session",
     "open",
+    "retry_request",
 ]
 __all__ += _public.__all__

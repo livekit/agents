@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 from pydantic import JsonValue, TypeAdapter
@@ -23,11 +22,12 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
     http,
 )
 
 from .errors import ErrorType, SynthesiaError
-from .log import logger
 from .types import StartSessionRequest, StartSessionResponse
 
 _JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
@@ -110,50 +110,37 @@ class SynthesiaAPI:
             "livekitToken": request.lk_token,
         }
 
-        last_status: int | None = None
-        last_body: JsonValue = None
-        last_exc: Exception | None = None
+        session = self._http()
 
-        async with conn_options.total_deadline():
-            for attempt in range(conn_options.max_retry + 1):
-                status: int | None = None
-                try:
-                    async with self._http().post(
-                        url,
-                        headers=headers,
-                        json=payload,
-                        conn_options=conn_options,
-                    ) as resp:
-                        status = resp.status
-                        body = await _read_json(resp)
-                        if resp.ok:
-                            return self._parse_success(body)
-                        if status < 500:
-                            raise self._mapped_error(resp, body)
-                        last_status, last_body, last_exc = status, body, None
-                        logger.debug(
-                            "synthesia session request failed, retrying",
-                            extra={"status": status},
-                        )
-                except (TimeoutError, APIConnectionError) as e:
-                    # A 5xx whose body fails to arrive is still a 5xx, not a transport failure.
-                    last_status = status if status is not None and status >= 500 else None
-                    last_body, last_exc = None, e
-                    logger.debug(
-                        "synthesia session request errored, retrying",
-                        extra={"error": type(e).__name__},
-                    )
+        async def attempt() -> StartSessionResponse:
+            async with session.post(
+                url, headers=headers, json=payload, conn_options=conn_options
+            ) as resp:
+                if resp.status >= 500:
+                    await resp.raise_for_status()
+                body = await _read_json(resp)
+                if resp.ok:
+                    return self._parse_success(body)
+                raise self._mapped_error(resp, body)
 
-                if attempt < conn_options.max_retry:
-                    await asyncio.sleep(conn_options.retry_interval)
-
-        raise SynthesiaError(
-            _exhausted_message(conn_options.max_retry + 1, last_status, last_body),
-            type=ErrorType.CONNECTION,
-            body=last_body,
-            status=last_status,
-            request_id=_body_request_id(last_body),
-        ) from last_exc
+        try:
+            return await http.retry_request(attempt, conn_options=conn_options)
+        except APITimeoutError:
+            raise
+        except APIConnectionError as e:
+            # retries exhausted: a mapped answer keeps its type, anything else is CONNECTION
+            last = e.__cause__
+            if isinstance(last, SynthesiaError):
+                raise last from None
+            status = last.status_code if isinstance(last, APIStatusError) else None
+            body = _parse_json(last.body) if isinstance(last, APIStatusError) else None
+            raise SynthesiaError(
+                _exhausted_message(conn_options.max_retry + 1, status, body),
+                type=ErrorType.CONNECTION,
+                body=body,
+                status=status,
+                request_id=_body_request_id(body),
+            ) from e
 
     def _parse_success(self, body: JsonValue) -> StartSessionResponse:
         if isinstance(body, dict):
@@ -277,7 +264,11 @@ def _parse_retry_after(resp: http.HttpResponse, body: JsonValue) -> float | None
 
 
 async def _read_json(resp: http.HttpResponse) -> JsonValue:
+    return _parse_json(await resp.read())
+
+
+def _parse_json(body: object) -> JsonValue:
     try:
-        return _JSON_VALUE.validate_python(await resp.json())
+        return _JSON_VALUE.validate_json(body if isinstance(body, (str, bytes)) else str(body))
     except ValueError:
         return None

@@ -824,7 +824,7 @@ impl Pump {
     async fn wait_for_retirement(&self) {
         let done = self.shared.retirement.lock().clone();
         if let Some(done) = done {
-            let _ = done.wait().await;
+            done.until(Option::is_some).await;
         }
     }
 

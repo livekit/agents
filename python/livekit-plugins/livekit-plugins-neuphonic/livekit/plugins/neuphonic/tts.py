@@ -16,6 +16,7 @@ from __future__ import annotations  # noqa: I001
 
 import asyncio
 import base64
+import binascii
 import json
 import os
 import weakref
@@ -38,7 +39,6 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents import http
 from livekit.agents.utils import is_given
 
-from .log import logger  # noqa: I001
 from .models import TTSLangCodes  # noqa: I001
 
 API_AUTH_HEADER = "x-api-key"
@@ -302,7 +302,7 @@ class ChunkedStream(tts.ChunkedStream):
                     if parsed_message is not None:
                         audio = (parsed_message.get("data") or {}).get("audio")
                         if audio is not None:
-                            output_emitter.push(base64.b64decode(audio))
+                            output_emitter.push(_decode_audio(audio))
 
                 output_emitter.flush()
         except APIError:
@@ -327,6 +327,23 @@ class _Response(TypedDict, total=False):
 _RESPONSE = TypeAdapter(_Response)
 
 
+def _decode_audio(audio: str) -> bytes:
+    try:
+        return base64.b64decode(audio, validate=True)
+    except binascii.Error as e:
+        raise APIConnectionError("NeuPhonic sent malformed audio", retryable=False) from e
+
+
+def _error(resp: _Response) -> APIStatusError:
+    # the status code decides retrying: auth, quota and invalid requests are 4xx
+    return APIStatusError(
+        "NeuPhonic returned an error",
+        status_code=resp.get("status_code") or -1,
+        body=resp,
+        detail=str(resp.get("errors")),
+    )
+
+
 def _parse_sse_message(message: str) -> _Response | None:
     """
     Parse each response from the SSE endpoint.
@@ -348,9 +365,7 @@ def _parse_sse_message(message: str) -> _Response | None:
         raise APIConnectionError("Malformed Neuphonic response", retryable=False) from error
 
     if message_dict.get("errors") is not None:
-        raise Exception(
-            f"received error status {message_dict.get('status_code')}:{message_dict.get('errors')}"
-        )
+        raise _error(message_dict)
 
     return message_dict
 
@@ -430,11 +445,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 msg = await ws.receive()
 
                 if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "NeuPhonic websocket connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("NeuPhonic websocket connection closed unexpectedly")
 
                 if msg.type is http.WebSocketMessageType.TEXT:
                     try:
@@ -445,18 +456,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                         ) from error
 
                     if resp.get("type") == "error":
-                        raise APIError(f"NeuPhonic returned error: {resp}")
+                        raise _error(resp)
 
                     data = resp.get("data") or {}
                     audio_data = data.get("audio")
-                    if audio_data and audio_data != "" and data.get("context_id") == segment_id:
-                        try:
-                            b64data = base64.b64decode(audio_data)
-                            if b64data:
-                                read_deadline.progress()
-                                output_emitter.push(b64data)
-                        except Exception as e:
-                            logger.warning("Failed to decode NeuPhonic audio data: %s", e)
+                    if audio_data and data.get("context_id") == segment_id:
+                        b64data = _decode_audio(audio_data)
+                        if b64data:
+                            read_deadline.progress()
+                            output_emitter.push(b64data)
 
                     nonlocal chunks
                     if data.get("stop"):

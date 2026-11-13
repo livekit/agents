@@ -172,7 +172,7 @@ async def test_failure_after_output_is_not_retried() -> None:
         model = LLM(client=client, model="test")
         chunks: list[llm.ChatChunk] = []
 
-        with pytest.raises(APIError) as caught:
+        with pytest.raises(APIError):
             async with model.chat(chat_ctx=ChatContext.empty(), conn_options=RETRIES) as stream:
                 async for chunk in stream:
                     chunks.append(chunk)
@@ -180,7 +180,6 @@ async def test_failure_after_output_is_not_retried() -> None:
 
     assert [chunk.delta.content for chunk in chunks if chunk.delta] == ["partial"]
     assert len(received) == 1
-    assert caught.value.retryable is False
 
 
 async def test_tool_call_accumulation() -> None:
@@ -300,11 +299,6 @@ async def test_base_prompt_and_assistant_ending_context_are_sent_validly() -> No
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="https://github.com/livekit/agents/pull/8169 reproduces: in-band errors are retried",
-)
 async def test_in_band_error_is_not_retried() -> None:
     """A provider error event fails the request once. https://github.com/livekit/agents/pull/8169"""
     error = _conversation_sse(

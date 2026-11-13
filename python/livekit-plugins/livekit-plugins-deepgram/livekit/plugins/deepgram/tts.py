@@ -11,7 +11,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     APITimeoutError,
     http,
     tokenize,
@@ -35,6 +34,17 @@ NUM_CHANNELS = 1
 MIN_SPEED = 0.7
 MAX_SPEED = 1.5
 
+_ENCODING_TO_MIMETYPE: dict[str, str] = {
+    "linear16": "audio/pcm",
+    "mulaw": "audio/pcmu",
+    "alaw": "audio/pcma",
+    "mp3": "audio/mp3",
+    "opus": "audio/opus",
+    "flac": "audio/flac",
+    "aac": "audio/aac",
+}
+# the encodings Deepgram streams over the websocket
+_STREAM_ENCODINGS = ("linear16", "mulaw", "alaw")
 
 _FLUSH_MSG = json.dumps({"type": "Flush"})
 _CLOSE_MSG = json.dumps({"type": "Close"})
@@ -50,67 +60,32 @@ class _TTSOptions:
     mip_opt_out: bool = False
     bit_rate: int | None = None
     speed: float | None = None
+    flux: bool = False
+    """Flux (/v2/speak) ends a turn with SpeechMetadata and has no speed."""
+
+    @property
+    def mime_type(self) -> str:
+        try:
+            return _ENCODING_TO_MIMETYPE[self.encoding]
+        except KeyError:
+            raise ValueError(
+                f"unsupported Deepgram TTS encoding {self.encoding!r}; "
+                f"supported encodings are: {', '.join(_ENCODING_TO_MIMETYPE)}"
+            ) from None
 
 
-class TTS(tts.TTS):
-    def __init__(
-        self,
-        *,
-        model: TTSModels | str = "aura-2-andromeda-en",
-        encoding: str = "linear16",
-        sample_rate: int = 24000,
-        bit_rate: int | None = None,
-        speed: float | None = None,
-        api_key: str | None = None,
-        base_url: str = BASE_URL,
-        http_session: http.HttpSession | None = None,
-        mip_opt_out: bool = False,
-    ) -> None:
-        """
-        Create a new instance of Deepgram TTS.
+class _DeepgramTTS(tts.TTS):
+    """The REST and websocket client shared by ``TTS`` (/v1/speak) and ``TTSv2`` (Flux)."""
 
-        Args:
-            model (TTSModels | str): TTS model to use. Defaults to "aura-2-andromeda-en".
-                See https://developers.deepgram.com/docs/tts-models for available models.
-            encoding (str): Audio encoding to use. Defaults to "linear16".
-            sample_rate (int): Sample rate of audio. Defaults to 24000.
-            bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3). Defaults to None.
-                See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
-            speed (float | None): Speaking rate, from 0.7 to 1.5; 1.0 is the normal rate. Defaults to None,
-                which leaves it out of the request. Deepgram supports it on Aura-2 English and Spanish
-                voices and rejects the request for other models.
-                See https://developers.deepgram.com/docs/tts-voice-controls
-            api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
-            base_url (str): Base URL for Deepgram TTS API. Defaults to "https://api.deepgram.com/v1/speak"
-            http_session (http.HttpSession): Optional HTTP session to use for requests.
-
-        """  # noqa: E501
+    def __init__(self, opts: _TTSOptions, http_session: http.HttpSession | None) -> None:
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
-            sample_rate=sample_rate,
+            capabilities=tts.TTSCapabilities(streaming=True, text_unit="words", max_text_len=2000),
+            sample_rate=opts.sample_rate,
             num_channels=NUM_CHANNELS,
         )
-
-        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
-        if not api_key:
-            raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
-
-        if speed is not None and not MIN_SPEED <= speed <= MAX_SPEED:
-            raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
-
-        self._opts = _TTSOptions(
-            model=model,
-            encoding=encoding,
-            sample_rate=sample_rate,
-            bit_rate=bit_rate,
-            speed=speed,
-            base_url=base_url,
-            api_key=api_key,
-            mip_opt_out=mip_opt_out,
-        )
+        self._opts = opts
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-
         self._pool = utils.ConnectionPool[http.WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -126,12 +101,6 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Deepgram"
 
-    def _core_text_unit(self) -> str:
-        return "words"
-
-    def _core_max_text_len(self) -> int | None:
-        return 2000
-
     async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
         session = self._ensure_session()
         config: dict[str, str | float | int | bool] = {
@@ -140,8 +109,6 @@ class TTS(tts.TTS):
             "sample_rate": self._opts.sample_rate,
             "mip_opt_out": self._opts.mip_opt_out,
         }
-        if self._opts.bit_rate is not None:
-            config["bit_rate"] = self._opts.bit_rate
         if self._opts.speed is not None:
             config["speed"] = self._opts.speed
         ws = await session.ws_connect(
@@ -180,35 +147,15 @@ class TTS(tts.TTS):
             self._session = http.http_session()
         return self._session
 
-    def update_options(
+    def _set_options(
         self,
         *,
-        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
-        encoding: NotGivenOr[str] = NOT_GIVEN,
-        sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        bit_rate: NotGivenOr[int | None] = NOT_GIVEN,
+        model: NotGivenOr[str],
+        encoding: NotGivenOr[str],
+        sample_rate: NotGivenOr[int],
+        bit_rate: NotGivenOr[int | None],
         speed: NotGivenOr[float | None] = NOT_GIVEN,
-        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        """
-        Args:
-            model (TTSModels | str): TTS model to use.
-            encoding (str): Audio encoding to use.
-            sample_rate (int): Sample rate of audio in Hz.
-            bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3).
-                See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
-            speed (float | None): Speaking rate, from 0.7 to 1.5; None leaves it out of the request.
-                See https://developers.deepgram.com/docs/tts-voice-controls
-            sentence_tokenizer (tokenize.SentenceTokenizer): What splits the text into the chunks
-                the TTS is sent.
-            pacing (tts.SentenceStreamPacer | None): A ``SentenceStreamPacer``, or ``None`` to send
-                each chunk as soon as it is split.
-        """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(speed) and speed is not None and not MIN_SPEED <= speed <= MAX_SPEED:
-            raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
-
         connection_params_changed = False
         if is_given(model):
             self._opts.model = model
@@ -263,18 +210,107 @@ class TTS(tts.TTS):
         await self._pool.aclose()
 
 
+class TTS(_DeepgramTTS):
+    def __init__(
+        self,
+        *,
+        model: TTSModels | str = "aura-2-andromeda-en",
+        encoding: str = "linear16",
+        sample_rate: int = 24000,
+        bit_rate: int | None = None,
+        speed: float | None = None,
+        api_key: str | None = None,
+        base_url: str = BASE_URL,
+        http_session: http.HttpSession | None = None,
+        mip_opt_out: bool = False,
+    ) -> None:
+        """
+        Create a new instance of Deepgram TTS.
+
+        Args:
+            model (TTSModels | str): TTS model to use. Defaults to "aura-2-andromeda-en".
+                See https://developers.deepgram.com/docs/tts-models for available models.
+            encoding (str): Audio encoding to use. Defaults to "linear16". stream() supports
+                "linear16", "mulaw" and "alaw"; compressed encodings are batch only.
+            sample_rate (int): Sample rate of audio. Defaults to 24000.
+            bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3). Defaults to None.
+                See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
+            speed (float | None): Speaking rate, from 0.7 to 1.5; 1.0 is the normal rate. Defaults to None,
+                which leaves it out of the request. Deepgram supports it on Aura-2 English and Spanish
+                voices and rejects the request for other models.
+                See https://developers.deepgram.com/docs/tts-voice-controls
+            api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
+            base_url (str): Base URL for Deepgram TTS API. Defaults to "https://api.deepgram.com/v1/speak"
+            http_session (http.HttpSession): Optional HTTP session to use for requests.
+
+        """  # noqa: E501
+        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
+        if not api_key:
+            raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
+
+        if speed is not None and not MIN_SPEED <= speed <= MAX_SPEED:
+            raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+
+        super().__init__(
+            _TTSOptions(
+                model=model,
+                encoding=encoding,
+                sample_rate=sample_rate,
+                bit_rate=bit_rate,
+                speed=speed,
+                base_url=base_url,
+                api_key=api_key,
+                mip_opt_out=mip_opt_out,
+            ),
+            http_session,
+        )
+
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        encoding: NotGivenOr[str] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        bit_rate: NotGivenOr[int | None] = NOT_GIVEN,
+        speed: NotGivenOr[float | None] = NOT_GIVEN,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
+    ) -> None:
+        """
+        Args:
+            model (TTSModels | str): TTS model to use.
+            encoding (str): Audio encoding to use.
+            sample_rate (int): Sample rate of audio in Hz.
+            bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3).
+                See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
+            speed (float | None): Speaking rate, from 0.7 to 1.5; None leaves it out of the request.
+                See https://developers.deepgram.com/docs/tts-voice-controls
+            sentence_tokenizer (tokenize.SentenceTokenizer): What splits the text into the chunks
+                the TTS is sent.
+            pacing (tts.SentenceStreamPacer | None): A ``SentenceStreamPacer``, or ``None`` to send
+                each chunk as soon as it is split.
+        """
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
+        if is_given(speed) and speed is not None and not MIN_SPEED <= speed <= MAX_SPEED:
+            raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+
+        self._set_options(
+            model=model, encoding=encoding, sample_rate=sample_rate, bit_rate=bit_rate, speed=speed
+        )
+
+
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
         get_session: Callable[[], http.HttpSession],
         opts: _TTSOptions,
-        tts: TTS,
+        tts: _DeepgramTTS,
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
+        self._tts: _DeepgramTTS = tts
         self._opts = opts
         self._get_session = get_session
 
@@ -306,7 +342,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    mime_type="audio/pcm",
+                    mime_type=self._opts.mime_type,
                 )
 
                 async for data in resp.iter_bytes():
@@ -328,22 +364,28 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         pool: utils.ConnectionPool[http.WebSocket],
         opts: _TTSOptions,
-        tts: TTS,
+        tts: _DeepgramTTS,
         conn_options: APIConnectOptions,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
+        self._tts: _DeepgramTTS = tts
         self._opts = opts
         self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if self._opts.encoding not in _STREAM_ENCODINGS:
+            raise ValueError(
+                f"Deepgram TTS streams {', '.join(_STREAM_ENCODINGS)}, got "
+                f"{self._opts.encoding!r}; use synthesize() for compressed output."
+            )
+
         segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            mime_type="audio/pcm",
+            num_channels=NUM_CHANNELS,
+            mime_type=self._opts.mime_type,
             stream=True,
         )
 
@@ -366,18 +408,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for segment in segments_ch:
                 await self._run_ws(segment, output_emitter)
 
-        try:
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(tasks.spawn(_segment_input()), tasks.spawn(_run_segments()))
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
+        async with utils.aio.TaskSet() as tasks:
+            await asyncio.gather(tasks.spawn(_segment_input()), tasks.spawn(_run_segments()))
 
     async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
         input_sent_event = asyncio.Event()
+        # audio is owed once a segment is flushed, never while waiting for more text
+        read_deadline = self._core_attempts
 
         async def send_task(ws: http.WebSocket) -> None:
             async for chunk in segment:
@@ -387,36 +426,49 @@ class SynthesizeStream(tts.SynthesizeStream):
                 input_sent_event.set()
 
             # always flush after a segment
-            flush_msg = {"type": "Flush"}
-            await ws.send_str(json.dumps(flush_msg))
+            await ws.send_str(_FLUSH_MSG)
+            read_deadline.expect_response()
             input_sent_event.set()
 
         async def recv_task(ws: http.WebSocket) -> None:
             await input_sent_event.wait()
             while True:
-                msg = await ws.receive(timeout=self._conn_options.read_timeout)
+                msg = await ws.receive()
                 if msg.type == http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "Deepgram websocket connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("Deepgram websocket connection closed unexpectedly")
 
                 if msg.type == http.WebSocketMessageType.BINARY:
+                    read_deadline.audio_received()
                     output_emitter.push(msg.binary)
                 elif msg.type == http.WebSocketMessageType.TEXT:
                     resp = json.loads(msg.data)
                     mtype = resp.get("type")
-                    if mtype == "Flushed":
+                    # Flux ends a turn with SpeechMetadata, then sends a trailing Flushed that
+                    # a pooled reuse absorbs at the top of the next turn.
+                    # https://developers.deepgram.com/docs/flux-tts/overview
+                    if mtype == ("SpeechMetadata" if self._opts.flux else "Flushed"):
+                        if (billed := resp.get("billable_character_count")) is not None:
+                            output_emitter.report_usage(characters_count=billed)
+                        read_deadline.complete_response()
                         output_emitter.end_segment()
                         break
                     elif mtype == "Warning":
-                        logger.warning("Deepgram warning: %s", resp.get("warn_msg"))
+                        logger.warning(
+                            "Deepgram warning: %s (code: %s)",
+                            resp.get("description") or resp.get("warn_msg"),
+                            resp.get("code"),
+                        )
                     elif mtype in ("Error", "error"):
-                        raise APIError(message="Deepgram TTS returned error", body=resp)
-                    elif mtype == "Metadata":
-                        pass
-                    else:
+                        raise APIError(
+                            "Deepgram TTS returned error", body=resp, detail=resp.get("description")
+                        )
+                    elif mtype not in (
+                        "Metadata",
+                        "Connected",
+                        "SpeechStarted",
+                        "Flushed",
+                        "SessionMetadata",
+                    ):
                         logger.warning("Unknown Deepgram message type", extra={"lk.pii.data": resp})
 
         async with self._pool.connection(conn_options=self._conn_options) as ws:

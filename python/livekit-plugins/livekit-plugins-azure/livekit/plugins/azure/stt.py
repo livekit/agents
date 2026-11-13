@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import time
 import weakref
 from collections.abc import Callable
 from copy import deepcopy
@@ -243,8 +242,6 @@ class SpeechStream(stt.RecognizeStream):
         self._loop = asyncio.get_running_loop()
         self._reconnect_event = asyncio.Event()
         self._cancellation_error: speechsdk.CancellationDetails | None = None
-        self._audio_duration = 0.0
-        self._last_audio_duration_report_time = time.monotonic()
 
     def update_options(
         self,
@@ -266,8 +263,12 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _run(self) -> None:
         while True:
+            self._session_started_event.clear()
             self._session_stopped_event.clear()
             self._cancellation_error = None
+            if self._speaking:  # a new session starts outside any speech
+                self._speaking = False
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
             self._stream = speechsdk.audio.PushAudioInputStream(
                 stream_format=speechsdk.audio.AudioStreamFormat(
@@ -294,12 +295,7 @@ class SpeechStream(stt.RecognizeStream):
                 async def process_input() -> None:
                     async for input in self.input:
                         if isinstance(input, rtc.AudioFrame):
-                            self._audio_duration += input.duration
-                            self._maybe_emit_recognition_usage()
                             self._stream.write(input.data.tobytes())
-                        else:
-                            self._emit_recognition_usage()
-                    self._emit_recognition_usage()
 
                 async with utils.aio.TaskSet() as tasks:
                     wait_reconnect_task = tasks.spawn(self._reconnect_event.wait())
@@ -312,8 +308,9 @@ class SpeechStream(stt.RecognizeStream):
                     if self._cancellation_error is not None:
                         details = self._cancellation_error
                         raise APIConnectionError(
-                            f"Azure STT canceled: "
-                            f"{details.error_details or details.reason} ({details.code})"
+                            f"Azure STT canceled: {details.reason} ({details.code})",
+                            retryable=details.code not in _REJECTED,
+                            detail=details.error_details,
                         )
                     raise APIConnectionError("SpeechRecognition session stopped")
 
@@ -324,9 +321,13 @@ class SpeechStream(stt.RecognizeStream):
                     self._reconnect_event.clear()
 
                 # close the push stream to flush finals for buffered audio before
-                # teardown, otherwise ending input truncates the transcript
+                # teardown, otherwise ending input truncates the transcript; bounded, as Azure
+                # does not always report the stop
                 self._stream.close()
-                await self._session_stopped_event.wait()
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        self._session_stopped_event.wait(), self._conn_options.read_timeout
+                    )
 
                 if input_ended:
                     break
@@ -363,25 +364,6 @@ class SpeechStream(stt.RecognizeStream):
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
                 ),
-            )
-
-    def _maybe_emit_recognition_usage(self) -> None:
-        if time.monotonic() - self._last_audio_duration_report_time >= 5.0:
-            self._emit_recognition_usage()
-
-    def _emit_recognition_usage(self) -> None:
-        if self._audio_duration <= 0.0:
-            return
-
-        audio_duration = self._audio_duration
-        self._audio_duration = 0.0
-        self._last_audio_duration_report_time = time.monotonic()
-        with contextlib.suppress(RuntimeError):
-            self.send(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
-                )
             )
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
@@ -436,8 +418,6 @@ class SpeechStream(stt.RecognizeStream):
             )
 
     def _on_session_started(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        self._session_started_event.set()
-
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(self._session_started_event.set)
 
@@ -447,19 +427,21 @@ class SpeechStream(stt.RecognizeStream):
 
     def _on_canceled(self, evt: speechsdk.SpeechRecognitionCanceledEventArgs) -> None:
         if evt.cancellation_details.reason == speechsdk.CancellationReason.Error:
-            logger.warning(
-                f"Speech recognition canceled: {evt.cancellation_details}",
-                extra={
-                    "code": evt.cancellation_details.code,
-                    "reason": evt.cancellation_details.reason,
-                    "error_details": evt.cancellation_details.error_details,
-                },
-            )
             # Azure does not always emit session_stopped after an error cancellation, so
             # surface it here to wake _run; the base class then retries and can fall back.
             self._cancellation_error = evt.cancellation_details
             with contextlib.suppress(RuntimeError):
                 self._loop.call_soon_threadsafe(self._session_stopped_event.set)
+
+
+# cancellations that fail the same way on a retry
+_REJECTED = frozenset(
+    {
+        speechsdk.CancellationErrorCode.AuthenticationFailure,
+        speechsdk.CancellationErrorCode.BadRequest,
+        speechsdk.CancellationErrorCode.Forbidden,
+    }
+)
 
 
 def _create_speech_recognizer(

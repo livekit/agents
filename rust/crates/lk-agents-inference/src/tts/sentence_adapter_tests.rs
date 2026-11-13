@@ -103,7 +103,7 @@ impl Tts for FakeTts {
         "fake.FakeTTS".into()
     }
     fn capabilities(&self) -> TtsCapabilities {
-        TtsCapabilities { streaming: false, aligned_transcript: false }
+        TtsCapabilities { streaming: false, aligned_transcript: false, ..Default::default() }
     }
     fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
         Ok(24_000)
@@ -267,7 +267,7 @@ async fn the_adapter_claims_streaming_but_keeps_the_wrapped_providers_audio_form
     let ad = adapter(tts.clone());
     assert_eq!(
         ad.capabilities(),
-        TtsCapabilities { streaming: true, aligned_transcript: true },
+        TtsCapabilities { streaming: true, aligned_transcript: true, ..Default::default() },
         "stream_adapter.py:33 verbatim"
     );
     assert_eq!(ad.sample_rate(), tts.sample_rate());

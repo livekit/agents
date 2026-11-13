@@ -277,7 +277,13 @@ impl VoiceStore {
         let (merged, written) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
-                let _ = run.abandon(RunOutcome::Failed, AbandonReason::VoiceLoad.as_str()).await;
+                let abandoned =
+                    run.abandon(RunOutcome::Failed, AbandonReason::VoiceLoad.as_str()).await;
+                crate::telemetry::cleanup_failed(
+                    &self.partition_key,
+                    "abandoning the run",
+                    abandoned,
+                );
                 thread.close().await;
                 return Err(error);
             }
@@ -348,10 +354,15 @@ impl VoiceStore {
                 active.run.commit(CommitOptions::default()).await.map(|committed| committed.version)
             }
             Err(error) => {
-                let _ = active
+                let abandoned = active
                     .run
                     .abandon(RunOutcome::Failed, AbandonReason::VoiceEncode.as_str())
                     .await;
+                crate::telemetry::cleanup_failed(
+                    &self.partition_key,
+                    "abandoning the run",
+                    abandoned,
+                );
                 Err(error)
             }
         };
@@ -367,7 +378,12 @@ impl VoiceStore {
                 self.lost.store(true, Ordering::Release);
             }
             if let Some(lease) = active.run.lease() {
-                let _ = lease.release(None).await;
+                let released = lease.release(None).await;
+                crate::telemetry::cleanup_failed(
+                    &self.partition_key,
+                    "releasing the lease",
+                    released,
+                );
             }
         }
         self.released();

@@ -411,7 +411,8 @@ impl RunnerCore {
     }
 
     /// One read from the receiver. The arm order is the decision: stale epoch, stale segment
-    /// end, held while clearing or reporting, push, end.
+    /// end, held while clearing or reporting, push, end. Audio stamped with a clear not seen yet
+    /// applies that clear first: its `clear_buffer` event, coming later, is then stale.
     fn audio_received(
         &mut self,
         result: Result<
@@ -420,6 +421,11 @@ impl RunnerCore {
         >,
         out: &mut Vec<AvatarEffect>,
     ) {
+        if let Ok((epoch, ..)) = &result
+            && *epoch > self.clear_epoch
+        {
+            self.clear_buffer(*epoch, out);
+        }
         match result {
             Ok((epoch, starts_segment, segment, Some(_))) if epoch < self.clear_epoch => {
                 if starts_segment && let Some(segment) = segment {

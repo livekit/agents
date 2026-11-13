@@ -198,7 +198,11 @@ impl lk_agents_abi::Stt for StartupStt {
         "startup-stt".into()
     }
     fn capabilities(&self) -> lk_agents_abi::SttCapabilities {
-        lk_agents_abi::SttCapabilities { streaming: true, ..Default::default() }
+        lk_agents_abi::SttCapabilities {
+            streaming: true,
+            reports_usage: true,
+            ..Default::default()
+        }
     }
     fn recognize(
         &self,

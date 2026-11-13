@@ -187,6 +187,22 @@ impl<T> Cell<T> {
         self.wait_map(move |value| ready(value).then(|| value.clone()))
     }
 
+    /// Until `ready` accepts the value or the producer is gone, which makes the value final:
+    /// for a waiter that only needs the work over, or reads the state afterwards. Cancel-safe.
+    #[track_caller]
+    pub fn until<'a>(
+        &'a self,
+        ready: impl Fn(&T) -> bool + Send + 'a,
+    ) -> impl Future<Output = ()> + Send + 'a
+    where
+        T: Send + Sync,
+    {
+        let wait = self.wait_map(move |value| ready(value).then_some(()));
+        async move {
+            let (Ok(()) | Err(Ended)) = wait.await;
+        }
+    }
+
     /// The next write after the last one this cell saw; `Err(Ended)` once the producer is gone.
     /// Cancel-safe.
     pub async fn changed(&mut self) -> Result<(), Ended>
@@ -242,8 +258,7 @@ impl<S> Shared<S> {
                 self.changed.modify(|()| ());
                 return found;
             }
-            // `self` holds the producer for the whole wait.
-            let _ = changed.changed().await;
+            changed.changed().await.expect("`self` holds the producer for the whole wait");
         }
     }
 }

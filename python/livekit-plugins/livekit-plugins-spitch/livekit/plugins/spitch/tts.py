@@ -108,7 +108,11 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except spitch.APIStatusError as e:
             raise APIStatusError(
-                e.message, status_code=e.status_code, request_id=request_id, body=e.body
+                "Spitch TTS request failed",
+                status_code=e.status_code,
+                request_id=request_id,
+                body=e.body,
+                detail=e.message,
             ) from None
         except Exception as e:
             raise APIConnectionError() from e

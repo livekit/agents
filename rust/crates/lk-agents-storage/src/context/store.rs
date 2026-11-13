@@ -402,10 +402,10 @@ impl HostContextActivation for ContextStore {
                     *self.lost_save.lock() = Some(resolving);
                     return Err(StorageError::Uncertain(why));
                 }
+                // The refused values never stand: the committed ones do, until the next load
+                // reloads the partition.
                 Err(Unsaved::Refused(error)) => {
-                    if let Ok((scopes, routing)) = database.snapshot().await {
-                        *self.activation.lock() = Activation::new(scopes, routing, false)?;
-                    }
+                    self.activation.lock().abandon();
                     return Err(error);
                 }
             }

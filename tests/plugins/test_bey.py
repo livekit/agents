@@ -10,7 +10,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import api
-from livekit.agents import APIConnectOptions, APIStatusError, http
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, APIStatusError, http
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.plugins.bey import AvatarSession
 
@@ -72,28 +72,30 @@ async def test_explicit_livekit_credentials_sign_the_avatar_token(
     assert claims.attributes == {ATTRIBUTE_PUBLISH_ON_BEHALF: "agent-1"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/issues/7495 reproduces: "
-    "every status is retried and replaced by a generic APIConnectionError",
+@pytest.mark.parametrize(
+    ("status", "attempts", "raised_type"),
+    [(401, 1, APIStatusError), (503, _OPTS.max_retry + 1, APIStatusError)],
 )
-@pytest.mark.parametrize(("status", "attempts"), [(401, 1), (503, _OPTS.max_retry + 1)])
 async def test_provider_status_survives_and_only_transient_errors_retry(
     peer: tuple[AvatarSession, list[int], list[dict[str, str]]],
     avatar_host: AvatarHost,
     status: int,
     attempts: int,
+    raised_type: type[APIError],
 ) -> None:
-    """A refused session keeps the provider's status and body; only 5xx is retried.
+    """A refused session keeps the provider's status and body; only 5xx is retried, and
+    exhausted retries raise from the last answer.
 
     https://github.com/livekit/agents/issues/7495
     """
     avatar, statuses, requests = peer
     statuses.append(status)
 
-    with pytest.raises(APIStatusError) as error:
+    with pytest.raises(raised_type) as error:
         await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
 
-    assert error.value.status_code == status
-    assert f"provider says {status}" in str(error.value.body)
+    refused = error.value if isinstance(error.value, APIStatusError) else error.value.__cause__
+    assert isinstance(refused, APIStatusError)
+    assert refused.status_code == status
+    assert f"provider says {status}" in str(refused.body)
     assert len(requests) == attempts

@@ -263,7 +263,11 @@ fn cancel_task(event_loop: &Py<PyAny>, child: &Child) {
 pub(crate) fn off_thread(what: &'static str, work: impl FnOnce() + Send + 'static) {
     match lk_agents_runtime::process::env().background() {
         Ok(background) => background.cleanup(what, async move {
-            let _ = lk_agents_runtime::net::blocking_io::blocking_io().run((), work).await;
+            if let Err(lost) =
+                lk_agents_runtime::net::blocking_io::blocking_io().run((), work).await
+            {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "{what}: {lost}");
+            }
         }),
         Err(_) => {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "{what} skipped: no process runtime")

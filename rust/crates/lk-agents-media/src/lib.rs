@@ -29,8 +29,8 @@ pub use error::{CodecError, Result};
 pub use filters::{ExpFilter, MovingAverage};
 pub use lk_agents_abi::media::codecs::Container;
 pub use lk_agents_abi::{Quality, ResampleError};
-pub use mime::{AudioDecoding, UnknownMime, audio_decoding, mime_container};
-pub use resample::{AudioResampler, OnChange, Resampler};
+pub use mime::{AudioDecoding, G711, UnknownMime, audio_decoding, mime_container};
+pub use resample::{AudioConverter, AudioResampler, OnChange, Resampler};
 pub use wav::{WavDecoder, WavSegment};
 
 #[cfg(feature = "ffmpeg")]

@@ -9,6 +9,7 @@
     "AgentRunUpdates",
     "AgentRunner",
     "AudioByteStream",
+    "AudioConverter",
     "AudioEmitter",
     "AudioStreamDecoder",
     "AvatarRunner",
@@ -298,6 +299,7 @@
     "video_queue_frames",
     "wait_for_agent",
     "wait_for_participant",
-    "wait_for_track_publication"
+    "wait_for_track_publication",
+    "websocket_close_kind"
   ]
 }

@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, cast
 from urllib.parse import unquote, urlsplit
 
-import numpy as np
 from google.protobuf import json_format
 from google.protobuf.message import DecodeError
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -104,34 +103,7 @@ def validate_audio_format(audio_format: str) -> RimeAudioFormat:
     return cast(RimeAudioFormat, audio_format)
 
 
-def _build_mulaw_table() -> np.ndarray:
-    """Build an ITU-T G.711 mu-law to linear 16-bit PCM lookup table."""
-    table = np.zeros(256, dtype=np.int16)
-    for value in range(256):
-        encoded = (~value) & 0xFF
-        sign = -1 if encoded & 0x80 else 1
-        exponent = (encoded >> 4) & 0x07
-        mantissa = encoded & 0x0F
-        sample = ((mantissa << 3) + 0x84) << exponent
-        table[value] = sign * (sample - 0x84)
-    return table
-
-
-_MULAW_TABLE = _build_mulaw_table()
-
-
-def _decode_audio(audio_format: RimeAudioFormat, data: bytes) -> bytes:
-    if audio_format != "audio/pcmu":
-        return data
-    # Rime v1 encodes PCMU at the requested sample rate, including 24 kHz.
-    # Decode one byte to one PCM sample; the emitter keeps that rate.
-    pcm = _MULAW_TABLE[np.ndarray((len(data),), dtype=np.uint8, buffer=data)]
-    return bytes(pcm.astype("<i2").tobytes())
-
-
 def _emitter_mime_type(audio_format: RimeAudioFormat) -> str:
-    if audio_format == "audio/pcmu":
-        return "audio/pcm"
     return audio_format.partition(";")[0]
 
 
@@ -460,7 +432,7 @@ async def run_context(
             elif payload == "audio":
                 if not state.server_started:
                     raise _ContaminatedConnection("Rime v1 sent audio before started")
-                output_emitter.push(_decode_audio(options.audio_format, envelope.audio))
+                output_emitter.push(envelope.audio)
             elif payload == "done":
                 if not state.server_started:
                     raise _ContaminatedConnection("Rime v1 sent done before started")
@@ -645,6 +617,7 @@ def _rime_error(error: proto.WebSocketError, *, fallback_request_id: str | None)
         request_id=request_id,
         body={"kind": safe_kind},
         retryable=False if kind == "unimplemented" else None,
+        detail=error.message or None,
     )
 
 

@@ -143,7 +143,7 @@ async def test_a_connection_error_fails_every_open_stream(
 
     for raised in errors:
         assert isinstance(raised, APIStatusError)
-        assert (raised.status_code, raised.message, raised.request_id) == (status, "rejected", "r1")
+        assert (raised.status_code, raised.detail, raised.request_id) == (status, "rejected", "r1")
         assert raised.retryable is (status == 429)
 
 
@@ -214,9 +214,11 @@ async def test_a_failure_after_audio_is_not_replayed(peer: tuple[SonioxPeer, str
     )
     tts = TTS(api_key="key", websocket_url=url)
 
-    with pytest.raises(APIStatusError, match="later failure"):
+    with pytest.raises(APIStatusError) as raised:
         await speak(tts, "First sentence is long enough. ", "Second must fail. ", retries=1)
     await tts.aclose()
+
+    assert raised.value.detail == "later failure"
 
     assert [str(t["text"]).strip() for t in server.texts] == [
         "First sentence is long enough.",

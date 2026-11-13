@@ -13,6 +13,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_core::tokenize::spoken_words;
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 pub use paused_speech::PausedSpeech;
@@ -759,13 +760,26 @@ impl VoiceDriver {
         force: bool,
         cause: InterruptCause,
     ) -> Result<Vec<SpeechId>, InterruptRefusal> {
+        self.interrupt_all_but(now, force, cause, &BTreeSet::new())
+    }
+
+    /// `interrupt_all`, keeping the speeches in `kept`.
+    pub(crate) fn interrupt_all_but(
+        &mut self,
+        now: Ts,
+        force: bool,
+        cause: InterruptCause,
+        kept: &BTreeSet<SpeechId>,
+    ) -> Result<Vec<SpeechId>, InterruptRefusal> {
         let abandoned =
             crate::agent_session::machine::activity::scheduling::PreemptiveDiscard::TurnAbandoned;
         self.cancel_preemptive_generation(now, abandoned);
         let generating = self.activity.realtime_generating();
         let mut reached = Vec::new();
         let mut socket_told = false;
-        if let Some(id) = self.activity.speech_scheduler.current_speech() {
+        if let Some(id) =
+            self.activity.speech_scheduler.current_speech().filter(|id| !kept.contains(id))
+        {
             self.cancel_false_interruption_timer();
             if self.interrupt_or_refuse(now, id, force, cause)? {
                 reached.push(id);
@@ -775,7 +789,7 @@ impl VoiceDriver {
         // The next speech (AMD's hold, or the consecutive-speech gap) counts as current, so AMD's
         // forced interrupt cuts the reply made under the hold.
         let candidate = self.activity.speech_scheduler.next_speech();
-        if let Some(id) = candidate
+        if let Some(id) = candidate.filter(|id| !kept.contains(id))
             && self.interrupt_or_refuse(now, id, force, cause)?
         {
             reached.push(id);
@@ -792,7 +806,9 @@ impl VoiceDriver {
             .speech_ids()
             .filter(|id| {
                 let status = self.activity.speech_scheduler.status(*id);
-                status == Some(Status::Working) && !self.activity.voice_tasks.awaits(*id)
+                status == Some(Status::Working)
+                    && !self.activity.voice_tasks.awaits(*id)
+                    && !kept.contains(id)
             })
             .collect();
         for id in working {
@@ -807,6 +823,9 @@ impl VoiceDriver {
         }
         // In pop order: the first refusal keeps that speech and all behind it.
         for id in self.activity.speech_scheduler.speech_q().clone() {
+            if kept.contains(&id) {
+                continue;
+            }
             let result = if force {
                 Ok(self.force_interrupt_speech(now, id, cause))
             } else {

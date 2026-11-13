@@ -127,7 +127,9 @@ class TTS(tts.TTS):
         )
 
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=False),
+            capabilities=tts.TTSCapabilities(
+                streaming=True, aligned_transcript=False, max_text_len=MAX_TEXT_CHARACTERS
+            ),
             sample_rate=int(sample_rate),
             num_channels=NUM_CHANNELS,
         )
@@ -200,9 +202,6 @@ class TTS(tts.TTS):
         self._opts = next_opts
         self._sample_rate = next_sample_rate
 
-    def _core_max_text_len(self) -> int | None:
-        return MAX_TEXT_CHARACTERS
-
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
@@ -263,8 +262,9 @@ class TTS(tts.TTS):
                 base_url=opts.base_url,
                 allow_insecure_base_url=opts.allow_insecure_base_url,
                 config=config,
+                session=self._ensure_session(),
             )
-            await session.connect(timeout=conn_options.connect_timeout)
+            await session.connect(conn_options)
             assert pool_ref is not None
             self._start_keepalive(session, pool_ref)
             return session
@@ -482,9 +482,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         started = True
 
                     async for chunk in session.synthesize_stream(
-                        text,
-                        timeout=self._conn_options.read_timeout,
-                        write_timeout=self._conn_options.write_timeout,
+                        text, timeout=self._conn_options.read_timeout
                     ):
                         output_emitter.push(chunk)
 

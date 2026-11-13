@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use super::{AttemptFailure, Backoff, Policy, Retry, Step};
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, Timeout};
@@ -208,30 +207,14 @@ impl Request {
     }
 
     /// A provider already adapted its failure at the boundary. Preserve its retryability and
-    /// phase rather than converting it back through a transport failure.
+    /// phase rather than converting it back through a transport failure. A retry waits at least
+    /// the `retry_after` the server named (`Retry-After`, `google.rpc.RetryInfo`).
     pub fn failed_error(&mut self, attempt: u32, error: ApiError, now: Ts, steps: &mut Vec<Step>) {
         if self.current() != Some(attempt) {
             return;
         }
         self.close_attempt(attempt, now);
-        self.fail(attempt, error, Duration::ZERO, now, steps);
-    }
-
-    /// The server named when to retry (`Retry-After`, `google.rpc.RetryInfo`): a retry waits at
-    /// least `retry_after`.
-    pub fn failed_retry_after(
-        &mut self,
-        attempt: u32,
-        error: ApiError,
-        retry_after: Duration,
-        now: Ts,
-        steps: &mut Vec<Step>,
-    ) {
-        if self.current() != Some(attempt) {
-            return;
-        }
-        self.close_attempt(attempt, now);
-        self.fail(attempt, error, retry_after, now, steps);
+        self.fail(attempt, error, now, steps);
     }
 
     /// A long-lived recognition completed one utterance. Its next failure gets a fresh retry
@@ -265,7 +248,7 @@ impl Request {
         if self.current() == Some(attempt) {
             self.unresolved |= self.sent();
             let failure = AttemptFailure::Connection("the response ended unexpectedly".into());
-            self.fail(attempt, failure.into_error(), Duration::ZERO, now, steps);
+            self.fail(attempt, failure.into_error(), now, steps);
         }
     }
 
@@ -339,7 +322,7 @@ impl Request {
                 {
                     self.unresolved |= self.sent();
                     self.stop(attempt, now, steps);
-                    self.fail(attempt, ApiError::timed_out(limit), Duration::ZERO, now, steps);
+                    self.fail(attempt, ApiError::timed_out(limit), now, steps);
                 }
             }
             _ => {}
@@ -387,24 +370,18 @@ impl Request {
 
     /// Retries while the error allows it, a replay is safe and attempts remain; the backoff
     /// never outlives the total deadline, whose own wake ends the request.
-    fn fail(
-        &mut self,
-        attempt: u32,
-        error: ApiError,
-        at_least: Duration,
-        now: Ts,
-        steps: &mut Vec<Step>,
-    ) {
+    fn fail(&mut self, attempt: u32, error: ApiError, now: Ts, steps: &mut Vec<Step>) {
         let retryable =
             error.retryable && error.kind != ApiErrorKind::Cancelled && !self.replay_unsafe;
         if let Some(delay) = self.policy.retry_delay(self.failures, retryable) {
-            let delay = delay.max(at_least);
+            let delay = delay.max(error.retry_after().unwrap_or_default());
             self.failures += 1;
             let at = now.saturating_add(delay);
             self.phase = Phase::Waiting { attempt: attempt + 1, at };
             steps.push(Step::Retry(Backoff { attempt, at, delay, error }));
         } else {
             self.phase = Phase::Settled;
+            error.log_detail();
             steps.push(Step::GiveUp(error.with_retryable(retryable)));
         }
     }
@@ -450,5 +427,28 @@ mod tests {
             Retry::GiveUp(ApiError { retryable: false, .. })
         ));
         assert!(request.is_settled());
+    }
+
+    // Catches: a provider's Retry-After ignored (retried at the policy's interval into another
+    // 429), or the policy's own longer backoff cut short by it.
+    #[test]
+    fn a_retry_waits_at_least_the_retry_after_the_provider_named() {
+        // the default policy retries the first failure after 0.1 s
+        let options = ApiConnectOptions::default();
+        for (asked, want) in [(3.0, 3.0), (0.01, 0.1)] {
+            let mut request = Request::retrying(&options, Ts::ZERO);
+            let error = ApiError {
+                said: lk_agents_abi::errors::ProviderSaid::boxed(
+                    None,
+                    Some(std::time::Duration::from_secs_f64(asked)),
+                ),
+                ..ApiError::status("busy", 429, None, None)
+            };
+            let Retry::At(backoff) = request.attempt_failed(error, Ts::ZERO) else {
+                panic!("a 429 is retried")
+            };
+            let at = backoff.announce("test", &"busy");
+            assert_eq!(at, Ts::ZERO.saturating_add(std::time::Duration::from_secs_f64(want)));
+        }
     }
 }

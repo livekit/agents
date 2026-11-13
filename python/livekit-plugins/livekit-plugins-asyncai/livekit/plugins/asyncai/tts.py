@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import json
 import os
 import uuid
@@ -25,10 +26,8 @@ from typing import cast
 from urllib.parse import urlencode
 
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
-    APITimeoutError,
+    APIError,
     http,
     tokenize,
     tts,
@@ -263,6 +262,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         input_sent_event = asyncio.Event()
         input_done = False
+        # reads time out only while a response is owed, never while waiting for more text
+        read_deadline = self._core_attempts
 
         async def _send_task(ws: http.WebSocket, asyncai_context_id: str) -> None:
             nonlocal input_done
@@ -277,11 +278,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 }
                 self.mark_started()
                 await ws.send_str(json.dumps(token_pkt))
+                read_deadline.expect_response()
                 input_sent_event.set()
 
             input_done = True
             end_pkt = {"transcript": "", "context_id": asyncai_context_id}
             await ws.send_str(json.dumps(end_pkt))
+            read_deadline.expect_response(final=True)
             input_sent_event.set()
 
         async def _recv_task(ws: http.WebSocket, asyncai_context_id: str) -> None:
@@ -289,14 +292,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             await input_sent_event.wait()
 
             while True:
-                msg = await ws.receive(timeout=self._conn_options.read_timeout)
+                msg = await ws.receive()
                 if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "Async connection closed unexpectedly",
-                        request_id=request_id,
-                        status_code=ws.close_code or -1,
-                        body=msg.data,
-                    )
+                    raise ws.close_error("Async connection closed unexpectedly")
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected Async message type %s", msg.type)
@@ -312,32 +310,26 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if input_done:
                         output_emitter.end_input()
                         break
+                    read_deadline.complete_response()
                 elif (audio := data.get("audio")) is not None:
                     if not audio:
                         continue
                     try:
-                        b64data = base64.b64decode(audio)
-                        output_emitter.push(b64data)
-                    except Exception:
-                        logger.warning("invalid audio payload", extra={"lk.pii.data": data})
-                        continue
+                        b64data = base64.b64decode(audio, validate=True)
+                    except binascii.Error as e:
+                        raise APIError("Async sent malformed audio", retryable=False) from e
+                    read_deadline.audio_received()
+                    output_emitter.push(b64data)
                 else:
                     logger.warning("unexpected message", extra={"lk.pii.data": data})
 
         async_context_id = str(uuid.uuid4())
-        try:
-            async with self._pool.connection(conn_options=self._conn_options) as ws:
-                async with utils.aio.TaskSet() as tasks:
-                    try:
-                        await asyncio.gather(
-                            tasks.spawn(_send_task(ws, async_context_id)),
-                            tasks.spawn(_recv_task(ws, async_context_id)),
-                        )
-                    finally:
-                        input_sent_event.set()
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except (APIStatusError, APIConnectionError):
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
+        async with self._pool.connection(conn_options=self._conn_options) as ws:
+            async with utils.aio.TaskSet() as tasks:
+                try:
+                    await asyncio.gather(
+                        tasks.spawn(_send_task(ws, async_context_id)),
+                        tasks.spawn(_recv_task(ws, async_context_id)),
+                    )
+                finally:
+                    input_sent_event.set()

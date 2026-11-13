@@ -369,7 +369,7 @@ class JobContext:
     def simulation_context(self) -> SimulationContext | None:
         """The :class:`SimulationContext` when this job runs under a simulation, else ``None``.
 
-        Final as soon as the entrypoint runs.
+        Final as soon as the entrypoint runs. Raises ``ValueError`` on a malformed dispatch.
         """
         metadata = self._info.job.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH, "")
         if not metadata:
@@ -386,8 +386,8 @@ class JobContext:
             dispatch = json_format.Parse(
                 metadata, sim_pb.SimulationDispatch(), ignore_unknown_fields=True
             )
-        except json_format.ParseError:
-            return None
+        except json_format.ParseError as e:
+            raise ValueError(f"malformed simulation dispatch: {e}") from e
 
         if not dispatch.simulation_run_id:
             return None

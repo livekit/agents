@@ -108,6 +108,11 @@ class STT(stt.STT):
         except spitch.APITimeoutError as e:
             raise APITimeoutError() from e
         except spitch.APIStatusError as e:
-            raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
+            raise APIStatusError(
+                "Spitch STT request failed",
+                status_code=e.status_code,
+                body=e.body,
+                detail=e.message,
+            ) from e
         except Exception as e:
             raise APIConnectionError() from e

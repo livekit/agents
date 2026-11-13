@@ -193,9 +193,26 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     and emit its events (``input_speech_started``, ``generation_created``, ``error``).
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self,
+        realtime_model: RealtimeModel,
+        *,
+        input_sample_rate: int | None = None,
+        input_num_channels: int = 1,
+    ) -> None:
+        """
+        Args:
+            input_sample_rate: The audio format ``push_audio`` takes. When given, the framework
+                converts what it pushes (resampled, channels mixed) before ``push_audio``.
+            input_num_channels: The channel count ``push_audio`` takes, with ``input_sample_rate``.
+        """
         super().__init__()
         self._realtime_model = realtime_model
+        self._input_audio = (
+            None
+            if input_sample_rate is None
+            else _core.AudioConverter(input_sample_rate, input_num_channels)
+        )
 
     def _report_connection_acquired(self, acquire_time: float) -> None:
         """Report connection timing as a RealtimeModelMetrics event with zero usage."""
@@ -343,7 +360,8 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def _core_send(self, cmd: wire.RealtimeCommand) -> None:
         match cmd:
             case wire.PushAudio(frame=frame):
-                self.push_audio(frame)
+                for converted in self._input_audio.push(frame) if self._input_audio else [frame]:
+                    self.push_audio(converted)
             case wire.Interrupt():
                 self.interrupt()
             case wire.CommitAudio():
@@ -437,15 +455,20 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
             async for call in ev.function_stream:
                 put(wire.FunctionCallReady(call=call))
 
-        await asyncio.gather(_messages(), _calls())
-        put(wire.GenerationDone(response_id=response_id))
+        try:
+            await asyncio.gather(_messages(), _calls())
+        finally:
+            # the generation ends whatever its streams did; a raise reaches the core as an error
+            put(wire.GenerationDone(response_id=response_id))
 
     async def _core_next_event(self) -> wire.Event | None:
         return await self._core_events.get()
 
     async def _core_aclose(self) -> None:
-        await self.aclose()
-        self._core_events.put_nowait(None)
+        try:
+            await self.aclose()
+        finally:
+            self._core_events.put_nowait(None)
 
     async def __aenter__(self) -> Self:
         return self

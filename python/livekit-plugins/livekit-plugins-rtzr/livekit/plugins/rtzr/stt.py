@@ -220,7 +220,6 @@ class SpeechStream(stt.RecognizeStream):
             )
             return ws
         except RTZRStatusError as e:
-            logger.error("RTZR API status error: %s", e)
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status_code or 500,
@@ -303,7 +302,6 @@ class SpeechStream(stt.RecognizeStream):
             finally:
                 self._recv_task = None
 
-    @utils.log_exceptions(logger=logger)
     async def _send_audio_task(self) -> None:
         audio_bstream = utils.media.AudioByteStream(
             sample_rate=self._params.sample_rate,
@@ -362,17 +360,19 @@ class SpeechStream(stt.RecognizeStream):
         """Check for error in RTZR response and raise if found."""
         if "error" in data:
             raise APIStatusError(
-                message=f"Server error: {data['error']}",
+                "RTZR STT server error",
                 status_code=500,
                 request_id=None,
                 body=None,
+                detail=str(data["error"]),
             )
         if data.get("type") == "error" and "message" in data:
             raise APIStatusError(
-                message=f"Server error: {data['message']}",
+                "RTZR STT server error",
                 status_code=500,
                 request_id=None,
                 body=None,
+                detail=str(data["message"]),
             )
 
     def _process_transcript_event(
@@ -438,7 +438,6 @@ class SpeechStream(stt.RecognizeStream):
 
         return events, in_speech, speech_started_at
 
-    @utils.log_exceptions(logger=logger)
     async def _recv_loop(self, ws: http.WebSocket) -> None:
         in_speech = False
         speech_started_at: float | None = None

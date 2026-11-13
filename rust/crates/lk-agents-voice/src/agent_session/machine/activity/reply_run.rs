@@ -771,7 +771,7 @@ impl VoiceDriver {
         let Some(agent) = agent.filter(|_| held) else {
             return self.reply_event(
                 speech,
-                AgentRunEvent::ToolHandlingTemplateRendered { call, text: None },
+                AgentRunEvent::ToolHandlingTemplateRendered { call, text: Ok(None) },
             );
         };
         let operation = self.activity.tools.mint_operation();
@@ -793,13 +793,16 @@ impl VoiceDriver {
         &mut self,
         now: lk_agents_abi::Ts,
         rendering: Rendering,
-        text: Option<String>,
+        text: Result<Option<String>, lk_agents_abi::errors::HostError>,
     ) {
         match rendering {
             Rendering::Refusal { speech, call } => {
                 self.reply_event(speech, AgentRunEvent::ToolHandlingTemplateRendered { call, text })
             }
-            Rendering::ToolReply { render } => self.tool_reply_rendered(now, render, text),
+            Rendering::ToolReply { render } => {
+                let text = lk_agents_core::tool_calls::rendered_template(text);
+                self.tool_reply_rendered(now, render, text)
+            }
         }
     }
 }

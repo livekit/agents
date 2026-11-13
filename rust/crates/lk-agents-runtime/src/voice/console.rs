@@ -131,7 +131,11 @@ impl SessionTransport for Transport {
                         return;
                     }
                 }
-                let _ = write.shutdown().await;
+                // The console reads to the end either way; a socket it already closed has
+                // nothing left to shut down.
+                if let Err(error) = write.shutdown().await {
+                    log::debug!(target: lk_agents_abi::LOG_TARGET, "console writer shutdown failed: {error}");
+                }
             });
             Ok(())
         })

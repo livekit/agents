@@ -1,22 +1,18 @@
 from __future__ import annotations
 
-import asyncio
 from types import TracebackType
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     NotGivenOr,
     http,
     utils,
 )
-
-from .log import logger
 
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
@@ -32,7 +28,7 @@ class AvatarioAPI:
     """
     An asynchronous client for interacting with the Avatario API.
 
-    This class handles authentication, request signing, and retries.
+    This class handles authentication and retries.
     """
 
     def __init__(
@@ -112,48 +108,25 @@ class AvatarioAPI:
             Response data as a dictionary
 
         Raises:
-            APIConnectionError: If the request fails after all retries
+            APIError: If the request fails after all retries
         """
-
-        if self._session is None:
+        session = self._session
+        if session is None:
             raise RuntimeError("Session not initialized. Use 'async with AvatarioAPI(...)'.")
-        last_exc: Exception | None = None
-        async with self._conn_options.total_deadline():
-            for i in range(self._conn_options.max_retry + 1):
+
+        async def request() -> dict[str, JsonValue]:
+            async with session.post(
+                f"{DEFAULT_API_URL}/start-session",
+                headers={"Content-Type": "application/json", "x-api-key": self._api_key},
+                json=payload,
+                conn_options=self._conn_options,
+            ) as response:
+                await response.raise_for_status()
                 try:
-                    async with self._session.post(
-                        f"{DEFAULT_API_URL}/start-session",
-                        headers={
-                            "Content-Type": "application/json",
-                            "x-api-key": self._api_key,
-                        },
-                        json=payload,
-                        conn_options=self._conn_options,
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise APIStatusError(
-                                "Server returned an error",
-                                status_code=response.status,
-                                body=text,
-                            )
-                        return _JSON_OBJECT.validate_python(await response.json())
-                except ValidationError as exc:
-                    raise APIConnectionError(
+                    return _JSON_OBJECT.validate_python(await response.json())
+                except ValueError as exc:
+                    raise APIError(
                         "Avatario returned an invalid response", retryable=False
                     ) from exc
-                except APIStatusError as e:
-                    last_exc = e
-                    if not e.retryable:
-                        raise
-                    logger.warning("Avatario API returned error", extra={"error": str(e)})
-                except Exception as e:
-                    last_exc = e
-                    logger.exception("failed to call Avatario API")
 
-                if i < self._conn_options.max_retry:
-                    await asyncio.sleep(self._conn_options.retry_interval)
-
-        if isinstance(last_exc, APIStatusError):
-            raise last_exc
-        raise APIConnectionError("Failed to call Avatario API after all retries")
+        return await http.retry_request(request, conn_options=self._conn_options)

@@ -53,8 +53,6 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
-
 # ASR recommended input rate; the base RecognizeStream resamples room audio to it.
 DEFAULT_STT_SAMPLE_RATE = 16000
 
@@ -331,7 +329,6 @@ class SpeechStream(stt.RecognizeStream):
         async def _recv_task(session: SttSession) -> None:
             async for event in session:
                 if isinstance(event, ServerError):
-                    logger.error("palabra stt error: %s", event.code)
                     raise APIError(
                         f"palabra stt error: {event.code}",
                         retryable=event.code in _RETRYABLE_ERROR_CODES,
@@ -359,8 +356,8 @@ class SpeechStream(stt.RecognizeStream):
             raise APIStatusError(str(e), status_code=401, request_id=None, body=None) from None
         except TaskError as e:
             # `code` is a short server enum (e.g. VALIDATION_ERROR); `desc` is free-form
-            # server text, so only the code is surfaced.
-            raise APIConnectionError(f"palabra stt error: {e.code}") from None
+            # server text.
+            raise APIConnectionError(f"palabra stt error: {e.code}", detail=e.desc) from None
         except (SessionError, PalabraError) as e:
             # The SDK interpolates the underlying websockets error into its message, and the
             # connect URL carries the API key as a ?token= query parameter -- so neither

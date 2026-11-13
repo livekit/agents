@@ -53,7 +53,7 @@ impl SpanError for HostError {
         self.message.clone()
     }
     fn stacktrace(&self) -> Option<String> {
-        self.traceback.clone()
+        self.traceback.as_deref().map(str::to_owned)
     }
 }
 

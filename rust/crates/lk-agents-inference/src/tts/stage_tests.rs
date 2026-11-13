@@ -82,7 +82,12 @@ impl Tts for Provider {
         "fake.Provider".into()
     }
     fn capabilities(&self) -> TtsCapabilities {
-        TtsCapabilities { streaming: false, aligned_transcript: false }
+        TtsCapabilities {
+            streaming: false,
+            aligned_transcript: false,
+            text_unit: self.unit,
+            max_text_len: self.limit,
+        }
     }
     fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
         Ok(1_000)
@@ -92,12 +97,6 @@ impl Tts for Provider {
     }
     fn markup_provider(&self) -> String {
         self.markup.to_owned()
-    }
-    fn text_unit(&self) -> TextUnit {
-        self.unit
-    }
-    fn max_text_len(&self) -> Option<usize> {
-        self.limit
     }
     fn options(&self) -> Arc<dyn lk_agents_abi::tts::types::SharedTtsOptions> {
         Arc::new(self.options.clone())

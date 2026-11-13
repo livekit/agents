@@ -16,7 +16,7 @@ from .._generated.workflow_prompts import (
     TOOL_SEARCH_QUERY_DESCRIPTION,
 )
 from ..job import get_job_context
-from ..llm import ToolFlag, Toolset, function_tool
+from ..llm import ToolError, ToolFlag, Toolset, function_tool
 from ..llm.tool_context import (
     FunctionTool,
     ProviderTool,
@@ -24,9 +24,10 @@ from ..llm.tool_context import (
     Tool,
     ToolContext,
 )
-from ..llm.utils import prepare_function_arguments, tool_schema
+from ..llm.utils import parse_function_arguments, tool_schema
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
+from ..voice.agent_run import ToolArgumentError, _Prepared, prepare_arguments
 from ..voice.events import CloseEvent, RunContext
 from . import workflows
 from .workflows import DtmfEvent
@@ -337,10 +338,15 @@ class ToolProxyToolset(ToolSearchToolset):
         call = _core.tool_proxy_arguments(raw_arguments, list(self._tool_ctx.function_tools))
         fnc_tool = self._tool_ctx.function_tools[call.name]
 
-        fnc_args, fnc_kwargs = prepare_function_arguments(
-            fnc=fnc_tool,
-            json_arguments=cast(str | dict[str, object], call.parameters),
-            call_ctx=ctx,
-        )
-        result = fnc_tool(*fnc_args, **fnc_kwargs)
+        try:
+            params = call.parameters
+            arguments = parse_function_arguments(params) if isinstance(params, str) else params
+            if not isinstance(arguments, dict):
+                raise ValueError("parameters must be an object")
+            prepared = cast("_Prepared", prepare_arguments(fnc_tool, arguments, ctx).prepared)
+        except ToolArgumentError as e:
+            raise ToolError(str(e)) from e
+        except ValueError as e:
+            raise ToolError(f"Error parsing arguments for `{call.name}`: {e}") from e
+        result = fnc_tool(*prepared.args, **prepared.kwargs)
         return await result if inspect.isawaitable(result) else result

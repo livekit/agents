@@ -77,6 +77,7 @@ pub(crate) async fn realtime_generation_task(
         backlog: std::collections::VecDeque::new(),
         leg: None,
         segment: None,
+        text_failed: None,
     };
     loop {
         let nodes = &ctx.resources.output_nodes;
@@ -105,6 +106,10 @@ pub(crate) async fn realtime_generation_task(
         let text_result = match generation.text_out.as_deref() {
             Some(text) => super::forward::finish_text(text, handle, played.is_err()).await,
             None => Ok(true),
+        };
+        let text_result = match generation.text_failed.take() {
+            Some(error) => Err(error),
+            None => text_result,
         };
         binding.text_drained();
         let part = match played {
@@ -198,7 +203,7 @@ pub(crate) async fn realtime_generation_task(
         request_ids,
     );
     let forwarded_text_empty = finished.outcome.forwarded_text.is_empty();
-    let next = run_tools(shared, handle, ctx, tools, forwarded_text_empty, true).await;
+    let next = run_tools(shared, handle, ctx, tools, forwarded_text_empty).await;
     Ok(deliver_realtime(handle, ctx.plan.step, wake, next, has_calls, finished))
 }
 
@@ -262,6 +267,8 @@ struct Generation<'a> {
     leg: Option<TextLeg<'a>>,
     /// The open message's text, read once for the transcript.
     segment: Option<SegmentText>,
+    /// A closed message's transcript the output refused, which fails the segment.
+    text_failed: Option<DriverError>,
 }
 
 /// A text message spoken by the TTS: its text goes in as it streams, its audio is the message's.
@@ -300,6 +307,9 @@ impl Generation<'_> {
                 capture(Some(&leg), &tail.shown).await;
             }
             leg.flush();
+            if let Err(error) = leg.result() {
+                self.text_failed.get_or_insert(error);
+            }
         }
     }
 
@@ -428,7 +438,7 @@ impl Generation<'_> {
     async fn unvoice(&mut self) {
         let Some(v) = self.voiced.take() else { return };
         v.sink.end_input();
-        let _ = super::llm::until_interrupted(self.handle, v.source.close()).await;
+        super::llm::close_until_interrupted(self.handle, v.source.close()).await;
     }
 }
 

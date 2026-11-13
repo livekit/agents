@@ -171,7 +171,7 @@ fn start(
         session = session.with_persistence();
     }
     let cancel = CancellationToken::new();
-    let (updates, receiver) = mpsc::channel(UPDATE_QUEUE);
+    let (updates, receiver) = lk_agents_net::outbox::outbox(UPDATE_QUEUE);
     let (events_tx, events) = mpsc::channel(64);
     let (progress_tx, progress) = mpsc::channel(32);
     let (release_tx, releases) = mpsc::channel(1);

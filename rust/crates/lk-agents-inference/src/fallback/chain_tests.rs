@@ -463,7 +463,7 @@ async fn closing_a_channel_source_stops_the_task_and_waits_for_it() {
         // The task's loop: serve until the consumer stops it, then close the member.
         stop.cancelled().await;
         closed_flag.store(true, Ordering::SeqCst);
-        let _ = done.send(());
+        done.resolve(());
     });
     let source: Box<dyn StreamOutput<u8>> =
         Box::new(crate::fallback::channel::ChannelSource { rx, task: Some(filling), chain });

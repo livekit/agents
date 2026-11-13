@@ -84,7 +84,7 @@ async fn chat_request(
     shared: &SessionShared,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyExecution,
-) -> ChatRequest {
+) -> Result<ChatRequest, ProviderError> {
     let mut chat_ctx = ctx.plan.request.chat_ctx.clone();
     // The guide teaches the dialect the TTS speaks now: `update_options(model=..)` can change it.
     let markup = (ctx.resources.tts.as_ref())
@@ -96,15 +96,10 @@ async fn chat_request(
     );
     // Rendered per request, so a tool's state change reaches the step after it.
     if let Some(dynamic) = &ctx.resources.dynamic_instructions {
-        let speech = handle.object();
-        match dynamic.render(&ctx.turn_cx(shared), speech).await {
-            Ok(text) => lk_agents_voice::generation::append_instructions(&mut chat_ctx, &text),
-            Err(e) => {
-                log::error!(target: lk_agents_abi::LOG_TARGET, "the agent's instructions functions failed; the static instructions are sent: {e}")
-            }
-        }
+        let rendered = dynamic.render(&ctx.turn_cx(shared), handle.object()).await;
+        lk_agents_voice::generation::append_instructions(&mut chat_ctx, rendered)?;
     }
-    ChatRequest {
+    Ok(ChatRequest {
         chat_ctx,
         tool_choice: ctx.plan.tool_choice.clone(),
         tools_host: ctx
@@ -117,7 +112,7 @@ async fn chat_request(
         tools: ctx.plan.request.tools.clone(),
         conn_options: shared.conn.llm.unwrap_or_default(),
         ..ChatRequest::default()
-    }
+    })
 }
 
 /// One step's words and tool calls, retried per the request's budget while nothing was produced.
@@ -134,7 +129,7 @@ impl LlmInference<'_> {
         let (shared, handle) = (self.shared, self.handle);
         // Held for the step: a mid-reply handoff must not swap the model under a live request.
         let llm = self.ctx.resources.llm.clone().ok_or(DriverError::Missing("llm"))?;
-        let req = chat_request(shared, handle, self.ctx).await;
+        let req = chat_request(shared, handle, self.ctx).await?;
         let node = LlmNodeTrace::start(shared, self.ctx.span, &req);
         let mut trace = telemetry::LlmTrace::start(node.cx(shared), llm.as_ref(), &req);
         let attempt = trace.attempt();
@@ -231,8 +226,7 @@ impl LlmInference<'_> {
     ) -> Result<(), ProviderError> {
         self.request_finished(ended.as_ref().err());
         report_llm_metrics(data, ended.is_err(), self.shared, self.handle);
-        // An interrupted reply leaves the close to finish as the session's cleanup.
-        let _ = until_interrupted(self.handle, stream.close()).await;
+        close_until_interrupted(self.handle, stream.close()).await;
         ended
     }
 
@@ -350,6 +344,17 @@ pub(super) fn report_retries<T>(
         let at = on.time.now().saturating_add(wait);
         on.trace(GenerationStep::RetryArmed { speech, leg, attempt, at });
     }));
+}
+
+/// A reply's stream closed, or left to close as the session's cleanup once the reply is
+/// interrupted. A failed close was logged by the stream; one that ran out of time is reported here.
+pub(crate) async fn close_until_interrupted(
+    handle: &SpeechHandle,
+    closing: lk_agents_net::owned::Closing,
+) {
+    if until_interrupted(handle, closing).await == Some(lk_agents_abi::Closed::TimedOut) {
+        log::warn!(target: lk_agents_abi::LOG_TARGET, "a reply's provider stream did not close in time");
+    }
 }
 
 pub(crate) async fn until_interrupted<T>(

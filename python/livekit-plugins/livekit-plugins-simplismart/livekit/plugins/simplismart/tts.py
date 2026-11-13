@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import cast
@@ -10,7 +9,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     http,
     tts,
     utils,
@@ -218,15 +216,7 @@ class ChunkedStream(tts.ChunkedStream):
                 headers=headers,
                 conn_options=self._conn_options,
             ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    logger.error("Simplismart TTS API error: %s - %s", resp.status, error_text)
-                    raise APIStatusError(
-                        message=f"Simplismart TTS API Error: {error_text}",
-                        status_code=resp.status,
-                        request_id=None,
-                        body=error_text,
-                    )
+                await resp.raise_for_status()
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -244,5 +234,4 @@ class ChunkedStream(tts.ChunkedStream):
         except APIError:
             raise
         except Exception as e:
-            logger.error("Error during Simplismart TTS processing: %s", traceback.format_exc())
-            raise APIConnectionError(f"Unexpected error in Simplismart TTS: {e}") from e
+            raise APIConnectionError("Unexpected error in Simplismart TTS", detail=str(e)) from e

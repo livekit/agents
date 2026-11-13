@@ -56,7 +56,6 @@ struct Queued {
 struct Shared {
     admission: RwLock<()>,
     finishing: AtomicBool,
-    cleanup_reported: AtomicBool,
     commands: AtomicUsize,
     queued_bytes: AtomicUsize,
     #[cfg(any(test, feature = "media-ffmpeg"))]
@@ -167,7 +166,6 @@ impl SessionRecorder {
         let shared = Arc::new(Shared {
             admission: RwLock::new(()),
             finishing: AtomicBool::new(false),
-            cleanup_reported: AtomicBool::new(false),
             commands: AtomicUsize::new(0),
             queued_bytes: AtomicUsize::new(0),
             retained_bytes: AtomicUsize::new(0),
@@ -236,12 +234,14 @@ impl SessionRecorder {
     }
 
     pub async fn ready(&self) -> Result<(), RecordingFailure> {
-        if let Ok(ready) = self.shared.ready.wait().await {
-            return ready;
+        match self.shared.ready.wait().await {
+            Ok(ready) => ready,
+            // The open ended unanswered: the worker's outcome says why.
+            Err(signal::Ended) => {
+                self.terminal().await?;
+                Err(RecordingFailure::Worker("open worker disappeared".into()))
+            }
         }
-        // The open ended unanswered: the worker's outcome says why.
-        self.terminal().await?;
-        Err(RecordingFailure::Worker("open worker disappeared".into()))
     }
 
     #[cfg(test)]
@@ -722,15 +722,7 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
         Self::flush(self, now).await
     }
     async fn finish(&self, now: Option<f64>) -> Result<(), RecordingFailure> {
-        match self.close(now, lk_agents_abi::HOST_TEARDOWN_TIMEOUT).await {
-            Ok(_) => Ok(()),
-            Err(RecordingFailure::IncompleteCleanup) => {
-                if !self.shared.cleanup_reported.swap(true, Ordering::AcqRel) {
-                    log::error!(target: lk_agents_abi::LOG_TARGET, "the session recording did not finish closing in time: it is uploaded as it is and may be incomplete");
-                }
-                Ok(())
-            }
-            Err(error) => Err(error),
-        }
+        // An incomplete close is the caller's to report; the file is uploaded as it is.
+        self.close(now, lk_agents_abi::HOST_TEARDOWN_TIMEOUT).await.map(drop)
     }
 }

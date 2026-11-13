@@ -142,8 +142,9 @@ async def test_stream_predicates_speech_error() -> None:
     stream.push_text("Hello world.")
     stream.end_input()
 
-    with pytest.raises(APIStatusError, match="boom"):
+    with pytest.raises(APIStatusError) as raised:
         await _collect(stream)
+    assert raised.value.detail == "boom"
 
 
 async def test_synthesize_streams_with_timestamps() -> None:

@@ -93,9 +93,7 @@ class TTS(tts.TTS):
             session(AioSession, optional): Optional aiobotocore session to use.
         """  # noqa: E501
         super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=False,
-            ),
+            capabilities=tts.TTSCapabilities(streaming=False, max_text_len=3000),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -122,9 +120,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Amazon Polly"
-
-    def _core_max_text_len(self) -> int | None:
-        return 3000
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

@@ -28,7 +28,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     http,
     tokenize,
     tts,
@@ -239,10 +238,10 @@ class ChunkedStream(tts.ChunkedStream):
                 response = _SynthesisResponse.model_validate(await resp.json())
 
                 if not response.success:
-                    error_msg = "; ".join(response.issues)
                     raise APIError(
-                        message=f"Resemble API returned failure: {error_msg}",
+                        "Resemble API returned failure",
                         body=response.model_dump_json(exclude_unset=True),
+                        detail="; ".join(response.issues),
                     )
 
                 output_emitter.initialize(
@@ -360,11 +359,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             while True:
                 msg = await ws.receive()
                 if msg.type == http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "Resemble connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("Resemble connection closed unexpectedly")
 
                 if msg.type != http.WebSocketMessageType.TEXT:
                     logger.warning("Unexpected Resemble message type %s", msg.type)

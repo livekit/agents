@@ -6,6 +6,7 @@ use super::effects::ToolCallEffect;
 use std::collections::BTreeSet;
 
 use crate::llm::tool_arguments;
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::llm::tool_executor::{Approval, ToolOutcome};
 use lk_agents_abi::resources::ResourceId;
@@ -39,6 +40,16 @@ fn duplicate_template(tool: &str, running: &[&FunctionCall], confirm: bool) -> T
     } else {
         ToolTemplate::DuplicateReject { function_name, fnc_calls_json, fnc_calls_text }
     }
+}
+
+/// A `tool_handling` template as the host rendered it: `None` keeps the framework's text, and so
+/// does a template that raised, which is logged: the call's outcome stands, only its wording
+/// falls back.
+pub fn rendered_template(rendered: Result<Option<String>, HostError>) -> Option<String> {
+    rendered.unwrap_or_else(|e| {
+        log::error!(target: lk_agents_abi::LOG_TARGET, "a tool_handling template failed: {e}");
+        None
+    })
 }
 
 /// The refused call's output when no template overrides it.
@@ -229,6 +240,10 @@ impl ToolCalls {
         let outcome = match failure {
             PrepareFailure::Refused(feedback) => ToolOutcome::ToolError(feedback),
             PrepareFailure::Internal => ToolOutcome::Internal,
+            PrepareFailure::Host(error) => {
+                log::error!(target: lk_agents_abi::LOG_TARGET, "preparing a tool call failed: {error}");
+                ToolOutcome::Internal
+            }
         };
         settle(call, outcome, true, fx);
         self.admit(tools, history, running, fx);
@@ -262,7 +277,7 @@ impl ToolCalls {
     pub fn read_back<'h, E: From<ToolCallEffect>>(
         &mut self,
         id: CallId,
-        answer: Result<ReadBackAnswer, lk_agents_abi::errors::HostError>,
+        answer: Result<ReadBackAnswer, HostError>,
         tools: &[FunctionToolInfo],
         history: impl Iterator<Item = &'h ChatItem> + Clone,
         running: &[RunningToolExecution],
@@ -301,16 +316,16 @@ impl ToolCalls {
     }
 
     /// The host rendered a refused call's template: its output, the framework's text when
-    /// `None`.
+    /// `None` or when the template raised.
     pub fn template_rendered<E: From<ToolCallEffect>>(
         &mut self,
         id: CallId,
-        text: Option<String>,
+        rendered: Result<Option<String>, HostError>,
         fx: &mut Vec<E>,
     ) {
         let Some(call) = self.call_mut(id) else { return };
         let Phase::Refusing { template } = &call.phase else { return };
-        let text = text.unwrap_or_else(|| duplicate_text(template));
+        let text = rendered_template(rendered).unwrap_or_else(|| duplicate_text(template));
         settle(call, ToolOutcome::ToolError(text), false, fx);
     }
 
@@ -718,11 +733,9 @@ pub fn admit(
     forbidden: bool,
     answering: Option<(&str, &str)>,
 ) -> Admission {
-    let malformed = !call.arguments.trim().is_empty()
-        && serde_json::from_str::<Value>(&call.arguments).is_err();
-    if malformed
+    // Recorded as JSON: repaired when malformed, `{}` when streamed empty.
+    if serde_json::from_str::<Value>(&call.arguments).is_err()
         && let Ok(parsed) = tool_arguments::parse(&call.arguments)
-        && parsed.repair.is_some()
     {
         call.arguments = Value::Object(parsed.arguments).to_string();
     }
@@ -746,8 +759,10 @@ pub fn admit(
 pub enum PrepareFailure {
     /// The arguments did not bind or validate: the message is the model's feedback.
     Refused(String),
-    /// The host failed; it logged the error, and the model is told nothing about it.
+    /// The call was lost before the host answered; the model is told nothing about it.
     Internal,
+    /// The host failed preparing it: logged here, and the model is told nothing about it.
+    Host(lk_agents_abi::errors::HostError),
 }
 
 /// Parses a call's arguments and asks the host to prepare them; an unknown tool or arguments
@@ -875,13 +890,14 @@ mod admit_tests {
         call.arguments
     }
 
-    // Catches: a repaired call's arguments left malformed in history, or valid ones rewritten.
+    // Catches: a repaired call's arguments left malformed in history, valid ones rewritten, or a
+    // zero-argument call streamed empty sent back as `""`, which providers refuse.
     #[test]
     fn malformed_arguments_are_kept_repaired() {
         let raw = r#"{"order_id": ["<|\"|\"O_WAAB70<|\"|\"]}"#;
         assert!(serde_json::from_str::<Value>(&repaired(raw)).is_ok(), "{}", repaired(raw));
         assert_eq!(repaired(r#"{"label":"human<|im_end|>"#), r#"{"label":"human"}"#);
         assert_eq!(repaired(r#"{"a": 1}"#), r#"{"a": 1}"#);
-        assert_eq!(repaired(""), "");
+        assert_eq!(repaired(""), "{}");
     }
 }

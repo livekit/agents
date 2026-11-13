@@ -120,7 +120,17 @@ struct Receiver {
     /// The segment being received, whether any of its audio was, and the clear epoch.
     segment: Mutex<(u32, bool, u64)>,
     closed: Mutex<bool>,
+    /// The newest clear epoch stamped on audio handed to the runner.
+    handed: Mutex<u64>,
+    /// A read is waiting on an empty receiver: no audio is ready to be handed over.
+    starved: Mutex<bool>,
+    /// A clear reaches the runner only after the audio stamped with it that was ready first.
+    hold_clears: bool,
+    clock: Arc<dyn Clock>,
 }
+
+/// How long a held clear waits for the runner to read again.
+const HOLD_CLEAR_MS: u64 = 200;
 
 impl Receiver {
     /// A segment end or a clear closes the segment being received.
@@ -147,8 +157,14 @@ impl AvatarAudio for Receiver {
                 segment,
                 frame,
             };
-            match self.rx.recv().await {
+            // Set across a pending recv only: one that finds audio ready returns in this poll.
+            *self.starved.lock().unwrap() = true;
+            let received = self.rx.recv().await;
+            *self.starved.lock().unwrap() = false;
+            match received {
                 Ok((epoch, starts_segment, key, Some(Received::Audio(frame)))) => {
+                    let handed = &mut *self.handed.lock().unwrap();
+                    *handed = (*handed).max(epoch);
                     let segment = {
                         let mut segment = self.segment.lock().unwrap();
                         segment.1 = true;
@@ -187,7 +203,22 @@ impl AvatarAudio for Receiver {
     }
 
     fn next_clear(&self, after: u64) -> lk_agents_abi::BoxFuture<'_, Option<u64>> {
-        AvatarAudio::next_clear(&*self.rx, after)
+        Box::pin(async move {
+            let epoch = AvatarAudio::next_clear(&*self.rx, after).await?;
+            // The receiver stamps audio and raises the clear on separate paths: the next
+            // segment's first audio, ready when the runner reads, can reach it before the clear
+            // it is stamped with. A read with nothing ready gets the clear at once.
+            if self.hold_clears {
+                let deadline = now_ms(&*self.clock) + HOLD_CLEAR_MS;
+                while *self.handed.lock().unwrap() < epoch
+                    && !*self.starved.lock().unwrap()
+                    && now_ms(&*self.clock) < deadline
+                {
+                    until_ms(&*self.clock, now_ms(&*self.clock) + 1).await;
+                }
+            }
+            Some(epoch)
+        })
     }
 }
 
@@ -580,6 +611,10 @@ impl FakeAvatarWorker {
             stamps: stamps.clone(),
             segment: Mutex::default(),
             closed: Mutex::default(),
+            handed: Mutex::default(),
+            starved: Mutex::default(),
+            hold_clears: fastrand::Rng::with_seed(schedule ^ 0xc1ea).bool(),
+            clock: clock.clone(),
         });
         let generator = Arc::new(Generator {
             period_ms,

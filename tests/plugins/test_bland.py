@@ -106,7 +106,7 @@ async def _speak(peer: _BlandPeer, text: str, *, api_key: str = "k") -> bytes:
 
 
 async def test_error_envelope_becomes_api_status_error() -> None:
-    """A Bland error envelope surfaces its code and message. https://github.com/livekit/agents/pull/6554"""
+    """A Bland error envelope keeps its status and body. https://github.com/livekit/agents/pull/6554"""
 
     async def not_found(request: web.Request) -> web.Response:
         return web.json_response(
@@ -124,8 +124,7 @@ async def test_error_envelope_becomes_api_status_error() -> None:
                     pass
 
     assert raised.value.status_code == 404
-    assert "voice_not_found" in str(raised.value)
-    assert "Voice was not found." in str(raised.value)
+    assert "voice_not_found" in str(raised.value.body)
 
 
 async def test_init_sent_once_with_voice_format_and_bearer_key() -> None:

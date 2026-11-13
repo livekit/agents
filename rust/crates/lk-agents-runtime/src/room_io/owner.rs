@@ -114,7 +114,7 @@ impl RoomIo {
         });
 
         let (events_tx, events_rx) = mpsc::channel(ROOM_EVENT_CAPACITY);
-        let (failures_tx, failures_rx) = mpsc::channel(ROOM_EVENT_CAPACITY);
+        let (failures_tx, failures_rx) = lk_agents_net::outbox::outbox(ROOM_EVENT_CAPACITY);
         let audio_input = config.audio_input.as_ref().map(|a| {
             ParticipantAudioInput::new(
                 room.clone(),
@@ -122,7 +122,7 @@ impl RoomIo {
                 clock.clone(),
                 a.clone(),
                 pre_connect.clone(),
-                failures_tx.clone(),
+                failures_tx,
             )
         });
 
@@ -736,17 +736,16 @@ impl RoomIo {
     }
 
     async fn close(&self, deadline: Ts) -> Closed {
-        // The room is borrowed for the wait, so the producer outlives it; the deadline bounds it.
         let execution = self.execution.cell();
-        let _ = lk_agents_abi::timeout(
+        let started = lk_agents_abi::timeout(
             self.clock.as_ref(),
             deadline.saturating_duration_since(self.clock.now()),
-            execution.wait_for(|state| state.starting == 0),
+            execution.until(|state| state.starting == 0),
         )
         .await;
         let joined = self.tasks.wait_empty(self.clock.as_ref(), Some(deadline)).await;
         let (mut outcome, starting) = self.execution.with(|state| (state.cleanup, state.starting));
-        if !joined || starting != 0 {
+        if !joined || started.is_err() || starting != 0 {
             outcome = outcome.and(Closed::TimedOut);
         }
         if let Some(pc) = &self.pre_connect {

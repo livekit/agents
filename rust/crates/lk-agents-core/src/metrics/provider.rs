@@ -28,6 +28,8 @@ impl lk_agents_abi::metrics::provider::ProviderMetrics for ProviderMetrics {
         model: String,
         provider: String,
     ) -> SttMetrics {
+        // The provider's own report, when it made one: tokens and its connection.
+        let usage = event.recognition_usage.map(|u| *u).unwrap_or_default();
         SttMetrics {
             label,
             request_id: event.request_id,
@@ -35,9 +37,9 @@ impl lk_agents_abi::metrics::provider::ProviderMetrics for ProviderMetrics {
             duration: Some(now - start),
             audio_duration: Some(audio_durations.iter().sum()),
             streamed: false,
-            tokens: TokenUsage::default(),
-            acquire_time: None,
-            connection_reused: false,
+            tokens: usage.tokens,
+            acquire_time: usage.connection.map(|c| c.acquire_time),
+            connection_reused: usage.connection.is_some_and(|c| c.reused),
             metadata: host_metadata(model, provider),
         }
     }
@@ -300,6 +302,29 @@ mod tests {
 
     fn chunk(id: &str, delta: Option<ChoiceDelta>) -> LlmChunk {
         LlmChunk { id: id.into(), delta, ..LlmChunk::default() }
+    }
+
+    // Catches: a batch recognition's reported tokens dropped for zeros.
+    #[test]
+    fn batch_stt_metrics_carry_the_reported_tokens() {
+        use lk_agents_abi::metrics::provider::ProviderMetrics as _;
+        let tokens = TokenUsage { input_tokens: 3, output_tokens: 5, ..Default::default() };
+        let mut event = SpeechEvent::new(SpeechEventType::FinalTranscript);
+        event.recognition_usage = Some(Box::new(lk_agents_abi::stt::events::RecognitionUsage {
+            tokens: tokens.clone(),
+            ..Default::default()
+        }));
+        let record = super::ProviderMetrics::stt_batch_metrics(
+            event,
+            0.0,
+            1.0,
+            vec![1.0],
+            0.0,
+            "stt".into(),
+            "m".into(),
+            "p".into(),
+        );
+        assert_eq!(record.tokens, tokens);
     }
 
     // Catches: an empty chunk id keeping the previous one, or ttft waiting for text past a tool

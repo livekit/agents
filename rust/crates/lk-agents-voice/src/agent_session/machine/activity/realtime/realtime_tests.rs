@@ -51,3 +51,42 @@ fn a_missing_auto_tool_reply_returns_the_agent_to_listening() {
         "a timed-out follow-up still holds the agent thinking"
     );
 }
+
+/// A reply asked of a session that is swapped out before answering keeps its speech and is asked
+/// of the new session, with its instructions, after the new session's frame.
+#[test]
+fn a_reply_the_old_session_never_answered_is_asked_again_after_a_swap() {
+    use crate::agent_session::effects::VoiceEffect;
+    let mut driver = realtime_driver();
+    let request = Request::GenerateReply {
+        instructions: Some("greet the user".into()),
+        tool_choice: None,
+        read_back: false,
+    };
+    let speech = driver
+        .realtime_request(Ts::ZERO, request, None, None, VoiceRunParticipation::Outside)
+        .expect("a speech for the reply");
+    let asked = |effects: &[VoiceEffect]| {
+        effects.iter().position(|e| {
+            matches!(e, VoiceEffect::Realtime { command: RealtimeCommand::GenerateReply(r), .. }
+                if r.instructions.as_deref() == Some("greet the user"))
+        })
+    };
+    assert!(asked(&driver.settle_step()).is_some(), "the reply is asked of the first session");
+
+    driver.on_realtime(Ts::ZERO, RealtimeWake::Event(Event::SessionSwapped { regenerate: true }));
+    let effects = driver.settle_step();
+    let frame = effects.iter().position(|e| {
+        matches!(e, VoiceEffect::Realtime { command: RealtimeCommand::UpdateChatCtx(_), .. })
+    });
+    let replies = effects
+        .iter()
+        .filter(|e| {
+            matches!(e, VoiceEffect::Realtime { command: RealtimeCommand::GenerateReply(_), .. })
+        })
+        .count();
+    assert!(frame.is_some() && asked(&effects) > frame, "asked again after the frame: {effects:?}");
+    assert_eq!(replies, 1, "asked once, not regenerated besides: {effects:?}");
+    let handle = driver.activity.speech_scheduler.speech(speech).expect("the speech is kept");
+    assert!(!handle.interrupted(), "the caller's speech is the one the new session answers");
+}

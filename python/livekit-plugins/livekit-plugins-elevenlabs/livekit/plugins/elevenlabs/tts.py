@@ -153,11 +153,14 @@ class TTS(tts.TTS):
 
         if not is_given(encoding):
             encoding = _DefaultEncoding
+        if not is_given(auto_mode):
+            auto_mode = not is_given(chunk_length_schedule)
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
                 aligned_transcript=sync_alignment,
+                text_unit="sentences" if auto_mode else "words",
             ),
             sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
@@ -168,9 +171,6 @@ class TTS(tts.TTS):
             raise ValueError(
                 "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"  # noqa: E501
             )
-
-        if not is_given(auto_mode):
-            auto_mode = not is_given(chunk_length_schedule)
 
         self._opts = _TTSOptions(
             voice_id=voice_id,
@@ -209,9 +209,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "ElevenLabs"
-
-    def _core_text_unit(self) -> str:
-        return "sentences" if self._opts.auto_mode else "words"
 
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:
@@ -571,10 +568,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             await waiter
         except TimeoutError as e:
             raise APITimeoutError() from e
-        except Exception as e:
-            if isinstance(e, APIStatusError):
-                raise e
-            raise APIStatusError("Could not synthesize") from e
         finally:
             # the connection is shared: unregister first so the audio the server flushes
             # after close_context() isn't pushed into an emitter with no open segment
@@ -731,7 +724,7 @@ def _accumulate_alignment(
 class _Connection:
     """Manages a single WebSocket connection with send/recv loops for multi-context TTS"""
 
-    _TIMEOUT_LABEL = "11labs tts"
+    _LABEL = "11labs tts"
 
     def __init__(
         self,
@@ -902,10 +895,7 @@ class _Connection:
                 if msg.type == http.WebSocketMessageType.CLOSE:
                     if not self._closed and len(self._context_data) > 0:
                         # websocket will be closed after all contexts are closed
-                        raise APIStatusError(
-                            "ElevenLabs websocket connection closed unexpectedly",
-                            status_code=self._ws.close_code or -1,
-                        )
+                        raise self._ws.close_error(f"{self._LABEL} connection closed unexpectedly")
                     break
 
                 if msg.type != http.WebSocketMessageType.TEXT:
@@ -919,31 +909,39 @@ class _Connection:
                 ctx = self._context_data.get(context_id) if context_id is not None else None
 
                 if error := data.error:
-                    logger.error(
-                        "elevenlabs tts returned error",
-                        extra={"context_id": context_id, "error": error, "lk.pii.data": data},
-                    )
+                    if ctx and not ctx.waiter.done():
+                        # its stream reports it
+                        ctx.waiter.set_exception(
+                            APIError(f"{self._LABEL} returned an error", detail=error)
+                        )
+                    else:
+                        logger.error(
+                            f"{self._LABEL} returned an error",
+                            extra={
+                                "context_id": context_id,
+                                "lk.pii.error": error,
+                                "lk.pii.data": data,
+                            },
+                        )
                     if context_id is not None:
-                        if ctx and not ctx.waiter.done():
-                            ctx.waiter.set_exception(APIError(message=error))
                         self._cleanup_context(context_id)
                     continue
 
                 if context_id is None or ctx is None:
                     if context_id is None:
                         logger.warning(
-                            "unexpected message received from elevenlabs tts",
+                            f"unexpected message received from {self._LABEL}",
                             extra={"lk.pii.data": data},
                         )
                         continue
 
                     logger.debug(
-                        "ignoring elevenlabs message for inactive context",
+                        f"ignoring {self._LABEL} message for inactive context",
                         extra={"context_id": context_id, "lk.pii.data": data},
                     )
                     if data.is_final:
                         # the server released the context, keep the drain check working
-                        self._active_contexts.discard(context_id)
+                        self._cleanup_context(context_id)
                         if not self._is_current and not self._active_contexts:
                             logger.debug("no active contexts, shutting down connection")
                             break
@@ -993,7 +991,10 @@ class _Connection:
                         logger.debug("no active contexts, shutting down connection")
                         break
         except Exception as e:
-            logger.warning("recv loop error", exc_info=e)
+            logger.warning(
+                f"{self._LABEL} recv loop error",
+                extra={"exception_type": type(e).__name__, "lk.pii.error": str(e)},
+            )
             for ctx in self._context_data.values():
                 if not ctx.waiter.done():
                     ctx.waiter.set_exception(e)
@@ -1031,7 +1032,7 @@ class _Connection:
         def _on_timeout() -> None:
             if not ctx.waiter.done():
                 ctx.waiter.set_exception(
-                    APITimeoutError(f"{self._TIMEOUT_LABEL} timed out after {timeout} seconds")
+                    APITimeoutError(f"{self._LABEL} timed out after {timeout} seconds")
                 )
             self._cleanup_context(context_id)
 
@@ -1055,7 +1056,7 @@ class _Connection:
             if not ctx.waiter.done():
                 # do not cancel the future as it becomes difficult to catch
                 # all pending tasks will be aborted with an exception
-                ctx.waiter.set_exception(APIStatusError("connection closed"))
+                ctx.waiter.set_exception(APIConnectionError("connection closed"))
             if ctx.timeout_timer:
                 ctx.timeout_timer.cancel()
         self._context_data.clear()
@@ -1073,7 +1074,7 @@ class _DialogueConnection(_Connection):
     protocol (different message framing and response field casing) for models
     ElevenLabs doesn't support on the regular text-to-speech websocket."""
 
-    _TIMEOUT_LABEL = "11labs text-to-dialogue"
+    _LABEL = "11labs text-to-dialogue"
 
     def __init__(
         self,
@@ -1172,117 +1173,9 @@ class _DialogueConnection(_Connection):
             if not self._closed:
                 await self.aclose()
 
-    async def _recv_loop(self) -> None:
-        """Receive loop - processes messages from WebSocket"""
-        try:
-            while not self._closed and self._ws and not self._ws.closed:
-                msg = await self._ws.receive()
-
-                if msg.type == http.WebSocketMessageType.CLOSE:
-                    if not self._closed and len(self._context_data) > 0:
-                        # websocket will be closed after all contexts are closed
-                        raise APIStatusError(
-                            "ElevenLabs dialogue websocket connection closed unexpectedly",
-                            status_code=self._ws.close_code or -1,
-                        )
-                    break
-
-                if msg.type != http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected message type %s", msg.type)
-                    continue
-
-                data = TTSFrame.model_validate_json(msg.data)
-                context_id = data.context_id
-                ctx = self._context_data.get(context_id) if context_id is not None else None
-
-                if error := data.error:
-                    logger.error(
-                        "elevenlabs text-to-dialogue returned error",
-                        extra={
-                            "context_id": context_id,
-                            "lk.pii.error": error,
-                            "lk.pii.data": data,
-                        },
-                    )
-                    if context_id is not None:
-                        if ctx and not ctx.waiter.done():
-                            ctx.waiter.set_exception(APIError(message=error))
-                        self._cleanup_context(context_id)
-                    continue
-
-                if context_id is None or ctx is None:
-                    if context_id is None:
-                        logger.warning(
-                            "unexpected message received from elevenlabs text-to-dialogue",
-                            extra={"lk.pii.data": data},
-                        )
-                        continue
-
-                    logger.debug(
-                        "ignoring elevenlabs text-to-dialogue message for inactive context",
-                        extra={"context_id": context_id, "lk.pii.data": data},
-                    )
-                    if data.is_final:
-                        # the server released the context, keep the drain check working
-                        self._cleanup_context(context_id)
-                        if not self._is_current and not self._active_contexts:
-                            logger.debug("no active contexts, shutting down connection")
-                            break
-                    continue
-
-                emitter = ctx.emitter
-                alignment = ctx.alignment
-
-                payload_alignment = data.alignment
-                if payload_alignment:
-                    _accumulate_alignment(
-                        alignment,
-                        emitter,
-                        payload_alignment.chars,
-                        payload_alignment.starts_ms,
-                        payload_alignment.durations_ms,
-                    )
-
-                if data.audio:
-                    b64data = base64.b64decode(data.audio)
-                    emitter.push(b64data)
-                    if ctx.timeout_timer:
-                        ctx.timeout_timer.cancel()
-                        ctx.timeout_timer = None
-                    if ctx.input_closed:
-                        # the final response is still pending, keep the idle timeout active
-                        self._start_timeout_timer(context_id)
-
-                if data.is_final:
-                    timed_words, _ = _to_timed_words(
-                        alignment.text,
-                        alignment.start_times_ms,
-                        alignment.durations_ms,
-                        flush=True,
-                    )
-                    emitter.push_timed_transcript(timed_words)
-
-                    if not ctx.waiter.done():
-                        ctx.waiter.set_result(None)
-                    self._cleanup_context(context_id)
-
-                    if not self._is_current and not self._active_contexts:
-                        logger.debug("no active contexts, shutting down connection")
-                        break
-        except Exception as e:
-            logger.warning(
-                "dialogue recv loop error",
-                extra={"exception_type": type(e).__name__, "lk.pii.error": str(e)},
-            )
-            for ctx in self._context_data.values():
-                if not ctx.waiter.done():
-                    ctx.waiter.set_exception(e)
-                if ctx.timeout_timer:
-                    ctx.timeout_timer.cancel()
-            self._context_data.clear()
-        finally:
-            if not self._closed:
-                await self.aclose()
+    @cached_property
+    def preferred_alignment(self) -> Literal["normalized", "original"]:
+        return "original"  # text-to-dialogue sends one alignment
 
     def _cleanup_context(self, context_id: str) -> None:
         super()._cleanup_context(context_id)

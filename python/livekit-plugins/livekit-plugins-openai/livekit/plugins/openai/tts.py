@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import json
 from dataclasses import dataclass, replace
 from typing import Any, Literal
@@ -26,6 +27,7 @@ import openai
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     TokenUsage,
@@ -102,7 +104,7 @@ class TTS(tts.TTS):
         ``OPENAI_API_KEY`` environmental variable.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=False, max_text_len=4096),
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
         )
@@ -224,9 +226,6 @@ class TTS(tts.TTS):
         tts._owns_client = True
         return tts
 
-    def _core_max_text_len(self) -> int | None:
-        return 4096
-
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
@@ -326,8 +325,10 @@ class ChunkedStream(tts.ChunkedStream):
 
                         try:
                             event = json.loads(data)
-                        except json.JSONDecodeError:
-                            continue
+                        except json.JSONDecodeError as e:
+                            raise APIError(
+                                "OpenAI TTS sent a malformed event", retryable=False
+                            ) from e
 
                         event_type = event.get("type", "")
 
@@ -335,7 +336,12 @@ class ChunkedStream(tts.ChunkedStream):
                             # Decode base64 audio and push to emitter
                             audio_b64 = event.get("delta", "") or event.get("audio", "")
                             if audio_b64:
-                                audio_data = base64.b64decode(audio_b64)
+                                try:
+                                    audio_data = base64.b64decode(audio_b64, validate=True)
+                                except binascii.Error as e:
+                                    raise APIError(
+                                        "OpenAI TTS sent malformed audio", retryable=False
+                                    ) from e
                                 output_emitter.push(audio_data)
                         elif event_type == "speech.audio.done" and (usage := event.get("usage")):
                             output_emitter.report_usage(_token_usage(usage))
@@ -348,6 +354,8 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIStatusError(
                 e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
             ) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 

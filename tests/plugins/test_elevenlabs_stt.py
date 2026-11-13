@@ -325,17 +325,20 @@ _INVALID_KEY = {"detail": {"code": "invalid_api_key", "message": "Invalid API ke
 
 
 @pytest.mark.parametrize(
-    ("body", "message", "parsed"),
+    ("body", "detail", "parsed"),
     [
         (json.dumps(_INVALID_KEY), "Invalid API key", _INVALID_KEY),
-        ("", "Unknown ElevenLabs error", ""),
+        ("", None, ""),
         ("{not json", "{not json", "{not json"),
     ],
 )
 async def test_recognize_does_not_retry_a_client_error(
-    body: str, message: str, parsed: object
+    body: str, detail: str | None, parsed: object
 ) -> None:
-    """A 4xx from batch recognition raises once with its message. https://github.com/livekit/agents/pull/7701"""
+    """A 4xx from batch recognition raises once, the provider's message in its detail.
+
+    https://github.com/livekit/agents/pull/7701
+    """
     requests = 0
 
     async def reject(request: web.Request) -> web.Response:
@@ -348,9 +351,9 @@ async def test_recognize_does_not_retry_a_client_error(
         with pytest.raises(APIStatusError) as error:
             await provider.recognize([silence(100)])
 
-    assert (error.value.status_code, error.value.message, error.value.body) == (
+    assert (error.value.status_code, error.value.detail, error.value.body) == (
         401,
-        message,
+        detail,
         parsed,
     )
     assert requests == 1
@@ -386,10 +389,8 @@ async def test_batch_recognition_honors_custom_url_and_tagging(
 
 
 @pytest.mark.parametrize("rate", [8000, 16000, 48000])
-async def test_realtime_sends_the_configured_rate_and_reports_its_duration(
-    rate: STTRealtimeSampleRates,
-) -> None:
-    """Streamed audio keeps its sample rate and usage reports its duration.
+async def test_realtime_sends_the_configured_rate(rate: STTRealtimeSampleRates) -> None:
+    """Streamed audio keeps its sample rate.
 
     https://github.com/livekit/agents/issues/5573 https://github.com/livekit/agents/pull/4953
     """
@@ -406,7 +407,6 @@ async def test_realtime_sends_the_configured_rate_and_reports_its_duration(
                 await ws.send_json({"message_type": "committed_transcript", "text": "Hello"})
         return ws
 
-    usage = 0.0
     async with peer(scribe) as (url, session):
         provider = STT(
             api_key="key",
@@ -421,10 +421,6 @@ async def test_realtime_sends_the_configured_rate_and_reports_its_duration(
             stream.flush()
             async with asyncio.timeout(2):
                 async for event in stream:
-                    if event.recognition_usage is not None:
-                        duration = event.recognition_usage.audio_duration
-                        assert duration is not None
-                        usage += duration
                     if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
                         break
         await provider.aclose()
@@ -432,7 +428,6 @@ async def test_realtime_sends_the_configured_rate_and_reports_its_duration(
     assert queries == [f"pcm_{rate}"]
     assert {p["sample_rate"] for p in packets} == {rate}
     assert sum(len(base64.b64decode(p["audio_base_64"])) for p in packets) == rate
-    assert usage == pytest.approx(0.5)
 
 
 @pytest.mark.xfail(

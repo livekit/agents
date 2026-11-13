@@ -44,10 +44,8 @@ from pydantic import JsonValue
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     LanguageCode,
     http,
     stt as stt_module,
@@ -332,18 +330,13 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
                 if msg.type is http.WebSocketMessageType.CLOSE:
                     if input_ended.is_set():
                         return
-                    raise APIConnectionError("Baseten closed the STT websocket")
+                    raise ws.close_error("Baseten closed the STT websocket")
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     continue
 
                 event = decode_transcript(msg.text)
                 if event.type == "error":
-                    raise APIStatusError(
-                        message=event.message,
-                        status_code=500,
-                        request_id=None,
-                        body=None,
-                    )
+                    raise APIError("Baseten STT error", body=msg.text, detail=event.message)
                 if event.type != "transcription":
                     continue
 
@@ -389,10 +382,6 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
                     tasks.spawn(_send(), name="qwen3-stt-send"),
                     tasks.spawn(_recv(), name="qwen3-stt-recv"),
                 )
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
         finally:
             await ws.close()
 

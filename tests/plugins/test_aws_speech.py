@@ -20,7 +20,6 @@ from smithy_core.exceptions import CallError
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, stt
-from livekit.agents.metrics import STTMetrics
 from livekit.plugins import aws
 from livekit.plugins.aws import stt as aws_stt
 
@@ -151,27 +150,6 @@ async def next_final(stream: stt.RecognizeStream) -> stt.SpeechEvent:
         if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             return event
     raise AssertionError("the stream ended without a final transcript")
-
-
-async def test_usage_bills_the_audio_sent(transcribe: Transcribe) -> None:
-    """Sent audio is reported as usage and as streamed STT metrics.
-
-    https://github.com/livekit/agents/issues/6650
-    """
-    provider = aws.STT(region="us-east-1", sample_rate=16000)
-    metrics: list[STTMetrics] = []
-    provider.on("metrics_collected", metrics.append)
-
-    async with provider, provider.stream(conn_options=OPTIONS) as stream:
-        stream.push_frame(frame(100))
-        stream.flush()
-        event = await anext(stream)
-
-    assert event.type == stt.SpeechEventType.RECOGNITION_USAGE
-    assert event.recognition_usage is not None
-    assert event.recognition_usage.audio_duration == pytest.approx(0.1)
-    assert metrics[0].audio_duration == pytest.approx(0.1)
-    assert metrics[0].streamed is True
 
 
 async def test_each_attempt_gets_its_own_crt_transport(

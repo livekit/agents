@@ -6,8 +6,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_adapter::TtsStreamAdapter;
 use lk_agents_abi::tts::types::{
-    SharedTtsOptions, SpeechChunk, SynthesizedAudio, TextUnit, Tts, TtsCapabilities, TtsSink,
-    TtsSource,
+    SharedTtsOptions, SpeechChunk, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::types::provider::ProviderEvents;
@@ -98,7 +97,7 @@ impl Tts for StreamAdapter {
 
     /// Verbatim from `stream_adapter.py:33`.
     fn capabilities(&self) -> TtsCapabilities {
-        TtsCapabilities { streaming: true, aligned_transcript: true }
+        TtsCapabilities { streaming: true, aligned_transcript: true, ..self.tts.capabilities() }
     }
 
     fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
@@ -112,14 +111,6 @@ impl Tts for StreamAdapter {
     /// A pass-through speaks whatever dialect it wraps.
     fn markup_provider(&self) -> String {
         self.tts.markup_provider()
-    }
-
-    fn text_unit(&self) -> TextUnit {
-        self.tts.text_unit()
-    }
-
-    fn max_text_len(&self) -> Option<usize> {
-        self.tts.max_text_len()
     }
 
     /// Each chunk is retried on its own, within the budget its view carries.

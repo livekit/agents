@@ -60,6 +60,8 @@ struct Outbox {
 enum Decode {
     /// `audio/pcm` and `audio/raw`.
     Pcm,
+    /// Expanded to PCM inside `push`.
+    G711(lk_agents_media::G711),
     /// Decoded inside `push`; a segment's resampler tail is framed when it ends.
     Wav(Mutex<Option<AudioDecoder>>),
     /// Calls queued for the emitter's task in arrival order.
@@ -265,6 +267,13 @@ impl Inner {
                 }
                 op => self.apply_now(op),
             },
+            Some(Decode::G711(law)) => match op {
+                Op::Push(data) => {
+                    let pcm = law.decode(&data);
+                    self.run(|m, now, eff| m.push(now, &pcm, eff))
+                }
+                op => self.apply_now(op),
+            },
             Some(Decode::Pcm) | None => self.apply_now(op),
         }
     }
@@ -286,9 +295,9 @@ impl Inner {
     /// segment's bytes on its own admitted worker and ending the segment once they are framed.
     async fn serve(self: Arc<Self>, queue: &Queue) {
         let mut segment: Option<Segment> = None;
-        let result = self.serve_ops(queue, &mut segment).await;
+        let mut result = self.serve_ops(queue, &mut segment).await;
         if let Some(mut segment) = segment {
-            let _ = segment.output.close().await;
+            result = result.and(segment.output.close().await.map_err(decode_error));
         }
         *locked(&queue.segment) = None;
         if let Err(error) = result
@@ -470,6 +479,7 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
             .map_err(|e| EmitterError::UnsupportedMime(e.to_string()))?
         {
             AudioDecoding::Passthrough => (Decode::Pcm, None),
+            AudioDecoding::G711(law) => (Decode::G711(law), None),
             AudioDecoding::Decode(Container::Wav) => (Decode::Wav(Mutex::new(None)), None),
             AudioDecoding::Decode(_) => {
                 let container = lk_agents_media::source::check_stream(&mime_type)
@@ -555,7 +565,7 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         if let Some(Decode::Container(queue)) = self.0.decode.get()
             && self.0.ended.load(Ordering::Acquire)
         {
-            let _ = queue.drained.wait().await;
+            queue.drained.until(Option::is_some).await;
         }
         self.0.failed()
     }
@@ -571,7 +581,7 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         if let Some(Decode::Container(queue)) = me.decode.get() {
             me.close_queue(queue);
             // Closing never reports a synthesis failure, but owns native decoding to settlement.
-            let _ = queue.drained.wait().await;
+            queue.drained.until(Option::is_some).await;
         }
         Ok(())
     }

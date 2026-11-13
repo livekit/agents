@@ -1,13 +1,10 @@
-import logging
 import os
 from json import JSONDecodeError
 from typing import TypeVar
 
 from pydantic import BaseModel, JsonValue, ValidationError
 
-from livekit.agents import NOT_GIVEN, APIConnectionError, NotGivenOr, http
-
-logger = logging.getLogger(__name__)
+from livekit.agents import NOT_GIVEN, APIError, NotGivenOr, http
 
 DEFAULT_API_URL = "https://api.avatartalk.ai"
 
@@ -55,16 +52,11 @@ class AvatarTalkAPI:
         async with http.http_session().request(
             method, f"{self._api_url}{path}", headers=self._headers, json=json
         ) as response:
-            if response.ok:
-                try:
-                    return response_type.model_validate(await response.json())
-                except (ValidationError, JSONDecodeError) as exc:
-                    raise APIConnectionError(
-                        "AvatarTalk returned an invalid response", retryable=False
-                    ) from exc
-            else:
-                r = await response.json()
-                raise AvatarTalkException(f"API request failed: {response.status} {r}")
+            await response.raise_for_status()
+            try:
+                return response_type.model_validate(await response.json())
+            except (ValidationError, JSONDecodeError) as exc:
+                raise APIError("AvatarTalk returned an invalid response", retryable=False) from exc
 
     async def start_session(
         self,

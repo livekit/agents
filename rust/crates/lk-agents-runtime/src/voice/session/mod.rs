@@ -359,7 +359,7 @@ impl VoiceSession {
             // The opening cycle: `open` resolves only once the drain took its events, so a host's
             // `start()` sees `listening` dispatched first.
             owner.open(time.read());
-            let (opening_tx, opening_rx) = tokio::sync::oneshot::channel();
+            let (opening_tx, opening_rx) = lk_agents_net::signal::once();
             let opening = Opening { left: events.len(), delivered: Some(opening_tx) };
 
             if let Some(run) = owner.run() {
@@ -405,8 +405,8 @@ impl VoiceSession {
                 tts_adapter,
                 stt_adapter,
             })?;
-            // A drain that returned without reading drops the sender: nothing to wait for.
-            let _ = opening_rx.await;
+            // A drain that returned without reading ends the signal: nothing to wait for.
+            opening_rx.until(Option::is_some).await;
             Ok(())
         })
     }
@@ -994,7 +994,7 @@ pub struct SessionRunner {
 
 struct Opening {
     left: usize,
-    delivered: Option<tokio::sync::oneshot::Sender<()>>,
+    delivered: Option<lk_agents_net::signal::Producer<Option<()>>>,
 }
 
 impl SessionRunner {
@@ -1005,7 +1005,7 @@ impl SessionRunner {
         if self.opening.left == 0
             && let Some(delivered) = self.opening.delivered.take()
         {
-            let _ = delivered.send(());
+            delivered.resolve(());
         }
         if let Some(reported) = self.reported.take() {
             reported.finish(true);
@@ -1024,7 +1024,9 @@ impl SessionRunner {
             }
             VoiceHostEvent::Session(SessionEvent::UserInputTranscribed(t)) => {
                 let text = t.ev.best_alternative().map(|a| a.text.as_str()).unwrap_or_default();
-                let _ = self.room_io.on_user_input_transcribed(text, t.is_final).await;
+                if let Err(error) = self.room_io.on_user_input_transcribed(text, t.is_final).await {
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "user transcript not published: {error}");
+                }
             }
             // Every event naming it was wired before this one.
             VoiceHostEvent::SpeechRetired(speech) => self.speeches.retire(*speech),
@@ -1099,26 +1101,26 @@ impl<T: Send + 'static> Pusher<T> {
         mut source: Box<dyn lk_agents_abi::StreamOutput<T>>,
         clock: Arc<dyn lk_agents_abi::Clock>,
     ) {
-        loop {
+        let ended = loop {
             let next = tokio::select! {
                 biased;
                 next = source.next() => next,
-                () = self.closed() => break,
+                () = self.closed() => break Ok(()),
             };
             match next {
                 Ok(Some(item)) => {
                     if !self.push(item).await {
-                        break;
+                        break Ok(());
                     }
                 }
-                Ok(None) => break,
-                Err(e) => {
-                    log::error!(target: lk_agents_abi::LOG_TARGET, "say(): the stream it speaks raised: {e}");
-                    break;
-                }
+                Ok(None) => break Ok(()),
+                Err(error) => break Err(error),
             }
-        }
+        };
         self.end();
         source.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+        if let Err(error) = ended {
+            log::error!(target: lk_agents_abi::LOG_TARGET, "say(): the stream it speaks raised: {error}");
+        }
     }
 }

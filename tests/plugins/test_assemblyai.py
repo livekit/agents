@@ -13,7 +13,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, http, stt
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, http, stt
 from livekit.agents.stt import SpeechEventType
 from livekit.plugins.assemblyai import STT
 from tests.fakes import until
@@ -186,7 +186,8 @@ async def test_interim_text_is_cumulative_within_a_turn(assemblyai: AssemblyAI) 
 
 
 async def test_provider_close_reason_reaches_the_caller() -> None:
-    """A provider error close surfaces as a typed error with its code and reason intact.
+    """A provider error close surfaces with its code, its reason as the detail, never as an
+    HTTP status.
 
     https://github.com/livekit/agents/pull/1499
     """
@@ -203,14 +204,16 @@ async def test_provider_close_reason_reaches_the_caller() -> None:
     async with TestServer(app) as server, http.open():
         model = STT(api_key="key", base_url=str(server.make_url("")))
 
-        with pytest.raises(APIStatusError) as caught:
+        with pytest.raises(APIConnectionError) as caught:
             async with model.stream(conn_options=NO_RETRY) as stream:
                 async for _ in stream:
                     pass
         await model.aclose()
 
-    assert caught.value.status_code == 3005
-    assert "Invalid audio encoding" in str(caught.value.body)
+    assert not isinstance(caught.value, APIStatusError)
+    assert "(close code 3005)" in caught.value.message
+    assert caught.value.detail == "Invalid audio encoding"
+    assert "Invalid audio encoding" not in str(caught.value)
 
 
 async def test_keyterms_survive_query_escaping_and_termination_is_acknowledged(
@@ -222,9 +225,8 @@ async def test_keyterms_survive_query_escaping_and_termination_is_acknowledged(
     """
     terms = ["two words", "München", "C++ & a/b?x=1#end"]
 
-    events, _ = await _hear(STT(api_key="key", keyterms_prompt=terms, base_url=assemblyai.base_url))
+    await _hear(STT(api_key="key", keyterms_prompt=terms, base_url=assemblyai.base_url))
 
-    assert events == []
     assert [json.loads(query["keyterms_prompt"]) for query in assemblyai.queries] == [terms]
     assert assemblyai.received.get_nowait() == {"type": "Terminate"}
 

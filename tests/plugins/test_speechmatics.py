@@ -162,10 +162,8 @@ async def test_segments_become_transcripts_with_provider_timing(
     assert data.confidence == interim.alternatives[0].confidence == 0.0
 
 
-async def test_turns_become_speech_events_and_usage_bills_the_audio_sent(
-    peer: tuple[SpeechmaticsPeer, str],
-) -> None:
-    """StartOfTurn / EndOfTurn frame speech; usage is the audio sent, reported once.
+async def test_turns_become_speech_events(peer: tuple[SpeechmaticsPeer, str]) -> None:
+    """StartOfTurn / EndOfTurn frame speech.
 
     https://github.com/livekit/agents/pull/7028
     """
@@ -178,20 +176,19 @@ async def test_turns_become_speech_events_and_usage_bills_the_audio_sent(
 
     events = await transcribe(STT(api_key="k", base_url=url, vad=None).stream(), seconds=1.0)
 
-    assert [event.type for event in events] == [
+    assert [
+        event.type for event in events if event.type != stt.SpeechEventType.RECOGNITION_USAGE
+    ] == [
         stt.SpeechEventType.START_OF_SPEECH,
         stt.SpeechEventType.END_OF_SPEECH,
-        stt.SpeechEventType.RECOGNITION_USAGE,
         stt.SpeechEventType.END_OF_SPEECH,
     ]
-    assert events[2].recognition_usage is not None
-    assert events[2].recognition_usage.audio_duration == pytest.approx(1.0)
 
 
 async def test_server_error_fails_the_stream_without_retry(
     peer: tuple[SpeechmaticsPeer, str],
 ) -> None:
-    """An ``Error`` ends the session as a non-retryable error carrying the message.
+    """An ``Error`` ends the session as a non-retryable error, its reason in the detail.
 
     https://github.com/livekit/agents/pull/7028
     """
@@ -211,6 +208,7 @@ async def test_server_error_fails_the_stream_without_retry(
     assert [event.alternatives[0].text for event in received] == ["still here"]
     assert raised.value.retryable is False
     assert raised.value.body == error
+    assert raised.value.detail == "nope"
 
 
 async def test_invalid_speaker_reply_fails_the_request_not_recognition(

@@ -538,12 +538,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             while True:
                 msg = await ws.receive()
                 if msg.type == http.WebSocketMessageType.CLOSE:
-                    raise APIStatusError(
-                        "Fish Audio websocket connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        request_id=None,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("Fish Audio websocket connection closed unexpectedly")
 
                 if msg.type != http.WebSocketMessageType.BINARY:
                     logger.debug("unexpected Fish Audio message type %s", msg.type)

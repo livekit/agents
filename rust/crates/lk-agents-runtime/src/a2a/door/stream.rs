@@ -4,12 +4,13 @@ use lk_agents_abi::a2a::turn::TurnEvent;
 use lk_agents_core::a2a::TurnResult;
 use lk_agents_core::a2a::wire::{self, Delivery, Publication};
 use lk_agents_storage::thread::schema::TaskRow;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 
 use lk_agents_net::clock::unix_now_ms;
 use lk_agents_storage::shortuuid;
 
-pub type Sender = mpsc::Sender<Result<DoorFrame, DoorError>>;
+/// A response's frames; a client that stopped reading needs none of them.
+pub type Sender = lk_agents_net::outbox::Outbox<Result<DoorFrame, DoorError>>;
 
 pub struct Publisher {
     request_id: JsonRpcId,
@@ -36,9 +37,10 @@ impl Publisher {
             let mut state = self.state.lock().await;
             let Some(sender) = state.1.as_ref() else { continue };
             let attached = match wire::deliver(self.request_id.clone(), frame, sender.capacity()) {
-                Delivery::Send(frame) => sender.try_send(Ok(frame)).is_ok(),
+                Delivery::Send(frame) => sender.try_send(Ok(frame)),
                 Delivery::Detach(failure) => {
-                    let _ = sender.try_send(Ok(failure));
+                    let sent = sender.try_send(Ok(failure));
+                    debug_assert!(sent, "the last slot is kept for the detaching error");
                     log::warn!(target: lk_agents_abi::LOG_TARGET, taskId = task_id; "detached a slow A2A observer");
                     false
                 }

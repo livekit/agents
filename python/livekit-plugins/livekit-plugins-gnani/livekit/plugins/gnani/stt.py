@@ -25,15 +25,13 @@ import contextlib
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import Any, Literal, cast
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
-    APITimeoutError,
+    APIError,
     LanguageCode,
     http,
     stt,
@@ -41,10 +39,6 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-
-if TYPE_CHECKING:
-    from websockets.asyncio.client import ClientConnection
-
 
 from .log import logger
 from .models import GnaniSTTLanguages
@@ -196,42 +190,29 @@ class STT(stt.STT):
             "X-API-Key-ID": self._opts.api_key,
         }
 
-        try:
-            async with self._ensure_session().post(
-                f"{self._opts.base_url}/stt/v3",
-                data=form_data,
-                headers=headers,
-                conn_options=conn_options,
-            ) as res:
-                if res.status != 200:
-                    error_text = await res.text()
-                    logger.error(f"Gnani STT API error: {res.status} - {error_text}")
-                    raise APIStatusError(
-                        message=f"Gnani STT API Error ({res.status}): {error_text}",
-                        status_code=res.status,
-                        body=error_text,
+        async with self._ensure_session().post(
+            f"{self._opts.base_url}/stt/v3",
+            data=form_data,
+            headers=headers,
+            conn_options=conn_options,
+        ) as res:
+            await res.raise_for_status()
+
+            response_json = cast(dict[str, Any], await res.json())
+            transcript = response_json.get("transcript", "")
+            request_id = response_json.get("request_id", "")
+
+            return stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=request_id,
+                alternatives=[
+                    stt.SpeechData(
+                        language=LanguageCode(lang),
+                        text=transcript,
+                        confidence=1.0,
                     )
-
-                response_json = cast(dict[str, Any], await res.json())
-                transcript = response_json.get("transcript", "")
-                request_id = response_json.get("request_id", "")
-
-                return stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=request_id,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=LanguageCode(lang),
-                            text=transcript,
-                            confidence=1.0,
-                        )
-                    ],
-                )
-
-        except (APIStatusError, APIConnectionError):
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"Gnani STT error: {e}") from e
+                ],
+            )
 
     def stream(
         self,
@@ -278,6 +259,7 @@ class SpeechStream(stt.RecognizeStream):
             sample_rate=opts.sample_rate,
         )
         self._opts = opts
+        self._session = stt._ensure_session()
 
     def _build_ws_url(self) -> str:
         base = self._opts.base_url
@@ -290,9 +272,6 @@ class SpeechStream(stt.RecognizeStream):
         return f"{ws_base}/stt/v3/stream"
 
     async def _run(self) -> None:
-        import websockets
-
-        ws_url = self._build_ws_url()
         headers: dict[str, str] = {
             "x-api-key-id": self._opts.api_key,
             "lang_code": self._opts.language,
@@ -305,51 +284,37 @@ class SpeechStream(stt.RecognizeStream):
         if self._opts.itn_native_numerals:
             headers["itn_native_numerals"] = "true"
 
+        ws = await self._session.ws_connect(
+            self._build_ws_url(), headers=headers, heartbeat=20, conn_options=self._conn_options
+        )
         try:
-            async with websockets.connect(
-                ws_url,
-                additional_headers=headers,
-                open_timeout=self._conn_options.connect_timeout,
-                ping_interval=20,
-                ping_timeout=20,
-                close_timeout=10,
-            ) as ws:
-                connected_msg = await asyncio.wait_for(
-                    ws.recv(), timeout=self._conn_options.read_timeout
+            connected = await ws.receive(timeout=self._conn_options.read_timeout)
+            if connected.type is http.WebSocketMessageType.CLOSE:
+                raise ws.close_error("Gnani STT WebSocket closed before it was ready")
+            if connected.type is not http.WebSocketMessageType.TEXT or (
+                json.loads(connected.text).get("type") != "connected"
+            ):
+                logger.warning("Unexpected first message from Gnani STT")
+
+            async with utils.aio.TaskSet() as tasks:
+                recv_task = tasks.spawn(self._recv_messages(ws), name="gnani-stt-recv")
+                # Wait for send to finish; if recv errors first, propagate it.
+                await tasks.first_completed(
+                    tasks.spawn(self._send_audio(ws), name="gnani-stt-send"),
+                    asyncio.shield(recv_task),
                 )
-                connected_data = json.loads(connected_msg)
-                if connected_data.get("type") != "connected":
-                    logger.warning(
-                        "Unexpected first message from Gnani STT",
-                        extra={"lk.pii.data": connected_data},
-                    )
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(recv_task), timeout=1.0)
+        finally:
+            await ws.close()
 
-                async with utils.aio.TaskSet() as tasks:
-                    recv_task = tasks.spawn(self._recv_messages(ws), name="gnani-stt-recv")
-                    # Wait for send to finish; if recv errors first, propagate it.
-                    await tasks.first_completed(
-                        tasks.spawn(self._send_audio(ws), name="gnani-stt-send"),
-                        asyncio.shield(recv_task),
-                    )
-                    with contextlib.suppress(asyncio.TimeoutError):
-                        await asyncio.wait_for(asyncio.shield(recv_task), timeout=1.0)
-
-        except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(f"Gnani STT WebSocket closed unexpectedly: {e}") from e
-        except TimeoutError as e:
-            raise APITimeoutError("Gnani STT WebSocket connection timed out") from e
-        except (APIConnectionError, APIStatusError, APITimeoutError):
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"Gnani STT WebSocket error: {e}") from e
-
-    async def _send_audio(self, ws: ClientConnection) -> None:
+    async def _send_audio(self, ws: http.WebSocket) -> None:
         audio_buffer = bytearray()
 
         async for data in self.input:
             if isinstance(data, self.Flush):
                 if audio_buffer:
-                    await ws.send(bytes(audio_buffer))
+                    await ws.send_bytes(bytes(audio_buffer))
                     audio_buffer.clear()
                 continue
 
@@ -360,68 +325,56 @@ class SpeechStream(stt.RecognizeStream):
             while len(audio_buffer) >= STREAM_CHUNK_BYTES:
                 chunk = bytes(audio_buffer[:STREAM_CHUNK_BYTES])
                 audio_buffer = audio_buffer[STREAM_CHUNK_BYTES:]
-                await ws.send(chunk)
+                await ws.send_bytes(chunk)
 
         if audio_buffer:
-            await ws.send(bytes(audio_buffer))
+            await ws.send_bytes(bytes(audio_buffer))
 
-    async def _recv_messages(self, ws: ClientConnection) -> None:
-        try:
-            async for msg in ws:
-                if isinstance(msg, bytes):
+    async def _recv_messages(self, ws: http.WebSocket) -> None:
+        while (msg := await ws.receive()).type is not http.WebSocketMessageType.CLOSE:
+            if msg.type is not http.WebSocketMessageType.TEXT:
+                continue
+
+            data = json.loads(msg.text)
+            msg_type = data.get("type", "")
+
+            if msg_type == "transcript":
+                text = data.get("text", "")
+                if not text:
                     continue
 
-                data = json.loads(msg)
-                msg_type = data.get("type", "")
-
-                if msg_type == "transcript":
-                    text = data.get("text", "")
-                    if not text:
-                        continue
-
-                    self.send(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            request_id=data.get("segment_id", ""),
-                            alternatives=[
-                                stt.SpeechData(
-                                    language=LanguageCode(self._opts.language),
-                                    text=text,
-                                    confidence=1.0,
-                                )
-                            ],
-                        )
+                self.send(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        request_id=data.get("segment_id", ""),
+                        alternatives=[
+                            stt.SpeechData(
+                                language=LanguageCode(self._opts.language),
+                                text=text,
+                                confidence=1.0,
+                            )
+                        ],
                     )
+                )
 
-                elif msg_type in ("speech_start", "vad_start"):
-                    self.send(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.START_OF_SPEECH,
-                        )
+            elif msg_type in ("speech_start", "vad_start"):
+                self.send(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.START_OF_SPEECH,
                     )
+                )
 
-                elif msg_type in ("speech_end", "vad_end"):
-                    self.send(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.END_OF_SPEECH,
-                        )
+            elif msg_type in ("speech_end", "vad_end"):
+                self.send(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH,
                     )
+                )
 
-                elif msg_type == "processing":
-                    pass
+            elif msg_type == "processing":
+                pass
 
-                elif msg_type == "error":
-                    error_msg = data.get("message", "Unknown error")
-                    logger.error(f"Gnani STT stream error: {error_msg}")
-                    raise APIStatusError(
-                        message=f"Gnani STT stream error: {error_msg}",
-                        status_code=500,
-                        body=error_msg,
-                    )
-
-        except asyncio.CancelledError:
-            raise
-        except (APIStatusError, APIConnectionError, APITimeoutError):
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"Error receiving Gnani STT messages: {e}") from e
+            elif msg_type == "error":
+                raise APIError("Gnani STT stream error", body=data, detail=data.get("message"))
+        if ws.close_code != 1000:
+            raise ws.close_error("Gnani STT WebSocket closed unexpectedly")

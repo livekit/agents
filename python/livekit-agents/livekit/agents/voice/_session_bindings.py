@@ -343,7 +343,9 @@ def _detection_llm(stt_context: STTContextOptions | None) -> LLM | None:
 
         return InferenceLLM.from_model_string(model)
     except Exception:  # noqa: BLE001 - never let detection setup break the session
-        logger.warning("keyterm detection: could not create detection LLM %r; skipping", model)
+        logger.warning(
+            "keyterm detection: could not create detection LLM %r; skipping", model, exc_info=True
+        )
         return None
 
 

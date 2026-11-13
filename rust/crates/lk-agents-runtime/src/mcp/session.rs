@@ -27,7 +27,7 @@ use rmcp::model::{
 };
 use rmcp::service::serve_client_with_ct;
 use rmcp::service::{
-    NotificationContext, PeerRequestOptions, RoleClient, RunningService, ServiceError,
+    NotificationContext, PeerRequestOptions, QuitReason, RoleClient, RunningService, ServiceError,
 };
 use rmcp::transport::Transport;
 use rmcp::{ClientHandler, Peer};
@@ -178,7 +178,12 @@ impl Connection {
         let owner = self.clone();
         // The owner outlives a cancelled close waiter or a missed cleanup deadline.
         let closing = self.background.spawner.spawn(async move {
-            let _ = service.waiting().await;
+            match service.waiting().await {
+                Ok(QuitReason::JoinError(error)) | Err(error) => {
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "MCP service ended with a failure: {error}");
+                }
+                Ok(_) => {}
+            }
             owner.receipt.closed().await;
             owner.state.wait_until(|state| state.settle_when_idle().then_some(())).await;
         });
@@ -506,10 +511,12 @@ impl McpSession {
             biased;
             result = &mut attempt => result,
             () = self.clock().wait_until(deadline) => {
-                // Cancelling lets the attempt release its transport before reporting the deadline.
+                // Cancelling lets the attempt release its transport; how it then ends is the
+                // deadline's doing.
                 cancel.cancel();
-                let _ = attempt.await;
-                Err(timed_out(self.init_timeout))
+                match attempt.await {
+                    Ok(()) | Err(_) => Err(timed_out(self.init_timeout)),
+                }
             }
         };
         let now = self.clock().now();
@@ -546,22 +553,20 @@ impl McpSession {
         let client = Client::default();
         let previous = self.state.lock().initializing.replace(receipt.clone());
         drop(previous);
-        let service = match serve_client_with_ct(
+        let service = serve_client_with_ct(
             client.clone(),
             Observed::new(transport, receipt.clone(), self.background.clone()),
             cancel.clone(),
         )
         .await
+        .map_err(|error| McpError::Initialization(Arc::new(error)));
+        // Observed owns the transport even if the SDK handshake is cancelled.
+        if service.is_err()
+            && timeout(self.clock(), HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err()
         {
-            Ok(service) => service,
-            Err(error) => {
-                // Observed owns the transport even if the SDK handshake is cancelled.
-                if timeout(self.clock(), HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err() {
-                    log::error!(target: lk_agents_abi::LOG_TARGET, "MCP incomplete initialization cleanup; runtime retains ownership");
-                }
-                return Err(McpError::Initialization(Arc::new(error)));
-            }
-        };
+            log::error!(target: lk_agents_abi::LOG_TARGET, "MCP incomplete initialization cleanup; runtime retains ownership");
+        }
+        let service = service?;
         let peer = service.peer().clone();
         let connection = Arc::new(Connection {
             peer,

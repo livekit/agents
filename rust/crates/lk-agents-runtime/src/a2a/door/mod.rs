@@ -182,13 +182,14 @@ impl Door {
             version.as_deref(),
         );
         let streaming = decoded.as_ref().is_ok_and(Request::is_streaming);
-        let (sender, receiver) = mpsc::channel(RESPONSE_CAPACITY);
+        let (sender, receiver) = lk_agents_net::outbox::outbox(RESPONSE_CAPACITY);
         let cancel = CancellationToken::new();
         let request = match decoded {
             Ok(request) => request,
             Err(refusal) => {
-                let _ =
+                let sent =
                     sender.try_send(Ok(wire::frame(rpc::failure(refusal.id, refusal.error), None)));
+                debug_assert!(sent, "a new response queue has room");
                 return Response { streaming, receiver: Mutex::new(receiver), cancel };
             }
         };
@@ -200,7 +201,7 @@ impl Door {
             let id = request.id.clone();
             if let Err(error) =
                 inner.execute(request, principal, sender.clone(), host_context, parent).await
-                && let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(match error {
+                && !sender.try_send(match error {
                     DoorError::Storage(error) => Ok(rpc::storage_failure(id, &error)),
                     auth => Err(auth),
                 })
@@ -281,7 +282,7 @@ impl Inner {
                 telemetry::end(span, sent.as_ref().map(|_| ()));
                 let frames = sent?;
                 for frame in frames {
-                    let _ = sender.send(Ok(frame)).await;
+                    sender.send(Ok(frame)).await;
                 }
                 return Ok(());
             }
@@ -317,7 +318,7 @@ impl Inner {
                 rpc::canceled(id, &task, after?.as_ref())
             }
         };
-        let _ = sender.send(Ok(frame)).await;
+        sender.send(Ok(frame)).await;
         Ok(())
     }
 

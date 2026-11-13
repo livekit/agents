@@ -807,7 +807,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
     async fn wait_reported(&self) {
         // Ended: the host will never be handed its `speech_done`.
         if self.wait_created().await.is_ok() {
-            let _ = self.reported.wait_for(|reported| *reported).await;
+            self.reported.until(|reported| *reported).await;
         }
     }
 }

@@ -146,10 +146,8 @@ impl Connections {
     /// An idle socket young enough to reuse, and the expired ones to close.
     fn take(&mut self, now: f64) -> (Option<(u64, Connection)>, Vec<Connection>) {
         let reused = self.pool.get(now).and_then(|id| self.idle.remove(&id).map(|c| (id, c)));
-        let mut expired = Vec::new();
-        while let Some(id) = self.pool.pop_closing() {
-            expired.extend(self.idle.remove(&id));
-        }
+        let expired =
+            self.pool.take_to_close().into_iter().filter_map(|id| self.idle.remove(&id)).collect();
         (reused, expired)
     }
 
@@ -184,7 +182,7 @@ impl Connections {
 
     fn forget(&mut self, id: u64) {
         self.pool.remove(id);
-        while self.pool.pop_closing().is_some() {}
+        self.pool.take_to_close();
     }
 }
 
@@ -208,7 +206,12 @@ impl GatewayTts {
             connections: Arc::default(),
         };
         let options = lk_agents_abi::tts::types::TtsOptions {
-            pacing: TtsCapabilities { streaming: true, aligned_transcript: false }.default_pacing(),
+            pacing: TtsCapabilities {
+                streaming: true,
+                aligned_transcript: false,
+                ..Default::default()
+            }
+            .default_pacing(),
             ..Default::default()
         };
         GatewayTts {
@@ -247,15 +250,20 @@ impl GatewayTts {
                 WHAT,
                 &create_frame,
             );
-            if let Ok((sender, receiver)) = opened.await {
-                let refused = {
-                    let mut connections = connections.lock();
-                    let id = connections.opened(clock.now().as_secs_f64());
-                    connections.give_back(id, Connection { sender, receiver, configuration })
-                };
-                if let Some(connection) = refused {
-                    connection.sender.close().await;
+            let (sender, receiver) = match opened.await {
+                Ok(opened) => opened,
+                Err(error) => {
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "TTS prewarm failed: {error}");
+                    return;
                 }
+            };
+            let refused = {
+                let mut connections = connections.lock();
+                let id = connections.opened(clock.now().as_secs_f64());
+                connections.give_back(id, Connection { sender, receiver, configuration })
+            };
+            if let Some(connection) = refused {
+                connection.sender.close().await;
             }
         });
     }
@@ -406,7 +414,11 @@ impl Tts for GatewayTts {
 
     /// `streaming` is always `True`; `aligned_transcript` reads the live extra kwargs.
     fn capabilities(&self) -> TtsCapabilities {
-        TtsCapabilities { streaming: true, aligned_transcript: self.aligned_transcript() }
+        TtsCapabilities {
+            streaming: true,
+            aligned_transcript: self.aligned_transcript(),
+            ..Default::default()
+        }
     }
 
     fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
@@ -595,13 +607,15 @@ impl StreamOutput<SynthesizedAudio> for SynthesisOutput {
             self.stop.cancel();
             self.done = true;
             self.audio.close();
-            let settled = self.settled.take();
-            lk_agents_abi::Closed::bounded(self.clock.as_ref(), deadline, async move {
-                if let Some(settled) = settled {
-                    let _ = settled.await;
-                }
-            })
-            .await
+            let Some(settled) = self.settled.take() else { return lk_agents_abi::Closed::Clean };
+            let limit = deadline.saturating_duration_since(self.clock.now());
+            match lk_agents_abi::timeout(self.clock.as_ref(), limit, settled).await {
+                // a failed synthesis already reached its reader through `failed`
+                Ok(Ok(Err(_))) => lk_agents_abi::Closed::Failed,
+                // settled, or its pump ended without a word
+                Ok(Ok(Ok(())) | Err(_)) => lk_agents_abi::Closed::Clean,
+                Err(_) => lk_agents_abi::Closed::TimedOut,
+            }
         })
     }
 }

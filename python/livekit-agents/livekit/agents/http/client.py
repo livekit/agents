@@ -4,14 +4,16 @@ import asyncio
 import contextlib
 import contextvars
 import copy
+import email.utils
 import enum
 import functools
 import json as jsonlib
 import os
 import ssl
+import time
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import IO, Any
+from typing import IO, Any, TypeVar
 
 import aiohttp
 import aiohttp.payload
@@ -19,11 +21,14 @@ import certifi
 from aiohttp.abc import AbstractStreamWriter
 from pydantic import JsonValue
 
+from .. import _core
 from .._bindings import (
     APIConnectionError,
     APITimeoutError,
+    attempt_started,
     create_api_error_from_http,
     redacted_cause,
+    run_attempts,
 )
 from .._generated.types import Timeout
 from ..log import logger
@@ -42,7 +47,10 @@ __all__ = [
     "WebSocketMessageType",
     "http_session",
     "open",
+    "retry_request",
 ]
+
+_T = TypeVar("_T")
 
 
 class HttpSession:
@@ -238,12 +246,14 @@ class HttpResponse:
         if self.ok:
             return
         body = (await self.read()).decode("utf-8", errors="replace")
-        raise create_api_error_from_http(
+        error = create_api_error_from_http(
             self.reason or "",
             status=self.status,
             request_id=_request_id(self.headers, self._request_id_header),
             body=body,
         )
+        error.retry_after = _retry_after(self.headers.get("Retry-After"))
+        raise error
 
 
 class FormData:
@@ -306,6 +316,7 @@ class WebSocket:
     def __init__(self, ws: aiohttp.ClientWebSocketResponse, write_timeout: float | None) -> None:
         self._ws = ws
         self._write_timeout = write_timeout
+        self._close_reason = ""
 
     @property
     def headers(self) -> Mapping[str, str]:
@@ -319,6 +330,17 @@ class WebSocket:
     @property
     def close_code(self) -> int | None:
         return self._ws.close_code
+
+    def close_error(self, message: str) -> APIConnectionError:
+        """The error to raise when the provider closed the socket: ``message`` with the close
+        code, retryable unless the code refuses the request or the client (policy, auth, invalid
+        data), and the provider's close reason as its ``detail``."""
+        code = self._ws.close_code or None
+        return APIConnectionError(
+            f"{message} (close code {code})" if code else message,
+            retryable=_core.websocket_close_kind(code) != "final",
+            detail=self._close_reason or None,
+        )
 
     async def send_str(self, data: str) -> None:
         await self._send(self._ws.send_str(data))
@@ -348,7 +370,8 @@ class WebSocket:
             case aiohttp.WSMsgType.ERROR:
                 raise APIConnectionError("websocket failed") from redacted_cause(msg.data)
             case _:  # CLOSE, CLOSING, CLOSED
-                return WebSocketMessage(WebSocketMessageType.CLOSE, msg.extra or "")
+                self._close_reason = self._close_reason or msg.extra or ""
+                return WebSocketMessage(WebSocketMessageType.CLOSE, self._close_reason)
 
     async def __aiter__(self) -> AsyncIterator[WebSocketMessage]:
         while (msg := await self.receive()).type is not WebSocketMessageType.CLOSE:
@@ -501,6 +524,65 @@ class _TimedBodyWriter:
 
     def __getattr__(self, name: str) -> object:
         return getattr(self._writer, name)
+
+
+def _retry_after(value: str | None) -> float | None:
+    """``Retry-After``'s seconds, given as a number or an HTTP date."""
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, when.timestamp() - time.time())
+
+
+async def retry_request(
+    request: Callable[[], Awaitable[_T]], *, conn_options: APIConnectOptions
+) -> _T:
+    """Run ``request`` (one HTTP request and the parsing of its answer, such as creating an
+    avatar session) under ``conn_options``' retries.
+
+    A 5xx, 429 or connection failure is retried, after at least the provider's ``Retry-After``;
+    nothing is retried once the request may have reached the provider and its answer timed out,
+    since a retry could create a second session. Once the retries are exhausted it raises the
+    last failure.
+    """
+    host = _Request(request)
+    result = await run_attempts(host, _core.ProviderAttempts("avatar", conn_options, host))
+    return result  # type: ignore[return-value]
+
+
+class _Request:
+    """One provider request as the core's attempt host."""
+
+    def __init__(self, request: Callable[[], Awaitable[Any]]) -> None:
+        self._request = request
+        self._core_attempt_task: asyncio.Task[Any] | None = None
+        self._core_cancelled = False
+
+    async def _core_attempt(self, retry: bool) -> object:
+        attempt_started(self)
+        try:
+            return await self._request()
+        except APITimeoutError as e:
+            if e.timeout in ("pool", "connect"):
+                raise
+            # the request may have been accepted: a retry could repeat it
+            raise APITimeoutError(str(e), timeout=e.timeout, retryable=False) from e
+
+    def _core_produced(self) -> bool:
+        return False
+
+    def _core_retrying(self, error: Exception) -> None:
+        pass
+
+    def _core_failed(self, error: Exception) -> None:
+        pass
 
 
 def _export_ca_paths() -> None:

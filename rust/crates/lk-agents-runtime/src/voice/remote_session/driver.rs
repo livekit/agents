@@ -272,7 +272,7 @@ impl RemoteSessionLink {
                 closed.resolve(());
             });
         }
-        let _ = self.closed.wait().await;
+        self.closed.until(Option::is_some).await;
     }
 }
 

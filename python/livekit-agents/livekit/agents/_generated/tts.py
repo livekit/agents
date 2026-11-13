@@ -86,10 +86,20 @@ class SegmentCount:
 
 @dataclass
 class TTSCapabilities:
+    """What a TTS supports, fixed at construction.
+
+    Usage: a figure the provider reports always wins. The characters it reports it billed
+    (`report_usage`) replace the ones the framework counts for that segment.
+    """
+
     streaming: bool
     """Whether this TTS supports streaming (generally using websockets)"""
     aligned_transcript: bool = False
     """Whether this TTS supports aligned transcripts with word timestamps"""
+    text_unit: Literal["sentences", "words", "text"] = "sentences"
+    """What each chunk of a stream's input holds: a provider that buffers text itself takes words"""
+    max_text_len: int | None = None
+    """The most characters one request may carry; None takes the markup's known limit"""
 
 
 @dataclass
@@ -402,12 +412,6 @@ class TTS(
     def _core_markup_provider(self) -> str:
         return self.markup._provider_key()
 
-    def _core_text_unit(self) -> str:
-        return "sentences"
-
-    def _core_max_text_len(self) -> int | None:
-        return None
-
     def _core_retries_itself(self) -> bool:
         return False
 
@@ -531,7 +535,9 @@ class ChunkedStream(ABC):
 
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
-        await aio.cancel_and_wait(self._synthesize_task)
+        await aio.cancel_and_wait(
+            self._synthesize_task, timeout=self._core_attempts.cleanup_timeout
+        )
         self._event_ch.close()
         # The reader is done with the stream: what was buffered for it is dropped, not returned.
         while not self._event_ch.empty():
@@ -716,7 +722,7 @@ class SynthesizeStream(ABC):
 
     async def aclose(self) -> None:
         """Close the stream immediately"""
-        await aio.cancel_and_wait(self._task)
+        await aio.cancel_and_wait(self._task, timeout=self._core_attempts.cleanup_timeout)
         self._event_ch.close()
         # The reader is done with the stream: what was buffered for it is dropped, not returned.
         while not self._event_ch.empty():

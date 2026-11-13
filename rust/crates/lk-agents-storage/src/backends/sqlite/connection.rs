@@ -25,7 +25,8 @@ pub(super) enum Request {
     Query(Statement, oneshot::Sender<Result<Vec<Row>, StorageError>>),
     Batch(Vec<Statement>, oneshot::Sender<Result<BatchResult, StorageError>>),
     DeleteThread(PathBuf, String, oneshot::Sender<Result<(), StorageError>>),
-    Close(oneshot::Sender<()>),
+    /// Resolved, or ended with the worker, once the database is closed.
+    Close(lk_agents_net::signal::Producer<Option<()>>),
 }
 
 /// Where a local storage's work runs: each database's worker on `spawner` (a dedicated thread
@@ -88,7 +89,7 @@ async fn serve(
     };
     drop(sqlite);
     if let Some(done) = done {
-        let _ = done.send(());
+        done.resolve(());
     }
 }
 
@@ -220,9 +221,9 @@ impl ThreadDbConnection for FileConnection {
             return;
         }
         let tx = self.worker.lock().await.tx.clone();
-        let (done, closed) = oneshot::channel();
+        let (done, closed) = lk_agents_net::signal::once();
         if tx.send(Request::Close(done)).await.is_ok() {
-            let _ = closed.await;
+            closed.until(Option::is_some).await;
         }
     }
 }

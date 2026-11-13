@@ -8,7 +8,7 @@ import os
 import time
 import uuid
 import weakref
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -37,6 +37,8 @@ from aws_sdk_bedrock_runtime.models import (  # pyright: ignore[reportMissingTyp
     ThrottlingException,
     ValidationException,
 )
+from botocore.credentials import Credentials
+from botocore.exceptions import BotoCoreError
 from pydantic import ValidationError as PayloadValidationError
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_aws_event_stream.exceptions import InvalidEventBytes
@@ -47,6 +49,7 @@ from smithy_http.aio.crt import AWSCRTHTTPClient
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
+    APIError,
     APIStatusError,
     TokenUsage,
     llm,
@@ -87,7 +90,6 @@ RECOVERABLE_VALIDATION_ERROR_MESSAGES = (
 # Session recycling: restart before 8-min AWS limit or credential expiry
 # Override with LK_SESSION_MAX_DURATION env var for testing (e.g., "60" for 1 minute)
 MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
-CREDENTIAL_EXPIRY_BUFFER_SECONDS = 3 * 60  # Restart 3 min before credential expiry
 # A recycle waits for the assistant's audio to stay quiet this long before closing the stream.
 RECYCLE_QUIET_PERIOD_SECONDS = 1.0
 # How long a recycle waits for the open generation's completionEnd after the prompt ends.
@@ -125,20 +127,6 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 lk_bedrock_debug = int(os.getenv("LK_BEDROCK_DEBUG", 0))
-
-# Shared credentials resolver instance to preserve cache across all sessions
-_shared_credentials_resolver: Boto3CredentialsResolver | None = None
-
-
-def _get_credentials_resolver() -> Boto3CredentialsResolver:
-    """Get or create the shared credentials resolver instance.
-
-    This ensures credential caching works across all RealtimeSession instances.
-    """
-    global _shared_credentials_resolver
-    if _shared_credentials_resolver is None:
-        _shared_credentials_resolver = Boto3CredentialsResolver()
-    return _shared_credentials_resolver
 
 
 @dataclass
@@ -217,113 +205,36 @@ class _ResponseGeneration:
 
 
 class Boto3CredentialsResolver(IdentityResolver[AWSCredentialsIdentity, Mapping[str, object]]):
-    """IdentityResolver implementation that sources AWS credentials from boto3.
+    """IdentityResolver that signs Bedrock requests with the boto3 credential chain.
 
-    The resolver delegates to the default boto3.Session() credential chain which
-    checks environment variables, shared credentials files, EC2 instance profiles, etc.
-    The credentials are then wrapped in an AWSCredentialsIdentity so they can be
-    passed into Bedrock runtime clients.
+    Temporary credentials are botocore's refreshable ones, which renew themselves while 10-15
+    minutes of validity remain: each session signs with credentials that outlive it.
     """
 
     def __init__(self) -> None:
-        self.session = boto3.Session()
-        self._cached_identity: AWSCredentialsIdentity | None = None
-        self._cached_expiry: float | None = None
+        self._credentials: Credentials | None = None
 
     async def get_identity(self, **kwargs: object) -> AWSCredentialsIdentity:
-        """Asynchronously resolve AWS credentials.
-
-        This method is invoked by the Bedrock runtime client whenever a new request needs to be
-        signed.  It converts the static or temporary credentials returned by boto3
-        into an AWSCredentialsIdentity instance.
-
-        Returns:
-            AWSCredentialsIdentity: Identity containing the
-            AWS access key, secret key and optional session token.
+        """The current credentials, refreshed first when they near expiry.
 
         Raises:
-            ValueError: If no credentials could be found by boto3.
-        """
-        # Return cached credentials if available and not expired
-        current_time = time.time()
-        if self._cached_identity and (
-            self._cached_expiry is None or current_time < self._cached_expiry
-        ):
-            return self._cached_identity
-
-        # Credentials expired or not cached - reset so fresh ones are fetched below
-        self._cached_identity = None
-        self._cached_expiry = None
-
-        try:
-            logger.debug("[CREDS] Attempting to load AWS credentials")
-            credentials = self.session.get_credentials()
-            if not credentials:
-                logger.error("[CREDS] Unable to load AWS credentials")
-                raise ValueError("Unable to load AWS credentials")
-
-            creds = credentials.get_frozen_credentials()
-
-            # Ensure credentials are valid
-            if not creds.access_key or not creds.secret_key:
-                logger.error("AWS credentials are incomplete")
-                raise ValueError("AWS credentials are incomplete")
-
-            logger.debug(
-                f"[CREDS] AWS credentials loaded successfully. AWS_ACCESS_KEY_ID: {creds.access_key[:4]}***"
-            )
-
-            # Get expiration time if available (for temporary credentials)
-            expiry_time = getattr(credentials, "_expiry_time", None)
-
-            identity = AWSCredentialsIdentity(
-                access_key_id=creds.access_key,
-                secret_access_key=creds.secret_key,
-                session_token=creds.token if creds.token else None,
-                expiration=expiry_time,
-            )
-
-            # Cache the identity and expiry
-            self._cached_identity = identity
-            if expiry_time:
-                # Session will restart 3 minutes before expiration
-                self._cached_expiry = expiry_time.timestamp() - 180
-                logger.debug(
-                    f"[CREDS] Cached credentials with expiry. "
-                    f"expiry_time={expiry_time}, restart_before={self._cached_expiry}"
-                )
-            else:
-                # Static credentials don't have an inherent expiration attribute, cache indefinitely
-                self._cached_expiry = None
-                logger.debug("[CREDS] Cached static credentials (no expiry)")
-
-            return identity
-        except Exception as e:
-            logger.error(f"[CREDS] Failed to load AWS credentials: {str(e)}")
-            raise ValueError(f"Failed to load AWS credentials: {str(e)}")  # noqa: B904
-
-    def get_credential_expiry_time(self) -> float | None:
-        """Get the credential expiry timestamp synchronously.
-
-        This loads credentials if not cached and returns the expiry time.
-        Used for calculating session duration before the async stream starts.
-
-        Returns:
-            float | None: Unix timestamp when credentials expire, or None for static credentials.
+            APIError: (not retryable) when no complete credentials can be loaded.
         """
         try:
-            session = boto3.Session()
-            credentials = session.get_credentials()
-            if not credentials:
-                return None
-
-            expiry_time = getattr(credentials, "_expiry_time", None)
-            if expiry_time:
-                return float(expiry_time.timestamp())
-            return None
-        except Exception as e:
-            logger.warning(f"[CREDS] Failed to get credential expiry: {e}")
-            return None
+            if self._credentials is None:
+                self._credentials = boto3.Session().get_credentials()
+            if self._credentials is None:
+                raise APIError("Unable to load AWS credentials", retryable=False)
+            creds = self._credentials.get_frozen_credentials()
+        except BotoCoreError as e:
+            raise APIError(f"Failed to load AWS credentials: {e}", retryable=False) from e
+        if not creds.access_key or not creds.secret_key:
+            raise APIError("AWS credentials are incomplete", retryable=False)
+        return AWSCredentialsIdentity(
+            access_key_id=creds.access_key,
+            secret_access_key=creds.secret_key,
+            session_token=creds.token or None,
+        )
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -374,6 +285,7 @@ class RealtimeModel(llm.RealtimeModel):
         )
         self._model = model
         self._generate_reply_timeout = generate_reply_timeout
+        self._credentials_resolver = Boto3CredentialsResolver()
         # note: temperature and top_p do not follow industry standards and are defined slightly differently for Sonic  # noqa: E501
         # temperature ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic  # noqa: E501
         # top_p ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic  # noqa: E501
@@ -579,7 +491,11 @@ class RealtimeSession(  # noqa: F811
             realtime_model (RealtimeModel): Parent model instance that stores static
                 inference options and the Smithy Bedrock client configuration.
         """
-        super().__init__(realtime_model)
+        super().__init__(
+            realtime_model,
+            input_sample_rate=DEFAULT_INPUT_SAMPLE_RATE,
+            input_num_channels=DEFAULT_CHANNELS,
+        )
         self._realtime_model: RealtimeModel = realtime_model
         self._opts = options
         self._generate_reply_timeout = generate_reply_timeout
@@ -588,8 +504,6 @@ class RealtimeSession(  # noqa: F811
             audio_content_name=str(uuid.uuid4()),
             model=self._realtime_model.model,
         )
-        self._input_resampler: rtc.AudioResampler | None = None
-        self._input_sample_rate: int | None = None
         self._bstream = utils.media.AudioByteStream(
             DEFAULT_INPUT_SAMPLE_RATE, DEFAULT_CHANNELS, samples_per_channel=DEFAULT_CHUNK_SIZE
         )
@@ -618,7 +532,9 @@ class RealtimeSession(  # noqa: F811
         self._session_recycle_task: asyncio.Task[None] | None = None
         self._tasks = utils.aio.TaskSet()
         self._last_audio_output_time: float = 0.0  # monotonic time of the last assistant audio
-        self._audio_end_turn = asyncio.Event()  # the assistant finished speaking
+        # set while the assistant is not speaking: an idle session recycles at once
+        self._audio_end_turn = asyncio.Event()
+        self._audio_end_turn.set()
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._sent_message_ids: set[str] = set()
         self._audio_message_ids: set[str] = set()
@@ -666,51 +582,17 @@ class RealtimeSession(  # noqa: F811
             self.initialize_streams(), name="RealtimeSession.initialize_streams"
         )
 
-    @utils.log_exceptions(logger=logger)
     async def _initialize_client(self) -> None:
         """Create the duplex Bedrock client with SDK retries disabled."""
         config = await AsyncBedrockRuntimeConfig.resolve(
             endpoint_uri=f"https://bedrock-runtime.{self._opts.region}.amazonaws.com",
             region=self._opts.region,
-            aws_credentials_identity_resolver=_get_credentials_resolver(),
+            aws_credentials_identity_resolver=self._realtime_model._credentials_resolver,
             user_agent_extra="x-client-framework:livekit-plugins-aws[realtime]",
             transport=AWSCRTHTTPClient(),
             retry_strategy=StandardRetryStrategy(max_attempts=1),
         )
         self._bedrock_client = AsyncBedrockRuntimeClient(config=config)
-
-    def _calculate_session_duration(self) -> float:
-        """Calculate session duration based on credential expiry and AWS 8-min limit."""
-        resolver = _get_credentials_resolver()
-        credential_expiry = resolver.get_credential_expiry_time()
-
-        if credential_expiry is None:
-            # Static credentials - just use the max session duration
-            logger.info(
-                f"[SESSION] Static credentials, using max duration: {MAX_SESSION_DURATION_SECONDS}s"
-            )
-            return MAX_SESSION_DURATION_SECONDS
-
-        # Calculate time until we should restart (before credential expiry)
-        now = time.time()
-        time_until_cred_expiry = credential_expiry - now - CREDENTIAL_EXPIRY_BUFFER_SECONDS
-
-        # Use the minimum of session limit and credential expiry
-        duration = min(MAX_SESSION_DURATION_SECONDS, time_until_cred_expiry)
-
-        if duration < 30:
-            logger.warning(
-                f"[SESSION] Very short session duration: {duration:.0f}s. "
-                f"Credentials may expire soon."
-            )
-            duration = max(duration, 10)  # At least 10 seconds
-
-        logger.info(
-            f"[SESSION] Session will recycle in {duration:.0f}s "
-            f"(max={MAX_SESSION_DURATION_SECONDS}s, time_until_cred_expiry={time_until_cred_expiry:.0f}s)"
-        )
-
-        return duration
 
     def _start_session_recycle_timer(self) -> None:
         """Start the session recycling timer."""
@@ -719,7 +601,8 @@ class RealtimeSession(  # noqa: F811
             if self._session_recycle_task is not None:
                 self._session_recycle_task.cancel()
 
-        duration = self._calculate_session_duration()
+        # within the validity botocore keeps on refreshable credentials (over 10 minutes)
+        duration = MAX_SESSION_DURATION_SECONDS
 
         self._session_recycle_task = self._tasks.spawn(
             self._session_recycle_timer(duration), name="RealtimeSession._session_recycle_timer"
@@ -822,7 +705,7 @@ class RealtimeSession(  # noqa: F811
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         self._audio_input_chan = utils.aio.Chan[bytes]()
         logger.debug("[SESSION] Created fresh tool results and audio input channels")
-        self._audio_end_turn.clear()
+        self._audio_end_turn.set()
         self._stream_ready.clear()
         self._audio_input_started.clear()
 
@@ -848,7 +731,6 @@ class RealtimeSession(  # noqa: F811
         except Exception:
             pass  # the receive loop reported its own failure
 
-    @utils.log_exceptions(logger=logger)
     async def _send_raw_event(self, event_json: str) -> None:
         """Low-level helper that serialises event_json and forwards it to the bidirectional stream.
 
@@ -938,7 +820,6 @@ class RealtimeSession(  # noqa: F811
 
         return tool_cfg
 
-    @utils.log_exceptions(logger=logger)
     async def initialize_streams(self, is_restart: bool = False) -> None:
         """Open the Bedrock bidirectional stream and spawn background worker tasks.
 
@@ -1091,7 +972,6 @@ class RealtimeSession(  # noqa: F811
             logger.debug(f"Failed to initialize stream: {str(e)}")
             raise
 
-    @utils.log_exceptions(logger=logger)
     def emit_generation_event(self) -> None:
         """Publish a llm.GenerationCreatedEvent to external subscribers.
 
@@ -1423,6 +1303,7 @@ class RealtimeSession(  # noqa: F811
         """Track audio content start."""
         payload = event_data.event.contentStart
         assert payload is not None
+        self._audio_end_turn.clear()  # the assistant is speaking: a recycle waits for its end
         if self._current_generation is not None:
             log_event_data(event_data)
             content_id = payload.contentId
@@ -1458,8 +1339,8 @@ class RealtimeSession(  # noqa: F811
 
         # Check if this is END_TURN (assistant finished speaking)
         content_end = event_data.event.contentEnd
+        self._audio_end_turn.set()  # an interrupted turn ends the speech too
         if content_end is not None and content_end.stopReason == "END_TURN":
-            self._audio_end_turn.set()
             logger.debug("[SESSION] AUDIO END_TURN received - assistant finished speaking")
             self._close_current_generation()
 
@@ -1564,7 +1445,6 @@ class RealtimeSession(  # noqa: F811
         )
         self.emit("metrics_collected", metrics)
 
-    @utils.log_exceptions(logger=logger)
     async def _process_responses(self) -> None:
         """Background task that drains Bedrock's output stream and feeds the event handlers."""
         try:
@@ -1704,7 +1584,6 @@ class RealtimeSession(  # noqa: F811
                     break
                 except Exception as e:
                     err_msg = getattr(e, "message", str(e))
-                    logger.error(f"Response processing error: {err_msg} (type: {type(e)})")
                     request_id = None
                     try:
                         request_id = err_msg.split(" ")[0].split("=")[1]
@@ -1717,11 +1596,12 @@ class RealtimeSession(  # noqa: F811
                             timestamp=time.monotonic(),
                             label=self._realtime_model.label,
                             error=APIStatusError(
-                                message=err_msg,
+                                f"Nova Sonic response processing error ({type(e).__name__})",
                                 status_code=500,
                                 request_id=request_id,
                                 body=e,
                                 retryable=False,
+                                detail=err_msg,
                             ),
                             recoverable=False,
                         ),
@@ -1755,11 +1635,12 @@ class RealtimeSession(  # noqa: F811
                     timestamp=time.monotonic(),
                     label=self._realtime_model.label,
                     error=APIStatusError(
-                        message=f"Max restart attempts exceeded: {err_msg}",
+                        "Max restart attempts exceeded",
                         status_code=500,
                         request_id=request_id,
                         body=ex,
                         retryable=False,
+                        detail=err_msg,
                     ),
                     recoverable=False,
                 ),
@@ -1999,37 +1880,21 @@ class RealtimeSession(  # noqa: F811
             "updating inference configuration options is not yet supported by Nova Sonic's Realtime API"  # noqa: E501
         )
 
-    @utils.log_exceptions(logger=logger)
-    def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
-        """Ensure mic audio matches Sonic's required sample rate & channels."""
-        if self._input_resampler:
-            if frame.sample_rate != self._input_sample_rate:
-                self._input_resampler = None
-
-        if self._input_resampler is None and (
-            frame.sample_rate != DEFAULT_INPUT_SAMPLE_RATE or frame.num_channels != DEFAULT_CHANNELS
-        ):
-            self._input_sample_rate = frame.sample_rate
-            self._input_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=DEFAULT_INPUT_SAMPLE_RATE,
-                num_channels=DEFAULT_CHANNELS,
-            )
-
-        if self._input_resampler:
-            # flush the resampler when the input source is changed
-            yield from self._input_resampler.push(frame)
-        else:
-            yield frame
-
-    @utils.log_exceptions(logger=logger)
     async def _process_audio_input(self) -> None:
         """Background task that feeds audio and tool results into the Bedrock stream."""
         # Wait for the bidirectional stream to be fully established (HTTP 200)
         # before sending audio_content_start_event. Without this, under load
         # Bedrock may not have finished processing chat history, causing:
         # ValidationException: "Chat history should be sent completely before streaming audio."
-        await self._stream_ready.wait()
+        if not self._stream_ready.is_set():
+            # the response reader opens the stream: if it ends first, nothing will
+            assert self._response_task is not None
+            async with utils.aio.TaskSet() as tasks:
+                await tasks.first_completed(
+                    self._stream_ready.wait(), asyncio.shield(self._response_task)
+                )
+            if not self._stream_ready.is_set():
+                return
         await self._send_raw_event(self._event_builder.create_audio_content_start_event())
         self._audio_input_started.set()
         logger.info("Starting audio input processing loop")
@@ -2089,18 +1954,13 @@ class RealtimeSession(  # noqa: F811
             if lk_bedrock_debug:
                 log_message("Enqueuing significant audio chunk", AnsiColors.BLUE)
 
-    @utils.log_exceptions(logger=logger)
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         """Enqueue an incoming mic rtc.AudioFrame for transcription."""
         if not self._audio_input_chan.closed:
-            # logger.debug(f"Raw audio received: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")  # noqa: E501
-            for f in self._resample_audio(frame):
-                # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")  # noqa: E501
-
-                for nf in self._bstream.push(f.data.tobytes()):
-                    audio_bytes = bytes(nf.data)
-                    self._log_significant_audio(audio_bytes)
-                    self._audio_input_chan.send_nowait(audio_bytes)
+            for nf in self._bstream.push(frame.data.tobytes()):
+                audio_bytes = bytes(nf.data)
+                self._log_significant_audio(audio_bytes)
+                self._audio_input_chan.send_nowait(audio_bytes)
         else:
             logger.warning("audio input channel closed, skipping audio")
 
@@ -2341,7 +2201,6 @@ class RealtimeSession(  # noqa: F811
     ) -> None:
         logger.warning("truncate is not supported by Nova Sonic's Realtime API")
 
-    @utils.log_exceptions(logger=logger)
     async def aclose(self) -> None:
         """Gracefully shut down the realtime session and release network resources."""
         logger.info("attempting to shutdown agent session")

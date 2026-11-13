@@ -104,10 +104,14 @@ mod speech_playback;
 mod storage_fault;
 #[path = "telephony_tests.rs"]
 mod telephony;
+#[path = "tool_answers_tests.rs"]
+mod tool_answers;
 #[path = "tool_call_segments_tests.rs"]
 mod tool_call_segments;
-#[path = "tools_tests.rs"]
-mod tools;
+#[path = "tool_lifecycle_tests.rs"]
+mod tool_lifecycle;
+#[path = "tool_speech_tests.rs"]
+mod tool_speech;
 #[path = "transcript_text_tests.rs"]
 mod transcript_text;
 #[path = "user_away_tests.rs"]

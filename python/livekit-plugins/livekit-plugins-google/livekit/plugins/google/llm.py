@@ -512,9 +512,10 @@ class LLMStream(llm.LLMStream):
             async for response in stream:
                 if response.prompt_feedback:
                     raise APIStatusError(
-                        response.prompt_feedback.model_dump_json(),
+                        "gemini llm: prompt blocked",
                         retryable=False,
                         request_id=request_id,
+                        detail=response.prompt_feedback.model_dump_json(),
                     )
 
                 if response.usage_metadata is not None:
@@ -604,8 +605,7 @@ class LLMStream(llm.LLMStream):
             raise
         except Exception as e:
             raise APIConnectionError(
-                f"gemini llm: error generating content {str(e)}",
-                retryable=retryable,
+                "gemini llm: error generating content", retryable=retryable, detail=str(e)
             ) from e
 
     def _parse_part(self, id: str, part: types.Part) -> llm.ChatChunk | None:

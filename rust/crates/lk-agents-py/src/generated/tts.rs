@@ -876,9 +876,7 @@ pub struct TtsProxy {
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::TtsCapabilities,
     num_channels: u16,
-    text_unit: ::lk_agents_abi::tts::types::TextUnit,
     retries_itself: bool,
-    max_text_len: ::std::option::Option<usize>,
     options: ::std::sync::Arc<dyn ::lk_agents_abi::tts::types::SharedTtsOptions>,
     conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
     /// Appended to every awaited call once bound.
@@ -946,22 +944,9 @@ impl TtsProxy {
             let v = crate::py_calls::read(obj, "_core_num_channels")?;
             crate::py_values::number_from_py::<u16>(v.as_any(), "Tts._core_num_channels")?
         };
-        let text_unit = {
-            let v = crate::py_calls::read(obj, "_core_text_unit")?;
-            crate::py_values::str_from_py(v.as_any())?
-        };
         let retries_itself = {
             let v = crate::py_calls::read(obj, "_core_retries_itself")?;
             v.extract::<bool>()?
-        };
-        let max_text_len = {
-            let v = crate::py_calls::read(obj, "_core_max_text_len")?;
-            if v.is_none() {
-                Ok(None)
-            } else {
-                (crate::py_values::number_from_py::<usize>(v.as_any(), "Tts._core_max_text_len"))
-                    .map(Some)
-            }?
         };
         let options = {
             let v = crate::py_calls::read(obj, "_core_options")?;
@@ -994,9 +979,7 @@ impl TtsProxy {
             label,
             capabilities,
             num_channels,
-            text_unit,
             retries_itself,
-            max_text_len,
             options,
             conn_options,
             conn: None,
@@ -1152,16 +1135,8 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         })
     }
 
-    fn text_unit(&self) -> ::lk_agents_abi::tts::types::TextUnit {
-        ::std::clone::Clone::clone(&self.text_unit)
-    }
-
     fn retries_itself(&self) -> bool {
         ::std::clone::Clone::clone(&self.retries_itself)
-    }
-
-    fn max_text_len(&self) -> ::std::option::Option<usize> {
-        ::std::clone::Clone::clone(&self.max_text_len)
     }
 
     fn options(&self) -> ::std::sync::Arc<dyn ::lk_agents_abi::tts::types::SharedTtsOptions> {
@@ -1186,16 +1161,17 @@ impl ::lk_agents_abi::Tts for TtsProxy {
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
         let host = ::std::sync::Arc::clone(&self.host);
         let error_arg = error;
-        let error_arg =
-            match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+        let error_arg = match ::pyo3::Python::attach(
+            |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
                 Ok((crate::py_errors::ExceptionValue::to_exception(error_arg, py)?).unbind())
-            }) {
-                Ok(value) => value,
-                Err(error) => {
-                    log::warn!("Tts._core_failed failed: {error}");
-                    return;
-                }
-            };
+            },
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!(target: ::lk_agents_abi::LOG_TARGET, "Tts._core_failed failed: {error}");
+                return;
+            }
+        };
         let recoverable_arg = recoverable;
         ::lk_agents_runtime::host::notify(
             &self.notifier,

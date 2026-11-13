@@ -16,17 +16,19 @@ class AssignmentTimeoutError(Exception):
 
 
 class APIError(Exception):
-    "An API request failed."
+    "An API request failed. `detail` holds the provider's own message, logged once under an `lk.pii.*` key and never shown in the text."
     __module__ = "livekit.agents._bindings"
     message: str
     body: object | None
     retryable: bool = False
+    detail: str | None
 
-    def __init__(self, message: str, *, body: object | None = None, retryable: bool = True) -> None:
+    def __init__(self, message: str, *, body: object | None = None, retryable: bool = True, detail: str | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.body = body
         self.retryable = retryable
+        self.detail = detail
 
     def __str__(self) -> str:
         return self.message
@@ -36,18 +38,20 @@ class APIError(Exception):
 
 
 class APIStatusError(APIError):
-    "An API response has an error status code."
+    "An API response has an error status code; `retry_after` is the seconds the provider asked to wait."
     __module__ = "livekit.agents._bindings"
     status_code: int
     request_id: str | None
+    retry_after: float | None
 
-    def __init__(self, message: str, *, status_code: int = -1, request_id: str | None = None, body: object | None = None, retryable: bool | None = None) -> None:
+    def __init__(self, message: str, *, status_code: int = -1, request_id: str | None = None, body: object | None = None, retryable: bool | None = None, detail: str | None = None, retry_after: float | None = None) -> None:
         from livekit.agents._core import retryable_for_status
 
         retryable = retryable_for_status(status_code, retryable)
-        super().__init__(message, body=body, retryable=retryable)
+        super().__init__(message, body=body, retryable=retryable, detail=detail)
         self.status_code = status_code
         self.request_id = request_id
+        self.retry_after = retry_after
 
     def __str__(self) -> str:
         from livekit.agents._bindings import _status_error_str
@@ -62,8 +66,8 @@ class APIConnectionError(APIError):
     "An API request failed due to a connection error."
     __module__ = "livekit.agents._bindings"
 
-    def __init__(self, message: str = "Connection error.", *, retryable: bool = True) -> None:
-        super().__init__(message, body=None, retryable=retryable)
+    def __init__(self, message: str = "Connection error.", *, retryable: bool = True, detail: str | None = None) -> None:
+        super().__init__(message, body=None, retryable=retryable, detail=detail)
 
     def __str__(self) -> str:
         from livekit.agents._bindings import _connection_error_str
@@ -76,8 +80,8 @@ class APITimeoutError(APIConnectionError):
     __module__ = "livekit.agents._bindings"
     timeout: Literal['pool', 'connect', 'read', 'write', 'total'] | None
 
-    def __init__(self, message: str = "Request timed out.", *, retryable: bool = True, timeout: Literal['pool', 'connect', 'read', 'write', 'total'] | None = None) -> None:
-        super().__init__(message, retryable=retryable)
+    def __init__(self, message: str = "Request timed out.", *, retryable: bool = True, timeout: Literal['pool', 'connect', 'read', 'write', 'total'] | None = None, detail: str | None = None) -> None:
+        super().__init__(message, retryable=retryable, detail=detail)
         self.timeout = timeout
 
 

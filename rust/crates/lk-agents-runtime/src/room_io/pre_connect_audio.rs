@@ -146,7 +146,7 @@ impl PreConnectAudioHandler {
                 if let Some(outcome) = self.state.lock().core.take(id) {
                     return outcome;
                 }
-                let _ = changed.changed().await;
+                changed.changed().await.expect("the producer is a field of self");
             }
         };
         let outcome = match lk_agents_abi::timeout(self.clock.as_ref(), self.timeout, wait).await {

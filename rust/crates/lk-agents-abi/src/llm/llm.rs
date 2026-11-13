@@ -224,7 +224,9 @@ impl ChatRequestView for ChatRequest {
 
 // A host `llm.LLM` is this trait through its generated proxy (`LlmProxy`), calling the `_core_*`
 // methods of its hand-written base class (`llm.py`); the request crosses as a `_core.ChatRequest`
-// handle.
+// handle. No capabilities record: nothing about an LLM is fixed at construction but its
+// identity. Usage: a figure the provider reports always wins, and its tokens only ever come from
+// the provider (`ChatChunk.usage`).
 /// A language model.
 ///
 /// Plugins implement `chat()`, returning an `LLMStream` whose `_run` sends the provider's chunks.

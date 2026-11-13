@@ -21,9 +21,12 @@ use tokio::sync::mpsc;
 // `tts:92-95`).
 #[test]
 fn merging_tts_capabilities_is_any_for_streaming_and_all_for_alignment() {
-    let duplex = TtsCapabilities { streaming: true, aligned_transcript: true };
-    let batch = TtsCapabilities { streaming: false, aligned_transcript: true };
-    let unaligned = TtsCapabilities { streaming: true, aligned_transcript: false };
+    let duplex =
+        TtsCapabilities { streaming: true, aligned_transcript: true, ..Default::default() };
+    let batch =
+        TtsCapabilities { streaming: false, aligned_transcript: true, ..Default::default() };
+    let unaligned =
+        TtsCapabilities { streaming: true, aligned_transcript: false, ..Default::default() };
 
     let merged = crate::fallback::tts::merge_capabilities(&[duplex, batch]);
     assert!(merged.streaming, "any -- see the function's own docs for why this over-promises");
@@ -88,7 +91,11 @@ impl Tts for FakeTts {
         self.label.clone()
     }
     fn capabilities(&self) -> TtsCapabilities {
-        TtsCapabilities { streaming: self.streaming, aligned_transcript: false }
+        TtsCapabilities {
+            streaming: self.streaming,
+            aligned_transcript: false,
+            ..Default::default()
+        }
     }
     fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
         Ok(self.rate)
@@ -313,7 +320,7 @@ impl Tts for SpeaksOnEnd {
         "backup".into()
     }
     fn capabilities(&self) -> TtsCapabilities {
-        TtsCapabilities { streaming: true, aligned_transcript: false }
+        TtsCapabilities { streaming: true, aligned_transcript: false, ..Default::default() }
     }
     fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
         Ok(24_000)

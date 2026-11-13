@@ -738,11 +738,7 @@ class _Connection:
 
                 if msg.type is http.WebSocketMessageType.CLOSE:
                     self._fail_all(
-                        APIStatusError(
-                            "Soniox TTS WebSocket connection closed unexpectedly",
-                            status_code=(self._ws.close_code if self._ws else -1) or -1,
-                            body=f"{msg.data=}",
-                        )
+                        self._ws.close_error("Soniox TTS WebSocket connection closed unexpectedly")
                     )
                     break
 
@@ -755,16 +751,13 @@ class _Connection:
                 if not stream_id:
                     # Connection-level message (only errors are expected here).
                     if resp.get("error_code"):
-                        logger.error(
-                            f"Soniox TTS connection-level error: "
-                            f"{resp.get('error_code')} - {resp.get('error_message')}"
-                        )
                         self._fail_all(
                             APIStatusError(
-                                message=resp.get("error_message", "Unknown error"),
+                                "Soniox TTS connection error",
                                 status_code=resp["error_code"],
                                 request_id=resp.get("request_id"),
                                 body=resp,
+                                detail=resp.get("error_message"),
                             )
                         )
                         break
@@ -777,22 +770,13 @@ class _Connection:
 
                 # Per-stream error.
                 if resp.get("error_code"):
-                    logger.error(
-                        f"Soniox TTS error: {resp.get('error_code')} - {resp.get('error_message')}",
-                        extra={"stream_id": stream_id},
-                    )
                     if not stream.waiter.done():
-                        code: int = resp.get("error_code", 500)
-                        # 408/429 are transient (timeout, rate limit); 5xx is
-                        # server-side. Other 4xx (400/401/402) is config/auth
-                        # and retrying won't help.
-                        retryable = code in (408, 429) or code >= 500
                         stream.waiter.set_exception(
                             APIStatusError(
-                                message=resp.get("error_message", "Unknown error"),
-                                status_code=code,
-                                body=f"stream_id={stream_id} {msg.text}",
-                                retryable=retryable,
+                                f"Soniox TTS stream error (stream_id={stream_id})",
+                                status_code=resp.get("error_code", 500),
+                                body=resp,
+                                detail=resp.get("error_message"),
                             )
                         )
                     continue

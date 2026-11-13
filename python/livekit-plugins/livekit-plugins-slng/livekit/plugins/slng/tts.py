@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import contextlib
 import json
 import os
@@ -140,15 +141,16 @@ class _ReceivedWsEvent:
     error_status: int | None = None
 
 
-def _decode_audio_payload(resp: dict[str, JsonValue], *, context: str) -> bytes | None:
-    audio_b64 = _extract_audio_b64(resp)
-    if not audio_b64:
-        return None
+def _decode_audio(audio_b64: str) -> bytes:
     try:
-        return base64.b64decode(audio_b64)
-    except Exception:
-        logger.warning("[TTS] invalid base64 audio (%s)", context, exc_info=True)
-        return None
+        return base64.b64decode(audio_b64, validate=True)
+    except binascii.Error as e:
+        raise APIConnectionError("SLNG sent malformed audio", retryable=False) from e
+
+
+def _decode_audio_payload(resp: dict[str, JsonValue]) -> bytes | None:
+    audio_b64 = _extract_audio_b64(resp)
+    return _decode_audio(audio_b64) if audio_b64 else None
 
 
 def _normalize_ws_message_type(resp: dict[str, JsonValue]) -> str | None:
@@ -186,12 +188,12 @@ def _parse_ws_event(resp: dict[str, JsonValue]) -> _ReceivedWsEvent:
     if mtype == "audio_chunk":
         return _ReceivedWsEvent(
             kind="audio_chunk",
-            audio=_decode_audio_payload(resp, context="audio_chunk"),
+            audio=_decode_audio_payload(resp),
         )
     if mtype in ("audio_end", "end", "flushed"):
         return _ReceivedWsEvent(
             kind="audio_end",
-            audio=_decode_audio_payload(resp, context="audio_end"),
+            audio=_decode_audio_payload(resp),
         )
     if mtype == "error":
         return _ReceivedWsEvent(
@@ -367,7 +369,7 @@ class _Connection(tts.TTS[Literal["slng_event"]]):
             headers["X-Slng-Provider-Key"] = byok_key
 
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, text_unit="words"),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -416,9 +418,6 @@ class _Connection(tts.TTS[Literal["slng_event"]]):
     @property
     def provider(self) -> str:
         return "SLNG"
-
-    def _core_text_unit(self) -> str:
-        return "words"
 
     @property
     def warm_standby_enabled(self) -> bool:
@@ -870,7 +869,7 @@ class ChunkedStream(tts.ChunkedStream):
                     if audio_received:
                         output_emitter.flush()
                         break
-                    raise APIStatusError("SLNG websocket connection closed unexpectedly")
+                    raise ws.close_error("SLNG websocket closed unexpectedly")
 
                 if msg.type is http.WebSocketMessageType.BINARY:
                     output_emitter.push(msg.binary)
@@ -899,14 +898,8 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                     audio_b64 = resp.get("audio")
                     if isinstance(audio_b64, str) and audio_b64:
-                        try:
-                            output_emitter.push(base64.b64decode(audio_b64))
-                            audio_received = True
-                        except Exception:
-                            logger.warning(
-                                "[TTS] invalid base64 audio in chunked synthesis",
-                                exc_info=True,
-                            )
+                        output_emitter.push(_decode_audio(audio_b64))
+                        audio_received = True
 
                     if is_final:
                         output_emitter.flush()
@@ -914,8 +907,9 @@ class ChunkedStream(tts.ChunkedStream):
 
                     if resp.get("error") is not None:
                         raise APIStatusError(
-                            f"SLNG TTS error: {resp.get('error')}",
+                            "SLNG TTS error",
                             status_code=_extract_error_status(resp) or -1,
+                            detail=str(resp.get("error")),
                         )
                     continue
 
@@ -934,8 +928,9 @@ class ChunkedStream(tts.ChunkedStream):
                     break
                 elif event.kind == "error":
                     raise APIStatusError(
-                        f"SLNG TTS error: {event.error}",
+                        "SLNG TTS error",
                         status_code=event.error_status or -1,
+                        detail=event.error,
                     )
                 else:
                     logger.debug("[TTS] ignoring unknown message", extra={"lk.pii.data": resp})
@@ -1089,6 +1084,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         def mark_first_audio_seen() -> None:
             nonlocal first_audio_ms
+            self._core_attempts.audio_received()
             if first_audio_ms is None:
                 first_audio_ms = _elapsed_ms(segment_started_at)
 
@@ -1196,13 +1192,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             logger.debug(f"[TTS] send_task: sent {word_count} words, flushing")
             await ws.send_str(_FLUSH_MSG)
             input_sent_event.set()
+            # the read deadline runs only from here: before, a pause in the text owes nothing
+            self._core_attempts.expect_response(final=True)
 
         async def recv_task(ws: http.WebSocket) -> None:
             nonlocal ready_ms, audio_end_ms, gateway_request_id, gateway_session_id
             nonlocal audio_chunks_seen
             await input_sent_event.wait()
             while True:
-                msg = await ws.receive(timeout=self._conn_options.read_timeout)
+                msg = await ws.receive()
                 if msg.type is http.WebSocketMessageType.CLOSE:
                     if audio_chunks_seen > 0:
                         logger.info(
@@ -1213,7 +1211,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
                         output_emitter.end_segment()
                         break
-                    raise APIStatusError("SLNG websocket connection closed unexpectedly")
+                    raise ws.close_error("SLNG websocket closed unexpectedly")
 
                 # SLNG: Handle both binary (legacy) and JSON audio_chunk messages
                 if msg.type is http.WebSocketMessageType.BINARY:
@@ -1258,22 +1256,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                         audio_b64 = resp.get("audio")
                         if isinstance(audio_b64, str) and audio_b64:
-                            try:
-                                mark_first_audio_seen()
-                                output_emitter.push(base64.b64decode(audio_b64))
-                            except Exception:
-                                if is_final:
-                                    logger.warning(
-                                        "[TTS] invalid base64 audio (isFinal frame)",
-                                        exc_info=True,
-                                    )
-                                else:
-                                    logger.warning(
-                                        "[TTS] invalid base64 audio (audio frame)",
-                                        exc_info=True,
-                                    )
-                            else:
-                                audio_chunks_seen += 1
+                            audio = _decode_audio(audio_b64)
+                            mark_first_audio_seen()
+                            output_emitter.push(audio)
+                            audio_chunks_seen += 1
 
                         if is_final:
                             audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
@@ -1282,8 +1268,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                         if resp.get("error") is not None:
                             raise APIStatusError(
-                                f"SLNG TTS error: {resp.get('error')}",
+                                "SLNG TTS error",
                                 status_code=_extract_error_status(resp) or -1,
+                                detail=str(resp.get("error")),
                             )
                         continue
 
@@ -1310,8 +1297,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     elif event.kind == "error":
                         raise APIStatusError(
-                            f"SLNG TTS error: {event.error}",
+                            "SLNG TTS error",
                             status_code=event.error_status or -1,
+                            detail=event.error,
                         )
 
                     else:

@@ -743,14 +743,20 @@ impl VoiceDriver {
 
     /// A new session holds nothing: what plays is cut so what was heard is committed, the new
     /// session gets the frame once those speeches are released, and a reply in progress is asked
-    /// for again.
+    /// for again. A request the old session never answered keeps its speech and is asked of the
+    /// new session as it was.
     fn on_session_swapped(&mut self, now: Ts, regenerate: bool) {
         let Some(rt) = self.activity.realtime_activity() else { return };
         if rt.state.closing || rt.state.ended() {
             return;
         }
+        let unanswered: BTreeSet<SpeechId> =
+            rt.state.pending.values().filter_map(|p| p.speech).collect();
+        let current = self.activity.speech_scheduler.current_speech();
         let state = self.session.states.agent_state();
-        let busy = matches!(state, AgentState::Speaking | AgentState::Thinking);
+        // The agent speaks or thinks for a reply the swap cuts, not for one it keeps.
+        let busy = matches!(state, AgentState::Speaking | AgentState::Thinking)
+            && current.is_none_or(|c| !unanswered.contains(&c));
         // The new server's VAD heard no onset: a turn the old one opened ends here, or nothing
         // would ever end it.
         if self.activity.audio_recognition.turn_detection_mode() == TurnDetectionMode::RealtimeLlm
@@ -759,7 +765,8 @@ impl VoiceDriver {
             let eff = self.activity.audio_recognition.on_server(now, ServerSpeech::Stopped);
             self.apply_recognition_effects(eff);
         }
-        let cut = match self.interrupt_all(now, true, InterruptCause::ModelSwapped) {
+        let cut = match self.interrupt_all_but(now, true, InterruptCause::ModelSwapped, &unanswered)
+        {
             Ok(cut) => cut,
             Err(error) => {
                 log::error!(target: lk_agents_abi::LOG_TARGET, error:? = error; "forced model-swap interruption was refused");
@@ -770,9 +777,13 @@ impl VoiceDriver {
             cut.into_iter().filter(|s| self.activity.speech_scheduler.contains(*s)).collect();
         let Some(rt) = self.activity.realtime_activity_mut() else { return };
         let t = &mut rt.state;
-        // What the old session was asked and cancelled will never be answered.
+        // What the old session was asked will never be answered: asked again after the frame.
         t.cancelled_requests.clear();
-        t.swap = Some(Swap { waiting, regenerate: regenerate && busy });
+        for key in t.requeue_all() {
+            self.clear_deadline(Timer::RealtimeRequest(key));
+        }
+        let Some(rt) = self.activity.realtime_activity_mut() else { return };
+        rt.state.swap = Some(Swap { waiting, regenerate: regenerate && busy });
         self.realtime_replay(now, None);
     }
 
@@ -798,6 +809,7 @@ impl VoiceDriver {
                 Request::GenerateReply { instructions: None, tool_choice: None, read_back: false };
             self.realtime_request(now, request, None, None, VoiceRunParticipation::Outside);
         }
+        self.realtime_send_queued(now);
     }
 
     fn close_on_realtime_failure(&mut self, now: Ts) {

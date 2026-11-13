@@ -201,6 +201,8 @@ pub struct Worker {
     load_health: crate::load::LoadHealth,
     load_available: bool,
     load_requested: lk_agents_abi::Ts,
+    /// How `load_fnc` fails now, if it does: logged once per change.
+    load_failure: Option<std::mem::Discriminant<crate::load::LoadError>>,
     starting_jobs: BTreeMap<JobId, lk_agents_abi::Ts>,
     cpu: Option<Box<CpuMonitor>>,
     rx: tokio::sync::mpsc::Receiver<WorkerCommand>,
@@ -557,7 +559,7 @@ impl PendingWrite {
 enum Completion {
     Decision { generation: u64, slot: Slot, decision: JobDecision },
     Launched { generation: u64, slot: Slot, result: Result<JobId, HostError> },
-    Load(Option<f32>),
+    Load(Option<Result<f32, crate::load::LoadError>>),
     CpuSample(load_driver::CpuSampleResult),
     Done,
     EndpointDone(u64),
@@ -612,6 +614,7 @@ impl Worker {
                 default_load: DefaultLoadCalc::new(),
                 load_available: true,
                 load_requested: lk_agents_abi::Ts::ZERO,
+                load_failure: None,
                 starting_jobs: BTreeMap::new(),
                 cpu: None,
                 rx,
@@ -796,7 +799,7 @@ impl Worker {
         let host = self.host.clone();
         let id = self.next_endpoint;
         self.next_endpoint = self.next_endpoint.wrapping_add(1);
-        let (served, done) = tokio::sync::oneshot::channel::<()>();
+        let (served, done) = signal::once::<()>();
         let clock = self.clock.clone();
         let task = self.spawner.spawn(async move {
             let _served = served;
@@ -805,7 +808,7 @@ impl Worker {
         self.endpoints.insert(id, task);
         self.operations.push(
             async move {
-                let _ = done.await;
+                done.until(Option::is_some).await;
                 Completion::EndpointDone(id)
             }
             .boxed(),
@@ -906,7 +909,7 @@ pub trait WorkerHost: Send + Sync {
 
     /// The user's `load_fnc`. `None` selects the CPU-based calculator; `0.0` would report the
     /// worker permanently idle.
-    async fn user_load(&self) -> Option<f32>;
+    async fn user_load(&self) -> Option<HostResult<f32>>;
 
     /// One endpoint request, preamble already parsed, served to completion: the host writes the
     /// HTTP/1.1 response and finishes or resets the stream (and after a `101`, pipes bytes both

@@ -536,8 +536,10 @@ class _DuplexSession:
         )
 
     async def _core_aclose(self) -> None:
-        await self.plugin.aclose()
-        self.events.put_nowait(None)
+        try:
+            await self.plugin.aclose()
+        finally:
+            self.events.put_nowait(None)
 
 
 def _chat_ctx(items: list[ChatItem] | None) -> NotGivenOr[llm.ChatContext]:

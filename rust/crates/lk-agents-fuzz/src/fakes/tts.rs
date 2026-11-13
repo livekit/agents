@@ -210,6 +210,7 @@ impl Tts for FakeTts {
         TtsCapabilities {
             streaming: self.streaming,
             aligned_transcript: self.alignment != TtsAlignment::None,
+            ..Default::default()
         }
     }
 

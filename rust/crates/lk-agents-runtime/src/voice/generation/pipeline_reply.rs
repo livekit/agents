@@ -2,7 +2,7 @@ use super::ReplyExecution;
 use super::forward::{Voice, voice_leg};
 use super::llm::produce_segments;
 use super::realtime_generation::RealtimePlayer;
-use super::tools::run_tools;
+use super::tools::{answer_tools, run_tools};
 use crate::voice::SpeechTasks;
 use crate::voice::generation::realtime_generation::realtime_generation_task;
 use crate::voice::session::SessionShared;
@@ -241,7 +241,7 @@ async fn pipeline_reply_task_impl(
                     None,
                 );
             }
-            let _ = run_tools(shared, handle, ctx, tools, true, false).await;
+            answer_tools(shared, handle, ctx, tools).await;
             return Err(e);
         }
     };
@@ -259,7 +259,7 @@ async fn pipeline_reply_task_impl(
                 None,
             );
         }
-        let _ = run_tools(shared, handle, ctx, tools, true, false).await;
+        answer_tools(shared, handle, ctx, tools).await;
         let outcome = empty_outcome(shared, ctx, true);
         return Ok(StepOutcome::Done(Finished { outcome, interrupted: true }));
     };
@@ -282,7 +282,7 @@ async fn pipeline_reply_task_impl(
         tools_running,
     );
     let forwarded_text_empty = finished.outcome.forwarded_text.is_empty();
-    let next = run_tools(shared, handle, ctx, tools, forwarded_text_empty, true).await;
+    let next = run_tools(shared, handle, ctx, tools, forwarded_text_empty).await;
     Ok(match next {
         None | Some(StepNext::Done) => StepOutcome::Done(finished),
         Some(StepNext::Interrupted) => {

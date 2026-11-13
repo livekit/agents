@@ -187,6 +187,8 @@ class STT(stt.STT):
                 aligned_transcript="chunk",
                 offline_recognize=False,
                 diarization=params.enable_speaker_diarization,
+                # usage is the total_audio_proc_ms Soniox reports with each response
+                reports_usage=True,
             )
         )
 
@@ -261,7 +263,6 @@ class SpeechStream(stt.RecognizeStream):
         self._api_key = api_key
         self._ensure_session = ensure_session
         self._ws: http.WebSocket | None = None
-        self._reconnect_event = asyncio.Event()
 
         self.audio_queue: asyncio.Queue[bytes | str] = asyncio.Queue()
 
@@ -344,61 +345,31 @@ class SpeechStream(stt.RecognizeStream):
         self._reported_duration_ms = int(total_audio_proc_ms)
 
     async def _run(self) -> None:
-        """Manage connection lifecycle, spawning tasks and handling reconnection."""
-        while True:
-            try:
-                ws = await self._connect_ws()
-                self._ws = ws
-                # Create task for audio processing, voice turn detection and message handling.
-                async with utils.aio.TaskSet() as tasks:
-                    io = asyncio.gather(
-                        tasks.spawn(self._prepare_audio_task()),
-                        tasks.spawn(self._send_audio_task()),
-                        tasks.spawn(self._recv_messages_task()),
-                        tasks.spawn(self._keepalive_task()),
-                    )
-                    reconnect = tasks.spawn(self._reconnect_event.wait())
-                    if await tasks.first_completed(io, reconnect) is not reconnect:
-                        break
-
-                self._reconnect_event.clear()
-
-            except APIError:
-                raise
-            except Exception as e:
-                logger.exception(f"Unexpected error occurred: {e}")
-                raise APIConnectionError(f"An unexpected error occurred: {e}") from e
-            # Close the WebSocket connection on finish.
-            finally:
-                if self._ws is not None:
-                    await self._ws.close()
-                    self._ws = None
-
-    def _request_reconnect(self, reason: str) -> None:
-        """Ask `_run` to tear down the current socket and open a new one.
-
-        No-op when there is no socket or a reconnect is already in flight; otherwise the
-        `_run` loop would never learn that the connection is gone.
-        """
-        if self._ws is None or self._reconnect_event.is_set():
-            return
-        logger.warning("Soniox STT WebSocket %s; requesting reconnect", reason)
-        self._reconnect_event.set()
+        """Run one connection; a failure ends the attempt and the base class reconnects."""
+        try:
+            self._ws = await self._connect_ws()
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(
+                    tasks.spawn(self._prepare_audio_task()),
+                    tasks.spawn(self._send_audio_task()),
+                    tasks.spawn(self._recv_messages_task()),
+                    tasks.spawn(self._keepalive_task()),
+                )
+        except APIError:
+            raise
+        except Exception as e:
+            raise APIConnectionError(f"An unexpected error occurred: {e}") from e
+        finally:
+            if self._ws is not None:
+                await self._ws.close()
+                self._ws = None
 
     async def _keepalive_task(self) -> None:
         """Periodically send keepalive messages (while no audio is being sent)
         to maintain the WebSocket connection."""
-        try:
-            while self._ws:
-                await self._ws.send_str(KEEPALIVE_MESSAGE)
-                await asyncio.sleep(5)
-        except APIConnectionError as e:
-            # When no audio is flowing this write is the only thing touching the socket,
-            # so a dropped connection surfaces here first. Swallowing it left the stream
-            # parked on a dead socket with nothing ever logged.
-            self._request_reconnect(f"keepalive write failed ({e!r})")
-        except Exception as e:
-            logger.error(f"Error while sending keep alive message: {e}")
+        while self._ws:
+            await self._ws.send_str(KEEPALIVE_MESSAGE)
+            await asyncio.sleep(5)
 
     async def _prepare_audio_task(self) -> None:
         """Read audio frames and enqueue PCM data for sending."""
@@ -419,21 +390,11 @@ class SpeechStream(stt.RecognizeStream):
             return
 
         while self._ws:
-            try:
-                data = await self.audio_queue.get()
-
-                if isinstance(data, bytes):
-                    await self._ws.send_bytes(data)
-                else:
-                    await self._ws.send_str(data)
-            except asyncio.CancelledError:
-                raise
-            except APIConnectionError as e:
-                self._request_reconnect(f"audio write failed ({e!r})")
-                break
-            except Exception as e:
-                logger.error(f"Error while sending audio data: {e}")
-                break
+            data = await self.audio_queue.get()
+            if isinstance(data, bytes):
+                await self._ws.send_bytes(data)
+            else:
+                await self._ws.send_str(data)
 
     async def _recv_messages_task(self) -> None:
         """Receive transcription messages, handle tokens, errors, and dispatch events."""
@@ -499,141 +460,121 @@ class SpeechStream(stt.RecognizeStream):
         if not self._ws:
             return
 
-        try:
-            async for msg in self._ws:
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning(
-                        f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
-                    )
+        async for msg in self._ws:
+            if msg.type is not http.WebSocketMessageType.TEXT:
+                logger.warning(
+                    f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
+                )
+                continue
+
+            try:
+                content = json.loads(msg.data)
+            except json.JSONDecodeError as e:
+                raise APIConnectionError(
+                    "Soniox STT sent a malformed message", retryable=False
+                ) from e
+            has_error = bool(content.get("error_code") or content.get("error_message"))
+            tokens = content.get("tokens", []) if has_error else content["tokens"]
+
+            non_final = _TokenAccumulator()
+            non_final_original = _TokenAccumulator()
+            total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
+
+            # 1) process tokens: accumulate final/non-final,
+            #    flush immediately on endpoint tokens.
+            for token in tokens:
+                is_translated = token.get("translation_status") == "translation"
+                if is_translation_mode and not is_end_token(token) and not is_translated:
+                    # Original-language token: capture text for source_text only.
+                    if token["is_final"]:
+                        final_original.update(token)
+                    else:
+                        non_final_original.update(token)
                     continue
-
-                try:
-                    content = json.loads(msg.data)
-                    has_error = bool(content.get("error_code") or content.get("error_message"))
-                    tokens = content.get("tokens", []) if has_error else content["tokens"]
-
-                    non_final = _TokenAccumulator()
-                    non_final_original = _TokenAccumulator()
-                    total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
-
-                    # 1) process tokens: accumulate final/non-final,
-                    #    flush immediately on endpoint tokens.
-                    for token in tokens:
-                        is_translated = token.get("translation_status") == "translation"
-                        if is_translation_mode and not is_end_token(token) and not is_translated:
-                            # Original-language token: capture text for source_text only.
-                            if token["is_final"]:
-                                final_original.update(token)
-                            else:
-                                non_final_original.update(token)
-                            continue
-                        if token["is_final"]:
-                            if is_end_token(token):
-                                send_endpoint_transcript()
-                            else:
-                                final.update(token)
-                        else:
-                            non_final.update(token)
-
-                    # 2) emit START_OF_SPEECH + transcript for remaining content.
-                    if final.text or non_final.text:
-                        if not is_speaking:
-                            is_speaking = True
-                            self.send(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
-                        # Same source/target classification as in
-                        # `send_endpoint_transcript`: in translation mode the
-                        # `_original` buckets carry the source side and `final` /
-                        # `non_final` carry the translation; in non-translation
-                        # mode the `_original` buckets are empty and `final` /
-                        # `non_final` ARE the source.
-                        merged_originals = _merge_lang_segments(
-                            final_original.language_segments,
-                            non_final_original.language_segments,
-                        )
-                        merged_primary = _merge_lang_segments(
-                            final.language_segments, non_final.language_segments
-                        )
-                        interim_src_segs, interim_tgt_segs = (
-                            (merged_originals, merged_primary)
-                            if is_translation_mode
-                            else (merged_primary, [])
-                        )
-                        interim_src_langs, interim_src_texts = _lang_segments_to_fields(
-                            interim_src_segs
-                        )
-                        interim_tgt_langs, interim_tgt_texts = _lang_segments_to_fields(
-                            interim_tgt_segs
-                        )
-
-                        # When all tokens in this batch are final (no non-final pending),
-                        # speech has reached a stable state — emit PREFLIGHT_TRANSCRIPT to
-                        # allow preemptive LLM generation. This mirrors Deepgram v2's
-                        # EagerEndOfTurn behavior.
-                        event_type = (
-                            SpeechEventType.PREFLIGHT_TRANSCRIPT
-                            if final.text and not non_final.text
-                            else SpeechEventType.INTERIM_TRANSCRIPT
-                        )
-                        self.send(
-                            stt.SpeechEvent(
-                                type=event_type,
-                                alternatives=[
-                                    final.merged_speech_data(
-                                        non_final,
-                                        self.start_time_offset,
-                                        source_languages=interim_src_langs,
-                                        source_texts=interim_src_texts,
-                                        target_languages=interim_tgt_langs,
-                                        target_texts=interim_tgt_texts,
-                                    )
-                                ],
-                            )
-                        )
-
-                    # 3) on error or finish, flush any remaining final tokens.
-                    if content.get("finished") or has_error:
+                if token["is_final"]:
+                    if is_end_token(token):
                         send_endpoint_transcript()
+                    else:
+                        final.update(token)
+                else:
+                    non_final.update(token)
 
-                    # 4) report processed audio for every frame; gating on
-                    #    endpoint/finish frames dropped whatever never reached one.
-                    self._report_processed_audio_duration(total_audio_proc_ms)
+            # 2) emit START_OF_SPEECH + transcript for remaining content.
+            if final.text or non_final.text:
+                if not is_speaking:
+                    is_speaking = True
+                    self.send(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+                # Same source/target classification as in
+                # `send_endpoint_transcript`: in translation mode the
+                # `_original` buckets carry the source side and `final` /
+                # `non_final` carry the translation; in non-translation
+                # mode the `_original` buckets are empty and `final` /
+                # `non_final` ARE the source.
+                merged_originals = _merge_lang_segments(
+                    final_original.language_segments,
+                    non_final_original.language_segments,
+                )
+                merged_primary = _merge_lang_segments(
+                    final.language_segments, non_final.language_segments
+                )
+                interim_src_segs, interim_tgt_segs = (
+                    (merged_originals, merged_primary)
+                    if is_translation_mode
+                    else (merged_primary, [])
+                )
+                interim_src_langs, interim_src_texts = _lang_segments_to_fields(interim_src_segs)
+                interim_tgt_langs, interim_tgt_texts = _lang_segments_to_fields(interim_tgt_segs)
 
-                    if has_error:
-                        err_code = content.get("error_code")
-                        err_msg = content.get("error_message", "Unknown Soniox STT error")
-                        logger.error(f"WebSocket error: {err_code} - {err_msg}")
-                        status_code = int(err_code) if isinstance(err_code, int) else -1
-                        if isinstance(err_code, str) and err_code.isdigit():
-                            status_code = int(err_code)
-                        raise APIStatusError(
-                            f"Soniox STT error: {err_code} - {err_msg}",
-                            status_code=status_code,
-                            body=content,
-                        )
+                # When all tokens in this batch are final (no non-final pending),
+                # speech has reached a stable state — emit PREFLIGHT_TRANSCRIPT to
+                # allow preemptive LLM generation. This mirrors Deepgram v2's
+                # EagerEndOfTurn behavior.
+                event_type = (
+                    SpeechEventType.PREFLIGHT_TRANSCRIPT
+                    if final.text and not non_final.text
+                    else SpeechEventType.INTERIM_TRANSCRIPT
+                )
+                self.send(
+                    stt.SpeechEvent(
+                        type=event_type,
+                        alternatives=[
+                            final.merged_speech_data(
+                                non_final,
+                                self.start_time_offset,
+                                source_languages=interim_src_langs,
+                                source_texts=interim_src_texts,
+                                target_languages=interim_tgt_langs,
+                                target_texts=interim_tgt_texts,
+                            )
+                        ],
+                    )
+                )
 
-                    if content.get("finished"):
-                        logger.debug("Transcription finished")
+            # 3) on error or finish, flush any remaining final tokens.
+            if content.get("finished") or has_error:
+                send_endpoint_transcript()
 
-                except APIError:
-                    raise
-                except Exception as e:
-                    logger.exception(f"Error processing message: {e}")
+            # 4) report processed audio for every frame; gating on
+            #    endpoint/finish frames dropped whatever never reached one.
+            self._report_processed_audio_duration(total_audio_proc_ms)
 
-        except asyncio.CancelledError:
-            # Normal shutdown — don't trigger reconnect.
-            raise
-        except APIConnectionError as e:
-            # the heartbeat closes the socket when a ping goes unanswered; reconnect below
-            logger.warning("Soniox STT WebSocket error: %r", e)
-        except APIError:
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error while receiving messages: {e}")
+            if has_error:
+                err_code = content.get("error_code")
+                err_msg = content.get("error_message", "Unknown Soniox STT error")
+                status_code = int(err_code) if isinstance(err_code, int) else -1
+                if isinstance(err_code, str) and err_code.isdigit():
+                    status_code = int(err_code)
+                raise APIStatusError(
+                    f"Soniox STT error: {err_code}",
+                    status_code=status_code,
+                    body=content,
+                    detail=str(err_msg),
+                )
 
-        # Request reconnect if STT silently dies on WS drop.
-        if not self._reconnect_event.is_set():
-            logger.warning("Soniox STT WebSocket closed; requesting reconnect")
-            self._reconnect_event.set()
+            if content.get("finished"):
+                return
+
+        raise self._ws.close_error("Soniox STT WebSocket closed")
 
 
 def _merge_lang_segments(

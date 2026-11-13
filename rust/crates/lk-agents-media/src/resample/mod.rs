@@ -59,6 +59,8 @@ impl Stream {
 /// representation and the selected lifecycle policy differ. soxr may buffer an entire push.
 pub struct AudioResampler {
     target_rate: Option<u32>,
+    /// The output channel count; `None` keeps each input's.
+    target_channels: Option<u16>,
     quality: Quality,
     mode: Mode,
     stream: Option<Stream>,
@@ -71,6 +73,7 @@ impl AudioResampler {
     pub fn new(output_rate: u32, quality: Quality, on_change: OnChange) -> Self {
         Self {
             target_rate: Some(output_rate),
+            target_channels: None,
             quality,
             mode: Mode::Follow(on_change),
             stream: None,
@@ -88,6 +91,7 @@ impl AudioResampler {
             Self::build(input, output_rate, quality, false).map_err(|failure| failure.error)?;
         Ok(Self {
             target_rate: Some(output_rate),
+            target_channels: None,
             quality,
             mode: Mode::Fixed(input),
             stream: Some(stream),
@@ -100,10 +104,20 @@ impl AudioResampler {
     pub fn decoded(target_rate: Option<u32>) -> Self {
         Self {
             target_rate,
+            target_channels: None,
             quality: Quality::Medium,
             mode: Mode::Decoded,
             stream: None,
             output_format: None,
+        }
+    }
+
+    /// Follow frame headers into `output`'s rate and channel count: a channel change is mixed
+    /// before resampling, a format change drains the old stream.
+    pub fn converting(output: AudioFormat, quality: Quality) -> Self {
+        Self {
+            target_channels: Some(output.num_channels.max(1)),
+            ..Self::new(output.sample_rate, quality, OnChange::Drain)
         }
     }
 
@@ -124,7 +138,17 @@ impl AudioResampler {
     /// Emit the preceding tail first, then converted output or the untouched passthrough frame.
     pub fn push_frame(&mut self, frame: &AudioFrame) -> Result<Vec<AudioFrame>, ResampleError> {
         let input = AudioFormat::new(frame.sample_rate, frame.num_channels);
-        self.frame(input, frame).map_err(|failure| failure.error)
+        let converted = match self.target_channels {
+            Some(channels) if channels != input.num_channels.max(1) => {
+                let samples = remix(&crate::pcm_samples(&frame.data), input.num_channels, channels);
+                let format = AudioFormat::new(input.sample_rate, channels);
+                let remixed = to_frame(&samples, format)
+                    .unwrap_or_else(|| AudioFrame::new(Vec::new(), input.sample_rate, channels, 0));
+                self.frame(format, &remixed)
+            }
+            _ => self.frame(input, frame),
+        };
+        converted.map_err(|failure| failure.error)
     }
 
     fn frame(
@@ -269,6 +293,35 @@ impl AudioResampler {
             Some(stream) => Ok(Some((stream.output, stream.flush()?))),
             None => Ok(None),
         }
+    }
+}
+
+/// Interleaved PCM from `from` channels to `to`: averaged to mono, then copied to each channel.
+pub fn remix(samples: &[i16], from: u16, to: u16) -> Vec<i16> {
+    let mono = crate::downmix_mono(samples, from);
+    match to {
+        0 | 1 => mono,
+        to => mono.iter().flat_map(|&s| std::iter::repeat_n(s, usize::from(to))).collect(),
+    }
+}
+
+/// `utils.media.AudioConverter`.
+pub struct AudioConverter(AudioResampler);
+
+impl lk_agents_abi::utils::resample::AudioConverter for AudioConverter {
+    fn new(sample_rate: u32, num_channels: u16) -> Self {
+        AudioConverter(AudioResampler::converting(
+            AudioFormat::new(sample_rate, num_channels),
+            Quality::Medium,
+        ))
+    }
+
+    fn push(&mut self, frame: AudioFrame) -> Result<Vec<AudioFrame>, ResampleError> {
+        self.0.push_frame(&frame)
+    }
+
+    fn flush(&mut self) -> Result<Vec<AudioFrame>, ResampleError> {
+        Ok(self.0.flush()?.into_iter().collect())
     }
 }
 
@@ -447,6 +500,32 @@ mod tests {
         assert!(r.input_format().is_none());
         r.push_frame(&ramp(24_000, 2, 2_400)).unwrap();
         assert_eq!(r.input_format(), Some(input));
+    }
+
+    // Catches: a converter built for the target channel count reading stereo input as mono
+    // (the copied `_resample_audio`s), or a channel change passed through unmixed.
+    #[test]
+    fn a_converter_mixes_channels_and_resamples_to_its_format() {
+        let mut r = AudioResampler::converting(AudioFormat::new(16_000, 1), Quality::Medium);
+        let stereo = AudioFrame::new(crate::pcm_bytes(&[100, 300, -50, 50]), 16_000, 2, 2);
+        let out = r.push_frame(&stereo).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            (out[0].sample_rate, out[0].num_channels, out[0].samples_per_channel),
+            (16_000, 1, 2)
+        );
+        assert_eq!(crate::pcm_samples(&out[0].data), vec![200, 0], "averaged, not interleaved");
+
+        let mut out = r.push_frame(&ramp(48_000, 2, 4_800)).unwrap();
+        out.extend(r.flush().unwrap());
+        let total: usize = out.iter().map(|f| f.samples_per_channel as usize).sum();
+        assert!(out.iter().all(|f| (f.sample_rate, f.num_channels) == (16_000, 1)));
+        assert!((1_500..=1_600).contains(&total), "48 kHz stereo to 16 kHz mono: {total}");
+
+        let mut up = AudioResampler::converting(AudioFormat::new(16_000, 2), Quality::Medium);
+        let out =
+            up.push_frame(&AudioFrame::new(crate::pcm_bytes(&[7, -7]), 16_000, 1, 2)).unwrap();
+        assert_eq!(crate::pcm_samples(&out[0].data), vec![7, 7, -7, -7]);
     }
 
     #[test]

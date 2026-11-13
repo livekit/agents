@@ -447,6 +447,7 @@ async def test_stt_unexpected_close_keeps_code_and_retryability(mode: str) -> No
                     async with asyncio.timeout(2):
                         _ = [ev async for ev in stream]
                 assert error.value.retryable
-                assert "close_code=1011" in str(error.value)
+                assert "(close code 1011)" in error.value.message
+                assert error.value.detail == "upstream failed"
         finally:
             await provider.aclose()

@@ -566,7 +566,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
                     state.progress.set()
                     continue
                 if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise APIConnectionError("Baseten closed the TTS websocket")
+                    raise ws.close_error("Baseten closed the TTS websocket")
 
                 event = _decode_response(msg.text)
                 etype = event.type
@@ -600,10 +600,11 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
 
                 elif etype == "error":
                     raise APIStatusError(
-                        message=event.message,
+                        "Baseten TTS error",
                         status_code=500,
                         request_id=request_id,
                         body=None,
+                        detail=event.message,
                     )
 
         try:

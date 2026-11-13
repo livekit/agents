@@ -272,6 +272,8 @@ class STT(stt.STT):
                 interim_results=use_realtime,
                 aligned_transcript=False,
                 keyterms=_supports_context_hints(model),
+                # streaming usage carries the server's speech timing or billed seconds
+                reports_usage=True,
             )
         )
         # the last language asked for, kept while detection is on so it can be restored
@@ -779,11 +781,9 @@ class SpeechStream(stt.RecognizeStream):
         self._speaking = False
         self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
-    @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
         closing_ws = False
 
-        @utils.log_exceptions(logger=logger)
         async def send_task(ws: http.WebSocket, vad_stream: VADStream | None) -> None:
             nonlocal closing_ws
 
@@ -820,7 +820,6 @@ class SpeechStream(stt.RecognizeStream):
 
             closing_ws = True
 
-        @utils.log_exceptions(logger=logger)
         async def vad_task(ws: http.WebSocket, vad_stream: VADStream) -> None:
             try:
                 async for ev in vad_stream:
@@ -836,7 +835,6 @@ class SpeechStream(stt.RecognizeStream):
                     return
                 raise
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: http.WebSocket) -> None:
             nonlocal closing_ws
             current_text = ""
@@ -851,11 +849,7 @@ class SpeechStream(stt.RecognizeStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="OpenAI Realtime STT connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("OpenAI Realtime STT connection closed unexpectedly")
 
                 if msg.type is not http.WebSocketMessageType.TEXT:
                     logger.warning("unexpected OpenAI message type %s", msg.type)
@@ -863,122 +857,118 @@ class SpeechStream(stt.RecognizeStream):
 
                 try:
                     data = json.loads(msg.data)
-                    msg_type = data.get("type")
-                    if msg_type == "input_audio_buffer.speech_started":
-                        item_id = data.get("item_id", "")
+                except json.JSONDecodeError as e:
+                    raise APIError("OpenAI sent a malformed message", retryable=False) from e
+                msg_type = data.get("type")
+                if msg_type == "input_audio_buffer.speech_started":
+                    item_id = data.get("item_id", "")
+                    current_item_id = item_id
+                    audio_start_ms = data.get("audio_start_ms", 0)
+                    item_audio_timing[item_id] = {"start_ms": audio_start_ms}
+                    if self._vad is None:
+                        self._start_speaking()
+
+                elif msg_type == "input_audio_buffer.speech_stopped":
+                    item_id = data.get("item_id", "")
+                    audio_end_ms = data.get("audio_end_ms", 0)
+                    if item_id in item_audio_timing:
+                        item_audio_timing[item_id]["end_ms"] = audio_end_ms
+                    if self._vad is None:
+                        self._stop_speaking()
+
+                elif msg_type == "conversation.item.input_audio_transcription.delta":
+                    delta = data.get("delta", "")
+                    item_id = data.get("item_id", "") or current_item_id
+                    if item_id:
                         current_item_id = item_id
-                        audio_start_ms = data.get("audio_start_ms", 0)
-                        item_audio_timing[item_id] = {"start_ms": audio_start_ms}
-                        if self._vad is None:
-                            self._start_speaking()
-
-                    elif msg_type == "input_audio_buffer.speech_stopped":
-                        item_id = data.get("item_id", "")
-                        audio_end_ms = data.get("audio_end_ms", 0)
-                        if item_id in item_audio_timing:
-                            item_audio_timing[item_id]["end_ms"] = audio_end_ms
-                        if self._vad is None:
-                            self._stop_speaking()
-
-                    elif msg_type == "conversation.item.input_audio_transcription.delta":
-                        delta = data.get("delta", "")
-                        item_id = data.get("item_id", "") or current_item_id
-                        if item_id:
-                            current_item_id = item_id
-                        if delta:
-                            current_text += delta
-                            if time.time() - last_interim_at > _delta_transcript_interval:
-                                self.send(
-                                    stt.SpeechEvent(
-                                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                                        request_id=current_item_id,
-                                        alternatives=[
-                                            stt.SpeechData(
-                                                text=current_text,
-                                                language=self._language,
-                                            )
-                                        ],
-                                    )
-                                )
-                                last_interim_at = time.time()
-
-                    elif msg_type == "conversation.item.input_audio_transcription.completed":
-                        current_text = ""
-                        transcript = data.get("transcript", "")
-                        item_id = data.get("item_id", "")
-                        # what the model detected beats the hint that was sent
-                        detected = [
-                            LanguageCode(lang.code)
-                            for lang in _DETECTED_LANGUAGES.validate_python(
-                                data.get("languages") or []
-                            )
-                            if lang.code
-                        ]
-
-                        if transcript:
+                    if delta:
+                        current_text += delta
+                        if time.time() - last_interim_at > _delta_transcript_interval:
                             self.send(
                                 stt.SpeechEvent(
-                                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                    request_id=item_id,
+                                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                                    request_id=current_item_id,
                                     alternatives=[
                                         stt.SpeechData(
-                                            text=transcript,
-                                            language=detected[0] if detected else self._language,
+                                            text=current_text,
+                                            language=self._language,
                                         )
                                     ],
                                 )
                             )
+                            last_interim_at = time.time()
 
-                        audio_duration: float | None = None
-                        timing = item_audio_timing.pop(item_id, None)
-                        if timing is not None:
-                            start_ms = timing.get("start_ms", 0)
-                            end_ms = timing.get("end_ms", 0)
-                            if end_ms > start_ms:
-                                audio_duration = (end_ms - start_ms) / 1000.0
+                elif msg_type == "conversation.item.input_audio_transcription.completed":
+                    current_text = ""
+                    transcript = data.get("transcript", "")
+                    item_id = data.get("item_id", "")
+                    # what the model detected beats the hint that was sent
+                    detected = [
+                        LanguageCode(lang.code)
+                        for lang in _DETECTED_LANGUAGES.validate_python(data.get("languages") or [])
+                        if lang.code
+                    ]
 
-                        # the usage is either {"type": "tokens", ...} or
-                        # {"type": "duration", "seconds": N}
-                        usage = data.get("usage") or {}
-                        tokens = TokenUsage()
-                        if usage.get("type") == "tokens":
-                            tokens = TokenUsage(
-                                input_tokens=usage.get("input_tokens", 0),
-                                output_tokens=usage.get("output_tokens", 0),
-                                input_audio_tokens=(usage.get("input_token_details") or {}).get(
-                                    "audio_tokens"
-                                ),
-                            )
-                        elif usage.get("type") == "duration":
-                            audio_duration = usage.get("seconds", audio_duration)
+                    if transcript:
                         self.send(
                             stt.SpeechEvent(
-                                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                                alternatives=[],
-                                recognition_usage=stt.RecognitionUsage(
-                                    audio_duration=audio_duration, tokens=tokens
-                                ),
+                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                request_id=item_id,
+                                alternatives=[
+                                    stt.SpeechData(
+                                        text=transcript,
+                                        language=detected[0] if detected else self._language,
+                                    )
+                                ],
                             )
                         )
 
-                        # restart session if needed
-                        if time.time() - connected_at > _max_session_duration:
-                            logger.info("resetting Realtime STT session due to timeout")
-                            self._pool.remove(ws)
-                            self._reconnect_event.set()
-                            return
-                    elif msg_type == "error":
-                        error_body = data.get("error", {})
-                        raise APIError(
-                            message=f"OpenAI Realtime STT error: {error_body.get('message', 'Unknown error')}",
-                            body=error_body,
-                            retryable=False,
-                        )
+                    audio_duration: float | None = None
+                    timing = item_audio_timing.pop(item_id, None)
+                    if timing is not None:
+                        start_ms = timing.get("start_ms", 0)
+                        end_ms = timing.get("end_ms", 0)
+                        if end_ms > start_ms:
+                            audio_duration = (end_ms - start_ms) / 1000.0
 
-                except APIError:
-                    raise
-                except Exception:
-                    logger.exception("failed to process OpenAI message")
+                    # the usage is either {"type": "tokens", ...} or
+                    # {"type": "duration", "seconds": N}
+                    usage = data.get("usage") or {}
+                    tokens = TokenUsage()
+                    if usage.get("type") == "tokens":
+                        tokens = TokenUsage(
+                            input_tokens=usage.get("input_tokens", 0),
+                            output_tokens=usage.get("output_tokens", 0),
+                            input_audio_tokens=(usage.get("input_token_details") or {}).get(
+                                "audio_tokens"
+                            ),
+                        )
+                    elif usage.get("type") == "duration":
+                        audio_duration = usage.get("seconds", audio_duration)
+                    self.send(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.RECOGNITION_USAGE,
+                            alternatives=[],
+                            recognition_usage=stt.RecognitionUsage(
+                                audio_duration=audio_duration, tokens=tokens
+                            ),
+                        )
+                    )
+
+                    # restart session if needed
+                    if time.time() - connected_at > _max_session_duration:
+                        logger.info("resetting Realtime STT session due to timeout")
+                        self._pool.remove(ws)
+                        self._reconnect_event.set()
+                        return
+                elif msg_type == "error":
+                    error_body = data.get("error", {})
+                    raise APIError(
+                        "OpenAI Realtime STT error",
+                        body=error_body,
+                        retryable=False,
+                        detail=error_body.get("message"),
+                    )
 
         while True:
             closing_ws = False  # reset the flag

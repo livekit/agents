@@ -59,7 +59,7 @@ fn journal_error(
 ) -> lk_agents_abi::errors::ProviderError {
     use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError};
     match error {
-        ProviderError::Host { error, api_kind, retryable, status_code, .. } => {
+        ProviderError::Host { error, api_kind, retryable, status_code, said } => {
             ProviderError::Local(ApiError {
                 kind: api_kind.unwrap_or(ApiErrorKind::Api),
                 message: error.to_string(),
@@ -68,6 +68,7 @@ fn journal_error(
                 request_id: None,
                 timeout: None,
                 cause: None,
+                said: said.clone(),
             })
         }
         ProviderError::Local(api) => ProviderError::Local(api.clone()),

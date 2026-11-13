@@ -19,7 +19,6 @@ import dataclasses
 import json
 import os
 import weakref
-from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
@@ -29,7 +28,6 @@ from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
-    APIStatusError,
     LanguageCode,
     http,
     stt,
@@ -62,39 +60,6 @@ class _StreamEvent(BaseModel):
     model_config = ConfigDict(strict=True)
 
     segments: list[_Segment] = Field(default_factory=list[_Segment])
-
-
-class _PeriodicCollector:
-    def __init__(self, duration: float, callback: Callable[[float], None]):
-        self._duration = duration
-        self._callback = callback
-        self._collected_value = 0.0
-        self._tasks = utils.aio.TaskSet()
-        self._task: asyncio.Task[None] | None = None
-        self._lock = asyncio.Lock()
-
-    async def push(self, value: float) -> None:
-        async with self._lock:
-            self._collected_value += value
-            if not self._task:
-                self._task = self._tasks.spawn(self._run())
-
-    async def flush(self) -> None:
-        async with self._lock:
-            if self._task:
-                await utils.aio.cancel_and_wait(self._task)
-                self._task = None
-
-            if self._collected_value > 0:
-                self._callback(self._collected_value)
-                self._collected_value = 0.0
-
-    async def _run(self) -> None:
-        await asyncio.sleep(self._duration)
-        async with self._lock:
-            self._callback(self._collected_value)
-            self._collected_value = 0.0
-            self._task = None
 
 
 @dataclass
@@ -301,10 +266,6 @@ class SpeechStream(stt.RecognizeStream):
         self._speaking = False
         self._final_segments_length: dict[int, int] = {}
         self._last_final_segment_id = -1
-        self._audio_duration_collector = _PeriodicCollector(
-            callback=self._on_audio_duration_report,
-            duration=10.0,
-        )
 
     def update_options(
         self,
@@ -362,7 +323,6 @@ class SpeechStream(stt.RecognizeStream):
                     frames = audio_bstream.push(data.data.tobytes())
 
                 for frame in frames:
-                    await self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
             closing_ws = True
@@ -382,20 +342,13 @@ class SpeechStream(stt.RecognizeStream):
                     if closing_ws:
                         return
 
-                    raise APIStatusError(
-                        "Fireworks connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=}",
-                    )
+                    raise ws.close_error("Fireworks connection closed unexpectedly")
 
                 if msg.type != http.WebSocketMessageType.TEXT:
                     logger.error("unexpected FireworksAI message type %s", msg.type)
                     continue
 
-                try:
-                    self._process_stream_event(json.loads(msg.data))
-                except Exception:
-                    logger.exception("failed to process FireworksAI message")
+                self._process_stream_event(json.loads(msg.data))
 
         ws: http.WebSocket | None = None
 
@@ -417,8 +370,6 @@ class SpeechStream(stt.RecognizeStream):
 
                 if ws is not None:
                     await ws.close()
-
-                await self._audio_duration_collector.flush()
 
     async def _connect_ws(self) -> http.WebSocket:
         live_config = {
@@ -510,6 +461,9 @@ class SpeechStream(stt.RecognizeStream):
                 self._last_final_segment_id = max_segment_id
                 words = latest_segment.words
                 self._final_segments_length[max_segment_id] = len(words)
+                # a final ends the speech: turn_detection="stt" commits on END_OF_SPEECH
+                self._speaking = False
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
             else:
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
@@ -520,10 +474,3 @@ class SpeechStream(stt.RecognizeStream):
                     ],
                 )
                 self.send(interim_event)
-
-    def _on_audio_duration_report(self, duration: float) -> None:
-        usage_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.RECOGNITION_USAGE,
-            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-        )
-        self.send(usage_event)

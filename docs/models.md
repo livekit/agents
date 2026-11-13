@@ -101,8 +101,8 @@ own options: its `options` are the serving member's, and its `update_options` se
 A plugin implements one provider attempt: `_synthesize(chunk, conn_options=)` for a whole text,
 and `_stream(conn_options=)` when the service synthesizes text as it arrives. Its stream's `input`
 yields a `tts.SpeechChunk` per chunk, `text` in the provider's syntax and `said` the words it
-says, and a `Flush` at each segment's end. A provider that buffers text itself declares
-`_core_text_unit()` as `"words"`; one with a request size limit declares `_core_max_text_len()`.
+says, and a `Flush` at each segment's end. A provider that buffers text itself passes
+`text_unit="words"` in its `TTSCapabilities`; one with a request size limit passes `max_text_len=`.
 
 ## Connection options
 
@@ -180,12 +180,34 @@ the core's client with the provider's own key and no LiveKit header, not on the
 `tool_choice`, `parallel_tool_calls` and `response_format` override them, so the
 framework can forbid tools on a turn.
 
+An STT or TTS declares every fact fixed at construction in its `STTCapabilities` or
+`TTSCapabilities`, passed to the base constructor (`super().__init__(capabilities=...)`);
+`update_options` never changes one. An LLM has no such facts: everything it does is chosen
+per request.
+
+Usage follows one rule: a figure the provider reports wins over one the framework
+measures. An LLM's tokens come only from the provider, on `ChatChunk.usage`.
+
 A TTS plugin whose provider reports what it billed passes it on with
 `output_emitter.report_usage(usage, characters_count=...)`: tokens as a
 `TokenUsage`, billed characters as a count, each report one provider request's
 share of the open segment. It rides on the segment's final `SynthesizedAudio`
-(`usage`, `characters_count`) into `TTSMetrics` and the usage totals; see
+(`usage`, `characters_count`) into `TTSMetrics` and the usage totals, the billed
+characters replacing the ones the framework counts; see
 [usage](usage.md#text-to-speech). A provider that reports nothing needs no call.
+
+A streaming STT's usage is measured by the framework, whether the stream was
+opened by a session or directly: it reports the audio each attempt takes from
+`input` as `RECOGNITION_USAGE` every 5 seconds of audio and when the attempt
+ends, failed or not. Since it cannot take back what it reported, a
+plugin whose provider reports what it billed says so up front: it passes
+`reports_usage=True` in its `STTCapabilities` and emits its own `RECOGNITION_USAGE`.
+
+A realtime session declares the audio its `push_audio` takes,
+`super().__init__(model, input_sample_rate=24000, input_num_channels=1)`, and
+the framework converts what it pushes. Elsewhere `utils.media.AudioConverter(rate,
+channels)` does the same: `push(frame)` and `flush()` return frames in that format.
+A TTS plugin passes G.711 bytes as `audio/pcmu` or `audio/pcma`.
 
 `ChoiceDelta.extra` and `FunctionToolCall.extra` carry provider data (such as
 Google thought signatures) as a JSON object: a value that is not JSON fails the
@@ -194,7 +216,9 @@ stream when the framework reads the chunk.
 A plugin keeps the cause of the errors it raises, redacted:
 `raise APIConnectionError(...) from redacted_cause(error)` chains the original
 error's type and traceback without its message, which can carry credentials or
-provider data.
+provider data. The provider's own message goes on the error's `detail=`: the
+framework logs it once under `lk.pii.provider_detail` and never shows it in the
+error's text, so a plugin never logs it before raising.
 
 ### HTTP and WebSockets
 
@@ -211,10 +235,11 @@ names, and failures are framework errors, never the transport's exceptions.
 | `open()` | `async with http.open() as session:` binds one outside a job (tests, scripts); inside a job it yields the job's |
 | `HttpSession(proxy=None)` | A session of its own; `await session.aclose()` closes it. A plugin's `http_session=` argument takes one. The HTTP library underneath is internal: nothing accepts or returns its objects. `session.with_request_id(header)` shares its connections and puts the response's `header` on `APIStatusError.request_id` |
 | `session.request(method, url, *, conn_options=, headers=, params=, json=, data=)`, `get`, `post`, `put`, `patch`, `delete` | `async with session.post(...) as response:`; `data` is `bytes`, `str`, a `FormData` or an async iterable of `bytes` |
-| `HttpResponse` | `status`, `ok`, `reason`, `headers`, `content_type`; `await read()`, `text()`, `json()` (a `JsonValue`); `async for chunk in response.iter_bytes()`, `async for line in response.iter_lines()`; `await raise_for_status()` raises `APIStatusError` carrying the status and body |
+| `HttpResponse` | `status`, `ok`, `reason`, `headers`, `content_type`; `await read()`, `text()`, `json()` (a `JsonValue`); `async for chunk in response.iter_bytes()`, `async for line in response.iter_lines()`; `await raise_for_status()` raises `APIStatusError` carrying the status, body and `retry_after` (the `Retry-After` seconds) |
 | `FormData` | `add_field(name, value, *, filename=, content_type=)`, a multipart body |
 | `await session.ws_connect(url, *, conn_options=, headers=, params=, heartbeat=, protocols=)` | A `WebSocket`; a rejected handshake raises `APIStatusError` |
-| `WebSocket` | `headers` (the upgrade response's), `closed`, `close_code`; `await send_str()`, `send_bytes()`, `send_json()`, `close(code=1000)`; `await receive(timeout=None)` returns a `WebSocketMessage`; `async for message in ws` yields until the socket closes |
+| `WebSocket` | `headers` (the upgrade response's), `closed`, `close_code`; `await send_str()`, `send_bytes()`, `send_json()`, `close(code=1000)`; `await receive(timeout=None)` returns a `WebSocketMessage`; `async for message in ws` yields until the socket closes; `raise ws.close_error(message)` for a socket the provider closed: final when its code refuses the request or the client (policy, auth, invalid data), else retryable, the close reason as its `detail` |
+| `await retry_request(request, *, conn_options=)` | Runs `request()` (one request and the parsing of its answer, such as starting an avatar session) under `conn_options`' retries: 5xx, 429 and connection failures are retried after at least `Retry-After`; a request whose answer timed out is never sent again |
 | `WebSocketMessage` | `type` (`WebSocketMessageType.TEXT`, `BINARY` or `CLOSE`), `data` (`str` text, `bytes` binary, the close reason), `json()` |
 
 A transport failure raises `APIConnectionError`; a transport error on a socket

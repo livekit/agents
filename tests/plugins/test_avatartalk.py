@@ -8,9 +8,8 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import http
+from livekit.agents import APIStatusError, http
 from livekit.plugins.avatartalk import AvatarSession
-from livekit.plugins.avatartalk.api import AvatarTalkException
 
 if TYPE_CHECKING:
     from tests.plugins.conftest import AvatarHost
@@ -27,8 +26,10 @@ async def test_start_propagates_provider_failure(avatar_host: AvatarHost) -> Non
     async with TestServer(app) as server, http.open():
         avatar = AvatarSession(api_secret="key", api_url=str(server.make_url("")).rstrip("/"))
 
-        with pytest.raises(AvatarTalkException, match="rejected"):
+        with pytest.raises(APIStatusError) as raised:
             await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
+
+    assert raised.value.status_code == 400
 
     avatar_host.audio_tail.assert_not_called()
     avatar_host.framework_start.assert_not_awaited()

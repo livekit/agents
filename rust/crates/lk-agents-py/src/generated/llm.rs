@@ -1418,6 +1418,18 @@ impl LlmChoiceParser {
         })?;
         out.map(|value| crate::generated::records::llm::chat_chunk_to_py(py, value)).transpose()
     }
+
+    /// The stream ended: the chunk closing a call no `finish_reason` closed.
+    fn finish<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::finish(
+            &mut self.0,
+        );
+        out.map(|value| crate::generated::records::llm::chat_chunk_to_py(py, value)).transpose()
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/inference.rs.
@@ -3727,7 +3739,8 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
     fn close_plugin(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -3745,13 +3758,26 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             }),
         );
         ::std::boxed::Box::pin(async move {
-            if let Err(e) = started.await {
-                log::warn!("DuplexSession.plugin.aclose failed: {e}");
-            }
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
         })
     }
 
-    fn aclose(&self, cx: &::lk_agents_abi::telemetry::Cx) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+    fn aclose(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -3769,9 +3795,18 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             }),
         );
         ::std::boxed::Box::pin(async move {
-            if let Err(e) = started.await {
-                log::warn!("DuplexSession._core_aclose failed: {e}");
-            }
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
         })
     }
 }
@@ -3962,16 +3997,17 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
             return;
         };
         let error_arg = error;
-        let error_arg =
-            match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+        let error_arg = match ::pyo3::Python::attach(
+            |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
                 Ok((crate::py_errors::ExceptionValue::to_exception(error_arg, py)?).unbind())
-            }) {
-                Ok(value) => value,
-                Err(error) => {
-                    log::warn!("ChainObserver._core_failed failed: {error}");
-                    return;
-                }
-            };
+            },
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!(target: ::lk_agents_abi::LOG_TARGET, "ChainObserver._core_failed failed: {error}");
+                return;
+            }
+        };
         let recoverable_arg = recoverable;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -4804,7 +4840,8 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
         request: ::lk_agents_abi::HostRef,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
         let host = ::std::sync::Arc::clone(&self.host);
         let request_arg = request;
         let started = ::lk_agents_runtime::host::call(
@@ -4824,9 +4861,18 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             }),
         );
         ::std::boxed::Box::pin(async move {
-            if let Err(e) = started.await {
-                log::warn!("HostRealtimeSession._core_cancel failed: {e}");
-            }
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
         })
     }
 
@@ -4835,7 +4881,8 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         cx: &::lk_agents_abi::telemetry::Cx,
         generation: ::lk_agents_abi::HostRef,
         req_id: ::std::option::Option<::std::string::String>,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
         let host = ::std::sync::Arc::clone(&self.host);
         let generation_arg = generation;
         let req_id_arg = req_id;
@@ -4858,9 +4905,18 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             }),
         );
         ::std::boxed::Box::pin(async move {
-            if let Err(e) = started.await {
-                log::warn!("HostRealtimeSession._core_drain failed: {e}");
-            }
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
         })
     }
 
@@ -4910,7 +4966,11 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         })
     }
 
-    fn aclose(&self, cx: &::lk_agents_abi::telemetry::Cx) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+    fn aclose(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -4928,9 +4988,18 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             }),
         );
         ::std::boxed::Box::pin(async move {
-            if let Err(e) = started.await {
-                log::warn!("HostRealtimeSession._core_aclose failed: {e}");
-            }
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
         })
     }
 }
@@ -5145,16 +5214,17 @@ impl ::lk_agents_abi::Llm for LlmProxy {
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
         let host = ::std::sync::Arc::clone(&self.host);
         let error_arg = error;
-        let error_arg =
-            match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+        let error_arg = match ::pyo3::Python::attach(
+            |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
                 Ok((crate::py_errors::ExceptionValue::to_exception(error_arg, py)?).unbind())
-            }) {
-                Ok(value) => value,
-                Err(error) => {
-                    log::warn!("Llm._core_failed failed: {error}");
-                    return;
-                }
-            };
+            },
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!(target: ::lk_agents_abi::LOG_TARGET, "Llm._core_failed failed: {error}");
+                return;
+            }
+        };
         let recoverable_arg = recoverable;
         ::lk_agents_runtime::host::notify(
             &self.notifier,

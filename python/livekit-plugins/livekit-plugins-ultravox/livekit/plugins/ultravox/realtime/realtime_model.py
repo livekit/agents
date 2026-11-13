@@ -12,14 +12,14 @@ import json
 import os
 import time
 import weakref
-from collections.abc import AsyncIterable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from pydantic import JsonValue
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, http, llm, utils
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, http, llm, utils
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
 from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
@@ -76,6 +76,7 @@ class _UltravoxOptions:
     enable_greeting_prompt: NotGivenOr[bool]
     first_speaker: NotGivenOr[str]
     output_medium: Literal["text", "voice"]
+    conn_options: APIConnectOptions
 
 
 @dataclass
@@ -133,6 +134,7 @@ class RealtimeModel(llm.RealtimeModel):
         enable_greeting_prompt: NotGivenOr[bool] = NOT_GIVEN,
         first_speaker: NotGivenOr[str] = "FIRST_SPEAKER_USER",
         http_session: http.HttpSession | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """Initialize the Ultravox RealtimeModel.
 
@@ -170,6 +172,8 @@ class RealtimeModel(llm.RealtimeModel):
             Who speaks first ('FIRST_SPEAKER_AGENT' or 'FIRST_SPEAKER_UNSPECIFIED'). If not set, model decides.
         http_session : http.HttpSession, optional
             HTTP session to use for requests.
+        conn_options : APIConnectOptions
+            Connection timeouts, and the retries after a failed connection (each creates a call).
         """
         output_medium = output_medium if is_given(output_medium) else "voice"
 
@@ -221,6 +225,7 @@ class RealtimeModel(llm.RealtimeModel):
             enable_greeting_prompt=enable_greeting_prompt,
             first_speaker=first_speaker,
             output_medium=output_medium,
+            conn_options=conn_options,
         )
 
         self._http_session_owned = False
@@ -299,14 +304,16 @@ class RealtimeSession(
         realtime_model : RealtimeModel
             The RealtimeModel instance providing configuration.
         """
-        super().__init__(realtime_model)
+        super().__init__(
+            realtime_model,
+            input_sample_rate=options.input_sample_rate,
+            input_num_channels=NUM_CHANNELS,
+        )
         self._realtime_model: RealtimeModel = realtime_model
         self._get_http_session = http_session
         self._opts = options
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[UltravoxEvent | dict[str, JsonValue] | bytes]()
-        self._input_resampler: rtc.AudioResampler | None = None
-        self._input_resampler_rate: int | None = None
 
         self._tasks = utils.aio.TaskSet()
         self._main_atask = self._tasks.spawn(self._main_task(), name="UltravoxSession._main_task")
@@ -493,9 +500,8 @@ class RealtimeSession(
         if self._closed:
             return
 
-        for resampled_frame in self._resample_audio(frame):
-            for audio_frame in self._bstream.push(resampled_frame.data):
-                self._send_audio_bytes(audio_frame.data.tobytes())
+        for audio_frame in self._bstream.push(frame.data):
+            self._send_audio_bytes(audio_frame.data.tobytes())
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         """Push video frames (not supported by Ultravox)."""
@@ -699,6 +705,8 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         """Main task with restart loop for managing WebSocket sessions."""
+        conn_options = self._opts.conn_options
+        num_retries = 0
         while not self._msg_ch.closed:
             # Clear restart signal for new session
             self._session_should_close.clear()
@@ -762,7 +770,7 @@ class RealtimeSession(
                     create_call_url,
                     json=payload,
                     headers=headers,
-                    conn_options=DEFAULT_API_CONNECT_OPTIONS,
+                    conn_options=conn_options,
                 ) as resp:
                     await resp.raise_for_status()
                     response_json = cast(dict[str, Any], await resp.json())
@@ -775,10 +783,9 @@ class RealtimeSession(
                     self._send_client_event(SetOutputMediumEvent(medium="text"))
 
                 t0 = time.perf_counter()
-                ws_conn = await http_session.ws_connect(
-                    join_url, conn_options=DEFAULT_API_CONNECT_OPTIONS
-                )
+                ws_conn = await http_session.ws_connect(join_url, conn_options=conn_options)
                 self._report_connection_acquired(time.perf_counter() - t0)
+                num_retries = 0
                 self._closing = False
 
                 async with utils.aio.TaskSet() as tasks:
@@ -800,35 +807,30 @@ class RealtimeSession(
                     break
 
             except Exception as e:
-                logger.error(f"Ultravox WebSocket error: {e}", exc_info=True)
-
-                # Determine if error is recoverable based on type
-                is_recoverable = isinstance(e, (APIConnectionError, TimeoutError))
-
-                # Convert to appropriate API error type
-                if isinstance(e, APIError):
-                    error = e
-                else:
-                    error = APIConnectionError(f"Connection failed: {str(e)}")
-
+                error = (
+                    e if isinstance(e, APIError) else APIConnectionError(f"Connection failed: {e}")
+                )
+                # every reconnect creates a new call, so retries are bounded by conn_options
+                recoverable = (
+                    error.retryable
+                    and num_retries < conn_options.max_retry
+                    and not self._msg_ch.closed
+                )
                 self.emit(
                     "error",
                     llm.RealtimeModelError(
                         timestamp=time.time(),
                         label=self._realtime_model.label,
                         error=error,
-                        recoverable=is_recoverable,
+                        recoverable=recoverable,
                     ),
                 )
-
-                # Break loop on non-recoverable errors or if channel is closed
-                if not is_recoverable or self._msg_ch.closed:
+                if not recoverable:
                     break
 
-                # Wait before retrying on recoverable errors
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(conn_options.interval_for_retry(num_retries))
+                num_retries += 1
 
-    @utils.log_exceptions(logger=logger)
     async def _send_task(self, ws_conn: http.WebSocket) -> None:
         """Task for sending messages to Ultravox WebSocket."""
         async for msg in self._msg_ch:
@@ -836,35 +838,24 @@ class RealtimeSession(
             if self._session_should_close.is_set():
                 break
 
-            try:
-                if isinstance(msg, bytes):
-                    # Handle binary audio data
-                    self.emit(
-                        "ultravox_client_event_queued", {"type": "audio_bytes", "len": len(msg)}
-                    )
-                    await ws_conn.send_bytes(msg)
-                    # You will want to comment these logs when in debugging mode as they are noisy
-                    # if lk_ultravox_debug:
-                    #     logger.info(f">>> [audio bytes: {len(msg)} bytes]")
-                elif isinstance(msg, dict):
-                    msg_dict = msg
-                    self.emit("ultravox_client_event_queued", msg_dict)
-                    await ws_conn.send_str(json.dumps(msg_dict))
-                    if lk_ultravox_debug:
-                        logger.debug(">>>", extra={"lk.pii.event": msg_dict})
-                else:
-                    msg_dict = msg.model_dump(by_alias=True, exclude_none=True, mode="json")
-                    self.emit("ultravox_client_event_queued", msg_dict)
-                    await ws_conn.send_str(json.dumps(msg_dict))
-                    if lk_ultravox_debug:
-                        logger.debug(">>>", extra={"lk.pii.event": msg_dict})
-            except Exception as e:
-                logger.error(f"Error sending message: {e}", exc_info=True)
-                break
+            if isinstance(msg, bytes):
+                self.emit("ultravox_client_event_queued", {"type": "audio_bytes", "len": len(msg)})
+                await ws_conn.send_bytes(msg)
+            elif isinstance(msg, dict):
+                msg_dict = msg
+                self.emit("ultravox_client_event_queued", msg_dict)
+                await ws_conn.send_str(json.dumps(msg_dict))
+                if lk_ultravox_debug:
+                    logger.debug(">>>", extra={"lk.pii.event": msg_dict})
+            else:
+                msg_dict = msg.model_dump(by_alias=True, exclude_none=True, mode="json")
+                self.emit("ultravox_client_event_queued", msg_dict)
+                await ws_conn.send_str(json.dumps(msg_dict))
+                if lk_ultravox_debug:
+                    logger.debug(">>>", extra={"lk.pii.event": msg_dict})
 
         self._closing = True
 
-    @utils.log_exceptions(logger=logger)
     async def _recv_task(self, ws_conn: http.WebSocket) -> None:
         """Task for receiving messages from Ultravox WebSocket."""
         while True:
@@ -895,7 +886,7 @@ class RealtimeSession(
                 if self._closing:
                     return
                 # Unexpected close
-                raise APIConnectionError(message="Ultravox S2S connection closed unexpectedly")
+                raise ws_conn.close_error("Ultravox S2S connection closed unexpectedly")
 
     def _start_new_generation(self, *, created_ts: float | None = None) -> None:
         """Start a new response generation."""
@@ -1237,25 +1228,3 @@ class RealtimeSession(
 
     def clear_audio(self) -> None:
         logger.warning("clear audio is not supported by Ultravox.")
-
-    def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
-        """Resample audio frame to the required sample rate."""
-        if self._input_resampler:
-            if frame.sample_rate != self._input_resampler_rate:
-                # Input audio changed to a different sample rate
-                self._input_resampler = None
-
-        if self._input_resampler is None and (
-            frame.sample_rate != self._opts.input_sample_rate or frame.num_channels != NUM_CHANNELS
-        ):
-            self._input_resampler_rate = frame.sample_rate
-            self._input_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=self._opts.input_sample_rate,
-                num_channels=NUM_CHANNELS,
-            )
-
-        if self._input_resampler:
-            yield from self._input_resampler.push(frame)
-        else:
-            yield frame

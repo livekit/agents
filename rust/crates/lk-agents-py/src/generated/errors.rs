@@ -64,6 +64,33 @@ pub fn retryable_for_status(
     ::pyo3::PyResult::Ok(out)
 }
 
+// Declared in rust/crates/lk-agents-abi/src/errors/api.rs.
+type WebSocketFunctionsImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::WebSocketFunctions;
+
+fn _extract_web_socket_functions_websocket_close_kind_code(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<WebSocketFunctionsWebsocketCloseKindCodeInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<u16>(obj.as_any(), "code")).map(Some)
+    }
+}
+type WebSocketFunctionsWebsocketCloseKindCodeInput = ::std::option::Option<u16>;
+
+/// What a close code says about the failure: `http.WebSocket.close_error`'s retryability.
+#[pyfunction]
+#[pyo3(signature = (code))]
+pub fn websocket_close_kind<'py>(
+    py: Python<'py>,
+    #[pyo3(from_py_with = _extract_web_socket_functions_websocket_close_kind_code)]
+    code: WebSocketFunctionsWebsocketCloseKindCodeInput,
+) -> PyResult<Bound<'py, PyAny>> {
+    let out = py.detach(|| <WebSocketFunctionsImpl as ::lk_agents_abi::errors::WebSocketFunctions>::websocket_close_kind(code));
+    crate::generated::records::types::close_kind_to_py(py, out)
+}
+
 impl crate::py_errors::HostException for ::lk_agents_abi::errors::Invalid {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))

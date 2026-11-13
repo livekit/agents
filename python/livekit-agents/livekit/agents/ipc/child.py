@@ -176,7 +176,6 @@ class _JobProc:
 
         return self._run
 
-    @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
         self._job_ctx._on_setup()
 

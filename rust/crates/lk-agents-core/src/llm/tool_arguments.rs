@@ -75,7 +75,11 @@ pub fn parse_logged(raw: &str) -> Result<Map<String, Value>, ToolArgumentError> 
     Ok(parsed.arguments)
 }
 
+/// A zero-argument call's arguments may stream as nothing at all (Anthropic): that is `{}`.
 pub fn parse(raw: &str) -> Result<ParsedArguments, ToolArgumentError> {
+    if raw.trim().is_empty() {
+        return Ok(ParsedArguments { arguments: Map::new(), repair: None });
+    }
     let (mut value, mut repair) = match serde_json::from_str::<Value>(raw) {
         Ok(value) => (value, None),
         Err(error) => {
@@ -169,8 +173,10 @@ mod tests {
     fn invalid_and_deep_input_fails_boundedly() {
         assert!(parse(&format!("{{\"x\":{}", "[".repeat(1000))).is_err());
         assert!(parse("{}{}").unwrap().arguments.is_empty());
-        for raw in ["", "garbage", "[1]", "42", "\"not json\""] {
+        for raw in ["garbage", "[1]", "42", "\"not json\""] {
             assert!(parse(raw).is_err(), "{raw}");
         }
+        // Catches: a zero-argument call streamed with no arguments refused as malformed.
+        assert!(parse("").unwrap().arguments.is_empty());
     }
 }

@@ -25,6 +25,7 @@ impl super::Implementations for Selected {
     type Cli = ::lk_agents_runtime::cli::Commands;
     type CliShutdown = ::lk_agents_runtime::cli::shutdown::Shutdown;
     type ApiErrorFunctions = ::lk_agents_runtime::net::http::HttpErrors;
+    type WebSocketFunctions = ::lk_agents_runtime::inference::retry::WebSocketCloses;
     type JudgeRunner = ::lk_agents_runtime::inference::evals::Judges;
     type Evaluations = ::lk_agents_runtime::inference::evals::Rules;
     type InferenceCredentials = ::lk_agents_runtime::inference::credentials::Credentials;
@@ -119,6 +120,7 @@ impl super::Implementations for Selected {
     type ConnectionPoolState = ::lk_agents_runtime::net::connection_pool::ConnectionPool;
     type ExpFilter = ::lk_agents_runtime::media::ExpFilter;
     type MovingAverage = ::lk_agents_runtime::media::MovingAverage;
+    type AudioConverter = ::lk_agents_runtime::media::AudioConverter;
     type InferenceVad = ::lk_agents_runtime::inference::vad::LocalVad;
     type AmdFunctions = ::lk_agents_runtime::voice::AmdRules;
     type HostAudioReceiver = ::lk_agents_runtime::avatar::host_receiver::HostAudioReceiver;

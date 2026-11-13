@@ -54,7 +54,8 @@ pub(super) struct Driver {
     cx: telemetry::Cx,
     spawner: Arc<dyn Spawner>,
     events_tx: mpsc::Sender<(String, Report)>,
-    updates: mpsc::Sender<TextSessionUpdate>,
+    /// Dropping the receiver cancels the session, so nobody needs what follows.
+    updates: lk_agents_net::outbox::Outbox<TextSessionUpdate>,
     work: BTreeMap<String, Execution>,
     /// Settled or parked invocations awaiting release, with their accepted output.
     pending: BTreeMap<String, Option<ValidationId>>,
@@ -190,12 +191,11 @@ impl Driver {
                 if let Some(work) = self.work.get_mut(&invocation_id)
                     && let Some(RunUpdate::IncompleteCleanup(pending)) = work.execute(effect).await
                 {
-                    let _ = self.updates.send(TextSessionUpdate::IncompleteCleanup(pending)).await;
+                    self.updates.send(TextSessionUpdate::IncompleteCleanup(pending)).await;
                 }
             }
             TextSessionEffect::Emit { sequence, frame_id, agent_name, invocation_id, event } => {
-                let _ = self
-                    .updates
+                self.updates
                     .send(TextSessionUpdate::Stream {
                         sequence,
                         frame_id,
@@ -211,12 +211,11 @@ impl Driver {
                     _ => None,
                 };
                 self.pending.insert(invocation_id.clone(), output);
-                let _ =
-                    self.updates.send(TextSessionUpdate::InvocationSettled(invocation_id)).await;
+                self.updates.send(TextSessionUpdate::InvocationSettled(invocation_id)).await;
             }
             TextSessionEffect::InvocationParked { invocation_id, .. } => {
                 self.pending.insert(invocation_id.clone(), None);
-                let _ = self.updates.send(TextSessionUpdate::Parked(invocation_id)).await;
+                self.updates.send(TextSessionUpdate::Parked(invocation_id)).await;
             }
             TextSessionEffect::RoutingRefused { .. } => {} // The core records the typed refusal in the original call.
             TextSessionEffect::Finished { invocation_id, result, input_requirements } => {
@@ -281,7 +280,7 @@ impl Driver {
                 TextSessionUpdate::Failed { error, input_requirements, provider_error }
             }
         };
-        let _ = self.updates.send(update).await;
+        self.updates.send(update).await;
     }
 
     /// A model failure's original provider error, kept by the invocation that failed.

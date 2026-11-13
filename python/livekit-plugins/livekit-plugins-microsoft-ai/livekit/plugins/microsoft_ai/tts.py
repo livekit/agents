@@ -173,7 +173,7 @@ class TTS(tts.TTS):
                 raise ValueError("Set MICROSOFT_AI_TTS_SAMPLE_RATE or pass sample_rate") from None
         _validate_limits(sample_rate, max_text_length, max_audio_bytes)
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=False, max_text_len=max_text_length),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -229,9 +229,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Microsoft AI"
-
-    def _core_max_text_len(self) -> int | None:
-        return self._max_text_length
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

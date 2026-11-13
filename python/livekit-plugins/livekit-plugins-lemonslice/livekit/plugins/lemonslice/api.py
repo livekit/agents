@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import io
 import json
 import os
@@ -14,9 +13,8 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     NotGivenOr,
     http,
     utils,
@@ -246,72 +244,40 @@ class LemonSliceAPI:
             Response data as a dictionary
 
         Raises:
-            APIConnectionError: If the request fails after all retries
+            APIError: If the request fails after all retries
         """
+        headers = {"X-API-Key": self._api_key}
+        form: http.FormData | None = None
+        if image_bytes is not None:
+            form = http.FormData()
+            form.add_field("payload", json.dumps(payload), content_type="application/json")
+            form.add_field("image", image_bytes, filename="image.png", content_type="image/png")
+        else:
+            headers["Content-Type"] = "application/json"
+
         session = self._session or http.HttpSession()
+
+        async def request() -> _ResponseT:
+            async with session.post(
+                url or self._api_url,
+                headers=headers,
+                conn_options=self._conn_options,
+                data=form,
+                json=payload if form is None else None,
+            ) as response:
+                await response.raise_for_status()
+                try:
+                    return response_type.model_validate(await response.json())
+                except (ValidationError, JSONDecodeError) as exc:
+                    raise APIError(
+                        "LemonSlice returned an invalid response", retryable=False
+                    ) from exc
+
         try:
-            async with self._conn_options.total_deadline():
-                for i in range(self._conn_options.max_retry + 1):
-                    try:
-                        headers = {"X-API-Key": self._api_key}
-                        form: http.FormData | None = None
-                        if image_bytes is not None:
-                            form = http.FormData()
-                            form.add_field(
-                                "payload", json.dumps(payload), content_type="application/json"
-                            )
-                            # Upload the image using multipart
-                            form.add_field(
-                                "image",
-                                image_bytes,
-                                filename="image.png",
-                                content_type="image/png",
-                            )
-                        else:
-                            headers["Content-Type"] = "application/json"
-
-                        async with session.post(
-                            url or self._api_url,
-                            headers=headers,
-                            conn_options=self._conn_options,
-                            data=form,
-                            json=payload if form is None else None,
-                        ) as response:
-                            if not response.ok:
-                                text = await response.text()
-                                raise APIStatusError(
-                                    "LemonSlice Server returned an error",
-                                    status_code=response.status,
-                                    body=text,
-                                )
-                            return response_type.model_validate(await response.json())
-                    except (ValidationError, JSONDecodeError) as exc:
-                        raise APIConnectionError(
-                            "Lemonslice returned an invalid response", retryable=False
-                        ) from exc
-                    except Exception as e:
-                        if isinstance(e, APIStatusError):
-                            logger.error(
-                                "LemonSlice API returned an error",
-                                extra={
-                                    "status_code": e.status_code,
-                                    "body": e.body,
-                                },
-                            )
-                            if not e.retryable:
-                                raise e
-                        elif isinstance(e, APIConnectionError):
-                            logger.warning("failed to call LemonSlice api", extra={"error": str(e)})
-                        else:
-                            logger.exception("failed to call lemonslice api")
-
-                        if i < self._conn_options.max_retry:
-                            await asyncio.sleep(self._conn_options.interval_for_retry(i))
+            return await http.retry_request(request, conn_options=self._conn_options)
         finally:
             if not self._session:  # if we created the session, we close it
                 await session.aclose()
-
-        raise APIConnectionError("Failed to call LemonSlice API after all retries")
 
 
 def _encode_image(image: Image.Image) -> bytes:

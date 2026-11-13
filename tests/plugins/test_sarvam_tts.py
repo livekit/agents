@@ -14,7 +14,6 @@ from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectOptions, APIStatusError, http
 from livekit.plugins.sarvam import tts as sarvam_tts
-from livekit.plugins.sarvam.log import logger as sarvam_logger
 
 NO_RETRY = APIConnectOptions(max_retry=0)
 PCM = b"\x34\x12" * 1100
@@ -153,7 +152,7 @@ async def test_reads_the_api_key_from_the_environment(monkeypatch: pytest.Monkey
 async def test_telephony_codec_is_configured_first_and_decoded_to_pcm(
     codec: str, encoded: int, sample: int
 ) -> None:
-    """https://github.com/livekit/agents/pull/5561"""
+    """The G.711 bytes Sarvam sends decode to PCM. https://github.com/livekit/agents/pull/5561"""
     configs: list[dict[str, object]] = []
     peer = _speaking_peer(configs, audio=bytes([encoded]) * 800)
     async with _ws_url(peer) as url:
@@ -220,7 +219,7 @@ async def test_interrupting_a_synthesis_closes_quietly_and_the_next_one_plays() 
 async def test_an_error_frame_status_decides_retryability_and_hides_provider_text(
     frame: dict[str, object], status_code: int, retryable: bool
 ) -> None:
-    """The raised error carries no provider text, which the framework logs on retry.
+    """The provider text goes to the error's detail, never its message.
 
     https://github.com/livekit/agents/pull/7335
     """
@@ -233,26 +232,7 @@ async def test_an_error_frame_status_decides_retryability_and_hides_provider_tex
     assert caught.value.status_code == status_code
     assert caught.value.retryable is retryable
     assert str(frame["message"]) not in str(caught.value)
-
-
-async def test_an_error_frame_logs_provider_text_only_under_redactable_keys(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Provider text reaches the log only under lk.pii.* keys, which collectors redact."""
-    speech = "my card number is 4111 1111 1111 1111"
-    frame = {"code": 422, "message": f"cannot synthesize: {speech}"}
-    async with _ws_url(_error_peer(frame)) as url:
-        model = _tts(url)
-        with caplog.at_level("ERROR", logger=sarvam_logger.name):
-            with pytest.raises(APIStatusError):
-                await _speak(model, "Hello there.")
-        await model.aclose()
-
-    record = next(r for r in caplog.records if r.name == sarvam_logger.name)
-    assert speech not in record.getMessage()
-    assert speech in record.__dict__["lk.pii.error_message"]
-    assert "error_message" not in record.__dict__
-    assert record.__dict__["lk.pii.raw_message"] == {"type": "error", "data": frame}
+    assert caught.value.detail == frame["message"]
 
 
 @pytest.mark.xfail(

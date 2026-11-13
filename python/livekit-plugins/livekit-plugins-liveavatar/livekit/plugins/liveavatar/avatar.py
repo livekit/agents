@@ -6,7 +6,6 @@ import contextlib
 import os
 import uuid
 from collections import deque
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal, Required
 
@@ -18,8 +17,8 @@ from livekit import api
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    APIConnectionError,
     APIConnectOptions,
+    APITimeoutError,
     NotGivenOr,
     VoiceSession,
     get_job_context,
@@ -28,6 +27,7 @@ from livekit.agents import (
 )
 from livekit.agents.job import _server_credentials
 from livekit.agents.utils import is_given
+from livekit.agents.utils.media import AudioConverter
 from livekit.agents.voice.avatar import (
     AvatarSession as BaseAvatarSession,
     QueueAudioOutput,
@@ -111,8 +111,6 @@ class AvatarSession(BaseAvatarSession):
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._main_atask: asyncio.Task[None] | None = None
         self._tasks = utils.aio.TaskSet()
-        self._audio_resampler: rtc.AudioResampler | None = None
-        self._resampler_input_rate: int | None = None
         self._msg_ch = utils.aio.Chan[dict[str, JsonValue]]()
         self._audio_playing = False
         self._utterances: deque[_Utterance] = deque()
@@ -232,26 +230,6 @@ class AvatarSession(BaseAvatarSession):
         finally:
             await super().aclose()
 
-    def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
-        if self._audio_resampler:
-            if frame.sample_rate != self._resampler_input_rate:
-                self._audio_resampler = None
-
-        if self._audio_resampler is None and (
-            frame.sample_rate != SAMPLE_RATE or frame.num_channels != 1
-        ):
-            self._audio_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=SAMPLE_RATE,
-                num_channels=1,
-            )
-            self._resampler_input_rate = frame.sample_rate
-
-        if self._audio_resampler:
-            yield from self._audio_resampler.push(frame)
-        else:
-            yield frame
-
     def send_event(self, msg: dict[str, JsonValue]) -> None:
         with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(msg)
@@ -264,7 +242,12 @@ class AvatarSession(BaseAvatarSession):
         ping_interval = utils.aio.interval(KEEP_ALIVE_INTERVAL)
 
         async def _forward_audio() -> None:
-            await self._session_connected.wait()
+            try:
+                async with asyncio.timeout(self._conn_options.connect_timeout):
+                    await self._session_connected.wait()
+            except TimeoutError:
+                raise APITimeoutError("LiveAvatar session did not connect") from None
+            converter = AudioConverter(SAMPLE_RATE, 1)
             chunk_buf: list[bytes] = []
             chunk_duration = 0.0
             is_first_chunk = True
@@ -292,8 +275,22 @@ class AvatarSession(BaseAvatarSession):
                 chunk_duration = 0.0
                 is_first_chunk = False
 
+            def _push_frames(frames: list[rtc.AudioFrame]) -> None:
+                nonlocal chunk_duration
+                for frame in frames:
+                    if not frame.data:
+                        continue
+                    chunk_buf.append(frame.data.tobytes())
+                    chunk_duration += frame.duration
+                    threshold = (
+                        first_chunk_threshold if is_first_chunk else subsequent_chunk_threshold
+                    )
+                    if chunk_duration >= threshold:
+                        _flush_chunk()
+
             def _discard_chunk() -> None:
-                nonlocal chunk_buf, chunk_duration, is_first_chunk
+                nonlocal converter, chunk_buf, chunk_duration, is_first_chunk
+                converter = AudioConverter(SAMPLE_RATE, 1)
                 chunk_buf = []
                 chunk_duration = 0.0
                 is_first_chunk = True
@@ -308,17 +305,9 @@ class AvatarSession(BaseAvatarSession):
                         self._current_utterance = _Utterance()
                         self._utterances.append(self._current_utterance)
                     self._audio_playing = True
-                    for resampled_frame in self._resample_audio(audio_frame):
-                        if not resampled_frame.data:
-                            continue
-                        chunk_buf.append(resampled_frame.data.tobytes())
-                        chunk_duration += resampled_frame.duration
-                        threshold = (
-                            first_chunk_threshold if is_first_chunk else subsequent_chunk_threshold
-                        )
-                        if chunk_duration >= threshold:
-                            _flush_chunk()
+                    _push_frames(converter.push(audio_frame))
                 else:
+                    _push_frames(converter.flush())
                     _flush_chunk()
                     if self._current_utterance is None:
                         continue
@@ -349,20 +338,15 @@ class AvatarSession(BaseAvatarSession):
             except asyncio.CancelledError:
                 return
 
-        @utils.log_exceptions(logger=logger)
         async def _send_task() -> None:
             nonlocal closing
 
             async for msg in self._msg_ch:
-                try:
-                    await ws_conn.send_json(data=msg)
-                    ping_interval.reset()
-                except Exception:
-                    break
+                await ws_conn.send_json(data=msg)
+                ping_interval.reset()
             closing = True
             await ws_conn.close()
 
-        @utils.log_exceptions(logger=logger)
         async def _recv_task() -> None:
             while True:
                 msg = await ws_conn.receive()
@@ -374,10 +358,7 @@ class AvatarSession(BaseAvatarSession):
                             "The LiveAvatar Sandbox connection surpassed the 1 minute limit"
                         )
                         return
-                    else:
-                        raise APIConnectionError(
-                            message="LiveAvatar connection closed unexpectedly."
-                        )
+                    raise ws_conn.close_error("LiveAvatar connection closed unexpectedly")
                 event = _SERVER_EVENT.validate_json(msg.data, strict=True)
                 self._handle_server_event(event)
 
