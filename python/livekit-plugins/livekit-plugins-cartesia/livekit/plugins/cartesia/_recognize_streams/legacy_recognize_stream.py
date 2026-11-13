@@ -250,31 +250,13 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         while True:
             try:
                 ws = await self._connect_ws()
-
-                send = asyncio.create_task(send_task(ws))
-                recv = asyncio.create_task(recv_task(ws))
-                wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
-                tasks = [send, recv, wait_reconnect]
-                send_recv_group = asyncio.gather(send, recv)
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (send_recv_group, wait_reconnect),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect:
-                            task.result()
-
-                    if wait_reconnect not in done:
+                async with utils.aio.TaskSet() as tasks:
+                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
+                    reconnect = tasks.spawn(self._reconnect_event.wait())
+                    if await tasks.first_completed(io, reconnect) is not reconnect:
                         break
 
                     self._reconnect_event.clear()
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks)
-                    send_recv_group.cancel()
-                    send_recv_group.exception()  # retrieve the exception
             finally:
                 if ws is not None:
                     await ws.close()

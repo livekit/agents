@@ -191,6 +191,7 @@ class SpeechStream(stt.RecognizeStream):
         self._idle_timeout = _IDLE_TIMEOUT_SECONDS
         self._last_audio_at: float | None = None
         self._idle_task: asyncio.Task[None] | None = None
+        self._tasks = utils.aio.TaskSet()
 
     async def _connect_ws(self) -> http.WebSocket:
         config = self._client.build_config(
@@ -228,17 +229,15 @@ class SpeechStream(stt.RecognizeStream):
             ) from e
 
     async def _run(self) -> None:
-        send_task = asyncio.create_task(self._send_audio_task(), name="RTZR.send_audio")
-        self._idle_task = asyncio.create_task(self._idle_watchdog(), name="RTZR.idle_watchdog")
-
-        try:
-            await send_task
-        finally:
-            self._state = _StreamState.CLOSED
-            if self._idle_task and not self._idle_task.done():
+        async with utils.aio.TaskSet() as self._tasks:
+            self._idle_task = self._tasks.spawn(self._idle_watchdog(), name="RTZR.idle_watchdog")
+            try:
+                await self._send_audio_task()
+            finally:
+                self._state = _StreamState.CLOSED
                 await utils.aio.cancel_and_wait(self._idle_task)
-            await self._await_recv_completion()
-            await self._cleanup_connection()
+                await self._await_recv_completion()
+                await self._cleanup_connection()
 
     async def _ensure_connected(self) -> None:
         """Lazy connect on first audio."""
@@ -249,7 +248,7 @@ class SpeechStream(stt.RecognizeStream):
                 ws = await self._connect_ws()
                 self._ws = ws
                 self._state = _StreamState.ACTIVE
-                self._recv_task = asyncio.create_task(self._recv_loop(ws), name="RTZR.recv_loop")
+                self._recv_task = self._tasks.spawn(self._recv_loop(ws), name="RTZR.recv_loop")
                 self._last_audio_at = time.monotonic()
             except Exception:
                 self._state = _StreamState.IDLE

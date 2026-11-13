@@ -35,7 +35,7 @@ pub trait TtsStreamAdapter: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn capabilities(&self) -> crate::TtsCapabilities;
     #[host(getter)]
-    fn sample_rate(&self) -> u32;
+    fn sample_rate(&self) -> Result<u32, crate::errors::HostError>;
     #[host(getter)]
     fn num_channels(&self) -> u16;
 }

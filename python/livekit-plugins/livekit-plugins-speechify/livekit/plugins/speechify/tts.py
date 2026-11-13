@@ -159,6 +159,7 @@ class TTS(tts.TTS):
 
         self._owns_client = client is None
         self._prewarm_task: asyncio.Task[None] | None = None
+        self._tasks = utils.aio.TaskSet()
         self._base_url = base_url if is_given(base_url) else SpeechifyEnvironment.DEFAULT.value
         if client is not None:
             self._client = client
@@ -209,7 +210,7 @@ class TTS(tts.TTS):
         DNS, TCP and TLS setup. Does nothing when a preconfigured ``client`` was
         passed in, because the plugin does not own that client's connections.
         """
-        if not self._owns_client:
+        if not self._owns_client or self._tasks.closed:
             return
 
         async def _prewarm() -> None:
@@ -218,13 +219,11 @@ class TTS(tts.TTS):
             except Exception:
                 pass
 
-        # A prewarm still in flight keeps its task, so aclose() can cancel it.
         if self._prewarm_task is None or self._prewarm_task.done():
-            self._prewarm_task = asyncio.create_task(_prewarm())
+            self._prewarm_task = self._tasks.spawn(_prewarm())
 
     async def aclose(self) -> None:
-        if self._prewarm_task is not None:
-            await utils.aio.cancel_and_wait(self._prewarm_task)
+        await self._tasks.aclose()
         if self._owns_client:
             await self._httpx_client.aclose()
 

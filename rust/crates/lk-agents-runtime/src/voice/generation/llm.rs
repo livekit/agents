@@ -86,6 +86,14 @@ async fn chat_request(
     ctx: &ReplyExecution,
 ) -> ChatRequest {
     let mut chat_ctx = ctx.plan.request.chat_ctx.clone();
+    // The guide teaches the dialect the TTS speaks now: `update_options(model=..)` can change it.
+    let markup = (ctx.resources.tts.as_ref())
+        .map(|tts| lk_agents_abi::tts::markup::Markup::from_provider_key(&tts.markup_provider()));
+    lk_agents_voice::generation::render_expressive(
+        &mut chat_ctx,
+        ctx.plan.request.expressive.as_deref(),
+        markup,
+    );
     // Rendered per request, so a tool's state change reaches the step after it.
     if let Some(dynamic) = &ctx.resources.dynamic_instructions {
         let speech = handle.object();

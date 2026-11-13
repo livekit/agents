@@ -322,13 +322,10 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
 
         try:
             ws = await self._connect_ws()
-            send = asyncio.create_task(send_task(ws))
-            recv = asyncio.create_task(recv_task(ws))
-            tasks = [send, recv]
             try:
-                await asyncio.gather(*tasks)
+                async with utils.aio.TaskSet() as tasks:
+                    await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
             finally:
-                await utils.aio.cancel_and_wait(*tasks)
                 self._send_recognition_usage_event()
                 # If the websocket dropped mid-turn, flush the partial
                 # transcript as a FINAL_TRANSCRIPT so the consumer can finalize

@@ -35,10 +35,16 @@ SPECULATIVE = '{"generationStage":"SPECULATIVE"}'
 
 
 class Duplex:
-    """One InvokeModelWithBidirectionalStream call: what the client sent, what Bedrock answers."""
+    """One InvokeModelWithBidirectionalStream call: what the client sent, what Bedrock answers.
+    ``before_output`` keeps what was sent before the client had the output stream; ``reads``
+    and ``taken`` count the client's reads begun and answered."""
 
     def __init__(self, ready: asyncio.Event) -> None:
         self.sent: list[Event] = []
+        self.before_output: list[Event] = []
+        self.output_open = False
+        self.reads = 0
+        self.taken = 0
         self.inbox: asyncio.Queue[Event | BaseException | None] = asyncio.Queue()
         self.changed = asyncio.Condition()
         self.input_stream = self
@@ -52,6 +58,8 @@ class Duplex:
             await self.text_gate.wait()
         async with self.changed:
             self.sent.append(event)
+            if not self.output_open:
+                self.before_output.append(event)
             self.changed.notify_all()
         if "sessionEnd" in event:
             self.inbox.put_nowait(None)
@@ -61,10 +69,13 @@ class Duplex:
 
     async def await_output(self) -> tuple[None, Duplex]:
         await self.stream_ready.wait()
+        self.output_open = True
         return None, self
 
     async def receive(self) -> InvokeModelWithBidirectionalStreamOutputChunk | None:
+        self.reads += 1
         item = await self.inbox.get()
+        self.taken += 1
         if isinstance(item, BaseException):
             raise item
         if item is None:
@@ -108,10 +119,10 @@ class Bedrock:
 
     async def answer(self, **event: dict[str, object]) -> None:
         duplex = self.duplexes[-1]
+        # the client reads one answer at a time: it handled this one once it reads the next
+        answer = duplex.taken + duplex.inbox.qsize() + 1
         duplex.inbox.put_nowait(event)
-        while not duplex.inbox.empty():
-            await asyncio.sleep(0)
-        await asyncio.sleep(0.01)
+        await until(lambda: duplex.reads > answer, f"the session handled {next(iter(event))}")
 
 
 @pytest.fixture
@@ -152,16 +163,17 @@ async def start(
 ) -> Duplex:
     await session.update_instructions("Be brief.")
     await session.update_chat_ctx(chat_ctx or llm.ChatContext())
-    if tools:
-        await session.update_tools(tools)
+    # as the voice session does, empty or not
+    await session.update_tools(tools or [])
     duplex = await bedrock.stream(0)
     if bedrock.ready.is_set():
+        # live: audio input has started and the answers are read
         await duplex.wait_until(
             lambda sent: any(e.get("contentStart", {}).get("type") == "AUDIO" for e in sent)
         )
+        await until(lambda: duplex.reads, "the session reads Bedrock's answers")
     else:
         await duplex.wait_for("promptStart")
-    await asyncio.sleep(0.1)  # the session goes live once audio input has started
     return duplex
 
 
@@ -328,10 +340,12 @@ async def test_history_is_context_and_new_user_text_is_sent_once(
     current.add_message(role="user", content="new question")
     await session.update_chat_ctx(current)
     await session.update_chat_ctx(current)
-    await duplex.wait_until(lambda sent: sum("textInput" in e for e in sent) >= 4)
-    await asyncio.sleep(0.05)
+    # text goes out in order: a resend of "new question" would come before "later question"
+    current.add_message(role="user", content="later question")
+    await session.update_chat_ctx(current)
+    await duplex.wait_until(lambda sent: sum("textInput" in e for e in sent) >= 5)
     contents = [e["textInput"]["content"] for e in duplex.sent if "textInput" in e]
-    assert contents[1:] == ["old question", "old answer", "new question"]
+    assert contents[1:] == ["old question", "old answer", "new question", "later question"]
 
     await bedrock.answer(contentStart={"contentId": "u1", "type": "TEXT", "role": "USER"})
     await bedrock.answer(textOutput={"contentId": "u1", "role": "USER", "content": "spoken"})
@@ -410,12 +424,12 @@ async def test_audio_waits_for_the_stream_and_never_splits_a_text_block(
     bedrock.ready.clear()
     duplex = await start(session, bedrock)
     session.push_audio(frame())
-    await asyncio.sleep(0.1)
-    assert "audioInput" not in duplex.kinds()
-    assert not any(e.get("contentStart", {}).get("type") == "AUDIO" for e in duplex.sent)
 
     bedrock.ready.set()
     await duplex.wait_for("audioInput")
+    early = duplex.before_output
+    assert "audioInput" not in [next(iter(e)) for e in early]
+    assert not any(e.get("contentStart", {}).get("type") == "AUDIO" for e in early)
     duplex.text_gate = asyncio.Event()
     ctx = llm.ChatContext()
     ctx.add_message(role="user", content="hello")
@@ -424,6 +438,7 @@ async def test_audio_waits_for_the_stream_and_never_splits_a_text_block(
         lambda sent: sent[-1].get("contentStart", {}).get("interactive") is True
     )
     session.push_audio(frame(2))
+    # nothing marks the audio as held: the window can only miss a split, never invent one
     await asyncio.sleep(0.05)
     duplex.text_gate.set()
     await duplex.wait_until(lambda sent: sent[-1].get("audioInput") is not None)
@@ -555,11 +570,6 @@ async def test_tool_result_is_delivered_while_post_tool_speech_streams(
     assert json.loads(result["content"]) == {"found": True}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/pull/7052 reproduces: aclose leaves a "
-    "pending user-text send running",
-)
 async def test_close_cancels_a_pending_user_text_send(
     session: sonic.RealtimeSession, bedrock: Bedrock
 ) -> None:
@@ -671,11 +681,6 @@ async def test_credentials_refresh_before_they_expire(monkeypatch: pytest.Monkey
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="after a fatal stream error aclose() returns at once, leaving the audio input and "
-    "session recycle tasks running",
-)
 async def test_close_after_a_fatal_error_stops_every_session_task(
     session: sonic.RealtimeSession, bedrock: Bedrock
 ) -> None:
@@ -695,3 +700,24 @@ async def test_close_after_a_fatal_error_stops_every_session_task(
     await asyncio.gather(*running, return_exceptions=True)
     assert not errors[0].recoverable
     assert [t.get_name() for t in running] == []
+
+
+async def test_a_session_without_tools_starts_without_waiting_for_them(
+    session: sonic.RealtimeSession, bedrock: Bedrock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An empty tool list is an answer: the session start does not wait out the tools timeout."""
+    await start(session, bedrock)
+    assert "Tools not ready" not in caplog.text
+
+
+async def test_close_during_a_recycle_leaves_no_session_task_running(
+    session: sonic.RealtimeSession, bedrock: Bedrock
+) -> None:
+    """A recycle that update_tools schedules is cancelled by aclose, never run after it."""
+    before = asyncio.all_tasks()
+    await start(session, bedrock, tools=[lookup])
+    await session.update_tools([])
+    await session.aclose()
+
+    assert [t.get_name() for t in asyncio.all_tasks() - before if not t.done()] == []
+    assert len(bedrock.duplexes) == 1

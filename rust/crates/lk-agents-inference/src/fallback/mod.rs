@@ -50,11 +50,11 @@ pub fn conn_options_for_attempt(
     }
 }
 
-/// `tts/fallback_adapter.py:86-87,109-118`: the adapter's output rate (`requested`, else the
-/// maximum of the entries) and, per entry, whether it needs resampling.
-pub fn resampling_plan(entry_rates: &[u32], requested: Option<u32>) -> (u32, Vec<bool>) {
-    let target = requested.unwrap_or_else(|| entry_rates.iter().copied().max().unwrap_or(0));
-    (target, entry_rates.iter().map(|&r| r != target).collect())
+/// `tts/fallback_adapter.py:86-87`: the adapter's output rate, `requested`, else the highest of
+/// the entries' rates when it is built. Each frame is resampled from the rate it carries, so an
+/// entry whose rate changes later still plays at the adapter's.
+pub fn output_rate(entry_rates: &[u32], requested: Option<u32>) -> u32 {
+    requested.unwrap_or_else(|| entry_rates.iter().copied().max().unwrap_or(0))
 }
 
 /// A backend's identity: its host object's, else the retained native allocation (alive for the
@@ -70,15 +70,12 @@ pub(crate) fn backend_resource<T: ?Sized>(
 
 #[cfg(test)]
 mod resampling_tests {
-    use super::resampling_plan;
+    use super::output_rate;
 
     #[test]
-    fn the_target_rate_is_the_best_entry_and_only_the_others_resample() {
-        assert_eq!(
-            resampling_plan(&[24_000, 16_000, 24_000], None),
-            (24_000, vec![false, true, false])
-        );
-        assert_eq!(resampling_plan(&[24_000, 16_000], Some(48_000)), (48_000, vec![true, true]));
-        assert_eq!(resampling_plan(&[22_050], None), (22_050, vec![false]));
+    fn the_output_rate_is_the_requested_one_else_the_best_entry() {
+        assert_eq!(output_rate(&[24_000, 16_000, 24_000], None), 24_000);
+        assert_eq!(output_rate(&[24_000, 16_000], Some(48_000)), 48_000);
+        assert_eq!(output_rate(&[22_050], None), 22_050);
     }
 }

@@ -569,11 +569,5 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.debug("unknown Fish Audio event", extra={"lk.pii.data": data})
 
-        tasks = [
-            asyncio.create_task(send_task()),
-            asyncio.create_task(recv_task()),
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
+        async with utils.aio.TaskSet() as tasks:
+            await asyncio.gather(tasks.spawn(send_task()), tasks.spawn(recv_task()))

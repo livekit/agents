@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Sequence
@@ -22,6 +21,7 @@ from .._generated.io_events import PlaybackSegment as PlaybackSegment
 from .._generated.public_voice_io import *  # noqa: F403
 from ..log import logger
 from ..types import TranscriptChunk as TranscriptChunk
+from ..utils import aio
 
 if TYPE_CHECKING:
     from ..inference import TurnDetector
@@ -438,7 +438,7 @@ class SpeechHandle(_facades.SpeechHandle):
         callbacks of earlier session events; soon, if it already has. Callbacks run in the order
         added; one that raises is logged and the rest still run."""
         if self._reported is None:
-            self._reported = asyncio.ensure_future(self._native.wait_reported())
+            self._reported = asyncio.ensure_future(self._native.wait_reported())  # noqa: TID251 a native future, returned as is: no task is created
         self._reported.add_done_callback(_DoneCallback(self, callback))
 
     def remove_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
@@ -449,15 +449,8 @@ class SpeechHandle(_facades.SpeechHandle):
     async def wait_if_not_interrupted(self, aw: Sequence[Awaitable[object]]) -> None:
         """Wait for ``aw``, unless the speech is interrupted first; ``aw`` is never cancelled."""
         gathered = asyncio.gather(*[asyncio.shield(fut) for fut in aw], return_exceptions=True)
-        interrupted = asyncio.ensure_future(self._native.wait_for_interrupted())
-        try:
-            await asyncio.wait({gathered, interrupted}, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            for fut in (gathered, interrupted):
-                if not fut.done():
-                    fut.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await fut
+        async with aio.TaskSet() as tasks:
+            await tasks.first_completed(gathered, self._native.wait_for_interrupted())
 
     def __repr__(self) -> str:
         return f"SpeechHandle(id={self.id!r}, done={self.done()}, interrupted={self.interrupted})"

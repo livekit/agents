@@ -215,7 +215,7 @@ impl TransferRun {
         let _restore = Restore(self.clone());
         let hold = host.start_hold(&telemetry::Cx::NONE).await?;
         self.lock().hold = hold;
-        let io = host.io_state();
+        let io = host.io_state()?;
         let effects = self.lock().core.begin(io);
         self.perform(effects);
         let mut settled = self.done.cell();
@@ -824,7 +824,7 @@ mod tests {
                 std::future::pending().await
             })
         }
-        fn io_state(&self) -> IoEnableState {
+        fn io_state(&self) -> Result<IoEnableState, HostError> {
             unreachable!()
         }
         fn set_io(&self, _: IoEnableState) {

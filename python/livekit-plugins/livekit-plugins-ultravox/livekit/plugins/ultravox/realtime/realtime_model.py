@@ -263,11 +263,15 @@ class RealtimeModel(llm.RealtimeModel):
     ) -> None:
         """Update model options."""
 
-        if is_given(output_medium):
-            self._opts.output_medium = output_medium
-            for sess in self._sessions:
-                sess.update_options(output_medium=output_medium)
-            self._capabilities.audio_output = output_medium == "voice"
+        # capabilities are fixed at construction: the output medium decides `audio_output`
+        if (
+            is_given(output_medium)
+            and (output_medium == "voice") != self._capabilities.audio_output
+        ):
+            raise ValueError(
+                "output_medium is fixed at construction: it sets the audio_output capability; "
+                "create a new RealtimeModel to change it"
+            )
 
     async def aclose(self) -> None:
         if self._http_session_owned and self._http_session:
@@ -304,14 +308,15 @@ class RealtimeSession(
         self._input_resampler: rtc.AudioResampler | None = None
         self._input_resampler_rate: int | None = None
 
-        self._main_atask = asyncio.create_task(self._main_task(), name="UltravoxSession._main_task")
+        self._tasks = utils.aio.TaskSet()
+        self._main_atask = self._tasks.spawn(self._main_task(), name="UltravoxSession._main_task")
 
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._current_generation: _ResponseGeneration | None = None
         self._chat_ctx = llm.ChatContext.empty()
 
-        # Prevent GC of in-flight say() tasks; cancelled on close.
-        self._say_tasks: set[asyncio.Task[None]] = set()
+        # In-flight say() tasks; cancelled on close, before the main task.
+        self._say_tasks = utils.aio.TaskSet()
 
         # Server-event gating for generate_reply race condition fix
         self._pending_generation_epoch: float | None = None
@@ -595,9 +600,7 @@ class RealtimeSession(
         # Without this, a leftover timestamp from the generation we just superseded would let say() resolve before its text goes out.
         self._pending_generation_epoch = None
 
-        task = asyncio.create_task(self._say_task(text, fut), name="ultravox-say")
-        self._say_tasks.add(task)
-        task.add_done_callback(self._say_tasks.discard)
+        self._say_tasks.spawn(self._say_task(text, fut), name="ultravox-say")
         return fut
 
     async def _say_task(
@@ -621,7 +624,14 @@ class RealtimeSession(
                 fut.set_exception(exc)
             return
 
-        done, _ = await asyncio.wait({fut}, timeout=5.0)
+        try:
+            async with asyncio.timeout(5.0):
+                await asyncio.shield(fut)
+        except (Exception, asyncio.CancelledError):
+            task = asyncio.current_task()
+            if not fut.done() and task is not None and task.cancelling():
+                raise
+        done = fut.done()
         is_current = self._pending_generation_fut is fut
         if is_current:
             self._pending_generation_fut = None
@@ -675,10 +685,8 @@ class RealtimeSession(
         self._msg_ch.close()
         self._session_should_close.set()
 
-        if self._say_tasks:
-            await utils.aio.cancel_and_wait(*self._say_tasks)
-
-        await utils.aio.cancel_and_wait(self._main_atask)
+        await self._say_tasks.aclose()
+        await self._tasks.aclose()
 
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             self._pending_generation_fut.cancel("Session closed")
@@ -773,32 +781,22 @@ class RealtimeSession(
                 self._report_connection_acquired(time.perf_counter() - t0)
                 self._closing = False
 
-                # Create tasks for send/recv and restart monitoring
-                send_task = asyncio.create_task(self._send_task(ws_conn), name="_send_task")
-                recv_task = asyncio.create_task(self._recv_task(ws_conn), name="_recv_task")
-                restart_wait_task = asyncio.create_task(
-                    self._session_should_close.wait(), name="_restart_wait"
-                )
-
-                try:
-                    # Wait for any task to complete
-                    done, _ = await asyncio.wait(
-                        [send_task, recv_task, restart_wait_task],
-                        return_when=asyncio.FIRST_COMPLETED,
+                async with utils.aio.TaskSet() as tasks:
+                    restart_wait = tasks.spawn(
+                        self._session_should_close.wait(), name="_restart_wait"
                     )
-
-                    for task in done:
-                        if task != restart_wait_task:
-                            # propagate exception if any
-                            task.result()
-                finally:
-                    # Close current WebSocket
-                    await ws_conn.close()
-                    await utils.aio.cancel_and_wait(send_task, recv_task, restart_wait_task)
+                    try:
+                        winner = await tasks.first_completed(
+                            tasks.spawn(self._send_task(ws_conn), name="_send_task"),
+                            tasks.spawn(self._recv_task(ws_conn), name="_recv_task"),
+                            restart_wait,
+                        )
+                    finally:
+                        await ws_conn.close()
 
                 # If restart triggered, loop continues
                 # If msg_ch closed, exit loop
-                if restart_wait_task not in done and self._msg_ch.closed:
+                if winner is not restart_wait and self._msg_ch.closed:
                     break
 
             except Exception as e:

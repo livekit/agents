@@ -291,7 +291,7 @@ async def test_an_end_call_tool_closes_the_session_and_shuts_the_job_down(
 
 @pytest.mark.xfail(
     strict=True,
-    reason="X8039 reproduces: the job's shutdown closes its session as user_initiated",
+    reason="https://github.com/livekit/agents/pull/8039 reproduces: the job's shutdown closes its session as user_initiated",
 )
 async def test_job_shutdown_closes_the_jobs_session_with_the_job_shutdown_reason(
     run_job: RunJob, no_livekit_credentials: None

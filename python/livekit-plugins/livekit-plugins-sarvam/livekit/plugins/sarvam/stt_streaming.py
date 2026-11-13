@@ -779,14 +779,11 @@ class RealtimeSpeechStream(stt.RecognizeStream):
         try:
             ws = await self._connect_ws()
             self._ws = ws
-            tasks = [
-                asyncio.create_task(self._process_audio(ws)),
-                asyncio.create_task(self._process_messages(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.cancel_and_wait(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(
+                    tasks.spawn(self._process_audio(ws)), tasks.spawn(self._process_messages(ws))
+                )
+
         finally:
             if ws is not None:
                 await ws.close()

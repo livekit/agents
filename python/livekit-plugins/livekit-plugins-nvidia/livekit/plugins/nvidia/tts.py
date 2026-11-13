@@ -208,10 +208,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         synthesize_thread.start()
 
-        tasks = [asyncio.create_task(_input_task())]
-
+        tasks = utils.aio.TaskSet()
         try:
-            await asyncio.gather(*tasks, asyncio.shield(done_fut))
+            await asyncio.gather(tasks.spawn(_input_task()), asyncio.shield(done_fut))
             output_emitter.end_segment()
         except APITimeoutError:
             raise
@@ -222,6 +221,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             if active_call is not None:
                 active_call.cancel()
             text_q.put(None)
-            await utils.aio.cancel_and_wait(*tasks)
+            await tasks.aclose()
             if not done_fut.done():
                 logger.warning("NVIDIA synthesis cleanup incomplete; SDK worker retains ownership")

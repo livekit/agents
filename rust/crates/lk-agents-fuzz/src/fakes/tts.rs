@@ -213,8 +213,8 @@ impl Tts for FakeTts {
         }
     }
 
-    fn sample_rate(&self) -> u32 {
-        SAMPLE_RATE
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
+        Ok(SAMPLE_RATE)
     }
 
     fn num_channels(&self) -> u16 {

@@ -25,7 +25,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import livekit.rtc as rtc
 from livekit import api
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, VoiceSession, get_job_context
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, VoiceSession, get_job_context, utils
 from livekit.agents.job import _server_credentials
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
@@ -125,6 +125,8 @@ class AvatarSession(BaseAvatarSession):
         self._starting = False
         self._close_done = asyncio.Event()
         self._session_id: str | None = None
+        # Holds the self-teardown, which is the close itself: aclose() and start() wait for it.
+        self._tasks = utils.aio.TaskSet()
         self._teardown_task: asyncio.Task[None] | None = None
         # The exact sink this session installed, tracked by identity rather than
         # type or chain position: VoiceSession.start() can wrap it in
@@ -373,7 +375,7 @@ class AvatarSession(BaseAvatarSession):
 
     def _begin_teardown(self) -> None:
         if self._teardown_task is None and self._state is not _State.CLOSED:
-            self._teardown_task = asyncio.create_task(self.aclose())
+            self._teardown_task = self._tasks.spawn(self.aclose(), name="synthesia_avatar_teardown")
             self._teardown_task.add_done_callback(self._on_teardown_done)
 
     def _on_teardown_done(self, task: asyncio.Task[None]) -> None:

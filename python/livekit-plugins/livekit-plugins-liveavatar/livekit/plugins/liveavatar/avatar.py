@@ -110,6 +110,7 @@ class AvatarSession(BaseAvatarSession):
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._main_atask: asyncio.Task[None] | None = None
+        self._tasks = utils.aio.TaskSet()
         self._audio_resampler: rtc.AudioResampler | None = None
         self._resampler_input_rate: int | None = None
         self._msg_ch = utils.aio.Chan[dict[str, JsonValue]]()
@@ -208,7 +209,7 @@ class AvatarSession(BaseAvatarSession):
         self._audio_buffer.on("clear_buffer", self._on_clear_buffer)
 
         agent_session.output.replace_audio_tail(self._audio_buffer)
-        self._main_atask = asyncio.create_task(self._main_task(), name="AvatarSession._main_task")
+        self._main_atask = self._tasks.spawn(self._main_task(), name="AvatarSession._main_task")
 
     def _on_clear_buffer(self) -> None:
         self._chunk_interrupted.set()
@@ -223,15 +224,11 @@ class AvatarSession(BaseAvatarSession):
 
     async def aclose(self) -> None:
         self._msg_ch.close()
-        main = self._main_atask
         try:
-            if main is not None:
-                if not main.done() and not main.cancelling():
-                    main.cancel()
-                await asyncio.shield(asyncio.gather(main, return_exceptions=True))
+            await self._tasks.aclose()
+            if self._main_atask is not None:
                 await self._audio_buffer.aclose()
-                if self._main_atask is main:
-                    self._main_atask = None
+                self._main_atask = None
         finally:
             await super().aclose()
 
@@ -384,18 +381,15 @@ class AvatarSession(BaseAvatarSession):
                 event = _SERVER_EVENT.validate_json(msg.data, strict=True)
                 self._handle_server_event(event)
 
-        io_tasks = [
-            asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
-            asyncio.create_task(_send_task(), name="_send_task"),
-            asyncio.create_task(_recv_task(), name="_recv_task"),
-            asyncio.create_task(_keep_alive_task(), name="_keep_alive_task"),
-        ]
         try:
-            done, _ = await asyncio.wait(io_tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                task.result()
+            async with utils.aio.TaskSet() as io:
+                await io.first_completed(
+                    io.spawn(_forward_audio(), name="_forward_audio_task"),
+                    io.spawn(_send_task(), name="_send_task"),
+                    io.spawn(_recv_task(), name="_recv_task"),
+                    io.spawn(_keep_alive_task(), name="_keep_alive_task"),
+                )
         finally:
-            await utils.aio.cancel_and_wait(*io_tasks)
             try:
                 if self._session_id and self._session_token:
                     data = await self._api.stop_streaming_session(

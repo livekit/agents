@@ -327,14 +327,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await session.__aenter__()
             except TimeoutError:
                 raise APITimeoutError(timeout="connect") from None
-            tasks = [
-                asyncio.create_task(_send_task(session)),
-                asyncio.create_task(_recv_task()),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.cancel_and_wait(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(tasks.spawn(_send_task(session)), tasks.spawn(_recv_task()))
         except asyncio.CancelledError:
             if pending_gens:
                 with contextlib.suppress(Exception):

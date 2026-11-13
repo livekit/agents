@@ -38,6 +38,7 @@ from livekit.agents import (
     http,
     redacted_cause,
     tts,
+    utils,
 )
 
 from .models import is_mist_model
@@ -507,17 +508,17 @@ async def run_context(
                     "Timed out waiting for a Rime v1 event after end"
                 ) from redacted_cause(cause)
 
-    tasks = [
-        asyncio.create_task(_send()),
-        asyncio.create_task(_receive()),
-        asyncio.create_task(_watch_started()),
-        asyncio.create_task(_watch_terminal()),
-    ]
+    tasks = utils.aio.TaskSet()
     try:
-        await asyncio.gather(*tasks)
+        await asyncio.gather(
+            tasks.spawn(_send()),
+            tasks.spawn(_receive()),
+            tasks.spawn(_watch_started()),
+            tasks.spawn(_watch_terminal()),
+        )
         return RunResult(reusable=True)
     except asyncio.CancelledError:
-        await _cancel_tasks(*tasks)
+        await tasks.aclose()
         if not state.emitter_initialized:
             output_emitter.initialize(
                 request_id=context_id,
@@ -539,7 +540,7 @@ async def run_context(
         raise ContextCancelled(reusable=reusable) from None
     finally:
         context_started.set()
-        await _cancel_tasks(*tasks)
+        await tasks.aclose()
 
 
 @dataclass
@@ -671,10 +672,3 @@ async def _cancel_and_drain(connection: Connection, *, context_id: str, timeout:
         return True
     except (Exception, asyncio.CancelledError):
         return False
-
-
-async def _cancel_tasks(*tasks: asyncio.Task[None]) -> None:
-    for task in tasks:
-        if not task.done():
-            task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)

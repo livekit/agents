@@ -292,20 +292,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for segment in segments_ch:
                 await self._run_ws(segment, output_emitter)
 
-        tasks = [
-            asyncio.create_task(_segment_input()),
-            asyncio.create_task(_run_segments()),
-        ]
         try:
-            await asyncio.gather(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(tasks.spawn(_segment_input()), tasks.spawn(_run_segments()))
         except TimeoutError:
             raise APITimeoutError() from None
         except APIConnectionError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
 
     async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
@@ -358,11 +353,5 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("Unexpected xAI message", extra={"lk.pii.data": data})
 
         async with self._pool.connection(conn_options=self._conn_options) as ws:
-            tasks = [
-                asyncio.create_task(_send_task(ws)),
-                asyncio.create_task(_recv_task(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.cancel_and_wait(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(tasks.spawn(_send_task(ws)), tasks.spawn(_recv_task(ws)))

@@ -662,7 +662,7 @@ impl Reader for ParticipantAudioInput {
         let stream = input_stream.frames()?;
         self.track_subscribed(&open.sid, publication.source());
         let owner = Owner { identity: participant.identity(), sid: participant.sid() };
-        let replay = publication.audio_features().contains(&AudioTrackFeature::PreconnectBuffer)
+        let replay = publication.audio_features()?.contains(&AudioTrackFeature::PreconnectBuffer)
             && self.readers.decide(|readers| readers.replay_pre_connect(owner, &open.sid));
         let (input, generation, sid) = (self.clone(), open.generation, open.sid.clone());
         self.pumps.spawn(self.spawner.as_ref(), "audio track pump", async move {

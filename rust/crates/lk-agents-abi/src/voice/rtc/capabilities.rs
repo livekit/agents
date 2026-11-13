@@ -454,9 +454,9 @@ pub trait TrackPublication: Send + Sync {
     fn is_subscribed(&self) -> Result<bool, RtcError>;
 
     /// `TF_PRECONNECT_BUFFER` here is what gates the pre-connect audio path (`_input.py`); the
-    /// rest of the set has no reader today.
-    #[host(read_once, getter = "sdk.audio_features")]
-    fn audio_features(&self) -> Vec<AudioTrackFeature>;
+    /// rest of the set has no reader today. Read when the track is opened: the SDK updates it.
+    #[host(call, getter = "sdk.audio_features")]
+    fn audio_features(&self) -> Result<Vec<AudioTrackFeature>, RtcError>;
 
     /// Remote only.
     #[host(await, name = "sdk.set_subscribed")]

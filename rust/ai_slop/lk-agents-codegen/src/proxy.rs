@@ -990,7 +990,7 @@ mod tests {
     fn an_sdk_proxy_reads_wire_enums_as_their_sdk_numbers() {
         let room = |extra: &str| {
             format!(
-                "use crate::errors::HostError;\n#[crate::host(wire_enum)] pub enum State {{ Off, On }}\n#[crate::host(proxy(host = \"livekit.rtc.Room\", sdk))]\npub trait Room: Send + Sync {{ #[host(call, getter = \"connection_state\")] fn state(&self) -> Result<State, HostError>; #[host(read_once, getter = \"features\")] fn features(&self) -> Vec<State>; {extra} }}"
+                "use crate::errors::HostError;\n#[crate::host(wire_enum)] pub enum State {{ Off, On }}\n#[crate::host(proxy(host = \"livekit.rtc.Room\", sdk))]\npub trait Room: Send + Sync {{ #[host(call, getter = \"connection_state\")] fn state(&self) -> Result<State, HostError>; #[host(read_once, getter = \"sdk.kind\")] fn features(&self) -> Vec<State>; {extra} }}"
             )
         };
         let decls = read(&room("")).expect("an sdk proxy resolves");

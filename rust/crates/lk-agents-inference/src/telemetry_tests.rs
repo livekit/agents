@@ -297,8 +297,8 @@ impl lk_agents_abi::Tts for Speaker {
     fn capabilities(&self) -> lk_agents_abi::TtsCapabilities {
         lk_agents_abi::TtsCapabilities { streaming: true, aligned_transcript: false }
     }
-    fn sample_rate(&self) -> u32 {
-        24_000
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
+        Ok(24_000)
     }
     fn num_channels(&self) -> u16 {
         1

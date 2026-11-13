@@ -10752,7 +10752,6 @@ pub struct TrackPublicationProxy {
     name: ::std::string::String,
     source: ::lk_agents_abi::voice::room_io::TrackSource,
     kind: i32,
-    audio_features: ::std::vec::Vec<::lk_agents_abi::voice::rtc::AudioTrackFeature>,
 }
 
 impl TrackPublicationProxy {
@@ -10819,10 +10818,6 @@ impl TrackPublicationProxy {
             let v = obj.getattr("sdk")?.getattr("kind")?;
             crate::py_values::number_from_py::<i32>(v.as_any(), "TrackPublication.sdk.kind")?
         };
-        let audio_features = {
-            let v = obj.getattr("sdk")?.getattr("audio_features")?;
-            v.try_iter().and_then(|items| items.map(|item| item?.extract::<i32>()).collect::<::pyo3::PyResult<Vec<i32>>>()).map(|v| v.into_iter().filter_map(|v| <::lk_agents_abi::voice::rtc::AudioTrackFeature as ::std::convert::TryFrom<i32>>::try_from(v).ok()).collect::<Vec<_>>())?
-        };
         Ok(TrackPublicationProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
             context,
@@ -10830,7 +10825,6 @@ impl TrackPublicationProxy {
             name,
             source,
             kind,
-            audio_features,
         })
     }
 }
@@ -10885,8 +10879,38 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
         })
     }
 
-    fn audio_features(&self) -> ::std::vec::Vec<::lk_agents_abi::voice::rtc::AudioTrackFeature> {
-        ::std::clone::Clone::clone(&self.audio_features)
+    fn audio_features(
+        &self,
+    ) -> ::std::result::Result<
+        ::std::vec::Vec<::lk_agents_abi::voice::rtc::AudioTrackFeature>,
+        ::lk_agents_abi::voice::rtc::RtcError,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("sdk")?,
+                    ::pyo3::types::PyString::new(py, "audio_features").into_any(),
+                ];
+                Ok((
+                    py.import("builtins")?.getattr("getattr")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (o.try_iter().and_then(|items| items.map(|item| item?.extract::<i32>()).collect::<::pyo3::PyResult<Vec<i32>>>()).map(|v| v.into_iter().filter_map(|v| <::lk_agents_abi::voice::rtc::AudioTrackFeature as ::std::convert::TryFrom<i32>>::try_from(v).ok()).collect::<Vec<_>>())).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
     }
 
     fn set_subscribed<'a>(
@@ -12991,7 +13015,6 @@ pub struct TransferHostProxy {
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
     /// The `notify` calls, delivered in order.
     notifier: crate::py_calls::Notifier,
-    io_state: ::lk_agents_abi::voice::workflows::IoEnableState,
 }
 
 impl TransferHostProxy {
@@ -13052,15 +13075,10 @@ impl TransferHostProxy {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        let io_state = {
-            let v = crate::py_calls::read(obj, "_core_io_state")?;
-            crate::generated::records::workflows::io_enable_state_from_py(v.as_any())?
-        };
         Ok(TransferHostProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
             context,
             notifier: ::std::default::Default::default(),
-            io_state,
         })
     }
 }
@@ -13118,8 +13136,52 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
         })
     }
 
-    fn io_state(&self) -> ::lk_agents_abi::voice::workflows::IoEnableState {
-        ::std::clone::Clone::clone(&self.io_state)
+    fn io_state(
+        &self,
+    ) -> ::std::result::Result<
+        ::lk_agents_abi::voice::workflows::IoEnableState,
+        ::lk_agents_abi::errors::HostError,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_io_state")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (context
+                .as_ref()
+                .map(|context| out.returned_context(py, context))
+                .transpose()
+                .and_then(|context| {
+                    crate::py_calls::returning(context, || {
+                        crate::generated::records::workflows::io_enable_state_from_py(o.as_any())
+                    })
+                }))
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
     }
 
     fn set_io(&self, state: ::lk_agents_abi::voice::workflows::IoEnableState) {

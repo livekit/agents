@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from typing import Generic, TypeVar
 
-from livekit.agents.utils import ConnectionPool
+from livekit.agents.utils import ConnectionPool, aio
 
 from .log import logger
 
@@ -31,6 +31,7 @@ class PoolManager(Generic[T]):
         self.current = pool
         self._retired_pools: set[ConnectionPool[T]] = set()
         self._pool_stream_counts: dict[ConnectionPool[T], int] = {}
+        self._closing = aio.TaskSet()
         self._pool_close_tasks: set[asyncio.Task[None]] = set()
 
     def track_stream(self, pool: ConnectionPool[T], task: asyncio.Task[None]) -> None:
@@ -59,28 +60,30 @@ class PoolManager(Generic[T]):
         for pool in list(self._retired_pools):
             await pool.aclose()
         self._retired_pools.clear()
+        # a retired pool's close runs to completion, then the set is closed
         if self._pool_close_tasks:
             await asyncio.gather(*list(self._pool_close_tasks), return_exceptions=True)
+        await self._closing.aclose()
 
     def _schedule_retired_pool_close(self, pool: ConnectionPool[T]) -> None:
-        if pool not in self._retired_pools:
+        if pool not in self._retired_pools or self._closing.closed:
             return
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
 
         self._retired_pools.remove(pool)
-        task = loop.create_task(pool.aclose())
+        task = self._closing.spawn(_close_retired(pool), name="rime-retired-pool-close")
         self._pool_close_tasks.add(task)
-        task.add_done_callback(self._on_retired_pool_closed)
+        task.add_done_callback(self._pool_close_tasks.discard)
 
-    def _on_retired_pool_closed(self, task: asyncio.Task[None]) -> None:
-        self._pool_close_tasks.discard(task)
-        if task.cancelled():
-            return
-        if error := task.exception():
-            logger.warning(
-                "failed to close a retired Rime WebSocket pool",
-                extra={"exception_type": type(error).__name__},
-            )
+
+async def _close_retired(pool: ConnectionPool[T]) -> None:
+    try:
+        await pool.aclose()
+    except Exception as error:
+        logger.warning(
+            "failed to close a retired Rime WebSocket pool",
+            extra={"exception_type": type(error).__name__},
+        )

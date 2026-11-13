@@ -199,7 +199,7 @@ impl Worker {
             let cloud = s.edition == pb::server_info::Edition::Cloud as i32;
             (s.region, s.protocol, cloud)
         });
-        log::info!(target: lk_agents_abi::LOG_TARGET, worker_id = resp.worker_id.as_str(), deployment = self.cfg.deployment.as_str(), url = self.cfg.ws_url.as_str(), transport:? = self.transport.kind(), region = region.as_str(), protocol = protocol, agent_name = self.cfg.agent_name.as_str(); "registered worker");
+        log::info!(target: lk_agents_abi::LOG_TARGET, worker_id = resp.worker_id.as_str(), deployment = self.cfg.deployment.as_str(), url = self.cfg.ws_url.as_str(), transport = self.transport.kind().as_str(), region = region.as_str(), protocol = protocol, agent_name = self.cfg.agent_name.as_str(); "registered worker");
         self.notify(WorkerNotification::Registered(RegisteredInfo {
             worker_id: resp.worker_id,
             region,

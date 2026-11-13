@@ -119,6 +119,9 @@ class AvatarSession(BaseAvatarSession):
         self._closed = False
         self._close_requested = False
         self._lifecycle_lock = asyncio.Lock()
+        # Holds the provider calls and the close; never cancelled, since each runs to completion
+        # so a created session is always ended. aclose() awaits the ones it depends on.
+        self._tasks = utils.aio.TaskSet()
         self._create_task: asyncio.Task[AvatarSessionInfo] | None = None
         self._startup_cleanup_task: asyncio.Task[None] | None = None
         self._shutdown_task: asyncio.Task[None] | None = None
@@ -182,7 +185,7 @@ class AvatarSession(BaseAvatarSession):
             agent_session.on("close", self._on_agent_session_close)
             started_info: AvatarSessionInfo | None = None
             try:
-                self._create_task = asyncio.create_task(
+                self._create_task = self._tasks.spawn(
                     self._api.start_session(
                         avatar_id=self._avatar_id,
                         livekit_url=livekit_url_value,
@@ -229,7 +232,7 @@ class AvatarSession(BaseAvatarSession):
                 # Move all startup cleanup into an independent task. It owns both
                 # the provider result and DELETE, so repeated caller cancellation
                 # cannot interrupt compensation or base-session cleanup.
-                self._startup_cleanup_task = asyncio.create_task(
+                self._startup_cleanup_task = self._tasks.spawn(
                     self._cleanup_failed_start(
                         create_task=self._create_task if started_info is None else None,
                         session_info=started_info,
@@ -274,7 +277,7 @@ class AvatarSession(BaseAvatarSession):
                 elif self._closed and self._session_info is None:
                     return
                 else:
-                    self._shutdown_task = asyncio.create_task(
+                    self._shutdown_task = self._tasks.spawn(
                         self._run_shutdown(), name="boson_avatar_shutdown"
                     )
                     self._shutdown_task.add_done_callback(self._consume_shutdown_result)
@@ -282,6 +285,10 @@ class AvatarSession(BaseAvatarSession):
 
             await asyncio.shield(owned_task)
             if not is_startup_cleanup:
+                # a close the VoiceSession's end started finishes with this one
+                agent_close = self._agent_close_task
+                if agent_close is not None and agent_close is not asyncio.current_task():
+                    await asyncio.shield(agent_close)
                 return
             # Awaiting an already-completed task does not yield to its queued
             # done callback. Clear it here too so close cannot spin on it.
@@ -372,7 +379,7 @@ class AvatarSession(BaseAvatarSession):
         self._close_requested = True
         if (self._closed and self._session_info is None) or self._agent_close_task is not None:
             return
-        self._agent_close_task = asyncio.create_task(
+        self._agent_close_task = self._tasks.spawn(
             self.aclose(), name="boson_avatar_agent_session_close"
         )
         self._agent_close_task.add_done_callback(self._consume_agent_close_result)

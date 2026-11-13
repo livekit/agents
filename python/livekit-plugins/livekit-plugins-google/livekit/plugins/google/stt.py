@@ -924,40 +924,34 @@ class SpeechStream(stt.RecognizeStream):
             None,
         ]:
             nonlocal audio_pushed
-            stop_task = asyncio.create_task(should_stop.wait())
-            frame_task: asyncio.Task[object] | None = None
-            try:
-                yield self._build_init_request(client)
+            async with utils.aio.TaskSet() as tasks:
+                stop_task = tasks.spawn(should_stop.wait())
+                try:
+                    yield self._build_init_request(client)
 
-                while True:
-                    # Race the next-frame await against should_stop so this generator
-                    # can exit even when no audio is flowing. Without this, on reconnect
-                    # the generator stays parked on input and pins the previous
-                    # gRPC streaming call, leaking it across iterations.
-                    frame_task = asyncio.create_task(self.input.recv())
-                    done, _ = await asyncio.wait(
-                        [frame_task, stop_task], return_when=asyncio.FIRST_COMPLETED
-                    )
-                    if stop_task in done:
-                        return
-                    try:
+                    while True:
+                        # Race the next-frame await against should_stop so this generator
+                        # can exit even when no audio is flowing. Without this, on reconnect
+                        # the generator stays parked on input and pins the previous
+                        # gRPC streaming call, leaking it across iterations.
+                        frame_task = tasks.spawn(self.input.recv())
+                        try:
+                            first = await tasks.first_completed(
+                                frame_task, asyncio.shield(stop_task)
+                            )
+                        except ChanClosed:
+                            return
+                        if first is not frame_task:
+                            return
+
                         frame = frame_task.result()
-                    except ChanClosed:
-                        return
-                    finally:
-                        frame_task = None
+                        if isinstance(frame, rtc.AudioFrame):
+                            yield self._build_audio_request(frame)
+                            if not audio_pushed:
+                                audio_pushed = True
 
-                    if isinstance(frame, rtc.AudioFrame):
-                        yield self._build_audio_request(frame)
-                        if not audio_pushed:
-                            audio_pushed = True
-
-            except Exception:
-                logger.exception("an error occurred while streaming input to google STT")
-            finally:
-                await utils.aio.cancel_and_wait(
-                    stop_task, *([frame_task] if frame_task is not None else [])
-                )
+                except Exception:
+                    logger.exception("an error occurred while streaming input to google STT")
 
         async def process_stream(
             client: SpeechAsyncClientV2 | SpeechAsyncClientV1,
@@ -1066,36 +1060,29 @@ class SpeechStream(stt.RecognizeStream):
                         )
                     self._session_connected_at = time.time()
 
-                    process_stream_task = asyncio.create_task(process_stream(client, stream))
-                    wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                    try:
-                        done, _ = await asyncio.wait(
-                            [process_stream_task, wait_reconnect_task],
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        for task in done:
-                            if task != wait_reconnect_task:
-                                task.result()
-                        if wait_reconnect_task not in done:
-                            break
-                        self._reconnect_event.clear()
-                    finally:
-                        should_stop.set()
-                        # Cancel the streaming RPC so its underlying call object releases
-                        # its read/write tasks and request iterator. Without this the
-                        # call (and the input_generator that yielded into it) stays
-                        # pinned across reconnects and leaks ~0.4 MB per cycle.
-                        with contextlib.suppress(Exception):
-                            cast(StreamStreamCall[object, object], stream).cancel()
-                        if not process_stream_task.done() and not wait_reconnect_task.done():
-                            # try to gracefully stop the process_stream_task
-                            try:
-                                await asyncio.wait_for(process_stream_task, timeout=1.0)
-                            except TimeoutError:
-                                pass
-
-                        await utils.aio.cancel_and_wait(process_stream_task, wait_reconnect_task)
+                    async with utils.aio.TaskSet() as tasks:
+                        process_stream_task = tasks.spawn(process_stream(client, stream))
+                        reconnect = tasks.spawn(self._reconnect_event.wait())
+                        first: asyncio.Future[object] | None = None
+                        try:
+                            first = await tasks.first_completed(
+                                asyncio.shield(process_stream_task), reconnect
+                            )
+                            if first is not reconnect:
+                                break
+                            self._reconnect_event.clear()
+                        finally:
+                            should_stop.set()
+                            # Cancel the streaming RPC so its underlying call object releases
+                            # its read/write tasks and request iterator. Without this the
+                            # call (and the input_generator that yielded into it) stays
+                            # pinned across reconnects and leaks ~0.4 MB per cycle.
+                            with contextlib.suppress(Exception):
+                                cast(StreamStreamCall[object, object], stream).cancel()
+                            if first is None and not process_stream_task.done():
+                                # try to gracefully stop the process_stream_task
+                                with contextlib.suppress(TimeoutError):
+                                    await asyncio.wait_for(process_stream_task, timeout=1.0)
             except DeadlineExceeded:
                 raise APITimeoutError() from None
             except GoogleAPICallError as e:

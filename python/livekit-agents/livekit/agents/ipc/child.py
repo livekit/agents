@@ -104,7 +104,7 @@ class _JobProc:
         self._args = args
         self._executor_type = executor_type
         self._server_env = dict(args.env)
-        self._job_task: asyncio.Task[None] | None = None
+        self._tasks = aio.TaskSet()
         self.log_fields: dict[str, Any] = {"pid": os.getpid()}
         self._client: _core.IpcClient
         self._loop_monitor = telemetry._LoopMonitor()
@@ -133,8 +133,8 @@ class _JobProc:
         thread = self._job_ctx._thread
         # The root span must exist before the job task can run.
         run.start_trace(job, thread.id if thread is not None else None)
-        self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
-        self._job_task.add_done_callback(lambda _: self._client.stop())
+        job_task = self._tasks.spawn(self._run_job_task(), name="job_task")
+        job_task.add_done_callback(lambda _: self._client.stop())
         return run
 
     async def _core_ping(self) -> None:
@@ -142,8 +142,7 @@ class _JobProc:
         ...
 
     async def aclose(self) -> None:
-        if self._job_task is not None:
-            await aio.cancel_and_wait(self._job_task)
+        await self._tasks.aclose()
 
     def _start_job(self, info: RunningJobInfo) -> _core.JobRun:
         job = info.job
@@ -204,7 +203,7 @@ class _JobProc:
         async def run() -> _T:
             return await awaitable
 
-        return ctx.run(asyncio.create_task, run(), name=name)
+        return self._tasks.spawn(run(), name=name, context=ctx)
 
     async def _core_start_entrypoint(self) -> asyncio.Task[None]:
         # Here so stalls are parented under the entrypoint's span, current at this point.
@@ -315,7 +314,7 @@ def serve_parent(mp_cch: socket.socket | PipeEnd, host: Any) -> None:
     loop.slow_callback_duration = 0.1
 
     try:
-        task = loop.create_task(_serve(client, host), name="proc_client_main")
+        task = loop.create_task(_serve(client, host), name="proc_client_main")  # noqa: TID251 the loop's root task, joined by close_loop
         while not task.done():
             # The parent drives shutdown through IPC, not signals.
             with contextlib.suppress(KeyboardInterrupt):

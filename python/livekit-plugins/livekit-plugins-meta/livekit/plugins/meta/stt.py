@@ -417,13 +417,12 @@ class SpeechStream(stt.RecognizeStream):
         self._end_stream_sent = False
         self._last_audio_processed_ms = 0.0
         ws: http.WebSocket | None = None
-        tasks: list[asyncio.Task[None]] = []
+        tasks = utils.aio.TaskSet()
         try:
             ws = await self._connect_ws()
-            sender = asyncio.create_task(self._send_audio(ws), name="meta-stt-send")
-            receiver = asyncio.create_task(self._receive_events(ws), name="meta-stt-receive")
-            tasks = [sender, receiver]
-            await self._drive_tasks(sender, receiver)
+            sender = tasks.spawn(self._send_audio(ws), name="meta-stt-send")
+            receiver = tasks.spawn(self._receive_events(ws), name="meta-stt-receive")
+            await self._drive_tasks(tasks, sender, receiver)
         except asyncio.CancelledError:
             raise
         except APIError as exc:
@@ -440,8 +439,7 @@ class SpeechStream(stt.RecognizeStream):
                 retryable=not self._audio_consumed,
             ) from None
         finally:
-            if tasks:
-                await utils.aio.cancel_and_wait(*tasks)
+            await tasks.aclose()
             self._flush_usage()
             if ws is not None:
                 await _close_quietly(ws)
@@ -507,9 +505,15 @@ class SpeechStream(stt.RecognizeStream):
             )
         self._session_id = session_id
 
-    async def _drive_tasks(self, sender: asyncio.Task[None], receiver: asyncio.Task[None]) -> None:
-        done, _ = await asyncio.wait((sender, receiver), return_when=asyncio.FIRST_COMPLETED)
-        if receiver in done:
+    async def _drive_tasks(
+        self,
+        tasks: utils.aio.TaskSet,
+        sender: asyncio.Task[None],
+        receiver: asyncio.Task[None],
+    ) -> None:
+        # shielded: the other one keeps running, to be drained below
+        await tasks.first_completed(asyncio.shield(sender), asyncio.shield(receiver))
+        if receiver.done():
             receiver.result()
             if not self._end_stream_sent:
                 raise APIConnectionError(
@@ -519,7 +523,6 @@ class SpeechStream(stt.RecognizeStream):
             if not sender.done():
                 await sender
         else:
-            sender.result()
             try:
                 await asyncio.wait_for(receiver, timeout=self._conn_options.read_timeout)
             except TimeoutError:

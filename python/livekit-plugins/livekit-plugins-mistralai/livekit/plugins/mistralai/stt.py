@@ -437,34 +437,21 @@ class SpeechStream(stt.RecognizeStream):
                 async with self._pool.connection(conn_options=self._conn_options) as connection:
                     vad_stream = self._vad.stream() if self._vad else None
 
-                    tasks = [
-                        asyncio.create_task(self._send_task(connection, vad_stream)),
-                        asyncio.create_task(self._recv_task(connection)),
-                    ]
-                    if vad_stream is not None:
-                        tasks.append(asyncio.create_task(self._vad_task(vad_stream, connection)))
-
-                    tasks_group = asyncio.gather(*tasks)
-                    wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
-
                     try:
-                        done, _ = await asyncio.wait(
-                            (tasks_group, wait_reconnect),
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
+                        async with utils.aio.TaskSet() as tasks:
+                            io_tasks = [
+                                tasks.spawn(self._send_task(connection, vad_stream)),
+                                tasks.spawn(self._recv_task(connection)),
+                            ]
+                            if vad_stream is not None:
+                                io_tasks.append(tasks.spawn(self._vad_task(vad_stream, connection)))
+                            io = asyncio.gather(*io_tasks)
+                            reconnect = tasks.spawn(self._reconnect_event.wait())
+                            if await tasks.first_completed(io, reconnect) is not reconnect:
+                                break
 
-                        for task in done:
-                            if task != wait_reconnect:
-                                task.result()
-
-                        if wait_reconnect not in done:
-                            break
-
-                        self._reconnect_event.clear()
+                            self._reconnect_event.clear()
                     finally:
-                        await utils.aio.cancel_and_wait(*tasks, wait_reconnect)
-                        tasks_group.cancel()
-                        tasks_group.exception()
                         if vad_stream is not None:
                             await vad_stream.aclose()
 

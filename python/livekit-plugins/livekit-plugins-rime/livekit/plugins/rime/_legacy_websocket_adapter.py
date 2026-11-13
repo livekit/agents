@@ -244,15 +244,13 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
 
         try:
             async with self._pool.connection(conn_options=self._conn_options) as websocket:
-                tasks = [
-                    asyncio.create_task(_send_task(websocket)),
-                    asyncio.create_task(_recv_task(websocket)),
-                ]
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    input_sent_event.set()
-                    await utils.aio.cancel_and_wait(*tasks)
+                async with utils.aio.TaskSet() as tasks:
+                    try:
+                        await asyncio.gather(
+                            tasks.spawn(_send_task(websocket)), tasks.spawn(_recv_task(websocket))
+                        )
+                    finally:
+                        input_sent_event.set()
         except APIError:
             raise
         except Exception as cause:

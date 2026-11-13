@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import json
 from collections.abc import AsyncIterator, Callable
@@ -27,6 +26,7 @@ from livekit.agents import (
 )
 from livekit.plugins.openai import responses
 from livekit.plugins.openai.tools import WebSearch
+from tests.fakes import until
 
 NO_RETRY = APIConnectOptions(max_retry=0)
 P = ParamSpec("P")
@@ -452,17 +452,13 @@ async def test_prewarm_opens_one_connection_and_close_settles_it(transport: str)
         model = _llm(str(server.make_url("/v1")), transport)
         model.prewarm()
         model.prewarm()
-        async with asyncio.timeout(3):
-            while not (peer.connections or listed):
-                await asyncio.sleep(0.01)
+        await until(lambda: peer.connections or listed, "the prewarm reached the server")
 
         await model.aclose()
 
         if transport == "websocket":
             assert len(peer.connections) == 1
-            async with asyncio.timeout(3):
-                while not peer.connections[0].closed:
-                    await asyncio.sleep(0.01)
+            await until(lambda: peer.connections[0].closed, "the prewarmed socket closed")
         else:
             assert listed == ["/v1/models"]
 

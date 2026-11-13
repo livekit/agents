@@ -114,6 +114,15 @@ impl From<&str> for HostError {
 
 pub type HostResult<T = ()> = Result<T, HostError>;
 
+/// A label read from the host each time it is used (a provider's model, its markup dialect): a
+/// failed read is logged and answered by `fallback`, since a label never fails what it names.
+pub fn label_or<T>(what: &str, read: HostResult<T>, fallback: impl FnOnce() -> T) -> T {
+    read.unwrap_or_else(|e| {
+        log::warn!(target: crate::LOG_TARGET, "reading {what} failed: {e}");
+        fallback()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

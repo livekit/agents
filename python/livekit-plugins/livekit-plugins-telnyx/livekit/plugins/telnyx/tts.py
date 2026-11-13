@@ -130,20 +130,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for text in self._segments_ch:
                 await self._run_ws(text, output_emitter)
 
-        tasks = [
-            asyncio.create_task(_collect_segments()),
-            asyncio.create_task(_run_segments()),
-        ]
         try:
-            await asyncio.gather(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(tasks.spawn(_collect_segments()), tasks.spawn(_run_segments()))
         except TimeoutError:
             raise APITimeoutError() from None
         except (APIConnectionError, APIStatusError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
 
     async def _run_ws(self, text: str, output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
@@ -193,16 +188,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             ws = await self._ensure_session().ws_connect(
                 url, headers=headers, conn_options=self._conn_options
             )
-            tasks = [
-                asyncio.create_task(send_task(ws)),
-                asyncio.create_task(recv_task(ws)),
-                asyncio.create_task(decode_task()),
-            ]
             try:
-                await asyncio.gather(*tasks)
+                async with utils.aio.TaskSet() as tasks:
+                    await asyncio.gather(
+                        tasks.spawn(send_task(ws)),
+                        tasks.spawn(recv_task(ws)),
+                        tasks.spawn(decode_task()),
+                    )
             finally:
-                await utils.aio.cancel_and_wait(*tasks)
                 await ws.close()
+
         except TimeoutError:
             raise APITimeoutError() from None
         except (APIConnectionError, APIStatusError):

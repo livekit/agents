@@ -202,10 +202,7 @@ class _InworldConnection:
         self._acquire_lock = asyncio.Lock()  # Ensures atomic capacity check + context creation
         self._last_activity: float = time.time()
 
-        # Background tasks
-        self._send_task: asyncio.Task[None] | None = None
-        self._recv_task: asyncio.Task[None] | None = None
-        self._cleanup_task: asyncio.Task[None] | None = None
+        self._tasks = aio.TaskSet()
 
     @property
     def context_count(self) -> int:
@@ -274,9 +271,9 @@ class _InworldConnection:
                 extra={"request_id": request_id},
             )
 
-            self._send_task = asyncio.create_task(self._send_loop())
-            self._recv_task = asyncio.create_task(self._recv_loop())
-            self._cleanup_task = asyncio.create_task(self._cleanup_stale_contexts())
+            self._tasks.spawn(self._send_loop(), name="inworld-tts-send")
+            self._tasks.spawn(self._recv_loop(), name="inworld-tts-recv")
+            self._tasks.spawn(self._cleanup_stale_contexts(), name="inworld-tts-cleanup")
 
     async def acquire_context(
         self,
@@ -634,15 +631,7 @@ class _InworldConnection:
     async def aclose(self) -> None:
         """Close the connection and all contexts."""
         self._closed = True
-
-        # Cancel background tasks
-        for task in [self._send_task, self._recv_task, self._cleanup_task]:
-            if task:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        await self._tasks.aclose()
 
         # Close all contexts and fail their waiters
         for ctx in list(self._contexts.values()):
@@ -694,7 +683,7 @@ class _ConnectionPool:
         self._capacity_available = asyncio.Event()
         self._capacity_available.set()  # Initially available since we can create connections
 
-        # Cleanup task
+        self._tasks = aio.TaskSet()
         self._cleanup_task: asyncio.Task[None] | None = None
 
     async def acquire_context(
@@ -724,10 +713,13 @@ class _ConnectionPool:
 
             async with self._pool_lock:
                 # Start cleanup task if not already running
-                if self._cleanup_task is None:
-                    self._cleanup_task = asyncio.create_task(self._cleanup_idle_connections())
+                if self._cleanup_task is None and not self._tasks.closed:
+                    self._cleanup_task = self._tasks.spawn(
+                        self._cleanup_idle_connections(), name="inworld-tts-pool-cleanup"
+                    )
 
                 # Prune closed connections first
+                failed = [c for c in self._connections if c.closed]
                 self._connections = [c for c in self._connections if not c.closed]
 
                 # First, try to find a connection with capacity
@@ -755,6 +747,10 @@ class _ConnectionPool:
                 # Reserve capacity BEFORE releasing lock so other callers see it
                 if conn:
                     conn.reserve_capacity()
+
+            # a connection that failed is pruned closed, but its loops and socket still run
+            for dropped in failed:
+                await dropped.aclose()
 
             # Acquire context OUTSIDE the lock to avoid head-of-line blocking
             if conn:
@@ -833,13 +829,7 @@ class _ConnectionPool:
     async def aclose(self) -> None:
         """Close all connections in the pool."""
         self._closed = True
-
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
+        await self._tasks.aclose()
 
         async with self._pool_lock:
             connections = list(self._connections)
@@ -987,6 +977,7 @@ class TTS(tts.TTS):
         self._idle_connection_timeout = idle_connection_timeout
         self._pool: _ConnectionPool | None = None
         self._pool_lock = asyncio.Lock()
+        self._tasks = aio.TaskSet()
         self._prewarm_task: asyncio.Task[None] | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
@@ -1113,11 +1104,10 @@ class TTS(tts.TTS):
         return self._session
 
     def prewarm(self) -> None:
-        # Don't replace a prewarm still in flight: the old task would lose its only
-        # reference, and aclose() cancels just the latest one, so it could build a
-        # pool after shutdown. Same guard as the soniox plugin.
+        if self._tasks.closed:
+            return
         if self._prewarm_task is None or self._prewarm_task.done():
-            self._prewarm_task = asyncio.create_task(self._prewarm_impl())
+            self._prewarm_task = self._tasks.spawn(self._prewarm_impl(), name="inworld-tts-prewarm")
 
     async def _prewarm_impl(self) -> None:
         # Just ensure the pool is created - first acquire will establish a connection
@@ -1150,9 +1140,7 @@ class TTS(tts.TTS):
         # Cancel first: _prewarm_impl calls _get_pool, which builds a new pool when
         # self._pool is None. A prewarm still in flight here would otherwise recreate
         # the pool after it was closed, leaving a live connection nothing owns.
-        if self._prewarm_task is not None:
-            await aio.cancel_and_wait(self._prewarm_task)
-            self._prewarm_task = None
+        await self._tasks.aclose()
 
         for stream in list(self._streams):
             await stream.aclose()
@@ -1349,7 +1337,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection.flush_context(context_id)
             connection.close_context(context_id)
 
-        tasks = [asyncio.create_task(_send_task())]
+        tasks = utils.aio.TaskSet()
+        tasks.spawn(_send_task(), name="inworld-tts-send-text")
 
         try:
             await waiter
@@ -1367,7 +1356,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection.close_context(context_id)
             raise APIConnectionError() from e
         finally:
-            await utils.aio.cancel_and_wait(*tasks)
+            await tasks.aclose()
             output_emitter.end_input()
 
 

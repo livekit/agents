@@ -8,7 +8,7 @@ pub use api::{
     TRANSIENT_CLIENT_STATUSES, Timeout, http_error_message, http_reason, retryable_for_status,
 };
 mod host;
-pub use host::{CapturedError, HostError, HostErrorKind, HostResult};
+pub use host::{CapturedError, HostError, HostErrorKind, HostResult, label_or};
 pub use host_capture::{
     ProviderErrorMetadata, RealtimeErrorMetadata, TaxonomyMatches, host_retryable,
 };

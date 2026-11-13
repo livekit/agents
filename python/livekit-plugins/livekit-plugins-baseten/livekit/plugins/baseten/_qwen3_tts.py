@@ -253,6 +253,7 @@ class Qwen3Backend:
         self._ref_audio_b64: str | None = None
         self._warm: _WarmSocket | None = None
         self._warm_lock = asyncio.Lock()
+        self._tasks = utils.aio.TaskSet()
         self._keepalive_task: asyncio.Task[None] | None = None
         self._closing = False
 
@@ -283,10 +284,7 @@ class Qwen3Backend:
 
     async def aclose(self) -> None:
         self._closing = True
-        if self._keepalive_task and not self._keepalive_task.done():
-            self._keepalive_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._keepalive_task
+        await self._tasks.aclose()
         async with self._warm_lock:
             warm, self._warm = self._warm, None
         if warm:
@@ -395,7 +393,7 @@ class Qwen3Backend:
             await self._shutdown_ws(stale.ws, notify=True)
 
         if not self._closing and (self._keepalive_task is None or self._keepalive_task.done()):
-            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+            self._keepalive_task = self._tasks.spawn(self._keepalive_loop())
 
     async def _keepalive_loop(self) -> None:
         """Keep the parked socket off the server's idle timeout.
@@ -612,12 +610,10 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             if config != applied_config:
                 await ws.send_str(json.dumps({"type": "session.config", **config}))
 
-            send_task = asyncio.create_task(_send(), name="qwen3-tts-send")
-            recv_task = asyncio.create_task(_recv(), name="qwen3-tts-recv")
-            try:
+            async with utils.aio.TaskSet() as tasks:
+                send_task = tasks.spawn(_send(), name="qwen3-tts-send")
+                recv_task = tasks.spawn(_recv(), name="qwen3-tts-recv")
                 await asyncio.gather(send_task, self._drain(recv_task, state))
-            finally:
-                await utils.aio.cancel_and_wait(send_task, recv_task)
 
             output_emitter.end_input()
             discard = False
@@ -648,22 +644,16 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             if state.settled:
                 return
 
-            waiter = asyncio.ensure_future(state.progress.wait())
+            timeout = (
+                self._conn_options.read_timeout if state.flushes_sent > state.flushes_done else None
+            )
             try:
-                done, _ = await asyncio.wait(
-                    {recv_task, waiter},
-                    timeout=(
-                        self._conn_options.read_timeout
-                        if state.flushes_sent > state.flushes_done
-                        else None
-                    ),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-            finally:
-                if not waiter.done():
-                    waiter.cancel()
-            if not done:
-                raise APITimeoutError("Qwen3 synthesis read timed out", timeout="read")
+                async with asyncio.timeout(timeout), utils.aio.TaskSet() as waits:
+                    await waits.first_completed(asyncio.shield(recv_task), state.progress.wait())
+            except TimeoutError:
+                if recv_task.done():
+                    raise
+                raise APITimeoutError("Qwen3 synthesis read timed out", timeout="read") from None
 
     def _emit_timestamps(
         self,

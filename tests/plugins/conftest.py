@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime
-import gc
 import ipaddress
 import json
 import ssl
@@ -230,7 +229,6 @@ async def gemini_live(gemini_tls: tuple[ssl.SSLContext, ssl.SSLContext]) -> Asyn
         live.accepting.set()
         await runner.cleanup()
         # the SDK's AsyncClient.__del__ schedules aclose() even on a closed client; settle it
-        gc.collect()
         await asyncio.sleep(0)
 
 

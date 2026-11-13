@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import gc
 import json
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -73,7 +72,7 @@ class GeminiPeer:
         await response.prepare(request)
         for index, payload in enumerate(self.payloads):
             if index < len(self.delays):
-                await asyncio.sleep(self.delays[index])
+                await asyncio.sleep(self.delays[index])  # real wait: the read timeout is under test
             event = f"data: {payload if isinstance(payload, str) else json.dumps(payload)}\n\n"
             if self.fragmented:
                 half = len(event) // 2
@@ -114,7 +113,6 @@ async def gemini() -> AsyncIterator[GeminiPeer]:
         peer.url = str(server.make_url(""))
         yield peer
     # the SDK's AsyncClient.__del__ schedules aclose() even on a closed client; settle it
-    gc.collect()
     await asyncio.sleep(0)
 
 

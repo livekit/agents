@@ -278,25 +278,17 @@ class RecognizeStream(stt.RecognizeStream):
 
         try:
             async with client.aio.live.connect(model=self._opts.model, config=config) as session:
-                send_task = asyncio.create_task(self._send_loop(session))
-                receive_task = asyncio.create_task(self._receive_loop(session))
-                tasks = [send_task, receive_task]
-
-                try:
-                    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-
+                async with utils.aio.TaskSet() as tasks:
+                    receive_task = tasks.spawn(self._receive_loop(session))
+                    await tasks.first_completed(
+                        tasks.spawn(self._send_loop(session)), asyncio.shield(receive_task)
+                    )
                     # A closed input channel doesn't mean Gemini is done: the tail of the
                     # transcript is only emitted once `finished`/`turn_complete` arrives.
                     # Give the receive loop a bounded grace period instead of cancelling
                     # it the moment _send_loop returns, which would drop that final.
-                    if send_task.done() and not receive_task.done():
-                        await asyncio.wait([receive_task], timeout=FINALIZE_TIMEOUT)
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks)
-
-                for task in tasks:
-                    if not task.cancelled():
-                        task.result()
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(asyncio.shield(receive_task), FINALIZE_TIMEOUT)
 
         # Provider errors can quote the audio payload or transcript, so the text is logged
         # as a redactable attribute and kept out of the raised message, whose body the

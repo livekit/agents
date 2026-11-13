@@ -22,15 +22,15 @@ logging.basicConfig(level=logging.INFO)
 telemetry._install()
 
 def block_the_loop_here():
-    time.sleep(0.4)
+    time.sleep(0.4)  # real wait: a stall past the detector's 100 ms wall-clock threshold
 
 async def main():
     monitor = telemetry._LoopMonitor()
     monitor.start("AJ_stall", whole_process=True)
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.1)  # real wait: the sampler attaches on its own thread
     {before_block}
     block_the_loop_here()
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.1)  # real wait: the detector reports the stall before the watch stops
     monitor.stop()
 
 asyncio.run(main())
@@ -104,7 +104,7 @@ from livekit.agents import _core
 watch = _core._core_LoopWatch(
     threading.get_native_id(), parent=None, job="AJ_parent", whole_process=True
 )
-time.sleep(0.5)  # the parent's detector has attached and samples
+time.sleep(0.5)  # real wait: the parent's detector has attached and samples
 if (child := os.fork()) != 0:
     watch.close()
     os._exit(os.waitstatus_to_exitcode(os.waitpid(child, 0)[1]))
@@ -138,7 +138,7 @@ def test_the_sampler_attaches_beside_a_thread_deeper_than_py_spy_reads() -> None
         watch = _core._core_LoopWatch(
             threading.get_native_id(), parent=None, job="AJ_deep", whole_process=True
         )
-        time.sleep(0.3)
+        time.sleep(0.3)  # real wait: the sampler attaches beside the deep thread
         watch.close()
         release.set()
         """
@@ -184,10 +184,10 @@ def test_exiting_with_a_watch_open_never_aborts_the_process() -> None:
         _THREAD_CHURN.format(
             program="""
 watch = open_watch()
-time.sleep(0.15)  # attached while the process is quiet
+time.sleep(0.15)  # real wait: attached while the process is quiet
 for _ in range(4):
     threading.Thread(target=churn, daemon=True).start()
-time.sleep(0.35)
+time.sleep(0.35)  # real wait: the interpreter finalizes while the sampler reads
 """
         )
     )
@@ -206,9 +206,9 @@ def test_a_forked_child_can_log_after_its_parent_reported_a_stall() -> None:
         watch = _core._core_LoopWatch(
             threading.get_native_id(), parent=None, job=None, whole_process=False
         )
-        time.sleep(0.4)
+        time.sleep(0.4)  # real wait: a stall past the detector's 100 ms threshold
         watch.beat()
-        time.sleep(0.1)
+        time.sleep(0.1)  # real wait: the detector reports it
         _core.flush_logs()  # the stall's report started the core's log drain
         if (child := os.fork()) == 0:
             telemetry._install()  # logs that the core was inherited across a fork

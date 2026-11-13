@@ -88,6 +88,15 @@ RECOVERABLE_VALIDATION_ERROR_MESSAGES = (
 # Override with LK_SESSION_MAX_DURATION env var for testing (e.g., "60" for 1 minute)
 MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
 CREDENTIAL_EXPIRY_BUFFER_SECONDS = 3 * 60  # Restart 3 min before credential expiry
+# A recycle waits for the assistant's audio to stay quiet this long before closing the stream.
+RECYCLE_QUIET_PERIOD_SECONDS = 1.0
+# How long a recycle waits for the open generation's completionEnd after the prompt ends.
+RECYCLE_COMPLETION_END_TIMEOUT_SECONDS = 2.0
+# How long a closing stream's receive loop gets to end on its own before it is cancelled.
+RESPONSE_DRAIN_TIMEOUT_SECONDS = 1.0
+# How long a recycle for changed tools waits for the tool calls in flight to be answered, so
+# their results reach the stream that asked for them.
+TOOL_RESULTS_RECYCLE_TIMEOUT_SECONDS = 5.0
 BARGE_IN_SIGNAL = '{ "interrupted" : true }'  # Nova Sonic's barge-in detection signal
 
 
@@ -590,6 +599,8 @@ class RealtimeSession(  # noqa: F811
         self._stream_response = None
         self._bedrock_client = None
         self._pending_tools: set[str] = set()
+        self._no_pending_tools = asyncio.Event()  # set while _pending_tools is empty
+        self._no_pending_tools.set()
         self._is_sess_active = asyncio.Event()
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext.empty()
@@ -605,12 +616,9 @@ class RealtimeSession(  # noqa: F811
         self._current_generation: _ResponseGeneration | None = None
         # Session recycling: proactively restart before credential expiry or 8-min limit
         self._session_recycle_task: asyncio.Task[None] | None = None
-        # Held only so the loop's weak reference cannot collect them mid-flight.
-        # Their lifecycle - cancellation, coalescing, shutdown - is #7052's subject.
-        self._user_text_tasks: set[asyncio.Task[None]] = set()
-        self._deferred_tool_recycle_tasks: set[asyncio.Task[None]] = set()
-        self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
-        self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
+        self._tasks = utils.aio.TaskSet()
+        self._last_audio_output_time: float = 0.0  # monotonic time of the last assistant audio
+        self._audio_end_turn = asyncio.Event()  # the assistant finished speaking
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._sent_message_ids: set[str] = set()
         self._audio_message_ids: set[str] = set()
@@ -619,9 +627,10 @@ class RealtimeSession(  # noqa: F811
         ] = {}  # contentId → role for events without generation
         self._current_user_content_id: str | None = None  # track current user utterance
         # Signalled after await_output() returns (HTTP 200 received).
-        # Interactive text must wait for this to avoid being sent before
-        # audio input is flowing (Nova Sonic requires active audio to generate).
         self._stream_ready = asyncio.Event()
+        # Signalled once the audio input's contentStart is sent. Interactive text waits for it:
+        # Nova Sonic requires active audio to generate, and the two contentStarts must not overlap.
+        self._audio_input_started = asyncio.Event()
 
         # Gate that pauses audio frame transmission while a text block is in-flight.
         # This prevents the race condition where an audioInput frame arrives at the
@@ -653,7 +662,7 @@ class RealtimeSession(  # noqa: F811
         )
 
         # Create main task to manage session lifecycle
-        self._main_atask = asyncio.create_task(
+        self._main_atask = self._tasks.spawn(
             self.initialize_streams(), name="RealtimeSession.initialize_streams"
         )
 
@@ -705,12 +714,14 @@ class RealtimeSession(  # noqa: F811
 
     def _start_session_recycle_timer(self) -> None:
         """Start the session recycling timer."""
-        if self._session_recycle_task and not self._session_recycle_task.done():
-            self._session_recycle_task.cancel()
+        # a recycle restarts the timer from inside the timer's own task
+        if self._session_recycle_task is not asyncio.current_task():
+            if self._session_recycle_task is not None:
+                self._session_recycle_task.cancel()
 
         duration = self._calculate_session_duration()
 
-        self._session_recycle_task = asyncio.create_task(
+        self._session_recycle_task = self._tasks.spawn(
             self._session_recycle_timer(duration), name="RealtimeSession._session_recycle_timer"
         )
 
@@ -729,43 +740,19 @@ class RealtimeSession(  # noqa: F811
             )
 
             # Step 1: Wait for assistant to finish speaking (AUDIO contentEnd with END_TURN)
-            if not self._audio_end_turn_received:
+            if not self._audio_end_turn.is_set():
                 logger.info(
                     "[SESSION] Waiting for assistant to finish speaking (AUDIO END_TURN)..."
                 )
-                while not self._audio_end_turn_received:
-                    await asyncio.sleep(0.1)
+                await self._audio_end_turn.wait()
                 logger.debug("[SESSION] Assistant finished speaking")
 
-            # Step 2: Wait for audio to fully stop (no new audio for 1 second)
+            # Step 2: Wait for the assistant's audio to stay quiet
             logger.debug("[SESSION] Waiting for audio to fully stop...")
-            last_audio_time = self._last_audio_output_time
-            while True:
-                await asyncio.sleep(0.1)
-                if self._last_audio_output_time == last_audio_time:
-                    await asyncio.sleep(0.9)
-                    if self._last_audio_output_time == last_audio_time:
-                        logger.debug("[SESSION] No new audio for 1s, proceeding with recycle")
-                        break
-                else:
-                    logger.debug("[SESSION] New audio detected, continuing to wait...")
-                    last_audio_time = self._last_audio_output_time
-
-            # Step 3: Send close events to trigger completionEnd from Nova Sonic
-            # This must happen BEFORE cancelling tasks so response task can receive completionEnd
-            logger.info("[SESSION] Sending close events to Nova Sonic...")
-            if self._stream_response:
-                for event in self._event_builder.create_prompt_end_block():
-                    await self._send_raw_event(event)
-
-            # Step 4: Wait for completionEnd and let done_fut resolve
-            if self._current_generation and self._current_generation.done_fut:
-                try:
-                    await asyncio.wait_for(self._current_generation.done_fut, timeout=2.0)
-                    logger.debug("[SESSION] Generation completed (completionEnd received)")
-                except TimeoutError:
-                    logger.warning("[SESSION] Timeout waiting for completionEnd, proceeding anyway")
-                    self._close_current_generation()
+            while (
+                quiet := time.monotonic() - self._last_audio_output_time
+            ) < RECYCLE_QUIET_PERIOD_SECONDS:
+                await asyncio.sleep(RECYCLE_QUIET_PERIOD_SECONDS - quiet)
 
             await self._graceful_session_recycle()
 
@@ -793,32 +780,31 @@ class RealtimeSession(  # noqa: F811
                 logger.warning(f"[SESSION] Error draining tool result: {e}")
                 break
 
-        # Step 2: Signal tasks to stop
-        self._is_sess_active.clear()
-
-        # Step 3: Wait for response task to exit naturally, then cancel if needed
-        if self._response_task and not self._response_task.done():
+        # Step 2: End the prompt, so Nova Sonic ends the open generation and the output stream
+        logger.info("[SESSION] Sending close events to Nova Sonic...")
+        if self._stream_response:
+            for event in self._event_builder.create_prompt_end_block():
+                await self._send_raw_event(event)
+        if self._current_generation and self._current_generation.done_fut:
             try:
-                # TODO: Even waiting for 30 seconds this never just happens.
-                # See if we can figure out how to make this more graceful
-                await asyncio.wait_for(self._response_task, timeout=1.0)
+                await asyncio.wait_for(
+                    asyncio.shield(self._current_generation.done_fut),
+                    timeout=RECYCLE_COMPLETION_END_TIMEOUT_SECONDS,
+                )
+                logger.debug("[SESSION] Generation completed (completionEnd received)")
             except TimeoutError:
-                logger.debug("[SESSION] Response task timeout, cancelling...")
-                self._response_task.cancel()
-                try:
-                    await self._response_task
-                except asyncio.CancelledError:
-                    pass
+                logger.warning("[SESSION] Timeout waiting for completionEnd, proceeding anyway")
+                self._close_current_generation()
+
+        # Step 3: Signal tasks to stop, and let the receive loop end with the stream
+        self._is_sess_active.clear()
+        await self._drain_response_task()
 
         # Step 4: Cancel audio input task (blocked on channel, won't exit naturally)
-        if self._audio_input_task and not self._audio_input_task.done():
-            self._audio_input_task.cancel()
-            try:
-                await self._audio_input_task
-            except asyncio.CancelledError:
-                pass
+        if self._audio_input_task is not None:
+            await utils.aio.cancel_and_wait(self._audio_input_task)
 
-        # Step 5: Close the stream (close events already sent in _session_recycle_timer)
+        # Step 5: Close the stream
         if self._stream_response:
             try:
                 await self._stream_response.input_stream.close()
@@ -836,13 +822,31 @@ class RealtimeSession(  # noqa: F811
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         self._audio_input_chan = utils.aio.Chan[bytes]()
         logger.debug("[SESSION] Created fresh tool results and audio input channels")
-        self._audio_end_turn_received = False
+        self._audio_end_turn.clear()
         self._stream_ready.clear()
+        self._audio_input_started.clear()
 
         # Step 7: Start new session with preserved state
         await self.initialize_streams(is_restart=True)
 
         logger.info("[SESSION] Session recycled successfully")
+
+    async def _drain_response_task(self) -> None:
+        """Let the receive loop end with its closing stream; cancel it if it does not."""
+        task = self._response_task
+        if task is None or task.done():
+            return
+        if not self._stream_ready.is_set():
+            # still waiting for the stream to open: no output will end it
+            await utils.aio.cancel_and_wait(task)
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=RESPONSE_DRAIN_TIMEOUT_SECONDS)
+        except TimeoutError:
+            logger.debug("[SESSION] Response task timeout, cancelling...")
+            await utils.aio.cancel_and_wait(task)
+        except Exception:
+            pass  # the receive loop reported its own failure
 
     @utils.log_exceptions(logger=logger)
     async def _send_raw_event(self, event_json: str) -> None:
@@ -1062,25 +1066,20 @@ class RealtimeSession(  # noqa: F811
                 await asyncio.sleep(0.01)
 
             # Step 3: Start response reader first (calls await_output, sets _stream_ready)
-            self._response_task = asyncio.create_task(
+            self._response_task = self._tasks.spawn(
                 self._process_responses(), name="RealtimeSession._process_responses"
             )
 
             # Step 4: Start audio input (waits for _stream_ready before sending audio_content_start)
-            self._audio_input_task = asyncio.create_task(
+            self._audio_input_task = self._tasks.spawn(
                 self._process_audio_input(), name="RealtimeSession._process_audio_input"
             )
-
-            # Step 5: Allow audio contentStart to be sent before unblocking
-            # interactive text (generate_reply). This avoids sending AUDIO and TEXT
-            # interactive contentStart events simultaneously.
-            await asyncio.sleep(0.05)
             self._is_sess_active.set()
 
-            # Step 6: If we popped a user message from history, send it as
+            # Step 5: If we popped a user message from history, send it as
             # interactive text now to trigger Nova Sonic to respond.
             if interactive_user_text:
-                await self._stream_ready.wait()
+                await self._audio_input_started.wait()
                 logger.debug(
                     "[SESSION] Sending interactive user text",
                     extra={"lk.pii.user_text": f"{interactive_user_text[:60]}..."},
@@ -1407,6 +1406,7 @@ class RealtimeSession(  # noqa: F811
             llm.FunctionCall(call_id=tool_use_id, name=tool_name, arguments=args)
         )
         self._pending_tools.add(tool_use_id)
+        self._no_pending_tools.clear()
         logger.debug(f"Tool call emitted: {tool_name} (id={tool_use_id})")
 
         # CRITICAL: Close generation after tool call emission
@@ -1450,7 +1450,7 @@ class RealtimeSession(  # noqa: F811
                 )
             )
             # Track when we last received audio output (for session recycling)
-            self._last_audio_output_time = time.time()
+            self._last_audio_output_time = time.monotonic()
 
     async def _handle_audio_output_content_end_event(self, event_data: SonicOutputEvent) -> None:
         """Handle audio content end - track END_TURN for session recycling."""
@@ -1459,7 +1459,7 @@ class RealtimeSession(  # noqa: F811
         # Check if this is END_TURN (assistant finished speaking)
         content_end = event_data.event.contentEnd
         if content_end is not None and content_end.stopReason == "END_TURN":
-            self._audio_end_turn_received = True
+            self._audio_end_turn.set()
             logger.debug("[SESSION] AUDIO END_TURN received - assistant finished speaking")
             self._close_current_generation()
 
@@ -1640,6 +1640,7 @@ class RealtimeSession(  # noqa: F811
                         if self._pending_tools:
                             logger.debug(f"Clearing {len(self._pending_tools)} pending tools")
                             self._pending_tools.clear()
+                            self._no_pending_tools.set()
 
                         self.emit(
                             "error",
@@ -1844,6 +1845,8 @@ class RealtimeSession(  # noqa: F811
 
                 logger.debug("function call output received", extra={"lk.pii.item": item})
                 self._pending_tools.discard(item.call_id)
+                if not self._pending_tools:
+                    self._no_pending_tools.set()
 
                 if not item.reply_required:
                     logger.warning(
@@ -1891,8 +1894,7 @@ class RealtimeSession(  # noqa: F811
                             text: str = text, fut: asyncio.Future[llm.GenerationCreatedEvent] = fut
                         ) -> None:
                             try:
-                                # Wait for bidirectional stream to be fully established
-                                await self._stream_ready.wait()
+                                await self._audio_input_started.wait()
                                 await self._send_text_message(text, interactive=True)
                             except Exception as e:
                                 if not fut.done():
@@ -1900,11 +1902,7 @@ class RealtimeSession(  # noqa: F811
                                 if self._pending_generation_fut is fut:
                                     self._pending_generation_fut = None
 
-                        task = asyncio.create_task(
-                            _send_user_text(), name="RealtimeSession._send_user_text"
-                        )
-                        self._user_text_tasks.add(task)
-                        task.add_done_callback(self._user_text_tasks.discard)
+                        self._tasks.spawn(_send_user_text(), name="RealtimeSession._send_user_text")
 
                     self._sent_message_ids.add(item.id)
                     self._chat_ctx.items.append(item)
@@ -1954,13 +1952,13 @@ class RealtimeSession(  # noqa: F811
         self._tools = llm.ToolContext(tools)
         new_tools = set(self._tools.function_tools)
 
-        if self._tools.function_tools:
-            if self._tools_ready is None:
-                self._tools_ready = asyncio.get_running_loop().create_future()
-            if not self._tools_ready.done():
-                self._tools_ready.set_result(True)
-                logger.debug("Tool list has been injected (initial)")
-                return
+        # the first update, empty or not, is what the session start waits for
+        if self._tools_ready is None:
+            self._tools_ready = asyncio.get_running_loop().create_future()
+        if not self._tools_ready.done():
+            self._tools_ready.set_result(True)
+            logger.debug("Tool list has been injected (initial)")
+            return
 
         # If tools actually changed and session is active, schedule a deferred recycle.
         # We defer because update_tools is often called from within a tool execution
@@ -1970,34 +1968,29 @@ class RealtimeSession(  # noqa: F811
                 f"[SESSION] Tools changed (added={new_tools - old_tools}, "
                 f"removed={old_tools - new_tools}), scheduling deferred session recycle"
             )
-            task = asyncio.create_task(
+            self._tasks.spawn(
                 self._deferred_tool_recycle(), name="RealtimeSession._deferred_tool_recycle"
             )
-            self._deferred_tool_recycle_tasks.add(task)
-            task.add_done_callback(self._deferred_tool_recycle_tasks.discard)
         else:
             logger.debug("Tool list updated locally")
 
     async def _deferred_tool_recycle(self) -> None:
-        """Wait for in-flight tool results to be delivered, then recycle."""
-        # Short yield to let the tool result be sent to Bedrock
-        # before we tear down the session.
-        await asyncio.sleep(0.15)
+        """Wait for the tool calls in flight to be answered, then recycle."""
+        try:
+            async with asyncio.timeout(TOOL_RESULTS_RECYCLE_TIMEOUT_SECONDS):
+                await self._no_pending_tools.wait()
+        except TimeoutError:
+            logger.warning("[SESSION] Tool results still pending, recycling without them")
 
         if not self._is_sess_active.is_set():
             logger.debug("[SESSION] Session no longer active, skipping tool recycle")
             return
 
         logger.info("[SESSION] Recycling session for updated tools")
-        # Clear pending tools so stale results from update_chat_ctx are ignored
+        # results that arrive later answer the old stream's tool uses: ignore them
         self._pending_tools.clear()
-        # Drain and discard any queued tool results
-        while True:
-            try:
-                discarded = self._tool_results_ch.recv_nowait()
-                logger.debug(f"[SESSION] Discarding stale tool result: {discarded['tool_use_id']}")
-            except utils.aio.ChanEmpty:
-                break
+        self._no_pending_tools.set()
+        # the recycle sends the results already queued before it closes the stream
         await self._graceful_session_recycle()
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
@@ -2038,48 +2031,39 @@ class RealtimeSession(  # noqa: F811
         # ValidationException: "Chat history should be sent completely before streaming audio."
         await self._stream_ready.wait()
         await self._send_raw_event(self._event_builder.create_audio_content_start_event())
+        self._audio_input_started.set()
         logger.info("Starting audio input processing loop")
 
-        # Wait for session to be marked active before entering the loop.
-        # Without this, the while-condition below evaluates to False immediately
-        # because _is_sess_active is set after an asyncio.sleep in initialize_streams.
         await self._is_sess_active.wait()
 
-        # Create tasks for both channels so we can wait on either
-        audio_task = asyncio.create_task(self._audio_input_chan.recv())
-        tool_task = asyncio.create_task(self._tool_results_ch.recv())
-        pending = {audio_task, tool_task}
-
-        while self._is_sess_active.is_set():
-            try:
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-
-                for task in done:
-                    if task == audio_task:
-                        try:
-                            audio_bytes = cast(bytes, task.result())
-                            # Wait for any in-flight text block to complete before
-                            # sending the audio frame. This prevents the race condition
-                            # where audioInput arrives between TEXT contentStart and
-                            # TEXT contentEnd. The lock serializes with _send_text_message.
+        try:
+            async with utils.aio.TaskSet() as tasks:
+                audio = tasks.spawn(self._audio_input_chan.recv())
+                tool = tasks.spawn(self._tool_results_ch.recv())
+                while self._is_sess_active.is_set():
+                    try:
+                        # shielded: the read that did not finish keeps its place for the next round
+                        await tasks.first_completed(asyncio.shield(audio), asyncio.shield(tool))
+                    except utils.aio.ChanClosed:
+                        logger.warning("audio input or tool results channel closed")
+                        break
+                    try:
+                        if audio.done():
+                            audio_bytes = audio.result()
+                            audio = tasks.spawn(self._audio_input_chan.recv())
+                            # Wait for any in-flight text block to complete before sending the
+                            # frame, so audioInput never lands between TEXT contentStart and
+                            # contentEnd. The lock serializes with _send_text_message.
                             async with self._text_block_lock:
                                 blob = base64.b64encode(audio_bytes)
                                 audio_event = self._event_builder.create_audio_input_event(
                                     audio_content=blob.decode("utf-8"),
                                 )
                                 await self._send_raw_event(audio_event)
-                            # Create new task for next audio
-                            audio_task = asyncio.create_task(self._audio_input_chan.recv())
-                            pending.add(audio_task)
-                        except utils.aio.ChanClosed:
-                            logger.warning("audio input channel closed")
-                            break
-
-                    elif task == tool_task:
-                        try:
-                            val = cast(dict[str, str], task.result())
+                        if tool.done():
+                            val = tool.result()
+                            tool = tasks.spawn(self._tool_results_ch.recv())
                             tool_result = val["tool_result"]
-                            tool_use_id = val["tool_use_id"]
                             try:
                                 tool_result = json.loads(tool_result)
                             except json.JSONDecodeError:
@@ -2088,24 +2072,14 @@ class RealtimeSession(  # noqa: F811
                             logger.debug(
                                 "Sending tool result", extra={"lk.pii.tool_result": tool_result}
                             )
-                            await self._send_tool_events(tool_use_id, tool_result)
-                            # Create new task for next tool result
-                            tool_task = asyncio.create_task(self._tool_results_ch.recv())
-                            pending.add(tool_task)
-                        except utils.aio.ChanClosed:
-                            logger.warning("tool results channel closed")
-                            break
-
-            except asyncio.CancelledError:
-                logger.info("Audio processing loop cancelled")
-                # Cancel pending tasks
-                for task in pending:
-                    task.cancel()
-                self._audio_input_chan.close()
-                self._tool_results_ch.close()
-                raise
-            except Exception:
-                logger.exception("Error processing audio")
+                            await self._send_tool_events(val["tool_use_id"], tool_result)
+                    except Exception:
+                        logger.exception("Error processing audio")
+        except asyncio.CancelledError:
+            logger.info("Audio processing loop cancelled")
+            self._audio_input_chan.close()
+            self._tool_results_ch.close()
+            raise
 
     # for debugging purposes only
     def _log_significant_audio(self, audio_bytes: bytes) -> None:
@@ -2225,9 +2199,7 @@ class RealtimeSession(  # noqa: F811
             # Send text message asynchronously
             async def _send_text() -> None:
                 try:
-                    # Wait for the bidirectional stream to be fully established
-                    # (HTTP 200 received) and audio input flowing.
-                    await self._stream_ready.wait()
+                    await self._audio_input_started.wait()
                     await self._send_text_message(instructions, interactive=True)
                 except Exception as e:
                     if not fut.done():
@@ -2235,7 +2207,7 @@ class RealtimeSession(  # noqa: F811
                     if self._pending_generation_fut is fut:
                         self._pending_generation_fut = None
 
-            send_task = asyncio.create_task(_send_text())
+            send_task = self._tasks.spawn(_send_text(), name="RealtimeSession._send_text")
 
             # Set timeout from model configuration
             def _on_timeout() -> None:
@@ -2252,11 +2224,10 @@ class RealtimeSession(  # noqa: F811
 
             def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
                 timeout_handle.cancel()
-                is_current = self._pending_generation_fut is fut
-                if is_current:
+                if self._pending_generation_fut is fut:
                     self._pending_generation_fut = None
-                if f.cancelled() and is_current and not send_task.done():
-                    # external cancel before the text was sent: drop the send
+                if f.cancelled() or f.exception() is not None:
+                    # cancelled, timed out or closed before the text was sent: drop the send
                     send_task.cancel()
 
             fut.add_done_callback(_on_fut_done)
@@ -2374,9 +2345,6 @@ class RealtimeSession(  # noqa: F811
     async def aclose(self) -> None:
         """Gracefully shut down the realtime session and release network resources."""
         logger.info("attempting to shutdown agent session")
-        if not self._is_sess_active.is_set():
-            logger.info("agent session already inactive")
-            return
 
         # Cancel any pending generation futures
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -2385,51 +2353,25 @@ class RealtimeSession(  # noqa: F811
             )
             self._pending_generation_fut = None
 
-        for event in self._event_builder.create_prompt_end_block():
-            await self._send_raw_event(event)
-        # allow event loops to fall out naturally
-        # otherwise, the smithy layer will raise an InvalidStateError during cancellation
-        self._is_sess_active.clear()
+        # a recycle in flight would reopen the stream
+        if self._session_recycle_task is not None:
+            await utils.aio.cancel_and_wait(self._session_recycle_task)
 
-        if self._stream_response and (output_stream := self._stream_response.output_stream):
-            await output_stream.close()
+        if self._is_sess_active.is_set():
+            for event in self._event_builder.create_prompt_end_block():
+                await self._send_raw_event(event)
+            # allow event loops to fall out naturally
+            # otherwise, the smithy layer will raise an InvalidStateError during cancellation
+            self._is_sess_active.clear()
+            if self._stream_response and (output_stream := self._stream_response.output_stream):
+                await output_stream.close()
+            await self._drain_response_task()
 
-        # note: even after the self.is_active flag is flipped and the output stream is closed,
-        # there is a future inside output_stream.receive() at the AWS-CRT C layer that blocks
-        # resulting in an error after cancellation
-        # however, it's mostly cosmetic-- the event loop will still exit
-        # TODO: fix this nit
-        tasks: list[asyncio.Task[Any]] = []
-
-        # Cancel session recycle timer
-        if self._session_recycle_task and not self._session_recycle_task.done():
-            self._session_recycle_task.cancel()
-            try:
-                await self._session_recycle_task
-            except asyncio.CancelledError:
-                pass
-
-        if self._response_task:
-            try:
-                await asyncio.wait_for(self._response_task, timeout=1.0)
-            except TimeoutError:
-                logger.warning("shutdown of output event loop timed out-- cancelling")
-                self._response_task.cancel()
-            tasks.append(self._response_task)
-
-        # must cancel the audio input task before closing the input stream
-        if self._audio_input_task and not self._audio_input_task.done():
-            self._audio_input_task.cancel()
-            tasks.append(self._audio_input_task)
+        # the audio input task must stop before the input stream closes
+        await self._tasks.aclose()
         if self._stream_response:
             await self._stream_response.input_stream.close()
 
-        # cancel main task to prevent pending task warnings
-        if self._main_atask and not self._main_atask.done():
-            self._main_atask.cancel()
-            tasks.append(self._main_atask)
-
-        await asyncio.gather(*tasks, return_exceptions=True)
         logger.debug(
             "chat context at session end", extra={"lk.pii.chat_ctx_items": self._chat_ctx.items}
         )

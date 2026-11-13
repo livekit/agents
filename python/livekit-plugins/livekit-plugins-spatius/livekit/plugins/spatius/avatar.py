@@ -152,7 +152,7 @@ class AvatarSession(BaseAvatarSession):
 
         self._spatius_session: SpatiusSDKSession | None = None
         self._audio: QueueAudioOutput | None = None
-        self._forward_atask: asyncio.Task[None] | None = None
+        self._tasks = utils.aio.TaskSet()
         self._interrupt_atask: asyncio.Task[None] | None = None
         self._aclose_atask: asyncio.Task[None] | None = None
         self._closed = False
@@ -276,9 +276,7 @@ class AvatarSession(BaseAvatarSession):
             agent_session.on("close", self._on_session_close)
 
             agent_session.output.replace_audio_tail(self._audio)
-            self._forward_atask = asyncio.create_task(
-                self._forward_audio(), name="spatius_avatar_audio_forwarder"
-            )
+            self._tasks.spawn(self._forward_audio(), name="spatius_avatar_audio_forwarder")
         except asyncio.CancelledError:
             await self.aclose()
             raise
@@ -363,7 +361,7 @@ class AvatarSession(BaseAvatarSession):
         if self._closed or self._spatius_session is None:
             return
         if self._interrupt_atask is None or self._interrupt_atask.done():
-            self._interrupt_atask = asyncio.create_task(self._interrupt())
+            self._interrupt_atask = self._tasks.spawn(self._interrupt())
 
     async def _interrupt(self) -> None:
         if self._spatius_session is None:
@@ -381,12 +379,12 @@ class AvatarSession(BaseAvatarSession):
         if self._closed or self._aclose_atask is not None:
             return
         logger.warning("Spatius avatar session closed unexpectedly")
-        self._aclose_atask = asyncio.create_task(self.aclose())
+        self._aclose_atask = self._tasks.spawn(self.aclose(), name="spatius_avatar_close")
 
     def _on_session_close(self, _: CloseEvent) -> None:
         if self._closed or self._aclose_atask is not None:
             return
-        self._aclose_atask = asyncio.create_task(self.aclose())
+        self._aclose_atask = self._tasks.spawn(self.aclose(), name="spatius_avatar_close")
 
     def _resolve_sample_rate(self, agent_session: VoiceSession) -> int:
         sample_rate = self._sample_rate
@@ -417,18 +415,18 @@ class AvatarSession(BaseAvatarSession):
 
     async def aclose(self) -> None:
         if self._closed:
+            # the avatar may be closing itself: wait for that close
+            close = self._aclose_atask
+            if close is not None and close is not asyncio.current_task():
+                await asyncio.shield(close)
             return
         self._closed = True
 
         if self._agent_session is not None:
             self._agent_session.off("close", self._on_session_close)
 
-        if self._interrupt_atask is not None:
-            await utils.aio.cancel_and_wait(self._interrupt_atask)
-            self._interrupt_atask = None
-        if self._forward_atask is not None:
-            await utils.aio.cancel_and_wait(self._forward_atask)
-            self._forward_atask = None
+        # the forwarder and an interrupt; a self-close running this is left to finish
+        await self._tasks.aclose()
 
         if self._audio is not None:
             await self._audio.aclose()

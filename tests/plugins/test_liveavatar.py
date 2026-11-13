@@ -30,6 +30,7 @@ from livekit.plugins.liveavatar.api import LiveAvatarAPI
 from tests.fakes import until
 
 SAMPLE_RATE = 24000
+NOT_CONNECTED = "the session is not connected yet"
 OPTIONS = APIConnectOptions(max_retry=2, retry_interval=0, connect_timeout=1, read_timeout=1)
 
 
@@ -45,7 +46,9 @@ Started = tuple[AvatarSession, VoiceSession, QueueAudioOutput]
 
 
 class LiveAvatarPeer:
-    """The LiveAvatar REST API (token, start, stop) and its LITE-mode event socket."""
+    """The LiveAvatar REST API (token, start, stop) and its LITE-mode event socket. Until
+    ``connected`` is set the socket sends only a ``warning`` (``NOT_CONNECTED``), and keeps what
+    the plugin sends meanwhile in ``early``."""
 
     def __init__(self) -> None:
         self.connected = asyncio.Event()
@@ -54,6 +57,7 @@ class LiveAvatarPeer:
         self.handshake.set()
         self.handshakes = 0
         self.commands: asyncio.Queue[Command] = asyncio.Queue()
+        self.early: list[Command] = []
         self.stops: list[tuple[str | None, dict[str, object]]] = []
         self.start_status = 200
         self.starts = 0
@@ -88,11 +92,28 @@ class LiveAvatarPeer:
         await self.handshake.wait()
         socket = web.WebSocketResponse()
         await socket.prepare(request)
-        await self.connected.wait()
-        await socket.send_json({"type": "session.state_updated", "state": "connected"})
-        self.socket = socket
-        async for message in socket:
-            self.commands.put_nowait(message.json())
+        told = False
+
+        async def connect() -> None:
+            nonlocal told
+            if not self.connected.is_set():
+                event = {"type": "warning", "event_id": "W1", "warning": NOT_CONNECTED}
+                await socket.send_json(event)
+                await self.connected.wait()
+            told = True
+            await socket.send_json({"type": "session.state_updated", "state": "connected"})
+            self.socket = socket
+
+        connecting = asyncio.create_task(connect())
+        try:
+            async for message in socket:
+                command = message.json()
+                if not told:
+                    self.early.append(command)
+                self.commands.put_nowait(command)
+        finally:
+            connecting.cancel()
+            await asyncio.gather(connecting, return_exceptions=True)
         return socket
 
     async def command(self, kind: str, seen: list[Command] | None = None) -> Command:
@@ -167,23 +188,26 @@ def unconnected(peer: LiveAvatarPeer) -> LiveAvatarPeer:
 
 
 async def test_speech_and_keepalives_wait_for_the_connected_state(
-    unconnected: LiveAvatarPeer, started: Started
+    unconnected: LiveAvatarPeer, started: Started, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Nothing is sent before LiveAvatar says connected; then speech goes out in 0.6 s chunks.
 
     https://github.com/livekit/agents/issues/4204 https://github.com/livekit/agents/pull/5453
     """
+    caplog.set_level(logging.WARNING)
     _, _, audio = started
     for _ in range(10):
         await audio.capture_frame(frame(0.1))
     audio.flush()
-    await asyncio.sleep(0.06)  # the window under test: three keepalive periods
-    assert unconnected.commands.empty(), "sent before the session was connected"
+    # an ungated keepalive or chunk goes out at once; the plugin reading the provider's first
+    # event is a round trip later
+    await until(lambda: NOT_CONNECTED in caplog.text, "the avatar read the provider's warning")
 
     unconnected.connected.set()
     seen: list[Command] = []
     await unconnected.command("agent.speak_end", seen)
     await unconnected.command("session.keep_alive")
+    assert unconnected.early == [], "sent before the session was connected"
 
     speaks = [c for c in seen if c["type"] == "agent.speak"]
     seconds = [len(base64.b64decode(c["audio"])) / (2 * SAMPLE_RATE) for c in speaks]

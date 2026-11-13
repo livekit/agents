@@ -397,14 +397,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     }
                 )
 
-                tasks = [
-                    asyncio.create_task(_send_task(ws)),
-                    asyncio.create_task(_recv_task(ws)),
-                ]
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks)
+                async with utils.aio.TaskSet() as tasks:
+                    await asyncio.gather(tasks.spawn(_send_task(ws)), tasks.spawn(_recv_task(ws)))
             finally:
                 await ws.close()
         except TimeoutError:

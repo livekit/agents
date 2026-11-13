@@ -7,6 +7,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
+import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
@@ -23,13 +24,16 @@ OPTIONS = APIConnectOptions(max_retry=0, connect_timeout=1, read_timeout=1)
 
 
 class _Provider:
-    """An avatar provider's REST API and event socket; ``hold`` keeps a session cancel hanging."""
+    """An avatar provider's REST API and event socket; ``hold`` keeps a session cancel hanging.
+    The socket keeps what the avatar sent (``heard``) and how it ended (``ended``: ``CLOSE`` for a
+    close frame, ``CLOSED`` for a dropped connection)."""
 
     def __init__(self) -> None:
         self.cancelling = asyncio.Event()
         self.hold = asyncio.Event()
         self.hold.set()
-        self.socket: web.WebSocketResponse | None = None
+        self.heard: list[str] = []
+        self.ended: aiohttp.WSMsgType | None = None
         self.url = ""
 
     def app(self) -> web.Application:
@@ -66,9 +70,10 @@ class _Provider:
     async def events(self, request: web.Request) -> web.WebSocketResponse:
         socket = web.WebSocketResponse()
         await socket.prepare(request)
-        self.socket = socket
-        async for _ in socket:
-            pass
+        await socket.send_json({"type": "session.state_updated", "state": "connected"})
+        while (message := await socket.receive()).type is aiohttp.WSMsgType.TEXT:
+            self.heard.append(message.data)
+        self.ended = message.type
         return socket
 
 
@@ -145,16 +150,21 @@ async def test_cancelling_a_runway_close_still_closes_its_audio_sink(
     assert closed_on_cancel == 1
 
 
-async def test_closing_a_liveavatar_closes_its_event_socket_before_returning(
+async def test_closing_a_liveavatar_sends_its_event_socket_a_close_frame(
     provider: _Provider, avatar_host: AvatarHost
 ) -> None:
-    """Closing a LiveAvatar session ends the provider connection it opened before it returns."""
+    """Closing a LiveAvatar session closes the event socket it opened with a close frame, rather
+    than leaving it open or dropping the connection."""
     avatar = liveavatar.AvatarSession(
         avatar_id="avatar", api_key="key", api_url=provider.url + "/sessions", conn_options=OPTIONS
     )
     await avatar.start(avatar_host.agent, avatar_host.room, **avatar_host.credentials)
-    await until(lambda: provider.socket, "the avatar never opened its event socket")
+    # it speaks once its side of the handshake is done; a close before that is
+    # test_liveavatar's stalled handshake
+    await until(lambda: provider.heard, "the avatar spoke on its event socket")
 
     await avatar.aclose()
 
-    assert provider.socket is not None and provider.socket.closed
+    # the frame is sent before aclose() returns; the provider reads it on its own time
+    await until(lambda: provider.ended, "the provider saw its event socket end")
+    assert provider.ended is aiohttp.WSMsgType.CLOSE

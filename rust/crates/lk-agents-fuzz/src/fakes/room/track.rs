@@ -206,8 +206,8 @@ impl TrackPublication for FakeTrackPublication {
         Ok(self.subscribed.load(Ordering::SeqCst))
     }
 
-    fn audio_features(&self) -> Vec<AudioTrackFeature> {
-        self.state.lock().unwrap().features.clone()
+    fn audio_features(&self) -> Result<Vec<AudioTrackFeature>> {
+        Ok(self.state.lock().unwrap().features.clone())
     }
 
     fn set_subscribed<'a>(

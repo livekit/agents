@@ -34,12 +34,8 @@ pub struct LlmRef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TtsRef {
     pub id: ResourceId,
-    pub provider: ProviderId,
     pub capabilities: TtsCapabilities,
-    pub sample_rate: u32,
     pub num_channels: u16,
-    /// The markup dialect it speaks (`markup._provider_key()`).
-    pub markup: crate::tts::markup::Markup,
 }
 
 /// The session a realtime model opened: what it said it can do when it opened.

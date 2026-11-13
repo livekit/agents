@@ -93,7 +93,7 @@ class Pod:
     async def until_health(self, path: str, status: int, timeout: float) -> httpx.Response:
         async with asyncio.timeout(timeout):
             while (response := await self.health.get(path)).status_code != status:
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.01)
         return response
 
     def hang_up(self) -> None:

@@ -349,14 +349,10 @@ class SpeechStream(stt.RecognizeStream):
             # also closes a connection abandoned by the timeout.
             session = _make_session()
             await asyncio.wait_for(session.__aenter__(), timeout=self._conn_options.connect_timeout)
-            tasks = [
-                asyncio.create_task(_send_task(session)),
-                asyncio.create_task(_recv_task(session)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.cancel_and_wait(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(
+                    tasks.spawn(_send_task(session)), tasks.spawn(_recv_task(session))
+                )
         except TimeoutError:
             raise APITimeoutError() from None
         except AuthError as e:

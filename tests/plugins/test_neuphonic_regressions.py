@@ -119,10 +119,6 @@ async def test_streaming_failure_is_mapped_and_next_request_recovers(failure: st
             await provider.aclose()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/issues/7569 reproduces: retry reuses closed segments channel",
-)
 async def test_retry_after_ended_input_delivers_replayed_audio() -> None:
     """A failure after text input ends retries with usable segmentation state. https://github.com/livekit/agents/issues/7569"""
     connections = 0

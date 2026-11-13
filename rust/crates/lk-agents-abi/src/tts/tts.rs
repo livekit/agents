@@ -280,15 +280,23 @@ pub trait Tts: Send + Sync {
     fn label(&self) -> String;
 
     /// What this instance supports, fixed at construction.
-    // Read per instance, at construction. Not a class property.
+    // Read once: an option that would change a capability is taken at construction only.
     #[host(read_once, name = "_core_capabilities")]
     fn capabilities(&self) -> TtsCapabilities;
 
-    /// The model and provider labelling this instance's turn metrics.
-    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
-    #[host(read_once, name = "_core_id")]
+    /// The model and provider labelling this instance's turn metrics, as they are now.
+    // Native only: a host provider answers `read_id`, read at each use, since
+    // `update_options(model=..)` changes it.
     fn id(&self) -> crate::ProviderId {
-        crate::types::identity::ProviderId::of_label(self.label())
+        crate::errors::label_or("the TTS model", self.read_id(), || {
+            crate::types::identity::ProviderId::of_label(self.label())
+        })
+    }
+
+    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
+    #[host(call, name = "_core_id")]
+    fn read_id(&self) -> Result<crate::ProviderId, crate::errors::HostError> {
+        Ok(crate::types::identity::ProviderId::of_label(self.label()))
     }
 
     /// Open the connection to the service early, for the job `cx` runs for; a provider with
@@ -296,19 +304,27 @@ pub trait Tts: Send + Sync {
     #[host(notify, name = "_core_prewarm")]
     fn prewarm(&self, _cx: &crate::telemetry::Cx) {}
 
-    /// The rate of the audio the provider produces, which the framework resamples from.
-    #[host(read_once, name = "_core_sample_rate")]
-    fn sample_rate(&self) -> u32;
+    /// The rate of the audio the provider produces now, which the framework resamples from.
+    // Read when asked: `update_options(sample_rate=..)` changes it. Each frame carries its own
+    // rate, which is what the engine plays; this only picks a fallback chain's default rate.
+    #[host(call, name = "_core_sample_rate")]
+    fn sample_rate(&self) -> Result<u32, crate::errors::HostError>;
 
     /// The channels of the audio the provider produces.
     #[host(read_once, name = "_core_num_channels")]
     fn num_channels(&self) -> u16;
 
     /// Access TTS markup capabilities (instructions for LLM, text stripping).
-    // `markup._provider_key()`: the markup dialect this TTS speaks, `""` for none.
-    #[host(read_once, name = "_core_markup_provider")]
+    // `markup._provider_key()`: the markup dialect this TTS speaks now, `""` for none. Native
+    // only: a host provider answers `read_markup_provider`, read at each request, since the
+    // dialect follows the model.
     fn markup_provider(&self) -> String {
-        String::new()
+        crate::errors::label_or("the TTS markup dialect", self.read_markup_provider(), String::new)
+    }
+
+    #[host(call, name = "_core_markup_provider")]
+    fn read_markup_provider(&self) -> Result<String, crate::errors::HostError> {
+        Ok(String::new())
     }
 
     // What each chunk of a stream's input holds: a provider that buffers text itself takes words.

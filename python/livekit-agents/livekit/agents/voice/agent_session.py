@@ -43,6 +43,7 @@ from ..types import (
     NOT_GIVEN,
     NotGivenOr,
 )
+from ..utils import aio
 from . import Agent, Output_T, io
 from ._session_bindings import (
     LLMNode as LLMNode,
@@ -121,7 +122,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     _text_input_cb: TextInputCallback | None
     _steps: dict[str, Callable[..., Any]]
     _audio_input_options: AudioInputOptions | None
-    _tasks: set[asyncio.Task[Any]]
+    _tasks: aio.TaskSet
 
     def __init__(
         self,

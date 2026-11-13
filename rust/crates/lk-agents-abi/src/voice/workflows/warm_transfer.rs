@@ -78,8 +78,9 @@ pub trait TransferHost: Send + Sync {
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<Option<std::sync::Arc<dyn HoldMusic>>, HostError>>;
-    #[host(read_once, name = "_core_io_state")]
-    fn io_state(&self) -> IoEnableState;
+    /// The session's input and output switches as they are now, restored when the transfer ends.
+    #[host(call, name = "_core_io_state")]
+    fn io_state(&self) -> Result<IoEnableState, HostError>;
     #[host(notify, name = "_core_set_io")]
     fn set_io(&self, state: IoEnableState);
     #[host(await, name = "_core_connect_human")]

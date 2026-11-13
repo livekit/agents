@@ -324,23 +324,15 @@ class SpeechStream(stt.RecognizeStream):
                         extra={"lk.pii.data": connected_data},
                     )
 
-                send_task = asyncio.create_task(self._send_audio(ws), name="gnani-stt-send")
-                recv_task = asyncio.create_task(self._recv_messages(ws), name="gnani-stt-recv")
-
-                try:
+                async with utils.aio.TaskSet() as tasks:
+                    recv_task = tasks.spawn(self._recv_messages(ws), name="gnani-stt-recv")
                     # Wait for send to finish; if recv errors first, propagate it.
-                    done, _ = await asyncio.wait(
-                        [send_task, recv_task],
-                        return_when=asyncio.FIRST_COMPLETED,
+                    await tasks.first_completed(
+                        tasks.spawn(self._send_audio(ws), name="gnani-stt-send"),
+                        asyncio.shield(recv_task),
                     )
-                    for task in done:
-                        task.result()
-
-                    if send_task.done() and not recv_task.done():
-                        with contextlib.suppress(asyncio.TimeoutError):
-                            await asyncio.wait_for(asyncio.shield(recv_task), timeout=1.0)
-                finally:
-                    await utils.aio.cancel_and_wait(send_task, recv_task)
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(asyncio.shield(recv_task), timeout=1.0)
 
         except websockets.exceptions.ConnectionClosed as e:
             raise APIConnectionError(f"Gnani STT WebSocket closed unexpectedly: {e}") from e

@@ -492,17 +492,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         cancelled: asyncio.CancelledError | None = None
         try:
             async with self._pool.connection(conn_options=self._conn_options) as ws:
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-
+                tasks = utils.aio.TaskSet()
                 try:
-                    await asyncio.gather(*tasks)
+                    await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
                 except asyncio.CancelledError as e:
                     turn_was_sent = input_sent.is_set()
                     input_sent.set()
-                    await utils.aio.cancel_and_wait(*tasks)
+                    await tasks.aclose()
                     if text_sent and not turn_was_sent:
                         # Cancellation interrupted the first write, so whether the
                         # server owns this context is unknowable. Do not reuse it.
@@ -555,7 +551,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise
                 finally:
                     input_sent.set()
-                    await utils.aio.cancel_and_wait(*tasks)
+                    await tasks.aclose()
             if cancelled is not None:
                 raise cancelled
         except APIError:

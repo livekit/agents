@@ -84,8 +84,8 @@ impl Tts for Provider {
     fn capabilities(&self) -> TtsCapabilities {
         TtsCapabilities { streaming: false, aligned_transcript: false }
     }
-    fn sample_rate(&self) -> u32 {
-        1_000
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
+        Ok(1_000)
     }
     fn num_channels(&self) -> u16 {
         1

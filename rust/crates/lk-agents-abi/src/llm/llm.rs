@@ -244,20 +244,33 @@ pub trait Llm: Send + Sync {
     // `LLM.model` (`llm/llm.py:120`): the model name, or `"unknown"`. Not derivable from
     // [`label`](Self::label) (`f"{module}.{classname}"`); an implementor that knows its model must
     // override this.
-    #[host(read_once, name = "_core_model")]
+    // Native only: a host provider answers `read_model`, read at each request, since
+    // `update_options(model=..)` changes it.
     fn model(&self) -> String {
-        "unknown".to_owned()
+        crate::errors::label_or("the LLM model", self.read_model(), || "unknown".to_owned())
     }
 
-    /// The model and provider labelling this instance's turn metrics.
-    // `label`/`model`/`provider` as metrics and errors stamp them; `"unknown"` for missing names.
-    #[host(read_once, name = "_core_id")]
+    #[host(call, name = "_core_model")]
+    fn read_model(&self) -> Result<String, crate::errors::HostError> {
+        Ok("unknown".to_owned())
+    }
+
+    /// The model and provider labelling this instance's turn metrics, as they are now.
+    // Native only: a host provider answers `read_id`, read at each request.
     fn id(&self) -> crate::ProviderId {
-        crate::types::identity::ProviderId {
+        crate::errors::label_or("the LLM model", self.read_id(), || {
+            crate::types::identity::ProviderId::of_label(self.label())
+        })
+    }
+
+    // `label`/`model`/`provider` as metrics and errors stamp them; `"unknown"` for missing names.
+    #[host(call, name = "_core_id")]
+    fn read_id(&self) -> Result<crate::ProviderId, crate::errors::HostError> {
+        Ok(crate::types::identity::ProviderId {
             label: self.label(),
             model: self.model(),
             provider: "unknown".to_owned(),
-        }
+        })
     }
 
     /// Pre-warm connection to the LLM service.

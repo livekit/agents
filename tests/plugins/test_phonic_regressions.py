@@ -15,6 +15,7 @@ from phonic.environment import PhonicEnvironment
 
 from livekit.agents import llm
 from livekit.plugins.phonic.realtime import RealtimeModel, RealtimeSession
+from tests.fakes import until
 
 # Any: decoded wire JSON, indexed by the provider's documented shape
 Wire = dict[str, Any]
@@ -137,9 +138,8 @@ async def test_a_speech_forbidding_tool_opens_no_reply_after_its_output(
         await peer.send(
             {"type": "tool_call", "tool_call_id": call_id, "tool_name": name, "parameters": {}}
         )
-        async with asyncio.timeout(1):
-            while len(turns) == before:  # the call arrives on a turn of its own
-                await asyncio.sleep(0.005)
+        # the call arrives on a turn of its own
+        await until(lambda: len(turns) > before, f"{name} arrived on a turn")
         before = len(turns)
         chat_ctx = session.chat_ctx
         chat_ctx.insert(llm.FunctionCall(call_id=call_id, name=name, arguments="{}"))

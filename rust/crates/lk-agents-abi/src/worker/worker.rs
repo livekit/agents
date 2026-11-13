@@ -79,6 +79,19 @@ pub struct ProcessStartOptions {
     pub session_end_timeout: f64,
 }
 
+/// How the worker reaches the server: `registered worker` names it, and a failed connection's
+/// errors depend on it.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    #[host(rename = "websocket")]
+    WebSocket,
+    /// QUIC over UDP: a server that does not accept WebTransport, or a network that drops UDP,
+    /// never answers.
+    #[host(rename = "webtransport")]
+    WebTransport,
+}
+
 /// How job processes start: `forkserver` (Linux only; elsewhere it falls back to `spawn`) or
 /// `spawn`.
 #[crate::host(record(module = "worker_options", extract, emit))]

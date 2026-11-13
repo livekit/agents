@@ -351,14 +351,14 @@ class SpeechStream(stt.RecognizeStream):
             except TimeoutError as e:
                 raise APIConnectionError("nabrah STT never sent ready") from e
 
-            watchdog_task = asyncio.create_task(self._eot_watchdog())
-            send_task = asyncio.create_task(self._send_task(ws))
-            recv_task = asyncio.create_task(self._recv_task(ws))
+            tasks = utils.aio.TaskSet()
+            tasks.spawn(self._eot_watchdog(), name="nabrah-stt-watchdog")
             try:
-                await asyncio.gather(send_task, recv_task)
+                await asyncio.gather(
+                    tasks.spawn(self._send_task(ws)), tasks.spawn(self._recv_task(ws))
+                )
             finally:
-                watchdog_task.cancel()
-                await utils.aio.cancel_and_wait(send_task, recv_task, watchdog_task)
+                await tasks.aclose()
                 if (
                     self._current_text()
                     or self._is_speaking

@@ -27,7 +27,7 @@ async def entrypoint(ctx):
     session = VoiceSession(tts=FakeTTS(streaming=False))
     await session.start(Agent(instructions="Greet."))
     await session.say("hello there")
-    await asyncio.sleep(0.5)  # the call lasts half a second
+    await asyncio.sleep(0.5)  # real wait: the recorded (wall-clock) length is under test
     await session.aclose()
     ctx.shutdown()
 

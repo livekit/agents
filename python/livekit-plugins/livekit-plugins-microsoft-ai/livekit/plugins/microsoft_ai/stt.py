@@ -344,23 +344,18 @@ class SpeechStream(stt.RecognizeStream):
             raise
 
     async def _attempt(self) -> None:
-        tasks: list[asyncio.Task[None]] = []
+        tasks = utils.aio.TaskSet()
         try:
             await self._handshake()
             assert self._ws is not None
-            sender = asyncio.create_task(self._send(self._ws))
-            receiver = asyncio.create_task(self._receive(self._ws))
-            tasks = [sender, receiver]
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            if sender in done:
-                await sender
-            else:
-                await receiver
+            sender = tasks.spawn(self._send(self._ws))
+            receiver = tasks.spawn(self._receive(self._ws))
+            if await tasks.first_completed(sender, receiver) is receiver:
                 raise APIConnectionError("Microsoft AI STT receiver stopped unexpectedly")
         except TimeoutError:
             raise APITimeoutError("Microsoft AI STT operation timed out") from None
         finally:
-            await utils.aio.cancel_and_wait(*tasks)
+            await tasks.aclose()
             if self._commit_future is not None:
                 self._commit_future.cancel()
                 self._commit_future = None
@@ -573,19 +568,20 @@ class SpeechStream(stt.RecognizeStream):
             if speaking:
                 await self._commit(ws, buffer)
 
-        producer = asyncio.create_task(feed())
-        consumer = asyncio.create_task(consume())
+        tasks = utils.aio.TaskSet()
+        producer = tasks.spawn(feed())
+        consumer = tasks.spawn(consume())
         try:
-            done, _ = await asyncio.wait([producer, consumer], return_when=asyncio.FIRST_COMPLETED)
-            if producer in done:
-                await producer
+            # shielded: the consumer keeps running after the producer ends
+            await tasks.first_completed(asyncio.shield(producer), asyncio.shield(consumer))
+            if producer.done():
                 # Finite input: the VAD's last results are a response the stream is waiting on.
                 await asyncio.wait_for(consumer, self._conn_options.read_timeout)
             else:
                 # Live input may remain open indefinitely; surface the consumer's error now.
                 await consumer
         finally:
-            await utils.aio.cancel_and_wait(producer, consumer)
+            await tasks.aclose()
             await vad_stream.aclose()
 
     def _start_speaking(self) -> None:

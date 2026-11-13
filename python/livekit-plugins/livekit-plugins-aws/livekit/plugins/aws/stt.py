@@ -335,6 +335,7 @@ class SpeechStream(stt.RecognizeStream):
                 elif is_given(v):
                     filtered_config[k] = v
 
+            owner = utils.aio.TaskSet()
             tasks: list[asyncio.Task[None]] = []
             gather_future: asyncio.Future[list[None]] | None = None
 
@@ -400,8 +401,8 @@ class SpeechStream(stt.RecognizeStream):
                         pass
 
                 tasks = [
-                    asyncio.create_task(input_generator(stream.input_stream)),
-                    asyncio.create_task(handle_transcript_events(output_stream)),
+                    owner.spawn(input_generator(stream.input_stream)),
+                    owner.spawn(handle_transcript_events(output_stream)),
                 ]
                 gather_future = asyncio.gather(*tasks)
 
@@ -434,6 +435,7 @@ class SpeechStream(stt.RecognizeStream):
                 if gather_future is not None:
                     with contextlib.suppress(Exception):
                         await gather_future
+                await owner.aclose()
 
     def _maybe_emit_recognition_usage(self) -> None:
         if time.monotonic() - self._last_audio_duration_report_time >= 5.0:

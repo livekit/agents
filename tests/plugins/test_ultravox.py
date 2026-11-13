@@ -11,6 +11,7 @@ from aiohttp.test_utils import TestServer
 
 from livekit.agents import http, llm
 from livekit.plugins.ultravox.realtime import RealtimeModel
+from tests.fakes import until
 
 # Any: decoded wire JSON, indexed by the provider's documented shape
 Wire = dict[str, Any]
@@ -98,9 +99,7 @@ async def test_typed_tool_arguments_transcripts_and_results_cross_the_protocol()
                     "parameters": arguments,
                 }
             )
-            async with asyncio.timeout(1):
-                while not generations:
-                    await asyncio.sleep(0.005)
+            await until(lambda: generations, "the tool call opened a generation")
             calls = [call async for call in generations[0].function_stream]
             assert [(c.call_id, c.name, json.loads(c.arguments)) for c in calls] == [
                 ("inv-1", "find_items", arguments)

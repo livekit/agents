@@ -412,30 +412,13 @@ class SpeechStream(stt.RecognizeStream):
                 closing_ws = False
                 ws = await self._connect_ws()
                 self._server_ready.clear()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
+                async with utils.aio.TaskSet() as tasks:
+                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
+                    reconnect = tasks.spawn(self._reconnect_event.wait())
+                    if await tasks.first_completed(io, reconnect) is not reconnect:
                         break
-
                     self._reconnect_event.clear()
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
+
             finally:
                 if ws is not None:
                     await ws.close()

@@ -500,6 +500,7 @@ class TTS(tts.TTS):
         # the connection sits idle in the pool. Sarvam closes idle connections
         # after 60 s; pinging every 30 s keeps them alive for reuse.
         self._ws_keepalive_tasks: dict[int, asyncio.Task[None]] = {}
+        self._tasks = utils.aio.TaskSet()
         # ids of the sockets this TTS has opened and not yet closed
         self._open_ws_ids: set[int] = set()
         # ids of sockets that were open when update_options last changed a handshake
@@ -567,12 +568,12 @@ class TTS(tts.TTS):
         the call is a no-op. Callers that need a fresh task must invoke
         ``_stop_keepalive`` first.
         """
-        if _KEEPALIVE_INTERVAL <= 0:
+        if _KEEPALIVE_INTERVAL <= 0 or self._tasks.closed:
             return
         existing = self._ws_keepalive_tasks.get(id(ws))
         if existing is not None and not existing.done():
             return
-        task = asyncio.create_task(self._keepalive_loop(ws), name="sarvam-tts-ws-keepalive")
+        task = self._tasks.spawn(self._keepalive_loop(ws), name="sarvam-tts-ws-keepalive")
         self._ws_keepalive_tasks[id(ws)] = task
 
     async def _stop_keepalive(self, ws: http.WebSocket) -> None:
@@ -835,6 +836,7 @@ class TTS(tts.TTS):
 
         self._streams.clear()
         await self._pool.aclose()
+        await self._tasks.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -977,18 +979,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for segment in segments_ch:
                 await self._run_ws(segment, output_emitter)
 
-        tasks = [
-            asyncio.create_task(_split_segments()),
-            asyncio.create_task(_process_segments()),
-        ]
         try:
-            await asyncio.gather(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(
+                    tasks.spawn(_split_segments()), tasks.spawn(_process_segments())
+                )
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
         except Exception as e:
             raise APIConnectionError(f"TTS stream failed: {e}") from e
         finally:
-            await utils.aio.cancel_and_wait(*tasks)
             output_emitter.end_input()
 
     async def _run_ws(self, segment: AsyncIterable[str], output_emitter: tts.AudioEmitter) -> None:
@@ -1135,20 +1135,17 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 logger.info("WebSocket connected successfully", extra=self._build_log_context())
 
-                self._send_task = asyncio.create_task(send_task(ws))
-                self._recv_task = asyncio.create_task(recv_task(ws))
-
-                tasks = [self._send_task, self._recv_task]
-
                 try:
-                    await asyncio.gather(*tasks)
+                    async with utils.aio.TaskSet() as tasks:
+                        self._send_task = tasks.spawn(send_task(ws))
+                        self._recv_task = tasks.spawn(recv_task(ws))
+                        await asyncio.gather(self._send_task, self._recv_task)
                     logger.info(
                         "WebSocket session completed successfully",
                         extra=self._build_log_context(),
                     )
                 finally:
                     input_sent_event.set()
-                    await utils.aio.cancel_and_wait(*tasks)
                     self._send_task = None
                     self._recv_task = None
 

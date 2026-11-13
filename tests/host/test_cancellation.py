@@ -234,9 +234,16 @@ async def test_cancelling_a_delegating_run_cancels_the_remote_task(peer: Peer) -
         llm=FakeLLM([tool_call("coverage_expert", request="Check")]),
     )
 
-    run = asyncio.create_task(agent.run("Check"))
-    await peer.received.wait()
-    await asyncio.sleep(0.05)  # the peer's working status reached the client
+    progress: list[str] = []
+
+    async def check() -> None:
+        async with agent.run_stream("Check") as stream:
+            async for event in stream.stream_events():
+                if event.type == "progress":
+                    progress.append(event.message)
+
+    run = asyncio.create_task(check())
+    await until(lambda: progress, "the remote task's working status reached the client")
     run.cancel()
 
     with pytest.raises(asyncio.CancelledError):

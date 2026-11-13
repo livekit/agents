@@ -406,9 +406,8 @@ class _Connection(tts.TTS[Literal["slng_event"]]):
         # Bumped on every option change; invalidates any standby opened earlier.
         self._standby_epoch = 0
         self._standby_task: asyncio.Task[None] | None = None
-        # Retain fire-and-forget standby-close tasks so the event loop cannot
-        # garbage-collect them mid-run before the socket is actually closed.
         self._standby_close_tasks: set[asyncio.Task[None]] = set()
+        self._tasks = utils.aio.TaskSet()
 
     @property
     def model(self) -> str:
@@ -484,7 +483,7 @@ class _Connection(tts.TTS[Literal["slng_event"]]):
         return ws
 
     def _start_standby_replenish(self, conn_options: APIConnectOptions) -> bool:
-        if not self.warm_standby_enabled:
+        if not self.warm_standby_enabled or self._tasks.closed:
             return False
         if self._standby is not None and self._is_ws_usable(self._standby.ws):
             return False
@@ -516,7 +515,7 @@ class _Connection(tts.TTS[Literal["slng_event"]]):
                         self._ws_connection_timings.pop(id(ws), None)
                         await _close_ws(ws, context="warm_standby_replenish_cancelled")
 
-        task = asyncio.create_task(_open_standby())
+        task = self._tasks.spawn(_open_standby())
         self._standby_task = task
 
         def _log_standby_failure(done: asyncio.Task[None]) -> None:
@@ -619,7 +618,7 @@ class _Connection(tts.TTS[Literal["slng_event"]]):
             self._standby_epoch += 1
         if invalidate_pool and (self._standby is not None or self._standby_task is not None):
             with contextlib.suppress(RuntimeError):
-                close_task = asyncio.get_running_loop().create_task(self._close_standby())
+                close_task = self._tasks.spawn(self._close_standby())
                 self._standby_close_tasks.add(close_task)
                 close_task.add_done_callback(self._standby_close_tasks.discard)
 
@@ -662,6 +661,7 @@ class _Connection(tts.TTS[Literal["slng_event"]]):
                 await asyncio.shield(close_task)
         self._standby_close_tasks.clear()
         await self._close_standby()
+        await self._tasks.aclose()
 
 
 class TTS(tts.FallbackAdapter):
@@ -1036,20 +1036,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await self._run_ws(segment, output_emitter)
             logger.debug(f"[TTS] _run_segments done: {segment_count} segments")
 
-        tasks = [
-            asyncio.create_task(_segment_input()),
-            asyncio.create_task(_run_segments()),
-        ]
         try:
-            await asyncio.gather(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(tasks.spawn(_segment_input()), tasks.spawn(_run_segments()))
         except TimeoutError:
             raise APITimeoutError() from None
         except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
 
     async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
@@ -1334,15 +1329,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             if ws is None:
                 ws = await self._connect(self._conn_options)
             capture_ws_timing(ws)
-            tasks = [
-                asyncio.create_task(send_task(ws)),
-                asyncio.create_task(recv_task(ws)),
-            ]
             try:
-                await asyncio.gather(*tasks)
+                async with utils.aio.TaskSet() as tasks:
+                    await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
             finally:
                 input_sent_event.set()
-                await utils.aio.cancel_and_wait(*tasks)
                 close_started_at = time.perf_counter()
                 try:
                     await _close_ws(ws, context="terminal_model_segment")

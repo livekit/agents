@@ -578,6 +578,10 @@ class SpeechStream(stt.RecognizeStream):
         return max(1, round(self._opts.sample_rate * buffer_size_seconds))
 
     async def _run(self) -> None:
+        async with utils.aio.TaskSet() as tasks:
+            await self._run_connections(tasks)
+
+    async def _run_connections(self, tasks: utils.aio.TaskSet) -> None:
         max_buffer_seconds = 600
         max_buffer_bytes = int(max_buffer_seconds * self._opts.sample_rate * 2)
 
@@ -644,7 +648,7 @@ class SpeechStream(stt.RecognizeStream):
                     pending_failover = ("timeout", TimeoutError(), timeout_s)
                     switch_event.set()
 
-            final_timeout_task = asyncio.create_task(_monitor())
+            final_timeout_task = tasks.spawn(_monitor())
 
         def cancel_final_timeout() -> None:
             nonlocal final_timeout_task
@@ -1179,22 +1183,22 @@ class SpeechStream(stt.RecognizeStream):
                     pending_switch_succeeded = None
 
                 connection_had_transcript = False
-                send = asyncio.create_task(
+                send = tasks.spawn(
                     send_task(
                         ws,
                         pending_frames=pending_frames,
                         close_on_input_end=True,
                     )
                 )
-                recv = asyncio.create_task(recv_task(ws))
-                keepalive = asyncio.create_task(keepalive_task(ws))
+                recv = tasks.spawn(recv_task(ws))
+                keepalive = tasks.spawn(keepalive_task(ws))
                 send.add_done_callback(retrieve_task_exception)
                 recv.add_done_callback(retrieve_task_exception)
                 keepalive.add_done_callback(retrieve_task_exception)
-                wait_switch = asyncio.create_task(switch_event.wait())
-                wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
-                wait_user_state = asyncio.create_task(self._user_state_event.wait())
-                wait_timeout_permission = asyncio.create_task(self._timeout_permission_event.wait())
+                wait_switch = tasks.spawn(switch_event.wait())
+                wait_reconnect = tasks.spawn(self._reconnect_event.wait())
+                wait_user_state = tasks.spawn(self._user_state_event.wait())
+                wait_timeout_permission = tasks.spawn(self._timeout_permission_event.wait())
 
                 retry_connection = False
                 while True:
@@ -1211,7 +1215,7 @@ class SpeechStream(stt.RecognizeStream):
                         )
                         if task is not None
                     ]
-                    done, _ = await asyncio.wait(
+                    done, _ = await asyncio.wait(  # noqa: TID251 the loop re-arms its waiters, which keep running, owned by `tasks`
                         active_tasks,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
@@ -1219,7 +1223,7 @@ class SpeechStream(stt.RecognizeStream):
                     if wait_user_state in done:
                         self._user_state_event.clear()
                         await handle_user_state_change()
-                        wait_user_state = asyncio.create_task(self._user_state_event.wait())
+                        wait_user_state = tasks.spawn(self._user_state_event.wait())
                         continue
 
                     if wait_timeout_permission in done:
@@ -1227,9 +1231,8 @@ class SpeechStream(stt.RecognizeStream):
                         if not self._final_timeout_allowed:
                             awaiting_final = False
                             cancel_final_timeout()
-                        wait_timeout_permission = asyncio.create_task(
-                            self._timeout_permission_event.wait()
-                        )
+                        wait_timeout_permission = tasks.spawn(self._timeout_permission_event.wait())
+
                         continue
 
                     if wait_reconnect in done:
@@ -1345,7 +1348,7 @@ class SpeechStream(stt.RecognizeStream):
                     continue
             except asyncio.CancelledError:
                 cancel_final_timeout()
-                tasks = [
+                running = [
                     t
                     for t in (
                         send,
@@ -1358,13 +1361,13 @@ class SpeechStream(stt.RecognizeStream):
                     )
                     if t is not None
                 ]
-                if tasks:
+                if running:
                     with contextlib.suppress(Exception, asyncio.CancelledError):
-                        await utils.aio.cancel_and_wait(*tasks)
+                        await utils.aio.cancel_and_wait(*running)
                 raise
             except Exception as exc:
                 cancel_final_timeout()
-                tasks = [
+                running = [
                     t
                     for t in (
                         send,
@@ -1377,9 +1380,9 @@ class SpeechStream(stt.RecognizeStream):
                     )
                     if t is not None
                 ]
-                if tasks:
+                if running:
                     with contextlib.suppress(Exception):
-                        await utils.aio.cancel_and_wait(*tasks)
+                        await utils.aio.cancel_and_wait(*running)
                 if (
                     not is_non_retryable_client_error(exc)
                     and candidate_attempts < self._candidate_max_retry

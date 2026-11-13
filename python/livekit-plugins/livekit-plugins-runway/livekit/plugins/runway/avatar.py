@@ -18,6 +18,7 @@ from livekit.agents import (
     VoiceSession,
     get_job_context,
     http,
+    utils,
 )
 from livekit.agents.job import _server_credentials
 from livekit.agents.utils import is_given
@@ -87,6 +88,7 @@ class AvatarSession(BaseAvatarSession):
         self._room: rtc.Room | None = None
         self._realtime_session_id: str | None = None
         self._end_session_task: asyncio.Task[None] | None = None
+        self._tasks = utils.aio.TaskSet()
 
     @property
     def avatar_identity(self) -> str:
@@ -215,7 +217,7 @@ class AvatarSession(BaseAvatarSession):
         if self._room is None:
             return None
 
-        self._end_session_task = asyncio.create_task(
+        self._end_session_task = self._tasks.spawn(
             self._end_runway_realtime_session(self._room),
             name="runway_end_realtime_session",
         )
@@ -284,5 +286,6 @@ class AvatarSession(BaseAvatarSession):
         try:
             if end_session_task := self._ensure_end_session_task():
                 await asyncio.shield(end_session_task)
+            await self._tasks.aclose()
         finally:
             await super().aclose()

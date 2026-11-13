@@ -441,7 +441,8 @@ class GPTVoiceSession(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
 
-        self._main_atask = asyncio.create_task(self._main_task(), name="GPTVoiceSession._main")
+        self._tasks = utils.aio.TaskSet()
+        self._main_atask = self._tasks.spawn(self._main_task(), name="GPTVoiceSession._main")
 
     # outbound
 
@@ -664,16 +665,8 @@ class GPTVoiceSession(
                     for event in self._input_events(item):
                         await self._ws_send(ws_conn, event)
 
-            senders = [
-                asyncio.create_task(_send_commands(), name="_send_commands"),
-                asyncio.create_task(_send_input(), name="_send_input"),
-            ]
-            try:
-                done, _ = await asyncio.wait(senders, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    task.result()
-            finally:
-                await utils.aio.cancel_and_wait(*senders)
+            async with utils.aio.TaskSet() as senders:
+                await senders.first_completed(_send_commands(), _send_input())
 
             await _close_ws()
 
@@ -709,24 +702,21 @@ class GPTVoiceSession(
                         extra={"type": event.get("type"), "error_type": type(e).__name__},
                     )
 
-        send_task = asyncio.create_task(_send_task(), name="_send_task")
-        tasks = [asyncio.create_task(_recv_task(), name="_recv_task"), send_task]
-        wait_reconnect_task: asyncio.Task[None] | None = None
-        if self._opts.max_session_duration is not None:
-            wait_reconnect_task = asyncio.create_task(
-                asyncio.sleep(self._opts.max_session_duration), name="_timeout_task"
-            )
-            tasks.append(wait_reconnect_task)
         try:
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                if task != wait_reconnect_task:
-                    task.result()
-            if wait_reconnect_task in done:
-                await utils.aio.cancel_and_wait(send_task)
-                await _close_ws()
+            async with utils.aio.TaskSet() as tasks:
+                send_task = tasks.spawn(_send_task(), name="_send_task")
+                recv_task = tasks.spawn(_recv_task(), name="_recv_task")
+                # shielded: on a session timeout the receiver reads until the socket closes
+                aws: list[asyncio.Future[None]] = [asyncio.shield(recv_task), send_task]
+                timeout: asyncio.Task[None] | None = None
+                if self._opts.max_session_duration is not None:
+                    timeout = tasks.spawn(
+                        asyncio.sleep(self._opts.max_session_duration), name="_timeout_task"
+                    )
+                    aws.append(timeout)
+                if await tasks.first_completed(*aws) is timeout:
+                    await _close_ws()
         finally:
-            await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
 
     async def _ws_send(
@@ -1149,8 +1139,11 @@ class GPTVoiceSession(
         if not self._session_started_fut.done():
             self._session_started_fut.cancel()
         self._msg_ch.close()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_atask
+        try:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._main_atask
+        finally:
+            await self._tasks.aclose()
 
     # framework hooks
 

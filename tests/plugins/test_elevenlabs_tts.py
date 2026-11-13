@@ -399,8 +399,9 @@ async def test_audio_arriving_slower_than_the_whole_read_timeout_completes(model
             packet = json.loads(msg.data)
             if packet.get("close_context"):
                 ctx = {"context_id": packet["context_id"]}
-                for _ in range(4):
-                    await asyncio.sleep(PACING)  # the provider's pacing, under the read timeout
+                for _ in range(3):
+                    # gaps under the read timeout that add up to more than it
+                    await asyncio.sleep(PACING)  # real wait: the read timeout is under test
                     await ws.send_json({**ctx, "audio": b64(chunk)})
                 await ws.send_json({**ctx, final(model): True})
         return ws
@@ -415,7 +416,7 @@ async def test_audio_arriving_slower_than_the_whole_read_timeout_completes(model
             frames = await collect(stream)
         await provider.aclose()
 
-    assert_pcm(frames, chunk * 4)
+    assert_pcm(frames, chunk * 3)
 
 
 @pytest.mark.parametrize("updated", [False, True])

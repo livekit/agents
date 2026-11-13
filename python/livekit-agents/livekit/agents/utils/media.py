@@ -10,7 +10,7 @@ from livekit import rtc
 from .. import _core
 from .._generated import public_utils_media as _public
 from .._generated.public_utils_media import *  # noqa: F403
-from .aio import cancel_and_wait
+from .aio import TaskSet
 
 
 async def audio_frames_from_file(
@@ -26,7 +26,10 @@ async def audio_frames_from_file(
 
     decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=num_channels)
 
+    error: Exception | None = None
+
     async def file_reader() -> None:
+        nonlocal error
         aborted = False
         try:
             async with aiofiles.open(file_path, mode="rb") as f:
@@ -39,23 +42,24 @@ async def audio_frames_from_file(
         except asyncio.CancelledError:
             aborted = True
             raise
+        except Exception as e:
+            error = e
         finally:
             # no EOF after a cancel: the decoder would report the truncated input as invalid audio
             if not aborted:
                 decoder.end_input()
 
-    reader_task = asyncio.create_task(file_reader())
-
+    tasks = TaskSet()
+    tasks.spawn(file_reader(), name="audio_frames_from_file")
     try:
         async for frame in decoder:
             yield frame
     finally:
-        await cancel_and_wait(reader_task)
+        await tasks.aclose()
         await decoder.aclose()
 
-    if reader_task.done() and not reader_task.cancelled():
-        if exc := reader_task.exception():
-            raise exc
+    if error is not None:
+        raise error
 
 
 async def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:

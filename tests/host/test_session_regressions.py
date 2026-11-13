@@ -148,7 +148,10 @@ async def test_turn_hook_edits_shape_the_reply_that_is_recorded() -> None:
     @session.on_user_turn_completed
     async def hook(ctx: RunContext, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
         nonlocal turns
-        await asyncio.sleep(0.05)
+        await until(
+            lambda: [r for r in model.requests if r.messages()[-1].text_content == "hello"],
+            "a reply was requested while the hook ran",
+        )
         turns += 1
         turn_ctx.add_message(role="system", content=f"note {turns}")
         new_message.content = [f"{new_message.text_content} (edited)"]

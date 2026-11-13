@@ -815,7 +815,7 @@ impl Tts for Node<dyn Tts> {
         telemetry::RequestSpan::Node
     }
 
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
         self.below.sample_rate()
     }
 

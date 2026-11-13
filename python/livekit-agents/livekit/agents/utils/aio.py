@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import time
-import weakref
 from collections import deque
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
-from typing import Generic, Protocol, TypeVar, overload
+from typing import Any, Generic, Protocol, TypeVar, overload
 
 from .. import _core
 from .._bindings import APITimeoutError
@@ -325,6 +325,96 @@ async def cancel_and_wait(
         waiter.cancel()
 
 
+class TaskSet:
+    """The owner of a group of asyncio tasks.
+
+    It holds each task strongly until it finishes, raises a task's failure to whoever awaits the
+    task and logs one nobody awaits, and cancels and joins the tasks still running when it
+    closes: on :meth:`aclose`, or on leaving its ``async with`` block.
+    """
+
+    def __init__(self) -> None:
+        self._tasks: set[asyncio.Task[Any]] = set()
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def spawn(
+        self,
+        aw: Awaitable[T],
+        *,
+        name: str | None = None,
+        context: contextvars.Context | None = None,
+    ) -> asyncio.Task[T]:
+        """Run ``aw`` as a task this set owns."""
+        coro = aw if isinstance(aw, Coroutine) else _as_coroutine(aw)
+        if self._closed:
+            coro.close()
+            raise RuntimeError("TaskSet is closed")
+        task = asyncio.create_task(coro, name=name, context=context)
+        self._tasks.add(task)
+        task.add_done_callback(self._done)
+        return task
+
+    def _done(self, task: asyncio.Task[Any]) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled():
+            # an awaiter takes the exception when it wakes, in a callback queued before this one
+            task.get_loop().call_soon(_report_unobserved, task)
+
+    async def first_completed(self, *aws: Awaitable[Any]) -> asyncio.Future[Any]:
+        """Wait for the first of ``aws`` to finish, then cancel and join the others.
+
+        Returns the first to finish and raises its failure. Every awaitable is the call's to
+        cancel: a coroutine runs as a task of this set.
+        """
+        futures = [aw if isinstance(aw, asyncio.Future) else self.spawn(aw) for aw in aws]
+        first: asyncio.Future[asyncio.Future[Any]] = asyncio.get_running_loop().create_future()
+
+        def finished(future: asyncio.Future[Any]) -> None:
+            if not future.cancelled():
+                future.exception()  # raised below for the winner, dropped for a later one
+            if not first.done():
+                first.set_result(future)
+
+        for future in futures:
+            future.add_done_callback(finished)
+        try:
+            winner = await first
+        finally:
+            for future in futures:
+                future.remove_done_callback(finished)
+            await cancel_and_wait(*(future for future in futures if not future.done()))
+        winner.result()
+        return winner
+
+    async def aclose(self) -> None:
+        """Cancel every task still running and wait for them to finish.
+
+        A task of this set may close it: that task is neither cancelled nor waited for.
+        """
+        self._closed = True
+        current = asyncio.current_task()
+        await cancel_and_wait(*(task for task in self._tasks if task is not current))
+
+    async def __aenter__(self) -> TaskSet:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
+
+async def _as_coroutine(aw: Awaitable[T]) -> T:
+    return await aw
+
+
+def _report_unobserved(task: asyncio.Task[Any]) -> None:
+    if task._log_traceback:
+        logger.error("task %s failed", task.get_name(), exc_info=task.exception())
+
+
 class ConnectionPool(_facades.ConnectionPool, Generic[T]):
     """A pool of persistent connections, such as websockets, reconnected after a max duration.
 
@@ -355,7 +445,8 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
         self._native = _core.ConnectionPoolState(max_session_duration, mark_refreshed_on_get)
         self._conns: dict[int, T] = {}  # every connection the state knows, by id()
         self._connect_lock = asyncio.Lock()
-        self._prewarm_task: weakref.ref[asyncio.Task[None]] | None = None
+        self._tasks = TaskSet()
+        self._prewarm_task: asyncio.Task[None] | None = None
 
     async def _connect(
         self, conn_options: APIConnectOptions, *, started_at: float | None = None
@@ -441,8 +532,8 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
 
     def prewarm(self) -> None:
         """Open a connection in the background if the pool has none."""
-        task = self._prewarm_task() if self._prewarm_task is not None else None
-        if (task is not None and not task.done()) or not self._native.empty():
+        prewarming = self._prewarm_task is not None and not self._prewarm_task.done()
+        if prewarming or self._tasks.closed or not self._native.empty():
             return
 
         async def _prewarm_impl() -> None:
@@ -457,12 +548,11 @@ class ConnectionPool(_facades.ConnectionPool, Generic[T]):
                     extra={"exception_type": type(e).__name__},
                 )
 
-        self._prewarm_task = weakref.ref(asyncio.create_task(_prewarm_impl()))
+        self._prewarm_task = self._tasks.spawn(_prewarm_impl(), name="ConnectionPool.prewarm")
 
     async def aclose(self) -> None:
         """Close every connection, including checked-out ones."""
-        if self._prewarm_task is not None and (task := self._prewarm_task()) is not None:
-            await cancel_and_wait(task)
+        await self._tasks.aclose()
         # the retired connections too, rather than waiting for holders that may never return them
         self._native.close_all()
         await self._drain_to_close()
@@ -518,6 +608,7 @@ def close_loop(loop: asyncio.AbstractEventLoop) -> list[Exception]:
 
 
 __all__ = [
+    "TaskSet",
     "ChanClosed",
     "Chan",
     "Interval",

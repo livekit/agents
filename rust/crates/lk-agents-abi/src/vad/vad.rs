@@ -41,11 +41,19 @@ pub trait Vad: Send + Sync {
     #[host(read_once, name = "_core_capabilities")]
     fn capabilities(&self) -> VadCapabilities;
 
-    /// The model and provider labelling this instance's metrics.
-    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
-    #[host(read_once, name = "_core_id")]
+    /// The model and provider labelling this instance's metrics, as they are now.
+    // Native only: a host provider answers `read_id`, read at each use, since
+    // `update_options(model=..)` changes it.
     fn id(&self) -> crate::ProviderId {
-        crate::types::identity::ProviderId::of_label(self.label())
+        crate::errors::label_or("the VAD model", self.read_id(), || {
+            crate::types::identity::ProviderId::of_label(self.label())
+        })
+    }
+
+    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
+    #[host(call, name = "_core_id")]
+    fn read_id(&self) -> Result<crate::ProviderId, crate::errors::HostError> {
+        Ok(crate::types::identity::ProviderId::of_label(self.label()))
     }
 
     /// Load the model early; a detector with nothing to warm ignores it.

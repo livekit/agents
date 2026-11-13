@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import time
@@ -165,6 +166,8 @@ class TTS(tts.TTS):
 
         # One persistent connection shared across streams (see _Connection).
         self.__current_connection: _Connection | None = None
+        # the prewarm, and the closes of retired connections draining their last streams
+        self._tasks = utils.aio.TaskSet()
         self._prewarm_task: asyncio.Task[None] | None = None
         self.__conn_lock = asyncio.Lock()
 
@@ -200,7 +203,7 @@ class TTS(tts.TTS):
             if conn is not None and not conn.closed:
                 conn.mark_non_current()
 
-            new_conn = _Connection(self._opts, self._ensure_session(), conn_options)
+            new_conn = _Connection(self._opts, self._ensure_session(), conn_options, self._tasks)
             await new_conn.connect()
             self.__current_connection = new_conn
             return new_conn
@@ -281,11 +284,9 @@ class TTS(tts.TTS):
                 logger.debug("Soniox TTS prewarm failed", exc_info=e)
 
         try:
-            # Don't replace a prewarm still in flight: the old task would lose its only
-            # reference, and aclose() cancels just the latest one, so it could open a
-            # connection after shutdown. utils.ConnectionPool.prewarm guards the same way.
-            if self._prewarm_task is None or self._prewarm_task.done():
-                self._prewarm_task = asyncio.create_task(_task(), name="soniox-tts-prewarm")
+            # Don't start a second prewarm while one is in flight, nor one after close.
+            if not self._tasks.closed and (self._prewarm_task is None or self._prewarm_task.done()):
+                self._prewarm_task = self._tasks.spawn(_task(), name="soniox-tts-prewarm")
         except RuntimeError:
             # No running event loop (e.g. called outside async context) — skip.
             pass
@@ -306,6 +307,7 @@ class TTS(tts.TTS):
         if self.__current_connection is not None:
             await self.__current_connection.aclose()
             self.__current_connection = None
+        await self._tasks.aclose()
 
 
 @dataclass
@@ -381,24 +383,24 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         active: _ActiveStream | None = None
         failure: APIError | None = None
-        next_task: asyncio.Future[tts.SpeechChunk | SynthesizeStream.Flush] | None = None
+        tasks = utils.aio.TaskSet()
+        next_task: asyncio.Task[tts.SpeechChunk | SynthesizeStream.Flush] | None = None
         input_iter = self.input.__aiter__()
 
         try:
             while not self._cancelled.is_set():
                 if next_task is None:
-                    next_task = asyncio.ensure_future(input_iter.__anext__())
+                    next_task = tasks.spawn(input_iter.__anext__())
 
-                waiters: set[
-                    asyncio.Future[tts.SpeechChunk | SynthesizeStream.Flush] | asyncio.Future[None]
-                ] = {next_task}
+                waiters: list[asyncio.Future[Any]] = [next_task]
                 if active is not None:
-                    waiters.add(active.waiter)
-                await asyncio.wait(
-                    waiters,
-                    timeout=self._idle_timeout() if active is not None else None,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
+                    waiters.append(active.waiter)
+                # shielded, and its outcome read below: whatever did not finish keeps waiting
+                with contextlib.suppress(Exception):
+                    async with asyncio.timeout(
+                        self._idle_timeout() if active is not None else None
+                    ):
+                        await tasks.first_completed(*(asyncio.shield(w) for w in waiters))
 
                 if active is not None and active.waiter.done():
                     failure = await self._settle_stream(active, output_emitter) or failure
@@ -441,8 +443,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             if failure is not None:
                 raise failure
         finally:
-            if next_task is not None:
-                await utils.aio.cancel_and_wait(next_task)
+            await tasks.aclose()
             if active is not None:
                 active.connection.cancel_stream(active.stream_id)
                 active.connection.unregister_stream(active.stream_id)
@@ -560,7 +561,8 @@ class _Connection:
         self,
         opts: _TTSOptions,
         session: http.HttpSession,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: APIConnectOptions,
+        owner: utils.aio.TaskSet,
     ) -> None:
         self._opts = opts
         self._session = session
@@ -568,9 +570,8 @@ class _Connection:
         self._ws: http.WebSocket | None = None
         self._streams: dict[str, _StreamData] = {}
         self._input_queue = utils.aio.Chan[_OutboundMsg]()
-        self._send_task: asyncio.Task[None] | None = None
-        self._recv_task: asyncio.Task[None] | None = None
-        self._keepalive_task: asyncio.Task[None] | None = None
+        self._tasks = utils.aio.TaskSet()  # the send, receive and keepalive loops
+        self._owner = owner  # the TTS's tasks, which hold this connection's self-close
         self._close_task: asyncio.Task[None] | None = None
         self._is_current = True
         self._closed = False
@@ -589,14 +590,10 @@ class _Connection:
         return len(self._streams)
 
     def _schedule_close(self, name: str) -> None:
-        """Close in the background, holding on to the task.
-
-        The event loop only keeps a weak reference to a bare task, so a discarded
-        one can be collected before it runs and the WebSocket would stay open.
-        """
-        if self._close_task is not None and not self._close_task.done():
+        """Close in the background, on a task the TTS owns and joins when it closes."""
+        if (self._close_task is not None and not self._close_task.done()) or self._owner.closed:
             return
-        self._close_task = asyncio.create_task(self.aclose(), name=name)
+        self._close_task = self._owner.spawn(self.aclose(), name=name)
 
     def mark_non_current(self) -> None:
         """Flag this connection to be replaced; self-closes once idle."""
@@ -621,11 +618,9 @@ class _Connection:
             raise
 
         logger.debug("Soniox TTS WebSocket connection established!")
-        self._send_task = asyncio.create_task(self._send_loop(), name="soniox-tts-send")
-        self._recv_task = asyncio.create_task(self._recv_loop(), name="soniox-tts-recv")
-        self._keepalive_task = asyncio.create_task(
-            self._keepalive_loop(), name="soniox-tts-keepalive"
-        )
+        self._tasks.spawn(self._send_loop(), name="soniox-tts-send")
+        self._tasks.spawn(self._recv_loop(), name="soniox-tts-recv")
+        self._tasks.spawn(self._keepalive_loop(), name="soniox-tts-keepalive")
 
     def register_stream(
         self,
@@ -883,12 +878,5 @@ class _Connection:
             except Exception as e:
                 logger.debug(f"Error closing Soniox TTS WebSocket: {e}")
 
-        # Cancel all loops except the current task (avoid self-deadlock).
-        current = asyncio.current_task()
-        to_cancel = [
-            t
-            for t in (self._send_task, self._recv_task, self._keepalive_task)
-            if t is not None and t is not current
-        ]
-        if to_cancel:
-            await utils.aio.cancel_and_wait(*to_cancel)
+        # a loop closing its own connection is not cancelled
+        await self._tasks.aclose()

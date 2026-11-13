@@ -158,15 +158,15 @@ async def pump(
     async def _close() -> None:
         await native.aclose()
 
-    feeding, draining = asyncio.create_task(_feed()), asyncio.ensure_future(drain)
+    tasks = aio.TaskSet()
+    feeding, draining = tasks.spawn(_feed()), tasks.spawn(drain)
     try:
-        await asyncio.wait({feeding, draining}, return_when=asyncio.FIRST_COMPLETED)
-        if feeding.done():
-            feeding.result()
+        # shielded: a finished feed leaves the drain running, and the reverse
+        await tasks.first_completed(asyncio.shield(feeding), asyncio.shield(draining))
         await draining
     finally:
         # native close must start even if an authored input's finally block stalls
-        await aio._await_cleanup(asyncio.gather(aio.cancel_and_wait(feeding, draining), _close()))
+        await aio._await_cleanup(asyncio.gather(tasks.aclose(), _close()))
 
 
 def check_input(stream: object, task: asyncio.Task[Any], *, closed: bool, ended: bool) -> None:

@@ -338,8 +338,8 @@ pub mod fallback {
         fn capabilities(&self) -> TtsCapabilities {
             TtsCapabilities { streaming: self.streaming, aligned_transcript: false }
         }
-        fn sample_rate(&self) -> u32 {
-            24_000
+        fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
+            Ok(24_000)
         }
         fn num_channels(&self) -> u16 {
             1

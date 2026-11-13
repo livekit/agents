@@ -384,12 +384,11 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
 
         try:
             await ws.send_str(json.dumps(self._opts.handshake()))
-            send_task = asyncio.create_task(_send(), name="qwen3-stt-send")
-            recv_task = asyncio.create_task(_recv(), name="qwen3-stt-recv")
-            try:
-                await asyncio.gather(send_task, recv_task)
-            finally:
-                await utils.aio.cancel_and_wait(send_task, recv_task)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(
+                    tasks.spawn(_send(), name="qwen3-stt-send"),
+                    tasks.spawn(_recv(), name="qwen3-stt-recv"),
+                )
         except APIError:
             raise
         except Exception as e:

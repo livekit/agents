@@ -859,28 +859,18 @@ class SpeechStream(stt.RecognizeStream):
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
-                    send_task = asyncio.create_task(self._send_audio_task())
-                    recv_task = asyncio.create_task(self._recv_messages_task())
-
-                    wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
                     try:
-                        done, _ = await asyncio.wait(
-                            [send_task, recv_task, wait_reconnect_task],
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-
-                        for task in done:
-                            if task != wait_reconnect_task:
-                                task.result()
-
-                        if wait_reconnect_task not in done:
-                            break
+                        async with utils.aio.TaskSet() as tasks:
+                            reconnect = tasks.spawn(self._reconnect_event.wait())
+                            first = await tasks.first_completed(
+                                self._send_audio_task(), self._recv_messages_task(), reconnect
+                            )
+                            if first is not reconnect:
+                                break
 
                         self._reconnect_event.clear()
                         logger.info("Reconnecting Gladia session due to options change")
                     finally:
-                        await utils.aio.cancel_and_wait(send_task, recv_task, wait_reconnect_task)
                         self._ws = None
                 finally:
                     await ws.close()

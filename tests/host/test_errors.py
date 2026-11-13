@@ -425,15 +425,24 @@ async def test_a_failing_toolset_close_lets_its_siblings_close_and_is_reported_o
     """One toolset failing to close does not cut its siblings' closes short; `result()` raises
     that same exception each time it is asked."""
     closed: list[str] = []
+    failed = asyncio.Event()
+
+    class Failing(FailingClose):
+        async def aclose(self) -> None:
+            try:
+                await super().aclose()
+            finally:
+                failed.set()
 
     class SlowClose(Toolset):
         async def aclose(self) -> None:
-            await asyncio.sleep(0.01)
+            # still closing when its sibling's close fails
+            await until(failed.is_set, "the failing toolset closed")
             closed.append(self.id)
 
     agent = Agent(
         instructions="Help.",
-        tools=[FailingClose(id="failing"), SlowClose(id="slow")],
+        tools=[Failing(id="failing"), SlowClose(id="slow")],
         llm=FakeLLM(["Hello"]),
     )
 

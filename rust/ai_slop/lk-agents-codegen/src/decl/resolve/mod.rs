@@ -7,6 +7,7 @@ mod exposed;
 mod facade;
 mod native;
 mod proxy;
+mod read_once;
 mod record;
 mod stream;
 use exposed::{declared_error, error_entry, export_decl, export_entry};

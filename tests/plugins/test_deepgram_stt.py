@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 
 import pytest
 from aiohttp import web
@@ -13,6 +14,7 @@ from multidict import MultiMapping
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, http, stt
 from livekit.plugins import deepgram
+from tests.fakes import until
 
 NO_RETRY = APIConnectOptions(max_retry=0)
 AUDIO: dict[str, object] = {"type": "audio"}
@@ -177,9 +179,9 @@ async def test_a_dropped_connection_reconnects_and_later_audio_reaches_the_new_s
         retry = APIConnectOptions(max_retry=1, retry_interval=0)
         async with model.stream(conn_options=retry) as stream:
             stream.push_frame(_audio(50))
-            while not second_audio.is_set():
-                stream.push_frame(_audio(50))
-                await asyncio.sleep(0.05)
+            await until(lambda: connections == 2, "the stream reconnected")
+            stream.push_frame(_audio(50))
+            await until(second_audio.is_set, "later audio reached the new socket")
         await model.aclose()
 
     assert connections == 2
@@ -368,12 +370,16 @@ def test_keywords_and_keyterms_are_refused_on_the_wrong_model_family() -> None:
         deepgram.STT(api_key="test", model="nova-2-general", keyterm=["LiveKit"])
 
 
-async def test_usage_covers_the_connection_lifetime() -> None:
+async def test_usage_covers_the_connection_lifetime(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reported audio covers the whole billed socket lifetime, not just pushed frames.
 
     https://github.com/livekit/agents/issues/3464 https://github.com/livekit/agents/issues/5498
     """
-
+    # the plugin times the socket with the wall clock: the test moves it instead of waiting
+    clock = SimpleNamespace(now=1.0)
+    monkeypatch.setattr(
+        "livekit.plugins.deepgram.stt.time", SimpleNamespace(perf_counter=lambda: clock.now)
+    )
     audio_arrived = asyncio.Event()
 
     async def peer(request: web.Request) -> web.WebSocketResponse:
@@ -390,7 +396,7 @@ async def test_usage_covers_the_connection_lifetime() -> None:
         async with model.stream(conn_options=NO_RETRY) as stream:
             stream.push_frame(_audio(100))
             await audio_arrived.wait()  # the socket is open
-            await asyncio.sleep(0.5)  # the socket stays open, and billed, while idle
+            clock.now += 0.5  # the socket stays open, and billed, while idle
             stream.end_input()
             usage = [
                 event.recognition_usage.audio_duration

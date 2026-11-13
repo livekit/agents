@@ -148,6 +148,7 @@ class TTS(tts.TTS):
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._pools: dict[TTSSessionConfig, utils.ConnectionPool[AsyncStreamingTTSSession]] = {}
         self._ws_keepalive_tasks: dict[AsyncStreamingTTSSession, asyncio.Task[None]] = {}
+        self._tasks = utils.aio.TaskSet()
 
     @property
     def model(self) -> str:
@@ -236,6 +237,7 @@ class TTS(tts.TTS):
         for pool in self._pools.values():
             await pool.aclose()
         self._pools.clear()
+        await self._tasks.aclose()
 
     def _session_config(self, opts: _TTSOptions) -> TTSSessionConfig:
         return TTSSessionConfig(
@@ -287,9 +289,9 @@ class TTS(tts.TTS):
         pool: utils.ConnectionPool[AsyncStreamingTTSSession],
     ) -> None:
         task = self._ws_keepalive_tasks.get(session)
-        if task is not None and not task.done():
+        if (task is not None and not task.done()) or self._tasks.closed:
             return
-        self._ws_keepalive_tasks[session] = asyncio.create_task(
+        self._ws_keepalive_tasks[session] = self._tasks.spawn(
             self._keepalive_loop(session, pool), name="vakyam-tts-ws-keepalive"
         )
 
@@ -446,12 +448,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for segment in segments_ch:
                 await self._run_segment(segment, output_emitter)
 
-        tasks = [
-            asyncio.create_task(_split_segments()),
-            asyncio.create_task(_process_segments()),
-        ]
         try:
-            await asyncio.gather(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(
+                    tasks.spawn(_split_segments()), tasks.spawn(_process_segments())
+                )
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
         except asyncio.CancelledError:
@@ -459,7 +460,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as exc:
             raise APIConnectionError(f"Vakyam TTS stream failed: {exc}") from exc
         finally:
-            await utils.aio.cancel_and_wait(*tasks)
             output_emitter.end_input()
 
     async def _run_segment(

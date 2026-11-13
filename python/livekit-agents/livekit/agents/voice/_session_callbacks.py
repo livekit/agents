@@ -461,7 +461,7 @@ def _on_amd_result(self: VoiceSession[Any], wire: AMDPredictionEvent) -> None:
 
 
 def _on_text_input(self: VoiceSession[Any], wire: TextInputWire) -> None:
-    if (callback := self._text_input_cb) is None:
+    if (callback := self._text_input_cb) is None or self._tasks.closed:
         return
     room = self._room
     participants = room.remote_participants if isinstance(room, rtc.Room) else {}
@@ -478,9 +478,7 @@ def _on_text_input(self: VoiceSession[Any], wire: TextInputWire) -> None:
         except Exception:
             logger.warning("failed to handle chat text stream", exc_info=True)
 
-    task = asyncio.ensure_future(_run())
-    self._tasks.add(task)
-    task.add_done_callback(self._tasks.discard)
+    self._tasks.spawn(_run(), name="text_input")
 
 
 def _on_delete_room(self: VoiceSession[Any], wire: DeleteRoomRequested) -> None:

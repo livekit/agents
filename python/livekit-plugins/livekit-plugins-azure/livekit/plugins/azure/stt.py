@@ -301,37 +301,27 @@ class SpeechStream(stt.RecognizeStream):
                             self._emit_recognition_usage()
                     self._emit_recognition_usage()
 
-                process_input_task = asyncio.create_task(process_input())
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                wait_stopped_task = asyncio.create_task(self._session_stopped_event.wait())
-
-                input_ended = False
-                try:
-                    done, _ = await asyncio.wait(
-                        [process_input_task, wait_reconnect_task, wait_stopped_task],
-                        return_when=asyncio.FIRST_COMPLETED,
+                async with utils.aio.TaskSet() as tasks:
+                    wait_reconnect_task = tasks.spawn(self._reconnect_event.wait())
+                    wait_stopped_task = tasks.spawn(self._session_stopped_event.wait())
+                    first = await tasks.first_completed(
+                        process_input(), wait_reconnect_task, wait_stopped_task
                     )
-                    for task in done:
-                        if task not in [wait_reconnect_task, wait_stopped_task]:
-                            task.result()
 
-                    if wait_stopped_task in done:
-                        if self._cancellation_error is not None:
-                            details = self._cancellation_error
-                            raise APIConnectionError(
-                                f"Azure STT canceled: "
-                                f"{details.error_details or details.reason} ({details.code})"
-                            )
-                        raise APIConnectionError("SpeechRecognition session stopped")
+                if first is wait_stopped_task:
+                    if self._cancellation_error is not None:
+                        details = self._cancellation_error
+                        raise APIConnectionError(
+                            f"Azure STT canceled: "
+                            f"{details.error_details or details.reason} ({details.code})"
+                        )
+                    raise APIConnectionError("SpeechRecognition session stopped")
 
-                    # session-stopped is handled above, so the wait unblocked
-                    # either because input ended (process_input drained) or a
-                    # reconnect was requested; reset the event in the latter case
-                    input_ended = wait_reconnect_task not in done
-                    if not input_ended:
-                        self._reconnect_event.clear()
-                finally:
-                    await utils.aio.cancel_and_wait(process_input_task, wait_reconnect_task)
+                # the wait unblocked either because input ended (process_input drained) or a
+                # reconnect was requested; reset the event in the latter case
+                input_ended = first is not wait_reconnect_task
+                if not input_ended:
+                    self._reconnect_event.clear()
 
                 # close the push stream to flush finals for buffered audio before
                 # teardown, otherwise ending input truncates the transcript

@@ -197,6 +197,7 @@ class TTS(tts.TTS):
 
         self.__current_connection: _Connection | _DialogueConnection | None = None
         self._connection_lock = asyncio.Lock()
+        self._tasks = utils.aio.TaskSet()
         self._prewarm_task: asyncio.Task[None] | None = None
         self._opts_revision = 0
         self._warn_if_dialogue_model_ignores_options()
@@ -366,8 +367,8 @@ class TTS(tts.TTS):
 
     def prewarm(self) -> None:
         """Open the websocket connection before the first synthesis request."""
-        if self._prewarm_task is None or self._prewarm_task.done():
-            self._prewarm_task = asyncio.create_task(self._run_prewarm())
+        if not self._tasks.closed and (self._prewarm_task is None or self._prewarm_task.done()):
+            self._prewarm_task = self._tasks.spawn(self._run_prewarm())
 
     async def _run_prewarm(self) -> None:
         retry_delay = 1.0
@@ -384,7 +385,7 @@ class TTS(tts.TTS):
 
                     # Text-to-dialogue sockets are closed by the server after an idle period.
                     # Wait for that closure and reconnect immediately so the next turn remains warm.
-                    # asyncio.wait() does not propagate cancellation from the receive task.
+                    # wait_closed() does not propagate cancellation from the receive task.
                     await conn.wait_closed()
                 except asyncio.CancelledError:
                     raise
@@ -404,9 +405,8 @@ class TTS(tts.TTS):
             raise
 
     async def aclose(self) -> None:
-        if self._prewarm_task:
-            await utils.aio.cancel_and_wait(self._prewarm_task)
-            self._prewarm_task = None
+        await self._tasks.aclose()
+        self._prewarm_task = None
 
         for stream in list(self._streams):
             await stream.aclose()
@@ -564,7 +564,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection.close_context(self._context_id)
             context_closed = True
 
-        input_t = asyncio.create_task(_input_task())
+        tasks = utils.aio.TaskSet()
+        tasks.spawn(_input_task())
 
         try:
             await waiter
@@ -579,7 +580,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             # after close_context() isn't pushed into an emitter with no open segment
             connection.unregister_stream(self._context_id)
             output_emitter.end_segment()
-            await utils.aio.cancel_and_wait(input_t)
+            await tasks.aclose()
             if not context_closed:
                 with contextlib.suppress(Exception):
                     connection.close_context(self._context_id)
@@ -748,7 +749,7 @@ class _Connection:
 
         self._context_data: dict[str, _StreamData] = {}
 
-        self._send_task: asyncio.Task[None] | None = None
+        self._tasks = utils.aio.TaskSet()
         self._recv_task: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -762,7 +763,13 @@ class _Connection:
     async def wait_closed(self) -> None:
         if self._recv_task is None:
             raise RuntimeError("ElevenLabs connection has not been started")
-        await asyncio.wait({self._recv_task})
+        try:
+            await asyncio.shield(self._recv_task)
+        except asyncio.CancelledError:
+            if not self._recv_task.cancelled():
+                raise
+        except Exception:
+            pass
 
     @property
     def voice_id(self) -> str:
@@ -804,8 +811,8 @@ class _Connection:
             self._connect_url(), conn_options=self._conn_options, headers=headers
         )
 
-        self._send_task = asyncio.create_task(self._send_loop())
-        self._recv_task = asyncio.create_task(self._recv_loop())
+        self._tasks.spawn(self._send_loop())
+        self._recv_task = self._tasks.spawn(self._recv_loop())
 
     def register_stream(
         self,
@@ -1056,10 +1063,7 @@ class _Connection:
         if self._ws:
             await self._ws.close()
 
-        if self._send_task:
-            await utils.aio.cancel_and_wait(self._send_task)
-        if self._recv_task:
-            await utils.aio.cancel_and_wait(self._recv_task)
+        await self._tasks.aclose()
 
         self._ws = None
 

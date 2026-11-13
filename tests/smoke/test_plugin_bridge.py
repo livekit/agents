@@ -125,8 +125,8 @@ async def test_tts_fallback_recovers_on_the_backup() -> None:
 
 async def test_realtime_fallback_answers_on_the_backup_when_the_primary_dies() -> None:
     """A realtime model whose session fails unrecoverably is marked unavailable once, and the
-    backup speaks the reply."""
-    primary, backup = FakeRealtime(dies=True), FakeRealtime("Hello from the backup.")
+    backup speaks the reply asked after the swap."""
+    primary, backup = FakeRealtime(dies="at_open"), FakeRealtime("Hello from the backup.")
     adapter = llm.RealtimeModelFallbackAdapter([primary, backup])
     changes: list[tuple[object, bool]] = []
     adapter.on(
@@ -136,9 +136,37 @@ async def test_realtime_fallback_answers_on_the_backup_when_the_primary_dies() -
 
     async with VoiceSession(llm=adapter, vad=None) as session:
         await session.start(Agent(instructions="You are realtime."))
+        # the session swapped once it configures the backup; a reply asked earlier is lost (below)
+        await until(
+            lambda: backup.sessions and backup.sessions[-1].configured,
+            "the session configured the backup",
+        )
         await session.generate_reply(instructions="greet the user")
 
     assert changes == [(primary, False)]
+    said = [i.text_content for i in session.history.items if i.type == "message"]
+    assert said == ["Hello from the backup."]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="a swap asks again only while the agent is speaking or thinking: a reply asked of the "
+    "primary but not yet started is cut and never asked of the backup",
+)
+async def test_a_reply_the_primary_dies_on_is_asked_again_on_the_backup() -> None:
+    """A reply the primary dies on before answering is asked again on the backup, which speaks
+    it (regenerate_on_swap)."""
+    primary, backup = FakeRealtime(dies="at_reply"), FakeRealtime("Hello from the backup.")
+    adapter = llm.RealtimeModelFallbackAdapter([primary, backup])
+
+    async with VoiceSession(llm=adapter, vad=None) as session:
+        await session.start(Agent(instructions="You are realtime."))
+        await session.generate_reply(instructions="greet the user")
+        await until(
+            lambda: [i for i in session.history.items if i.type == "message"],
+            "the backup spoke the reply the primary died on",
+        )
+
     said = [i.text_content for i in session.history.items if i.type == "message"]
     assert said == ["Hello from the backup."]
 

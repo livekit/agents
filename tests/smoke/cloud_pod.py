@@ -37,7 +37,7 @@ async def entrypoint(ctx: JobContext) -> None:
     (POD_DIR / ".job.json").write_text(json.dumps(seen))
     (POD_DIR / ".job.json").rename(POD_DIR / "job.json")
     while not (POD_DIR / "hangup").exists():
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)
     ctx.shutdown("hung up")
 
 

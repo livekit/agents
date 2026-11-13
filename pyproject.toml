@@ -178,6 +178,7 @@ select = [
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
     "RUF006", # asyncio-dangling-task: the event loop only weakly references a bare task
+    "TID251", # banned-api: tasks are spawned through utils.aio.TaskSet
 ]
 ignore = ["E501"]
 
@@ -187,6 +188,19 @@ ignore = ["E501"]
 "python/livekit-agents/livekit/agents/**/*.py" = ["F405"]
 # The CLI is mid-refactor in the owner's session; its one `asyncio.TimeoutError` goes with it.
 "python/livekit-agents/livekit/agents/cli.py" = ["UP041"]
+# TaskSet is built on the raw asyncio primitives. Tests, benchmarks and examples are not the
+# framework: they drive it from outside, as an application would.
+"python/livekit-agents/livekit/agents/utils/aio.py" = ["TID251"]
+"{tests,bench,examples}/**" = ["TID251"]
+"rust/crates/lk-agents-py/src/*_tests.py" = ["TID251"]
+# The ABI templates generate the base streams' tasks; they move onto TaskSet in the generator.
+"rust/crates/lk-agents-abi/src/**/*.py" = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"asyncio.create_task".msg = "spawn on a utils.aio.TaskSet, which owns, reports and joins the task"
+"asyncio.ensure_future".msg = "spawn on a utils.aio.TaskSet, which owns, reports and joins the task"
+"asyncio.run_coroutine_threadsafe".msg = "spawn on a utils.aio.TaskSet from the loop's thread"
+"asyncio.wait".msg = "use utils.aio.TaskSet.first_completed, which cancels and joins the losers"
 
 [tool.ruff.lint.isort]
 combine-as-imports = true

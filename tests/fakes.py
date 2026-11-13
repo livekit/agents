@@ -46,7 +46,12 @@ from livekit.agents._generated.language import (
     LanguageCode,  # SpeechData's field type, not re-exported
 )
 from livekit.agents.tokenize import SentenceStream
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from livekit.agents.utils import aio, shortuuid
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
@@ -109,15 +114,15 @@ def audio_frame(seconds: float = 0.1, *, level: float = 0.3) -> rtc.AudioFrame:
     return rtc.AudioFrame(samples.astype(np.int16).tobytes(), SAMPLE_RATE, 1, n)
 
 
-def _tone(seconds: float, frequency: float | None) -> bytes:
-    n = round(SAMPLE_RATE * seconds)
+def _tone(seconds: float, frequency: float | None, rate: int = SAMPLE_RATE) -> bytes:
+    n = round(rate * seconds)
     if frequency is None:
         return bytes(2 * n)
-    samples = 8000 * np.sin(2 * np.pi * frequency * np.arange(n) / SAMPLE_RATE)
+    samples = 8000 * np.sin(2 * np.pi * frequency * np.arange(n) / rate)
     return samples.astype(np.int16).tobytes()
 
 
-async def until(done: Callable[[], object], what: str, timeout: float = 10) -> None:
+async def until(done: Callable[[], object], what: str, timeout: float = 2) -> None:
     """Waits until ``done()`` holds, failing with ``what`` after ``timeout`` seconds."""
     try:
         async with asyncio.timeout(timeout):
@@ -148,7 +153,8 @@ class FakeLLM(llm.LLM):
     function of the request's chat context returns.
 
     Keeps each request's chat context in ``requests`` and the tools it offered in ``tools``;
-    ``extend()`` queues more replies on a list-answering model.
+    ``extend()`` queues more replies on a list-answering model. ``update_options(model=)``
+    changes the model it names, as a plugin's does.
     """
 
     def __init__(
@@ -156,8 +162,10 @@ class FakeLLM(llm.LLM):
         replies: Iterable[Reply] | Mapping[str, Reply] | Callable[[llm.ChatContext], Reply] = (),
         *,
         prewarm_error: Exception | None = None,
+        model: str = "unknown",
     ) -> None:
         super().__init__()
+        self._model = model
         self.replies: deque[Reply] | Mapping[str, Reply] | Callable[[llm.ChatContext], Reply] = (
             replies if isinstance(replies, Mapping) or callable(replies) else deque(replies)
         )
@@ -175,6 +183,13 @@ class FakeLLM(llm.LLM):
         **kwargs: object,
     ) -> llm.LLMStream:
         return _LLMStream(self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options)
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    def update_options(self, *, model: str) -> None:
+        self._model = model
 
     def extend(self, replies: Iterable[Reply]) -> None:
         """Queue more replies after those left; only for a model answering from a list."""
@@ -363,7 +378,8 @@ class FakeTTS(tts.TTS):
     segment, as soon as its first text arrives. Keeps each synthesized text in ``texts``.
 
     ``error`` fails every synthesis, ``failures`` one attempt each, in order; ``usage`` is
-    reported for each synthesis.
+    reported for each synthesis. ``update_options(sample_rate=)`` changes the rate it speaks at,
+    as a plugin's does.
     """
 
     def __init__(
@@ -375,10 +391,11 @@ class FakeTTS(tts.TTS):
         error: Exception | None = None,
         failures: Iterable[Exception] = (),
         usage: TokenUsage | None = None,
+        sample_rate: int = SAMPLE_RATE,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=streaming),
-            sample_rate=SAMPLE_RATE,
+            sample_rate=sample_rate,
             num_channels=1,
         )
         self.seconds = seconds
@@ -397,12 +414,23 @@ class FakeTTS(tts.TTS):
     def _stream(self, *, conn_options: APIConnectOptions) -> tts.SynthesizeStream:
         return _SynthesizeStream(tts=self, conn_options=conn_options)
 
+    def update_options(
+        self,
+        *,
+        sample_rate: int | None = None,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
+    ) -> None:
+        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
+        if sample_rate is not None:
+            self._sample_rate = sample_rate
+
     def _speak(self, emitter: tts.AudioEmitter, text: str) -> None:
         if self.error is not None:
             raise self.error
         if self.failures:
             raise self.failures.popleft()
-        emitter.push(_tone(self.seconds, self.tone))
+        emitter.push(_tone(self.seconds, self.tone, self.sample_rate))
         if self.usage is not None:
             emitter.report_usage(self.usage, characters_count=len(text))
 
@@ -412,7 +440,7 @@ class _ChunkedStream(tts.ChunkedStream):
         assert isinstance(self._tts, FakeTTS)
         output_emitter.initialize(
             request_id=shortuuid("req_"),
-            sample_rate=SAMPLE_RATE,
+            sample_rate=self._tts.sample_rate,
             num_channels=1,
             mime_type="audio/pcm",
         )
@@ -426,7 +454,7 @@ class _SynthesizeStream(tts.SynthesizeStream):
         assert isinstance(provider, FakeTTS)
         output_emitter.initialize(
             request_id=shortuuid("req_"),
-            sample_rate=SAMPLE_RATE,
+            sample_rate=provider.sample_rate,
             num_channels=1,
             mime_type="audio/pcm",
             stream=True,
@@ -476,17 +504,19 @@ class _SentenceStream(tokenize.BufferedSentenceStream):
 
 class FakeAudioInput(AudioInput):
     """Hands the session the audio a test pushes, no faster than real time, as a microphone
-    does: a burst never queues more audio than a live call would."""
+    does: a burst never queues more audio than a live call would. ``paced=False`` hands it over
+    at once, for a recording whose length is not under test."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, paced: bool = True) -> None:
         super().__init__(label="fake")
         self._frames = aio.Chan[rtc.AudioFrame]()
         self._next_at = 0.0
+        self._paced = paced
 
     async def __anext__(self) -> rtc.AudioFrame:
         frame = await self._frames.__anext__()
         now = time.monotonic()
-        if self._next_at > now:
+        if self._paced and self._next_at > now:
             await asyncio.sleep(self._next_at - now)  # the frame is still being captured
         self._next_at = max(self._next_at, now) + frame.duration
         return frame
@@ -616,11 +646,16 @@ class FakeTranscriptionOutput(TranscriptionOutput):
 
 
 class FakeRealtime(llm.RealtimeModel):
-    """Answers each reply request with one spoken message; with ``dies``, each session it opens
-    fails at once with an unrecoverable error."""
+    """Answers each reply request with one spoken message; keeps its sessions, each
+    ``configured`` once the session sent it its tools (the end of its frame). With
+    ``dies="at_open"`` each session it opens fails at once with an unrecoverable error; with
+    ``dies="at_reply"`` it fails instead of answering its first reply request."""
 
     def __init__(
-        self, reply: str = "Hello from the realtime model.", *, dies: bool = False
+        self,
+        reply: str = "Hello from the realtime model.",
+        *,
+        dies: Literal["at_open", "at_reply"] | None = None,
     ) -> None:
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -634,9 +669,11 @@ class FakeRealtime(llm.RealtimeModel):
         )
         self.reply = reply
         self.dies = dies
+        self.sessions: list[FakeRealtimeSession] = []
 
     def session(self, *, turn_detection_disabled: bool = False) -> FakeRealtimeSession:
-        return FakeRealtimeSession(self)
+        self.sessions.append(FakeRealtimeSession(self))
+        return self.sessions[-1]
 
 
 _T = TypeVar("_T")
@@ -655,12 +692,18 @@ class FakeRealtimeSession(llm.RealtimeSession):
     def __init__(self, model: FakeRealtime) -> None:
         super().__init__(model)
         self._reply = model.reply
+        self._dies = model.dies
         self._chat_ctx = llm.ChatContext.empty()
-        if model.dies:
-            died = llm.RealtimeModelError(
-                timestamp=time.time(), label="fake", error=RuntimeError("gone"), recoverable=False
-            )
-            asyncio.get_running_loop().call_soon(self.emit, "error", died)
+        self.configured = False
+        self._unanswered: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+        if self._dies == "at_open":
+            self._die()
+
+    def _die(self) -> None:
+        died = llm.RealtimeModelError(
+            timestamp=time.time(), label="fake", error=RuntimeError("gone"), recoverable=False
+        )
+        asyncio.get_running_loop().call_soon(self.emit, "error", died)
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -677,7 +720,7 @@ class FakeRealtimeSession(llm.RealtimeSession):
         self._chat_ctx = chat_ctx
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
-        pass
+        self.configured = True
 
     def update_options(self, **_: object) -> None:
         pass
@@ -690,6 +733,12 @@ class FakeRealtimeSession(llm.RealtimeSession):
 
     def generate_reply(self, **_: object) -> asyncio.Future[llm.GenerationCreatedEvent]:
         loop = asyncio.get_running_loop()
+        if self._dies == "at_reply":
+            self._dies = None
+            self._die()
+            # never answered: it fails when the session closes, as a plugin's would
+            self._unanswered = loop.create_future()
+            return self._unanswered
         modalities: asyncio.Future[list[Literal["text", "audio"]]] = loop.create_future()
         modalities.set_result(["audio", "text"])
         message = llm.MessageGeneration(
@@ -722,7 +771,8 @@ class FakeRealtimeSession(llm.RealtimeSession):
         pass
 
     async def aclose(self) -> None:
-        pass
+        if self._unanswered is not None and not self._unanswered.done():
+            self._unanswered.set_exception(llm.RealtimeError("the session closed"))
 
 
 class FakeDuplex(llm.DuplexModel):

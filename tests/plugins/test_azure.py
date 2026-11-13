@@ -23,6 +23,7 @@ from livekit.agents import (
     stt,
 )
 from livekit.plugins.azure import stt as azure_stt, tts as azure_tts
+from tests.fakes import until
 
 # Speech SDK recognizer seam
 
@@ -99,9 +100,7 @@ class SpeechSDK:
         self.finals_on_close: list[str] = []
 
     async def recognizer(self, index: int) -> Recognizer:
-        async with asyncio.timeout(2):
-            while len(self.recognizers) <= index:
-                await asyncio.sleep(0.01)
+        await until(lambda: len(self.recognizers) > index, f"recognizer {index} was made")
         return self.recognizers[index]
 
 

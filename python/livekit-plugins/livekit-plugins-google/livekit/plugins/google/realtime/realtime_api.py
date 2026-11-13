@@ -560,7 +560,8 @@ class RealtimeSession(llm.RealtimeSession):
             http_options=http_options,
         )
 
-        self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
+        self._tasks = utils.aio.TaskSet()
+        self._main_atask = self._tasks.spawn(self._main_task(), name="gemini-realtime-session")
 
         self._current_generation: _ResponseGeneration | None = None
         self._active_session: AsyncSession | None = None
@@ -984,9 +985,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._msg_ch.close()
         self._session_should_close.set()
 
-        if self._main_atask:
-            await utils.aio.cancel_and_wait(self._main_atask)
-
+        await self._tasks.aclose()
         await self._close_active_session()
 
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -1019,7 +1018,6 @@ class RealtimeSession(llm.RealtimeSession):
 
             self._session_should_close.clear()
             session = None
-            session_tasks: list[asyncio.Task[None] | asyncio.Task[bool]] = []
             try:
                 config = self._build_connect_config()
                 logger.debug("connecting to Gemini Realtime API...")
@@ -1082,33 +1080,18 @@ class RealtimeSession(llm.RealtimeSession):
                                 continue
                             self._active_session = session
 
-                    # queue up existing chat context
-                    send_task = asyncio.create_task(
-                        self._send_task(session), name="gemini-realtime-send"
-                    )
-                    recv_task = asyncio.create_task(
-                        self._recv_task(session), name="gemini-realtime-recv"
-                    )
-                    restart_wait_task = asyncio.create_task(
-                        self._session_should_close.wait(), name="gemini-restart-wait"
-                    )
+                    async with utils.aio.TaskSet() as tasks:
+                        restart_wait_task = tasks.spawn(
+                            self._session_should_close.wait(), name="gemini-restart-wait"
+                        )
+                        first = await tasks.first_completed(
+                            tasks.spawn(self._send_task(session), name="gemini-realtime-send"),
+                            tasks.spawn(self._recv_task(session), name="gemini-realtime-recv"),
+                            restart_wait_task,
+                        )
 
-                    session_tasks = [send_task, recv_task, restart_wait_task]
-                    done, pending = await asyncio.wait(
-                        session_tasks,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task is not restart_wait_task and task.exception():
-                            logger.error(f"error in task {task.get_name()}: {task.exception()}")
-                            raise task.exception() or Exception(f"{task.get_name()} failed")
-
-                    if restart_wait_task not in done and self._msg_ch.closed:
+                    if first is not restart_wait_task and self._msg_ch.closed:
                         break
-
-                    for task in pending:
-                        await utils.aio.cancel_and_wait(task)
 
                     # the recv/send tasks signal restart by setting _session_should_close
                     # rather than raising. propagate any error they recorded so the handler
@@ -1171,8 +1154,6 @@ class RealtimeSession(llm.RealtimeSession):
                     await asyncio.sleep(retry_interval)
                     self._num_retries += 1
             finally:
-                if session_tasks:
-                    await utils.aio.cancel_and_wait(*session_tasks)
                 await self._close_active_session()
 
     async def _send_task(self, session: AsyncSession) -> None:

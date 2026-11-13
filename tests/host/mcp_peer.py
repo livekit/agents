@@ -128,12 +128,16 @@ class Journal:
         return [e for e in entries if event is None or e["event"] == event]
 
     async def until(
-        self, event: str, count: int = 1, *, timeout: float = 10
+        self, event: str, count: int = 1, *, timeout: float = 2
     ) -> list[dict[str, Any]]:
-        """The ``event`` entries once there are ``count`` of them."""
-        async with asyncio.timeout(timeout):
-            while len(found := self.entries(event)) < count:
-                await asyncio.sleep(0.01)
+        """The ``event`` entries once there are ``count`` of them; fails naming them after
+        ``timeout`` seconds, as ``tests.fakes.until`` does."""
+        try:
+            async with asyncio.timeout(timeout):
+                while len(found := self.entries(event)) < count:
+                    await asyncio.sleep(0.01)
+        except TimeoutError:
+            raise AssertionError(f"the MCP peer journaled {count} {event!r}") from None
         return found
 
 

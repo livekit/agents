@@ -589,7 +589,7 @@ class SpeechStream(stt.RecognizeStream):
             # The inherited SDK emitter types RT events, while Agent STT adds its own enum.
             self._client.on(event, add_message)  # type: ignore[arg-type]
 
-        message_task: asyncio.Task[None] | None = None
+        owned = utils.aio.TaskSet()
         try:
             async with self._client:
                 logger.debug("Connected to Speechmatics STT service")
@@ -599,18 +599,20 @@ class SpeechStream(stt.RecognizeStream):
                 ):
                     self._vad_stream = self._vad.stream()
 
-                audio_task = asyncio.create_task(self._process_audio())
-                message_task = asyncio.create_task(self._process_messages())
+                audio_task = owned.spawn(self._process_audio())
+                message_task = owned.spawn(self._process_messages())
                 self._tasks = [audio_task, message_task]
                 vad_task: asyncio.Task[None] | None = None
                 if self._vad_stream is not None:
-                    vad_task = asyncio.create_task(self._process_vad(self._vad_stream))
+                    vad_task = owned.spawn(self._process_vad(self._vad_stream))
                     self._tasks.append(vad_task)
 
                 try:
-                    done, _ = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
-                    for task in done:
-                        task.result()
+                    # the receiver outlives this wait: the SDK exit below flushes through it
+                    await owned.first_completed(
+                        asyncio.shield(message_task),
+                        *(t for t in self._tasks if t is not message_task),
+                    )
                 finally:
                     await utils.aio.cancel_and_wait(audio_task)
                     if self._vad_stream is not None:
@@ -624,8 +626,7 @@ class SpeechStream(stt.RecognizeStream):
         except (SMConnectionError, SMTimeoutError, TransportError) as e:
             raise APIConnectionError(f"failed to connect to Speechmatics: {e}") from e
         finally:
-            if message_task is not None:
-                await utils.aio.cancel_and_wait(message_task)
+            await owned.aclose()
             if self in self._streams:
                 self._streams.remove(self)
 

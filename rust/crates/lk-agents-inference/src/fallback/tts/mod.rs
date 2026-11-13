@@ -3,7 +3,7 @@ use crate::fallback::chain::{
 };
 use crate::fallback::channel::{ServeAttempt, drain_probe, next_or_stop};
 use crate::fallback::traced::{self, Traced};
-use crate::fallback::{ChainPolicy, resampling_plan};
+use crate::fallback::{ChainPolicy, output_rate};
 use crate::telemetry;
 use crate::tts::fed::{Fed, FixedLog, TextLog};
 use crate::tts::sentence_adapter::StreamAdapter;
@@ -335,8 +335,6 @@ pub struct FallbackTts {
     capabilities: TtsCapabilities,
     sample_rate: u32,
     num_channels: u16,
-    needs_resampling: Arc<Vec<bool>>,
-    entry_rates: Arc<Vec<u32>>,
     caller_conn: ApiConnectOptions,
     /// The adapter that built the chain: a request's failures are its `error` events.
     observer: Arc<dyn ChainObserver>,
@@ -370,16 +368,22 @@ impl FallbackTts {
                 "all TTS must have the same number of channels, got {channels:?}"
             )));
         }
-        let entry_rates: Vec<u32> = entries.iter().map(|b| b.inner.sample_rate()).collect();
-        let (target, needs_resampling) = resampling_plan(&entry_rates, sample_rate);
+        let target = match sample_rate {
+            Some(rate) => rate,
+            None => {
+                let rates = entries.iter().map(|b| b.inner.sample_rate());
+                let rates = rates
+                    .collect::<Result<Vec<u32>, _>>()
+                    .map_err(|e| Invalid(format!("reading a TTS's sample rate failed: {e}")))?;
+                output_rate(&rates, None)
+            }
+        };
         let chain = FallbackChain::new(entries, policy, clock, spawner, observer.clone())?;
         Ok(FallbackTts {
             chain: Arc::new(chain),
             capabilities,
             sample_rate: target,
             num_channels,
-            needs_resampling: Arc::new(needs_resampling),
-            entry_rates: Arc::new(entry_rates),
             caller_conn: crate::fallback::caller_default(),
             observer,
             label: NativeLabel::TtsFallback.as_str().into(),
@@ -394,10 +398,6 @@ impl FallbackTts {
         Arc::clone(&self.chain.active().inner)
     }
 
-    pub fn needs_resampling(&self, index: usize) -> bool {
-        self.needs_resampling.get(index).copied().unwrap_or(false)
-    }
-
     fn spawn_pump(&self, req: TtsReq, slot: RecoveryMode, log: Option<Arc<TokenLog>>) -> TtsSource {
         let call = ChainCall {
             conn_options: self.caller_conn,
@@ -405,8 +405,6 @@ impl FallbackTts {
             slot,
         };
         let leg = Arc::new(TtsLeg {
-            needs_resampling: Arc::clone(&self.needs_resampling),
-            entry_rates: Arc::clone(&self.entry_rates),
             target: self.sample_rate,
             channels: self.num_channels,
             log: log.clone(),
@@ -420,8 +418,6 @@ impl FallbackTts {
 
 /// One request's attempts: each resamples its entry's audio to the adapter's rate.
 struct TtsLeg {
-    needs_resampling: Arc<Vec<bool>>,
-    entry_rates: Arc<Vec<u32>>,
     target: u32,
     channels: u16,
     /// The streamed request's text; `None` for a one-shot.
@@ -448,15 +444,7 @@ impl ServeAttempt<TtsBackend, SynthesizedAudio> for TtsLeg {
         stop: CancellationToken,
     ) -> BoxFuture<'a, Attempt<()>> {
         Box::pin(async move {
-            let resampler = match self.resampler_for(index) {
-                Ok(resampler) => resampler,
-                Err(error) => {
-                    source.close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
-                    return Attempt::Failed { error, produced_output: false };
-                }
-            };
-            let outcome =
-                self.forward_audio(&chain, index, &mut source, resampler, tx, &stop).await;
+            let outcome = self.forward_audio(&chain, index, &mut source, tx, &stop).await;
             // An attempt that failed before any audio still anchors the request.
             self.anchor_started(&source);
             source.close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
@@ -466,16 +454,23 @@ impl ServeAttempt<TtsBackend, SynthesizedAudio> for TtsLeg {
 }
 
 impl TtsLeg {
-    /// One resampler per attempt (`tts:262-269`): no history crosses a failover. Built from the
-    /// entry's declared rate, which every frame is read as.
-    fn resampler_for(&self, index: usize) -> Result<Option<AudioResampler>, ProviderError> {
-        if !self.needs_resampling.get(index).copied().unwrap_or(false) {
+    /// The attempt's resampler for a frame at `from` (`tts:262-269`): none at the adapter's rate,
+    /// rebuilt when the rate a frame carries changes, never crossing a failover.
+    fn resampler_at<'r>(
+        &self,
+        slot: &'r mut Option<(u32, AudioResampler)>,
+        from: u32,
+    ) -> Result<Option<&'r mut AudioResampler>, ProviderError> {
+        if from == self.target {
             return Ok(None);
         }
-        let from = self.entry_rates.get(index).copied().unwrap_or(self.target);
-        AudioResampler::fixed(AudioFormat::new(from, self.channels), self.target, Quality::Medium)
-            .map(Some)
-            .map_err(|e| ProviderError::Local(ApiError::new(format!("resampler: {e}"))))
+        if slot.as_ref().is_none_or(|(rate, _)| *rate != from) {
+            let format = AudioFormat::new(from, self.channels);
+            let resampler = AudioResampler::fixed(format, self.target, Quality::Medium)
+                .map_err(|e| ProviderError::Local(ApiError::new(format!("resampler: {e}"))))?;
+            *slot = Some((from, resampler));
+        }
+        Ok(slot.as_mut().map(|(_, resampler)| resampler))
     }
 
     async fn forward_audio(
@@ -483,11 +478,11 @@ impl TtsLeg {
         chain: &FallbackChain<TtsBackend>,
         index: usize,
         source: &mut TtsSource,
-        mut resampler: Option<AudioResampler>,
         tx: &mut mpsc::Sender<Result<SynthesizedAudio, ProviderError>>,
         stop: &CancellationToken,
     ) -> Attempt<()> {
         let mut produced = false;
+        let mut resampler = None;
         loop {
             let mut audio = match next_or_stop(source.as_mut(), stop).await {
                 Ok(Some(audio)) => audio,
@@ -501,7 +496,11 @@ impl TtsLeg {
             if let Some(at) = self.anchor_started(source) {
                 audio.started_time = Some(at);
             }
-            match Self::deliver(audio, resampler.as_mut(), tx).await {
+            let resampler = match self.resampler_at(&mut resampler, audio.frame.sample_rate) {
+                Ok(resampler) => resampler,
+                Err(error) => return Attempt::Failed { error, produced_output: produced },
+            };
+            match Self::deliver(audio, resampler, tx).await {
                 Delivery::Delivered => {}
                 Delivery::ConsumerGone => return Attempt::Served(()),
                 Delivery::Failed(error) => {
@@ -609,8 +608,8 @@ impl Tts for FallbackTts {
         self.capabilities
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
+        Ok(self.sample_rate)
     }
 
     fn num_channels(&self) -> u16 {

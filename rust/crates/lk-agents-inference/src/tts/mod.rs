@@ -409,8 +409,8 @@ impl Tts for GatewayTts {
         TtsCapabilities { streaming: true, aligned_transcript: self.aligned_transcript() }
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate()
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
+        Ok(GatewayTts::sample_rate(self))
     }
 
     fn num_channels(&self) -> u16 {

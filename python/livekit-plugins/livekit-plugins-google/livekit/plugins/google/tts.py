@@ -468,14 +468,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for input_stream in segments_ch:
                 await self._run_stream(input_stream, output_emitter, streaming_config)
 
-        tasks = [
-            asyncio.create_task(_split_segments()),
-            asyncio.create_task(_run_segments()),
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
+        async with utils.aio.TaskSet() as tasks:
+            await asyncio.gather(tasks.spawn(_split_segments()), tasks.spawn(_run_segments()))
 
     async def _run_stream(
         self,

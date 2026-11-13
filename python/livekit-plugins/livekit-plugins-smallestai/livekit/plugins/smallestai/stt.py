@@ -413,9 +413,14 @@ class STT(stt.STT):
         finalize_on_flush: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update STT options; propagates to all active streams (triggers reconnect)."""
+        # capabilities are fixed at construction: a session wraps a non-streaming STT once
+        if is_given(model) and (model in _STREAMING_MODELS) != self.capabilities.streaming:
+            raise ValueError(
+                f"{model} {'streams' if model in _STREAMING_MODELS else 'does not stream'}, "
+                "unlike the model this STT was created with; create a new STT for it"
+            )
         if is_given(model):
             self._opts.model = model
-            self._capabilities.streaming = model in _STREAMING_MODELS
         self._opts = _apply_updates(
             self._opts,
             language=language,
@@ -695,32 +700,16 @@ class SpeechStream(stt.RecognizeStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                # Not in the gather: recv_task ends on is_last before the socket closes, and the
-                # session must not wait on a keepalive loop. Its failure still ends the session.
-                keepalive = asyncio.create_task(keepalive_task(ws))
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task, keepalive),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
+                async with utils.aio.TaskSet() as tasks:
+                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
+                    # Not in the gather: recv_task ends on is_last before the socket closes, and
+                    # the session must not wait on a keepalive loop. Its failure still ends it.
+                    keepalive = tasks.spawn(keepalive_task(ws))
+                    reconnect = tasks.spawn(self._reconnect_event.wait())
+                    if await tasks.first_completed(io, reconnect, keepalive) is not reconnect:
                         break
-
                     self._reconnect_event.clear()
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks, wait_reconnect_task, keepalive)
-                    tasks_group.cancel()
-                    tasks_group.exception()
+
             finally:
                 if ws is not None:
                     await ws.close()

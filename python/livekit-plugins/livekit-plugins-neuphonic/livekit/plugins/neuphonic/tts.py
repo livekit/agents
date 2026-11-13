@@ -399,18 +399,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for segment in segments_ch:
                 await self._run_ws(segment, output_emitter)
 
-        tasks = [
-            asyncio.create_task(_split_segments()),
-            asyncio.create_task(_run_segments()),
-        ]
         try:
-            await asyncio.gather(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                await asyncio.gather(tasks.spawn(_split_segments()), tasks.spawn(_run_segments()))
         except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
 
     async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
@@ -475,13 +470,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif msg.type is http.WebSocketMessageType.BINARY:
                     pass
 
-        async with self._pool.connection(conn_options=self._conn_options) as ws:
-            tasks = [
-                asyncio.create_task(send_task(ws)),
-                asyncio.create_task(recv_task(ws)),
-            ]
-
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.cancel_and_wait(*tasks)
+        async with (
+            self._pool.connection(conn_options=self._conn_options) as ws,
+            utils.aio.TaskSet() as tasks,
+        ):
+            await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))

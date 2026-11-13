@@ -514,7 +514,12 @@ class STT(stt.STT):
             for stream in self._streams:
                 stream.validate_model(resolved_model, user_keywords)
 
-        # the transport is fixed at construction: VoiceSession wraps a non-streaming STT once
+        # capabilities are fixed at construction: a session wires the STT by them once
+        if _supports_context_hints(resolved_model) != self.capabilities.keyterms:
+            raise ValueError(
+                f"{resolved_model} {'takes' if not self.capabilities.keyterms else 'rejects'} "
+                "keyterms, which this STT was created without; create a new STT for it"
+            )
         if is_given(model) and _is_realtime_only(model):
             if not self.capabilities.streaming:
                 raise ValueError(
@@ -534,7 +539,6 @@ class STT(stt.STT):
         # a stream keeps a language of its own unless this call names or moves the language
         languages_given = is_given(language) or languages_changed
         self._opts.model = resolved_model
-        self._capabilities.keyterms = _supports_context_hints(resolved_model)
         self._opts.languages = languages
         if languages:
             self._specified_languages = languages
@@ -706,6 +710,7 @@ class SpeechStream(stt.RecognizeStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: http.WebSocket | None = None
+        self._tasks = utils.aio.TaskSet()
         self._update_task: asyncio.Task[None] | None = None
         # serializes the config a connection is set up with against any later change to it
         self._config_lock = asyncio.Lock()
@@ -735,8 +740,8 @@ class SpeechStream(stt.RecognizeStream):
             if self._ws is not None:
                 self._pool.remove(self._ws)
             self._reconnect_event.set()
-        else:
-            self._update_task = asyncio.create_task(
+        elif not self._tasks.closed:
+            self._update_task = self._tasks.spawn(
                 self._send_update(_session_update(opts), old_task=self._update_task)
             )
 
@@ -759,9 +764,7 @@ class SpeechStream(stt.RecognizeStream):
             logger.warning("failed to update the transcription session", exc_info=True)
 
     async def aclose(self) -> None:
-        if self._update_task is not None:
-            await utils.aio.cancel_and_wait(self._update_task)
-
+        await self._tasks.aclose()
         await super().aclose()
 
     def _start_speaking(self) -> None:
@@ -1004,33 +1007,25 @@ class SpeechStream(stt.RecognizeStream):
                     self._ws = None
                     raise
                 vad_stream = self._vad.stream() if self._vad is not None else None
-                tasks = [
-                    asyncio.create_task(send_task(ws, vad_stream)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                if vad_stream is not None:
-                    tasks.append(asyncio.create_task(vad_task(ws, vad_stream)))
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    # propagate exceptions from completed tasks
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
+                    async with utils.aio.TaskSet() as tasks:
+                        io_tasks = [
+                            tasks.spawn(send_task(ws, vad_stream)),
+                            tasks.spawn(recv_task(ws)),
+                        ]
+                        if vad_stream is not None:
+                            io_tasks.append(tasks.spawn(vad_task(ws, vad_stream)))
+                        reconnect = tasks.spawn(self._reconnect_event.wait())
+                        try:
+                            winner = await tasks.first_completed(
+                                asyncio.gather(*io_tasks), reconnect
+                            )
+                        finally:
+                            self._ws = None
+                    if winner is not reconnect:
                         break
 
                     self._reconnect_event.clear()
                 finally:
-                    self._ws = None
-                    await utils.aio.cancel_and_wait(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
                     if vad_stream is not None:
                         await vad_stream.aclose()

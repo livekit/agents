@@ -520,16 +520,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             ws = await self._connect_ws(self._conn_options)
-            tasks = [
-                asyncio.create_task(_send_task(ws)),
-                asyncio.create_task(_recv_task(ws)),
-            ]
-
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await self._close_ws(ws)
-                await utils.aio.cancel_and_wait(*tasks)
+            async with utils.aio.TaskSet() as tasks:
+                try:
+                    await asyncio.gather(tasks.spawn(_send_task(ws)), tasks.spawn(_recv_task(ws)))
+                finally:
+                    await self._close_ws(ws)
 
         except APIError:
             raise

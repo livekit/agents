@@ -203,9 +203,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         self._closed = False
         self._closing = False
 
-        self._main_atask = asyncio.create_task(
-            self._main_task(), name="PersonaplexSession._main_task"
-        )
+        self._tasks = utils.aio.TaskSet()
+        self._tasks.spawn(self._main_task(), name="PersonaplexSession._main_task")
 
     # -- Properties --
 
@@ -295,7 +294,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         self._msg_ch.close()
         self._session_should_close.set()
 
-        await utils.aio.cancel_and_wait(self._main_atask)
+        await self._tasks.aclose()
 
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             self._pending_generation_fut.cancel("Session closed")
@@ -362,33 +361,25 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
                 logger.info(f"Connected to PersonaPlex server at {self._opts.base_url}")
 
-                send_task = asyncio.create_task(self._send_task(ws_conn), name="_send_task")
-                recv_task = asyncio.create_task(self._recv_task(ws_conn), name="_recv_task")
-                restart_wait_task = asyncio.create_task(
-                    self._session_should_close.wait(), name="_restart_wait"
-                )
+                async with utils.aio.TaskSet() as tasks:
+                    try:
+                        restart = tasks.spawn(self._session_should_close.wait(), name="_restart")
+                        winner = await tasks.first_completed(
+                            tasks.spawn(self._send_task(ws_conn), name="_send_task"),
+                            tasks.spawn(self._recv_task(ws_conn), name="_recv_task"),
+                            restart,
+                        )
+                    finally:
+                        await ws_conn.close()
 
-                try:
-                    done, _ = await asyncio.wait(
-                        [send_task, recv_task, restart_wait_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != restart_wait_task:
-                            task.result()
-                finally:
-                    await ws_conn.close()
-                    await utils.aio.cancel_and_wait(send_task, recv_task, restart_wait_task)
-
-                if restart_wait_task not in done and self._closed:
+                if winner is not restart and self._closed:
                     break
 
                 old_ch = self._msg_ch
                 old_ch.close()
                 self._msg_ch = utils.aio.Chan[bytes]()
 
-                if restart_wait_task in done:
+                if winner is restart:
                     self.emit(
                         "session_reconnected",
                         llm.RealtimeSessionReconnectedEvent(),

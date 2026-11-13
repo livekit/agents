@@ -69,6 +69,7 @@ class _PeriodicCollector:
         self._duration = duration
         self._callback = callback
         self._collected_value = 0.0
+        self._tasks = utils.aio.TaskSet()
         self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
 
@@ -76,16 +77,12 @@ class _PeriodicCollector:
         async with self._lock:
             self._collected_value += value
             if not self._task:
-                self._task = asyncio.create_task(self._run())
+                self._task = self._tasks.spawn(self._run())
 
     async def flush(self) -> None:
         async with self._lock:
             if self._task:
-                self._task.cancel()
-                try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
+                await utils.aio.cancel_and_wait(self._task)
                 self._task = None
 
             if self._collected_value > 0:
@@ -405,27 +402,13 @@ class SpeechStream(stt.RecognizeStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (asyncio.gather(*tasks), wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
+                async with utils.aio.TaskSet() as tasks:
+                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
+                    reconnect = tasks.spawn(self._reconnect_event.wait())
+                    if await tasks.first_completed(io, reconnect) is not reconnect:
                         break
 
                     self._reconnect_event.clear()
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks, wait_reconnect_task)
             finally:
                 if self._speaking:
                     self._speaking = False

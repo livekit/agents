@@ -50,6 +50,7 @@ class MeetingChatRelay:
         self._loop = asyncio.get_running_loop()
         self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=100)
         self._drain_task: asyncio.Task[None] | None = None
+        self._tasks = utils.aio.TaskSet()
 
     def submit_json(self, payload: str) -> None:
         """Queue a raw chat JSON payload from the meeting relay WebSocket."""
@@ -91,11 +92,9 @@ class MeetingChatRelay:
     def start(self) -> None:
         """Start draining queued chat messages into the agent session."""
         if self._drain_task is None:
-            self._drain_task = asyncio.create_task(self._drain())
+            self._drain_task = self._tasks.spawn(self._drain())
 
     async def aclose(self) -> None:
         """Stop the chat relay and cancel the drain task."""
-        if self._drain_task is not None:
-            self._drain_task.cancel()
-            await asyncio.gather(self._drain_task, return_exceptions=True)
-            self._drain_task = None
+        await self._tasks.aclose()
+        self._drain_task = None

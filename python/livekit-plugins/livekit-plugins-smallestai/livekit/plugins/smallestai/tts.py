@@ -236,6 +236,12 @@ class TTS(tts.TTS):
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options."""
+        # capabilities are fixed at construction: word timestamps decide `aligned_transcript`
+        if is_given(word_timestamps) and word_timestamps != self.capabilities.aligned_transcript:
+            raise ValueError(
+                "word_timestamps is fixed at construction: it sets the aligned_transcript "
+                "capability; create a new TTS to change it"
+            )
         super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(model):
             self._opts.model = model
@@ -251,9 +257,6 @@ class TTS(tts.TTS):
             self._opts.language = LanguageCode(language)
         if is_given(output_format):
             self._opts.output_format = output_format
-        if is_given(word_timestamps):
-            self._opts.word_timestamps = word_timestamps
-            self._capabilities.aligned_transcript = word_timestamps
         if is_given(max_buffer_flush_ms):
             self._opts.max_buffer_flush_ms = max_buffer_flush_ms
         if is_given(use_continuations):
@@ -386,8 +389,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             async with self._pool.connection(conn_options=self._conn_options) as ws:
-                send_task = asyncio.create_task(self._send_task(ws, context_id, ctx_state))
-                recv_task = asyncio.create_task(self._recv_task(ws, output_emitter, ctx_state))
+                tasks = utils.aio.TaskSet()
+                send_task = tasks.spawn(self._send_task(ws, context_id, ctx_state))
+                recv_task = tasks.spawn(self._recv_task(ws, output_emitter, ctx_state))
                 # Whether recv_task ended on a protocol-confirmed signal (legacy's
                 # explicit `complete`) vs. the continuations idle-drain heuristic, which
                 # is never fully certain - see _recv_task and the pool.remove() below.
@@ -402,7 +406,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         await utils.aio.cancel_and_wait(recv_task)
                 finally:
-                    await utils.aio.cancel_and_wait(send_task, recv_task)
+                    await tasks.aclose()
                     if self._opts.use_continuations and ctx_state["opened"]:
                         removed = False
                         if not ctx_state["finalized"]:

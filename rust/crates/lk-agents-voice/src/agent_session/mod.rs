@@ -213,8 +213,10 @@ impl VoiceSessionState {
         self.next_request
     }
 
-    pub(crate) fn expressive_guide(&mut self) -> Option<String> {
-        self.expressive.guide(self.tts.as_ref(), lk_agents_abi::Modality::Audio)
+    /// The expressive layers a reply's requests render their guide from, `None` when off or
+    /// without a TTS to speak it.
+    pub(crate) fn expressive_layers(&self) -> Option<Box<crate::generation::ExpressiveLayers>> {
+        (self.tts.is_some() && self.expressive.on()).then(|| Box::new(self.expressive.clone()))
     }
 
     /// The previous state when it changed. A speaking edge means the pipeline produced audio, so

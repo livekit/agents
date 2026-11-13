@@ -194,7 +194,7 @@ impl TtsStreamAdapter {
     fn sample_rate(&self, py: Python<'_>) -> PyResult<u32> {
         crate::py_calls::check_pid()?;
         let engine = self.engine()?;
-        let out = py.detach(|| <TtsStreamAdapterImpl as ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter>::sample_rate(engine));
+        let out = py.detach(|| <TtsStreamAdapterImpl as ::lk_agents_abi::tts::stream_adapter::TtsStreamAdapter>::sample_rate(engine)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -875,10 +875,7 @@ pub struct TtsProxy {
     instance_id: ::std::option::Option<usize>,
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::TtsCapabilities,
-    id: ::lk_agents_abi::ProviderId,
-    sample_rate: u32,
     num_channels: u16,
-    markup_provider: ::std::string::String,
     text_unit: ::lk_agents_abi::tts::types::TextUnit,
     retries_itself: bool,
     max_text_len: ::std::option::Option<usize>,
@@ -945,21 +942,9 @@ impl TtsProxy {
             let v = crate::py_calls::read(obj, "_core_capabilities")?;
             crate::generated::records::tts::tts_capabilities_from_py(v.as_any())?
         };
-        let id = {
-            let v = crate::py_calls::read(obj, "_core_id")?;
-            crate::generated::records::types::provider_id_from_py(v.as_any())?
-        };
-        let sample_rate = {
-            let v = crate::py_calls::read(obj, "_core_sample_rate")?;
-            crate::py_values::number_from_py::<u32>(v.as_any(), "Tts._core_sample_rate")?
-        };
         let num_channels = {
             let v = crate::py_calls::read(obj, "_core_num_channels")?;
             crate::py_values::number_from_py::<u16>(v.as_any(), "Tts._core_num_channels")?
-        };
-        let markup_provider = {
-            let v = crate::py_calls::read(obj, "_core_markup_provider")?;
-            v.extract::<::std::string::String>()?
         };
         let text_unit = {
             let v = crate::py_calls::read(obj, "_core_text_unit")?;
@@ -1008,10 +993,7 @@ impl TtsProxy {
             instance_id,
             label,
             capabilities,
-            id,
-            sample_rate,
             num_channels,
-            markup_provider,
             text_unit,
             retries_itself,
             max_text_len,
@@ -1035,8 +1017,50 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         ::std::clone::Clone::clone(&self.capabilities)
     }
 
-    fn id(&self) -> ::lk_agents_abi::ProviderId {
-        ::std::clone::Clone::clone(&self.id)
+    fn read_id(
+        &self,
+    ) -> ::std::result::Result<::lk_agents_abi::ProviderId, ::lk_agents_abi::errors::HostError>
+    {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_id")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (context
+                .as_ref()
+                .map(|context| out.returned_context(py, context))
+                .transpose()
+                .and_then(|context| {
+                    crate::py_calls::returning(context, || {
+                        crate::generated::records::types::provider_id_from_py(o.as_any())
+                    })
+                }))
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
     }
 
     fn prewarm(&self, _cx: &::lk_agents_abi::telemetry::Cx) {
@@ -1058,16 +1082,74 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         );
     }
 
-    fn sample_rate(&self) -> u32 {
-        ::std::clone::Clone::clone(&self.sample_rate)
+    fn sample_rate(&self) -> ::std::result::Result<u32, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_sample_rate")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (crate::py_values::number_from_py::<u32>(
+                o.as_any(),
+                "Tts._core_sample_rate",
+            ))
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
     }
 
     fn num_channels(&self) -> u16 {
         ::std::clone::Clone::clone(&self.num_channels)
     }
 
-    fn markup_provider(&self) -> ::std::string::String {
-        ::std::clone::Clone::clone(&self.markup_provider)
+    fn read_markup_provider(
+        &self,
+    ) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_markup_provider")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (o.extract::<::std::string::String>()).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
     }
 
     fn text_unit(&self) -> ::lk_agents_abi::tts::types::TextUnit {

@@ -21,7 +21,6 @@ import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
@@ -318,31 +317,16 @@ class SpeechStream(stt.RecognizeStream):
                 ws = await self._connect_ws()
                 self._ws = ws
 
-                tasks = [
-                    asyncio.create_task(self._send_audio_task()),
-                    asyncio.create_task(self._recv_messages_task()),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
-                try:
-                    done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
+                async with utils.aio.TaskSet() as tasks:
+                    io = asyncio.gather(
+                        tasks.spawn(self._send_audio_task()),
+                        tasks.spawn(self._recv_messages_task()),
                     )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
+                    reconnect = tasks.spawn(self._reconnect_event.wait())
+                    if await tasks.first_completed(io, reconnect) is not reconnect:
                         break
 
                     self._reconnect_event.clear()
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
 
             except TimeoutError as e:
                 logger.error(f"Timeout during Inworld STT connection: {e}")

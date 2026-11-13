@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from livekit.agents import APIConnectOptions, APIError
 from livekit.plugins.upliftai.tts import TTS, WEBSOCKET_NAMESPACE
+from tests.fakes import until
 
 
 @pytest.fixture
@@ -38,8 +39,11 @@ async def uplift() -> AsyncIterator[tuple[TTS, list[dict[str, object]]]]:
         yield provider, replies
         await provider.aclose()
         await server.shutdown()
-        # Engine.IO's scheduled ping finishes after disconnect, even after shutdown().
-        await asyncio.sleep(0.02)
+        # Engine.IO cancels its scheduled ping after shutdown() returns
+        await until(
+            lambda: not [t for t in asyncio.all_tasks() if "_send_ping" in repr(t.get_coro())],
+            "Engine.IO's ping task ended",
+        )
 
 
 async def _synthesize(provider: TTS) -> None:

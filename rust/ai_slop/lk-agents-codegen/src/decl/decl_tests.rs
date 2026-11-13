@@ -560,6 +560,28 @@ fn a_core_stream_reaches_a_host_call_as_its_generated_stream_class() {
     );
 }
 
+// Catches: a value its host object can change (a provider's model, its sample rate) read once
+// and kept for a whole session, or an allowed name read once from a class it does not describe.
+#[test]
+fn read_once_is_refused_outside_the_values_that_cannot_change() {
+    for body in [
+        r#"#[host(read_once, name = "_core_sample_rate")] fn sample_rate(&self) -> u32;"#,
+        r#"#[host(read_once, getter = "model")] fn model(&self) -> String;"#,
+        r#"#[host(read_once, getter = "sample_rate")] fn sample_rate(&self) -> u32;"#,
+    ] {
+        let refused = refuse_proxy(body);
+        assert!(refused.contains("is not read once"), "{body}: {refused}");
+    }
+    let allowed = r#"#[host(read_once, name = "_core_label")] fn label(&self) -> String;"#;
+    assert!(read(&proxy(allowed)).is_ok());
+    // A target allowed for one class only is read once from that class.
+    let output = r#"#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput"))]
+        pub trait Out: Send + Sync {
+            #[host(read_once, getter = "sample_rate")] fn sample_rate(&self) -> Option<u32>;
+        }"#;
+    assert!(read(output).is_ok());
+}
+
 #[test]
 fn incomplete_proxy_declarations_fail_generation() {
     for (body, want) in [
@@ -956,7 +978,7 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
         r#"
         #[host(call)] fn state(&self, id: &str) -> Result<Chunk, HostError>;
         #[host(await)] async fn close(self: Box<Self>, cx: &Cx) -> Result<(), HostError>;
-        #[host(read_once)] fn conn(&self) -> &Conn;
+        #[host(read_once, name = "_core_conn_options")] fn conn(&self) -> &Conn;
         #[host(await)] async fn open_writer(&self, cx: &Cx) -> Result<Box<dyn Callbacks>, HostError>;
         #[host(await)] async fn release(&self, cx: &Cx);
         "#,
@@ -994,7 +1016,7 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
     assert!(
         llm.contains(
             "fn conn(&self) -> &::lk_agents_abi::llm::chat::Conn {\n        &self.conn\n    }"
-        ) && llm.contains("crate::py_calls::read(obj, \"conn\")"),
+        ) && llm.contains("crate::py_calls::read(obj, \"_core_conn_options\")"),
         "{llm}"
     );
     let err = refuse_proxy("#[host(call)] fn state(&self) -> Chunk;");
@@ -1028,7 +1050,7 @@ fn a_viewed_proxy_calls_its_view_and_shares_core_objects() {
         "pub struct Tracker;\n#[crate::host(class(name = \"Tracker\"))]\npub trait Tracked: Sized {}\nimpl Tracked for Tracker {}\n\
          #[crate::host(proxy(host = \"livekit.agents.io.Sink\", view = \"livekit.agents.view._Sink\"))]\n\
          pub trait Sink: Send + Sync {\n\
-             #[host(read_once, name = \"_core_tracker\")] fn tracker(&self) -> &std::sync::Arc<Tracker>;\n\
+             #[host(read_once, name = \"_core_options\")] fn tracker(&self) -> &std::sync::Arc<Tracker>;\n\
              #[host(notify, name = \"_core_flush\")] fn flush(&self);\n\
          }",
     )
@@ -1141,7 +1163,7 @@ fn a_declared_proxy_is_handed_back_as_its_host_object() {
         use crate::errors::HostError;
         #[crate::host(proxy(host = "livekit.agents.Noise", view = "livekit.agents._NoiseView"))]
         pub trait Noise: Any + Send + Sync {
-            #[host(read_once, name = "_core_kind")] fn kind(&self) -> String;
+            #[host(read_once, name = "_core_label")] fn kind(&self) -> String;
         }
         #[crate::host(proxy(host = "livekit.agents.Track"))]
         pub trait Track: Send + Sync {
@@ -1167,7 +1189,7 @@ fn a_declared_proxy_is_handed_back_as_its_host_object() {
         use crate::errors::HostError;
         #[crate::host(proxy(host = "livekit.agents.Noise"))]
         pub trait Noise: Send + Sync {
-            #[host(read_once, name = "_core_kind")] fn kind(&self) -> String;
+            #[host(read_once, name = "_core_label")] fn kind(&self) -> String;
         }
         #[crate::host(proxy(host = "livekit.agents.Track"))]
         pub trait Track: Send + Sync {

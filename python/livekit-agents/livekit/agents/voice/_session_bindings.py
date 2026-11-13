@@ -46,7 +46,7 @@ from ..types import (
     NotGivenOr,
     TranscriptChunk,
 )
-from ..utils import is_dev_mode, is_given, is_hosted, shortuuid
+from ..utils import aio, is_dev_mode, is_given, is_hosted, shortuuid
 from ..version import __version__
 from . import Agent, ModelSettings, _BindingContextVar, _VoiceBinding, io
 from ._session_callbacks import _DynamicInstructions, _SessionNodes
@@ -173,7 +173,7 @@ def initialize(
     session._text_input_cb = None
     session._steps = {}
     session._audio_input_options = None
-    session._tasks = set()
+    session._tasks = aio.TaskSet()
 
 
 class SessionAdapter:
@@ -485,6 +485,7 @@ class SessionHost:
 
     async def closed(self) -> None:
         session = self.session
+        await session._tasks.aclose()
         if session._session_binding is not None:
             session._session_binding.close()
         if session._store is not None:

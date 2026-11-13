@@ -453,7 +453,7 @@ impl VoiceDriver {
         let turn_toolset = spec.toolset.clone().unwrap_or_else(|| Arc::clone(&advertised));
         let expressive = match &spec.source {
             ReplySource::Realtime => None,
-            _ => self.session.expressive_guide(),
+            _ => self.session.expressive_layers(),
         };
         let mut plan = crate::generation::PlanSpec {
             record: spec.chat_ctx.clone(),
@@ -506,7 +506,7 @@ impl VoiceDriver {
                 chat_ctx: record,
                 tools: plan.tools.clone(),
                 instructions_hash: crate::generation::stable_hash(&instructions),
-                expressive: false,
+                expressive: None,
             },
         };
 
@@ -754,6 +754,16 @@ impl VoiceDriver {
                 self.record_trace(InterruptStep::PlayoutGate { speech, op: GateOp::Resume, cause })
             }
             GenEvent::RequestStarted { speech, kind, provider, model } => {
+                // The LLM's identity as its request found it labels the session's spans from here.
+                if kind == lk_agents_core::usage::ModelKind::Llm {
+                    if let Some(llm) = self.session.llm.as_mut() {
+                        (llm.provider.provider, llm.provider.model) =
+                            (provider.clone(), model.clone());
+                    }
+                    if let Some(turn) = self.activity.speech_scheduler.agent_turn(speech) {
+                        turn.llm_requested(&provider, &model);
+                    }
+                }
                 let request = self.start_request(Some(speech), kind, &provider, &model);
                 self.session.requests.entry((speech, kind)).or_default().push_back(request);
             }

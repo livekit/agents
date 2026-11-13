@@ -134,6 +134,7 @@ class TTS(tts.TTS):
             ),
         )
 
+        self._tasks = aio.TaskSet()
         self._prewarm_task: asyncio.Task[None] | None = None
 
     @property
@@ -244,15 +245,13 @@ class TTS(tts.TTS):
             except Exception:
                 pass
 
-        # Don't replace a prewarm still in flight: the old task would lose its only reference,
-        # and aclose() cancels just the latest one, so it could still be using the client after
-        # close. utils.ConnectionPool.prewarm guards the same way.
+        if self._tasks.closed:
+            return
         if self._prewarm_task is None or self._prewarm_task.done():
-            self._prewarm_task = asyncio.create_task(_prewarm())
+            self._prewarm_task = self._tasks.spawn(_prewarm(), name="openai-tts-prewarm")
 
     async def aclose(self) -> None:
-        if self._prewarm_task:
-            await aio.cancel_and_wait(self._prewarm_task)
+        await self._tasks.aclose()
 
         if self._owns_client:
             await self._client.close()

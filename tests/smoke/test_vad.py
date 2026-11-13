@@ -99,7 +99,8 @@ async def test_python_vad_speech_interrupts_the_agent() -> None:
 async def test_silero_hears_a_recorded_voice_and_drives_its_turn() -> None:
     """Silero finds the speech in a real recording; the turn it delimits is transcribed once
     and answered."""
-    microphone = FakeAudioInput()
+    # Silero times the speech by its samples: the 6 s recording need not take 6 s
+    microphone = FakeAudioInput(paced=False)
     session = listening_session(
         microphone,
         vad=silero.VAD.load(),

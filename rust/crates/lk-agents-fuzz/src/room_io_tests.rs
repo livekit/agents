@@ -497,8 +497,8 @@ impl TrackPublication for Processed {
     fn is_subscribed(&self) -> Result<bool, RtcError> {
         Ok(true)
     }
-    fn audio_features(&self) -> Vec<AudioTrackFeature> {
-        vec![AudioTrackFeature::PreconnectBuffer]
+    fn audio_features(&self) -> Result<Vec<AudioTrackFeature>, lk_agents_runtime::rtc::RtcError> {
+        Ok(vec![AudioTrackFeature::PreconnectBuffer])
     }
     fn open_audio_stream(
         &self,

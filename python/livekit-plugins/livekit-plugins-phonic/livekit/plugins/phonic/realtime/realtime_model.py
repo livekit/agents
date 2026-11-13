@@ -499,7 +499,8 @@ class RealtimeSession(llm.RealtimeSession):
             | None
         ) = None
         self._send_ch = utils.aio.Chan[AudioChunkPayload]()
-        self._main_atask = asyncio.create_task(self._main_task(), name="phonic-realtime-session")
+        self._tasks = utils.aio.TaskSet()
+        self._main_atask = self._tasks.spawn(self._main_task(), name="phonic-realtime-session")
 
         self._current_generation: _ResponseGeneration | None = None
         self._conversation_id: str | None = None
@@ -952,14 +953,14 @@ class RealtimeSession(llm.RealtimeSession):
         if changes.keys() & {"configs_for_tools", "phonic_tools"}:
             self._rebuild_tool_definitions()
 
-        if not self._config_sent:
+        if not self._config_sent or self._tasks.closed:
             return
 
         # update_options is synchronous; coalesce into a single background reset (the options are
         # already applied, so the latest reset carries them).
         if self._options_reset_task and not self._options_reset_task.done():
             self._options_reset_task.cancel()
-        self._options_reset_task = asyncio.create_task(
+        self._options_reset_task = self._tasks.spawn(
             self._apply_options_reset(), name="phonic-options-reset"
         )
 
@@ -993,7 +994,7 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if self._generate_reply_task and not self._generate_reply_task.done():
             self._generate_reply_task.cancel()
-        self._generate_reply_task = asyncio.create_task(self._send_say(text), name="phonic-say")
+        self._generate_reply_task = self._tasks.spawn(self._send_say(text), name="phonic-say")
 
         self._close_current_generation(interrupted=False)
 
@@ -1055,7 +1056,9 @@ class RealtimeSession(llm.RealtimeSession):
         )
         if self._generate_reply_task and not self._generate_reply_task.done():
             self._generate_reply_task.cancel()
-        send_task = asyncio.create_task(self._send_generate_reply(payload))
+        send_task = self._tasks.spawn(
+            self._send_generate_reply(payload), name="phonic-generate-reply"
+        )
         self._generate_reply_task = send_task
 
         self._close_current_generation(interrupted=False)
@@ -1152,15 +1155,7 @@ class RealtimeSession(llm.RealtimeSession):
             self._pending_generate_reply_fut.cancel()
             self._pending_generate_reply_fut = None
 
-        if self._generate_reply_task and not self._generate_reply_task.done():
-            await utils.aio.cancel_and_wait(self._generate_reply_task)
-
-        if self._options_reset_task and not self._options_reset_task.done():
-            await utils.aio.cancel_and_wait(self._options_reset_task)
-
-        if self._main_atask:
-            await utils.aio.cancel_and_wait(self._main_atask)
-
+        await self._tasks.aclose()
         await self._close_active_session()
 
     @utils.log_exceptions(logger=logger)
@@ -1199,25 +1194,12 @@ class RealtimeSession(llm.RealtimeSession):
                 ConfigPayload.model_validate({"type": "config", **config_options})
             )
 
-            recv_task = asyncio.create_task(self._recv_task(self._socket), name="phonic-recv")
-            send_task = asyncio.create_task(self._send_task(self._socket), name="phonic-send")
-            shutdown_wait_task = asyncio.create_task(
-                self._session_should_close.wait(), name="phonic-shutdown-wait"
-            )
-
-            done, pending = await asyncio.wait(
-                [recv_task, send_task, shutdown_wait_task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            for task in done:
-                exception = task.exception()
-                if task is not shutdown_wait_task and exception:
-                    logger.error(f"Error in Phonic task: {exception}")
-                    raise exception
-
-            for task in pending:
-                await utils.aio.cancel_and_wait(task)
+            async with utils.aio.TaskSet() as tasks:
+                await tasks.first_completed(
+                    tasks.spawn(self._recv_task(self._socket), name="phonic-recv"),
+                    tasks.spawn(self._send_task(self._socket), name="phonic-send"),
+                    self._session_should_close.wait(),
+                )
 
         except asyncio.CancelledError:
             pass

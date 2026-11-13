@@ -187,7 +187,8 @@ async def test_a_response_within_the_read_limit_ignores_the_other_limits(
 ) -> None:
     """Waiting for the response is not a write, pool or connect wait."""
     options = _options(read_timeout=SLOW, write_timeout=0.05, pool_timeout=0.05, connect_timeout=1)
-    async with session.post(f"{server}/slow?delay=0.3", conn_options=options, data=b"x") as resp:
+    # the answer comes after the write and pool limits would have fired
+    async with session.post(f"{server}/slow?delay=0.1", conn_options=options, data=b"x") as resp:
         assert await resp.text() == "ok"
 
 
@@ -243,11 +244,11 @@ async def test_a_slow_dns_lookup_fires_the_connect_limit(
     resolve = loop.getaddrinfo
 
     # Any: loop.getaddrinfo's arguments and result, forwarded untouched
-    async def slow_lookup(*args: Any, **kwargs: Any) -> Any:
-        await asyncio.sleep(SLOW)
+    async def stalled_lookup(*args: Any, **kwargs: Any) -> Any:
+        await asyncio.Event().wait()  # never answers: only the connect limit ends it
         return await resolve(*args, **kwargs)
 
-    monkeypatch.setattr(loop, "getaddrinfo", slow_lookup)
+    monkeypatch.setattr(loop, "getaddrinfo", stalled_lookup)
     url = server.replace("127.0.0.1", "localhost") + "/hang"
 
     phase = await _timeout_of(lambda: _get(session, url, _options(connect_timeout=FAST)))

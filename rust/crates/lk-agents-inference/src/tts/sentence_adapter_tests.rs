@@ -105,8 +105,8 @@ impl Tts for FakeTts {
     fn capabilities(&self) -> TtsCapabilities {
         TtsCapabilities { streaming: false, aligned_transcript: false }
     }
-    fn sample_rate(&self) -> u32 {
-        24_000
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
+        Ok(24_000)
     }
     /// Stereo, so an adapter that hard-coded `1` would show.
     fn num_channels(&self) -> u16 {

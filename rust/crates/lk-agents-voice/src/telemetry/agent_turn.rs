@@ -164,6 +164,14 @@ impl AgentTurnSpan {
     }
 
     /// The speech entered the queue (`_mark_scheduled`), once.
+    /// The model its LLM request went to, which labels its measurements: the LLM's at that
+    /// request, not at the session's start.
+    pub(crate) fn llm_requested(&mut self, provider: &str, model: &str) {
+        if let Some(llm) = self.reply.llm.as_mut() {
+            (llm.provider, llm.model) = (provider.to_owned(), model.to_owned());
+        }
+    }
+
     pub(crate) fn scheduled(&mut self, now: Ts) {
         self.progress.scheduled.get_or_insert(now);
     }

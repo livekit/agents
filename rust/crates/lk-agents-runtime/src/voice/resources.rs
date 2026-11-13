@@ -148,17 +148,8 @@ impl Resources {
     }
 
     pub fn register_tts(&self, tts: Arc<dyn Tts>) -> TtsRef {
-        let (provider, capabilities) = (tts.id(), tts.capabilities());
-        let (sample_rate, num_channels) = (tts.sample_rate(), tts.num_channels());
-        let markup = lk_agents_abi::tts::markup::Markup::from_provider_key(&tts.markup_provider());
-        TtsRef {
-            id: self.insert(Resource::Tts(tts)),
-            provider,
-            capabilities,
-            sample_rate,
-            num_channels,
-            markup,
-        }
+        let (capabilities, num_channels) = (tts.capabilities(), tts.num_channels());
+        TtsRef { id: self.insert(Resource::Tts(tts)), capabilities, num_channels }
     }
 
     pub fn register_realtime(

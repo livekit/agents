@@ -16,14 +16,7 @@ pub enum TransportError {
     TimedOut(Duration),
 }
 
-/// How a transport reaches the server, for the errors a failed connection reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransportKind {
-    WebSocket,
-    /// QUIC over UDP: a server that does not accept WebTransport, or a network that drops UDP,
-    /// never answers.
-    WebTransport,
-}
+pub use lk_agents_abi::worker::types::TransportKind;
 
 #[derive(Debug)]
 pub enum TransportEvent {

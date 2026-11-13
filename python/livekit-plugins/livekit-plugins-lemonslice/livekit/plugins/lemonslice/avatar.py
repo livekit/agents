@@ -17,6 +17,7 @@ from livekit.agents import (
     VoiceSession,
     get_job_context,
     http,
+    utils,
 )
 from livekit.agents.job import _server_credentials
 from livekit.agents.voice import room_io
@@ -84,6 +85,7 @@ class AvatarSession(BaseAvatarSession):
         self._meeting_chat: MeetingChatRelay | None = None
         self._meeting_relay_stop: asyncio.Event | None = None
         self._meeting_relay_task: asyncio.Task[None] | None = None
+        self._tasks = utils.aio.TaskSet()
 
     @property
     def avatar_identity(self) -> str:
@@ -254,7 +256,7 @@ class AvatarSession(BaseAvatarSession):
             self._meeting_chat = chat_relay
             chat_sink = chat_relay.submit_json
 
-        self._meeting_relay_task = asyncio.create_task(
+        self._meeting_relay_task = self._tasks.spawn(
             stream_meeting_relay(
                 result.websocket_url,
                 meeting_audio.submit,
@@ -270,6 +272,7 @@ class AvatarSession(BaseAvatarSession):
         try:
             await self.leave_meeting()
         finally:
+            await self._tasks.aclose()
             await super().aclose()
 
     async def leave_meeting(self) -> None:
@@ -296,8 +299,7 @@ class AvatarSession(BaseAvatarSession):
                 self._meeting_relay_stop.set()
             relay_task = self._meeting_relay_task
             if relay_task is not None:
-                relay_task.cancel()
-                await asyncio.gather(relay_task, return_exceptions=True)
+                await utils.aio.cancel_and_wait(relay_task)
                 self._meeting_relay_task = None
 
             if self._meeting_chat is not None:

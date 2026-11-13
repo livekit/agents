@@ -61,6 +61,9 @@ impl Resolver<'_> {
                 }
             }
         }
+        for m in methods.iter().filter(|m| m.kind == ProxyCall::ReadOnce) {
+            super::read_once::check(&format!("{at}::{}", m.rust_name), &host, &m.name)?;
+        }
         if methods.iter().filter(|m| m.kind == ProxyCall::Bind).count() > 1 {
             return Err(format!("{at}: a proxy binds one value"));
         }

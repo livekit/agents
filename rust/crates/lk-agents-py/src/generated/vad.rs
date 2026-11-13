@@ -527,7 +527,6 @@ pub struct VadProxy {
     notifier: crate::py_calls::Notifier,
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::VadCapabilities,
-    id: ::lk_agents_abi::ProviderId,
 }
 
 impl VadProxy {
@@ -578,17 +577,12 @@ impl VadProxy {
             let v = crate::py_calls::read(obj, "_core_capabilities")?;
             crate::generated::records::vad::vad_capabilities_from_py(v.as_any())?
         };
-        let id = {
-            let v = crate::py_calls::read(obj, "_core_id")?;
-            crate::generated::records::types::provider_id_from_py(v.as_any())?
-        };
         Ok(VadProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
             context,
             notifier: ::std::default::Default::default(),
             label,
             capabilities,
-            id,
         })
     }
 }
@@ -602,8 +596,50 @@ impl ::lk_agents_abi::Vad for VadProxy {
         ::std::clone::Clone::clone(&self.capabilities)
     }
 
-    fn id(&self) -> ::lk_agents_abi::ProviderId {
-        ::std::clone::Clone::clone(&self.id)
+    fn read_id(
+        &self,
+    ) -> ::std::result::Result<::lk_agents_abi::ProviderId, ::lk_agents_abi::errors::HostError>
+    {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &crate::py_calls::calling_context(&self.context),
+        )
+        .cloned();
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_id")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (context
+                .as_ref()
+                .map(|context| out.returned_context(py, context))
+                .transpose()
+                .and_then(|context| {
+                    crate::py_calls::returning(context, || {
+                        crate::generated::records::types::provider_id_from_py(o.as_any())
+                    })
+                }))
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
     }
 
     fn prewarm(&self, _cx: &::lk_agents_abi::telemetry::Cx) {

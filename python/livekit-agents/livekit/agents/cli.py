@@ -7,7 +7,8 @@ import math
 import os
 import sys
 from builtins import ExceptionGroup
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
+from typing import Any
 
 from . import _core
 from ._bindings import CLIError
@@ -24,7 +25,7 @@ from ._generated.worker_options import ProcessOptions
 from .http import client as http_client
 from .job import JobExecutorType
 from .log import _add_global_log_fields, logger
-from .utils.aio import close_loop
+from .utils.aio import TaskSet, close_loop
 from .worker import AgentServer
 
 __all__ = ["run_app"]
@@ -201,31 +202,33 @@ def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool =
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.slow_callback_duration = 0.1
-    main_task = loop.create_task(
-        _serve(server, devmode, args.cli_addr, unregistered=unregistered),
-        name="worker_main_task_cli",
-    )
+    serve = _serve(server, devmode, args.cli_addr, unregistered=unregistered)
     try:
-        try:
-            loop.run_until_complete(_wait_for_exit(main_task, shutdown))
-        finally:
-            loop.run_until_complete(_finish_server(server, shutdown, drain=not devmode))
-        error = main_task.exception() if main_task.done() and not main_task.cancelled() else None
-        if error is not None:
-            # Message first: the launcher shows it, and the traceback only on request.
-            logger.error("worker failed: %s", error, exc_info=error)
+        loop.run_until_complete(_run_until_exit(server, shutdown, serve, drain=not devmode))
+    except Exception as error:
+        # Message first: the launcher shows it, and the traceback only on request.
+        logger.error("worker failed: %s", error, exc_info=error)
+        return 1
     finally:
         _close_loop(loop, shutdown)
-    return int(error is not None)
+    return 0
 
 
-async def _wait_for_exit(main_task: asyncio.Task[None], shutdown: _core.Shutdown) -> None:
-    # The native awaitable must be constructed inside the running loop.
-    exit_task = asyncio.ensure_future(shutdown.wait())
-    try:
-        await asyncio.wait({main_task, exit_task}, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        exit_task.cancel()
+async def _run_until_exit(
+    server: AgentServer,
+    shutdown: _core.Shutdown,
+    main: Coroutine[Any, Any, None],
+    *,
+    drain: bool,
+) -> None:
+    """Run ``main`` until it ends or shutdown begins, then finish the server; raise its failure."""
+    async with TaskSet() as tasks:
+        main_task = tasks.spawn(main, name="worker_main_task_cli")
+        try:
+            # shielded: the server keeps serving while it drains
+            await tasks.first_completed(asyncio.shield(main_task), shutdown.wait())
+        finally:
+            await _finish_server(server, shutdown, drain=drain)
 
 
 async def _serve(
@@ -234,7 +237,7 @@ async def _serve(
     channel = None
     if cli_addr:
         config = server._config
-        dev = _core.dev_channel(
+        channel = _core.dev_channel(
             cli_addr,
             config.agent_name,
             config.ws_url,
@@ -242,12 +245,10 @@ async def _serve(
             config.api_secret,
             server._ensure_runtime(),
         )
-        channel = asyncio.ensure_future(dev)
-    try:
-        await server._run(devmode=devmode, unregistered=unregistered)
-    finally:
+    async with TaskSet() as tasks:
         if channel is not None:
-            channel.cancel()
+            tasks.spawn(channel, name="dev_channel")
+        await server._run(devmode=devmode, unregistered=unregistered)
 
 
 async def _finish_server(server: AgentServer, shutdown: _core.Shutdown, *, drain: bool) -> None:
@@ -289,24 +290,22 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
     shutdown = _core.Shutdown(server._config.shutdown_timeout, 0.0)
 
     async def _call() -> None:
-        await server._simulate_job("console-room", agent_identity="console", fake_job=True)
-        # The console is one call: exit once its job ends.
-        await server._drain(None)
-        shutdown.begin()
+        # The console is one call: exit once its job ends, or fails.
+        try:
+            await server._simulate_job("console-room", agent_identity="console", fake_job=True)
+            await server._drain(None)
+        finally:
+            shutdown.begin()
 
-    def _start_call() -> None:
-        asyncio.run_coroutine_threadsafe(_call(), loop)
-
-    server._on_started.append(_start_call)
+    calls = TaskSet()
+    server._on_started.append(
+        lambda: loop.call_soon_threadsafe(lambda: calls.spawn(_call(), name="console_call"))
+    )
 
     shutdown.listen()
-    main_task = loop.create_task(server._run(devmode=True, unregistered=True))
+    serve = server._run(devmode=True, unregistered=True)
     try:
-        try:
-            loop.run_until_complete(_wait_for_exit(main_task, shutdown))
-        finally:
-            loop.run_until_complete(_finish_server(server, shutdown, drain=False))
-        if main_task.done() and not main_task.cancelled():
-            main_task.result()
+        loop.run_until_complete(_run_until_exit(server, shutdown, serve, drain=False))
     finally:
+        loop.run_until_complete(calls.aclose())
         _close_loop(loop, shutdown)

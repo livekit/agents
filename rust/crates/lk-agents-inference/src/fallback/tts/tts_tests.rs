@@ -90,8 +90,8 @@ impl Tts for FakeTts {
     fn capabilities(&self) -> TtsCapabilities {
         TtsCapabilities { streaming: self.streaming, aligned_transcript: false }
     }
-    fn sample_rate(&self) -> u32 {
-        self.rate
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
+        Ok(self.rate)
     }
     fn num_channels(&self) -> u16 {
         self.channels
@@ -315,8 +315,8 @@ impl Tts for SpeaksOnEnd {
     fn capabilities(&self) -> TtsCapabilities {
         TtsCapabilities { streaming: true, aligned_transcript: false }
     }
-    fn sample_rate(&self) -> u32 {
-        24_000
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
+        Ok(24_000)
     }
     fn num_channels(&self) -> u16 {
         1
@@ -564,15 +564,13 @@ mod tts {
         let fb = tts_chain(vec![slow, fast]);
 
         assert_eq!(fb.label(), "tts.FallbackAdapter");
-        assert_eq!(fb.sample_rate(), 24_000, "the maximum of the entries");
+        assert_eq!(fb.sample_rate(), Ok(24_000), "the maximum of the entries");
         assert_eq!(
             fb.num_channels(),
             2,
             "both entries are stereo; the adapter must not invent mono"
         );
         assert!(fb.capabilities().streaming, "the merged shape, not Default");
-        assert!(fb.needs_resampling(0), "the 16 kHz primary");
-        assert!(!fb.needs_resampling(1), "the entry already at the chain's rate");
 
         let mut source = within(
             "synthesize",

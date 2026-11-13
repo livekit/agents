@@ -101,7 +101,7 @@ impl Tts for StreamAdapter {
         TtsCapabilities { streaming: true, aligned_transcript: true }
     }
 
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
         self.tts.sample_rate()
     }
 
@@ -502,7 +502,7 @@ impl TtsStreamAdapter for StreamAdapter {
         Tts::capabilities(self)
     }
 
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> Result<u32, lk_agents_abi::errors::HostError> {
         Tts::sample_rate(self)
     }
 

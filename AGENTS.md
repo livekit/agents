@@ -69,6 +69,14 @@ A test asserts public behaviour (tool outcomes, replies, run steps, wire payload
 shared fakes in `tests/fakes.py`, and names the regression it catches. Keep only tests
 that would catch a real regression. A new test goes in the folder of its category.
 
+A hermetic test never waits on real time. It awaits the event it needs with
+`until(done, what)` (2 s by default, failing with `what`), and skips the core's timers with
+`_core.skip_host_time(seconds)`; a sleep over 0.05 s fails `tests/smoke/test_no_real_waits.py`
+unless its line says `# real wait: <why the duration is under test>`. A negative assertion
+waits for the event that proves the thing did not happen, never for a pause. A hermetic test
+is cut at 10 s, an e2e test at 120 s. A strict xfail's reason names its issue or PR link and
+what reproduces. See `docs/internals/testing.md#python-tests`.
+
 ### Running Agents
 ```bash
 lk agent dev               # Development mode with hot reload (connects to LiveKit)
@@ -371,6 +379,10 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 - Python that only forwards to `_core` is generated; handwritten Python is host-specific logic. [review]
 - A plugin base class implements every proxy method. [check]
 - The runtime lends the process Tokio runtime as one `ProcessEnv` (`#[host(env)] type Env;`). [review]
+- `read_once` only reads a value its host object cannot change after construction (identity,
+  fixed shape, port objects), listed with its reason in the codegen's `read_once.rs`; anything
+  `update_options` or a setter changes is read by `call` when used, or owned by the engine.
+  Capabilities are fixed at construction: an option that would change one is refused. [check]
 
 ### Generated code
 - Generated files start with `//! GENERATED FILE -- DO NOT EDIT.` and are never edited by hand. [check]

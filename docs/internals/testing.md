@@ -68,6 +68,31 @@ Python tests reach an offline room through the documented session, as
 without a job, or `room=None` where a job would supply one. `_core` ships no
 test-only room export. Room-level behavior is tested in Rust over the SDK-port
 fakes in `lk-agents-fuzz` (`fakes::room`).
+
+### Python tests
+
+A hermetic test (`tests/host`, `tests/plugins`, `tests/smoke`) runs fast, never waits on
+real time and fails with a message naming what never happened:
+
+- It awaits the event it needs: `until(done, what)` from `tests/fakes.py` polls `done()`
+  and fails with `what` after 2 s. A fake records what it saw (a request, a frame, a close)
+  so a test can wait for exactly that, never for a pause. A wait that needs longer is made
+  faster, not given a longer timeout.
+- It skips the core's timers instead of waiting them out: `_core.skip_host_time(seconds)`
+  moves every host clock of the process forward, so a watchdog, grace period or idle close
+  fires when the test chooses.
+- A negative assertion ("nothing was sent", "not interrupted") first waits for the event
+  that proves the window closed, such as a later message or the peer's next request.
+- A sleep over 0.05 s fails `tests/smoke/test_no_real_waits.py`, scripts run in a child
+  process included. Only a duration that is itself under test (the stall detector's
+  threshold, a recording's length) stays, with `# real wait: <why>` on its line.
+  `tests/fakes.py` and `tests/e2e` are outside the rule.
+- pytest cuts a hermetic test at 10 s (`pyproject.toml`) and an e2e test at 120 s
+  (`tests/conftest.py`): a wait that reaches the cut is a hang, not a slow test.
+- A test names the regression it catches. A strict xfail's reason starts with its issue or
+  PR link (or the doc it cites) and says what reproduces; once the fix lands the xfail
+  fails the suite, and the marker goes.
+
 ## Deterministic simulation testing
 
 The DST is scoped to voice sessions and room I/O over fake provider and RTC ports.

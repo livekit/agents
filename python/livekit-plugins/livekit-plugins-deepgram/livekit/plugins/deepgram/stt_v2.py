@@ -324,6 +324,7 @@ class SpeechStreamv2(stt.RecognizeStream):
         self._reconnect_event = asyncio.Event()
         # active connection for in-band Configure updates; None while disconnected
         self._ws: http.WebSocket | None = None
+        self._tasks = utils.aio.TaskSet()
         self._reconfigure_atask: asyncio.Task[None] | None = None
 
     def update_options(
@@ -412,7 +413,7 @@ class SpeechStreamv2(stt.RecognizeStream):
 
         if changed_options:
             # chain off the previous send so deltas reach the server in order
-            self._reconfigure_atask = asyncio.create_task(
+            self._reconfigure_atask = self._tasks.spawn(
                 self._send_configure(changed_options, self._reconfigure_atask)
             )
 
@@ -518,31 +519,13 @@ class SpeechStreamv2(stt.RecognizeStream):
                 ws = await self._connect_ws()
                 # expose the connection for in-band Configure updates
                 self._ws = ws
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    # propagate exceptions from completed tasks
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
+                async with utils.aio.TaskSet() as tasks:
+                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
+                    reconnect = tasks.spawn(self._reconnect_event.wait())
+                    if await tasks.first_completed(io, reconnect) is not reconnect:
                         break
 
                     self._reconnect_event.clear()
-                finally:
-                    await utils.aio.cancel_and_wait(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
             finally:
                 self._ws = None
                 if self._reconfigure_atask is not None:

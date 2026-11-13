@@ -30,7 +30,7 @@ from livekit.agents import (
     tts,
 )
 from livekit.plugins.openai import TTS, responses, stt as openai_stt
-from tests.fakes import FakeVAD, audio_frame
+from tests.fakes import FakeVAD, audio_frame, until
 
 NO_RETRY = APIConnectOptions(max_retry=0)
 PCM = b"\x00\x01" * 4800  # 200 ms of 16-bit mono at 24 kHz
@@ -85,9 +85,7 @@ class _RealtimePeer:
 
     async def configured(self) -> _Transcription:
         """The transcription settings of the first session.update."""
-        async with asyncio.timeout(3):
-            while not self.transcriptions:
-                await asyncio.sleep(0.01)
+        await until(lambda: self.transcriptions, "the session was configured")
         return self.transcriptions[0]
 
 
@@ -344,9 +342,7 @@ async def test_closing_the_model_closes_its_pooled_realtime_socket() -> None:
 
         await model.aclose()
 
-        async with asyncio.timeout(3):
-            while not peer.sockets[0].closed:
-                await asyncio.sleep(0.01)
+        await until(lambda: peer.sockets[0].closed, "the pooled socket closed")
 
 
 # TTS
@@ -440,16 +436,25 @@ async def test_a_second_prewarm_does_not_open_another_request() -> None:
         return web.Response(text="")
 
     async with _serve(("GET", "/v1/", warm)) as base_url:
-        tts = TTS(api_key="test", base_url=base_url)
+        client = openai.AsyncClient(api_key="test", base_url=base_url)
+        asked: list[str] = []
+        get = client.get
+
+        def asking_get(path: str, **options: object) -> object:
+            asked.append(path)
+            return get(path, **options)  # type: ignore[call-overload]
+
+        client.get = asking_get  # type: ignore[method-assign, assignment]
+        tts = TTS(client=client)
         tts.prewarm()
-        async with asyncio.timeout(3):
-            while not requests:
-                await asyncio.sleep(0.01)
+        await until(lambda: requests, "the prewarm reached the server")
         tts.prewarm()
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0)  # a prewarm task spawned by the second call has asked by now
         await tts.aclose()
         release.set()
+        await client.close()
 
+    assert asked == ["/"]
     assert requests == ["/v1/"]
 
 
