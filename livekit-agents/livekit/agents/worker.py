@@ -38,7 +38,7 @@ from google.protobuf.json_format import MessageToDict, MessageToJson
 from livekit import api, rtc
 from livekit.protocol import agent, agent_worker, models
 
-from . import ipc, telemetry, utils
+from . import _hosted_logs, ipc, telemetry, utils
 from ._exceptions import APIStatusError, AssignmentTimeoutError
 from .inference_runner import _InferenceRunner
 from .job import (
@@ -586,6 +586,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             if self._load_fnc is None:
                 self._load_fnc = _DefaultLoadCalc.get_load
+
+            if self._job_executor_type == JobExecutorType.THREAD and _hosted_logs.logs_handed_off():
+                _hosted_logs.install_thread_router()
 
             if self.worker_info.cloud_agents:
                 if self._load_fnc != _DefaultLoadCalc.get_load:
