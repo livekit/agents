@@ -50,6 +50,7 @@ from pydantic import BaseModel
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents.llm._realtime.openai_utils import _ItemIdMap
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -122,6 +123,21 @@ _BOSON_NONFATAL_ERROR_TYPES = frozenset({"voice_output_task_ongoing", "invalid_p
 # to the base, which gathers them and logs a warning, on the grounds that one
 # rejected item is not worth failing the turn over.
 _CHAT_CTX_ESCALATING_ERROR_TYPES = frozenset({"invalid_previous_item_id"})
+
+
+class _UnshortenedItemIds(_ItemIdMap):
+    """Sends item ids exactly as they are.
+
+    The OpenAI base shortens any id over OpenAI's 32-char limit before it goes
+    out. The server's own item ids are 36-char UUIDs, and it matches the ids it
+    receives exactly, so a shortened id points at nothing: a tool result created
+    after the function call fails with invalid_previous_item_id, and a truncate
+    of the server's reply names no item. Nothing is shortened, so there is
+    nothing for restore() to map back either.
+    """
+
+    def shorten(self, event: dict[str, Any]) -> None:
+        return
 
 
 @dataclass
@@ -527,6 +543,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # recycles the connection like max_session_duration does.
         self._server_max_duration_reached = False
         super().__init__(realtime_model)
+        self._item_ids = _UnshortenedItemIds()
         self._sync_base_transcription_opts()
         # The base recv loop dispatches OpenAI event types to _handle_* methods
         # and re-emits every raw event on this hook; Boson-specific events are

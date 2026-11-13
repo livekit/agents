@@ -32,6 +32,13 @@ pytestmark = pytest.mark.unit
 _URL = "ws://localhost:8000/v1/realtime/"
 _DEFAULT_TURN_DETECTION = realtime.realtime_model._DEFAULT_TURN_DETECTION
 
+# Ids in the shape the server hands out: item ids are UUIDs, and call ids come from
+# the model server. Both run past the 32 chars OpenAI caps ids at.
+_BOSON_USER_ID = "5f0c3a52-8a8e-4f63-9d0e-2b7c1f4e9a10"
+_BOSON_CALL_ITEM_ID = "fd1c99fd-6798-4b02-aa27-0c173b1ff1da"
+_BOSON_ASSISTANT_ID = "42d7cfa0-f6ef-49e6-ac1b-91e6e5ea8ac0"
+_BOSON_CALL_ID = "chatcmpl-tool-303f9ba2eef6422cbfd4cf2dcad3108f"
+
 
 async def _idle_run(_session):
     await asyncio.Future()
@@ -1698,15 +1705,15 @@ async def test_boson_realtime_terminal_connection_failure_closes_the_session(
 async def test_boson_realtime_reconnect_replays_chat_ctx_after_ws_drop(socket_session):
     # The first connection delivers a user turn and a tool call with its result,
     # then drops. The server keeps no state across connections, so all of it is
-    # replayed; a replay without the call would let the model repeat it.
-    call = _item("call_item_1", "function_call", call_id="call_1", name="lookup_weather")
+    # replayed, under the ids the server gave it; a replay without the call would
+    # let the model repeat it.
+    call = _item(
+        _BOSON_CALL_ITEM_ID, "function_call", call_id=_BOSON_CALL_ID, name="lookup_weather"
+    )
     call["arguments"] = '{"location": "Paris"}'
-    output = _item("output_item_1", "function_call_output", call_id="call_1", output="sunny")
-    items = [
-        (_item("user_1", role="user", content=[{"type": "input_text", "text": "hello"}]), None),
-        (call, "user_1"),
-        (output, "call_item_1"),
-    ]
+    output = _item("output_item_1", "function_call_output", call_id=_BOSON_CALL_ID, output="sunny")
+    user = _item(_BOSON_USER_ID, role="user", content=[{"type": "input_text", "text": "hello"}])
+    items = [(user, None), (call, _BOSON_USER_ID), (output, _BOSON_CALL_ITEM_ID)]
     ws2 = _FakeWebSocket()
     client = _SequencedHTTPClient(
         [_dropped_ws([_ws_text(_item_added_echo(item, prev)) for item, prev in items]), ws2]
@@ -1726,13 +1733,21 @@ async def test_boson_realtime_reconnect_replays_chat_ctx_after_ws_drop(socket_se
     # local chat-context mirror is replayed via conversation.item.create.
     sent = [json.loads(s) for s in ws2.sent]
     assert sent[0]["type"] == "session.update"
-    replayed = [e["item"] for e in sent if e["type"] == "conversation.item.create"]
-    assert [item["id"] for item in replayed] == ["user_1", "call_item_1", "output_item_1"]
+    creates = [e for e in sent if e["type"] == "conversation.item.create"]
+    replayed = [e["item"] for e in creates]
+    assert [item["id"] for item in replayed] == [
+        _BOSON_USER_ID,
+        _BOSON_CALL_ITEM_ID,
+        "output_item_1",
+    ]
+    assert [e["previous_item_id"] for e in creates] == [None, _BOSON_USER_ID, _BOSON_CALL_ITEM_ID]
     assert replayed[0]["content"] == [{"type": "input_text", "text": "hello"}]
     assert replayed[1]["type"] == "function_call"
     assert replayed[1]["name"] == "lookup_weather"
     assert replayed[1]["arguments"] == '{"location": "Paris"}'
+    assert replayed[1]["call_id"] == _BOSON_CALL_ID
     assert replayed[2]["type"] == "function_call_output"
+    assert replayed[2]["call_id"] == _BOSON_CALL_ID
     assert replayed[2]["output"] == "sunny"
 
     # The drop surfaced as a recoverable error and the session stayed usable.
@@ -1740,6 +1755,39 @@ async def test_boson_realtime_reconnect_replays_chat_ctx_after_ws_drop(socket_se
     assert errors[0].recoverable is True
     assert session._closed is False
     assert not session._msg_ch.closed
+
+
+async def test_boson_realtime_sends_server_item_ids_as_is(socket_session):
+    # The server matches the ids it handed out exactly. A tool result created after
+    # its function call, and a truncate of its reply, must name those items as is,
+    # not under the shortened ids the OpenAI base sends for its 32-char limit.
+    call = _item(
+        _BOSON_CALL_ITEM_ID, "function_call", call_id=_BOSON_CALL_ID, name="lookup_weather"
+    )
+    call["arguments"] = "{}"
+    ws = _FakeWebSocket(messages=[_ws_text(_item_added_echo(call))])
+    session = socket_session(_SequencedHTTPClient([ws]))
+    assert await _eventually(lambda: session._remote_chat_ctx.get(_BOSON_CALL_ITEM_ID))
+
+    chat_ctx = session.chat_ctx.copy()
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(call_id=_BOSON_CALL_ID, output="sunny", is_error=False)
+    )
+    update_task = asyncio.create_task(session.update_chat_ctx(chat_ctx))
+    assert await _eventually(lambda: any("conversation.item.create" in s for s in ws.sent))
+    sent = [json.loads(s) for s in ws.sent]
+    create = next(e for e in sent if e["type"] == "conversation.item.create")
+    assert create["previous_item_id"] == _BOSON_CALL_ITEM_ID
+    assert create["item"]["call_id"] == _BOSON_CALL_ID
+    _server_event(session, _item_added_echo(create["item"], _BOSON_CALL_ITEM_ID))
+    await asyncio.wait_for(update_task, timeout=1.0)
+
+    session.truncate(message_id=_BOSON_ASSISTANT_ID, modalities=["audio"], audio_end_ms=500)
+    assert await _eventually(lambda: any("conversation.item.truncate" in s for s in ws.sent))
+    truncate = next(
+        e for e in map(json.loads, ws.sent) if e["type"] == "conversation.item.truncate"
+    )
+    assert truncate["item_id"] == _BOSON_ASSISTANT_ID
 
 
 async def test_boson_realtime_recycles_the_connection_after_max_session_duration(socket_session):
