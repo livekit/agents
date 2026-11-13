@@ -495,6 +495,7 @@ class GPTLiveSession(
 
         # delegation_id -> call_ids of its response that has not completed yet; on completion the
         # call_ids move to the open set, and stay there until each output is sent to the backend.
+        # A response whose calls arrive with no response.created is entered on its first call.
         # response_pending is set once an output is sent and cleared by the response.create
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
@@ -1062,11 +1063,17 @@ class GPTLiveSession(
                 )
                 return
             if (calls := self._backend_running_responses.get(d_id)) is None:
-                logger.warning(
-                    "gpt-live function call outside a known response",
+                if item.call_id in self._backend_open_calls:
+                    return
+                # the continuation a response.create starts can stream its calls with no
+                # response.created first; it is still running, so an output that comes back before
+                # it completes must wait for its end like any other, or the response.create lands
+                # inside it and the chain never continues
+                logger.debug(
+                    "gpt-live function call from a response with no response.created",
                     extra={"call_id": item.call_id, "function": item.name, "delegation_id": d_id},
                 )
-                calls = self._backend_open_calls
+                calls = self._backend_running_responses[d_id] = set()
             if item.call_id in calls:
                 return
             calls.add(item.call_id)
