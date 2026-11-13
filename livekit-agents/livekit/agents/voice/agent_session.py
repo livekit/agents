@@ -62,10 +62,11 @@ from ..types import (
 from ..utils.deprecation import deprecate_params
 from ..utils.misc import is_given
 from . import io, room_io
+from ._turn_hooks import TurnHooks
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
-from .amd import AMD
+from .amd import AMD, AMDCompletedEvent, AMDPredictionEvent
 from .events import (
     AgentEvent,
     AgentState,
@@ -773,11 +774,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr and AMD
         self._ivr_activity: IVRActivity | None = None
         self._amd: AMD | None = None
+        self._turn_hooks: TurnHooks | None = None
 
     @property
     def amd(self) -> AMD | None:
         """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
         return self._amd
+
+    def _on_amd_prediction(self, event: AMDPredictionEvent) -> None:
+        if self._session_host is not None:
+            self._session_host._on_amd_prediction(event)
+
+    def _on_amd_completed(self, event: AMDCompletedEvent) -> None:
+        if self._session_host is not None:
+            self._session_host._on_amd_completed(event)
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         if event == "metrics_collected" and callback is not None:
@@ -1410,6 +1420,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._amd is not None:
             await self._amd.aclose()
             self._amd = None
+            self._turn_hooks = None
 
         activity = self._activity
         cancelled = False
@@ -1811,6 +1822,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def update_agent(self, agent: Agent) -> None:
+        if self._amd is not None:
+            raise RuntimeError("agent handoffs are not supported while AMD is running")
+
         # reject before touching state: a failed handoff would leave turns blocked
         if agent._activity is not None and agent._activity is not self._activity:
             raise RuntimeError("cannot update agent: the agent is already running")
@@ -1908,6 +1922,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
+            if self._amd is not None:
+                raise RuntimeError("agent handoffs are not supported while AMD is running")
             if self._closing and new_activity == "start":
                 # checked again after the drain below: closing may start while it's in flight
                 logger.warning(
@@ -2352,7 +2368,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             UserStateChangedEvent(
                 old_state=old_state,
                 new_state=state,
-                created_at=last_speaking_time or time.time(),
+                speech_timestamp=last_speaking_time,
             ),
         )
 
@@ -2360,7 +2376,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """End user speaking state when audio is disabled by default."""
         if not enabled and self._user_state == "speaking":
             if self._activity is not None:
-                self._activity.on_end_of_speech(None)
+                self._activity.on_end_of_speech(None, speech_end_time=time.time())
             else:
                 self._update_user_state("listening")
 

@@ -23,6 +23,7 @@ from livekit.agents.metrics import (
     STTModelUsage,
     TTSModelUsage,
 )
+from livekit.agents.voice.amd import AMDCategory, AMDCompletedEvent, AMDPredictionEvent
 from livekit.agents.voice.events import (
     AgentStateChangedEvent,
     CloseEvent,
@@ -373,7 +374,16 @@ class TestSessionHostEvents:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_user_state_changed(self, transport: InMemoryTransport) -> None:
+    @pytest.mark.parametrize(
+        ("speech_timestamp", "expected_timestamp_ns"),
+        [(999.25, 999_250_000_000), (None, 1_000_000_000_000), (0.0, 0)],
+    )
+    async def test_user_state_changed(
+        self,
+        transport: InMemoryTransport,
+        speech_timestamp: float | None,
+        expected_timestamp_ns: int,
+    ) -> None:
         host = SessionHost(transport)
         await host.start()
 
@@ -381,17 +391,18 @@ class TestSessionHostEvents:
             type="user_state_changed",
             old_state="listening",
             new_state="speaking",
+            speech_timestamp=speech_timestamp,
             created_at=1000.0,
         )
         host._on_user_state_changed(event)
         await asyncio.sleep(0.1)
+        await host.aclose()
 
         assert len(transport.sent) == 1
         msg = transport.sent[0]
         assert msg.event.user_state_changed.old_state == agent_pb.US_LISTENING
         assert msg.event.user_state_changed.new_state == agent_pb.US_SPEAKING
-
-        await host.aclose()
+        assert msg.event.created_at.ToNanoseconds() == expected_timestamp_ns
 
     @pytest.mark.asyncio
     async def test_tool_execution_updated(self, transport: InMemoryTransport) -> None:
@@ -502,6 +513,98 @@ class TestSessionHostEvents:
         assert msg.event.conversation_item_added.item.message.id == "msg-1"
 
         await host.aclose()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("category", list(AMDCategory))
+    async def test_amd_prediction_maps_each_category(
+        self, transport: InMemoryTransport, category: AMDCategory
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+        try:
+            host._on_amd_prediction(
+                AMDPredictionEvent(
+                    category=category,
+                    reason="prediction",
+                    transcript="Please hold.",
+                    speech_duration=1.0,
+                    delay=0.1,
+                )
+            )
+            await asyncio.sleep(0.1)
+            event = transport.sent[0].event.amd_prediction
+            assert agent_pb.AmdCategory.Name(event.category) == f"AMD_{category.name}"
+        finally:
+            await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_amd_prediction_carries_turn_stage_and_inference(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+        try:
+            prediction = AMDPredictionEvent(
+                category=AMDCategory.WAIT,
+                reason="prediction",
+                transcript="Please hold while I connect your call.",
+                speech_duration=1.0,
+                delay=0.1,
+                turn_id=3,
+                stage=AMDCategory.MACHINE_SCREENING,
+                inference_duration=0.25,
+            )
+            host._on_amd_prediction(prediction)
+            host._on_amd_prediction(prediction.model_copy(update={"inference_duration": None}))
+            await asyncio.sleep(0.1)
+            inferred, reused = (msg.event.amd_prediction for msg in transport.sent)
+            assert inferred.turn_id == 3
+            assert inferred.stage == agent_pb.AMD_MACHINE_SCREENING
+            assert inferred.inference_duration.ToMilliseconds() == 250
+            assert inferred.speech_duration.ToMilliseconds() == 1000
+            assert inferred.delay.ToMilliseconds() == 100
+            assert not reused.HasField("inference_duration")
+        finally:
+            await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_amd_completed_carries_the_last_prediction(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+        try:
+            prediction = AMDPredictionEvent(
+                category=AMDCategory.MACHINE_VM,
+                reason="prediction",
+                transcript="Leave a message after the tone.",
+                speech_duration=2.0,
+                delay=0.1,
+                turn_id=2,
+                stage=AMDCategory.MACHINE_VM,
+            )
+            host._on_amd_completed(
+                AMDCompletedEvent(
+                    category=AMDCategory.MACHINE_VM,
+                    reason="timeout",
+                    voicemail_message_played=True,
+                    last_prediction=prediction,
+                )
+            )
+            host._on_amd_completed(
+                AMDCompletedEvent(category=AMDCategory.UNCERTAIN, reason="cancelled")
+            )
+            await asyncio.sleep(0.1)
+            completed, cancelled = (msg.event.amd_completed for msg in transport.sent)
+            assert completed.category == agent_pb.AMD_MACHINE_VM
+            assert completed.reason == "timeout"
+            assert completed.voicemail_message_played
+            assert completed.prediction.turn_id == 2
+            assert completed.prediction.transcript == "Leave a message after the tone."
+            assert cancelled.reason == "cancelled"
+            assert not cancelled.HasField("prediction")
+        finally:
+            await host.aclose()
 
     @pytest.mark.asyncio
     async def test_error_event(self, transport: InMemoryTransport) -> None:

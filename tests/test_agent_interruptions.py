@@ -490,7 +490,7 @@ async def test_resume_waits_for_a_dropped_turn(rt_session: AgentSession) -> None
     resumes = _record_resumes(rt_session)
 
     t0 = time.time()
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
     activity._audio_recognition = _recognition(activity, last_speaking_time=t0 - VAD_MIN_SILENCE)
     # a confirmed backchannel is what makes the turn drop rather than commit
     activity._audio_recognition._turn_backchannel_over_agent = True
@@ -511,7 +511,7 @@ async def test_committed_turn_suppresses_the_resume(rt_session: AgentSession) ->
     activity._create_speech_task = _swallow_task  # type: ignore[method-assign, assignment]
     resumes = _record_resumes(rt_session)
 
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
     activity._audio_recognition = _recognition(
         activity, last_speaking_time=time.time() - VAD_MIN_SILENCE
     )
@@ -530,7 +530,7 @@ async def test_teardown_does_not_resume_a_deferred_pause(rt_session: AgentSessio
     activity, _ = _paused_activity(rt_session)
     resumes = _record_resumes(rt_session)
 
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
     activity._audio_recognition = _recognition(
         activity, last_speaking_time=time.time() - VAD_MIN_SILENCE
     )
@@ -560,7 +560,7 @@ async def test_reply_that_returns_early_keeps_the_resume_armed(
     activity._create_speech_task = _swallow_task  # type: ignore[method-assign, assignment]
     resumes = _record_resumes(rt_session)
 
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
     assert activity.on_end_of_turn(_end_of_turn(skip_reply=cause == "skipped_reply")) is True
 
     await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
@@ -578,7 +578,7 @@ async def test_resume_is_immediate_when_no_turn_decision_is_open(
     resumes = _record_resumes(rt_session)
 
     t0 = time.time()
-    activity.on_end_of_speech(None)
+    activity.on_end_of_speech(None, speech_end_time=time.time())
 
     await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
     await rt_session.aclose()
