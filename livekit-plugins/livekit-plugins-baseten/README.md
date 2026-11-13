@@ -20,7 +20,7 @@ The STT plugin connects to Baseten's [Whisper Streaming](https://docs.baseten.co
 
 ### Recommended model
 
-[Whisper v3 Turbo – WebSocket](https://www.baseten.co/library/whisper-streaming-large-v3/)
+[Whisper Large V3 Turbo](https://www.baseten.co/library/whisper-large-turbo/) (real-time deployment)
 
 ### Endpoint URL formats
 
@@ -184,7 +184,7 @@ Several defaults follow the selected model, matching each deployment's own:
 | `partial_transcript_interval_s` | `1.0` | `0.5` |
 | `vad_min_silence_duration_ms` | `300` | `500` |
 | `vad_speech_pad_ms` | `30` | `100` |
-| `show_word_timestamps` | on | off (needs `STREAM_ALIGNER=mms` on the deployment) |
+| `show_word_timestamps` | on | off (needs `STREAM_ALIGNER=mms` and `STREAM_ALIGNER_DEVICE=cuda` on the deployment) |
 | `voice` | `tara` | required — a registered clone |
 
 ### Qwen3 TTS voices
@@ -217,6 +217,38 @@ into the deployment (`REQUIRED_VOICES`) so every replica starts with it, or pass
 `x_vector_only_mode`, `ref_audio`/`ref_text`, and `extra_config` (merged into
 `session.config` for server fields newer than this plugin) apply to
 `model="qwen3-tts"` only.
+
+## Real-time transcription API (v2)
+
+Baseten's [Real-time transcription API (v2)](https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api-v2)
+puts one streaming protocol in front of every speech-to-text model its STT
+server hosts (Whisper, Qwen3-ASR, and others), so one `model="streaming-v2"`
+works for any of them. Endpoints are the same `.../websocket` URLs shown above.
+The deployment decides the protocol: one that does not send `session.created`
+speaks v1, so use `whisper` or `qwen3-asr` for it.
+
+```python
+stt = baseten.STT(model="streaming-v2", model_id="your-model-id")
+```
+
+Who ends a turn is set with `segmentation_mode`:
+
+| `segmentation_mode` | A turn ends when | Use it with |
+|---|---|---|
+| `server_vad` (default) | the server's VAD hears trailing silence | any `turn_detection` |
+| `client_flush` | LiveKit flushes the stream as it commits the user's turn | a turn detector or VAD in the `AgentSession` |
+
+Options that apply: `language` (a BCP-47 code such as `en` or `en-US`, or
+`auto`; unset takes the deployment's default), `enable_partial_transcripts`,
+`partial_transcript_interval_s` (default `0.5`; the server may raise it to its
+own floor), and under `server_vad` only, `vad_threshold` and
+`vad_min_silence_duration_ms` (unset takes the deployment's per-model
+defaults). Anything the server does not grant is logged as a warning, and the
+session carries on with what it did grant.
+
+Not available yet in v2: word-level timestamps,
+`language_options`, `pcm_mulaw` audio, and `vad_speech_pad_ms`. Sending
+`language` needs a server at v0.2.0 or newer.
 
 ## LLM (Large Language Model)
 

@@ -162,3 +162,28 @@ def test_session_passes_through_success_and_unrelated_errors(monkeypatch):
     monkeypatch.setattr("requests.Session.request", lambda self, *a, **k: bad, raising=True)
     assert session.request("POST", "https://example") is bad
     assert not traces._upload_gate.disabled
+
+
+def test_session_auth_overrides_otel_env_headers(monkeypatch):
+    # OTLP exporters pass OTEL_EXPORTER_OTLP_HEADERS per request (#8406)
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Basic other")
+    sent = {}
+
+    def fake_request(self, *args, **kwargs):
+        sent.update(kwargs["headers"])
+        return _FakeResponse(200, b"")
+
+    monkeypatch.setattr("requests.Session.request", fake_request, raising=True)
+
+    session = traces._AuthRefreshingSession(lambda: {"Authorization": "Bearer x"})
+    provider = TracerProvider()
+    provider.add_span_processor(
+        SimpleSpanProcessor(OTLPSpanExporter(endpoint="https://example", session=session))
+    )
+    provider.get_tracer("test").start_span("span").end()
+
+    assert {k.lower(): v for k, v in sent.items()}["authorization"] == "Bearer x"

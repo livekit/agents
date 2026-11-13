@@ -69,7 +69,12 @@ def test_builders_produce_the_conventions_shapes() -> None:
         "arguments": {"loc": "Paris"},
     }
     # a serialized payload is deserialized, as the convention asks of instrumentations
-    assert messages[2]["parts"][0]["response"] == {"temp": 14}
+    assert messages[2]["parts"][0] == {
+        "type": "tool_call_response",
+        "id": "call_1",
+        "name": "get_weather",
+        "response": {"temp": 14},
+    }
 
     call = llm.FunctionCall(call_id="call_9", name="lookup", arguments='{"q": "x"}')
     output = gen_ai.to_output_messages(text="one moment", function_calls=[call])
@@ -263,15 +268,3 @@ def test_the_provider_tables_only_target_registry_values() -> None:
         *(v for _, v in trace_types._PROVIDER_BY_HOST_SUFFIX),
     }
     assert targets <= trace_types.GEN_AI_PROVIDER_NAMES
-
-
-def test_tool_spans_carry_the_conversation_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    # execute_tool is a first-class GenAI operation; a backend that groups by
-    # gen_ai.conversation.id would otherwise drop tool spans out of the session view
-    monkeypatch.setattr(gen_ai, "_conversation_id", lambda: "room-42")
-
-    span, exporter = _exporting_span("function_tool")
-    gen_ai.set_tool_attributes(span, name="get_weather", call_id="call_1")
-    span.end()
-
-    assert _attributes(exporter)["gen_ai.conversation.id"] == "room-42"

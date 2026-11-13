@@ -29,6 +29,17 @@ def test_add_fail_replaces_a_success_outcome() -> None:
     assert tagger.outcome_reason is None
 
 
+@pytest.mark.parametrize("outcome", ["success", "fail"])
+def test_adding_the_same_outcome_keeps_its_reason(outcome: str) -> None:
+    tagger = Tagger()
+    getattr(tagger, outcome)(reason="recorded reason")
+
+    tagger.add(f"lk.{outcome}", metadata={"updated": True})
+
+    assert tagger.outcome == outcome
+    assert tagger.outcome_reason == "recorded reason"
+
+
 def test_add_keeps_custom_tags_out_of_the_outcome() -> None:
     tagger = Tagger()
     tagger.add("voicemail:true")

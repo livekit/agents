@@ -14,10 +14,7 @@ class _TagEntry:
     timestamp: float = field(default_factory=time.time)
 
 
-# The only two tags that carry a session outcome. They stay mutually exclusive, and
-# `outcome_reason` is only meaningful while one of them is present.
-_SUCCESS_TAG = "lk.success"
-_FAIL_TAG = "lk.fail"
+_OUTCOME_TAGS = ("lk.success", "lk.fail")
 
 
 class Tagger:
@@ -61,7 +58,9 @@ class Tagger:
         Args:
             reason: Optional reason for the success (stored separately from the tag).
         """
-        self.add(_SUCCESS_TAG)
+        # Remove any existing outcome tag
+        self._tags.pop("lk.fail", None)
+        self._tags["lk.success"] = _TagEntry()
         self._outcome_reason = reason
 
     def fail(self, reason: str | None = None) -> None:
@@ -70,40 +69,33 @@ class Tagger:
         Args:
             reason: Optional reason for the failure (stored separately from the tag).
         """
-        self.add(_FAIL_TAG)
+        # Remove any existing outcome tag
+        self._tags.pop("lk.success", None)
+        self._tags["lk.fail"] = _TagEntry()
         self._outcome_reason = reason
 
     def add(self, tag: str, *, metadata: dict[str, Any] | None = None) -> None:
         """Add a tag to the session with optional structured metadata.
 
-        The two reserved outcome tags go through the same mutual exclusion that
-        `success()` and `fail()` maintain, so `outcome` cannot end up disagreeing with
-        `tags` whichever public path wrote them.
+        Switching between `lk.success` and `lk.fail` clears the previous reason.
 
         Args:
             tag: The tag string in "key:value" format (e.g., "voicemail:true", "language:es").
             metadata: Optional dict of structured metadata associated with this tag.
         """
-        if tag == _SUCCESS_TAG:
-            self._tags.pop(_FAIL_TAG, None)
-            self._outcome_reason = None
-        elif tag == _FAIL_TAG:
-            self._tags.pop(_SUCCESS_TAG, None)
-            self._outcome_reason = None
-
+        if tag in _OUTCOME_TAGS:
+            for outcome_tag in _OUTCOME_TAGS:
+                if outcome_tag != tag and self._tags.pop(outcome_tag, None) is not None:
+                    self._outcome_reason = None
         self._tags[tag] = _TagEntry(metadata=metadata)
 
     def remove(self, tag: str) -> None:
         """Remove a tag from the session.
 
-        Removing an outcome tag also clears its reason, so a session left without an
-        outcome tag does not keep reporting the reason of the outcome it no longer has.
-
         Args:
             tag: The tag string to remove.
         """
-        removed = self._tags.pop(tag, None)
-        if removed is not None and tag in (_SUCCESS_TAG, _FAIL_TAG):
+        if self._tags.pop(tag, None) is not None and tag in _OUTCOME_TAGS:
             self._outcome_reason = None
 
     @property
@@ -119,9 +111,9 @@ class Tagger:
     @property
     def outcome(self) -> str | None:
         """The session outcome: 'success', 'fail', or None if not set."""
-        if _SUCCESS_TAG in self._tags:
+        if "lk.success" in self._tags:
             return "success"
-        elif _FAIL_TAG in self._tags:
+        elif "lk.fail" in self._tags:
             return "fail"
         return None
 

@@ -65,6 +65,12 @@ XAI_DEFAULT_TURN_DETECTION = ServerVad(
 
 
 class RealtimeModel(openai.realtime.RealtimeModel):
+    """xAI Grok Voice Agent API model, ready to pass to ``AgentSession(llm=)``.
+
+    Supports xAI built-in tools (``XSearch``, ``WebSearch``, ``FileSearch``) and
+    ``session.say()`` without a TTS plugin.
+    """
+
     def __init__(
         self,
         *,
@@ -80,6 +86,35 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        """
+        Initialize an xAI Grok Voice Agent API client.
+
+        Args:
+            model (GrokRealtimeModels | str | NotGiven): Grok voice model ID. Defaults to "grok-voice-latest".
+            voice (GrokVoices | str | None | NotGiven): Voice used for audio responses. Defaults to "Ara".
+            api_key (str | None): xAI API key. If None, read from XAI_API_KEY.
+            base_url (str | NotGiven): Base URL of the xAI Realtime API. Defaults to "wss://api.x.ai/v1/realtime".
+            turn_detection (TurnDetection | None | NotGiven): Server-side turn-detection options. Defaults to server VAD with threshold=0.5, prefix_padding_ms=300, silence_duration_ms=200.
+            input_audio_transcription (AudioTranscription | None | NotGiven): Options for transcribing input audio. Defaults to ``AudioTranscription(model="grok-transcribe")``. Transcripts from xAI ``conversation.item.input_audio_transcription.updated`` events are emitted as interim (non-final) transcripts.
+            reasoning (RealtimeReasoning | None | NotGiven): Reasoning config, e.g. ``RealtimeReasoning(effort="high")``. Sent only when not None; when None, xAI's server default applies.
+            speed (float | NotGiven): Audio playback speed multiplier. Defaults to 1.0.
+            http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
+            max_session_duration (float | None | NotGiven): Seconds before recycling the connection. Defaults to None (no recycling).
+            conn_options (APIConnectOptions): Retry/backoff and connection settings.
+
+        Raises:
+            ValueError: If api_key is not provided and XAI_API_KEY is not set.
+
+        Examples:
+            ```python
+            from livekit.agents import AgentSession
+            from livekit.plugins import xai
+
+            session = AgentSession(
+                llm=xai.realtime.RealtimeModel(voice="Ara"),
+            )
+            ```
+        """
         api_key = api_key or os.environ.get("XAI_API_KEY")
         if api_key is None:
             raise ValueError(
@@ -413,7 +448,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
         if event.previous_item_id and not self._remote_chat_ctx.get(event.previous_item_id):
             logger.warning(
-                "xAI anchored an item to one it never announced, appending it instead",
+                "xAI placed a chat history item after an unknown item; appended it instead",
                 extra={"item_id": event.item.id, "previous_item_id": event.previous_item_id},
             )
             event.previous_item_id = None

@@ -218,25 +218,25 @@ async def test_continuous_partials_requires_u3_rt_pro():
 
 async def test_continuous_partials_with_u3_pro_alias():
     """continuous_partials works with the deprecated 'u3-pro' alias (rewritten to
-    universal-3-5-pro)."""
+    universal-3-6-pro)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="u3-pro", continuous_partials=True)
     assert stt._opts.continuous_partials is True
-    assert stt._opts.speech_model == "universal-3-5-pro"
+    assert stt._opts.speech_model == "universal-3-6-pro"
 
 
-async def test_u3_pro_deprecated_rewrites_to_universal_3_5_pro():
+async def test_u3_pro_deprecated_rewrites_to_universal_3_6_pro():
     """The deprecated 'u3-pro' alias warns and is rewritten to the recommended
-    default model 'universal-3-5-pro'."""
+    default model 'universal-3-6-pro'."""
     from livekit.plugins.assemblyai import STT
 
     with patch("livekit.plugins.assemblyai.stt.logger") as mock_logger:
         stt = STT(api_key="test-key", model="u3-pro")
 
-    assert stt._opts.speech_model == "universal-3-5-pro"
+    assert stt._opts.speech_model == "universal-3-6-pro"
     mock_logger.warning.assert_called_once()
-    assert "universal-3-5-pro" in mock_logger.warning.call_args.args[0]
+    assert "universal-3-6-pro" in mock_logger.warning.call_args.args[0]
 
 
 async def test_continuous_partials_update():
@@ -515,22 +515,13 @@ async def test_previous_context_n_turns_zero_is_forwarded():
 
 
 # ---------------------------------------------------------------------------
-# universal-3-5-pro: default model + u3-rt-pro parameter family
+# universal-3-5-pro: u3-rt-pro parameter family
 #
-# universal-3-5-pro is the plugin's default model and belongs to the u3-rt-pro
-# parameter family, so it accepts the u3-pro-gated params (prompt,
-# agent_context, previous_context_n_turns, continuous_partials,
-# interruption_delay) and inherits the family's connect-time defaults.
+# universal-3-5-pro belongs to the u3-rt-pro parameter family, so it accepts
+# the u3-pro-gated params (prompt, agent_context, previous_context_n_turns,
+# continuous_partials, interruption_delay) and inherits the family's
+# connect-time defaults.
 # ---------------------------------------------------------------------------
-
-
-async def test_default_model_is_universal_3_5_pro():
-    """The plugin defaults to universal-3-5-pro."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt.model == "universal-3-5-pro"
-    assert stt._opts.speech_model == "universal-3-5-pro"
 
 
 async def test_universal_3_5_pro_accepts_u3_pro_params():
@@ -562,13 +553,23 @@ async def test_universal_3_5_pro_leaves_continuous_partials_unset():
 
 
 # ---------------------------------------------------------------------------
-# universal-3-6-pro: u3-rt-pro parameter family
+# universal-3-6-pro: default model + u3-rt-pro parameter family
 #
-# universal-3-6-pro is the next U3 Pro release: server-side it has the same
-# parameter support as universal-3-5-pro and differs only in which ASR
-# deployment serves the session. So it accepts the u3-pro-gated params and
-# inherits the family's connect-time defaults.
+# universal-3-6-pro is the plugin's default model and the next U3 Pro release
+# after universal-3-5-pro: server-side it has the same parameter support as
+# universal-3-5-pro and differs only in which ASR deployment serves the
+# session. So it accepts the u3-pro-gated params and inherits the family's
+# connect-time defaults.
 # ---------------------------------------------------------------------------
+
+
+async def test_default_model_is_universal_3_6_pro():
+    """The plugin defaults to universal-3-6-pro."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt.model == "universal-3-6-pro"
+    assert stt._opts.speech_model == "universal-3-6-pro"
 
 
 async def test_universal_3_6_pro_is_accepted():
@@ -1055,6 +1056,18 @@ async def test_language_codes_max_10():
     codes = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
     with pytest.raises(ValueError, match="at most 10"):
         STT(api_key="test-key", model="u3-rt-pro", language_codes=codes)
+
+
+async def test_language_codes_uncapped_on_universal_3_6_pro():
+    """Universal-3.6 Pro has no documented cap, so more than 10 codes are accepted."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
+    stt = STT(api_key="test-key", model="universal-3-6-pro", language_codes=codes)
+    assert stt._opts.language_codes == codes
+
+    stt.update_options(language_codes=codes + ["zu"])
+    assert stt._opts.language_codes == codes + ["zu"]
 
 
 async def test_language_codes_max_10_applies_after_dedup():
@@ -1634,6 +1647,28 @@ def _turn_message(**overrides):
     }
     msg.update(overrides)
     return msg
+
+
+@pytest.mark.parametrize("offset", [0.0, 8.5])
+async def test_eos_uses_last_word_end_time(offset):
+    stream = _make_stream_for_unit_test()
+    stream.start_time_offset = offset
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello"))
+
+    endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 1
+    assert endpoints[0].alternatives[0].end_time == pytest.approx(offset + 0.48)
+
+
+@pytest.mark.parametrize("words", [[], [{"text": "hello", "confidence": 0.9}]])
+async def test_eos_without_word_timing_does_not_use_stream_offset(words):
+    stream = _make_stream_for_unit_test()
+    stream.start_time_offset = 8.5
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello", words=words))
+
+    endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 1
+    assert endpoints[0].alternatives == []
 
 
 async def test_end_of_turn_confidence_surfaced_on_interim_metadata():

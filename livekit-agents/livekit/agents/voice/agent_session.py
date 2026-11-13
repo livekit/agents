@@ -74,7 +74,6 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
-    ToolCallEnded,
     ToolExecutionUpdatedEvent,
     UserInputTranscribedEvent,
     UserState,
@@ -89,10 +88,11 @@ from .keyterm_detection import (
     _stt_context_from_keyterms_options,
 )
 from .recorder_io import RecorderIO
+from .recorder_io.recorder_io import _validate_bit_rate
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
-from .run_result import RunOutputOptions, RunResult
+from .run_result import RunOutputOptions, RunResult, _RunSuspension
 from .speech_handle import InputDetails, SpeechHandle
-from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options, _RunningTasks
+from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options
 from .turn import (
     EndpointingOptions,
     InterruptionOptions,
@@ -142,6 +142,23 @@ class RecordingOptions(TypedDict, total=False):
     """Upload the conversation transcript (chat history). Defaults to ``True``."""
     redaction: bool
     """Enable redaction. ``False`` does not disable project redaction."""
+    input_delta: bool
+    """Record only what changed in LLM inputs on trace spans. Defaults to ``False``.
+    The model always receives the full input; this only affects telemetry.
+
+    Each span continues the input recorded for the last committed generation: its
+    ``gen_ai.input.messages`` / ``lk.pii.chat_ctx`` hold what follows the longest prefix
+    they share (usually the previous agent turn and the new user turn), and
+    ``gen_ai.system_instructions`` is left out while unchanged. Such spans carry
+    ``lk.input.*`` attributes pointing at the span that holds the rest.
+    """
+    bit_rate: int | None
+    """Target bit rate of the session-audio Opus encoder, in bits per second. ``None``
+    (the default) keeps the encoder's own default. Only affects ``audio`` recording."""
+    constant_bit_rate: bool
+    """Encode session audio at a constant bit rate instead of a variable one. Defaults to
+    ``False``. Players that estimate an Ogg Opus duration from the file size (e.g. macOS
+    Finder and QuickLook) only get it right on a constant bit rate."""
 
 
 _RECORDING_ALL_ON: RecordingOptions = {
@@ -164,6 +181,7 @@ def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOpti
     if isinstance(record, bool):
         defaults = _RECORDING_ALL_ON if record else _RECORDING_ALL_OFF
         return RecordingOptions(**defaults)
+    _validate_bit_rate(record.get("bit_rate"))
     return RecordingOptions(**{**_RECORDING_ALL_ON, **record})
 
 
@@ -260,7 +278,10 @@ def _append_instructions(template: Instructions | str, extra: str) -> Instructio
     # concatenate the *raw* template text so any {placeholders} survive until render()
     if isinstance(template, Instructions):
         return Instructions(
-            template.common + "\n\n" + extra, audio=template.audio, text=template.text
+            template.common + "\n\n" + extra,
+            audio=template.audio,
+            text=template.text,
+            dynamic=template.dynamic,
         )
     return Instructions(template + "\n\n" + extra)
 
@@ -472,7 +493,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``3.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
-                Default ``3``.
+                Not enforced for realtime models that generate the tool reply
+                server-side. Default ``3``.
             video_sampler (_VideoSampler, optional): Uses
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
                 captures video at ~1 fps while the user is speaking and ~0.3 fps
@@ -692,6 +714,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._session_transport_audio_input: TcpAudioInput | None = None
         self._session_transport_audio_output: TcpAudioOutput | None = None
         self._session_host: SessionHost | None = None
+        self._owns_session_host = False
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
@@ -699,6 +722,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
+        # count of active `_create_away_timer_hold` holds, by the activity that owns them
+        self._user_away_holds: dict[AgentActivity | None, int] = {}
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -720,6 +745,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._global_run_state: RunResult | None = None
         # guards keeping an active run open across `_wait_for_idle_and_hold` scopes
         self._foreground_guards: set[asyncio.Future[None]] = set()
+        self._run_suspensions: list[_RunSuspension] = []
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
         # the latest user turn no agent speech has reported e2e_latency for yet
@@ -985,6 +1011,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._room_io = None
             self._recorder_io = None
             self._session_host = None
+            self._owns_session_host = False
 
             self._closing = False
             self._root_span_context = otel_context.get_current()
@@ -1016,13 +1043,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 c.acquire_io(loop=self._loop, session=self)
 
-                if c._tcp_transport is not None:
-                    self._session_host = SessionHost(
-                        c._tcp_transport,
-                        audio_input=c._tcp_audio_input,
-                        audio_output=c._tcp_audio_output,
+                if (tcp_transport := c._tcp_transport) is not None:
+                    self._attach_session_host(
+                        lambda: SessionHost(
+                            tcp_transport,
+                            audio_input=c._tcp_audio_input,
+                            audio_output=c._tcp_audio_output,
+                        )
                     )
-                    self._session_host.register_session(self)
             elif is_given(room) and not self._room_io:
                 room_options = room_io.RoomOptions._ensure_options(
                     room_options,
@@ -1062,9 +1090,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if hosting:
                     # only the primary session can have a session host
-                    transport = RoomSessionTransport(room)
-                    self._session_host = SessionHost(transport)
-                    self._session_host.register_session(self)
+                    self._attach_session_host(
+                        lambda: SessionHost(RoomSessionTransport(room)), room=room
+                    )
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
@@ -1074,7 +1102,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
                     if self._opts.recording_options["audio"] or (c.enabled and c.record):
-                        self._recorder_io = RecorderIO(agent_session=self)
+                        self._recorder_io = RecorderIO(
+                            agent_session=self,
+                            bit_rate=self._opts.recording_options.get("bit_rate"),
+                            constant_bit_rate=self._opts.recording_options.get(
+                                "constant_bit_rate", False
+                            ),
+                        )
                         self.input.audio = self._recorder_io.record_input(self.input.audio)
                         self.output.audio = self._recorder_io.record_output(self.output.audio)
 
@@ -1120,7 +1154,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if self._global_run_state is not None and not self._global_run_state.done():
                     raise RuntimeError("nested runs are not supported")
 
-                run_state = RunResult(output_type=None)
+                run_state = RunResult(output_type=None, session=self)
                 self._global_run_state = run_state
 
             # it is ok to await it directly, there is no previous task to drain.
@@ -1215,6 +1249,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await run_state
 
             return run_state
+
+    def _attach_session_host(
+        self, make_host: Callable[[], SessionHost], *, room: rtc.Room | None = None
+    ) -> None:
+        # under a job, the job owns the host so it outlives this session and the simulator
+        # can still finalize over the job's room. A session in any other room, or outside a
+        # job, owns its own host: the job's host is bound to the job's room.
+        job_ctx = get_job_context(required=False)
+        if job_ctx is None or (room is not None and room is not job_ctx.room):
+            self._session_host = make_host()
+            self._owns_session_host = True
+        else:
+            if job_ctx._session_host is None:
+                job_ctx._session_host = make_host()
+            self._session_host = job_ctx._session_host
+            self._owns_session_host = False
+        self._session_host.register_session(self)
 
     async def drain(self) -> None:
         if self._activity is None:
@@ -1316,7 +1367,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self.emit("close", CloseEvent(error=error, reason=reason))
 
                 if self._session_host:
-                    await self._session_host.aclose()
+                    if self._session_host.session is self:
+                        self._session_host.unregister_session()
+                    if self._owns_session_host:
+                        await self._session_host.aclose()
                     self._session_host = None
 
                 # close room io after close event is emitted
@@ -1358,10 +1412,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._amd = None
 
         activity = self._activity
+        cancelled = False
         while activity and isinstance(agent_task := activity.agent, AgentTask):
+            parent_interrupted: asyncio.Future[None] | None = None
+            if drain:
+                # cancel() interrupts with force: let the task play out what it has queued
+                # first, such as the goodbye of the tool that called shutdown()
+                await activity.drain()
+                # once a task is cancelled, the parents' speech that awaits the chain would only
+                # answer the cancellation, even when a TaskGroup in between completes with it
+                cancelled = cancelled or not agent_task.done()
+                old_agent = agent_task._old_agent
+                if cancelled and old_agent and old_agent._activity:
+                    parent_interrupted = old_agent._activity.interrupt(force=True)
             # notify AgentTask to complete and wait it to resume the parent agent
             agent_task.cancel()
             await agent_task._wait_for_inactive()
+            if parent_interrupted is not None:
+                # the parent's speech is waiting on this task, it can only end after cancel()
+                await parent_interrupted
 
             if old_agent := agent_task._old_agent:
                 activity = old_agent._activity
@@ -1698,7 +1767,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_user_state("speaking" if speaking else "listening")
 
     def clear_user_turn(self) -> None:
-        # clear the transcription or input audio buffer of the user turn
+        """Discard uncommitted user transcription and input audio."""
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
@@ -1721,8 +1790,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 to be received after committing the user turn.
                 Default ``2.0`` s. Increase this value if the STT is slow to respond.
             stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
-                to flush the buffer and generate the final transcript.
-                Default ``2.0`` s.
+                to flush the buffer and generate the final transcript when audio input is
+                detached and STT does not support manual flushing. STT with manual flush
+                support receives a flush request instead. Default ``2.0`` s.
             skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
 
         Returns:
@@ -1741,6 +1811,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def update_agent(self, agent: Agent) -> None:
+        # reject before touching state: a failed handoff would leave turns blocked
+        if agent._activity is not None and agent._activity is not self._activity:
+            raise RuntimeError("cannot update agent: the agent is already running")
+
         self._agent = agent
 
         if self._started:
@@ -1920,6 +1994,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._activity = self._next_activity
                 self._next_activity = None
 
+                if self._user_state == "listening" and self._agent_state == "listening":
+                    # which tools hold the away window off depends on the current agent
+                    self._set_user_away_timer()
+
                 run_state = self._global_run_state
                 handoff_item = AgentHandoff(
                     old_agent_id=(previous_activity_v.agent.id if previous_activity_v else None),
@@ -2048,8 +2126,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._opts.user_away_timeout is None:
             return
 
-        if _RunningTasks.get(self):
-            # a tool in flight will speak when it lands; the window restarts then (#6883)
+        if self._user_away_holds.get(None) or self._user_away_holds.get(self._activity):
+            # a paused agent's work can't speak now, so it doesn't hold the window (#6883)
             return
 
         if (room_io := self._room_io) and (
@@ -2058,9 +2136,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         ):
             return
 
-        self._user_away_timer = self._loop.call_later(
-            self._opts.user_away_timeout, self._update_user_state, "away"
-        )
+        def _on_timeout() -> None:
+            if (
+                self._activity is not None
+                and (rt_session := self._activity.realtime_llm_session) is not None
+                and rt_session.background_work_running
+            ):
+                # the model still works on an answer, so the window starts again
+                self._set_user_away_timer()
+                return
+
+            self._update_user_state("away")
+
+        self._user_away_timer = self._loop.call_later(self._opts.user_away_timeout, _on_timeout)
 
     def _cancel_user_away_timer(self) -> None:
         if self._user_away_timer is not None:
@@ -2098,14 +2186,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._aec_warmup_duration_explicit:
             return
 
+        from ..job import current_simulation
+
         is_outbound_sip = (
             participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
             and not participant.attributes.get(_SIP_RULE_ID_ATTR)
         )
-        self._opts.aec_warmup_duration = None if is_outbound_sip else _DEFAULT_AEC_WARMUP_DURATION
+        # a simulator publishes synthesized audio, so the agent's speech never echoes back
+        no_warmup = is_outbound_sip or current_simulation() is not None
+        self._opts.aec_warmup_duration = None if no_warmup else _DEFAULT_AEC_WARMUP_DURATION
         self._aec_warmup_remaining = self._opts.aec_warmup_duration or 0.0
 
-        if is_outbound_sip and self._aec_warmup_timer is not None:
+        if no_warmup and self._aec_warmup_timer is not None:
             self._aec_warmup_timer.cancel()
             self._aec_warmup_timer = None
 
@@ -2168,9 +2260,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     _set_participant_attributes(
                         self._agent_speaking_span, self._room_io.room.local_participant
                     )
-                # self._agent_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._agent_speaking_span is not None:
-            # self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
 
@@ -2231,10 +2321,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._user_speaking_span, self._room_io.linked_participant
                 )
 
-            # self._user_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._user_speaking_span is not None:
-            # end_time = last_speaking_time or time.time()
-            # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
             end_time_ns = last_speaking_time_ns
             if (
                 end_time_ns is not None
@@ -2306,15 +2393,30 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a call recorded when its execution started must not be inserted a second time
             self._chat_ctx._upsert_item(item)
 
-    def _tool_execution_updated(self, ev: ToolExecutionUpdatedEvent) -> None:
+    def _create_away_timer_hold(self, owner: AgentActivity | None) -> None:
+        """Keep the user from going away while work that will speak when it lands runs.
+
+        ``owner`` is the activity that will speak, or None when any current agent can; only the
+        holds of the current one count, since a paused agent cannot speak (#6883).
+        """
+        self._user_away_holds[owner] = self._user_away_holds.get(owner, 0) + 1
+        if owner in (None, self._activity):
+            self._cancel_user_away_timer()
+
+    def _release_away_timer_hold(self, owner: AgentActivity | None) -> None:
+        if (count := self._user_away_holds.get(owner, 0) - 1) > 0:
+            self._user_away_holds[owner] = count
+            return
+        self._user_away_holds.pop(owner, None)
         if (
-            isinstance(ev.update, ToolCallEnded)
-            and self._user_state == "listening"
+            self._user_state == "listening"
             and self._agent_state == "listening"
+            and self._user_away_timer is None
         ):
-            # tools hold the window off, so the last one to land restarts it (#6883)
+            # a running timer means the released hold belonged to a paused agent
             self._set_user_away_timer()
 
+    def _tool_execution_updated(self, ev: ToolExecutionUpdatedEvent) -> None:
         self.emit("tool_execution_updated", ev)
 
     def _config_update_added(self, item: llm.AgentConfigUpdate) -> None:

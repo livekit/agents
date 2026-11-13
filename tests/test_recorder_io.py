@@ -20,6 +20,7 @@ from livekit.agents.voice.recorder_io import recorder_io as recorder_module
 from livekit.agents.voice.recorder_io.recorder_io import (
     RecorderAudioOutput,
     RecorderIO,
+    _Captured,
     _Track,
 )
 
@@ -590,3 +591,135 @@ async def test_the_writer_waits_on_the_agent_but_not_on_a_quiet_source() -> None
             assert flushed[-1] == pytest.approx(segment_began)
 
             task.cancel()
+
+
+async def _packet_sizes(path: Path, **options: object) -> list[int]:
+    """Record a second of silence then a second of tone, and return the encoded packet sizes."""
+    now = 1000.0
+    with patch(_CLOCK, side_effect=lambda: now):
+        source = _Source()
+        recorder = RecorderIO(agent_session=MagicMock(), sample_rate=RATE, **options)  # type: ignore[arg-type]
+        audio_in = recorder.record_input(source)
+        recorder.record_output(_Sink())
+        await recorder.start(output_path=path)
+
+        for i in range(20):
+            now += 0.1
+            source.frames.append(_tone(0.1, level=8000 if i >= 10 else 0))
+            await audio_in.__anext__()
+
+        await recorder.aclose()
+
+    with av.open(str(path)) as container:
+        sizes = [p.size for p in container.demux(audio=0) if p.size]
+    # the last packet holds the encoder's padding
+    return sizes[:-1]
+
+
+def _has_libopus() -> bool:
+    try:
+        av.Codec("libopus", "w")
+    except av.codec.codec.UnknownCodecError:
+        return False
+    return True
+
+
+requires_libopus = pytest.mark.skipif(not _has_libopus(), reason="libopus is not available")
+
+
+@requires_libopus
+async def test_the_default_encoding_packs_silence_into_smaller_packets(tmp_path: Path) -> None:
+    sizes = await _packet_sizes(tmp_path / "vbr.ogg")
+    assert min(sizes) < max(sizes)
+
+
+@requires_libopus
+async def test_a_constant_bit_rate_encodes_every_packet_at_the_same_size(tmp_path: Path) -> None:
+    """At 128 kb/s, a 20 ms packet is 320 bytes, silent or not, as in Egress recordings."""
+    sizes = await _packet_sizes(tmp_path / "cbr.ogg", bit_rate=128_000, constant_bit_rate=True)
+    assert set(sizes) == {320}
+
+
+@pytest.mark.parametrize("bit_rate", [499, 512_001, -1, True, 128_000.0, "128000"])
+async def test_a_bit_rate_the_encoder_would_reject_fails_at_construction(bit_rate: object) -> None:
+    """The encoder opens on its own thread, where a bad bit rate would cost the recording."""
+    with pytest.raises(ValueError, match="bit_rate"):
+        RecorderIO(agent_session=MagicMock(), bit_rate=bit_rate)  # type: ignore[arg-type]
+
+
+async def test_constant_bit_rate_without_libopus_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    def no_libopus(name: str, mode: str) -> av.Codec:
+        if name == "libopus":
+            raise av.codec.codec.UnknownCodecError(name)
+        return av.Codec(name, mode)
+
+    with (
+        patch.object(recorder_module.av, "Codec", side_effect=no_libopus),
+        caplog.at_level("WARNING"),
+    ):
+        await _packet_sizes(tmp_path / "native.ogg", constant_bit_rate=True)
+
+    assert "constant_bit_rate requires libopus" in caplog.text
+
+
+async def _start_unwritable(
+    tmp_path: Path,
+) -> tuple[RecorderIO, io.AudioInput, _Source, RecorderAudioOutput]:
+    """A recorder whose output directory cannot be created, so its encode thread fails."""
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("")
+
+    source = _Source()
+    recorder = RecorderIO(agent_session=MagicMock(), sample_rate=RATE)
+    audio_in = recorder.record_input(source)
+    audio_out = recorder.record_output(_Sink())
+    await recorder.start(output_path=blocker / "audio.ogg")
+    return recorder, audio_in, source, audio_out
+
+
+async def test_a_failed_encoder_setup_does_not_hang_close(tmp_path: Path) -> None:
+    """The thread that would have resolved the close is the one that failed."""
+    recorder, _, _, _ = await _start_unwritable(tmp_path)
+    await asyncio.wait_for(recorder.aclose(), timeout=5)
+
+
+async def test_a_failed_encoder_stops_buffering_audio(tmp_path: Path) -> None:
+    """Nothing drains the queue once the encode thread has exited."""
+    recorder, audio_in, source, audio_out = await _start_unwritable(tmp_path)
+    await asyncio.wait_for(asyncio.shield(recorder._close_fut), timeout=5)
+
+    queued = recorder._q.qsize()
+    for _ in range(10):
+        source.frames.append(_tone(0.1))
+        await audio_in.__anext__()
+    assert recorder._q.qsize() == queued
+
+    # the agent's side holds a segment's audio until playback finishes; it must not start one
+    await audio_out.capture_frame(_tone(1.0))
+    assert audio_out.pending_since is None
+    await recorder.aclose()
+
+
+async def test_a_restart_does_not_record_audio_left_over_from_a_failed_run(
+    tmp_path: Path,
+) -> None:
+    """Audio queued before an encoder failed must not land on the next run's timeline."""
+    now = 1000.0
+    path = tmp_path / "retry.ogg"
+
+    with patch(_CLOCK, side_effect=lambda: now):
+        recorder, _, _, _ = await _start_unwritable(tmp_path)
+        await asyncio.wait_for(asyncio.shield(recorder._close_fut), timeout=5)
+        # a frame that reached the queue just before the encoder failed
+        leftover = _Captured(channel=0, started_at=now + 0.5, frame=_tone(0.5, level=8000))
+        recorder._q.put_nowait(leftover)
+        await recorder.aclose()
+
+        await recorder.start(output_path=path)
+        now += 2.0
+        await recorder.aclose()
+
+    pcm, rate = _decode(path)
+    assert not any(_energy_bins(pcm[0], rate))

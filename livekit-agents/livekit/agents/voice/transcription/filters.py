@@ -85,16 +85,19 @@ INLINE_SPLIT_TOKENS = " ,.?!;，。？！；"
 # text without one of these cannot match any inline pattern
 INLINE_MARKERS = re.compile(r"[*_`~\[]")
 
-COMPLETE_LINKS_PATTERN = re.compile(r"\[[^\]]*\]\([^)]*\)")  # links [text](url)
-COMPLETE_IMAGES_PATTERN = re.compile(r"!\[[^\]]*\]\([^)]*\)")  # images ![text](url)
+# a run that could still open emphasis; ``5 * 3`` or ``a_b@x.com`` never can
+_ASTERISK_OPENER = re.compile(rf"(?<!{_INTRAWORD})(?<!\*)\*{{1,3}}(?![\s*])")
+_UNDERSCORE_OPENER = re.compile(r"(?<!\w)_{1,3}(?![\s_])")
+
+# a link or image still being written; ``[1]`` followed by text is not one
+_PENDING_LINK = re.compile(r"\[[^\]]*(?:\]|\]\([^)]*)?$")
 
 
-def _unbalanced(buffer: str, delimiter: str) -> bool:
-    """Whether a delimiter's occurrences cannot pair up yet."""
-    doubles = buffer.count(delimiter * 2)
-    if doubles % 2 == 1:
-        return True
-    return (buffer.count(delimiter) - doubles * 2) % 2 == 1
+def _pending_emphasis(buffer: str) -> bool:
+    """Whether a delimiter run in the buffer could still open emphasis."""
+    for pattern in (_ASTERISK_EMPHASIS, _UNDERSCORE_EMPHASIS, _ASTERISK_EMPHASIS):
+        buffer = pattern.sub(r"\2", buffer)
+    return bool(_ASTERISK_OPENER.search(buffer) or _UNDERSCORE_OPENER.search(buffer))
 
 
 async def filter_markdown(text: AsyncIterable[str]) -> AsyncIterable[str]:
@@ -108,8 +111,8 @@ async def filter_markdown(text: AsyncIterable[str]) -> AsyncIterable[str]:
         if buffer.endswith(("#", "-", "+", "*", "_", ">", "!", "`", "~", " ")):
             return True
 
-        # emphasis delimiters that cannot pair up yet
-        if _unbalanced(buffer, "*") or _unbalanced(buffer, "_"):
+        # emphasis delimiters that could still pair up
+        if _pending_emphasis(buffer):
             return True
 
         # incomplete code (`text`) or strikethrough (~~text~~)
@@ -117,11 +120,7 @@ async def filter_markdown(text: AsyncIterable[str]) -> AsyncIterable[str]:
             return True
 
         # incomplete links [text](url) or images ![text](url)
-        open_brackets = buffer.count("[")
-        complete_links = len(COMPLETE_LINKS_PATTERN.findall(buffer))
-        complete_images = len(COMPLETE_IMAGES_PATTERN.findall(buffer))
-
-        return open_brackets - complete_links - complete_images > 0
+        return _PENDING_LINK.search(buffer) is not None
 
     def process_complete_text(text: str, *, is_newline: bool, is_line_end: bool) -> str:
         if is_newline:

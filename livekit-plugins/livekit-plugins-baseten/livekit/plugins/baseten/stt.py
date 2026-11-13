@@ -32,7 +32,9 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
+    APITimeoutError,
     LanguageCode,
     stt,
     utils,
@@ -42,7 +44,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from . import qwen3_stt
+from . import qwen3_stt, streaming_v2_stt
 from .log import logger
 from .models import STTModels
 
@@ -100,9 +102,10 @@ class STT(stt.STT):
         partial_transcript_interval_s: NotGivenOr[float] = NOT_GIVEN,
         final_transcript_max_duration_s: int = 30,
         show_word_timestamps: NotGivenOr[bool] = NOT_GIVEN,
-        vad_threshold: float = 0.5,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
+        segmentation_mode: NotGivenOr[streaming_v2_stt.SegmentationMode] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ):
         """Baseten Speech-to-Text provider.
@@ -125,6 +128,9 @@ class STT(stt.STT):
         variable is used as a fallback.
 
         Args:
+            model: Which wire protocol the deployment speaks: ``whisper`` (the
+                default), ``qwen3-asr``, or ``streaming-v2`` for any deployment speaking
+                Baseten's Real-time transcription API (v2).
             api_key: Baseten API key.  Falls back to the ``BASETEN_API_KEY`` env var.
             model_endpoint: Full WebSocket URL of the deployed model.  Takes
                 priority over ``model_id`` and ``chain_id``.
@@ -140,6 +146,8 @@ class STT(stt.STT):
                 language name (``English``, ``Cantonese``) or ``auto``
                 (the default) — forcing one also sets the *output* language and
                 can translate, so use it only to pin what is actually spoken.
+                For ``streaming-v2``, a BCP-47 code or ``auto``; unset takes the
+                deployment's default.
             language_options: Restrict automatic detection to this set of
                 language codes, e.g. ``["en", "de"]``.  Detection across all
                 supported languages is unreliable on the one- to two-second
@@ -151,21 +159,83 @@ class STT(stt.STT):
                 is still talking.  Defaults to ``True``.
             partial_transcript_interval_s: Interval (seconds) between partial
                 transcript updates. Defaults to 1.0 for ``whisper`` and 0.5 for
-                ``qwen3-asr``, matching each deployment's own default.
+                ``qwen3-asr`` and ``streaming-v2``, matching each deployment's own default.
             final_transcript_max_duration_s: Maximum seconds of audio before the
-                server forces a final transcript.
+                server forces a final transcript. Not used by ``streaming-v2``, whose
+                server cuts turns at the model's own limit.
             show_word_timestamps: Include word-level timestamps. Defaults to
                 on for ``whisper``; off for ``qwen3-asr``, whose aligner is
-                opt-in on the deployment (``STREAM_ALIGNER=mms``).
-            vad_threshold: Server-side VAD threshold (0.0–1.0).
+                opt-in on the deployment (``STREAM_ALIGNER=mms``). Not yet
+                available for ``streaming-v2``.
+            vad_threshold: Server-side VAD threshold (0.0–1.0). Defaults to 0.5
+                for ``whisper`` and ``qwen3-asr``; the deployment's own for ``streaming-v2``.
             vad_min_silence_duration_ms: Minimum silence (ms) to end an
-                utterance. Defaults to 300 (``whisper``) / 500 (``qwen3-asr``).
+                utterance. Defaults to 300 (``whisper``) / 500 (``qwen3-asr``) /
+                the deployment's own (``streaming-v2``).
             vad_speech_pad_ms: Padding (ms) around detected speech. Defaults to
-                30 (``whisper``) / 100 (``qwen3-asr``).
+                30 (``whisper``) / 100 (``qwen3-asr``). Not used by ``streaming-v2``.
+            segmentation_mode: ``streaming-v2`` only. Who ends a turn:
+                ``server_vad`` (the default) ends it on trailing silence;
+                ``client_flush`` leaves it to LiveKit's turn handling, which
+                flushes the stream when the user's turn is committed.
             http_session: Optional :class:`aiohttp.ClientSession` to reuse.
         """
         self._model_name = model
         self._qwen3: qwen3_stt._Qwen3Backend | None = None
+        self._streaming_v2: streaming_v2_stt._StreamingV2Backend | None = None
+
+        if model == "streaming-v2":
+            if is_given(encoding) and encoding != "pcm_s16le":
+                raise ValueError(
+                    f"model='streaming-v2' accepts pcm_s16le audio only, not {encoding!r}"
+                )
+            # Not in the v2 protocol yet; say so rather than dropping them quietly.
+            for name, unsupported in (
+                ("language_options", bool(language_options)),
+                ("show_word_timestamps", is_given(show_word_timestamps) and show_word_timestamps),
+                ("vad_speech_pad_ms", is_given(vad_speech_pad_ms)),
+            ):
+                if unsupported:
+                    logger.warning("%s does not apply to model=%r and was ignored", name, model)
+            mode = segmentation_mode if is_given(segmentation_mode) else "server_vad"
+            self._streaming_v2 = streaming_v2_stt._StreamingV2Backend(
+                model_endpoint=model_endpoint,
+                model_id=model_id,
+                chain_id=chain_id,
+                api_key=api_key,
+                segmentation_mode=mode,
+                language=language if is_given(language) else None,
+                interim_results=enable_partial_transcripts,
+                partial_transcript_interval_s=(
+                    partial_transcript_interval_s
+                    if is_given(partial_transcript_interval_s)
+                    else 0.5
+                ),
+                # Unset VAD settings are left to the deployment, whose defaults
+                # are tuned per model.
+                vad_threshold=vad_threshold if is_given(vad_threshold) else None,
+                vad_min_silence_duration_ms=(
+                    vad_min_silence_duration_ms if is_given(vad_min_silence_duration_ms) else None
+                ),
+                http_session=http_session,
+            )
+            super().__init__(
+                capabilities=stt.STTCapabilities(
+                    streaming=True,
+                    interim_results=enable_partial_transcripts,
+                    aligned_transcript=False,
+                    offline_recognize=True,
+                    # Under client_flush only a flush ends a turn, so LiveKit's
+                    # turn handling has to send one when it commits the user's turn.
+                    manual_flush=mode == "client_flush",
+                )
+            )
+            self._session = http_session
+            self._streams = weakref.WeakSet[stt.SpeechStream]()
+            return
+
+        if is_given(segmentation_mode):
+            logger.warning("segmentation_mode does not apply to model=%r and was ignored", model)
 
         if model == "qwen3-asr":
             self._qwen3 = qwen3_stt._Qwen3Backend(
@@ -181,7 +251,7 @@ class STT(stt.STT):
                     else 0.5
                 ),
                 final_transcript_max_duration_s=final_transcript_max_duration_s,
-                vad_threshold=vad_threshold,
+                vad_threshold=vad_threshold if is_given(vad_threshold) else 0.5,
                 vad_min_silence_duration_ms=(
                     vad_min_silence_duration_ms if is_given(vad_min_silence_duration_ms) else 500
                 ),
@@ -256,7 +326,7 @@ class STT(stt.STT):
             ),
             final_transcript_max_duration_s=final_transcript_max_duration_s,
             show_word_timestamps=(show_word_timestamps if is_given(show_word_timestamps) else True),
-            vad_threshold=vad_threshold,
+            vad_threshold=vad_threshold if is_given(vad_threshold) else 0.5,
             vad_min_silence_duration_ms=(
                 vad_min_silence_duration_ms if is_given(vad_min_silence_duration_ms) else 300
             ),
@@ -294,6 +364,10 @@ class STT(stt.STT):
             return await self._qwen3.recognize_via_stream(
                 self, buffer, language=language, conn_options=conn_options
             )
+        if self._streaming_v2 is not None:
+            return await self._streaming_v2.recognize_via_stream(
+                self, buffer, language=language, conn_options=conn_options
+            )
         raise NotImplementedError("Not implemented")
 
     def stream(
@@ -308,6 +382,12 @@ class STT(stt.STT):
             )
             self._streams.add(qwen3_stream)
             return qwen3_stream
+        if self._streaming_v2 is not None:
+            v2_stream = self._streaming_v2.make_stream(
+                self, language=language, conn_options=conn_options
+            )
+            self._streams.add(v2_stream)
+            return v2_stream
 
         config = dataclasses.replace(self._opts)
         stream = SpeechStream(
@@ -348,6 +428,22 @@ class STT(stt.STT):
                         "%s does not apply to model=%r and was ignored", name, self._model_name
                     )
             return
+        if self._streaming_v2 is not None:
+            self._streaming_v2.update_options(
+                language=language,
+                vad_threshold=vad_threshold,
+                vad_min_silence_duration_ms=vad_min_silence_duration_ms,
+            )
+            for name, value in (
+                ("vad_speech_pad_ms", vad_speech_pad_ms),
+                ("language_options", language_options),
+                ("buffer_size_seconds", buffer_size_seconds),
+            ):
+                if is_given(value):
+                    logger.warning(
+                        "%s does not apply to model=%r and was ignored", name, self._model_name
+                    )
+            return
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(vad_min_silence_duration_ms):
@@ -362,8 +458,8 @@ class STT(stt.STT):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
         for stream in self._streams:
-            # Only the Whisper stream carries these knobs; a qwen3-asr stream
-            # cannot be in here, since that path returns above.
+            # Only the Whisper stream carries these knobs; a qwen3-asr or v2
+            # stream cannot be in here, since those paths return above.
             if not isinstance(stream, SpeechStream):
                 continue
             stream.update_options(
@@ -379,8 +475,9 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     """A streaming speech-to-text session connected to Baseten via WebSocket."""
 
-    # Used to close websocket
-    _CLOSE_MSG: str = json.dumps({"terminate_session": True})
+    # Asks the server to transcribe whatever audio it still has buffered. It replies
+    # with any remaining transcripts, then {"type": "end_audio", "body": {"status": "finished"}}.
+    _END_AUDIO_MSG: str = json.dumps({"type": "end_audio"})
 
     def __init__(
         self,
@@ -436,8 +533,14 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
+        # input_ended is set once the input channel is drained, end_audio_sent_at once
+        # end_audio is on the wire, flush_deadline once the server acknowledges it
+        input_ended = False
+        end_audio_sent_at: float | None = None
+        flush_deadline: float | None = None
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal input_ended, end_audio_sent_at
             samples_per_buffer = 512
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -459,18 +562,42 @@ class SpeechStream(stt.SpeechStream):
 
                         int16_array = np.frombuffer(frame.data, dtype=np.int16)
                         await ws.send_bytes(int16_array.tobytes())
+
+                # input ended: send the partial last buffer, then ask the server to flush
+                input_ended = True
+                for frame in audio_bstream.flush():
+                    await ws.send_bytes(frame.data.tobytes())
+                await ws.send_str(SpeechStream._END_AUDIO_MSG)
+                end_audio_sent_at = asyncio.get_running_loop().time()
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws or self._session.closed:
                     return
                 raise APIConnectionError("Baseten connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal closing_ws, flush_deadline
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
+            loop = asyncio.get_running_loop()
             while True:
+                wait = 5.0
+                if flush_deadline is not None:
+                    wait = min(wait, flush_deadline - loop.time())
+                    if wait <= 0:
+                        raise APITimeoutError("Baseten did not finish flushing audio")
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    msg = await asyncio.wait_for(monitor.receive(), timeout=wait)
                 except asyncio.TimeoutError:
+                    # a runtime without end_audio support never acknowledges it, so
+                    # stop waiting; once acknowledged, wait until flush_deadline
                     if closing_ws:
+                        break
+                    if (
+                        end_audio_sent_at is not None
+                        and flush_deadline is None
+                        and loop.time() - end_audio_sent_at >= 5.0
+                    ):
                         break
                     continue
 
@@ -494,8 +621,17 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
 
-                    # Skip non-transcription messages (e.g. error, status)
                     msg_type = data.get("type")
+                    if msg_type == "end_audio":
+                        # every transcript for the flushed audio arrives before "finished"
+                        status = (data.get("body") or {}).get("status")
+                        if status == "finished":
+                            return
+                        if status == "acknowledged" and flush_deadline is None:
+                            flush_deadline = loop.time() + self._conn_options.timeout
+                        continue
+
+                    # Skip non-transcription messages (e.g. error, status)
                     if msg_type and msg_type not in ("transcription",):
                         logger.debug("Ignoring message type: %s", msg_type)
                         continue
@@ -587,6 +723,9 @@ class SpeechStream(stt.SpeechStream):
                             self._final_events.append(event)
                             self._event_ch.send_nowait(event)
 
+                    if msg_type == "transcription" or "transcript" in data or "segments" in data:
+                        self._mark_provider_progress()
+
                 except Exception:
                     logger.exception("Failed to process message from Baseten")
 
@@ -595,6 +734,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -608,7 +748,14 @@ class SpeechStream(stt.SpeechStream):
                     )
                     for task in done:
                         if task != wait_reconnect_task:
-                            task.result()
+                            try:
+                                task.result()
+                            except APIError as e:
+                                # the input channel is drained, so a retry would reconnect
+                                # with no audio and report an empty flush as success
+                                if input_ended:
+                                    e.retryable = False
+                                raise
 
                     if wait_reconnect_task not in done:
                         break
@@ -634,7 +781,9 @@ class SpeechStream(stt.SpeechStream):
             "Authorization": f"Api-Key {self._api_key}",
         }
 
-        ws = await self._session.ws_connect(self._model_endpoint, headers=headers, ssl=ssl_context)
+        ws = await self._session.ws_connect(
+            self._model_endpoint, headers=headers, ssl=ssl_context, autoping=False
+        )
 
         # Build metadata matching Baseten's StreamingWhisperInput schema.
         # See: https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api
