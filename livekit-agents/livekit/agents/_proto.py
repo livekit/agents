@@ -105,9 +105,10 @@ def encode_timestamp(created_at: float) -> Timestamp:
 def encode_by_name(msg_type: type[_ProtoT], src: Any, **overrides: Any) -> _ProtoT:
     """Build ``msg_type`` by copying same-named entries off ``src``, a mapping or an object.
 
-    Only the fields ``FIELDS`` lists for ``msg_type`` are read, and a field ``src`` has
-    nothing for is left unset. Seconds-since-epoch floats fill Timestamp fields, and map values are
-    stringified: every map these protos declare is ``map<string, string>``.
+    Only the fields ``FIELDS`` lists for ``msg_type`` are read. A field ``src`` has nothing
+    for, or the installed protocol does not declare, is left unset. Seconds-since-epoch
+    floats fill Timestamp fields, and map values are stringified: every map these protos
+    declare is ``map<string, string>``.
     """
 
     def lookup(name: str) -> Any:
@@ -117,9 +118,9 @@ def encode_by_name(msg_type: type[_ProtoT], src: Any, **overrides: Any) -> _Prot
     for name in FIELDS[msg_type]:
         if name in kwargs:
             continue
-        fd = msg_type.DESCRIPTOR.fields_by_name[name]
+        fd = msg_type.DESCRIPTOR.fields_by_name.get(name)
         value = lookup(name)
-        if value is None:
+        if fd is None or value is None:
             continue
         if fd.message_type is not None and fd.message_type.full_name == "google.protobuf.Timestamp":
             value = encode_timestamp(value)
