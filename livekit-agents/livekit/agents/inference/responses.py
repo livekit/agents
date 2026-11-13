@@ -46,6 +46,7 @@ from ._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
     create_access_token,
+    create_api_error_from_response,
     extract_quota_usage,
     get_default_inference_url,
     get_inference_headers,
@@ -544,11 +545,7 @@ class _GatewayResponsesWebsocket(ResponsesWebsocket):
         except aiohttp.WSServerHandshakeError as e:
             if e.status == 429:
                 self._log_rate_limited(e)
-            raise APIStatusError(
-                f"inference gateway refused the WebSocket: {e.message}",
-                status_code=e.status,
-                retryable=False if _terminal_denial(e.headers) else None,
-            ) from e
+            raise create_api_error_from_response(e) from e
         except aiohttp.ClientError as e:
             raise APIConnectionError("failed to connect to inference gateway WebSocket") from e
         except asyncio.TimeoutError as e:
