@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
 from livekit import rtc
-from livekit.agents import get_job_context, llm, utils
+from livekit.agents import RoomIO, get_job_context, llm, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -104,6 +104,17 @@ class ConfigurationEndpoint(TypedDict, total=False):
     url: str
     headers: dict[str, str]
     timeout_ms: int
+
+
+def _session_room_io() -> RoomIO | None:
+    """The room input of the job's agent session, or None outside a job or without a room."""
+    job_ctx = get_job_context(required=False)
+    if job_ctx is None:
+        return None
+    try:
+        return job_ctx.primary_session.room_io
+    except RuntimeError:
+        return None
 
 
 def _to_phonic_tool_definition(
@@ -559,10 +570,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._keypad_digits = ""
         self._keypad_flush_handle: asyncio.TimerHandle | None = None
         self._keypad_send_tasks: set[asyncio.Task[None]] = set()
-        job_ctx = get_job_context(required=False)
-        self._room: rtc.Room | None = job_ctx.room if job_ctx else None
-        if self._room is not None:
-            self._room.on("sip_dtmf_received", self._on_sip_dtmf_received)
+        self._room_io = _session_room_io()
+        if self._room_io is not None:
+            self._room_io.room.on("sip_dtmf_received", self._on_sip_dtmf_received)
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -1201,8 +1211,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_should_close.set()
         self._send_ch.close()
 
-        if self._room is not None:
-            self._room.off("sip_dtmf_received", self._on_sip_dtmf_received)
+        if self._room_io is not None:
+            self._room_io.room.off("sip_dtmf_received", self._on_sip_dtmf_received)
         if self._keypad_flush_handle is not None:
             self._keypad_flush_handle.cancel()
         for task in list(self._keypad_send_tasks):
@@ -1523,10 +1533,13 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
     def _on_sip_dtmf_received(self, ev: rtc.SipDTMF) -> None:
-        if (
-            ev.participant is None
-            or ev.participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-        ):
+        """Buffer a keypad press from the participant the session is linked to.
+
+        Presses from anyone else in the room are ignored. The buffer is sent once the caller
+        pauses or the key limit is reached.
+        """
+        linked = self._room_io.linked_participant if self._room_io else None
+        if linked is None or ev.participant is None or ev.participant.identity != linked.identity:
             return
         # Every key, including * and #, is part of what the caller typed.
         self._keypad_digits += ev.digit
@@ -1541,6 +1554,7 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     def _flush_keypad_digits(self) -> None:
+        """Clear the keypad buffer and send its digits as one user turn."""
         self._keypad_flush_handle = None
         digits, self._keypad_digits = self._keypad_digits, ""
         if not digits or self._session_should_close.is_set():
@@ -1550,15 +1564,20 @@ class RealtimeSession(llm.RealtimeSession):
         task.add_done_callback(self._keypad_send_tasks.discard)
 
     async def _send_keypad_input(self, digits: str) -> None:
+        """Send keypad digits to Phonic as a user turn, once the conversation is ready."""
         await self._ready_to_start.wait()
         if self._session_should_close.is_set() or not self._socket:
             return
         logger.info("Sending caller keypad input", extra={"lk.pii.digits": digits})
         # The count saves the model from counting the keys itself, which it sometimes gets wrong.
         count = f"{len(digits)} key" if len(digits) == 1 else f"{len(digits)} keys"
-        await self._socket.send_generate_reply(
-            GenerateReplyPayload(user_message=f"(User pressed {digits} on the keypad: {count})")
-        )
+        try:
+            await self._socket.send_generate_reply(
+                GenerateReplyPayload(user_message=f"(User pressed {digits} on the keypad: {count})")
+            )
+        except Exception as e:
+            logger.error(f"Failed to send caller keypad input: {e}")
+            self._emit_error(e, recoverable=True)
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> typing.Iterator[rtc.AudioFrame]:
         if self._input_resampler is not None:
