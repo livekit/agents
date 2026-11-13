@@ -108,6 +108,21 @@ class ConfigurationEndpoint(TypedDict, total=False):
     timeout_ms: int
 
 
+def _check_tool_configs(configs: NotGivenOr[list[PhonicToolConfig]]) -> None:
+    """Raise on per-tool option combinations Phonic rejects, which would otherwise end the session."""
+    for cfg in configs if is_given(configs) else []:
+        name = cfg["name"]
+        mode = cfg.get("execution_mode", "sync")
+        if cfg.get("wait_for_response") and mode != "async":
+            raise ValueError(f"{name}: wait_for_response requires execution_mode='async'")
+        if cfg.get("wait_for_response") and cfg.get("allow_tool_chaining"):
+            raise ValueError(
+                f"{name}: wait_for_response can't be combined with allow_tool_chaining"
+            )
+        if cfg.get("uninterruptible") and mode != "sync":
+            raise ValueError(f"{name}: uninterruptible requires execution_mode='sync'")
+
+
 def _to_phonic_tool_definition(
     tool_schema: dict[str, typing.Any],
 ) -> ResponsesToolDefinitionParams:
@@ -398,6 +413,8 @@ class RealtimeModel(llm.RealtimeModel):
             forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
         )
+
+        _check_tool_configs(configs_for_tools)
 
         if is_given(forbid_speech_after_tool_call):
             logger.warning(
@@ -974,6 +991,7 @@ class RealtimeSession(llm.RealtimeSession):
         }
         if not changes:
             return
+        _check_tool_configs(configs_for_tools)
 
         # Rotate the previous default into additional_languages when switching default_language so
         # it stays usable (and drop the new default, which the API forbids there), unless the caller

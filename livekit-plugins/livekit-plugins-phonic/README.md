@@ -160,6 +160,8 @@ RealtimeModel(
 
 The plugin always sends tool calls with `wait_for_speech_before_tool_call` on; this is not configurable per tool.
 
+Combinations Phonic rejects (`wait_for_response` on a sync tool or with `allow_tool_chaining`, `uninterruptible` on an async tool) raise a `ValueError` when the model is created or updated, rather than ending the session.
+
 For a slow lookup the agent should wait on, use an async tool with `wait_for_response` and `forbid_speech_after_tool_call`, and leave `allow_tool_chaining` off. The agent acknowledges the request, keeps the caller engaged without calling other tools, and speaks the result when it arrives. Without `forbid_speech_after_tool_call`, the agent may keep talking after the acknowledgement and guess at the result.
 
 ```python
