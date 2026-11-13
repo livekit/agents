@@ -1053,6 +1053,7 @@ class SpeechStream(stt.SpeechStream):
         self._connection: _STTConnection | None = None
 
     async def _close_connection(self, connection: _STTConnection) -> None:
+        """Stop the sole reader and bound socket cleanup, including failed candidates."""
         if connection.reader is not None:
             await utils.aio.gracefully_cancel(connection.reader)
         with contextlib.suppress(Exception):
