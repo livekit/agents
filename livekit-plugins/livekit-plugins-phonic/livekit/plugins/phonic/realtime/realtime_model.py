@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import AgentSession, RoomIO, get_job_context, llm, utils
+from livekit.agents.llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -55,6 +56,9 @@ CONVERSATION_HISTORY_PREFIX = (
 PHONIC_INPUT_FRAME_MS = 20
 WS_CLOSE_NORMAL = 1000
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
+# Caller keypad presses are buffered and sent as one user turn once the caller pauses.
+KEYPAD_INTER_DIGIT_TIMEOUT_SEC = 2.0
+KEYPAD_MAX_DIGITS = 32
 
 
 # Phonic's built-in tools, referenced by name in ``phonic_tools``. A configs_for_tools entry for one of
@@ -101,6 +105,17 @@ class ConfigurationEndpoint(TypedDict, total=False):
     url: str
     headers: dict[str, str]
     timeout_ms: int
+
+
+def _job_agent_session() -> AgentSession | None:
+    """The job's primary agent session, or None outside a job or before one starts."""
+    job_ctx = get_job_context(required=False)
+    if job_ctx is None:
+        return None
+    try:
+        return job_ctx.primary_session
+    except RuntimeError:
+        return None
 
 
 def _to_phonic_tool_definition(
@@ -167,6 +182,7 @@ class _RealtimeOptions:
     configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None]
     additional_params: NotGivenOr[dict[str, typing.Any]]
     external_id: NotGivenOr[str]
+    forward_keypad_input: bool
     configs_for_tools: NotGivenOr[list[PhonicToolConfig]]
     forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
@@ -243,6 +259,7 @@ class RealtimeModel(llm.RealtimeModel):
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
         additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
         external_id: NotGivenOr[str] = NOT_GIVEN,
+        forward_keypad_input: bool = False,
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -306,6 +323,9 @@ class RealtimeModel(llm.RealtimeModel):
             additional_params: Additional runtime parameters forwarded to Phonic.
             external_id: Your own identifier for the conversation (e.g. a call or session ID),
                 stored on the Phonic conversation so you can look it up later.
+            forward_keypad_input: When True, the caller's keypad presses are sent to the agent as
+                user turns. Leave it off if your agent already handles keypad input itself (e.g.
+                with ``GetDtmfTask`` or a ``sip_dtmf_received`` handler).
             configs_for_tools: Per-tool behavior overrides, one ``PhonicToolConfig`` per tool
                 (keyed by ``name``); omitted fields fall back to the plugin defaults. See the
                 README for the available fields.
@@ -389,6 +409,7 @@ class RealtimeModel(llm.RealtimeModel):
             configuration_endpoint=configuration_endpoint,
             additional_params=additional_params,
             external_id=external_id,
+            forward_keypad_input=forward_keypad_input,
             configs_for_tools=configs_for_tools,
             forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
@@ -552,6 +573,20 @@ class RealtimeSession(llm.RealtimeSession):
         self._configs_for_tools: dict[str, PhonicToolConfig] = {}
         self._system_prompt_postfix: str = ""
         self._pending_user_text: str | None = None
+
+        self._keypad_digits = ""
+        self._keypad_flush_handle: asyncio.TimerHandle | None = None
+        self._keypad_send_tasks: set[asyncio.Task[None]] = set()
+        # Keypad presses come from the job's agent session: its room and its linked participant.
+        self._agent_session = _job_agent_session() if self._opts.forward_keypad_input else None
+        self._keypad_room_io: RoomIO | None = None
+        if self._agent_session is not None:
+            try:
+                self._keypad_room_io = self._agent_session.room_io
+            except RuntimeError:  # the session wasn't started with a room
+                pass
+            else:
+                self._keypad_room_io.room.on("sip_dtmf_received", self._on_sip_dtmf_received)
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -1189,6 +1224,13 @@ class RealtimeSession(llm.RealtimeSession):
     async def aclose(self) -> None:
         self._session_should_close.set()
         self._send_ch.close()
+
+        if self._keypad_room_io is not None:
+            self._keypad_room_io.room.off("sip_dtmf_received", self._on_sip_dtmf_received)
+        if self._keypad_flush_handle is not None:
+            self._keypad_flush_handle.cancel()
+        for task in list(self._keypad_send_tasks):
+            await utils.aio.cancel_and_wait(task)
         self._instructions_ready.set()
         self._tools_ready.set()
         self._ready_to_start.set()
@@ -1503,6 +1545,65 @@ class RealtimeSession(llm.RealtimeSession):
             "input_speech_stopped",
             llm.InputSpeechStoppedEvent(user_transcription_enabled=True),
         )
+
+    def _on_sip_dtmf_received(self, ev: rtc.SipDTMF) -> None:
+        """Buffer a keypad press from the participant the agent session is linked to.
+
+        Presses from anyone else, or meant for another agent session in the job, are ignored.
+        The buffer is sent once the caller pauses or the key limit is reached.
+        """
+        if self._agent_session is None or self._keypad_room_io is None:
+            return
+        try:
+            rt_session = self._agent_session.current_agent.realtime_llm_session
+        except RuntimeError:  # no agent running yet
+            return
+        # Fallback adapters wrap the realtime session in use; unwrap to their active child.
+        while isinstance(rt_session, _FallbackRealtimeSession):
+            rt_session = rt_session._active
+        # A job can run several agent sessions; only the one using this realtime session takes keys.
+        if rt_session is not self:
+            return
+        linked = self._keypad_room_io.linked_participant
+        if linked is None or ev.participant is None or ev.participant.identity != linked.identity:
+            return
+        # Every key, including * and #, is part of what the caller typed.
+        self._keypad_digits += ev.digit
+        if self._keypad_flush_handle is not None:
+            self._keypad_flush_handle.cancel()
+            self._keypad_flush_handle = None
+        if len(self._keypad_digits) >= KEYPAD_MAX_DIGITS:
+            self._flush_keypad_digits()
+        else:
+            self._keypad_flush_handle = asyncio.get_event_loop().call_later(
+                KEYPAD_INTER_DIGIT_TIMEOUT_SEC, self._flush_keypad_digits
+            )
+
+    def _flush_keypad_digits(self) -> None:
+        """Clear the keypad buffer and send its digits as one user turn."""
+        self._keypad_flush_handle = None
+        digits, self._keypad_digits = self._keypad_digits, ""
+        if not digits or self._session_should_close.is_set():
+            return
+        task = asyncio.create_task(self._send_keypad_input(digits), name="phonic-keypad-input")
+        self._keypad_send_tasks.add(task)
+        task.add_done_callback(self._keypad_send_tasks.discard)
+
+    async def _send_keypad_input(self, digits: str) -> None:
+        """Send keypad digits to Phonic as a user turn, once the conversation is ready."""
+        await self._ready_to_start.wait()
+        if self._session_should_close.is_set() or not self._socket:
+            return
+        logger.info("Sending caller keypad input", extra={"lk.pii.digits": digits})
+        # The count saves the model from counting the keys itself, which it sometimes gets wrong.
+        count = f"{len(digits)} key" if len(digits) == 1 else f"{len(digits)} keys"
+        try:
+            await self._socket.send_generate_reply(
+                GenerateReplyPayload(user_message=f"(User pressed {digits} on the keypad: {count})")
+            )
+        except Exception as e:
+            logger.error(f"Failed to send caller keypad input: {e}")
+            self._emit_error(e, recoverable=True)
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> typing.Iterator[rtc.AudioFrame]:
         if self._input_resampler is not None:
