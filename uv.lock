@@ -42,6 +42,7 @@ members = [
     "livekit-plugins-bey",
     "livekit-plugins-bithuman",
     "livekit-plugins-bland",
+    "livekit-plugins-boson",
     "livekit-plugins-boson-avatar",
     "livekit-plugins-browser",
     "livekit-plugins-cambai",
@@ -69,6 +70,7 @@ members = [
     "livekit-plugins-lemonslice",
     "livekit-plugins-liveavatar",
     "livekit-plugins-lmnt",
+    "livekit-plugins-lokutor",
     "livekit-plugins-meta",
     "livekit-plugins-microsoft-ai",
     "livekit-plugins-minimal",
@@ -2191,6 +2193,9 @@ bithuman = [
 bland = [
     { name = "livekit-plugins-bland" },
 ]
+boson = [
+    { name = "livekit-plugins-boson" },
+]
 boson-avatar = [
     { name = "livekit-plugins-boson-avatar" },
 ]
@@ -2274,6 +2279,9 @@ liveavatar = [
 ]
 lmnt = [
     { name = "livekit-plugins-lmnt" },
+]
+lokutor = [
+    { name = "livekit-plugins-lokutor" },
 ]
 mcp = [
     { name = "mcp" },
@@ -2420,7 +2428,7 @@ requires-dist = [
     { name = "livekit", specifier = "==1.2.1" },
     { name = "livekit-api", specifier = ">=1.2.2,<2" },
     { name = "livekit-blingfire", specifier = "~=1.1,<2" },
-    { name = "livekit-local-inference", specifier = ">=0.2.7" },
+    { name = "livekit-local-inference", specifier = ">=0.3.0,<0.4" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/livekit-plugins-anam" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
@@ -2434,6 +2442,7 @@ requires-dist = [
     { name = "livekit-plugins-bey", marker = "extra == 'bey'", editable = "livekit-plugins/livekit-plugins-bey" },
     { name = "livekit-plugins-bithuman", marker = "extra == 'bithuman'", editable = "livekit-plugins/livekit-plugins-bithuman" },
     { name = "livekit-plugins-bland", marker = "extra == 'bland'", editable = "livekit-plugins/livekit-plugins-bland" },
+    { name = "livekit-plugins-boson", marker = "extra == 'boson'", editable = "livekit-plugins/livekit-plugins-boson" },
     { name = "livekit-plugins-boson-avatar", marker = "extra == 'boson-avatar'", editable = "livekit-plugins/livekit-plugins-boson-avatar" },
     { name = "livekit-plugins-browser", marker = "extra == 'browser'", editable = "livekit-plugins/livekit-plugins-browser" },
     { name = "livekit-plugins-cambai", marker = "extra == 'cambai'", editable = "livekit-plugins/livekit-plugins-cambai" },
@@ -2460,6 +2469,7 @@ requires-dist = [
     { name = "livekit-plugins-lemonslice", marker = "extra == 'lemonslice'", editable = "livekit-plugins/livekit-plugins-lemonslice" },
     { name = "livekit-plugins-liveavatar", marker = "extra == 'liveavatar'", editable = "livekit-plugins/livekit-plugins-liveavatar" },
     { name = "livekit-plugins-lmnt", marker = "extra == 'lmnt'", editable = "livekit-plugins/livekit-plugins-lmnt" },
+    { name = "livekit-plugins-lokutor", marker = "extra == 'lokutor'", editable = "livekit-plugins/livekit-plugins-lokutor" },
     { name = "livekit-plugins-meta", marker = "extra == 'meta'", editable = "livekit-plugins/livekit-plugins-meta" },
     { name = "livekit-plugins-microsoft-ai", marker = "extra == 'microsoft-ai'", editable = "livekit-plugins/livekit-plugins-microsoft-ai" },
     { name = "livekit-plugins-minimax-ai", marker = "extra == 'minimax'", editable = "livekit-plugins/livekit-plugins-minimax" },
@@ -2525,7 +2535,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -2797,24 +2807,24 @@ requires-dist = [
 
 [[package]]
 name = "livekit-local-inference"
-version = "0.2.7"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/59/4a120c700508179d01af5525911acc044e2996d5fc86619896020b4fc41d/livekit_local_inference-0.2.7-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:86b64885254d554ca35483059e295bcf0281d7470b58301862e0367568633615", size = 34838988, upload-time = "2026-08-18T09:46:36.094Z" },
-    { url = "https://files.pythonhosted.org/packages/ce/1a/0384f23dae195dca39fec32fb77fa5bf68bb022ca1648e9c1908b1228667/livekit_local_inference-0.2.7-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:d66a509223e6e1f2ae77c52081969cafb49bd63d7bf4d50153f5bcdf52172865", size = 35096362, upload-time = "2026-08-18T09:46:38.893Z" },
-    { url = "https://files.pythonhosted.org/packages/e0/29/18d7c360642e519124c8e5ae422dac36e22d74696a476edcc48fc6217d36/livekit_local_inference-0.2.7-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d8fc1803a65654cc5061274a1aee067c584e2f0fd4ead85659f8f26ec06880f8", size = 34835065, upload-time = "2026-08-18T09:46:41.926Z" },
-    { url = "https://files.pythonhosted.org/packages/37/61/0b073e893274e461019516f8610029ceab74c06b9f6496b34be9ed704039/livekit_local_inference-0.2.7-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:449411e6cf01057e761588d6c19f1978d0ff652235d43de1780aa0b866b1435d", size = 34876716, upload-time = "2026-08-18T09:46:44.7Z" },
-    { url = "https://files.pythonhosted.org/packages/13/30/230770d450305c53cad880445d046c7f84c26507b61c50fe185ea15a29ca/livekit_local_inference-0.2.7-cp312-cp312-win_amd64.whl", hash = "sha256:5a497ed9dc7f11666b2226cf195c85bd12f511ad7d57dbd7857bec4c573b9031", size = 34877098, upload-time = "2026-08-18T09:46:47.717Z" },
-    { url = "https://files.pythonhosted.org/packages/a2/ff/01233367f526c67df021d5ee5ad0e7d229553ad7e90d5ae02d5afbdc7abb/livekit_local_inference-0.2.7-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:5b23b2fca99fbf05d349b8c1c1e499d9154997214db15b6784a999783f63169a", size = 34839008, upload-time = "2026-08-18T09:46:50.374Z" },
-    { url = "https://files.pythonhosted.org/packages/cc/45/9c70db9dc4581d9f2eecc04386bba3c8e74b6f438d2d6acb11aeaf66f96e/livekit_local_inference-0.2.7-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:866036cf42fce282404ecdad90bb2b814bc78aab245bc7be740e3cff528a36e8", size = 35096385, upload-time = "2026-08-18T09:46:53.359Z" },
-    { url = "https://files.pythonhosted.org/packages/c3/7d/0a981a4c7504fc4323a277d04705799fa48fbc036d368e47d5780c737341/livekit_local_inference-0.2.7-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f304cca187033b257cc8baf67f8799f5f467fa5f5984cdc3948591eb2027761b", size = 34835081, upload-time = "2026-08-18T09:46:55.883Z" },
-    { url = "https://files.pythonhosted.org/packages/7a/cc/858e2792eba28aa3baae1939488319f3bbef38c911cc0640f020bb0fe708/livekit_local_inference-0.2.7-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:454c451a4df153f5a9c8c7ba20e842dd5c77993103fd1c03194856d351be87dd", size = 34876656, upload-time = "2026-08-18T09:46:58.567Z" },
-    { url = "https://files.pythonhosted.org/packages/2a/07/b85d8f18fd46f335a559f6d39f8acf07663510d1add19d1f31814ef7daf0/livekit_local_inference-0.2.7-cp313-cp313-win_amd64.whl", hash = "sha256:c16e86495346d8c349910ac8530de1e3532a6d1bac95ece0bc416c88f2a5c20f", size = 34877068, upload-time = "2026-08-18T09:47:01.317Z" },
-    { url = "https://files.pythonhosted.org/packages/92/78/fd54ef156b91123f7bfe3c04d4163619275c9b5b802f9c084fbff49913fa/livekit_local_inference-0.2.7-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:4a10f4e2322a4a4dae679be292dece7bb7a94ac55c27ab9b6d7ed2c5ff1ce68f", size = 34839377, upload-time = "2026-08-18T09:47:03.831Z" },
-    { url = "https://files.pythonhosted.org/packages/77/f1/e1bef0798a102382afd9f041bcf16d96ea6e99ae4ad6956b292be7016cd5/livekit_local_inference-0.2.7-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:dbb2c1d3b52d68914f6b469467cf1cdc56dcca06c7fb494995e692398f66d6e5", size = 35096694, upload-time = "2026-08-18T09:47:06.301Z" },
-    { url = "https://files.pythonhosted.org/packages/82/2e/7b4ec0de0e5f1ef4c2f441a3047dda950c11d819fb1804e0a13c6ef68317/livekit_local_inference-0.2.7-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f122e205899c5393ef4a710beedfece7a166649afa5ccbdc3cca61f2df113efa", size = 34835765, upload-time = "2026-08-18T09:47:08.974Z" },
-    { url = "https://files.pythonhosted.org/packages/01/c9/5cee5031e9ac2b545f6a68d2442bb02a3a6564f298d91f321448c1b59944/livekit_local_inference-0.2.7-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7a97bc2932b73f72c5246cb8350cf2cd7d21fc6237053fc7c1ac645352ed0f3f", size = 34876770, upload-time = "2026-08-18T09:47:11.379Z" },
-    { url = "https://files.pythonhosted.org/packages/7f/72/c2c956d1797bd944449fd90945ceea5dded222a54b2df8c967c77440298f/livekit_local_inference-0.2.7-cp314-cp314-win_amd64.whl", hash = "sha256:168c2f2dd55ee6dd94fd7caae0ff73e4875e25aa418df819905fd339de1de4cd", size = 34882427, upload-time = "2026-08-18T09:47:13.983Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/2b/3176066e57d39f808249bc37031949f80c62f71dd0b66ec459f05836efe1/livekit_local_inference-0.3.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:288b856b158e446d28d53e5e03104dc02ccc41abc7159f0027cff0d7e44a38a8", size = 94275213, upload-time = "2026-11-12T11:38:37.979Z" },
+    { url = "https://files.pythonhosted.org/packages/02/70/07c3388edd18583d855043e41f306960a7a1a006dcf5ad66a2a26b58d9dd/livekit_local_inference-0.3.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:4504b2a0ceb42cbffe9678097409a3df632cf51894c1df01051ed362811ced90", size = 94999032, upload-time = "2026-11-12T11:38:42.554Z" },
+    { url = "https://files.pythonhosted.org/packages/38/f3/f48ceb03c0c426520524174ac84556fe06673f4dab33f968253aa362d25a/livekit_local_inference-0.3.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d265ef8496190cd71c1c0e17ae2b9c95e10e32a2269fcb77c535b44659db6a4f", size = 94277120, upload-time = "2026-11-12T11:38:46.828Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/6c/2d140a88388da5e10c2f2a2a773df7e5e782c3488299c3a1e9ae89de3357/livekit_local_inference-0.3.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d933321bbb4d57a752069cd8ed3a69bbb8b989482f18e0c6fe357b30f03f49c4", size = 94343061, upload-time = "2026-11-12T11:38:50.979Z" },
+    { url = "https://files.pythonhosted.org/packages/86/f0/be9d039a529d0ee33d3864d8597a8cd2006cc9ffeb4fac4857b2f5e2f6d2/livekit_local_inference-0.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:9eb8908dc4f7fadbb14c2b7c99c6a4518cd7508cea7cde9fdc0f041b4b97ad60", size = 94347077, upload-time = "2026-11-12T11:38:55.065Z" },
+    { url = "https://files.pythonhosted.org/packages/11/54/0ec0b5230bbcea1cf909a8775c2c191b517909b63fd87e6566a756653099/livekit_local_inference-0.3.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:3fd3d0c262137d7ffadc839f82886b0db6dda31eecca77f94c1e5ec7bbc9e790", size = 94275281, upload-time = "2026-11-12T11:38:59.164Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/4b/b35025d8be7250df066a58d80519b7ce4e4dce73a9fb5bdb9ccbaa64a7b4/livekit_local_inference-0.3.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:b4f0fb50480ea8960e916a7eca436a98038496794cb497a2ef55d0ca2b71c6f5", size = 94999052, upload-time = "2026-11-12T11:39:03.777Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/2a/281c1361027d3e2f140af62f2633529a9e7a990e86e26957293185fda3e2/livekit_local_inference-0.3.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:772f25ed6399086fa64ed24e26ac4137fef2fcbc13c5619db392f820bf51d9a4", size = 94277152, upload-time = "2026-11-12T11:39:07.478Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/45/36a3f36e03054326affc86a046d672810c59a2dfa4e706f6059543358a97/livekit_local_inference-0.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e3067399e2b9eedcc84b7319e60eaff4bbcb712f6e86521a86d73616257aad61", size = 94343040, upload-time = "2026-11-12T11:39:11.763Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/7f/8c73317974ae294137f226e9c7a43e9fcc5c3df5a26dfa59ef9634bdf606/livekit_local_inference-0.3.0-cp313-cp313-win_amd64.whl", hash = "sha256:c788102484102d7c6a0ff0e489048e0230dc4e4e41cc7b9ab6c16a5c5d28921b", size = 94347092, upload-time = "2026-11-12T11:39:15.911Z" },
+    { url = "https://files.pythonhosted.org/packages/40/c8/cd1a412a66b909d27c61561e29ca6fc8187cf955af272ab85d87b8ebe347/livekit_local_inference-0.3.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:b1be84dea9f52fe0f426151a42364cd28f471b144f19e2a7ae9f2cfae3af9c69", size = 94275640, upload-time = "2026-11-12T11:39:21.073Z" },
+    { url = "https://files.pythonhosted.org/packages/35/f6/9470eb5a7eb110be0205bb3d95efb7643e429b0f1e53332fa74ee6295ddf/livekit_local_inference-0.3.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:a1237935b9d2f93b0ea9c64c7941c98aa69277a14f27c5edbdd0087897b82f3d", size = 94999519, upload-time = "2026-11-12T11:39:25.202Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/8b/4adb1614f129af936c74bce631a087f9867974b7a331c0b0f045a29e62d5/livekit_local_inference-0.3.0-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:97ad658f893bed4a2c5e77cf46c29e5a3f25f901bc49c3f81eeaaf6f228e0f09", size = 94277735, upload-time = "2026-11-12T11:39:29.455Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/75/bf22352537305418cd47532913cc94e5b6f5bf306d23ba68844d0a1581b5/livekit_local_inference-0.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e8c467d41702b495654e4cbb7154ee975358261588fe38d83ad3c231e1386ff2", size = 94343206, upload-time = "2026-11-12T11:39:33.679Z" },
+    { url = "https://files.pythonhosted.org/packages/70/a7/f57bc8a7dcb4a534f34f83ef3bb8e0089134c90083c63bf102f2130e16ab/livekit_local_inference-0.3.0-cp314-cp314-win_amd64.whl", hash = "sha256:f0a70180fe6af64068c6135f5ec58fdea5a036dd23144e7020c2f5a72f0340cf", size = 94352876, upload-time = "2026-11-12T11:39:37.543Z" },
 ]
 
 [[package]]
@@ -3025,6 +3035,16 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-boson"
+source = { editable = "livekit-plugins/livekit-plugins-boson" }
+dependencies = [
+    { name = "livekit-agents", extra = ["openai"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-boson-avatar"
@@ -3420,6 +3440,16 @@ dependencies = [
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
+name = "livekit-plugins-lokutor"
+source = { editable = "livekit-plugins/livekit-plugins-lokutor" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
 name = "livekit-plugins-meta"
 source = { editable = "livekit-plugins/livekit-plugins-meta" }
 dependencies = [
@@ -3531,6 +3561,7 @@ requires-dist = [
 name = "livekit-plugins-nvidia"
 source = { editable = "livekit-plugins/livekit-plugins-nvidia" }
 dependencies = [
+    { name = "grpcio" },
     { name = "livekit-agents" },
     { name = "nvidia-riva-client" },
 ]
@@ -3543,9 +3574,10 @@ personaplex = [
 
 [package.metadata]
 requires-dist = [
+    { name = "grpcio", specifier = ">=1.51.1" },
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "livekit-agents", extras = ["codecs"], marker = "extra == 'personaplex'", editable = "livekit-agents" },
-    { name = "nvidia-riva-client" },
+    { name = "nvidia-riva-client", specifier = ">=2.16" },
     { name = "sphn", marker = "extra == 'personaplex'", specifier = ">=0.2.0" },
 ]
 provides-extras = ["personaplex"]
