@@ -366,8 +366,6 @@ class DataStreamAudioReceiver(AudioReceiver):
     subscribe to the first agent participant in the room.
     """
 
-    _clear_buffer_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
-
     def __init__(
         self,
         room: rtc.Room,
@@ -400,6 +398,7 @@ class DataStreamAudioReceiver(AudioReceiver):
         self._main_atask: asyncio.Task | None = None
         self._exception: Exception | None = None
         self._closing: bool = False
+        self._registered: bool = False
 
     async def start(self) -> None:
         # wait for the target participant or first agent participant to join
@@ -408,7 +407,6 @@ class DataStreamAudioReceiver(AudioReceiver):
             identity=self._sender_identity,
             kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT if not self._sender_identity else None,
         )
-        self._main_atask = asyncio.create_task(self._main_task())
 
         def _handle_clear_buffer(data: rtc.RpcInvocationData) -> str:
             assert self._remote_participant is not None
@@ -449,12 +447,15 @@ class DataStreamAudioReceiver(AudioReceiver):
                 self._current_reader_superseded.set()
             self._stream_reader_changed.set()
 
-        self._register_clear_buffer_rpc(
-            self._room,
-            caller_identity=self._remote_participant.identity,
-            handler=_handle_clear_buffer,
-        )
+        # The stream topic permits one receiver per room. Claim it before the RPC.
         self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)
+        try:
+            self._room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handle_clear_buffer)
+        except Exception:
+            self._room.unregister_byte_stream_handler(AUDIO_STREAM_TOPIC)
+            raise
+        self._registered = True
+        self._main_atask = asyncio.create_task(self._main_task())
 
     def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
         self._rpc_send_ch.send_nowait(
@@ -559,9 +560,10 @@ class DataStreamAudioReceiver(AudioReceiver):
                         for frame in bstream.flush():
                             self._data_ch.send_nowait(frame)
 
+                    interrupted = self._current_reader_cleared
                     self._current_reader = None
                     self._current_reader_cleared = False
-                    self._data_ch.send_nowait(AudioSegmentEnd())
+                    self._data_ch.send_nowait(AudioSegmentEnd(interrupted=interrupted))
 
                 except utils.aio.ChanClosed:
                     if self._closing:
@@ -635,38 +637,12 @@ class DataStreamAudioReceiver(AudioReceiver):
 
     async def aclose(self) -> None:
         self._closing = True
+        if self._registered:
+            self._registered = False
+            self._room.unregister_byte_stream_handler(AUDIO_STREAM_TOPIC)
+            self._room.local_participant.unregister_rpc_method(RPC_CLEAR_BUFFER)
         self._rpc_send_ch.close()
         self._data_ch.close()
         self._stream_reader_changed.set()
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
-
-    @classmethod
-    def _register_clear_buffer_rpc(
-        cls,
-        room: rtc.Room,
-        *,
-        caller_identity: str,
-        handler: Callable[[rtc.RpcInvocationData], str],
-    ) -> None:
-        cls._clear_buffer_handlers[caller_identity] = handler
-
-        if (
-            rpc_handler := room.local_participant._rpc_handlers.get(RPC_CLEAR_BUFFER)
-        ) and rpc_handler == cls._clear_buffer_rpc_handler:
-            return
-
-        room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, cls._clear_buffer_rpc_handler)
-
-    @classmethod
-    def _clear_buffer_rpc_handler(cls, data: rtc.RpcInvocationData) -> str:
-        if data.caller_identity not in cls._clear_buffer_handlers:
-            logger.warning(
-                "clear buffer event received from unexpected participant",
-                extra={
-                    "caller_identity": data.caller_identity,
-                    "expected_identities": list(cls._clear_buffer_handlers.keys()),
-                },
-            )
-            return "reject"
-        return cls._clear_buffer_handlers[data.caller_identity](data)
