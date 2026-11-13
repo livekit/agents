@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.8.12",
-    "anthropic>=1.8,<2",
+    "anthropic>=2.3,<3",
     "httpx2",
 ]
 
