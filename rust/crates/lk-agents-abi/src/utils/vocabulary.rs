@@ -12,7 +12,7 @@ pub enum Coverage<T> {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not cover `{K}`, so nothing here will ever produce that variant",
     label = "implement `Covers<{K}>` for `{Self}`: return `Coverage::Covered(..)` to handle it, or `Coverage::Skipped(\"why\")` to leave it out on purpose",
-    note = "every variant of a driver boundary type must be covered or skipped -- lk-agents-voice/TEST_STRATEGY.md §5 \"Search-space inventory\""
+    note = "every variant of a driver boundary type must be covered or skipped, so a new command the DST does not handle fails to compile"
 )]
 pub trait Covers<K> {
     /// Every variant of one vocabulary shares the type.

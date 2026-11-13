@@ -1,5 +1,4 @@
 [package]
-autotests = false
 name = "lk-agents-fuzz"
 version = "0.1.0"
 edition.workspace = true
@@ -10,7 +9,7 @@ publish = false
 # The voice behavioural suite: one harness and one runner for every contract, and a generator
 # drawn from the production vocabulary (`#[derive(Vocabulary)]` on the driver's boundary enums).
 # A library so regression tests and voice campaigns share the same runner and fake room.
-# See README.md for the layout and ../lk-agents-voice/TEST_STRATEGY.md for the strategy.
+# See README.md for the layout.
 [lib]
 doctest = false
 
@@ -35,33 +34,6 @@ async-trait.workspace = true
 parking_lot.workspace = true
 # The text driver's clients cancel their runs and drop their turns.
 tokio-util = "0.7"
-
-[build-dependencies]
-serde_json.workspace = true
-
-[[test]]
-name = "build_registration"
-path = "build_registration.rs"
-
-[[test]]
-name = "pos"
-path = "src/pos_tests.rs"
-
-[[test]]
-name = "soak"
-path = "src/soak_tests.rs"
-
-[[test]]
-name = "survey"
-path = "src/survey_tests.rs"
-
-[[test]]
-name = "text"
-path = "src/text_tests.rs"
-
-[[test]]
-name = "regressions"
-path = "src/regressions_tests.rs"
 
 [lints]
 workspace = true

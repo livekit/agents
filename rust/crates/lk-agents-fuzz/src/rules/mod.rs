@@ -1,7 +1,7 @@
 use crate::check::{Registered, Rule};
 
-// `build.rs` generates the `mod` declarations and `RULES` from `src/rules/*.rs`: a file holding a
-// unit struct `<Id>` that implements `Rule` is registered by existing.
+// `build.rs` generates the `mod` declarations and `RULES` from `src/rules/<domain>/*.rs`: a file
+// holding a unit struct `<Id>` that implements `Rule` is registered by existing.
 include!(concat!(env!("OUT_DIR"), "/rules.rs"));
 
 #[cfg(test)]
@@ -28,7 +28,7 @@ mod registry {
             );
             assert!(!known.why.is_empty(), "{} has no reason", known.contract);
             if let Some(test) = known.fixed_by {
-                let path = format!("{}/src/{test}_tests.rs", env!("CARGO_MANIFEST_DIR"));
+                let path = format!("{}/tests/regressions/{test}.rs", env!("CARGO_MANIFEST_DIR"));
                 assert!(std::path::Path::new(&path).exists(), "{test}: no such regression test");
             }
         }

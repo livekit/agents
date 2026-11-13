@@ -1002,17 +1002,11 @@ async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
     );
 }
 
-#[path = "room_transcription_tests.rs"]
-mod transcription;
-
-#[path = "room_participant_tests.rs"]
 mod participant;
-
-#[path = "room_playback_tests.rs"]
 mod playback;
-
-#[path = "room_reconnect_tests.rs"]
 mod reconnect;
+mod registration;
+mod transcription;
 
 #[derive(Default)]
 struct Spans(Mutex<Vec<lk_agents_abi::telemetry::record::SpanRecord>>);

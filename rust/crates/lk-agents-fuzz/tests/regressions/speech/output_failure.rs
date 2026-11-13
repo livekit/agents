@@ -1,7 +1,7 @@
 mod a_raising_audio_output {
     //! An audio output whose capture raises cuts the speech it was playing, which ends interrupted
     //! with the output's error, and leaves the output to the next speech, which plays on it whole.
-    use super::super::playout::apply_with_playout;
+    use crate::playout::apply_with_playout;
     use lk_agents_abi::{ChatItem, Role};
     use lk_agents_core::markup::ChatMessageExt;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
@@ -140,7 +140,7 @@ mod a_raising_audio_output {
 mod a_capture_that_never_returns {
     //! A speech interrupted while its output holds its first frame (an avatar that never joins)
     //! leaves the output to the next speech.
-    use super::super::playout::apply_with_playout;
+    use crate::playout::apply_with_playout;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::fakes::CaptureFault;
     use lk_agents_fuzz::input::{AgentText, Input, Millis, SayInput};
@@ -199,7 +199,7 @@ mod a_clear_the_output_never_reports {
     //! skips `on_playback_finished`, a dead avatar worker) holds the output for 5 s from the cut at
     //! most: the cut segment settles where the output last reported, one recoverable `error`
     //! event says so, and the next speech plays.
-    use super::super::playout::apply_with_playout;
+    use crate::playout::apply_with_playout;
     use lk_agents_abi::{ChatItem, Role};
     use lk_agents_core::markup::ChatMessageExt;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};

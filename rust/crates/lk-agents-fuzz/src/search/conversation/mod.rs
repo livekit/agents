@@ -19,7 +19,7 @@ use super::uniform;
 
 use crate::{
     drive::{AmdAnswer, Case, Outcome, Policy, Run, Setup},
-    fakes::{MS_PER_WORD, Measured, Timing, delay, measured},
+    fakes::{MS_PER_WORD, Timing, delay, measured},
     input::{
         AGENT_TURNS, AgentText, AmdInput, Confidence, ConsoleAsk, Count, HookAnswer, Input, Make,
         Millis, NAMES, Ref, RoomIn, RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode,

@@ -9,7 +9,7 @@ pub use setup::sample_setup;
 
 // Exploration policy lives only here: `input.rs` knows what is legal, `drive/` how a case is
 // judged. A seed draws a run's setup, conversation and schedule, so seed plus code is the run.
-// A search change is kept only if it wins on the survey's yardstick (`src/survey_tests.rs`).
+// A search change is kept only if it wins on the survey's yardstick (`tests/survey.rs`).
 
 #[cfg(test)]
 mod tests {

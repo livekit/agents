@@ -24,7 +24,7 @@ use crate::{
 };
 
 // The session is a thin pass to [`server::Server`], which behaves as the real one was measured
-// (`calibration.json`). It keeps only the provider's port promises: a reply cancelled before
+// (`calibration.rs`). It keeps only the provider's port promises: a reply cancelled before
 // creation or still waiting at the end fails; a slow connect times out; a drop is a recoverable
 // error and the reconnect a server holding the conversation as text, asked again for waiting
 // replies; retries exhausted end the session; a fallback setup's fatal error swaps to a fresh

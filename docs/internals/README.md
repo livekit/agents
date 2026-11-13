@@ -30,7 +30,7 @@ Use [development](development.md) for installation, builds, checks and review co
 | --- | --- |
 | [Development and review](development.md) | Local builds, checks, source conventions and review evidence |
 | [Internal testing](testing.md) | Component, boundary and deterministic simulation tests |
-| [DST contribution guide](../../rust/crates/lk-agents-fuzz/CONTRIBUTING.md) | Add a regression, model a fake port, reproduce a seed and diagnose a failure |
+| [DST guide](../../rust/crates/lk-agents-fuzz/README.md) | Add a regression, model a fake port, reproduce a seed and diagnose a failure |
 
 Keep current contracts in their owning guide. Migration ledgers, dated file counts and
 completed audit checklists are not part of the implementation reference.

@@ -10,7 +10,7 @@ pub struct Boundary {
     pub outside: &'static [&'static str],
 }
 
-/// The voice campaigns (`src/survey_tests.rs`, `src/soak_tests.rs`, `src/pos_tests.rs`).
+/// The voice campaigns (`tests/survey.rs`, `tests/soak.rs`, `tests/pos.rs`).
 pub const VOICE: Boundary = Boundary {
     cores: &[
         "voice decision core (agent_session::VoiceDriver), stepped by the runtime's real loop \

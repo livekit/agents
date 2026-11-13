@@ -202,8 +202,8 @@ do not establish scheduler correctness.
 
 Fakes reproduce real boundary behavior: calibrated LLM chunk timings, TTS audio
 proportional to text, realtime probe fixtures and SDK room lifecycle behavior.
-The measured provider timings are in `rust/crates/lk-agents-fuzz/calibration.json`, for
-reference; each fake hardcodes the deciles it draws from. Fix the
+The fakes draw their delays from the deciles measured on real providers
+(`rust/crates/lk-agents-fuzz/src/calibration.rs`). Fix the
 fake's missing behavior whenever a real-room failure reveals a gap.
 
 A seed reproduces a run for the same build, configuration and scheduling policy.
@@ -221,6 +221,29 @@ Its `KNOWN_FINDINGS` baseline may only shrink. The purity Clippy policy rejects 
 spawns, `select!`, clocks and unbounded channels; `rust/check` rejects executor
 dependencies in the cores and Tokio runtime uses and unbiased selects in the runtime's
 executor modules, with no baseline.
+
+### Search space
+
+Every driver boundary enum carries `#[derive(Vocabulary)]`, and the input table declares each
+variant covered or skipped with a reason: a new command the suite does not handle fails to
+compile. The journal's step names are the reach metric; the survey reports which variants a
+campaign reached and which it never did.
+
+One generator, `search::explore(setup, seed, budget)`, draws everything in a run from its seed:
+the setup, the conversation, the providers' behaviour, the queue policy and the scheduler. Four
+actors each act only on what they observed: a person who speaks, pauses, barges in and waits;
+the developer's program, calling the API and answering hooks and tools; the end of the call;
+and providers that answer and fail as real ones do. Uniform moves at a per-seed rate span the
+range from a pure conversation to a pure uniform sampler.
+
+### Known gaps
+
+- No shrinker: a finding is reduced by hand while writing its regression.
+- No corpus: each seed is independent of the seeds before it.
+- Tasks run on one thread in Tokio's order; multi-thread interleavings are not explored.
+- No finite campaign shows an interaction impossible, and a variant reached is not a
+  guarantee checked.
+- A stuck agent that stays silent is not caught until per-operation progress bounds exist.
 
 ### Observations and replay
 

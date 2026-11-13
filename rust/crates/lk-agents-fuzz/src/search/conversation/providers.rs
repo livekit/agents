@@ -2,24 +2,7 @@ use super::*;
 
 use crate::calibration::llm::{LLM_CHARS_PER_CHUNK, LLM_CHUNK_GAP, LLM_FIRST_CHUNK};
 
-/// A real recogniser as measured (`calibration.json`, `stt/<name>/<field>`): its delays in ms, how
-/// it cuts a turn, and its quirks. A quantity a model never showed is all zeros and never drawn.
-pub struct SttModel {
-    pub name: &'static str,
-    first_after_onset: Measured,
-    interim_gap: Measured,
-    final_after_end: Measured,
-    finals_per_utterance: Measured,
-    preflights_per_utterance: Measured,
-    final_after_preflight: Measured,
-    /// Utterances it finalised twice, of all measured.
-    duplicate_share: (u64, u64),
-    duplicate_final_after: Measured,
-    /// It opens an utterance over noise and closes it with an empty final.
-    pub empty_finals: bool,
-}
-
-include!(concat!(env!("OUT_DIR"), "/stt_calibration.rs"));
+pub use crate::calibration::stt::{STT_MODELS, SttModel};
 
 /// The model's side: every chat request is answered on the model's own clock, as a real one
 /// answers -- the first chunk after a while, then token-sized pieces a few milliseconds apart,

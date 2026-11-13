@@ -62,7 +62,7 @@ pub const SAMPLE_RATE: u32 = 24_000;
 /// One fixture chunk is 10 ms of mono audio.
 pub const SAMPLES_PER_CHUNK: usize = (SAMPLE_RATE / 100) as usize;
 
-/// A provider quantity by its measured deciles: min, p10 to p90, max (from `calibration.json`).
+/// A provider quantity by its measured deciles: min, p10 to p90, max (`calibration.rs`).
 pub type Measured = [u64; 11];
 
 /// The share of provider delays that stray from the measured spread, and the deadlines armed in

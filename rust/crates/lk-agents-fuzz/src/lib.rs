@@ -9,10 +9,8 @@
 )]
 
 pub mod authored;
-mod calibration {
-    include!(concat!(env!("OUT_DIR"), "/calibration.rs"));
-}
 pub mod boundary;
+mod calibration;
 pub mod check;
 pub mod drive;
 pub mod fakes;
