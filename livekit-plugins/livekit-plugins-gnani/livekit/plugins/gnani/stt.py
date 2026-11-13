@@ -407,10 +407,10 @@ class STT(stt.STT):
         format: GnaniSTTFormat = "verbatim",
         itn_native_numerals: bool = False,
         use_streaming: bool = True,
-        keyterms: Sequence[str] | None = None,
+        keyterms: list[str] | None = None,
         topic: str | None = None,
         previous_text: str | None = None,
-        speaker_names: Sequence[str] | None = None,
+        speaker_names: list[str] | None = None,
         idle_timeout_sec: int | None = None,
         vad_threshold: float | None = None,
         min_silence_ms: int | None = None,
@@ -498,7 +498,7 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[GnaniSTTLanguages | str | Sequence[str]] = NOT_GIVEN,
         format: NotGivenOr[GnaniSTTFormat] = NOT_GIVEN,
-        keyterms: NotGivenOr[Sequence[str]] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """Change options for new requests and for streams that are already running.
 
@@ -527,7 +527,7 @@ class STT(stt.STT):
             stream.update_options(
                 language=candidate.language if is_given(language) else NOT_GIVEN,
                 format=candidate.format if is_given(format) else NOT_GIVEN,
-                keyterms=candidate.keyterms if is_given(keyterms) else NOT_GIVEN,
+                keyterms=list(candidate.keyterms) if is_given(keyterms) else NOT_GIVEN,
             )
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
@@ -541,7 +541,7 @@ class STT(stt.STT):
         merged = _merge_keyterms(self._user_keyterms, session)
         self._opts = replace(self._opts, keyterms=merged)
         for stream in self._streams:
-            stream.update_options(keyterms=merged)
+            stream.update_options(keyterms=list(merged))
 
     async def recognize(
         self,
@@ -712,7 +712,7 @@ class SpeechStream(stt.RecognizeStream):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         format: NotGivenOr[str] = NOT_GIVEN,
-        keyterms: NotGivenOr[Sequence[str]] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """Apply options to this stream: live via ``update_settings`` when connected, and
         otherwise on the next (re)connect. Values are expected to be validated already
