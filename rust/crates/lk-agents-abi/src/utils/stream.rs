@@ -72,6 +72,53 @@ pub trait StreamInput<T>: Send + Sync {
     }
 }
 
+/// Where a duplex stream's input stands, shared by its two halves: the output records how the
+/// stream ended and every input call answers from it, a provider's failure before an end. The one
+/// place an input learns why it takes nothing more.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum InputState {
+    #[default]
+    Open,
+    /// Ended by its user, or the stream finished or was closed.
+    Ended,
+    /// The provider failed: every later input call returns this failure.
+    Failed(ProviderError),
+}
+
+impl InputState {
+    /// `Ok` while open, else why the input takes nothing more.
+    pub fn admit(&self) -> Result<(), ProviderError> {
+        match self {
+            InputState::Open => Ok(()),
+            InputState::Ended => Err(crate::errors::ApiError::new("stream input is closed")
+                .with_retryable(false)
+                .into()),
+            InputState::Failed(error) => Err(error.clone()),
+        }
+    }
+
+    /// No more input; a failure already recorded stays the answer.
+    pub fn end(&mut self) {
+        if *self == InputState::Open {
+            *self = InputState::Ended;
+        }
+    }
+
+    /// The provider failed: the answer from now on, even after an end. The first failure stays.
+    pub fn fail(&mut self, error: ProviderError) {
+        if !matches!(self, InputState::Failed(_)) {
+            *self = InputState::Failed(error);
+        }
+    }
+
+    pub fn failure(&self) -> Option<&ProviderError> {
+        match self {
+            InputState::Failed(error) => Some(error),
+            InputState::Open | InputState::Ended => None,
+        }
+    }
+}
+
 /// One step of a [`StreamInput`], as a pump hands it over.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entry<T> {

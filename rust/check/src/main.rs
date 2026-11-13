@@ -2,7 +2,8 @@
 //! cover. Run by `make -C rust check`. Each module lists the rules it checks:
 //!
 //! - [`graph`]: the crate graph, sans-I/O dependency bans, pyo3 dependencies.
-//! - [`sources`]: file length, binding placement, host calls, DST executors, `select!` order.
+//! - [`sources`]: file length, binding placement, host calls, DST executors, `select!` order,
+//!   input refusals worded only in `InputState`.
 //! - [`tokens`]: token helpers for `sources`; it checks nothing itself.
 
 mod graph;

@@ -19,9 +19,7 @@ use lk_agents_abi::{ApiConnectOptions, BoxFuture, Clock, SpeechChunk, Ts};
 use lk_agents_net::connection_pool::ConnectionPool;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
-use lk_agents_net::transport::{
-    WsReceiver, WsSender, WsTransport, join_url, open_ws, stream_closed, to_ws_url,
-};
+use lk_agents_net::transport::{WsReceiver, WsSender, WsTransport, join_url, open_ws, to_ws_url};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::pin::pin;
@@ -328,6 +326,7 @@ impl GatewayTts {
         let stop = CancellationToken::new();
         let (done, settled) = oneshot::channel();
         let (failure, failed) = lk_agents_net::signal::signal(None);
+        let gate = lk_agents_net::source::InputGate::default();
         let clock = self.clock.clone();
         let accepted_at = clock.now();
 
@@ -351,6 +350,7 @@ impl GatewayTts {
             stopped: stop.clone(),
             done: Some(done),
             failure,
+            gate: gate.clone(),
             create_frame: wire::session_create(&opts)?,
             sample_rate: opts.sample_rate,
             opts,
@@ -362,13 +362,14 @@ impl GatewayTts {
         self.tasks.spawn(self.spawner.as_ref(), "tts stream", pump.run());
 
         Ok((
-            SynthesisInput { text: Mutex::new(Some(text_tx)) },
+            SynthesisInput { text: Mutex::new(Some(text_tx)), gate: gate.clone() },
             SynthesisOutput {
                 audio: audio_rx,
                 done: false,
                 stop,
                 settled: Some(settled),
                 failed,
+                gate,
                 clock,
             },
         ))
@@ -468,11 +469,15 @@ impl Tts for GatewayTts {
 /// input ends when the sender goes: the pump reads what was queued, then the end.
 pub struct SynthesisInput {
     text: Mutex<Option<mpsc::Sender<String>>>,
+    /// What a refused call answers: the synthesis's failure, else its end.
+    gate: lk_agents_net::source::InputGate,
 }
 
 impl SynthesisInput {
     fn sender(&self) -> Result<mpsc::Sender<String>, ProviderError> {
-        self.text.lock().clone().ok_or_else(|| stream_closed(WHAT))
+        self.gate.admit()?;
+        let sender = self.text.lock().clone();
+        sender.ok_or_else(|| self.gate.refused())
     }
 
     /// Queues `text` without waiting: refused when the queue is full.
@@ -481,7 +486,7 @@ impl SynthesisInput {
             mpsc::error::TrySendError::Full(_) => {
                 ApiError::new("TTS pending text queue is full").into()
             }
-            mpsc::error::TrySendError::Closed(_) => stream_closed(WHAT),
+            mpsc::error::TrySendError::Closed(_) => self.gate.refused(),
         })
     }
 }
@@ -497,6 +502,7 @@ impl StreamInput<SpeechChunk> for SynthesisInput {
     }
 
     fn end_input(&self) {
+        self.gate.end();
         drop(self.text.lock().take());
     }
 
@@ -510,9 +516,10 @@ impl StreamInput<SpeechChunk> for SynthesisInput {
                 return Box::pin(std::future::ready(Ok(())));
             }
         };
+        let gate = self.gate.clone();
         Box::pin(async move {
             let Entry::Item(chunk) = entry else { unreachable!("only an item is sent") };
-            sender?.send(chunk.text).await.map_err(|_| stream_closed(WHAT))
+            sender?.send(chunk.text).await.map_err(|_| gate.refused())
         })
     }
 }
@@ -523,6 +530,8 @@ pub struct SynthesisOutput {
     stop: CancellationToken,
     settled: Option<oneshot::Receiver<Result<(), ApiError>>>,
     failed: lk_agents_net::signal::Cell<Option<ApiError>>,
+    /// Its input's: ended with the synthesis, the failure kept by the pump as it happens.
+    gate: lk_agents_net::source::InputGate,
     clock: Arc<dyn Clock>,
 }
 
@@ -559,17 +568,17 @@ impl StreamOutput<SynthesizedAudio> for SynthesisOutput {
             if self.done {
                 return Ok(None);
             }
-            match self.next_item().await {
-                Some(Ok(audio)) => Ok(Some(audio)),
-                Some(Err(error)) => {
-                    self.done = true;
-                    Err(error.into())
-                }
-                None => {
-                    self.done = true;
-                    self.settle().await
-                }
+            let next = match self.next_item().await {
+                Some(Ok(audio)) => return Ok(Some(audio)),
+                Some(Err(error)) => Err(error.into()),
+                None => self.settle().await,
+            };
+            self.done = true;
+            match &next {
+                Err(error) => self.gate.fail(error.clone()),
+                Ok(_) => self.gate.end(),
             }
+            next
         })
     }
 
@@ -582,6 +591,7 @@ impl StreamOutput<SynthesizedAudio> for SynthesisOutput {
         deadline: lk_agents_abi::Ts,
     ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
         Box::pin(async move {
+            self.gate.end();
             self.stop.cancel();
             self.done = true;
             self.audio.close();
@@ -600,6 +610,7 @@ impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for Synthesi
 
 impl Drop for SynthesisOutput {
     fn drop(&mut self) {
+        self.gate.end();
         self.stop.cancel();
     }
 }
@@ -621,6 +632,8 @@ struct Pump {
     stopped: CancellationToken,
     done: Option<oneshot::Sender<Result<(), ApiError>>>,
     failure: lk_agents_net::signal::Producer<Option<ApiError>>,
+    /// The input's answer: the failure, recorded as it is published.
+    gate: lk_agents_net::source::InputGate,
     create_frame: serde_json::Value,
     opts: TtsOptions,
     provider: Option<InferenceProvider>,

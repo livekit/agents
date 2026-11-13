@@ -263,22 +263,27 @@ impl FallbackRecognizeStream {
     fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         let item = crate::generated::records::rtc_frames::audio_frame_from_py(item.as_any())?;
-        if self.1.is_closed() {
-            return Err(::pyo3::exceptions::PyRuntimeError::new_err("stream input is closed"));
-        }
+        self.1.admit_input().map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+            <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(
+                &e,
+            )
+        })?;
         py.detach(|| ::lk_agents_abi::StreamInput::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))
     }
 
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        if self.1.is_closed() {
-            return Err(::pyo3::exceptions::PyRuntimeError::new_err("stream input is closed"));
-        }
+        self.1.admit_input().map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+            <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(
+                &e,
+            )
+        })?;
         py.detach(|| ::lk_agents_abi::StreamInput::flush(&*self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))
     }
 
     fn end_input(&self, py: Python<'_>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        self.1.input_failure().map_or(Ok(()), Err).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
         py.detach(|| ::lk_agents_abi::StreamInput::end_input(&*self.0));
         Ok(())
     }
@@ -582,22 +587,27 @@ impl InferenceSttStream {
     fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         let item = crate::generated::records::rtc_frames::audio_frame_from_py(item.as_any())?;
-        if self.1.is_closed() {
-            return Err(::pyo3::exceptions::PyRuntimeError::new_err("stream input is closed"));
-        }
+        self.1.admit_input().map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+            <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(
+                &e,
+            )
+        })?;
         py.detach(|| ::lk_agents_abi::StreamInput::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))
     }
 
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        if self.1.is_closed() {
-            return Err(::pyo3::exceptions::PyRuntimeError::new_err("stream input is closed"));
-        }
+        self.1.admit_input().map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+            <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(
+                &e,
+            )
+        })?;
         py.detach(|| ::lk_agents_abi::StreamInput::flush(&*self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))
     }
 
     fn end_input(&self, py: Python<'_>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        self.1.input_failure().map_or(Ok(()), Err).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
         py.detach(|| ::lk_agents_abi::StreamInput::end_input(&*self.0));
         Ok(())
     }
@@ -797,22 +807,27 @@ impl SttAdapterStream {
     fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         let item = crate::generated::records::rtc_frames::audio_frame_from_py(item.as_any())?;
-        if self.1.is_closed() {
-            return Err(::pyo3::exceptions::PyRuntimeError::new_err("stream input is closed"));
-        }
+        self.1.admit_input().map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+            <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(
+                &e,
+            )
+        })?;
         py.detach(|| ::lk_agents_abi::StreamInput::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))
     }
 
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        if self.1.is_closed() {
-            return Err(::pyo3::exceptions::PyRuntimeError::new_err("stream input is closed"));
-        }
+        self.1.admit_input().map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+            <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(
+                &e,
+            )
+        })?;
         py.detach(|| ::lk_agents_abi::StreamInput::flush(&*self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))
     }
 
     fn end_input(&self, py: Python<'_>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        self.1.input_failure().map_or(Ok(()), Err).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
         py.detach(|| ::lk_agents_abi::StreamInput::end_input(&*self.0));
         Ok(())
     }

@@ -14,7 +14,7 @@ mod side_tables {
         crate::py_test_support::install_package(_core::register);
         retryable_and_status_code_are_readable_without_the_gil();
         a_captured_error_that_is_dropped_leaves_nothing_outstanding();
-        re_raising_works_once_across_every_clone_and_the_drops_after_it_release_nothing();
+        re_raising_raises_the_original_every_time_until_the_last_clone_drops();
         a_pyerr_is_captured_as_its_own_value_and_is_not_retryable();
         generated_wrappers_preserve_the_original_exception();
         foreign_exception_keys_cannot_peek_or_take_a_local_exception();
@@ -22,7 +22,6 @@ mod side_tables {
 
     use _core::py_errors::{capture, capture_value, raise_original, resolve_captured};
     use _core::py_objects::exception_table;
-    use pyo3::exceptions::PyRuntimeError;
     use pyo3::prelude::*;
 
     fn generated_wrappers_preserve_the_original_exception() {
@@ -104,8 +103,9 @@ mod side_tables {
         });
     }
 
-    // Catches: `raise_original` handing the same object out twice through two clones.
-    fn re_raising_works_once_across_every_clone_and_the_drops_after_it_release_nothing() {
+    // Catches: a failure a stream keeps raised once and then lost: an output raises it, and every
+    // input call after it raises the same object again, or the entry outliving its last clone.
+    fn re_raising_raises_the_original_every_time_until_the_last_clone_drops() {
         Python::initialize();
         Python::attach(|py| {
             let before = outstanding();
@@ -116,12 +116,11 @@ mod side_tables {
 
             let raised = raise_original(py, a);
             assert!(raised.value(py).is(&exc), "the first re-raise is the original object");
-            assert_eq!(outstanding(), before, "re-raising takes the entry out");
-
             let again = raise_original(py, b);
-            assert!(again.is_instance_of::<PyRuntimeError>(py), "a second re-raise finds nothing");
+            assert!(again.value(py).is(&exc), "and so is every later one");
+            assert_eq!(outstanding(), before + 1, "kept while a clone is live");
             drop(err);
-            assert_eq!(outstanding(), before);
+            assert_eq!(outstanding(), before, "the last drop is the release");
         });
     }
 

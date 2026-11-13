@@ -1,6 +1,9 @@
 use futures_util::FutureExt;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
+use lk_agents_abi::utils::stream::{CallLedger, RetryReport};
+use lk_agents_abi::{
+    BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, InputState, ProviderStream, StreamOutput, Ts,
+};
 use parking_lot::Mutex;
 use std::sync::{
     Arc,
@@ -9,6 +12,135 @@ use std::sync::{
 use tokio_util::sync::CancellationToken;
 
 // A cancelled waiter never loses the source or repeats an in-flight read.
+
+/// One duplex stream's [`InputState`], shared by its halves: the output side writes how the
+/// stream ended, the provider's own failure included, and every input call answers from it first.
+#[derive(Clone)]
+pub struct InputGate(Arc<crate::signal::Shared<InputState>>);
+
+impl Default for InputGate {
+    fn default() -> Self {
+        InputGate(Arc::new(crate::signal::Shared::new(InputState::Open)))
+    }
+}
+
+impl std::fmt::Debug for InputGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.with(|state| f.debug_tuple("InputGate").field(state).finish())
+    }
+}
+
+impl InputGate {
+    /// `Ok` while the input is open, else the provider's failure or the end.
+    pub fn admit(&self) -> Result<(), ProviderError> {
+        self.0.with(|state| state.admit())
+    }
+
+    /// `then` runs only while the input is open, under the gate: nothing it admits lands after
+    /// an end or a failure.
+    pub fn admit_with<R>(
+        &self,
+        then: impl FnOnce() -> Result<R, ProviderError>,
+    ) -> Result<R, ProviderError> {
+        self.0.with(|state| {
+            state.admit()?;
+            then()
+        })
+    }
+
+    /// The input refused for a reason of its own (its queue is gone): it has ended, and the
+    /// provider's failure, if any, is the answer.
+    pub fn refused(&self) -> ProviderError {
+        self.0.modify(|state| {
+            state.end();
+            state.admit().expect_err("an ended input refuses")
+        })
+    }
+
+    pub fn end(&self) {
+        self.0.modify(InputState::end);
+    }
+
+    pub fn fail(&self, error: ProviderError) {
+        self.0.modify(|state| state.fail(error));
+    }
+
+    pub fn failure(&self) -> Option<ProviderError> {
+        self.0.with(|state| state.failure().cloned())
+    }
+
+    /// The provider's failure once recorded; cancel-safe. A stream that ends cleanly never
+    /// resolves it, so it is raced against the stream's own read.
+    pub async fn failed(&self) -> ProviderError {
+        self.0.wait_until(|state| state.failure().cloned()).await
+    }
+}
+
+/// An output that records in its stream's [`InputGate`] how it ended: its failure as it reads
+/// it, its end, its close or its drop.
+pub struct Gated<S> {
+    source: S,
+    gate: EndOnDrop,
+}
+
+struct EndOnDrop(InputGate);
+
+impl Drop for EndOnDrop {
+    fn drop(&mut self) {
+        self.0.end();
+    }
+}
+
+impl<S> Gated<S> {
+    pub fn new(source: S, gate: InputGate) -> Self {
+        Gated { source, gate: EndOnDrop(gate) }
+    }
+}
+
+impl<T: Send + 'static, S: StreamOutput<T>> StreamOutput<T> for Gated<S> {
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<T>, ProviderError>> {
+        Box::pin(async move {
+            let next = self.source.next().await;
+            match &next {
+                Ok(Some(_)) => {}
+                Ok(None) => self.gate.0.end(),
+                Err(error) => self.gate.0.fail(error.clone()),
+            }
+            next
+        })
+    }
+
+    fn cancel_safe(&self) -> bool {
+        self.source.cancel_safe()
+    }
+
+    fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
+        let Gated { source, gate } = *self;
+        drop(gate);
+        Box::new(source).close(deadline)
+    }
+}
+
+impl<T: Send + 'static, S: ProviderStream<T>> ProviderStream<T> for Gated<S> {
+    fn started_time(&self) -> Option<f64> {
+        self.source.started_time()
+    }
+
+    fn take_call_metrics(
+        &mut self,
+        in_flight: bool,
+    ) -> Option<Vec<lk_agents_abi::metrics::base::AgentMetrics>> {
+        self.source.take_call_metrics(in_flight)
+    }
+
+    fn call_ledger(&self) -> Option<CallLedger> {
+        self.source.call_ledger()
+    }
+
+    fn report_retries(&mut self, report: RetryReport) {
+        self.source.report_retries(report)
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum Pulled<T> {
@@ -99,6 +231,8 @@ struct Inner<T> {
     state: Mutex<Option<State<T>>>,
     reading: AtomicBool,
     closing: CancellationToken,
+    /// Its input's answer: the failure read, or the end or close.
+    input: InputGate,
     clock: Arc<dyn Clock>,
 }
 
@@ -128,6 +262,7 @@ impl<T: Send + 'static> SharedStream<T> {
                 state: Mutex::new(Some(State::Ready(source))),
                 reading: AtomicBool::new(false),
                 closing: CancellationToken::new(),
+                input: InputGate::default(),
                 clock,
             }),
         }
@@ -135,6 +270,16 @@ impl<T: Send + 'static> SharedStream<T> {
 
     pub fn is_closed(&self) -> bool {
         self.inner.closing.is_cancelled()
+    }
+
+    /// Whether the stream's input still takes anything: once the output failed, its failure.
+    pub fn admit_input(&self) -> Result<(), ProviderError> {
+        self.inner.input.admit()
+    }
+
+    /// The output's failure, once read: an end of input after it answers with it too.
+    pub fn input_failure(&self) -> Option<ProviderError> {
+        self.inner.input.failure()
     }
 
     /// Admits one read at a time: `None` while another pull of this stream is in flight, which
@@ -169,6 +314,7 @@ impl<T: Send + 'static> SharedStream<T> {
     /// The first close owns the deadline. Every caller waits for the same cleanup outcome;
     /// abandoning a waiter leaves the pending work available to the next waiter.
     pub async fn close(&self, deadline: Ts) -> Closed {
+        self.inner.input.end();
         self.inner.closing.cancel();
         let cleanup = self.inner.begin_close(deadline);
         cleanup.run().await
@@ -208,10 +354,12 @@ impl<T: Send + 'static> Inner<T> {
         match item {
             Some(Ok(Some(item))) => Ok(Pulled::Item(item)),
             Some(Ok(None)) => {
+                self.input.end();
                 self.closing.cancel();
                 Ok(Pulled::End)
             }
             Some(Err(error)) => {
+                self.input.fail(error.clone());
                 self.closing.cancel();
                 Err(error)
             }

@@ -29,17 +29,22 @@ impl TtsStream {
         Self { sink: sink.map(Arc::from), source: SharedStream::new(source, clock), native: true }
     }
 
-    /// Where text goes; `None` once the synthesis has ended, its audio or its failure being what
-    /// reading it reports: input after a provider's failure never masks that failure.
-    fn sink(&self) -> Result<Option<&Arc<dyn StreamInput<String>>>, ProviderError> {
-        let sink = self.sink.as_ref().ok_or_else(|| {
+    /// Where text goes; a `synthesize()` stream has none.
+    fn text_sink(&self) -> Result<&Arc<dyn StreamInput<String>>, ProviderError> {
+        self.sink.as_ref().ok_or_else(|| {
             let message = "this is a synthesize() stream; its text was given at the call";
             ProviderError::from(HostError {
                 class: "RuntimeError".into(),
                 ..HostError::new(message)
             })
-        })?;
-        Ok((!self.source.is_closed()).then_some(sink))
+        })
+    }
+
+    /// Where text goes while the synthesis takes it: once it failed, its failure.
+    fn sink(&self) -> Result<&Arc<dyn StreamInput<String>>, ProviderError> {
+        let sink = self.text_sink()?;
+        self.source.admit_input()?;
+        Ok(sink)
     }
 }
 
@@ -132,13 +137,16 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
     }
 
     fn push_text(&self, text: String) -> Result<(), ProviderError> {
-        self.sink()?.map_or(Ok(()), |sink| sink.push(text))
+        self.sink()?.push(text)
     }
     fn flush(&self) -> Result<(), ProviderError> {
-        self.sink()?.map_or(Ok(()), |sink| sink.flush())
+        self.sink()?.flush()
     }
+    /// Ending input twice, or after the synthesis ended, is no error; after its failure, it is.
     fn end_input(&self) -> Result<(), ProviderError> {
-        if let Some(sink) = self.sink()? {
+        let sink = self.text_sink()?;
+        self.source.input_failure().map_or(Ok(()), Err)?;
+        if self.source.admit_input().is_ok() {
             sink.end_input();
         }
         Ok(())
@@ -232,11 +240,48 @@ mod tests {
         );
         stream.push_text("hello".into()).unwrap();
         stream.aclose().await;
-        // the synthesis is over: late input is taken and said by nothing, never an error that
-        // would mask how the synthesis ended
-        stream.push_text("late".into()).unwrap();
+        // closed by its user: text is refused as closed, and ending the input is no error
+        let late = stream.push_text("late".into()).expect_err("a closed synthesis takes no text");
+        assert_eq!(late.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Api));
         stream.end_input().unwrap();
         assert_eq!(*input.0.lock(), ["text"], "aclose must not speak pending text");
+    }
+
+    struct Failing;
+    impl StreamOutput<SynthesizedAudio> for Failing {
+        fn next(
+            &mut self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
+            Box::pin(async { Err(refused().into()) })
+        }
+        fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+            Box::pin(async { Closed::Clean })
+        }
+    }
+
+    impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for Failing {}
+
+    fn refused() -> lk_agents_abi::errors::ApiError {
+        lk_agents_abi::errors::ApiError::status("refused", 401, None, None)
+    }
+
+    // Catches: input after a provider's failure answered with a generic close, or swallowed,
+    // instead of the provider's own error.
+    #[tokio::test]
+    async fn input_after_a_failure_returns_that_failure() {
+        let input = Input::default();
+        let stream = TtsStream::new(
+            Some(Box::new(input.clone())),
+            Box::new(Failing),
+            Arc::new(lk_agents_net::clock::RealClock::new()),
+        );
+        let failed = stream.recv().await.expect_err("the provider failed");
+        let PullError::Failed(failed) = failed else { panic!("{failed:?}") };
+        assert_eq!(failed.status_code(), Some(401));
+        for refused in [stream.push_text("late".into()), stream.flush(), stream.end_input()] {
+            assert_eq!(refused, Err(failed.clone()));
+        }
+        assert!(input.0.lock().is_empty(), "nothing reaches a failed provider");
     }
 
     /// Only a synthesis of text with words and no audio is a "no audio" failure.

@@ -167,8 +167,8 @@ class VADStream(ABC):
         )
 
     def _check_open(self) -> None:
-        self._check_input_not_ended()
-        self._check_not_closed()
+        """Raise the detection's failure, or that the stream is closed or its input ended."""
+        _bindings.check_input(self, self._task, closed=self.closed, ended=self.input.closed)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be analyzed. Raises ``ChanFull`` while ``input`` holds 256 entries."""
@@ -224,16 +224,6 @@ class VADStream(ABC):
     def closed(self) -> bool:
         """Whether the stream is closed: its reader takes nothing more."""
         return self._event_ch.closed
-
-    def _check_not_closed(self) -> None:
-        if self.closed:
-            cls = type(self)
-            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
-
-    def _check_input_not_ended(self) -> None:
-        if self.input.closed:
-            cls = type(self)
-            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
     async def __aenter__(self) -> Self:
         return self

@@ -8,6 +8,7 @@ use lk_agents_abi::{
     Tts, TtsSource,
 };
 use lk_agents_net::signal;
+use lk_agents_net::source::{Gated, InputGate};
 use std::sync::Arc;
 
 /// A synthesis of `text`, whole: one request retried within `options`, or, when it passes the
@@ -97,8 +98,8 @@ pub fn start(
         lk_agents_abi::errors::ApiError::new(error.to_string()).with_retryable(false)
     })?;
     let (provider, options) = attempts(&tts, options);
-    let stop = tokio_util::sync::CancellationToken::new();
-    let input = Arc::new(Input { entries: signal::Shared::new(Vec::new()), stop: stop.clone() });
+    let gate = InputGate::default();
+    let input = Arc::new(Input { entries: signal::Shared::new(Vec::new()), gate: gate.clone() });
     let (cx, pending, staged, stage_clock) =
         (cx.clone(), input.clone(), tts.clone(), clock.clone());
     let open = Arc::new(move || {
@@ -112,7 +113,12 @@ pub fn start(
         }) as BoxFuture<'static, _>
     });
     let report = report(tts, observer);
-    let opening = async move { retry::stream(&options, clock, open, |_| true, report, stop).await };
+    // the request's failure, once it gave up, is what its input answers from then on
+    let opening = async move {
+        let stop = tokio_util::sync::CancellationToken::new();
+        let source = retry::stream(&options, clock, open, |_| true, report, stop).await;
+        Box::new(Gated::new(source, gate)) as TtsSource
+    };
     Ok((Box::new(Sink(input)) as TextSink, Box::pin(opening)))
 }
 
@@ -136,16 +142,16 @@ fn report(tts: Arc<dyn Tts>, observer: Option<retry::Observer>) -> retry::Observ
 
 struct Input {
     entries: signal::Shared<Vec<Entry<String>>>,
-    stop: tokio_util::sync::CancellationToken,
+    /// Ended by the end of input or the request's close; failed by its failure.
+    gate: InputGate,
 }
 
 impl Input {
     fn send(&self, entry: Entry<String>) -> Result<(), ProviderError> {
         self.entries.modify(|entries| {
-            if self.stop.is_cancelled() || matches!(entries.last(), Some(Entry::EndInput)) {
-                return Err(lk_agents_abi::errors::ApiError::new("synthesis input is closed")
-                    .with_retryable(false)
-                    .into());
+            self.gate.admit()?;
+            if entry == Entry::EndInput {
+                self.gate.end();
             }
             entries.push(entry);
             Ok(())

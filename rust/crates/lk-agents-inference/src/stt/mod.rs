@@ -18,8 +18,8 @@ use crate::telemetry;
 use lk_agents_core::request::{Policy, Request, Step};
 use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{
-    TransportError, WsMessage, WsSender, WsTransport, connect_error, join_url, open_ws,
-    stream_closed, to_ws_url, within,
+    TransportError, WsMessage, WsSender, WsTransport, connect_error, join_url, open_ws, to_ws_url,
+    within,
 };
 
 use base64::Engine as _;
@@ -342,16 +342,16 @@ impl GatewayStt {
         // Checked now, so bad options fail the call rather than the first connect.
         wire::session_create(&opts, &keyterms)?;
 
-        let (audio, audio_rx) = AudioInput::new(self.shared.clock.clone());
+        let gate = lk_agents_net::source::InputGate::default();
+        let (audio, audio_rx) = AudioInput::new(self.shared.clock.clone(), gate.clone());
         let (event_tx, event_rx) = mpsc::channel::<Result<SpeechEvent, ApiError>>(STREAM_QUEUE);
         let (update_tx, update_rx) = mpsc::unbounded_channel::<serde_json::Value>();
         let stop = tokio_util::sync::CancellationToken::new();
         let stop_guard = Arc::new(stop.clone().drop_guard());
-        let failure = Arc::new(Mutex::new(None));
         let (done, done_rx) = tokio::sync::oneshot::channel();
         let control = Arc::new(StreamControl {
             stop: Arc::clone(&stop_guard),
-            failure: Arc::clone(&failure),
+            gate: gate.clone(),
             updates: update_tx.clone(),
             deferred: Arc::new(DeferredExtra {
                 options: Mutex::new(stream::LiveOptions {
@@ -377,7 +377,7 @@ impl GatewayStt {
             deferred: control.deferred.clone(),
             update_tx,
             event_tx,
-            failure: control.failure.clone(),
+            gate: gate.clone(),
             stop,
             accepted: self.shared.clock.now(),
         };
@@ -393,7 +393,7 @@ impl GatewayStt {
                 done: false,
                 stop: stop_guard,
                 joined: done_rx,
-                failure,
+                gate,
                 clock: self.shared.clock.clone(),
             },
         ))

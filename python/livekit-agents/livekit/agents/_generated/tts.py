@@ -808,8 +808,15 @@ class _Synthesizing(SynthesizeStream):
         if not self._native.native:
             self._metrics = None
 
+    def _check_input(self) -> None:
+        """Raise the synthesis's failure, or that the stream is closed or its input ended."""
+        _bindings.check_input(
+            self, self._task, closed=self._event_ch.closed, ended=self.input.closed
+        )
+
     def push_text(self, token: str) -> None:
-        if not token or self.input.closed:
+        self._check_input()
+        if not token:
             return
         if not self._segment_open:
             self._segment_open = True
@@ -820,8 +827,7 @@ class _Synthesizing(SynthesizeStream):
         self._native.push_text(token)
 
     def flush(self) -> None:
-        if self.input.closed:
-            return
+        self._check_input()
         self._segment_open = False
         if self._segment_text and self._metrics is not None:
             self._metrics.queue_text(self._segment_text)
@@ -829,8 +835,6 @@ class _Synthesizing(SynthesizeStream):
         self._native.flush()
 
     def end_input(self) -> None:
-        if self.input.closed:
-            return
         self.flush()
         self.input.close()
         self._native.end_input()

@@ -255,7 +255,8 @@ fn ambiguous_or_unsupported_declarations_fail_generation() {
 
 // Catches: a sink and its source handed out as two objects instead of one stream class, the sink
 // trait's own calls dropped from that class, input taken without its record conversion, or a sink
-// accepted anywhere but beside its source.
+// accepted anywhere but beside its source, or input after a provider failure answered with a
+// generic close instead of that failure.
 #[test]
 fn a_sink_and_its_source_are_one_duplex_stream_class() {
     let control = "use super::chat::Chunk;\nuse crate::utils::stream::StreamInput;\n#[crate::host(sink)]\npub trait Audio: StreamInput<Chunk> { #[host(call)] fn retune(&self, #[host(kw, default = None)] model: Option<String>); }";
@@ -283,9 +284,13 @@ fn a_sink_and_its_source_are_one_duplex_stream_class() {
         !llm.contains("pub struct Live(::lk_agents_runtime::net::source::SharedStream"),
         "{llm}"
     );
+    assert!(!llm.contains("input is closed"), "{llm}");
     for expected in [
         "pub struct Live(::std::boxed::Box<LiveImpl>, ::lk_agents_runtime::net::source::SharedStream<::lk_agents_abi::llm::chat::Report>);",
         "py.detach(|| ::lk_agents_abi::StreamInput::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError|",
+        // after the provider failed, every input call raises its failure, never a generic close
+        "self.1.admit_input().map_err(|e: ::lk_agents_abi::errors::ProviderError|",
+        "self.1.input_failure().map_or(Ok(()), Err).map_err(|e: ::lk_agents_abi::errors::ProviderError|",
         "fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {\n        crate::py_calls::check_pid()?;\n        crate::py_streams::close_native(&self.1, py)",
         "<LiveImpl as ::lk_agents_abi::llm::class::audio::Audio>::retune(&*self.0, model)",
         "{ let (sink, source) = out.split(); Live(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::SharedStream::new(::std::boxed::Box::new(source), ::lk_agents_runtime::process::host_clock())) }",

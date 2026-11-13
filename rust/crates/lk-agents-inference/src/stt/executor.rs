@@ -35,14 +35,14 @@ pub(super) struct SttStreamExecutor {
     pub(super) deferred: Arc<DeferredExtra>,
     pub(super) update_tx: mpsc::UnboundedSender<serde_json::Value>,
     pub(super) event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
-    pub(super) failure: Arc<Mutex<Option<ApiError>>>,
+    pub(super) gate: lk_agents_net::source::InputGate,
     pub(super) stop: tokio_util::sync::CancellationToken,
     pub(super) accepted: lk_agents_abi::Ts,
 }
 
 impl SttStreamExecutor {
     async fn failed(&self, error: ApiError) {
-        *self.failure.lock() = Some(error.clone());
+        self.gate.fail(error.clone().into());
         let _ = self.event_tx.send(Err(error)).await;
     }
 

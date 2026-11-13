@@ -238,3 +238,55 @@ async fn a_close_landing_while_the_read_is_polled_is_not_lost() {
     );
     assert!(reader.await.unwrap_err().is_cancelled());
 }
+
+/// Yields its items, then fails with a 401.
+struct Failing(Vec<u32>);
+
+impl StreamOutput<u32> for Failing {
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<u32>, ProviderError>> {
+        Box::pin(async move {
+            match self.0.is_empty() {
+                true => Err(refused()),
+                false => Ok(Some(self.0.remove(0))),
+            }
+        })
+    }
+
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async { Closed::Clean })
+    }
+}
+
+impl lk_agents_abi::utils::stream::ProviderStream<u32> for Failing {}
+
+fn refused() -> ProviderError {
+    lk_agents_abi::errors::ApiError::status("refused", 401, None, None).into()
+}
+
+// Catches: input after a provider's failure answered with a generic close (or accepted) instead
+// of that failure, an end of input masking a later failure, or a clean end taken for a failure.
+#[tokio::test]
+async fn the_input_answers_with_the_failure_the_output_read() {
+    let gate = InputGate::default();
+    let mut output = super::Gated::new(Failing(vec![1]), gate.clone());
+    assert_eq!(gate.admit(), Ok(()));
+    gate.end();
+    let ended = gate.admit().expect_err("an ended input refuses");
+    assert_eq!(output.next().await, Ok(Some(1)));
+    assert_eq!(output.next().await, Err(refused()));
+    assert_eq!(gate.admit(), Err(refused()), "the failure, not {ended}");
+    assert_eq!(gate.refused(), refused());
+    Box::new(output).close(Ts::ZERO).await;
+    assert_eq!(gate.admit(), Err(refused()), "a close keeps the failure");
+
+    let shared =
+        SharedStream::new(Box::new(Failing(vec![])), Arc::new(crate::clock::RealClock::new()));
+    assert_eq!(shared.input_failure(), None);
+    assert_eq!(shared.try_pull().unwrap().await, Err(refused()));
+    assert_eq!((shared.admit_input(), shared.input_failure()), (Err(refused()), Some(refused())));
+
+    let (shared, _) = source(vec![]);
+    shared.aclose().await;
+    assert_eq!(shared.admit_input(), Err(ended));
+    assert_eq!(shared.input_failure(), None, "a close is no failure");
+}

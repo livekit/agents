@@ -19,8 +19,12 @@
 //! 6. `Unacknowledged::sent`, the one way to an uncertain write, is called only where a write
 //!    is handed to its transport: the storage connections and their fakes ([`SENT_WRITES`]);
 //!    everything else passes on the `Uncertain` it was given ("Errors").
+//! 7. No string literal says an input is closed outside the one shared terminal state
+//!    ([`INPUT_STATE`]): a stream's input answers from its `InputState`, so after a provider's
+//!    failure every input call returns that failure, never a generic close ("Errors"). A typed
+//!    error's `#[error(..)]` message is a closed set, not a literal an input picks.
 //!
-//! Rules 4 to 6 skip test files, benches, examples and `#[cfg(test)]` items. pyo3 and `#[host]`
+//! Rules 4 to 7 skip test files, benches, examples and `#[cfg(test)]` items. pyo3 and `#[host]`
 //! placement need no rule here: the crate graph ([`crate::graph`]) leaves the compiler to reject
 //! them.
 
@@ -43,6 +47,10 @@ const SENT_WRITES: &[&str] = &[
     "crates/lk-agents-fuzz/src/fakes/",
 ];
 const GENERATED: &str = "//! GENERATED FILE -- DO NOT EDIT.";
+/// The one place an input's refusal is worded (rule 7).
+const INPUT_STATE: &str = "crates/lk-agents-abi/src/utils/stream.rs";
+/// What a literal of a refused input says (rule 7), lowercased.
+const INPUT_CLOSED: &[&str] = &["input is closed", "input closed"];
 
 /// Where Rust calls Python: HostInvoker's entry and log forwarding (rule 3).
 const HOST_ENTRY: &[&str] = &["py_calls.rs", "py_streams.rs", "py_logging.rs"];
@@ -208,6 +216,9 @@ fn check_source(source: &Source) -> Vec<String> {
     {
         unacknowledged(source, without_tests(&source.text), &mut errors);
     }
+    if !source.test() && source.path != INPUT_STATE {
+        input_closed(source, without_tests(&source.text), &mut errors);
+    }
     if ASYNC.contains(&crate_name) && !source.test() {
         let product = without_tests(&source.text);
         unowned(source, product.clone(), &mut errors);
@@ -237,6 +248,30 @@ fn unacknowledged(source: &Source, tokens: TokenStream, errors: &mut Vec<String>
             }
         }
     });
+}
+
+/// A literal refusing input as closed, outside `InputState` and attributes. Rule 7.
+fn input_closed(source: &Source, tokens: TokenStream, errors: &mut Vec<String>) {
+    let mut attribute = false;
+    for token in tokens {
+        match &token {
+            TokenTree::Group(group) if attribute && group.delimiter() == Delimiter::Bracket => {}
+            TokenTree::Group(group) => input_closed(source, group.stream(), errors),
+            TokenTree::Literal(literal) => {
+                let text = literal.to_string().to_lowercase();
+                if text.starts_with('"') && INPUT_CLOSED.iter().any(|said| text.contains(said)) {
+                    errors.push(source.error(
+                        line(&token),
+                        "an input refused as closed: answer from the stream's InputState, so a \
+                         provider's failure is what its input returns",
+                    ));
+                }
+            }
+            _ => {}
+        }
+        // `#[..]` and `#![..]`
+        attribute = punct(Some(&token), '#') || (attribute && punct(Some(&token), '!'));
+    }
 }
 
 /// pyo3 and `#[py*]` only in `lk-agents-py`; `#[host]` only in ABI; host calls only in the entry.
@@ -530,6 +565,19 @@ mod tests {
         let text =
             "async fn f() { select! { biased; e = pump.run() => e, x = source.next() => x } }";
         assert_eq!(errors("crates/lk-agents-inference/src/x.rs", text).len(), 1);
+    }
+
+    #[test]
+    fn an_input_refused_as_closed_outside_its_state_fails() {
+        let text = "fn f() -> E { ApiError::new(\"stream input is closed\").into() }";
+        assert_eq!(errors("crates/lk-agents-runtime/src/voice/x.rs", text).len(), 1);
+        let generated = "fn f() { new_err(\"Stream Input Closed\") }";
+        assert_eq!(errors("crates/lk-agents-py/src/generated/x.rs", generated).len(), 1);
+        assert!(errors(INPUT_STATE, text).is_empty());
+        let typed = "enum E { #[error(\"decoder input is closed\")] Closed }";
+        assert!(errors("crates/lk-agents-inference/src/x.rs", typed).is_empty());
+        let test = "#[cfg(test)] mod tests { const S: &str = \"input is closed\"; }";
+        assert!(errors("crates/lk-agents-net/src/x.rs", test).is_empty());
     }
 
     #[test]

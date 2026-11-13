@@ -308,10 +308,12 @@ class _RecognizeStream(stt.RecognizeStream):
 
 
 class FakeVAD(VAD):
-    """Hears loud audio as speech; ``PAUSE`` seconds of quiet end it."""
+    """Hears loud audio as speech; ``PAUSE`` seconds of quiet end it. ``error`` fails every
+    stream as it starts."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, error: Exception | None = None) -> None:
         super().__init__(capabilities=VADCapabilities(update_interval=0.1))
+        self.error = error
 
     def stream(self) -> VADStream:
         return _VADStream(self)
@@ -319,6 +321,9 @@ class FakeVAD(VAD):
 
 class _VADStream(VADStream):
     async def _run(self) -> None:
+        assert isinstance(self._vad, FakeVAD)
+        if self._vad.error is not None:
+            raise self._vad.error
         ear = _Ear()
         async for frame in self.input:
             if not isinstance(frame, rtc.AudioFrame):

@@ -26,8 +26,8 @@ pub struct RecognitionInput {
 pub(super) struct StreamControl {
     /// Shared with the output: the stream stops once both halves are gone.
     pub(super) stop: Arc<tokio_util::sync::DropGuard>,
-    /// The stream's failure, once it has one; read by both halves after it ends.
-    pub(super) failure: Arc<Mutex<Option<ApiError>>>,
+    /// The stream's failure, once it has one, or its end: what its input answers.
+    pub(super) gate: lk_agents_net::source::InputGate,
     /// Unbounded: one update per option change or turn, sent ahead of queued audio.
     pub(super) updates: mpsc::UnboundedSender<serde_json::Value>,
     pub(super) deferred: Arc<DeferredExtra>,
@@ -69,7 +69,7 @@ impl StreamControl {
                 let _ = self.updates.send(frame);
             }
             Err(error) => {
-                *self.failure.lock() = Some(error);
+                self.gate.fail(error.into());
                 self.stop.token().cancel();
             }
             Ok(None) => {}
@@ -88,33 +88,23 @@ impl StreamControl {
 
 impl StreamInput<AudioFrame> for RecognitionInput {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if !self.control.stop.token().is_cancelled() && self.audio.push(item) {
-            return Ok(());
-        }
-        Err(self.closed_error())
+        self.stopped()?;
+        self.audio.push(item)
     }
 
     fn head(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if !self.control.stop.token().is_cancelled() && self.audio.head(item) {
-            return Ok(());
-        }
-        Err(self.closed_error())
+        self.stopped()?;
+        self.audio.head(item)
     }
 
     fn filler(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if !self.control.stop.token().is_cancelled() && self.audio.filler(item) {
-            return Ok(());
-        }
-        Err(self.closed_error())
+        self.stopped()?;
+        self.audio.filler(item)
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        match self.audio.flush() {
-            Some(flushed) if !self.control.stop.token().is_cancelled() => {
-                flushed.map_err(|stuck| ApiError::new(stuck.to_string()).into())
-            }
-            _ => Err(self.closed_error()),
-        }
+        self.stopped()?;
+        self.audio.flush()
     }
 
     fn end_input(&self) {
@@ -123,9 +113,12 @@ impl StreamInput<AudioFrame> for RecognitionInput {
 }
 
 impl RecognitionInput {
-    fn closed_error(&self) -> ProviderError {
-        let failure = self.control.failure.lock().clone();
-        failure.map(ProviderError::from).unwrap_or_else(|| stream_closed(WHAT))
+    /// The stream stopped (both halves gone, or a failure): the gate's answer.
+    fn stopped(&self) -> Result<(), ProviderError> {
+        match self.control.stop.token().is_cancelled() {
+            true => Err(self.control.gate.refused()),
+            false => Ok(()),
+        }
     }
 }
 
@@ -135,7 +128,7 @@ pub struct RecognitionOutput {
     pub(super) done: bool,
     pub(super) stop: Arc<tokio_util::sync::DropGuard>,
     pub(super) joined: tokio::sync::oneshot::Receiver<()>,
-    pub(super) failure: Arc<Mutex<Option<ApiError>>>,
+    pub(super) gate: lk_agents_net::source::InputGate,
     pub(super) clock: Arc<dyn Clock>,
 }
 
@@ -149,14 +142,18 @@ impl StreamOutput<SpeechEvent> for RecognitionOutput {
                 Some(Ok(event)) => Ok(Some(event)),
                 Some(Err(error)) => {
                     self.done = true;
-                    Err(error.into())
+                    let error = ProviderError::from(error);
+                    self.gate.fail(error.clone());
+                    Err(error)
                 }
                 None => {
                     self.done = true;
-                    let failure = self.failure.lock().clone();
-                    match failure {
-                        Some(error) => Err(error.into()),
-                        None => Ok(None),
+                    match self.gate.failure() {
+                        Some(error) => Err(error),
+                        None => {
+                            self.gate.end();
+                            Ok(None)
+                        }
                     }
                 }
             }
@@ -169,6 +166,7 @@ impl StreamOutput<SpeechEvent> for RecognitionOutput {
     ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
         Box::pin(async move {
             self.done = true;
+            self.gate.end();
             self.stop.token().cancel();
             self.events.close();
             let mut settled = false;

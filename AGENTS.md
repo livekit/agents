@@ -398,6 +398,8 @@ the violation, or allow one site with `#[allow(lint, reason = "...")]`.
 - A re-sent write that finds itself already applied reports success. [review]
 - `Uncertain` reaches the caller only when retries ran out and the outcome is still unknown. [review]
 - Local pressure is never a non-retryable error. [review]
+- After a provider fails, every input call on its stream returns that failure; "input is
+  closed" is only for a stream that ended or was closed, and lives only in `InputState`. [check]
 
 ### Idiomatic Rust
 - Every crate uses `[workspace.lints]`; the workspace builds with zero warnings. [lint]

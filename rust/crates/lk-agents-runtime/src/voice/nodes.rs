@@ -18,6 +18,7 @@ use lk_agents_media::media_queue::{self, Item, Policy};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
+use lk_agents_net::source::{Gated, InputGate};
 use lk_agents_net::task::TaskSet;
 use std::convert::Infallible;
 use std::time::Duration;
@@ -90,6 +91,7 @@ impl NodeFactory for AgentNodes {
         let calls = NodeCalls::of(calls);
         Box::pin(async move {
             let (sink, input) = channel();
+            let gate = sink.gate.clone();
             let out = self.host.tts(&cx, Box::new(input), calls.clone()).await?;
             let request_id = node_id("tts_node_");
             let relay = calls.clone();
@@ -98,7 +100,7 @@ impl NodeFactory for AgentNodes {
                 connection: audio.connection.or_else(|| relay.take_connection()),
                 ..audio
             };
-            let out = Mapped { source: out, map, calls: Some(calls) };
+            let out = Gated::new(Mapped { source: out, map, calls: Some(calls) }, gate);
             Ok(lk_agents_abi::DuplexStream::new(
                 Box::new(sink) as TextSink,
                 Box::new(out) as TtsSource,
@@ -118,6 +120,7 @@ impl NodeFactory for AgentNodes {
         let calls = NodeCalls::of(calls);
         Box::pin(async move {
             let (sink, input) = audio_channel(Arc::clone(&self.clock), cx.clone());
+            let gate = sink.gate.clone();
             let out = self.host.stt(&cx, Box::new(input), calls.clone()).await?;
             let map = move |mut event: SpeechEvent| {
                 if let Some(usage) = &mut event.recognition_usage
@@ -127,7 +130,7 @@ impl NodeFactory for AgentNodes {
                 }
                 event
             };
-            let out = Mapped { source: out, map, calls: None };
+            let out = Gated::new(Mapped { source: out, map, calls: None }, gate);
             Ok(lk_agents_abi::DuplexStream::new(
                 Box::new(sink) as SttSink,
                 Box::new(out) as SttSource,
@@ -189,6 +192,7 @@ impl Opener {
         F: std::future::Future<Output = Result<bool, IoError>> + Send,
     {
         let (sink, input) = channel();
+        let gate = sink.gate.clone();
         let (host, clock) = (Arc::clone(&self.host), Arc::clone(&self.clock));
         let deadline = move || clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         let drain = async move {
@@ -197,9 +201,13 @@ impl Opener {
                 () = cancelled.cancelled() => return done(Ok(())),
                 opened = call(host, input) => opened,
             };
+            // the node's failure is what its input answers from then on
             let mut out = match opened {
-                Ok(out) => out,
-                Err(error) => return done(Err(error.into())),
+                Ok(out) => Gated::new(out, gate),
+                Err(error) => {
+                    gate.fail(error.clone());
+                    return done(Err(error.into()));
+                }
             };
             let outcome = loop {
                 let next = tokio::select! {
@@ -223,7 +231,7 @@ impl Opener {
                     Err(error) => break Err(error),
                 }
             };
-            let cleanup = out.close(deadline()).await;
+            let cleanup = Box::new(out).close(deadline()).await;
             done(outcome.and_then(|()| match cleanup {
                 Closed::Clean => Ok(()),
                 _ => Err(IoError::Rtc("node output cleanup did not settle".into())),
@@ -355,38 +363,53 @@ impl Drop for TranscriptionNode {
     }
 }
 
+/// Items a node's input holds before a push is refused.
+const NODE_INPUT: usize = 256;
+
 /// What the core hands a node as its input: the node reads what was pushed until the input ends.
-/// Admission is bounded; a stalled or closed consumer refuses further input.
-struct ChannelSink<I>(Mutex<Option<mpsc::Sender<I>>>);
+/// Admission is bounded; a stalled consumer refuses further input, and once the node ended or
+/// failed every call answers with that.
+struct ChannelSink<I> {
+    tx: Mutex<Option<mpsc::Sender<I>>>,
+    /// The node's failure, read from its output, or its end.
+    gate: InputGate,
+}
 
 struct ChannelSource<I>(mpsc::Receiver<I>);
 
 fn channel<I>() -> (ChannelSink<I>, ChannelSource<I>) {
-    let (tx, rx) = mpsc::channel(256);
-    (ChannelSink(Mutex::new(Some(tx))), ChannelSource(rx))
+    let (tx, rx) = mpsc::channel(NODE_INPUT);
+    (ChannelSink { tx: Mutex::new(Some(tx)), gate: InputGate::default() }, ChannelSource(rx))
+}
+
+impl<I> ChannelSink<I> {
+    /// The node's queue while its input is open and the node reads it; else the gate's answer.
+    fn sender(&self) -> Result<mpsc::Sender<I>, ProviderError> {
+        self.gate.admit()?;
+        let tx = self.tx.lock().clone().filter(|tx| !tx.is_closed());
+        tx.ok_or_else(|| self.gate.refused())
+    }
 }
 
 impl<I: Send + 'static> StreamInput<I> for ChannelSink<I> {
     fn push(&self, item: I) -> Result<(), ProviderError> {
-        let input = self.0.lock();
-        let tx = input
-            .as_ref()
-            .ok_or_else(|| lk_agents_abi::errors::ApiError::new("stream input is closed"))?;
-        tx.try_send(item)
-            .map_err(|error| lk_agents_abi::errors::ApiError::new(error.to_string()).into())
+        self.sender()?.try_send(item).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => lk_agents_abi::errors::ApiError::new(format!(
+                "the node is not taking its input: {NODE_INPUT} items are waiting"
+            ))
+            .into(),
+            mpsc::error::TrySendError::Closed(_) => self.gate.refused(),
+        })
     }
 
     /// Node input has no segment marker, but closed input must still refuse it.
     fn flush(&self) -> Result<(), ProviderError> {
-        if self.0.lock().as_ref().is_some_and(|tx| !tx.is_closed()) {
-            Ok(())
-        } else {
-            Err(lk_agents_abi::errors::ApiError::new("stream input is closed").into())
-        }
+        self.sender().map(drop)
     }
 
     fn end_input(&self) {
-        self.0.lock().take();
+        self.gate.end();
+        self.tx.lock().take();
     }
 
     /// Waits for room: a node behind holds the feed, it never refuses what was said.
@@ -394,13 +417,10 @@ impl<I: Send + 'static> StreamInput<I> for ChannelSink<I> {
         &self,
         entry: Entry<I>,
     ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
-        let closed = || lk_agents_abi::errors::ApiError::new("stream input is closed").into();
-        let tx = self.0.lock().clone();
         match entry {
             Entry::Item(item) => {
-                Box::pin(
-                    async move { tx.ok_or_else(closed)?.send(item).await.map_err(|_| closed()) },
-                )
+                let (tx, gate) = (self.sender(), self.gate.clone());
+                Box::pin(async move { tx?.send(item).await.map_err(|_| gate.refused()) })
             }
             Entry::Flush => Box::pin(std::future::ready(self.flush())),
             Entry::EndInput => {
@@ -435,6 +455,8 @@ const NODE_AUDIO_POLICY: Policy = Policy::CatchUp(Duration::from_secs(10));
 struct AudioSink {
     /// `None` once the input ended.
     audio: Mutex<Option<media_queue::AudioSender<Infallible>>>,
+    /// The node's failure, read from its output, or its end.
+    gate: InputGate,
 }
 
 struct AudioSource(media_queue::AudioReceiver<Infallible>);
@@ -443,52 +465,49 @@ struct AudioSource(media_queue::AudioReceiver<Infallible>);
 fn audio_channel(clock: Arc<dyn Clock>, cx: telemetry::Cx) -> (AudioSink, AudioSource) {
     let (tx, rx) = media_queue::audio(NODE_AUDIO_POLICY, telemetry::AudioConsumer::SttNode, clock);
     tx.observe(cx);
-    (AudioSink { audio: Mutex::new(Some(tx)) }, AudioSource(rx))
+    (AudioSink { audio: Mutex::new(Some(tx)), gate: InputGate::default() }, AudioSource(rx))
 }
 
 impl AudioSink {
-    fn closed() -> ProviderError {
-        lk_agents_abi::errors::ApiError::new("stream input is closed").into()
+    /// `op` on the queue while the input is open and the node reads it; else the gate's answer.
+    fn with(
+        &self,
+        op: impl FnOnce(&media_queue::AudioSender<Infallible>),
+    ) -> Result<(), ProviderError> {
+        self.gate.admit()?;
+        let audio = self.audio.lock();
+        if let Some(audio) = audio.as_ref().filter(|audio| !audio.is_closed()) {
+            op(audio);
+            return Ok(());
+        }
+        drop(audio);
+        Err(self.gate.refused())
     }
 }
 
 impl StreamInput<AudioFrame> for AudioSink {
     fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
-        match self.audio.lock().as_ref() {
-            Some(audio) if !audio.is_closed() => {
-                audio.push(frame);
-                Ok(())
-            }
-            _ => Err(Self::closed()),
-        }
+        self.with(|audio| {
+            audio.push(frame);
+        })
     }
 
     fn head(&self, frame: AudioFrame) -> Result<(), ProviderError> {
-        match self.audio.lock().as_ref() {
-            Some(audio) if !audio.is_closed() => audio.head(frame),
-            _ => return Err(Self::closed()),
-        }
-        Ok(())
+        self.with(|audio| audio.head(frame))
     }
 
     fn filler(&self, frame: AudioFrame) -> Result<(), ProviderError> {
-        match self.audio.lock().as_ref() {
-            Some(audio) if !audio.is_closed() => {
-                audio.filler(frame);
-                Ok(())
-            }
-            _ => Err(Self::closed()),
-        }
+        self.with(|audio| {
+            audio.filler(frame);
+        })
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        match self.audio.lock().as_ref() {
-            Some(audio) if !audio.is_closed() => Ok(()),
-            _ => Err(Self::closed()),
-        }
+        self.with(|_| {})
     }
 
     fn end_input(&self) {
+        self.gate.end();
         drop(self.audio.lock().take());
     }
 }

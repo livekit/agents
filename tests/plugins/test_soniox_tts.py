@@ -131,9 +131,13 @@ async def test_a_connection_error_fails_every_open_stream(
     second = await asyncio.gather(
         speak(tts, "The second one breaks the socket. "), return_exceptions=True
     )
-    first.end_input()
+    ended: list[BaseException] = []
+    try:
+        first.end_input()
+    except APIStatusError as refused:  # the first already failed: its input answers with that
+        ended.append(refused)
     [first_error] = await asyncio.gather(_drain(first), return_exceptions=True)
-    errors = [*second, first_error]
+    errors = [*second, first_error, *ended]
     await first.aclose()
     await tts.aclose()
 

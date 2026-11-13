@@ -169,6 +169,18 @@ async def pump(
         await aio._await_cleanup(asyncio.gather(aio.cancel_and_wait(feeding, draining), _close()))
 
 
+def check_input(stream: object, task: asyncio.Task[Any], *, closed: bool, ended: bool) -> None:
+    """Raise why ``stream`` takes no more input: its provider's failure first, then its close,
+    then the end of its input. Every stream base checks its input calls here."""
+    if task.done() and not task.cancelled() and (error := task.exception()) is not None:
+        raise error
+    cls = type(stream)
+    if closed:
+        raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
+    if ended:
+        raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
+
+
 async def drain(native: _Source[_OutputT], out: Callable[[_OutputT], None]) -> None:
     while (item := await native.recv()) is not None:
         out(item)

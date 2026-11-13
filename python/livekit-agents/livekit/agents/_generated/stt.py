@@ -506,7 +506,6 @@ class RecognizeStream(ABC):
         self._event_read.set()
 
     def _resampled(self, frame: rtc.AudioFrame) -> list[rtc.AudioFrame]:
-        self._check_not_closed()
         self._check_input_not_ended()
         if self._pushed_sr and self._pushed_sr != frame.sample_rate:
             raise ValueError("the sample rate of the input frames must be consistent")
@@ -518,7 +517,6 @@ class RecognizeStream(ABC):
         return self._resampler.push(frame) if self._resampler else [frame]
 
     def _segment_end(self) -> list[rtc.AudioFrame | RecognizeStream.Flush]:
-        self._check_not_closed()
         self._check_input_not_ended()
         tail = self._resampler.flush() if self._resampler else []
         return [*tail, self.Flush()]
@@ -573,16 +571,12 @@ class RecognizeStream(ABC):
         return self._event_ch.closed
 
     def _check_not_closed(self) -> None:
-        if self._task.done() and not self._task.cancelled() and (error := self._task.exception()):
-            raise error
-        if self.closed:
-            cls = type(self)
-            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
+        """Raise the recognition's failure, or that the stream is closed."""
+        _bindings.check_input(self, self._task, closed=self.closed, ended=False)
 
     def _check_input_not_ended(self) -> None:
-        if self.input.closed:
-            cls = type(self)
-            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
+        """Raise the recognition's failure, or that the stream is closed or its input ended."""
+        _bindings.check_input(self, self._task, closed=self.closed, ended=self.input.closed)
 
     async def __aenter__(self) -> Self:
         return self

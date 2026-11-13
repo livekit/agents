@@ -7,6 +7,7 @@ use lk_agents_abi::{AudioFrame, Clock, Closed, StreamInput, StreamOutput, Ts};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_media::pool::{Job, JobClass, MediaPool};
 use lk_agents_net::signal::Cell;
+use lk_agents_net::source::{Gated, InputGate};
 use lk_agents_telemetry as telemetry;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
@@ -33,31 +34,30 @@ pub(super) struct Flush;
 pub(super) struct Input {
     /// `None` once the input ended.
     audio: Mutex<Option<AudioSender<Flush>>>,
-    cancelled: CancellationToken,
+    /// What a refused call answers: the detection's failure, else its end.
+    gate: InputGate,
 }
 
 impl Input {
-    /// Refuses audio once `cancelled`; the queue is measured under `cx`'s job.
+    /// Refuses audio once `gate` is no longer open; the queue is measured under `cx`'s job.
     pub(super) fn open(
-        cancelled: CancellationToken,
+        gate: InputGate,
         cx: &telemetry::Cx,
         clock: Arc<dyn Clock>,
     ) -> (Self, AudioReceiver<Flush>) {
         let (audio, rx) = media_queue::audio(INPUT_POLICY, telemetry::AudioConsumer::Vad, clock);
         audio.observe(cx.clone());
-        (Input { audio: Mutex::new(Some(audio)), cancelled }, rx)
+        (Input { audio: Mutex::new(Some(audio)), gate }, rx)
     }
 
     fn send<R>(&self, op: impl FnOnce(&AudioSender<Flush>) -> R) -> Result<R, ProviderError> {
-        if self.cancelled.is_cancelled() {
-            return Err(failed("the VAD stream is closed"));
-        }
+        self.gate.admit()?;
         let audio = self.audio.lock();
-        let audio = audio.as_ref().ok_or_else(|| failed("the VAD input is closed"))?;
-        if audio.is_closed() {
-            return Err(failed("the VAD stream is closed"));
+        if let Some(audio) = audio.as_ref().filter(|audio| !audio.is_closed()) {
+            return Ok(op(audio));
         }
-        Ok(op(audio))
+        drop(audio);
+        Err(self.gate.refused())
     }
 }
 
@@ -76,6 +76,7 @@ impl StreamInput<AudioFrame> for Input {
     }
 
     fn end_input(&self) {
+        self.gate.end();
         drop(self.audio.lock().take());
     }
 }
@@ -238,7 +239,8 @@ pub(super) fn open(
     cx: &telemetry::Cx,
 ) -> Result<DetectionStream, ProviderError> {
     let cancelled = CancellationToken::new();
-    let (sink, input) = Input::open(cancelled.clone(), cx, clock.clone());
+    let gate = InputGate::default();
+    let (sink, input) = Input::open(gate.clone(), cx, clock.clone());
     let (output, events) = mpsc::channel(OUTPUT_CAPACITY);
     let stop = cancelled.clone();
     // Only channel descriptors precede admission; refusal constructs no model and retains no
@@ -254,7 +256,7 @@ pub(super) fn open(
         .map_err(|error| failed(error.to_string()))?;
     Ok(lk_agents_abi::DuplexStream::new(
         Box::new(sink),
-        Box::new(Output { events, worker: Some(worker), cancelled, clock }),
+        Box::new(Gated::new(Output { events, worker: Some(worker), cancelled, clock }, gate)),
     ))
 }
 

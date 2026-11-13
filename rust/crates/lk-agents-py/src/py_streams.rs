@@ -52,7 +52,7 @@ use lk_agents_abi::utils::clock::Clock;
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::utils::stream::Entry;
-use lk_agents_runtime::net::signal::Shared;
+use lk_agents_runtime::net::source::InputGate;
 use lk_agents_runtime::net::source::Pulled;
 use lk_agents_runtime::net::source::SharedStream;
 use parking_lot::Mutex;
@@ -78,8 +78,6 @@ pub struct HostStream<T> {
     pending: Option<Started>,
     ended: bool,
     input: Arc<InputStop>,
-    /// The input half's failure, which ends the output too.
-    failure: Arc<Shared<Option<ProviderError>>>,
 }
 
 /// Whether a duplex stream still takes input, and the host task of the input entry in flight:
@@ -87,11 +85,15 @@ pub struct HostStream<T> {
 struct InputStop {
     event_loop: Arc<Py<PyAny>>,
     in_flight: Arc<Child>,
+    /// What every input call answers once the stream ended: either half's failure, which ends
+    /// the output too, or the end.
+    gate: InputGate,
 }
 
 impl InputStop {
     /// From any thread, a dropping one included: never waits for the GIL.
     fn stop(&self) {
+        self.gate.end();
         self.in_flight.cancel_later(&self.event_loop);
     }
 
@@ -146,8 +148,8 @@ impl<T> HostStream<T> {
             input: Arc::new(InputStop {
                 event_loop: Arc::new(event_loop.clone().unbind()),
                 in_flight: Arc::default(),
+                gate: InputGate::default(),
             }),
-            failure: Arc::new(Shared::new(None)),
         })
     }
 
@@ -169,12 +171,7 @@ impl<T> HostStream<T> {
                 ctx: source.host.ctx.clone_ref(py),
                 to_host,
                 stop: source.input.clone(),
-                failure: source.failure.clone(),
-                queue: Mutex::new(SinkQueue {
-                    entries: VecDeque::new(),
-                    scheduled: false,
-                    ended: false,
-                }),
+                queue: Mutex::new(SinkQueue { entries: VecDeque::new(), scheduled: false }),
             }),
         };
         Ok(lk_agents_abi::DuplexStream::new(sink, source))
@@ -203,8 +200,8 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
             if self.ended {
                 return Ok(None);
             }
-            let failure = self.failure.clone();
-            if let Some(error) = failure.with(|failed| failed.clone()) {
+            let gate = self.input.gate.clone();
+            if let Some(error) = gate.failure() {
                 self.ended = true;
                 self.input.stop();
                 return Err(error);
@@ -215,7 +212,7 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
             };
             let pulled = tokio::select! {
                 biased;
-                error = failure.wait_until(|failed| failed.clone()) => {
+                error = gate.failed() => {
                     self.ended = true;
                     self.input.stop();
                     return Err(error);
@@ -238,9 +235,11 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
                     Ok(None)
                 }
                 Err(e) => {
+                    let error = captured(e);
+                    gate.fail(error.clone());
                     self.ended = true;
                     self.input.stop();
-                    Err(captured(e))
+                    Err(error)
                 }
             }
         })
@@ -449,7 +448,6 @@ struct SinkShared<I> {
     ctx: Py<PyAny>,
     to_host: ToHost<I>,
     stop: Arc<InputStop>,
-    failure: Arc<Shared<Option<ProviderError>>>,
     queue: Mutex<SinkQueue<I>>,
 }
 
@@ -457,32 +455,29 @@ struct SinkQueue<I> {
     entries: VecDeque<Entry<I>>,
     /// A drain is scheduled on the loop and has not emptied the queue yet.
     scheduled: bool,
-    ended: bool,
 }
 
 impl<I: Send + 'static> HostSink<I> {
     fn admit(&self, entry: Entry<I>) -> Result<(), ProviderError> {
         let schedule = {
             let mut queue = self.shared.queue.lock();
-            if let Some(failed) = self.shared.failure.with(|failed| failed.clone()) {
-                return Err(failed);
-            }
-            if self.shared.stop.stopped() || queue.ended {
-                return Err(lk_agents_abi::errors::ApiError::new("stream input is closed").into());
-            }
+            let gate = &self.shared.stop.gate;
+            gate.admit()?;
             let ending = matches!(entry, Entry::EndInput);
             if !ending && queue.entries.len() >= SINK_QUEUE {
                 return Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(format!(
                     "the host stream is not taking its input: {SINK_QUEUE} entries are waiting"
                 ))));
             }
-            queue.ended |= ending;
+            if ending {
+                gate.end();
+            }
             queue.entries.push_back(entry);
             !std::mem::replace(&mut queue.scheduled, true)
         };
         if schedule && let Err(e) = Python::attach(|py| self.schedule(py)) {
             let e = captured(e);
-            fail(&self.shared.failure, e.clone());
+            self.shared.stop.gate.fail(e.clone());
             return Err(e);
         }
         Ok(())
@@ -492,7 +487,7 @@ impl<I: Send + 'static> HostSink<I> {
         let (shared, lost) = (self.shared.clone(), self.shared.clone());
         let release = move || {
             let closed = lk_agents_abi::errors::ApiError::new("the host event loop closed");
-            fail(&lost.failure, closed.into());
+            lost.stop.gate.fail(closed.into());
             // Dropped after the guard: an item's host objects may run Python finalizers.
             let _dropped = {
                 let mut queue = lost.queue.lock();
@@ -509,10 +504,6 @@ impl<I: Send + 'static> HostSink<I> {
             release,
         )
     }
-}
-
-fn fail(failure: &Shared<Option<ProviderError>>, error: ProviderError) {
-    failure.modify(|failed| *failed = Some(error));
 }
 
 /// On the loop, inside the stream's context: everything queued, in order, until the queue is
@@ -580,13 +571,13 @@ fn await_then_drain<I: Send + 'static>(
 /// The input failed: kept for the next push, and what is queued is discarded.
 fn failed<I>(py: Python<'_>, shared: &SinkShared<I>, error: &PyErr) {
     // Capturing reads the exception's attributes: Python code, run before the lock.
-    fail(&shared.failure, crate::py_errors::capture(py, error));
+    shared.stop.gate.fail(crate::py_errors::capture(py, error));
     discard(shared);
 }
 
 /// Unschedules the queue once stopped or failed, dropping what it holds.
 fn discard<I>(shared: &SinkShared<I>) {
-    if !shared.stop.stopped() && shared.failure.with(|failed| failed.is_none()) {
+    if !shared.stop.stopped() && shared.stop.gate.failure().is_none() {
         return;
     }
     // Dropped after the guard: an item's host objects may run Python finalizers.
@@ -619,11 +610,9 @@ impl<I: Send + Sync + 'static> StreamInput<I> for HostSink<I> {
     ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
         let shared = self.shared.clone();
         Box::pin(async move {
-            if let Some(failed) = shared.failure.with(|failed| failed.clone()) {
-                return Err(failed);
-            }
-            if shared.stop.stopped() {
-                return Err(lk_agents_abi::errors::ApiError::new("stream input is closed").into());
+            shared.stop.gate.admit()?;
+            if matches!(entry, Entry::EndInput) {
+                shared.stop.gate.end();
             }
             let started = Python::attach(|py| {
                 let (target, to_host) = (shared.target.clone_ref(py), shared.to_host);
@@ -637,7 +626,7 @@ impl<I: Send + Sync + 'static> StreamInput<I> for HostSink<I> {
             };
             sent.map_err(|e| {
                 let e = captured(e);
-                fail(&shared.failure, e.clone());
+                shared.stop.gate.fail(e.clone());
                 e
             })
         })

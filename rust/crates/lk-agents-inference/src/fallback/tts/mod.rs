@@ -23,6 +23,7 @@ use lk_agents_abi::{
 use lk_agents_media::{AudioFormat, AudioResampler, Quality};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::signal;
+use lk_agents_net::source::{Gated, InputGate};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -77,17 +78,13 @@ impl TokenLog {
         self.inner.modify(|s| s.finished = true);
     }
 
-    /// Refused once the input ended: a late token reaches no provider.
-    pub fn push(&self, token: Token) -> Result<(), ProviderError> {
+    /// Kept only before the input ended: a late token reaches no provider.
+    pub fn push(&self, token: Token) {
         self.inner.modify(|s| {
-            if s.ended {
-                return Err(ApiError::new("synthesis input is closed")
-                    .with_retryable(false)
-                    .into());
+            if !s.ended {
+                s.tokens.push(token);
             }
-            s.tokens.push(token);
-            Ok(())
-        })
+        });
     }
 
     pub fn end(&self) {
@@ -123,24 +120,38 @@ impl Drop for FinishOnDrop {
     }
 }
 
-struct LoggingSink(Arc<TokenLog>);
+/// The request's text, refused once the input ended or the request failed, with its failure.
+struct LoggingSink {
+    log: Arc<TokenLog>,
+    gate: InputGate,
+}
+
+impl LoggingSink {
+    fn log(&self, token: Token) -> Result<(), ProviderError> {
+        self.gate.admit_with(|| {
+            self.log.push(token);
+            Ok(())
+        })
+    }
+}
 
 /// The text as written ([`TextUnit::Text`]): each member prepares it for itself.
 impl StreamInput<SpeechChunk> for LoggingSink {
     fn push(&self, item: SpeechChunk) -> Result<(), ProviderError> {
         // `tts:409-410` records only non-empty strings.
         if item.text.is_empty() {
-            return Ok(());
+            return self.gate.admit();
         }
-        self.0.push(Token::Text(item.text))
+        self.log(Token::Text(item.text))
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        self.0.push(Token::Flush)
+        self.log(Token::Flush)
     }
 
     fn end_input(&self) {
-        self.0.end();
+        self.gate.end();
+        self.log.end();
     }
 }
 
@@ -632,7 +643,12 @@ impl Tts for FallbackTts {
                 RecoveryMode::Streaming,
                 Some(Arc::clone(&log)),
             );
-            Ok(lk_agents_abi::DuplexStream::new(Box::new(LoggingSink(log)) as TtsSink, source))
+            let gate = InputGate::default();
+            let sink = LoggingSink { log, gate: gate.clone() };
+            Ok(lk_agents_abi::DuplexStream::new(
+                Box::new(sink) as TtsSink,
+                Box::new(Gated::new(source, gate)) as TtsSource,
+            ))
         })
     }
 }

@@ -7,8 +7,8 @@ use lk_agents_abi::{
     VadSink, VadSource,
 };
 use lk_agents_media::media_queue::{AudioReceiver, Item};
+use lk_agents_net::source::{Gated, InputGate};
 use lk_agents_telemetry as telemetry;
-use tokio_util::sync::CancellationToken;
 
 use super::stream::{Flush, Input};
 
@@ -26,10 +26,10 @@ impl PluginInput {
         clock: Arc<dyn Clock>,
     ) -> DuplexStream<VadSink, VadSource> {
         let (sink, events) = stream.split();
-        let cancelled = CancellationToken::new();
-        let (input, audio) = Input::open(cancelled.clone(), cx, clock);
+        let gate = InputGate::default();
+        let (input, audio) = Input::open(gate.clone(), cx, clock);
         let pump = Pump { audio, sink, sending: None, ended: false };
-        DuplexStream::new(Box::new(input), Box::new(Source { events, pump, cancelled }))
+        DuplexStream::new(Box::new(input), Box::new(Gated::new(Source { events, pump }, gate)))
     }
 }
 
@@ -70,7 +70,6 @@ impl Pump {
 struct Source {
     events: VadSource,
     pump: Pump,
-    cancelled: CancellationToken,
 }
 
 impl StreamOutput<VadEvent> for Source {
@@ -89,8 +88,7 @@ impl StreamOutput<VadEvent> for Source {
     }
 
     fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
-        let Source { events, pump, cancelled } = *self;
-        cancelled.cancel();
+        let Source { events, pump } = *self;
         drop(pump);
         events.close(deadline)
     }

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use lk_agents_abi::errors::{ApiError, ProviderError, Timeout};
+use lk_agents_abi::errors::{ApiError, Timeout};
 use lk_agents_abi::{ApiConnectOptions, Ts};
 use std::sync::Arc;
 
@@ -84,11 +84,6 @@ pub async fn open_ws(
         return Err(connect_error(what, err));
     }
     Ok((sender, receiver))
-}
-
-/// A send on a stream whose session already ended.
-pub fn stream_closed(what: &str) -> ProviderError {
-    ProviderError::Local(ApiError::connection(Some(format!("{what} stream is closed"))))
 }
 
 /// One HTTP exchange as the runtime sends it.

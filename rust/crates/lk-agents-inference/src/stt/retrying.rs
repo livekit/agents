@@ -159,7 +159,8 @@ pub async fn stream(
     let deadline = attempts.wake_at(None);
     wake_attempts(&mut attempts, clock.now(), &*stt)?;
     let offset = start_time_offset.unwrap_or(0.0);
-    let (input, audio) = AudioInput::new(clock.clone());
+    let gate = lk_agents_net::source::InputGate::default();
+    let (input, audio) = AudioInput::new(clock.clone(), gate.clone());
     input.observe(cx.clone());
     let mut pump = Pump { audio, sink: None, sending: None, ended: false, gaps: Gaps::default() };
     let opened = before(&*clock, deadline, stt.stream(cx, language, Some(offset))).await;
@@ -190,9 +191,10 @@ pub async fn stream(
         deadline,
         hook: None,
     };
+    // once the recognition gave up, its failure is what the input answers
     Ok(Some(lk_agents_abi::DuplexStream::new(
         Box::new(InputSink(input)) as SttSink,
-        Box::new(source) as SttSource,
+        Box::new(lk_agents_net::source::Gated::new(source, gate)) as SttSource,
     )))
 }
 
@@ -293,31 +295,24 @@ struct InputSink(AudioInput);
 
 impl StreamInput<AudioFrame> for InputSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if self.0.push(item) { Ok(()) } else { Err(input_closed()) }
+        self.0.push(item)
     }
 
     fn head(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if self.0.head(item) { Ok(()) } else { Err(input_closed()) }
+        self.0.head(item)
     }
 
     fn filler(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if self.0.filler(item) { Ok(()) } else { Err(input_closed()) }
+        self.0.filler(item)
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        match self.0.flush() {
-            Some(flushed) => flushed.map_err(|stuck| ApiError::new(stuck.to_string()).into()),
-            None => Err(input_closed()),
-        }
+        self.0.flush()
     }
 
     fn end_input(&self) {
         self.0.end();
     }
-}
-
-fn input_closed() -> ProviderError {
-    ApiError::new("recognition input is closed").with_retryable(false).into()
 }
 
 struct RetrySource {

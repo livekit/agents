@@ -387,6 +387,7 @@ impl Pump {
     }
 
     fn publish_failure(&self, error: &ApiError) {
+        self.gate.fail(error.clone().into());
         self.failure.modify(|failure| {
             failure.get_or_insert_with(|| error.clone());
         });

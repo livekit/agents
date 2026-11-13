@@ -68,7 +68,8 @@ use pyo3::types::PyDict;
 use pyo3::types::PyType;
 
 // A host exception goes into the side table and only its key plus scalar `retryable`/`status_code`/
-// kind cross, so it re-raises with traceback and subclass intact. `raise_original` takes it once.
+// kind cross, so it re-raises with traceback and subclass intact, as often as the failure is
+// reported (an output, then every input call after it); the last clone's drop releases it.
 
 fn insert(obj: Py<PyAny>) -> CapturedError {
     let t = exception_table();
@@ -188,7 +189,7 @@ pub fn to_py_exception(py: Python<'_>, err: &ProviderError) -> PyResult<Py<PyAny
     if let ProviderError::Host { error, .. } = err {
         return Ok(match error.host_ref.clone().and_then(|r| resolve_captured(py, r)) {
             Some(obj) => obj,
-            // Released already (re-raised once): the message is what is left of it.
+            // Released already: the message is what is left of it.
             None => PyRuntimeError::new_err(error.to_string()).into_value(py).into_any(),
         });
     }
@@ -249,13 +250,14 @@ pub fn host_exception(module: &str, class: &str, message: String) -> PyErr {
     })
 }
 
-/// Works once across all clones; a second call is a `RuntimeError`.
+/// The original object, every time: a failure a stream keeps is raised by its output and again
+/// by each input call after it. A `RuntimeError` once the entry was released.
 pub fn raise_original(py: Python<'_>, host_ref: CapturedError) -> PyErr {
     let id = host_ref.id();
-    match release(host_ref) {
+    match resolve_captured(py, host_ref) {
         Some(obj) => PyErr::from_value(obj.into_bound(py)),
         None => PyRuntimeError::new_err(format!(
-            "host exception {id} is no longer in the side table (already re-raised or released)"
+            "host exception {id} is no longer in the side table (released)"
         )),
     }
 }

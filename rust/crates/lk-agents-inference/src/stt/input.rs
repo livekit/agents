@@ -1,5 +1,7 @@
+use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock};
-use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Policy, Stuck};
+use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Policy};
+use lk_agents_net::source::InputGate;
 use lk_agents_telemetry as telemetry;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use std::sync::Arc;
@@ -14,12 +16,14 @@ pub(crate) struct Flush;
 
 pub(crate) struct AudioInput {
     audio: Mutex<Option<AudioSender<Flush>>>,
+    /// What a refused call answers: the recognition's failure, else its end.
+    gate: InputGate,
 }
 
 impl AudioInput {
-    pub(crate) fn new(clock: Arc<dyn Clock>) -> (Self, AudioReceiver<Flush>) {
+    pub(crate) fn new(clock: Arc<dyn Clock>, gate: InputGate) -> (Self, AudioReceiver<Flush>) {
         let (audio, rx) = media_queue::audio(INPUT_POLICY, telemetry::AudioConsumer::Stt, clock);
-        (AudioInput { audio: Mutex::new(Some(audio)) }, rx)
+        (AudioInput { audio: Mutex::new(Some(audio)), gate }, rx)
     }
 
     /// Measures the queue under `cx`'s job.
@@ -29,40 +33,41 @@ impl AudioInput {
         }
     }
 
-    /// `false` once the input ended or its pump is gone.
-    pub(crate) fn push(&self, frame: AudioFrame) -> bool {
-        let Some(audio) = self.open() else { return false };
-        audio.push(frame);
-        true
+    pub(crate) fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
+        self.open()?.push(frame);
+        Ok(())
     }
 
-    /// Filler, dropped before any other audio. `false` once the input ended or its pump is gone.
-    pub(crate) fn filler(&self, frame: AudioFrame) -> bool {
-        let Some(audio) = self.open() else { return false };
-        audio.filler(frame);
-        true
+    /// Filler, dropped before any other audio.
+    pub(crate) fn filler(&self, frame: AudioFrame) -> Result<(), ProviderError> {
+        self.open()?.filler(frame);
+        Ok(())
     }
 
-    /// Pre-connect audio, kept in full. `false` once the input ended or its pump is gone.
-    pub(crate) fn head(&self, frame: AudioFrame) -> bool {
-        let Some(audio) = self.open() else { return false };
-        audio.head(frame);
-        true
+    /// Pre-connect audio, kept in full.
+    pub(crate) fn head(&self, frame: AudioFrame) -> Result<(), ProviderError> {
+        self.open()?.head(frame);
+        Ok(())
     }
 
-    /// `None` once the input ended or its pump is gone.
-    pub(crate) fn flush(&self) -> Option<Result<(), Stuck>> {
-        self.open().map(|audio| audio.event(Flush))
+    pub(crate) fn flush(&self) -> Result<(), ProviderError> {
+        self.open()?.event(Flush).map_err(|stuck| ApiError::new(stuck.to_string()).into())
     }
 
     pub(crate) fn end(&self) {
+        self.gate.end();
         drop(self.audio.lock().take());
     }
 
-    fn open(&self) -> Option<MappedMutexGuard<'_, AudioSender<Flush>>> {
+    /// The queue while the input is open and its pump reads it; else the gate's answer.
+    fn open(&self) -> Result<MappedMutexGuard<'_, AudioSender<Flush>>, ProviderError> {
+        self.gate.admit()?;
         MutexGuard::try_map(self.audio.lock(), |audio| {
             audio.as_mut().filter(|audio| !audio.is_closed())
         })
-        .ok()
+        .map_err(|unopen| {
+            drop(unopen);
+            self.gate.refused()
+        })
     }
 }

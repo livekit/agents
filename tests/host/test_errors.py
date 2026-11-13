@@ -51,6 +51,7 @@ from tests.fakes import (
     FakeLLM,
     FakeSTT,
     FakeTTS,
+    FakeVAD,
     audio_frame,
     tool_call,
     until,
@@ -635,6 +636,81 @@ async def test_a_native_tts_request_reports_its_final_error_once(
     assert requests == (2 if status == 429 else 1)
     assert [e.recoverable for e in events] == [True] * (requests - 1) + [False]
     assert all(isinstance(e.error, APIStatusError) for e in events)
+
+
+# -- input after a provider's failure raises that failure
+
+
+def _refused(failure: type[APIStatusError], *calls: Callable[[], object]) -> None:
+    for call in calls:
+        with pytest.raises(failure) as refused:
+            call()
+        assert refused.value.status_code == 401, call
+
+
+@pytest.mark.parametrize("native", [True, False], ids=["inference", "plugin"])
+async def test_input_after_a_tts_failure_raises_that_failure(
+    native: bool, rejecting_gateway: str
+) -> None:
+    """Text pushed, flushed or ended after the voice failed raises the voice's own error with its
+    status, never a generic closed-input error, and is never swallowed."""
+    model: tts.TTS = (
+        inference.TTS(
+            "cartesia/sonic-3", base_url=rejecting_gateway, api_key="key", api_secret="secret"
+        )
+        if native
+        else FakeTTS(error=APIStatusError("refused", status_code=401, retryable=False))
+    )
+
+    async with model.stream(conn_options=NO_RETRY) as stream:
+        stream.push_text("Hello there.")
+        stream.flush()
+        with pytest.raises(APIStatusError):
+            _ = [audio async for audio in stream]
+        _refused(APIStatusError, lambda: stream.push_text("Again."), stream.flush, stream.end_input)
+    await model.aclose()
+
+
+@pytest.mark.parametrize("native", [True, False], ids=["inference", "plugin"])
+async def test_input_after_an_stt_failure_raises_that_failure(
+    native: bool, rejecting_gateway: str
+) -> None:
+    """Audio pushed, flushed or ended after the recognizer failed raises the recognizer's own
+    error with its status, never a generic closed-input error."""
+    model: stt.STT = (
+        inference.STT(
+            "deepgram/nova-3", base_url=rejecting_gateway, api_key="key", api_secret="secret"
+        )
+        if native
+        else FakeSTT([APIStatusError("refused", status_code=401, retryable=False)])
+    )
+
+    async with model.stream(conn_options=NO_RETRY) as stream:
+        with pytest.raises(APIStatusError):
+            _ = [event async for event in stream]
+        _refused(
+            APIStatusError,
+            lambda: stream.push_frame(audio_frame(0.1)),
+            stream.flush,
+            stream.end_input,
+        )
+    await model.aclose()
+
+
+async def test_input_after_a_vad_failure_raises_that_failure() -> None:
+    """Audio pushed, flushed or ended after the detector failed raises the detector's own error,
+    not that the stream is closed."""
+    detector = FakeVAD(error=APIStatusError("refused", status_code=401, retryable=False))
+
+    async with detector.stream() as stream:
+        with pytest.raises(APIStatusError):
+            _ = [event async for event in stream]
+        _refused(
+            APIStatusError,
+            lambda: stream.push_frame(audio_frame(0.1)),
+            stream.flush,
+            stream.end_input,
+        )
 
 
 # A node that calls the session's default must still run a native provider natively: handed its
