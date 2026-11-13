@@ -8,6 +8,7 @@ back office that holds the system and does the work.
 | [`frontdesk/`](frontdesk/README.md) | A dental practice's scheduling: two tools and a booking that asks for what it is missing. |
 | [`hotel-receptionist/`](hotel-receptionist/README.md) | A hotel's bookings, lookups and cancellations: guided flows, verification, approval on writes. |
 | [`airline-support/`](airline-support/README.md) | An airline's customer care: a graph that asks for what is missing, EU261 in code, payment after approval. |
+| [`getaway/`](getaway/README.md) | A travel concierge: two experts at once, a chain to a payments desk, several open questions, exact text two hops away. |
 
 ## Running them
 

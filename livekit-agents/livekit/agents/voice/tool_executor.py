@@ -8,7 +8,7 @@ import json
 import time
 import weakref
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from typing_extensions import TypedDict
@@ -17,6 +17,7 @@ from .. import utils
 from ..llm.chat_context import ChatContext, ChatItem, FunctionCall, FunctionCallOutput
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
+    CUT_OFF_KEY,
     DELIVERED,
     AskedQuestion,
     DuplicateMode,
@@ -33,7 +34,7 @@ from ..llm.tool_context import (
     ToolResult,
     Toolset,
     Transition,
-    approval_granted,
+    answered_read_back,
     approval_scope,
     delivered,
     function_tool,
@@ -333,6 +334,9 @@ class ToolSink(Protocol):
     def answering(self, ctx: RunContext, question: AskedQuestion) -> None:
         """The call continues ``question``'s task with the answer: the question closes."""
 
+    def decided(self, ctx: RunContext) -> None:
+        """The call said whether it answers one of the questions: the next may be asked."""
+
     async def record(self, ctx: RunContext) -> None:
         """Stores the conversation so far, so an agent the call delegates to reads the person's
         last words in the thread."""
@@ -461,20 +465,20 @@ class _ToolExecutor:
                 fnc_args, fnc_kwargs = prepare_function_arguments(
                     fnc=tool, json_arguments=raw_arguments, call_ctx=run_ctx
                 )
-                granted = isinstance(tool, FunctionTool) and tool.info.requires_approval
-                if granted:
+                answered = None
+                if isinstance(tool, FunctionTool) and tool.info.requires_approval:
                     history = (
                         run_ctx._run._chat_ctx.items
                         if run_ctx._run is not None
                         else run_ctx.session.history.items
                     )
-                    granted = approval_granted(history, run_ctx.function_call)
+                    answered = answered_read_back(history, run_ctx.function_call)
                 if mock is not None:
                     from .run_result import _run_mock
 
                     output = await _run_mock(mock, *fnc_args, **fnc_kwargs)
                 else:
-                    with approval_scope(run_ctx.function_call, granted):
+                    with approval_scope(run_ctx.function_call, answered):
                         output = tool(*fnc_args, **fnc_kwargs)
                         if inspect.isawaitable(output):
                             output = await output
@@ -677,10 +681,14 @@ class _CallSink:
         # per call let run in the background: its later updates, and the task recording them
         self._queues: dict[str, utils.aio.Chan[_PendingUpdate]] = {}
         self._recorders: set[asyncio.Task[None]] = set()
+        # per call: its progress reply not yet playing, dropped once a newer output lands
+        self._progress_replies: dict[str, SpeechHandle] = {}
 
     def started(self, task: _RunningTask) -> None:
         session = task.ctx.session
         _RunningTasks.setdefault(session, {})[task.ctx.function_call.call_id] = task
+        if (activity := self._owning_activity) is not None:
+            activity._deciding_on(task.ctx.function_call)
         session._tool_execution_updated(
             ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=task.ctx.function_call)),
         )
@@ -688,6 +696,10 @@ class _CallSink:
     def done(self, task: _RunningTask, output: Any) -> None:
         run_ctx = task.ctx
         call_id = run_ctx.function_call.call_id
+        self.decided(run_ctx)
+        if call_id not in self._queues and (activity := self._owning_activity) is not None:
+            # never let run on in the background: its output is in once its turn is done
+            run_ctx.speech_handle.add_done_callback(lambda _: activity._settled(call_id))
         session = run_ctx.session
         if (session_tasks := _RunningTasks.get(session)) is not None:
             session_tasks.pop(call_id, None)
@@ -735,7 +747,11 @@ class _CallSink:
 
     def answering(self, ctx: RunContext, question: AskedQuestion) -> None:
         if (activity := self._owning_activity) is not None:
-            activity._answering(question, ctx.speech_handle)
+            activity._answering(question, ctx.function_call.call_id)
+
+    def decided(self, ctx: RunContext) -> None:
+        if (activity := self._owning_activity) is not None:
+            activity._decided(ctx.function_call.call_id)
 
     async def record(self, ctx: RunContext) -> None:
         if (activity := self._owning_activity) is not None:
@@ -888,10 +904,23 @@ class _CallSink:
         try:
             await recorded
             async for update in queue:
+                progress = self._progress_replies.pop(ctx.function_call.call_id, None)
+                if progress is not None and progress._authorized_at is None:
+                    # a newer output lands before the call's progress reply plays: its reply says
+                    # it now, and the progress stays in the history
+                    progress.interrupt(force=True)
+                # a question waits out of the history until it is asked, exact text until it
+                # played: no reply says either first
+                asks = (
+                    isinstance(update.transition, InputRequired)
+                    and self._owning_activity is not None
+                )
+                held = asks or (update.say is not None and not _asks_reply(update.items))
                 if update.items:
                     # the history orders by creation: stamped now, they follow the first output
                     for item in update.items:
                         item.created_at = time.time()
+                if update.items and not held:
                     # eager insert so a reply firing before delivery sees the items
                     target = update.target = self._speaker(ctx)
                     chat_ctx = target._chat_ctx.copy()
@@ -909,9 +938,17 @@ class _CallSink:
                     fnc_call_out = update.items[1]
                     assert isinstance(fnc_call_out, FunctionCallOutput)
                     self._owning_activity._apply_transition(
-                        update.transition, fnc_call_out=fnc_call_out
+                        update.transition,
+                        fnc_call_out=fnc_call_out,
+                        pair=update.items if asks else None,
                     )
+                if self._owning_activity is not None:
+                    # the call's next word after its first: a follow-up question went first, or
+                    # the desk is at work and the answered task holds the floor no longer
+                    self._owning_activity._settled(ctx.function_call.call_id)
         finally:
+            if (activity := self._owning_activity) is not None:
+                activity._settled(ctx.function_call.call_id)
             self._queues.pop(ctx.function_call.call_id, None)
             queue.close()
             # what was not recorded is dropped, as the delivery drops it
@@ -950,6 +987,16 @@ class _CallSink:
                     # a question in front of the person holds the floor until their next turn
                     await target_activity._turn_after_question.wait()
                     continue
+                # a turn that started a running call speaks first: a tool reply written before
+                # that turn's reply would not read it
+                turns = {
+                    task.ctx.speech_handle
+                    for task in _RunningTasks.get(session, {}).values()
+                    if not task.ctx.speech_handle.done()
+                }
+                if turns:
+                    await asyncio.wait([asyncio.ensure_future(h.wait_for_playout()) for h in turns])
+                    continue
                 if all(u.ctx.speech_handle.done() for u in self._pending_updates):
                     break
         except ActivityClosedError:
@@ -982,7 +1029,11 @@ class _CallSink:
                     # cut off before any of it played: said at the next idle, in call order
                     bisect.insort(self._pending_updates, update, key=lambda u: u.seq)
                     self._schedule_delivery(session)
-                elif update.result:
+                    return
+                if not _asks_reply(update.items):
+                    # held out of the history until it played
+                    target_activity._show_items(update.items, True)
+                if update.result:
                     tool_replied(update.ctx, speech.chat_items)
 
             speech.add_done_callback(_on_say_done)
@@ -1036,6 +1087,9 @@ class _CallSink:
             chat_ctx=chat_ctx,
         )
 
+        if not any(u.result for u in updates):
+            for update in updates:
+                self._progress_replies[update.ctx.function_call.call_id] = speech
         session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolReplyUpdated(
@@ -1057,20 +1111,20 @@ class _CallSink:
         )
 
         def _on_speech_done(speech: SpeechHandle) -> None:
-            # both paths record a reply cut before its first frame with no assistant text
-            unheard = speech.interrupted and not any(
-                item.type == "message" and item.role == "assistant" and item.text_content
-                for item in speech.chat_items
-            )
+            for update in updates:
+                if (
+                    self._progress_replies.get(call_id := update.ctx.function_call.call_id)
+                    is speech
+                ):
+                    del self._progress_replies[call_id]
             reply_status: Literal["completed", "interrupted", "skipped"]
-            if unheard:
-                # cut off before any of it played: told after the person's turn, in call order
-                for update in updates:
-                    requeued = replace(update, say=None)  # its exact text was said on its own
-                    bisect.insort(self._pending_updates, requeued, key=lambda u: u.seq)
-                self._schedule_delivery(session)
-                reply_status = "interrupted"
-            elif speech.interrupted:
+            if speech.interrupted:
+                # cut off, even before any of it played, it is not made again: the reply to the
+                # person's turn reads the outputs, noted as cut off, and a second reply would act
+                # on their words too
+                for item in pending_items:
+                    if isinstance(item, FunctionCall):
+                        item.extra[CUT_OFF_KEY] = "true"
                 reply_status = "interrupted"
             elif not speech.chat_items:
                 # the LLM judged the content already covered and produced no output
@@ -1084,10 +1138,9 @@ class _CallSink:
                     extra={"speech_id": speech.id, "interrupted": speech.interrupted},
                 )
 
-            if not unheard:
-                for update in updates:
-                    if update.result:
-                        tool_replied(update.ctx, speech.chat_items)
+            for update in updates:
+                if update.result:
+                    tool_replied(update.ctx, speech.chat_items)
 
             session._tool_execution_updated(
                 ToolExecutionUpdatedEvent(

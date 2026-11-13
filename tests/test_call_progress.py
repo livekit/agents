@@ -16,6 +16,7 @@ from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.delegation import A2ADelegate
 from livekit.agents.delegation.a2a import DISPATCHED, DISPATCHED_SILENTLY
 from livekit.agents.llm import ChatContext
+from livekit.agents.llm.tool_context import CUT_OFF_KEY
 from livekit.agents.voice.tool_executor import REPLY_INSTRUCTIONS_AT_TAIL
 
 from .a2a_driver import Door, Reply, ScriptedLLM, call, no_project_env  # noqa: F401
@@ -381,16 +382,17 @@ async def test_a_result_after_the_acknowledgement_started_follows_it(
 
 
 @pytest.mark.rule("B71")
-async def test_a_result_reply_cut_before_any_of_it_played_is_told_again(
+async def test_a_result_reply_cut_before_any_of_it_played_is_left_to_the_reply_to_the_person(
     expert: Callable[..., A2ADelegate],
 ) -> None:
+    """The reply to the person's turn reads the result; a cut-off reply made again after it would
+    answer their words a second time."""
     gate, ended = asyncio.Event(), list[str]()
     gate.set()
     model = ScriptedRealtimeModel(
         Reply("", [call("ask", "a1", request="slots")]),
         Reply("", hold=asyncio.Event(), when=told("a1_final")),
-        Reply("We have 10 slots.", when=told("a1_final")),
-        Reply("Sure.", when=answering("hold on")),
+        Reply("Sure, we have 10 slots.", when=answering("hold on")),
     )
     desk = Agent(instructions="front desk", tools=[expert(slow_expert(gate, ended))])
     async with LiveSession(llm=model) as session:
@@ -399,9 +401,14 @@ async def test_a_result_reply_cut_before_any_of_it_played_is_told_again(
         rt.hear("any slots?")
         await soon(lambda: any(told("a1_final")(r) for r in model.requests), "the result reply")
         rt.hear("hold on")
-        await soon(lambda: {"Sure.", "We have 10 slots."} <= set(spoken(session)), "both told")
+        await soon(lambda: "Sure, we have 10 slots." in spoken(session), "the reply to the person")
+        await asyncio.sleep(0.3)
 
-    assert sum(told("a1_final")(r) for r in model.requests) == 2
+    assert sum(told("a1_final")(r) for r in model.requests) == 1
+    (result,) = [
+        i for i in session.history.items if i.type == "function_call" and i.call_id == "a1_final"
+    ]
+    assert result.extra.get(CUT_OFF_KEY), "the next reply reads that the person did not hear it"
 
 
 @pytest.mark.rule("B71")
@@ -485,3 +492,43 @@ async def test_a_tool_that_times_out_its_wait_for_an_update_loses_none_of_its_la
         "b1_final",
         "b1_final out",
     ]
+
+
+@pytest.mark.rule("B71")
+async def test_a_result_is_told_after_the_reply_to_the_turn_it_landed_in(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    slots, booked = asyncio.Event(), asyncio.Event()
+    results = lambda c: "a1_final" in str(c.items[-1])  # noqa: E731
+    model = ScriptedLLM(
+        Reply("We have 10 slots.", when=results),
+        Reply(tool_calls=[call("slots", "a1", request="slots")], when=answering("any slots?")),
+        Reply(tool_calls=[call("book", "b1")], when=answering("book one")),
+        Reply("Booking it, and we have 10 slots.", when=lambda c: "booking" in outputs(c)[-1]),
+    )
+    desk = Agent(
+        instructions="front desk",
+        tools=[expert(slow_expert(slots, []), "slots", tool="slots", announce=False)],
+    )
+
+    @desk.tool
+    async def book(ctx: RunContext) -> str:
+        """Book one."""
+        slots.set()  # the slots land while this call has not said anything yet
+        await asyncio.sleep(0.3)
+        await ctx.update("booking")
+        await booked.wait()
+        return "booked"
+
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        await session.run(user_input="any slots?")
+        turn = asyncio.ensure_future(session.run(user_input="book one"))
+        try:
+            await soon(lambda: any(results(r) for r in model.requests), "the result told")
+        finally:
+            booked.set()
+            await turn
+
+    told_it = next(r for r in model.requests if results(r))
+    assert "Booking it, and we have 10 slots." in str(told_it.items), "it reads the turn's reply"

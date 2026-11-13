@@ -15,6 +15,7 @@ from livekit.agents.llm import (
     utils,
 )
 from livekit.agents.llm.chat_context import _ReadOnlyChatContext
+from livekit.agents.llm.tool_context import UPDATE_OF_KEY
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -151,6 +152,35 @@ def test_openai_format_preserves_mid_conversation_system_messages():
     assert [m["role"] for m in messages] == ["system", "assistant", "user", "system"]
     assert messages[0] == {"role": "system", "content": "You are a helpful assistant."}
     assert messages[-1]["content"] == instructions
+
+
+def _ctx_with_a_later_result() -> ChatContext:
+    """A call, its output, and its later result recorded as a call of its own."""
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["book a flight"])
+    chat_ctx.items.append(FunctionCall(call_id="c1", name="flights", arguments="{}"))
+    chat_ctx.items.append(
+        FunctionCallOutput(call_id="c1", name="flights", output="searching", is_error=False)
+    )
+    later = {UPDATE_OF_KEY: "c1"}
+    chat_ctx.items.append(
+        FunctionCall(call_id="c1_final", name="flights", arguments="{}", extra=later)
+    )
+    chat_ctx.items.append(
+        FunctionCallOutput(call_id="c1_final", name="flights", output="booked", is_error=False)
+    )
+    chat_ctx.add_message(role="user", content=["thanks"])
+    return chat_ctx
+
+
+def test_a_later_result_reaches_the_model_as_a_note_in_its_place():
+    messages, _ = _ctx_with_a_later_result().to_provider_format(format="openai")
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool", "system", "user"]
+    assert messages[3]["content"] == "Your earlier flights call: booked"
+    # a provider that lifts system messages to the top keeps the note where it was
+    turns, _ = _ctx_with_a_later_result().to_provider_format(format="anthropic")
+    assert "Your earlier flights call: booked" in str(turns[-1])
 
 
 def test_mistralai_format_converts_mid_conversation_instructions():

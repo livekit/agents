@@ -65,15 +65,24 @@ def start(turn: Coroutine[object, object, None]) -> None:
     task.add_done_callback(running.discard)
 
 
+@dataclass
+class Frame:
+    """A frame of a task's answer stream and its position, the count of frames up to it: the
+    SSE ``id`` a ``tasks/resubscribe`` resumes after."""
+
+    event: StreamEvent | pb.StreamResponse
+    position: int
+
+
 class ResponsePump:
     """The frames of one message's response, in order: those of the task stream it follows."""
 
     def __init__(self, streams: Streams, stream_id: str) -> None:
         self._streams = streams
         self._stream_id = stream_id
-        self._queue: asyncio.Queue[StreamEvent | pb.StreamResponse | BaseException | None] = (
-            asyncio.Queue()
-        )
+        self._queue: asyncio.Queue[
+            StreamEvent | pb.StreamResponse | Frame | BaseException | None
+        ] = asyncio.Queue()
         self._following: asyncio.Future[None] | None = None
         self._finished = False
         self.acked: str | None = None
@@ -84,28 +93,32 @@ class ResponsePump:
         record = json.dumps(to_json(to_stream_response(event)), separators=(",", ":"))
         self._streams.append(stream_id, record.encode())
 
-    def show(self, event: StreamEvent | pb.StreamResponse) -> None:
-        """One frame to the response only."""
-        self._queue.put_nowait(event)
+    def show(self, event: StreamEvent | pb.StreamResponse, position: int | None = None) -> None:
+        """One frame to the response only, with its position in the task's stream when it is
+        one of its frames."""
+        self._queue.put_nowait(Frame(event, position) if position is not None else event)
 
     def forget(self, stream_id: str) -> None:
         """The task waits on a question: its stream is read from the store from now on."""
         self._streams.forget(stream_id)
 
-    def follow(self, stream_id: str, after: str | None, *, local: bool) -> None:
-        """The response relays a task's stream from ``after`` up to the frame where the task ends
-        or waits on a question; ``local`` when this worker writes it."""
+    def follow(self, stream_id: str, after: str | None, *, local: bool, start: int = 0) -> None:
+        """The response relays a task's stream from ``after``, the ``start`` frames before it,
+        up to the frame where the task ends or waits on a question; ``local`` when this worker
+        writes it."""
 
         async def relay() -> None:
             try:
                 reader = self._streams.read(stream_id, after=after, live=True, local=local)
+                position = start
                 while (frame := await reader.next()) is not None:
+                    position += 1
                     event = json_format.ParseDict(
                         json.loads(frame), pb.StreamResponse(), ignore_unknown_fields=True
                     )
                     if event.HasField("task"):
                         continue  # the acknowledgment went out from here
-                    self.show(event)
+                    self.show(event, position)
                     if event.status_update.status.state in _LAST_STATES:
                         break
             except StorageError as e:
@@ -142,7 +155,7 @@ class ResponsePump:
         await self.close(self._stream_id)
         self._queue.put_nowait(error)
 
-    async def frames(self) -> AsyncIterator[StreamEvent | pb.StreamResponse]:
+    async def frames(self) -> AsyncIterator[StreamEvent | pb.StreamResponse | Frame]:
         """The response: every frame, then the turn's error when it had one. A client that goes
         away stops the relay, never the turn."""
         try:
@@ -168,13 +181,15 @@ class ResponsePump:
             )
 
 
-async def tail(streams: Streams, stream_id: str) -> str | None:
-    """Where a task's stream ends now: what a continuation of the task writes comes after."""
+async def tail(streams: Streams, stream_id: str) -> tuple[str | None, int]:
+    """Where a task's stream ends now, and how many frames it holds: what a continuation of the
+    task writes comes after."""
     await streams.flush(stream_id)
     reader = streams.read(stream_id)
+    frames = 0
     while await reader.next() is not None:
-        pass
-    return await reader.next_offset()
+        frames += 1
+    return await reader.next_offset(), frames
 
 
 @dataclass
@@ -198,7 +213,7 @@ class WireHost(Generic[S]):
         task_id: str,
         context_id: str,
         exts: Extensions,
-        continued_from: asyncio.Future[str | None] | None = None,
+        continued_from: asyncio.Future[tuple[str | None, int]] | None = None,
     ) -> None:
         self._host = host(self.on_update, self.on_token)
         self._pump = pump
@@ -297,9 +312,10 @@ class WireHost(Generic[S]):
         new = task_id == self._task_id and self._continued_from is None
         if new:
             self._pump.append(task_id, ack)
-        self._pump.show(ack)
-        after = await self._continued_from if self._continued_from is not None else None
-        self._pump.follow(task_id, after, local=local and new)
+        # a new task's acknowledgment is the first frame of its stream
+        self._pump.show(ack, 1 if new else None)
+        after, start = await self._continued_from if self._continued_from is not None else (None, 0)
+        self._pump.follow(task_id, after, local=local and new, start=start)
 
     def _mark(self, name: str) -> None:
         """Milliseconds from the host's creation to a point of the turn, the first time."""
@@ -336,4 +352,4 @@ class WireHost(Generic[S]):
         )
 
 
-__all__ = ["ResponsePump", "WireHost", "running", "start", "tail"]
+__all__ = ["Frame", "ResponsePump", "WireHost", "running", "start", "tail"]

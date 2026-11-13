@@ -34,6 +34,7 @@ from ..llm import (
     FunctionCall,
     FunctionCallOutput,
 )
+from ..llm.tool_context import DelegateQuestion
 from ..log import logger
 from ..voice.agent_run import RunHooks, TextTools, reset_run_hooks, set_run_hooks
 from ..voice.generation import ToolExecutionOutput
@@ -208,10 +209,11 @@ class TurnHost(Generic[S]):
             waiting = row.status == "input-required" or row.id == ctx.task_id
             if not waiting or not isinstance(ask, dict):
                 continue
-            for tool, ref in ask.get("answer_to", []):
-                question = str(ask.get("question", ""))
+            for held in map(DelegateQuestion._make, ask.get("answer_to", [])):
                 shown = float(ask.get("shown_at") or 0)
-                questions.append(AskedQuestion(question, ref, shown, _record=(row.id, tool)))
+                questions.append(
+                    AskedQuestion(held.question, held.task_id, shown, _record=(row.id, held.tool))
+                )
         hooks = RunHooks(
             boundary=boundary.check,
             on_result=results.append,
@@ -226,13 +228,6 @@ class TurnHost(Generic[S]):
             delegated=bool(ctx.batch) and all(m.channel == "delegation" for m in ctx.batch),
             lane=ctx.lane,
             task_id=ctx.task_id,
-            open_tasks=frozenset(
-                r.id
-                for r in ctx.tasks
-                if r.id != ctx.task_id
-                and r.id not in {m.task_id for m in ctx.batch}  # a delivery's other tasks
-                and r.status not in TERMINAL_TASK_STATES
-            ),
             tools=self._tools if ctx.live else None,
             canceled=lambda: boundary.client_canceled,
         )
@@ -279,6 +274,10 @@ class TurnHost(Generic[S]):
 
         handled_output = self._output(context, output, results)
         handled_output.answered = [(q._record[0], q.ref) for q in hooks.answered]
+        # a task whose every question the turn answered waits on the person no more: what its
+        # work in the background queued is delivered
+        still_open = {q._record[0] for q in questions if q not in hooks.answered}
+        self._waiting -= {q._record[0] for q in hooks.answered} - still_open
         handled_output.new_items[:0] = [item_to_payload(item) for item in progress]
         return handled_output
 

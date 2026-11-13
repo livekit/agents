@@ -17,12 +17,19 @@ from livekit.agents.llm import (
     Tool,
     ToolChoice,
 )
+from livekit.agents.llm.tool_context import OPEN_QUESTIONS
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
 )
+
+
+def is_note(item: Any) -> bool:
+    """The note on the open questions a request ends with."""
+    note = OPEN_QUESTIONS.split("{")[0]
+    return item.type == "message" and (item.text_content or "").startswith(note)
 
 
 class FakeLLMResponse(BaseModel):
@@ -116,8 +123,9 @@ class FakeLLMStream(LLMStream):
 
     def _get_index_text(self) -> str:
         assert self.chat_ctx.items
-        # a handoff is bookkeeping, not an input: the model reads what came before it
-        items = [i for i in self.chat_ctx.items if i.type != "agent_handoff"]
+        # a handoff is bookkeeping, and the open-questions note is told after the input: the
+        # input is what came before them
+        items = [i for i in self.chat_ctx.items if i.type != "agent_handoff" and not is_note(i)]
 
         item = items[-1]
 

@@ -32,6 +32,7 @@ from livekit.agents.a2a.extension import (
     REASON,
     as_dict,
 )
+from livekit.agents.a2a.pump import Frame
 from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.llm.tool_context import CUT_OFF_KEY
 from livekit.agents.storage import AgentDBStorage, StorageUnavailable
@@ -424,7 +425,8 @@ async def test_resubscribe_replays_after_the_first_stream_is_dropped(
         CallContext(extensions=Extensions(livekit=True)),
     )
     ack = await stream.__anext__()
-    task_id = ack.id
+    assert isinstance(ack, Frame) and ack.position == 1
+    task_id = ack.event.id
     await stream.aclose()
 
     async with http_client(server_b) as http_b:
@@ -455,6 +457,28 @@ async def test_resubscribe_replays_after_the_first_stream_is_dropped(
         assert results[1]["task"]["id"] == task_id
 
 
+async def test_a_resubscribe_resumes_after_the_last_frame_the_client_has(
+    door: Callable[..., Door],
+) -> None:
+    async def handler(ctx: A2ASessionContext[Any]) -> str:
+        await ctx.update("working on it")
+        return "done"
+
+    desk = door(handler)
+    ctx_id = await desk.thread()
+    message = {"message": wire("slow", "m1", context_id=ctx_id)}
+    response = await rpc(desk.http, "message/stream", message)
+    # each frame of the task's stream carries its position as the SSE id
+    ids = [line[len("id: ") :] for line in response.text.splitlines() if line.startswith("id: ")]
+    assert ids == ["1", "2", "3", "4"]
+    task_id = sse_results(response)[0]["result"]["task"]["id"]
+
+    params = {"id": task_id, "contextId": ctx_id, "offset": "2"}
+    later = [r["result"] for r in sse_results(await rpc(desk.http, "tasks/resubscribe", params))]
+    # the Task object, then only the frames after the two the client had
+    assert [list(r)[0] for r in later] == ["task", "artifactUpdate", "statusUpdate"]
+
+
 async def test_the_stream_completes_when_the_first_client_vanishes_without_closing(
     agentdb_workers: Workers,
 ) -> None:
@@ -481,7 +505,8 @@ async def test_the_stream_completes_when_the_first_client_vanishes_without_closi
         CallContext(extensions=Extensions(livekit=True)),
     )
     ack = await stream.__anext__()
-    task_id = ack.id
+    assert isinstance(ack, Frame) and ack.position == 1
+    task_id = ack.event.id
     # held, never closed: the suspended generator of a response whose client is gone
 
     async with http_client(server_b) as http_b:

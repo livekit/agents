@@ -800,7 +800,8 @@ class ChatContext:
         inject_dummy_user_message: bool = True,
         **kwargs: Any,
     ) -> tuple[list[dict], Any]:
-        """Convert the chat context to a provider-specific format.
+        """Convert the chat context to a provider-specific format. A tool's later updates,
+        recorded as calls of their own, reach the model as notes.
 
         If ``inject_dummy_user_message`` is ``True``, a dummy user message will be added
         to the beginning or end of the chat context depending on the provider.
@@ -809,20 +810,21 @@ class ChatContext:
         generating a response.
         """
         kwargs["inject_dummy_user_message"] = inject_dummy_user_message
+        chat_ctx = _provider_format.utils.tool_updates_as_notes(self)
 
         if format == "openai":
-            return _provider_format.openai.to_chat_ctx(self, **kwargs)
+            return _provider_format.openai.to_chat_ctx(chat_ctx, **kwargs)
         elif format == "openai.responses":
-            return _provider_format.openai.to_responses_chat_ctx(self, **kwargs)
+            return _provider_format.openai.to_responses_chat_ctx(chat_ctx, **kwargs)
         elif format == "google":
-            return _provider_format.google.to_chat_ctx(self, **kwargs)
+            return _provider_format.google.to_chat_ctx(chat_ctx, **kwargs)
         elif format == "aws":
-            return _provider_format.aws.to_chat_ctx(self, **kwargs)
+            return _provider_format.aws.to_chat_ctx(chat_ctx, **kwargs)
         elif format == "anthropic":
-            return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
+            return _provider_format.anthropic.to_chat_ctx(chat_ctx, **kwargs)
         elif format == "mistralai":
             return _provider_format.mistralai.to_conversations_ctx(
-                self, inject_dummy_user_message=inject_dummy_user_message
+                chat_ctx, inject_dummy_user_message=inject_dummy_user_message
             )
         else:
             raise ValueError(f"Unsupported provider format: {format}")

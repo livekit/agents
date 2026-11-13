@@ -16,6 +16,8 @@ pub const INTERRUPTION_REASON_KEY: &str = "livekit/interruptionReason";
 pub const MERGED_INTO_KEY: &str = "livekit/mergedInto";
 pub const CHANNEL_KEY: &str = "livekit/channel";
 pub const KIND_KEY: &str = "livekit/kind";
+/// On a delegated message: the lane of the agent that sent it.
+pub const CALLER_LANE_KEY: &str = "livekit/callerLane";
 pub const KEY_KEY: &str = "livekit/key";
 /// On a message under `live`: `false` when it waits for the reply instead of stopping it.
 pub const INTERRUPT_KEY: &str = "livekit/interrupt";

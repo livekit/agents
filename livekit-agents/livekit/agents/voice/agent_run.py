@@ -62,6 +62,7 @@ from ..llm.tool_context import (
     TASK_KEY,
     AskedQuestion,
     Completed,
+    DelegateQuestion,
     Failed,
     InputRequired,
     ModelRetry,
@@ -77,6 +78,7 @@ from ..llm.tool_context import (
     function_tool,
     is_transition,
     note_cut_off_replies,
+    open_questions_note,
 )
 from ..llm.utils import parse_function_arguments
 from ..log import logger
@@ -140,7 +142,7 @@ class RunHooks:
     ``delegated`` says the turn's message came from another agent: the run does not phrase its questions,
     the agent facing the person does. ``lane`` is the door's lane of the thread, what
     ``A2ADelegate`` names as the caller's. ``task_id`` marks what the run records
-    (``TASK_KEY``); ``open_tasks`` are the lane's other open tasks, whose later items it skips.
+    (``TASK_KEY``).
     ``tools`` is set under the ``live`` inbox: a tool's first ``ctx.update()`` is its output, the
     run goes on, and the tool runs on there; ``delivery`` is what its tools queued that this turn
     delivers, in place of a message.
@@ -160,7 +162,6 @@ class RunHooks:
     delegated: bool = False
     lane: str | None = None
     task_id: str | None = None
-    open_tasks: frozenset[str] = frozenset()
     tools: TextTools | None = None
     delivery: Sequence[ToolExecutionOutput] = ()
     canceled: Callable[[], bool] | None = None
@@ -247,6 +248,9 @@ class TextTools:
     def answering(self, ctx: RunContext[Any, Any], question: AskedQuestion) -> None:
         if (hooks := current_run_hooks()) is not None:
             hooks.answered.append(question)
+
+    def decided(self, ctx: RunContext[Any, Any]) -> None:
+        pass  # text shows every question at once: none waits on a call
 
     async def record(self, ctx: RunContext[Any, Any]) -> None:
         pass  # the turn commits the person's message with its reply
@@ -492,8 +496,6 @@ class AgentRun(Generic[Run_T]):
         self._on_token: Callable[[str], Awaitable[None]] | None = None
         # exact text said since the last call output, recorded after it as the agent's message
         self._said: list[ChatMessage] = []
-        # what the lane's other open tasks added that this run's model does not read
-        self._hidden: frozenset[str] = frozenset()
         # the calls whose tool went on in the background at its first update
         self._background_calls: set[str] = set()
         self._tools = TextTools(on_update=None)
@@ -683,26 +685,6 @@ class AgentRun(Generic[Run_T]):
         new_items: list[ChatItem] = []
         hooks = None if self._nested else _run_hooks.get()
         task_id = hooks.task_id if hooks is not None else None
-        if hooks is not None and hooks.open_tasks:
-            # each item with its task; an output belongs to its call's task
-            call_tasks: dict[str, Any] = {}
-            tagged: list[tuple[ChatItem, Any]] = []
-            for item in chat_ctx.items:
-                if isinstance(item, FunctionCallOutput):
-                    task = call_tasks.get(item.call_id)
-                elif isinstance(item, (ChatMessage, FunctionCall)):
-                    task = item.extra.get(TASK_KEY)
-                else:
-                    task = None
-                if isinstance(item, FunctionCall):
-                    call_tasks[item.call_id] = task
-                tagged.append((item, task))
-            last = max((n for n, (_, task) in enumerate(tagged) if task == task_id), default=None)
-            if last is not None:
-                # what other open tasks added after this task's last item: the task never saw it
-                self._hidden = frozenset(
-                    item.id for item, task in tagged[last + 1 :] if task in hooks.open_tasks
-                )
 
         def record(item: ChatItem) -> None:
             if task_id is not None and isinstance(item, (ChatMessage, FunctionCall)):
@@ -743,15 +725,19 @@ class AgentRun(Generic[Run_T]):
         async def ask(
             question: InputRequired,
             call: FunctionCall | None,
-            answer_to: Sequence[tuple[str, str]] | None = None,
+            answer_to: Sequence[DelegateQuestion] | None = None,
         ) -> RunResult[Run_T]:
             """The task pauses on ``question`` from ``call``: as written when it is verbatim or
             another agent asked, else in the agent's own words. ``answer_to`` are the delegates'
-            questions it holds, each ``(tool, expert task)``, by default ``call``'s."""
+            questions it holds, by default ``call``'s."""
             result._pending_call = call
             if answer_to is None:
                 ref = question._answer_ref
-                answer_to = [(call.name, ref)] if ref and call is not None else []
+                answer_to = (
+                    [DelegateQuestion(call.name, ref, question.question)]
+                    if ref and call is not None
+                    else []
+                )
             result._answer_to = list(answer_to)
             if (
                 hooks is not None
@@ -897,8 +883,14 @@ class AgentRun(Generic[Run_T]):
             tool_ctx = ToolContext(tools)
 
             on_token = self._on_token or (hooks.on_token if hooks is not None else None)
-            request = _without_pending_calls(chat_ctx, self._hidden)
+            request = _without_pending_calls(chat_ctx)
             note_cut_off_replies(request)
+            if hooks is not None and (
+                note := open_questions_note(
+                    [(q.question, q._record[1]) for q in hooks.questions if q not in hooks.answered]
+                )
+            ):
+                request.add_message(role="system", content=[note])
             if hint is not None:
                 # as on a call: told last, next to what it is about, and not recorded
                 request.add_message(role="system", content=[hint])
@@ -1047,7 +1039,11 @@ class AgentRun(Generic[Run_T]):
                     "\n\n".join(dict.fromkeys(q.question for _, q in questions)),
                     verbatim=all(q.verbatim for _, q in questions),
                 )
-                return await ask(question, call, [(c.name, str(q._answer_ref)) for c, q in takers])
+                # each expert's own question, not the joined text, is what its answer is judged by
+                answered = [
+                    DelegateQuestion(c.name, str(q._answer_ref), q.question) for c, q in takers
+                ]
+                return await ask(question, call, answered)
             if held and (stopped or not replies):
                 # the one place the step's exact results become one text
                 return finish("\n\n".join(held), verbatim=True)
@@ -1098,9 +1094,7 @@ class AgentRun(Generic[Run_T]):
             modality="text",
         )
         ctx.add_message(role="system", content=ASK_IN_OWN_WORDS.format(question=question))
-        text, _, usage = await self._infer(
-            _without_pending_calls(ctx, self._hidden), ToolContext([])
-        )
+        text, _, usage = await self._infer(_without_pending_calls(ctx), ToolContext([]))
         self._usage._add_completion(usage)
         return text.strip() or question
 
@@ -1319,20 +1313,17 @@ class AgentRun(Generic[Run_T]):
             return None, f"invalid {FINAL_RESULT_TOOL}: {e}"
 
 
-def _without_pending_calls(
-    chat_ctx: ChatContext, hidden: frozenset[str] = frozenset()
-) -> ChatContext:
+def _without_pending_calls(chat_ctx: ChatContext) -> ChatContext:
     """The history as the model reads it: a call still waiting on a task has no output yet,
     and a request cannot carry one, so it is left out until the task completes; an answered
-    read-back says the call has not run; the ``hidden`` items of other open tasks are left out."""
+    read-back says the call has not run."""
     answered = {item.call_id for item in chat_ctx.items if isinstance(item, FunctionCallOutput)}
     pending = [
         item
         for item in chat_ctx.items
         if isinstance(item, FunctionCall) and item.call_id not in answered
     ]
-    kept = [item for item in chat_ctx.items if item not in pending and item.id not in hidden]
-    return ChatContext(as_model_reads(kept))
+    return ChatContext(as_model_reads([item for item in chat_ctx.items if item not in pending]))
 
 
 def _tool_text(value: Any) -> str:

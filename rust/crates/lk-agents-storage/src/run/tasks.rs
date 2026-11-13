@@ -57,8 +57,9 @@ pub struct WaitOptions {
     pub tool: Option<String>,
     /// For a conversation tool's `InputRequired`, the pending call.
     pub call_id: Option<String>,
-    /// The delegates' questions it holds, each `(tool, the expert task the answer continues)`.
-    pub answer_to: Vec<(String, String)>,
+    /// The delegates' questions it holds, each `(tool, the expert task the answer continues,
+    /// its own question)`.
+    pub answer_to: Vec<(String, String, String)>,
     /// When the question was put behind the one in front of the person, in seconds: it waits
     /// unshown and the row stays `working`.
     pub queued_at: Option<f64>,

@@ -32,6 +32,7 @@ from typing import (
     Any,
     Generic,
     Literal,
+    NamedTuple,
     TypeGuard,
     TypeVar,
     get_type_hints,
@@ -46,7 +47,7 @@ from . import _provider_format
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
-    from .chat_context import ChatContext
+    from .chat_context import ChatContext, FunctionCall
 
 
 class Tool(ABC):
@@ -242,10 +243,20 @@ class InputRequired:
     _answer_ref: str | None = None
 
 
+class DelegateQuestion(NamedTuple):
+    """A delegate's question that a task waiting on the person holds."""
+
+    tool: str
+    task_id: str
+    """The expert task the answer continues."""
+    question: str
+    """The expert's own question, which its answer is judged by."""
+
+
 @dataclass(frozen=True, eq=False)
 class AskedQuestion:
-    """A delegate's question the person was asked and may have answered since: the tool's next
-    call may continue its task with the answer."""
+    """A delegate's open question the person may have answered since: the tool's next call may
+    continue its task with the answer."""
 
     question: str
     ref: str
@@ -355,9 +366,10 @@ _CONFIRM_DUPLICATE_DESCRIPTION = (
 
 @dataclass
 class _ApprovalScope:
-    """Set by the executor around one call of a tool that requires approval: whether it may
-    run, and whether it asked for approval instead."""
+    """Set by the executor around one call of a tool that requires approval: the read-back the
+    person answered, and whether the call ran on it or asked for approval instead."""
 
+    answered: str | None
     granted: bool
     asked: bool = False
 
@@ -370,6 +382,10 @@ APPROVAL_KEY = "lk.approval"
 """``FunctionCall.extra`` key on a call of a tool that requires approval: ``asked`` when it
 returned the read-back, ``granted`` when it ran on the person's answer."""
 
+UPDATE_OF_KEY = "lk.update_of"
+"""``extra`` key on a call that records a tool's later update or result as a call of its own:
+the call id it belongs to. A model reads such a pair as a note, never as a call it made."""
+
 CUT_OFF_KEY = "lk.cut_off"
 """``FunctionCall.extra`` key, ``"true"``, on a call whose output's reply the person cut off by
 speaking: the output stores no ``extra``, and the call is stored beside it."""
@@ -381,7 +397,7 @@ _approval_scope: ContextVar[_ApprovalScope | None] = ContextVar(
 
 
 ASK_IN_OWN_WORDS = (
-    "Ask the person this, in your own words, as your whole reply, and add nothing else: {question}"
+    "Ask the person this in your own words, saying what it is for, as your whole reply: {question}"
 )
 """How the agent facing the person is told to ask a question that is not verbatim."""
 
@@ -476,26 +492,53 @@ WAITING_PREFIX = "waiting for the person's answer to: "
 """The output of a call that asked the person: its question. The answer is the person's next
 message, never this output."""
 
-RELAY_ANSWER = "\n\nWhen they answer it, call {name} with their answer."
-"""After a delegate's question in its call's output: the answer continues the delegate's task
-only when the model sends it."""
+ASKED_FOR = "asked the person for {name}: {question}"
+"""The output of a call whose expert asked the person: a fact, whether still open or answered;
+``OPEN_QUESTIONS`` says which are open."""
+
+OPEN_QUESTIONS = (
+    "When the person answers one of these, call its expert with their answer: {questions}"
+)
+"""Told last in each request while delegates' questions put to the person are open, never stored:
+the answer continues an expert's task only when the model sends it."""
 
 
-def approval_granted(items: Sequence[Any], call: Any) -> bool:
-    """Whether ``call`` repeats, with the same arguments, the latest answered read-back of its
-    tool in its task, and no earlier repeat used that answer. A call that asked something else,
-    such as a missing detail, is not a read-back."""
-    from .chat_context import FunctionCall
+def open_questions_note(questions: Sequence[tuple[str, str]]) -> str | None:
+    """The note on the open ``(question, expert)`` pairs, or ``None`` when none is open."""
+    if not questions:
+        return None
+    return OPEN_QUESTIONS.format(questions="; ".join(f'"{q}" ({name})' for q, name in questions))
 
-    def key(c: FunctionCall) -> str:
-        try:
-            return json.dumps(json.loads(c.arguments or "{}"), sort_keys=True)
-        except ValueError:
-            return c.arguments or ""
+
+class AnsweredReadBack(NamedTuple):
+    """A read-back the person answered: the call that asked, and what it asked."""
+
+    call: FunctionCall
+    question: str
+
+
+def _arguments(call: FunctionCall) -> str:
+    """A call's arguments as canonical JSON, for comparing two calls."""
+    try:
+        return json.dumps(json.loads(call.arguments or "{}"), sort_keys=True)
+    except ValueError:
+        return call.arguments or ""
+
+
+def answered_read_back(items: Sequence[Any], call: Any) -> AnsweredReadBack | None:
+    """The latest read-back of ``call``'s tool in its task that the person answered and no
+    repeat ran on yet. A call that asked something else, such as a missing detail, is not a
+    read-back."""
+    from .chat_context import FunctionCall, FunctionCallOutput
 
     answered = _read_back_answers(items)
+    questions = {
+        item.call_id: item.output.removeprefix(WAITING_PREFIX)
+        for item in items
+        if isinstance(item, FunctionCallOutput)
+    }
     task = call.extra.get(TASK_KEY)
-    asked: str | None = None  # the arguments of the latest answered, unused read-back
+    read_back: AnsweredReadBack | None = None
     for item in items:
         if not isinstance(item, FunctionCall) or item.name != call.name:
             continue
@@ -504,18 +547,27 @@ def approval_granted(items: Sequence[Any], call: Any) -> bool:
         if item.call_id == call.call_id:
             break
         mark = item.extra.get(APPROVAL_KEY)
-        if mark == "granted" and key(item) == asked:
-            asked = None  # this repeat ran on the answer
+        if mark == "granted":
+            read_back = None  # this repeat ran on the answer
         elif mark == "asked":
-            asked = key(item) if item.call_id in answered else None
-    return asked is not None and key(call) == asked
+            question = questions.get(item.call_id)
+            read_back = (
+                AnsweredReadBack(item, question)
+                if item.call_id in answered and question is not None
+                else None
+            )
+    return read_back
 
 
 @contextmanager
-def approval_scope(call: Any, granted: bool) -> Iterator[None]:
-    """Around one call of a tool that requires approval: whether it is the approved repeat of
-    a read-back the person answered. Marks the call, for the next one to read."""
-    scope = _ApprovalScope(granted=granted)
+def approval_scope(call: Any, answered: AnsweredReadBack | None) -> Iterator[None]:
+    """Around one call of a tool that requires approval: the read-back the person answered,
+    which the call runs on when it repeats its arguments or reads back the same. Marks the call,
+    for the next one to read."""
+    scope = _ApprovalScope(
+        answered=answered.question if answered is not None else None,
+        granted=answered is not None and _arguments(call) == _arguments(answered.call),
+    )
     token = _approval_scope.set(scope)
     try:
         yield
@@ -784,9 +836,12 @@ def _wrap_with_approval(
                     if shown
                     else f"Please confirm: {plain}. Yes or no?"
                 )
-            if scope is not None:
-                scope.asked = True
-            return InputRequired(str(question), verbatim=True)
+            # the person approved what they read: other arguments that read back the same run
+            if scope is None or scope.answered != str(question):
+                if scope is not None:
+                    scope.asked = True
+                return InputRequired(str(question), verbatim=True)
+            scope.granted = True
         result = func(*args, **kwargs)
         if asyncio.iscoroutine(result):
             return await result

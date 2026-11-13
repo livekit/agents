@@ -1,0 +1,48 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/trip.yaml --agent-name getaway`.
+# The clock is pinned: run the agent with GETAWAY_NOW=2026-06-12, a Friday. Fares and rooms are made
+# up from the city and the date, so the expectations name what must happen, not the prices. One
+# complication per scenario; the label names it; the expectations name the failing case.
+
+id: SCNG_gW4tYk2mQe8a
+name: Getaway, trips
+
+scenarios:
+- id: SCN_r7Lp2xVb9Kd1
+  label: "Flight and hotel together, one card for both"
+  instructions: >
+    You are Dana Park, planning a long weekend with your partner, relaxed and quick to decide.
+    Open with "Flight and hotel in Lisbon, please." When asked, say you fly from Boston, out
+    Friday June 19 and back Monday June 22, two of you. Take the cheapest flight and the cheapest
+    hotel. When asked which card, say the Visa. Say yes to each charge read back to you, and end
+    the conversation once both are booked.
+  agent_expectations: >
+    The agent sends the trip to the flight desk and the hotel desk, relays what each asks, offers
+    the fares and rooms the desks listed, asks which card once, reads each charge back as the
+    payments desk wrote it, and confirms both bookings with their receipts. Fails if a charge or a
+    booking is confirmed before the traveler said yes to it, or if a price is named that no desk
+    gave.
+
+- id: SCN_c3Hn8wQz5Tm4
+  label: "Second charge remembers the card"
+  instructions: >
+    You are Luis Ortega, booking a flight first and a hotel after, methodical. Ask for a flight
+    from Chicago to Rome, out Thursday June 25 and back Monday June 29, for one. Take the
+    cheapest, pay with the Amex and say yes to the read-back. Once it is booked, ask for a hotel
+    in Rome for those four nights, take the cheapest and say yes to its read-back.
+  agent_expectations: >
+    The agent books the flight after the traveler picked the Amex and said yes, then books the
+    hotel with a read-back on the Amex without asking which card again. Fails if the card is asked
+    for a second time, or if either booking is made without the traveler's yes.
+
+- id: SCN_k9Fd1sRy6Wn2
+  label: "A question and a change of mind while the desks search"
+  instructions: >
+    You are Priya Shah, planning a trip to Paris and easily distracted. Ask for a flight and a
+    hotel in Paris from New York, out Friday July 3 and back Monday July 6, for two. Right away,
+    before any options come, ask what time check-in is. Then say "never mind the hotel, we'll stay
+    with friends". Take the cheapest flight, pay with the Visa, say yes to the read-back, and end
+    the conversation once it is booked.
+  agent_expectations: >
+    The agent answers the check-in time from the hotel desk while the searches run, stops the
+    hotel once the traveler drops it, and books only the flight. Fails if a hotel is offered as
+    still wanted after the traveler dropped it, or if a hotel is booked.

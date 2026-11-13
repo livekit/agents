@@ -45,6 +45,7 @@ from ..llm.tool_context import (
     get_fnc_tool_names,
     is_transition,
     note_cut_off_replies,
+    open_questions_note,
 )
 from ..log import logger
 from ..metrics import (
@@ -139,6 +140,7 @@ from .turn import (
 
 if TYPE_CHECKING:
     from .._generated.storage import TaskRow
+    from ..delegation import InputRequiredDetector
     from ..llm import mcp
     from .agent_run import AgentRun
     from .agent_session import ExpressiveOptions, LiveSession
@@ -353,6 +355,9 @@ class _Question:
     question may be asked. A delegate's question stays open until a call answers it."""
     row: TaskRow | None = None
     """The lane's task of a question asked by another door, which completes once answered."""
+    pair: list[llm.ChatItem] | None = None
+    """The call and output that ask it, when they came after the call's first output: out of the
+    history until it is asked, so no reply asks it first."""
 
     def answered_by(self, message: llm.ChatMessage) -> bool:
         """Only a turn that started after the question was asked answers it."""
@@ -519,6 +524,8 @@ class AgentActivity(RecognitionHooks):
         )
         self._interruption_detection_enabled: bool = self._interruption_detector is not None
         self._interruption_detected: bool = False
+        # the delegates' answer detectors whose usage this activity reports
+        self._answer_detectors: list[InputRequiredDetector] = []
 
         # this allows taking over audio interruption temporarily until interruption is detected
         # by default it is true unless turn_detection is manual or realtime_llm
@@ -541,9 +548,12 @@ class AgentActivity(RecognitionHooks):
         # time, and the next only after they spoke: their next message answers a local tool's
         # question, and a delegate's stays open until a call of the delegate answers it
         self._questions: list[_Question] = []
-        # the expert task an answer went to, until the call that sent it ends: its follow-up
-        # question goes first
-        self._floor: str | None = None
+        # the expert task an answer went to and the call that sent it, until the call's next
+        # output: a follow-up question goes first
+        self._floor: tuple[str, str] | None = None
+        # calls of a delegate with a question in line, until they say whether they answer it:
+        # none is asked meanwhile, so the person is never asked what a call is answering
+        self._deciding: set[str] = set()
         self._question_tasks: set[asyncio.Task[None]] = set()
         # a spoken turn whose transcript has not arrived: a realtime model may answer it first.
         # it settles with the person's message, or None when the turn said nothing
@@ -573,9 +583,11 @@ class AgentActivity(RecognitionHooks):
                 call_id=asked.call_id, name=asked.tool, output=asked.question, is_error=False
             )
             # one question per delegate that asked it: each one's answer closes its own
-            refs: list[tuple[str, str | None]] = [*asked.answer_to] or [(asked.tool, None)]
-            for tool, ref in refs:
-                question = InputRequired(asked.question, verbatim=asked.verbatim, _answer_ref=ref)
+            refs: list[tuple[str, str | None, str]] = [*asked.answer_to] or [
+                (asked.tool, None, asked.question)
+            ]
+            for tool, ref, own in refs:
+                question = InputRequired(own, verbatim=asked.verbatim, _answer_ref=ref)
                 self._questions.append(
                     _Question(
                         question,
@@ -1413,6 +1425,17 @@ class AgentActivity(RecognitionHooks):
         # keyterm detection runs its own LLM, surface its usage
         self._session._keyterm_detector.on("metrics_collected", self._on_metrics_collected)
 
+        # so does a delegate's answer detector, which its calls run
+        from ..delegation import A2ADelegate
+
+        self._answer_detectors = [
+            detector
+            for tool in self.tools
+            if isinstance(tool, A2ADelegate) and (detector := tool.answer_detector) is not None
+        ]
+        for detector in self._answer_detectors:
+            detector.on("metrics_collected", self._on_metrics_collected)
+
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
             if rt_reused:
@@ -1798,6 +1821,9 @@ class AgentActivity(RecognitionHooks):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
 
         self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
+        for detector in self._answer_detectors:
+            detector.off("metrics_collected", self._on_metrics_collected)
+        self._answer_detectors = []
 
         if self._rt_session is not None:
             await self._rt_session.aclose()
@@ -2515,8 +2541,9 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
     async def _asked_questions(self, tool: str) -> list[AskedQuestion]:
-        """The questions ``tool`` asked as a delegate that the person spoke after, oldest first:
-        a call of it may answer one. A spoken turn whose transcript is pending is waited for."""
+        """The open questions of ``tool`` as a delegate that the person spoke after, oldest first:
+        a call of it may answer one, even one still in line, when the person says what it asks
+        before they hear it. A spoken turn whose transcript is pending is waited for."""
         if (pending := self._turn_transcript) is not None and not pending.done():
             await asyncio.shield(pending)
         said = next(
@@ -2531,26 +2558,35 @@ class AgentActivity(RecognitionHooks):
             if (ref := q.request._answer_ref) is not None
             and q.output is not None
             and q.output.name == tool
-            and q.answered_by(said)
+            and said.created_at >= (q.asked_at if q.asked else q.output.created_at)
         ]
 
-    def _answering(self, question: AskedQuestion, speech: SpeechHandle) -> None:
+    def _deciding_on(self, call: llm.FunctionCall) -> None:
+        """A call starts: one of a delegate with a question open may be answering it."""
+        if any(q.relays and q.output and q.output.name == call.name for q in self._questions):
+            self._deciding.add(call.call_id)
+
+    def _decided(self, call_id: str) -> None:
+        """The call said whether it answers a question; the next may be asked."""
+        if call_id in self._deciding:
+            self._deciding.discard(call_id)
+            self._ask_at_idle()
+
+    def _answering(self, question: AskedQuestion, call_id: str) -> None:
         """A call sends the answer to ``question``'s task: the question closes, and the task's
-        follow-up goes before the other questions until the call's speech ends, which waits for
-        the call's result even when progress lets it run on in the background."""
+        follow-up goes before the other questions, when it is the call's next output."""
         asked = question._record
         if asked in self._questions:
             self._questions.remove(asked)
             if asked.row is not None and (lane := self._session._live_lane) is not None:
                 lane.question_answered(asked.row, question.ref)
-        ref = self._floor = question.ref
+        self._floor = (question.ref, call_id)
 
-        def release(_: SpeechHandle) -> None:
-            if self._floor == ref:
-                self._floor = None
+    def _settled(self, call_id: str) -> None:
+        """The call said its next word, or ended: an answer it sent puts its task first no more."""
+        if self._floor is not None and self._floor[1] == call_id:
+            self._floor = None
             self._ask_at_idle()
-
-        speech.add_done_callback(release)
 
     async def _record_turn(self) -> None:
         """The person's last words are on the lane before a delegation goes out."""
@@ -3287,7 +3323,11 @@ class AgentActivity(RecognitionHooks):
             self._user_turn_exceeded_atask = None
 
     def _apply_transition(
-        self, transition: Transition, *, fnc_call_out: llm.FunctionCallOutput | None = None
+        self,
+        transition: Transition,
+        *,
+        fnc_call_out: llm.FunctionCallOutput | None = None,
+        pair: list[llm.ChatItem] | None = None,
     ) -> None:
         """Act on the transition a tool or ``on_enter`` returned (plan 7.4), in memory.
 
@@ -3319,7 +3359,7 @@ class AgentActivity(RecognitionHooks):
             elif not task.done():
                 task._complete(ToolError(text))
         elif isinstance(transition, InputRequired):
-            self._put_question(_Question(transition, fnc_call_out))
+            self._put_question(_Question(transition, fnc_call_out, pair=pair))
         elif isinstance(transition, Working):
             if transition.tool is not None or transition.timeout is not None:
                 logger.warning(
@@ -3329,20 +3369,23 @@ class AgentActivity(RecognitionHooks):
                 )
 
     def _put_question(self, question: _Question) -> None:
-        """A question is asked when none is in front of the person, or at once when it is a
-        follow-up of the task that holds the floor; else it waits behind the others."""
+        """A question waits in line, a follow-up of the task that holds the floor first; one is
+        asked when none is in front of the person, so at most one per turn of theirs."""
         ref = question.request._answer_ref
-        if ref is not None and ref == self._floor:
+        if ref is not None and self._floor is not None and ref == self._floor[0]:
             self._questions.insert(0, question)
-            self._ask(question)
-            return
-        self._questions.append(question)
-        self._ask_next()
+        else:
+            self._questions.append(question)
+        self._ask_at_idle()
 
     def _ask_next(self) -> None:
         """Asks the oldest waiting question, unless one is in front of the person or an expert's
         task holds the floor."""
-        if self._floor is not None or any(q.asked and not q.passed for q in self._questions):
+        if (
+            self._floor is not None
+            or self._deciding
+            or any(q.asked and not q.passed for q in self._questions)
+        ):
             return
         if (waiting := next((q for q in self._questions if not q.asked), None)) is not None:
             self._ask(waiting)
@@ -3374,6 +3417,8 @@ class AgentActivity(RecognitionHooks):
         """Puts a question to the person: as written when verbatim, else in the model's words."""
         request = question.request
         question.asked_at = time.time()
+        if question.pair is not None:
+            self._show_items(question.pair, True)
         try:
             if request.verbatim:
                 handle = self._say_exactly(request.question)
@@ -3400,6 +3445,8 @@ class AgentActivity(RecognitionHooks):
             if unheard and question.asked and question in self._questions:
                 # cut off before any of it played: it is unasked, and asked at the next idle
                 question.asked = False
+                if question.pair is not None:
+                    self._show_items(question.pair, False)
                 self._turn_after_question.set()
                 self._ask_at_idle()
 
@@ -3408,6 +3455,22 @@ class AgentActivity(RecognitionHooks):
         self._turn_after_question.clear()
         if (run_state := self._session._global_run_state) is not None and not run_state.done():
             run_state._watch_handle(handle)
+
+    def _show_items(self, items: list[llm.ChatItem], shown: bool) -> None:
+        """Puts tool items held out of the history in it, stamped now, or takes them out again:
+        a question as it is asked, exact text once it played."""
+        ids = {item.id for item in items}
+        now = time.time()
+        for item in items:
+            item.created_at = now
+        for chat_ctx in (self._chat_ctx, self._session.history):
+            chat_ctx.items[:] = [item for item in chat_ctx.items if item.id not in ids]
+            if shown:
+                chat_ctx.insert(items)
+        if self._rt_session is not None:
+            task = asyncio.create_task(self.update_chat_ctx(self._chat_ctx.copy()))
+            self._question_tasks.add(task)
+            task.add_done_callback(self._question_tasks.discard)
 
     def _answer_pending_input(self, message: llm.ChatMessage) -> None:
         """The person's message, said after the question in front of them was asked, moves it
@@ -3993,6 +4056,13 @@ class AgentActivity(RecognitionHooks):
             [task.ctx.function_call for task in _RunningTasks.get(self._session, {}).values()],
         )
         note_cut_off_replies(chat_ctx)
+        relayed = [
+            (q.request.question, q.output.name)
+            for q in self._questions
+            if q.relays and q.asked and q.output
+        ]
+        if (note := open_questions_note(relayed)) is not None:
+            chat_ctx.add_message(role="system", content=[note])
 
         tasks: list[asyncio.Task[Any]] = []
         # the spans of this generation record their input against the last committed one

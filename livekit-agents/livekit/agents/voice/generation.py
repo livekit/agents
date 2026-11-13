@@ -25,7 +25,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..llm.tool_context import (
-    RELAY_ANSWER,
+    ASKED_FOR,
     WAITING_PREFIX,
     Completed,
     Failed,
@@ -1191,9 +1191,10 @@ def _transition_output(fnc_call: llm.FunctionCall, transition: Transition) -> To
     elif isinstance(transition, Rejected):
         output, is_error = transition.reason, True
     elif isinstance(transition, InputRequired):
-        output = f"{WAITING_PREFIX}{transition.question}"
         if transition._answer_ref is not None:
-            output += RELAY_ANSWER.format(name=fnc_call.name)
+            output = ASKED_FOR.format(name=fnc_call.name, question=transition.question)
+        else:
+            output = f"{WAITING_PREFIX}{transition.question}"
     else:
         output = transition.message or "working"
 

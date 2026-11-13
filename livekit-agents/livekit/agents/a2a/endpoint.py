@@ -35,7 +35,7 @@ from ..storage.protocol import dump_state
 from ..storage.resolve import AgentRegistry
 from .auth import ANONYMOUS, AuthError, Credentials, Principal, Unauthorized
 from .extension import EXTENSIONS_HEADER, Extensions, agent_card, to_json
-from .methods import METHODS, STREAMING, A2AService, CallContext, JsonRpc
+from .methods import METHODS, STREAMING, A2AService, CallContext, RpcResponse
 
 AGENT_CARD_PATH = "/.well-known/agent-card.json"
 RPC_PATH = "/v1"
@@ -282,9 +282,9 @@ class A2AEndpoint(Generic[S]):
         except AuthError as e:
             return _auth_response(e)
         except StopAsyncIteration:
-            first = build_error_response(None, RpcInternalError(message="no response"))
-        if not streaming or "error" in first:
-            return JSONResponse(first, headers=headers)
+            first = RpcResponse(build_error_response(None, RpcInternalError(message="no response")))
+        if not streaming or "error" in first.body:
+            return JSONResponse(first.body, headers=headers)
 
         async def sse() -> AsyncIterator[bytes]:
             yield _sse_frame(first)
@@ -292,9 +292,8 @@ class A2AEndpoint(Generic[S]):
                 async for item in responses:
                     yield _sse_frame(item)
             except AuthError as e:
-                yield _sse_frame(
-                    build_error_response(body.get("id"), InternalError(message=e.message))
-                )
+                error = build_error_response(body.get("id"), InternalError(message=e.message))
+                yield _sse_frame(RpcResponse(error))
 
         headers["Cache-Control"] = "no-cache"
         return StreamingResponse(sse(), media_type="text/event-stream", headers=headers)
@@ -311,9 +310,13 @@ def _seconds(
     return {channel: wait.total_seconds() for channel, wait in debounce.items()}
 
 
-def _sse_frame(item: JsonRpc) -> bytes:
-    data = json.dumps(item, separators=(",", ":"))
-    prefix = b"event: error\n" if "error" in item else b""
+def _sse_frame(item: RpcResponse) -> bytes:
+    """One SSE event; a frame of a task's stream carries its position as the ``id`` a
+    ``Last-Event-ID`` resumes after."""
+    data = json.dumps(item.body, separators=(",", ":"))
+    prefix = b"event: error\n" if "error" in item.body else b""
+    if item.position is not None:
+        prefix += f"id: {item.position}\n".encode()
     return prefix + b"data: " + data.encode() + b"\n\n"
 
 

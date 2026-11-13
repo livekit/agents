@@ -19,7 +19,7 @@ export const WIRE_TERMINAL = new Set([
   "TASK_STATE_REJECTED",
 ]);
 
-type Part = { kind?: string; text?: string };
+type Part = { kind?: string; text?: string; metadata?: Record<string, unknown> };
 type Message = { messageId?: string; role?: string; parts?: Part[]; metadata?: Record<string, unknown> };
 type Status = { state: string; message?: Message };
 type Task = { id: string; contextId: string; status: Status; artifacts?: { parts: Part[] }[] };
@@ -30,14 +30,16 @@ export type Frame =
       result: {
         task?: Task;
         statusUpdate?: { taskId: string; status: Status; final?: boolean; metadata?: Record<string, unknown> };
-        artifactUpdate?: { taskId: string; artifact: { parts: Part[] }; append?: boolean; lastChunk?: boolean };
+        artifactUpdate?: { taskId: string; artifact: { artifactId?: string; parts: Part[] }; append?: boolean; lastChunk?: boolean };
       };
     };
 
 export type WireEvent =
   | { type: "task"; taskId: string; contextId: string; state: string; artifactText?: string }
   | { type: "progress"; text: string }
-  | { type: "artifact"; text: string; append: boolean }
+  | { type: "said"; text: string }
+  | { type: "replied" }
+  | { type: "artifact"; id: string; text: string; append: boolean; last: boolean }
   | { type: "question"; text: string }
   | { type: "ended"; taskId: string; state: string; meta: Record<string, unknown> }
   | { type: "error"; code: number; message: string };
@@ -79,8 +81,15 @@ export function interpret(frame: Frame): WireEvent[] {
   if (r.statusUpdate) {
     const update = r.statusUpdate;
     const state = update.status.state;
-    if (state === "TASK_STATE_WORKING" && update.status.message)
-      out.push({ type: "progress", text: partsText(update.status.message.parts) });
+    const message = update.status.message;
+    const textParts = (message?.parts ?? []).filter((part) => part.text);
+    /* A working message means only what the extension flags it as: progress, or a line said as written. */
+    if (state === "TASK_STATE_WORKING" && message?.metadata?.[key("progress")] === true)
+      out.push({ type: "progress", text: partsText(message.parts) });
+    else if (state === "TASK_STATE_WORKING" && textParts.length && textParts.every((part) => part.metadata?.[key("verbatim")] === true))
+      out.push({ type: "said", text: partsText(textParts) });
+    /* A reply beside work that runs on ended: the next reply is a new one. */
+    else if (state === "TASK_STATE_WORKING" && update.metadata && key("background") in update.metadata) out.push({ type: "replied" });
     if (update.final || state !== "TASK_STATE_WORKING") {
       /* A tool waiting on the person (plan 7.4): the question rides on the
          status, not an artifact. */
@@ -92,28 +101,36 @@ export function interpret(frame: Frame): WireEvent[] {
   if (r.artifactUpdate)
     out.push({
       type: "artifact",
+      id: r.artifactUpdate.artifact.artifactId ?? "",
       text: partsText(r.artifactUpdate.artifact.parts),
       append: Boolean(r.artifactUpdate.append),
+      last: Boolean(r.artifactUpdate.lastChunk),
     });
   return out;
 }
 
-/** Cuts complete SSE events off a buffer: their `data:` payloads, and the rest. */
-export function cutEvents(buffer: string): { events: string[]; rest: string } {
-  const events: string[] = [];
+/** One SSE event: its `data:` payload, and its `id:`, a frame's position in its task's stream. */
+export type SseEvent = { data: string; id?: string };
+
+/** Cuts complete SSE events off a buffer, and the rest. */
+export function cutEvents(buffer: string): { events: SseEvent[]; rest: string } {
+  const events: SseEvent[] = [];
   let index: number;
   while ((index = buffer.indexOf("\n\n")) >= 0) {
-    const event = buffer.slice(0, index);
+    const lines = buffer.slice(0, index).split("\n");
     buffer = buffer.slice(index + 2);
-    const data = event
-      .split("\n")
+    const data = lines
       .filter((line) => line.startsWith("data: "))
       .map((line) => line.slice(6))
       .join("");
-    if (data) events.push(data);
+    const id = lines.find((line) => line.startsWith("id: "))?.slice(4);
+    if (data) events.push(id ? { data, id } : { data });
   }
   return { events, rest: buffer };
 }
+
+/** A frame as the stream carried it, with its position when it is one of its task's frames. */
+export type Received = { frame: Frame; id?: string };
 
 export const uuid = () => `msg_${Math.random().toString(36).slice(2, 12)}`;
 
@@ -137,7 +154,7 @@ export class A2AClient {
     method: string,
     params: unknown,
     sessionId: string | null,
-  ): AsyncGenerator<Frame> {
+  ): AsyncGenerator<Received> {
     const id = uuid();
     const response = await fetch(`${this.endpoint}/v1`, {
       method: "POST",
@@ -146,7 +163,7 @@ export class A2AClient {
     });
     if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
     if (!response.headers.get("content-type")?.startsWith("text/event-stream")) {
-      yield (await response.json()) as Frame;
+      yield { frame: (await response.json()) as Frame };
       return;
     }
     const reader = response.body!.getReader();
@@ -158,7 +175,7 @@ export class A2AClient {
       buffer += decoder.decode(value, { stream: true });
       const cut = cutEvents(buffer);
       buffer = cut.rest;
-      for (const data of cut.events) yield JSON.parse(data) as Frame;
+      for (const { data, id } of cut.events) yield { frame: JSON.parse(data) as Frame, id };
     }
   }
 

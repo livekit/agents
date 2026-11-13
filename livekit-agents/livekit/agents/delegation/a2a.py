@@ -55,7 +55,6 @@ from .delegate import (
 from .input_required import (
     InputRequiredCheck,
     InputRequiredDetector,
-    InputRequiredDetectorFn,
     InputRequiredVerdict,
 )
 
@@ -82,6 +81,9 @@ DISPATCHED_SILENTLY = (
     "The request is with the expert. The answer is a separate entry, not this one."
 )
 """What the model reads on a call while the expert works under ``announce=False``, unanswered."""
+
+MERGED = "Taken up with your later request to this expert, whose answer covers both."
+"""What a call reads when the expert answered its request in one turn with a later one."""
 
 UNCLEAR = (
     "Not sent: the person's reply could answer more than one of the expert's open questions: "
@@ -142,7 +144,7 @@ class A2ADelegate(Delegate, Toolset):
         httpx_client: httpx.AsyncClient | None = None,
         name: str | None = None,
         announce: bool = True,
-        answer_detector: InputRequiredDetectorFn | bool = False,
+        answer_detector: InputRequiredDetector | bool = False,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._url = url.rstrip("/")
@@ -155,9 +157,11 @@ class A2ADelegate(Delegate, Toolset):
         # TODO: default to True if a benchmark of the asked-last default, this detector, the
         # detector started when the person's turn ends, and the model naming the question in the
         # tool's arguments shows it the best; is the tool-argument routing worth an option?
-        self._answer_detector: InputRequiredDetectorFn | None = (
-            InputRequiredDetector() if answer_detector is True else answer_detector or None
-        )
+        # a detector the delegate made is closed with it; one passed in belongs to the caller
+        self._owned_detector = InputRequiredDetector() if answer_detector is True else None
+        self._answer_detector = (
+            answer_detector if isinstance(answer_detector, InputRequiredDetector) else None
+        ) or self._owned_detector
         self._tool: FunctionTool | None = None
         # the tool names the expert only: its card could not be read yet
         self._unread = False
@@ -220,30 +224,42 @@ class A2ADelegate(Delegate, Toolset):
             history = ctx._run.chat_ctx
         # the reply to a question the expert asked continues its task
         answered: AskedQuestion | None = None
-        if asked := await ctx._asked_questions():
-            check = InputRequiredCheck(request, asked, history)
-            try:
-                verdict = await (self._answer_detector or _asked_last)(check)
-            except Exception as e:
-                logger.warning("the answer detector failed", extra={"error": str(e)})
-                verdict = await _asked_last(check)
-            if verdict == "unclear":
-                return UNCLEAR.format(questions="; ".join(f'"{q.question}"' for q in asked))
-            if verdict != "new":
-                answered = verdict
-                ctx._answering(answered)
+        try:
+            if asked := await ctx._asked_questions():
+                # without a detector, or when it fails, the question asked last takes the reply
+                last = max(asked, key=lambda q: q.asked_at)
+                verdict: InputRequiredVerdict = last
+                if self._answer_detector is not None:
+                    check = InputRequiredCheck(request, asked, history, usage=ctx.usage)
+                    try:
+                        verdict = await self._answer_detector.detect(check)
+                    except Exception as e:
+                        logger.warning("the answer detector failed", extra={"error": str(e)})
+                if verdict == "unclear":
+                    return UNCLEAR.format(questions="; ".join(f'"{q.question}"' for q in asked))
+                if verdict != "new":
+                    answered = verdict
+                    ctx._answering(answered)
+        finally:
+            ctx._decided()
         # the expert reads the person's own words in the thread
         await ctx._record()
-        if session is not None and answered is None:
-            # a barge-in drops the calls of the speech it cuts, so on a call the turn goes on
+        if session is not None:
+            # a barge-in drops the calls of the speech it cuts, so on a call the turn goes on;
+            # an answer too, so the expert's next question is a later output, out of the
+            # history until it is asked
             if self._announce:
                 ctx.update(DISPATCHED)
             else:
                 ctx.update(DISPATCHED_SILENTLY, silent=True)
+        # a desk another agent asked keeps its expert's progress: its own updates speak for it,
+        # and only exact text goes through every desk to the person
+        hooks = current_run_hooks()
+        delegated = hooks is not None and hooks.delegated
         try:
             result = await self.run(
                 request,
-                progress=ctx.update,
+                progress=None if delegated else ctx.update,
                 say=ctx.say,
                 context_id=session.thread.id if session and session.thread else None,
                 message_history=history,
@@ -323,6 +339,10 @@ class A2ADelegate(Delegate, Toolset):
 
         if update.state == "failed":
             raise DelegationFailed(text or "the delegation failed")
+        from ..a2a.extension import MERGED_INTO
+
+        if update.state == "completed" and not text and update.metadata.get(MERGED_INTO):
+            text = MERGED
         # with no text there is no question: the task gives an empty answer
         asked = update.state == "input-required" and bool(text)
 
@@ -407,10 +427,16 @@ class A2ADelegate(Delegate, Toolset):
                 extra={"url": self._url, "taskId": task_id, "error": str(e)},
             )
 
+    @property
+    def answer_detector(self) -> InputRequiredDetector | None:
+        return self._answer_detector
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._owned_detector is not None:
+            await self._owned_detector.aclose()
 
     async def _connect(self) -> AgentClient:
         if self._client is None:
@@ -436,11 +462,6 @@ class A2ADelegate(Delegate, Toolset):
         from ..a2a.auth import Credentials
 
         return Credentials(api_key, api_secret).project_token(identity="delegate")
-
-
-async def _asked_last(check: InputRequiredCheck) -> InputRequiredVerdict:
-    """With no detector, the question asked last takes the reply."""
-    return max(check.questions, key=lambda q: q.asked_at)
 
 
 def _conversation(

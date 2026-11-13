@@ -29,6 +29,7 @@ from ..llm import (
     RealtimeModelError,
     ToolChoice,
 )
+from ..llm.tool_context import UPDATE_OF_KEY
 from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
@@ -351,6 +352,11 @@ class RunContext(Generic[Deps_T, State_T]):
         if self._executor is not None:
             self._executor._sink.answering(self, question)
 
+    def _decided(self) -> None:
+        """This call said whether it answers one of its tool's questions."""
+        if self._executor is not None:
+            self._executor._sink.decided(self)
+
     async def _record(self) -> None:
         """The conversation so far is stored before another agent reads it."""
         if self._executor is not None:
@@ -409,15 +415,19 @@ class RunContext(Generic[Deps_T, State_T]):
         """Synthesize a (FunctionCall, FunctionCallOutput) pair for a progress update.
 
         The new FunctionCall carries ``{call_id}{call_id_suffix}``; name/arguments/extra
-        are copied. ``make_tool_output`` is reused so error handling matches dispatch.
+        are copied, and a pair of its own names the call it belongs to in ``UPDATE_OF_KEY``.
+        ``make_tool_output`` is reused so error handling matches dispatch.
         """
         from .generation import make_tool_output
 
+        extra = dict(self.function_call.extra)
+        if call_id_suffix:
+            extra[UPDATE_OF_KEY] = self.function_call.call_id
         fnc_call = FunctionCall(
             call_id=f"{self.function_call.call_id}{call_id_suffix}",
             name=self.function_call.name,
             arguments=self.function_call.arguments,
-            extra=dict(self.function_call.extra),
+            extra=extra,
         )
         tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
         return (fnc_call, tool_output.fnc_call_out)
