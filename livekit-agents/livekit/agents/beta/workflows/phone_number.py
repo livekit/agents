@@ -15,7 +15,9 @@ from ...voice.events import RunContext
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
 
-PHONE_REGEX = r"^\+?[1-9]\d{6,14}$"
+# with "+" the number starts with a country code, which never begins with 0; without it,
+# national numbers in many countries begin with a trunk 0 (UK 07700 900123, DE 030 ...)
+PHONE_REGEX = r"^(?:\+[1-9]\d{6,14}|\d{7,15})$"
 
 _BASE_INSTRUCTIONS = """
 You are only a single step in a broader system, responsible solely for capturing a phone number.
