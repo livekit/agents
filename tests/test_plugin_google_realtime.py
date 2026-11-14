@@ -60,6 +60,15 @@ def test_model_api_mismatch_warns(
 
 
 @pytest.mark.parametrize("vertexai", [False, True])
+def test_default_model_is_gemini_3_8_live_on_both_apis(vertexai: bool) -> None:
+    """Neither default may be a model Google retires: the Vertex native-audio model goes on 2026-12-13."""
+    model = RealtimeModel(
+        vertexai=vertexai, api_key="fake-key", project="test-project", location="us-central1"
+    )
+    assert model.model == "gemini-3.8-live"
+
+
+@pytest.mark.parametrize("vertexai", [False, True])
 def test_shared_model_api_from_environment(monkeypatch: pytest.MonkeyPatch, vertexai: bool) -> None:
     monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", str(vertexai))
     model = RealtimeModel(
@@ -472,6 +481,7 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
 ) -> None:
     """BLOCKING calls ignore scheduling, so each response is sent anyway and reported."""
     async with _make_connected_session(monkeypatch) as session:
+        session._opts.tool_behavior = types.Behavior.BLOCKING
         session._start_new_generation()
         session._handle_tool_calls(
             types.LiveServerToolCall(
@@ -1054,6 +1064,7 @@ async def test_update_instructions_role_for_api(
 ) -> None:
     """Vertex AI replaces the instruction with role="system"; the Gemini API rejects it."""
     async with _make_connected_session(monkeypatch) as session:
+        session._opts.model = "gemini-2.5-flash-native-audio-preview-12-2025"
         session._opts.vertexai = vertexai
         await session.update_instructions("replacement instructions")
 
