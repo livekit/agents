@@ -34,7 +34,7 @@ class _IdentitySession:
     is unambiguously an artifact of the buffering, not of the model.
     """
 
-    def process(self, chunk_in: np.ndarray, level: int) -> np.ndarray:
+    def process(self, chunk_in: np.ndarray, level: float) -> np.ndarray:
         return np.asarray(chunk_in, dtype=np.int16)
 
 
@@ -43,7 +43,7 @@ def _make_processor(sample_rate: int, chunk_samples: int) -> _KrispLicenseFrameP
     proc = object.__new__(_KrispLicenseFrameProcessor)
     proc._filtering_enabled = True
     proc._warned_channels = False
-    proc._noise_suppression_level = 100
+    proc._noise_suppression_level = 100.0
     proc._session = _IdentitySession()
     proc._sample_rate = sample_rate
     proc._chunk_samples = chunk_samples

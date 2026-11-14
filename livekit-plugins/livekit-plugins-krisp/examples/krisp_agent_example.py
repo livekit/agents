@@ -90,22 +90,25 @@ async def entrypoint(ctx: JobContext):
     # it on token rotation. No manual credential plumbing required. Input frames
     # of any size and sample rate are buffered and adapted automatically.
     noise_cancellation = krisp.voice_isolation(
-        noise_suppression_level=100,  # 0-100, where 100 is maximum suppression
+        # 0.0-100.0, where 100.0 is maximum suppression. Below 100.0, background
+        # voices leak through and may interrupt the agent.
+        noise_suppression_level=100.0,
     )
     # For telephony audio (for example, SIP participants), use
     # krisp.voice_isolation_telephony() instead.
 
-    # To use a Krisp license key + .kef model file instead, supply an explicit
-    # auth provider:
+    # To run Krisp's own SDK with a .kef model file instead, supply an explicit
+    # auth provider, or set KRISP_VIVA_FILTER_MODEL_PATH:
     #
     #     noise_cancellation = krisp.KrispVivaFilterFrameProcessor(
     #         auth_provider=krisp.auth.krisp_license(
     #             # Both default to env vars KRISP_VIVA_SDK_LICENSE_KEY and
-    #             # KRISP_VIVA_FILTER_MODEL_PATH if omitted.
+    #             # KRISP_VIVA_FILTER_MODEL_PATH if omitted. Only Krisp's UAR
+    #             # builds need the key.
     #             license_key="...",
     #             model_path="/path/to/model.kef",
     #         ),
-    #         noise_suppression_level=100,
+    #         noise_suppression_level=100.0,
     #     )
 
     # Start the session with RoomIO configuration.

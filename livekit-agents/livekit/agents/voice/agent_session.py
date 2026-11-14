@@ -2450,7 +2450,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._vad
 
     @property
-    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
+    def interruption_detection(
+        self,
+    ) -> NotGivenOr[Literal["adaptive", "vad"] | inference.InterruptionDetector]:
         return self._interruption_detection
 
     # -- User changed input/output streams/sinks --

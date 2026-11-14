@@ -24,7 +24,7 @@ implementation.
   framework hands to the FrameProcessor via the standard
   ``_on_credentials_updated`` callback.
 - :class:`KrispLicenseAuthProvider`: selects the public ``krisp_audio`` wheel
-  with a Krisp license key + ``.kef`` model file.
+  with a ``.kef`` model file, plus a Krisp license key on Krisp's UAR builds.
 
 Recommended call sites use the snake_case aliases via the ``auth`` namespace::
 
@@ -50,10 +50,13 @@ class LiveKitCloudAuthProvider:
 
 
 class KrispLicenseAuthProvider:
-    """Krisp-direct auth using a license key + ``.kef`` model file.
+    """Krisp-direct auth using a ``.kef`` model file and an optional license key.
 
-    Defaults to reading ``KRISP_VIVA_SDK_LICENSE_KEY`` and
-    ``KRISP_VIVA_FILTER_MODEL_PATH`` from the environment.
+    Defaults to reading ``KRISP_VIVA_FILTER_MODEL_PATH`` and
+    ``KRISP_VIVA_SDK_LICENSE_KEY`` from the environment. Only Krisp's UAR (Usage
+    Auto Reporting) builds of ``krisp_audio`` need the key; regular builds take
+    none. A UAR build without a key fails when the SDK starts, because only then
+    is it known which build is installed.
     """
 
     def __init__(
