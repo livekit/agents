@@ -216,34 +216,188 @@ mod stored_answer_reaches_the_read_back {
 
 mod cut_question {
     //! A question its speech was cut before putting is not the one the person's words answer.
-    use lk_agents_fuzz::search;
+    use lk_agents_abi::ChatItem;
+    use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{
+        AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, TurnMode, UserText,
+    };
+    use lk_agents_voice::events::SessionEvent;
 
     // Catches: a step whose speech was cut before its tools settled kept its question selected,
-    // so the person's next words answered a question never put instead of the one asked (survey
-    // seed 16796 BasicPos, tool_output_follows_outcome).
+    // so the person's next words answered a question never put instead of the one asked.
     #[test]
     fn the_next_words_answer_the_question_asked() {
-        let seed = 16796;
-        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-        let outcome = search::explore(setup, seed, 3000);
-        let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.to_string()).collect();
-        assert!(!failed.iter().any(|c| c == "tool_output_follows_outcome"), "{failed:?}");
+        let setup = Setup {
+            vad: true,
+            stt: true,
+            turn: TurnMode::Stt,
+            tools: vec!["lookup".into(), "reserve".into()],
+            ..Setup::default()
+        };
+        let call = |chat, name: &str| Input::LlmToolCall {
+            chat: Ref::new(chat),
+            name: name.into(),
+            args: ToolArgs("{}".into()),
+        };
+        let ask = |tool, question: &str| Input::ToolAnswered {
+            tool: Ref::new(tool),
+            answer: ToolAnswer::AskVerbatim,
+            text: AgentText(question.into()),
+        };
+        let inputs = [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            call(0, "lookup"),
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(100) },
+            // The reply is cut while `lookup` runs; its question comes after and is never put.
+            Input::Interrupt { force: false, wait: false },
+            Input::Advance { ms: Millis(100) },
+            ask(0, "Which day?"),
+            Input::Advance { ms: Millis(1_000) },
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            call(1, "reserve"),
+            Input::LlmEnd { chat: Ref::new(1) },
+            Input::Advance { ms: Millis(100) },
+            ask(1, "Which city?"),
+            Input::Advance { ms: Millis(3_000) },
+            Input::VadStart { vad: Ref::new(0), speech_ms: Millis(300) },
+            Input::SttStart { stt: Ref::new(0) },
+            Input::Advance { ms: Millis(300) },
+            Input::SttFinal {
+                utterance: Ref::new(0),
+                text: UserText("Paris".into()),
+                speaker: None,
+            },
+            Input::SttEnd { utterance: Ref::new(0) },
+            Input::VadEnd { vad: Ref::new(0), silence_ms: Millis(500) },
+            Input::Advance { ms: Millis(3_000) },
+        ];
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            run
+        });
+        let outputs: Vec<(String, String)> = run
+            .record
+            .host_view()
+            .events()
+            .into_iter()
+            .filter_map(|(_, ev)| match ev {
+                SessionEvent::ConversationItemAdded { item, .. } => match item.as_ref() {
+                    ChatItem::FunctionCallOutput(o) => Some((o.name.clone(), o.output.clone())),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let waiting = |q: &str| format!("{WAITING_PREFIX}{q}");
+        assert_eq!(
+            outputs,
+            [
+                ("lookup".to_owned(), waiting("Which day?")),
+                ("reserve".to_owned(), waiting("Which city?")),
+                ("reserve".to_owned(), "Paris".to_owned()),
+            ],
+            "the answer goes to the question put, never to the cut one"
+        );
     }
 }
 
 mod questions_in_recorded_order {
     //! Questions wait in the order the session recorded them.
-    use lk_agents_fuzz::search;
+    use lk_agents_abi::ChatItem;
+    use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{
+        AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, TurnMode, UserText,
+    };
+    use lk_agents_voice::events::SessionEvent;
 
     // Catches: an output stamped from its run's anchor, before an output the session recorded
     // ahead of it, so the history put the later question first and the person's words answered
-    // it (campaign seed 5264 Arrival, tool_output_follows_outcome).
+    // it.
     #[test]
     fn the_next_words_answer_the_question_recorded_first() {
-        let seed = 5264;
-        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-        let outcome = search::explore(setup, seed, 3000);
-        let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.to_string()).collect();
-        assert!(!failed.iter().any(|c| c == "tool_output_follows_outcome"), "{failed:?}");
+        let setup = Setup {
+            vad: true,
+            stt: true,
+            turn: TurnMode::Stt,
+            tools: vec!["lookup".into(), "reserve".into()],
+            ..Setup::default()
+        };
+        let call = |chat, name: &str| Input::LlmToolCall {
+            chat: Ref::new(chat),
+            name: name.into(),
+            args: ToolArgs("{}".into()),
+        };
+        let ask = |tool, question: &str| Input::ToolAnswered {
+            tool: Ref::new(tool),
+            answer: ToolAnswer::AskVerbatim,
+            text: AgentText(question.into()),
+        };
+        let inputs = [
+            // The first reply's `reserve` runs on once its step gave the floor back.
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            call(0, "reserve"),
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(100) },
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            // In one instant: the second reply calls `lookup`, which asks, then `reserve` asks.
+            call(1, "lookup"),
+            Input::LlmEnd { chat: Ref::new(1) },
+            Input::Advance { ms: Millis(0) },
+            ask(1, "Which day?"),
+            Input::Advance { ms: Millis(0) },
+            ask(0, "Which city?"),
+            Input::Advance { ms: Millis(3_000) },
+            Input::VadStart { vad: Ref::new(0), speech_ms: Millis(300) },
+            Input::SttStart { stt: Ref::new(0) },
+            Input::Advance { ms: Millis(300) },
+            Input::SttFinal {
+                utterance: Ref::new(0),
+                text: UserText("Monday".into()),
+                speaker: None,
+            },
+            Input::SttEnd { utterance: Ref::new(0) },
+            Input::VadEnd { vad: Ref::new(0), silence_ms: Millis(500) },
+            Input::Advance { ms: Millis(3_000) },
+        ];
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            run
+        });
+        let outputs: Vec<(String, String)> = run
+            .record
+            .host_view()
+            .events()
+            .into_iter()
+            .filter_map(|(_, ev)| match ev {
+                SessionEvent::ConversationItemAdded { item, .. } => match item.as_ref() {
+                    ChatItem::FunctionCallOutput(o) => Some((o.name.clone(), o.output.clone())),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let waiting = |q: &str| format!("{WAITING_PREFIX}{q}");
+        assert_eq!(
+            outputs,
+            [
+                ("lookup".to_owned(), waiting("Which day?")),
+                ("reserve".to_owned(), waiting("Which city?")),
+                ("lookup".to_owned(), "Monday".to_owned()),
+            ],
+            "the answer goes to the question recorded first"
+        );
     }
 }

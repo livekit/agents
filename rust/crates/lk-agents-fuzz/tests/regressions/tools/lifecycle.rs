@@ -404,16 +404,33 @@ mod host_body_close_ownership {
 
     // Catches: a host body refusing the close's cancellation held the call that awaited it past
     // the close's cleanup bound as well, though only the body owns its cleanup: the call's task
-    // was cancelled there (survey seed 5901 TaskBridge, every_task_finishes).
+    // was cancelled there.
     #[test]
     fn a_body_refusing_the_close_alone_runs_to_the_bound() {
-        use lk_agents_fuzz::{drive::Policy, search};
-        let seed = 5901;
-        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-        let dials = search::Dials::of(seed);
-        let outcome = search::explore_with(setup, seed, 3000, dials, Policy::TaskBridge);
-        let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.to_string()).collect();
-        assert!(!failed.iter().any(|c| c == "every_task_finishes"), "{failed:?}");
+        // The person cut the reply while its tool ran: the speech is done, the call still awaits
+        // its body when the close lands.
+        let mut case = case(true);
+        case.inputs.truncate(5);
+        case.inputs.extend([
+            Input::Interrupt { force: false, wait: false },
+            Input::Advance { ms: Millis(100) },
+            Input::Close { drain: false },
+            Input::AwaitExit {},
+        ]);
+        let outcome = run(case);
+        let late: Vec<_> = outcome
+            .failures
+            .iter()
+            .filter(|f| f.contract == "every_task_finishes")
+            .map(|f| &f.detail)
+            .collect();
+        assert!(late.is_empty(), "{late:?}");
+        assert!(
+            outcome.expectations.get("close_completes_at_its_bound").is_some_and(|n| *n > 0),
+            "the refusing body did not hold the close to its bound"
+        );
+        assert!(outcome.ok(), "{:?}", outcome.failures);
+        assert!(!outcome.stopped_early, "{:?}", outcome.ending);
     }
 
     #[test]
