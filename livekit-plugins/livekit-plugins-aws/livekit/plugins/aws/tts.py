@@ -23,6 +23,7 @@ from aiobotocore.session import AioSession  # type: ignore
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIStatusError,
     APITimeoutError,
     LanguageCode,
     tts,
@@ -187,5 +188,20 @@ class ChunkedStream(tts.ChunkedStream):
                             output_emitter.push(data)
         except botocore.exceptions.ConnectTimeoutError:
             raise APITimeoutError() from None
+        except botocore.exceptions.ClientError as e:
+            meta = e.response.get("ResponseMetadata", {})
+            status_error = APIStatusError(
+                f"aws polly tts: error synthesizing speech: {e}",
+                status_code=meta.get("HTTPStatusCode", -1),
+                request_id=meta.get("RequestId"),
+            )
+            # Polly throttles with a 400, and request signing can raise STS's ClientErrors here
+            if (
+                status_error.retryable
+                or e.operation_name != "SynthesizeSpeech"
+                or e.response.get("Error", {}).get("Code") == "ThrottlingException"
+            ):
+                raise APIConnectionError() from e
+            raise status_error from e
         except Exception as e:
             raise APIConnectionError() from e
