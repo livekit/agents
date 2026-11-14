@@ -28,10 +28,10 @@ classifiers = [
 dependencies = [
     "certifi>=2025.6.15",
     "livekit==1.2.1",
-    "livekit-api>=1.2.2,<2",
-    "livekit-local-inference>=0.3.0,<0.4",
+    "livekit-api==1.2.2",
+    "livekit-local-inference==0.3.0",
     "livekit-protocol==1.1.32",
-    "livekit-blingfire~=1.1,<2",
+    "livekit-blingfire==1.1.0",
     "protobuf>=3",
     "pyjwt>=2.0",
     "types-protobuf>=4",
