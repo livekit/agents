@@ -10,6 +10,7 @@ import asyncio
 import base64
 import io
 import json
+import time
 import wave
 from typing import Any
 from unittest.mock import patch
@@ -309,6 +310,78 @@ async def test_stream_that_stalls_after_end_times_out():
 
     with pytest.raises(APITimeoutError):
         await asyncio.wait_for(_stream_against(ws_stt, timeout=0.5), 10)
+
+
+async def _live_stream(ws_stt, *, liveness_timeout: float = 1.0):
+    """A stream whose input stays open, against ``ws_stt``; returns (runner, session, stream)."""
+    from livekit.plugins.lokutor import STT
+
+    app = web.Application()
+    app.router.add_get("/ws/stt", ws_stt)
+    runner, base = await _serve(app)
+    session = aiohttp.ClientSession()
+    s = STT(api_key="sk-test", base_url=base, http_session=session)
+    stream = s.stream(
+        conn_options=APIConnectOptions(max_retry=0, liveness_timeout=liveness_timeout)
+    )
+    stream.push_frame(_frame())
+    return runner, session, stream
+
+
+async def test_stream_fails_within_the_liveness_timeout_when_the_server_goes_silent():
+    # A half-open socket never delivers a close; only an unanswered ping reveals it.
+    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse(autoping=False)
+        await ws.prepare(request)
+        await ws.receive()
+        await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
+        async for _ in ws:
+            pass
+        return ws
+
+    runner, session, stream = await _live_stream(ws_stt)
+    try:
+        started = time.monotonic()
+        with pytest.raises(APIConnectionError, match="WebSocket connection lost"):
+
+            async def drain() -> None:
+                async for _ in stream:
+                    pass
+
+            await asyncio.wait_for(drain(), 5)
+        assert time.monotonic() - started < 3
+    finally:
+        await stream.aclose()
+        await session.close()
+        await runner.cleanup()
+
+
+async def test_a_quiet_stream_that_answers_pings_stays_open():
+    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()  # answers pings
+        await ws.prepare(request)
+        await ws.receive()
+        await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
+        async for _ in ws:
+            pass
+        return ws
+
+    runner, session, stream = await _live_stream(ws_stt)
+    events: list[stt.SpeechEvent] = []
+
+    async def collect() -> None:
+        async for ev in stream:
+            events.append(ev)
+
+    task = asyncio.create_task(collect())
+    try:
+        await asyncio.sleep(2.5)  # over two liveness windows with no message from the server
+        assert not task.done()
+    finally:
+        await stream.aclose()
+        await asyncio.gather(task, return_exceptions=True)
+        await session.close()
+        await runner.cleanup()
 
 
 async def test_stream_without_a_language_reports_the_detected_one():
