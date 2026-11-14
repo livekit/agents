@@ -234,6 +234,7 @@ def _extract_message_chunk(item: Any) -> BaseMessageChunk | str | None:
 def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
     message_id = utils.shortuuid("LC_")
     content: str | None = None
+    usage: llm.CompletionUsage | None = None
 
     if isinstance(msg, str):
         content = msg
@@ -250,13 +251,22 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
         if isinstance(raw, str):
             content = raw
 
-    if not content:
+    usage_metadata = getattr(msg, "usage_metadata", None)
+    if usage_metadata:
+        usage = llm.CompletionUsage(
+            completion_tokens=usage_metadata["output_tokens"],
+            prompt_tokens=usage_metadata["input_tokens"],
+            total_tokens=usage_metadata["total_tokens"],
+        )
+
+    if not content and usage is None:
         return None
 
     return llm.ChatChunk(
         id=message_id,
         delta=llm.ChoiceDelta(
             role="assistant",
-            content=content,
+            content=content or "",
         ),
+        usage=usage,
     )
