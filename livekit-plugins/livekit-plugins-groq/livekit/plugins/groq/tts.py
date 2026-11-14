@@ -188,5 +188,7 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except (APIStatusError, APIError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e

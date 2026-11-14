@@ -23,6 +23,8 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
+    APIStatusError,
     APITimeoutError,
     create_api_error_from_http,
     tts,
@@ -256,5 +258,7 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from None
+        except (APIStatusError, APIError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
