@@ -65,6 +65,11 @@ class MCPToolOptions(TypedDict, total=False):
     report_progress: bool
     """Whether to forward the tool's progress notifications to ctx.update()."""
 
+    read_timeout_seconds: float
+    """Per-tool read timeout in seconds. If unset or zero, uses the server's default
+    ``client_session_timeout_seconds``. Useful for slow operations (payments,
+    bookings) that need a longer timeout without penalizing fast lookups."""
+
 
 # default for tools not listed in tool_options
 _DEFAULT_TOOL_OPTIONS: MCPToolOptions = {
@@ -72,6 +77,7 @@ _DEFAULT_TOOL_OPTIONS: MCPToolOptions = {
     "on_duplicate": "allow",
     "duplicate_scope": "name",
     "report_progress": False,
+    "read_timeout_seconds": 0.0,
 }
 
 
@@ -272,7 +278,10 @@ class MCPServer(ABC):
                     await ctx.update(message)
 
                 tool_result = await self._call_tool(
-                    name, raw_arguments, progress_callback=_on_progress
+                    name,
+                    raw_arguments,
+                    progress_callback=_on_progress,
+                    read_timeout_seconds=options["read_timeout_seconds"],
                 )
                 return await _resolve(tool_result, raw_arguments)
 
@@ -287,7 +296,9 @@ class MCPServer(ABC):
                         "Please check that the MCPServer is still running."
                     )
 
-                tool_result = await self._call_tool(name, raw_arguments)
+                tool_result = await self._call_tool(
+                    name, raw_arguments, read_timeout_seconds=options["read_timeout_seconds"]
+                )
                 return await _resolve(tool_result, raw_arguments)
 
             impl = _tool_called
@@ -314,6 +325,7 @@ class MCPServer(ABC):
         arguments: dict[str, Any],
         *,
         progress_callback: ProgressFnT | None = None,
+        read_timeout_seconds: float | None = None,
     ) -> mcp.types.CallToolResult:
         """Call a tool.
 
@@ -324,7 +336,12 @@ class MCPServer(ABC):
         """
         client = self._client
         assert client is not None
-        result = await client.call_tool(name, arguments, progress_callback=progress_callback)
+        timeout = (
+            read_timeout_seconds if read_timeout_seconds and read_timeout_seconds > 0 else None
+        )
+        result = await client.call_tool(
+            name, arguments, progress_callback=progress_callback, read_timeout_seconds=timeout
+        )
         if not isinstance(result, mcp.types.CallToolResult):
             raise ToolError(
                 f"Tool '{name}' returned an unexpected MCP result ({type(result).__name__})."
