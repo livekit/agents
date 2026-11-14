@@ -5,11 +5,11 @@ use crate::telemetry;
 use handler::{Handler, Read};
 use lk_agents_abi::a2a::metadata::REASON_KEY;
 use lk_agents_abi::a2a::turn::Turn as TurnContract;
-use lk_agents_abi::storage::thread::{Backoff, TaskReason, TaskWrite};
+use lk_agents_abi::storage::thread::{TaskReason, TaskWrite};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, Spawner};
 use lk_agents_core::a2a::task::{
     A2aTaskEffect, A2aTaskEvent, Access, Completion, Handle, HandlerEvent, Operation, PartitionRun,
-    RunEnd, Stage, TaskMachine, rejected_commit,
+    RunEnd, Stage, TaskMachine,
 };
 use lk_agents_core::a2a::{
     HandlerOutput, Message, Policy, TurnContext, TurnHost, TurnOptions, TurnResult,
@@ -17,7 +17,6 @@ use lk_agents_core::a2a::{
 };
 use lk_agents_net::env::{ProcessEnv, ProcessError};
 use lk_agents_net::task::{Leave, TaskSet};
-use lk_agents_storage::thread::RESOLVE_LATER;
 use lk_agents_storage::thread::db::{Receive, ReceiveInput};
 use lk_agents_storage::thread::run::ItemRow;
 use lk_agents_storage::{
@@ -27,7 +26,6 @@ use lk_agents_storage::{
 use lk_agents_storage::{Holder, StorageError};
 use serde_json::Value;
 use std::sync::Arc;
-use std::time::Duration;
 
 /// One message's live resources while its machine runs: the partition, the open run, a kept lease,
 /// the open handler, the task it submitted.
@@ -39,20 +37,19 @@ struct Call {
     lease: Option<Lease>,
     handler: Option<Handler>,
     submitted: Option<Submitted>,
-    /// Where the turn's background work (a cancel, a commit resolver) runs.
+    /// Where the turn's background work (an unanswered task's cancel) runs.
     spawner: Arc<dyn Spawner>,
 }
 
 /// The `submitted` row a turn writes, owned from before its insert until the turn answers it.
 /// Dropped unanswered (the client dropped the turn, or an error ended it) it is canceled in the
-/// background, through outages: no task is left submitted with nobody to run it.
+/// background, until the cancel's deadline: no task is left submitted with nobody to run it.
 struct Submitted {
     partition_key: Partition,
     task_id: String,
     /// Keeps the thread's connection open for the cancel.
     open: Option<Leave>,
-    clock: Arc<dyn Clock>,
-    resolvers: Arc<TaskSet>,
+    cancels: Arc<TaskSet>,
     spawner: Arc<dyn Spawner>,
     answered: bool,
 }
@@ -62,35 +59,22 @@ impl Drop for Submitted {
         if self.answered {
             return;
         }
-        let (partition_key, task_id, clock) =
-            (self.partition_key.clone(), self.task_id.clone(), self.clock.clone());
+        let (partition_key, task_id) = (self.partition_key.clone(), self.task_id.clone());
         let open = self.open.take();
-        self.resolvers.spawn(&*self.spawner, "a2a task cancel", async move {
+        self.cancels.spawn(&*self.spawner, "a2a task cancel", async move {
             let _open = open;
-            cancel_unanswered(partition_key, task_id, clock).await;
+            cancel_unanswered(partition_key, task_id).await;
         });
     }
 }
 
-/// Cancels a task its turn left unanswered, `caller-canceled`; a terminal row stays as it is. A
-/// database that cannot be reached is tried again for up to [`RESOLVE_LATER`].
-async fn cancel_unanswered(partition_key: Partition, task_id: String, clock: Arc<dyn Clock>) {
+/// Cancels a task its turn left unanswered, `caller-canceled`; a terminal row stays as it is.
+/// The cancel's own resends own its retries, until its deadline.
+async fn cancel_unanswered(partition_key: Partition, task_id: String) {
     let reason = Value::String(TaskReason::CallerCanceled.as_str().to_owned());
     let metadata = serde_json::Map::from_iter([(REASON_KEY.to_owned(), reason)]);
-    let epoch = clock.now();
-    let mut backoff = Backoff::new(Duration::ZERO, RESOLVE_LATER);
-    loop {
-        let error = match partition_key.cancel_task(&task_id, metadata.clone()).await {
-            Ok(_) => return,
-            Err(error) => error,
-        };
-        let retry = matches!(error, StorageError::Unavailable(_) | StorageError::Uncertain(_));
-        let next = backoff.next(clock.now().saturating_duration_since(epoch)).filter(|_| retry);
-        let Some(at) = next else {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, taskId = task_id.as_str(); "an unanswered task could not be canceled: {error}");
-            return;
-        };
-        clock.wait_until(epoch.saturating_add(at)).await;
+    if let Err(error) = partition_key.cancel_task(&task_id, metadata).await {
+        log::warn!(target: lk_agents_abi::LOG_TARGET, taskId = task_id.as_str(); "an unanswered task could not be canceled: {error}");
     }
 }
 
@@ -204,8 +188,8 @@ pub struct Turn {
     host_context: Option<lk_agents_abi::HostRef>,
     /// The span the handler runs in: the request's `a2a_request`.
     span: Option<telemetry::SpanContext>,
-    /// The resolvers of commits left uncertain, owned by the door.
-    resolvers: Arc<TaskSet>,
+    /// The cancels of tasks turns left unanswered, owned by the door.
+    cancels: Arc<TaskSet>,
     /// The executor each run's background work spawns on, read when the run starts.
     spawner: fn() -> Result<Arc<dyn Spawner>, ProcessError>,
 }
@@ -233,7 +217,7 @@ impl Turn {
             publisher: None,
             host_context: None,
             span: None,
-            resolvers: Arc::default(),
+            cancels: Arc::default(),
             spawner,
         }
     }
@@ -350,8 +334,7 @@ impl Turn {
                     partition_key: call.partition_key.clone(),
                     task_id: task.task_id.clone(),
                     open: Some(self.thread.keep_open("a2a task cancel")),
-                    clock: self.clock.clone(),
-                    resolvers: self.resolvers.clone(),
+                    cancels: self.cancels.clone(),
                     spawner: call.spawner.clone(),
                     answered: false,
                 });
@@ -407,12 +390,9 @@ impl Turn {
                 }
                 Completion::Done
             }
-            Operation::ResolveLater { task_id, failed } => {
-                let run = call
-                    .run
-                    .take()
-                    .ok_or_else(|| StorageError::Invalid("no A2A run is open".into()))?;
-                self.resolve_later(call, run, task_id, failed);
+            Operation::DropUncertain => {
+                // its lease drops with it: released by token, in the holder's background
+                call.run = None;
                 Completion::Done
             }
             Operation::CloseRun => {
@@ -554,27 +534,6 @@ impl Turn {
         let cx = telemetry::Cx::NONE.continuing(self.span);
         call.handler = Some(Handler::open(host, cx, host_ctx));
         Ok(Completion::Done)
-    }
-
-    /// Hands a run whose commit stayed uncertain to a background resolver, which fails its task
-    /// with `failed` when the commit was rejected.
-    fn resolve_later(&self, call: &Call, run: Run, answer: String, failed: a2a::Message) {
-        let open = self.thread.keep_open("a2a commit resolver");
-        let partition_key = call.partition_key.clone();
-        self.resolvers.spawn(&*call.spawner, "a2a commit resolver", async move {
-            let _open = open;
-            match run.resolve_later().await {
-                Some(Err(e)) if rejected_commit(&e) => {
-                    if let Err(e) = partition_key.fail_orphan(&answer, &failed).await {
-                        log::warn!(target: lk_agents_abi::LOG_TARGET, taskId = answer.as_str(); "a rejected commit's task could not be failed: {e}");
-                    }
-                }
-                Some(Err(e)) => {
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, taskId = answer.as_str(); "a commit stayed unresolved: {e}");
-                }
-                Some(Ok(_)) | None => {}
-            }
-        });
     }
 
     /// Answers the handler's last checkpoint, then reads its next checkpoint or its output; a

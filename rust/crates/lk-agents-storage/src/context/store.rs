@@ -16,9 +16,7 @@ use crate::telemetry::Cx;
 use crate::thread::run::RunOutcome;
 use crate::thread::schema::{RecordAppliedWrite, SelectAppliedWrite};
 use crate::{CommitOptions, Holder, RunOptions, Storage, StorageError, Thread, shortuuid};
-use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::thread::AbandonReason;
-use lk_agents_net::signal;
 
 #[path = "store_session.rs"]
 mod session;
@@ -37,8 +35,9 @@ pub struct ContextStore {
     turn: Arc<AtomicU64>,
     /// What managed transactions staged for the turn's commit.
     statements: Arc<Mutex<Vec<AppStatement>>>,
-    /// A direct save whose acknowledgment was lost, resolving before the next load or save.
-    lost_save: Arc<Mutex<Option<signal::Cell<Option<SaveOutcome>>>>>,
+    /// A direct save whose outcome stayed unknown at its deadline: the next save reloads the
+    /// committed scopes first.
+    lost_save: Arc<AtomicBool>,
 }
 
 /// The partition's thread database: direct saves outside a managed turn, and application SQL.
@@ -120,45 +119,17 @@ impl Database {
         .await
     }
 
-    /// A direct save, one fenced run. One whose acknowledgment stayed lost keeps resolving in
-    /// the background, on the holder's cleanup set, and is answered with its outcome's watch.
-    async fn commit(&self, writes: Vec<ContextScopeWrite>) -> Result<(), Unsaved> {
+    /// A direct save, one fenced run. One whose outcome stayed unknown at its deadline is
+    /// `Uncertain`; its dropped run's lease is released by token, which fences it out if it
+    /// never applied.
+    async fn commit(&self, writes: Vec<ContextScopeWrite>) -> Result<(), StorageError> {
         let thread = self.open().await?;
-        let mut run = match self.stage(&thread, writes).await {
-            Ok(run) => run,
-            Err(error) => {
-                thread.close().await;
-                return Err(error.into());
-            }
+        let out = match self.stage(&thread, writes).await {
+            Ok(mut run) => run.commit(CommitOptions::default()).await.map(drop),
+            Err(error) => Err(error),
         };
-        match run.commit(CommitOptions::default()).await {
-            Err(StorageError::Uncertain(why)) => {
-                let (resolved, resolving) = signal::once();
-                let lost = why.clone();
-                let spawner = thread.background.spawner.clone();
-                self.holder.spawn_settling_cleanup(
-                    &*spawner,
-                    "context save resolution",
-                    resolved,
-                    async move {
-                        let outcome = match run.resolve_later().await {
-                            Some(Ok(_)) => SaveOutcome::Committed,
-                            Some(Err(StorageError::Uncertain(why))) => SaveOutcome::Unknown(why),
-                            // refused or rejected: the save cannot apply any more
-                            Some(Err(_)) => SaveOutcome::NeverApplied,
-                            None => SaveOutcome::Unknown(lost),
-                        };
-                        thread.close().await;
-                        outcome
-                    },
-                );
-                Err(Unsaved::Lost(why, resolving))
-            }
-            out => {
-                thread.close().await;
-                Ok(out.map(drop)?)
-            }
-        }
+        thread.close().await;
+        out
     }
 
     /// The direct save's run, its writes staged once the lease confirmed their revisions.
@@ -191,29 +162,6 @@ impl Database {
         run.stage_scopes(writes);
         Ok(run)
     }
-}
-
-/// A direct save that did not commit: refused, or its acknowledgment lost with its resolution
-/// in flight.
-enum Unsaved {
-    Refused(StorageError),
-    Lost(Unacknowledged, signal::Cell<Option<SaveOutcome>>),
-}
-
-impl From<StorageError> for Unsaved {
-    fn from(error: StorageError) -> Self {
-        Self::Refused(error)
-    }
-}
-
-/// How a lost direct save resolved.
-#[derive(Clone)]
-enum SaveOutcome {
-    Committed,
-    /// Refused or rejected: it cannot apply any more.
-    NeverApplied,
-    /// Nobody could tell.
-    Unknown(Unacknowledged),
 }
 
 impl ContextStore {
@@ -277,23 +225,16 @@ impl ContextStore {
         self.statements.lock().clear();
     }
 
-    /// Settles a lost direct save by its outcome before anything reads or stages over it:
-    /// committed, its writes are acknowledged; never applied, they are dropped. `Uncertain`
-    /// while nobody can tell, and its writes stay pending.
+    /// Reloads the committed scopes over a direct save whose outcome stayed unknown, before
+    /// anything stages over it: the database's committed state is the truth. A save that lands
+    /// after the read is caught by the next save's revision check under its lease.
     async fn settle_lost_save(&self, database: &Database) -> Result<(), StorageError> {
-        let Some(resolving) = self.lost_save.lock().clone() else { return Ok(()) };
-        let outcome = resolving.wait().await.ok();
-        match outcome {
-            Some(SaveOutcome::Committed) => self.activation.lock().acknowledge(),
-            Some(SaveOutcome::NeverApplied) => self.activation.lock().abandon(),
-            Some(SaveOutcome::Unknown(why)) => return Err(StorageError::Uncertain(why)),
-            // its resolver was stopped: the database's committed state is the truth
-            None => {
-                let (scopes, routing) = database.snapshot().await?;
-                *self.activation.lock() = Activation::new(scopes, routing, false)?;
-            }
+        if !self.lost_save.load(Ordering::Acquire) {
+            return Ok(());
         }
-        *self.lost_save.lock() = None;
+        let (scopes, routing) = database.snapshot().await?;
+        *self.activation.lock() = Activation::new(scopes, routing, false)?;
+        self.lost_save.store(false, Ordering::Release);
         Ok(())
     }
 
@@ -398,13 +339,13 @@ impl HostContextActivation for ContextStore {
             let writes = self.activation.lock().writes();
             match database.commit(writes).await {
                 Ok(()) => self.activation.lock().acknowledge(),
-                Err(Unsaved::Lost(why, resolving)) => {
-                    *self.lost_save.lock() = Some(resolving);
+                Err(StorageError::Uncertain(why)) => {
+                    self.lost_save.store(true, Ordering::Release);
                     return Err(StorageError::Uncertain(why));
                 }
                 // The refused values never stand: the committed ones do, until the next load
                 // reloads the partition.
-                Err(Unsaved::Refused(error)) => {
+                Err(error) => {
                     self.activation.lock().abandon();
                     return Err(error);
                 }

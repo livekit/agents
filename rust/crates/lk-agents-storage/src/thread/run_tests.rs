@@ -730,6 +730,33 @@ async fn a_commit_whose_ack_was_lost_before_it_applied_is_sent_again_under_its_f
     fx.cleanup(&[&s]).await;
 }
 
+/// Catches: a commit whose resends and whose resolution each waited a budget of their own. A
+/// commit refused unapplied for half its deadline, then answered with its acknowledgment lost,
+/// is `Uncertain` at the caller's one deadline, not a fresh wait later.
+#[tokio::test(start_paused = true)]
+async fn a_commit_and_its_resolution_share_the_callers_deadline() {
+    use crate::deadline::REQUEST_WAIT;
+    let fx = Backend::Sqlite.fixture(None).await;
+    let (s, faults) = fx.faulty_thread().await;
+    let mut run = s
+        .partition(PARTITION_KEY)
+        .open(RunOptions::new("r1", "AST_1"), &crate::Holder::new("test"))
+        .await
+        .unwrap();
+    run.history_mut().push(message("i1", ChatRole::User, "hi"));
+    faults.unreachable_for(REQUEST_WAIT / 2);
+    faults.fail_next_commit(crate::testing::WriteFault::LoseAckAfter);
+    faults.unreachable_after_commit_for(REQUEST_WAIT * 6);
+    let started = tokio::time::Instant::now();
+    let committed = run.commit(CommitOptions::default()).await;
+    assert!(matches!(committed, Err(StorageError::Uncertain(_))), "{committed:?}");
+    assert!(started.elapsed() <= REQUEST_WAIT, "answered after {:?}", started.elapsed());
+    drop(run);
+    tokio::time::sleep(REQUEST_WAIT * 6).await;
+    assert_eq!(run_ended_count(&s).await, 1, "the commit applied once; nothing guessed");
+    fx.cleanup(&[&s]).await;
+}
+
 #[tokio::test]
 async fn a_lost_ack_after_the_partition_moved_on_is_a_rejection_with_nothing_written() {
     let fx = Backend::Sqlite.fixture(None).await;

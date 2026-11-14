@@ -266,19 +266,23 @@ async fn faulty_store() -> (
     (Arc::new(storage), faults, thread, dir)
 }
 
-/// A direct save whose acknowledgment stayed lost past the commit's wait resolves before the
-/// next save: it committed, so the next save builds on it instead of failing a stale revision.
+/// Catches: a direct save left unknown at its deadline kept resolving in the background, or the
+/// next save staged over values the database may not hold. The host learns `Uncertain`; the next
+/// save reloads the committed scopes first: the lost save committed, so it builds on it instead
+/// of failing a stale revision.
 #[tokio::test(start_paused = true)]
-async fn a_lost_direct_save_resolves_before_the_next_save() {
+async fn a_direct_save_unknown_at_its_deadline_is_reloaded_by_the_next_save() {
     use crate::testing::WriteFault;
     let (storage, faulty, thread, _dir) = faulty_store().await;
     let store = ContextStore::bound(storage, thread, "desk".into(), Cx::NONE).await.unwrap();
     let first = vec![field("draft", json!("first"))];
     let loaded = store.load("root:desk".into(), "Booking".into(), first.clone()).await.unwrap();
+    let outage = crate::deadline::REQUEST_WAIT * 2;
     faulty.fail_next_commit(WriteFault::LoseAckAfter);
-    faulty.unreachable_after_commit_for(crate::thread::RESOLVE_WAIT * 2);
+    faulty.unreachable_after_commit_for(outage);
     let lost = store.save("root:desk".into(), "Booking".into(), loaded.revision, first).await;
     assert!(matches!(lost, Err(StorageError::Uncertain(_))), "{lost:?}");
+    tokio::time::sleep(outage).await;
     let second = vec![field("draft", json!("second"))];
     let saved = store.save("root:desk".into(), "Booking".into(), loaded.revision + 1, second).await;
     assert_eq!(saved.expect("the lost save committed; this one builds on it").revision, 2);

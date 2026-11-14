@@ -431,7 +431,7 @@ impl Inner {
             publisher: Some(publisher.clone()),
             host_context: call.host_context,
             span: call.span,
-            resolvers: self.owner.clone(),
+            cancels: self.owner.clone(),
             ..Turn::new(
                 thread.clone(),
                 &self.holder,

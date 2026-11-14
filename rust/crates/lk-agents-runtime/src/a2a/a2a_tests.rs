@@ -948,11 +948,11 @@ async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
     }
 }
 
-/// An acknowledgment lost with the database unreachable through the whole wait
-/// answers the original task still `working`, never a failure; the resolver later finds the
-/// commit and the task reads completed.
+/// An acknowledgment lost with the database unreachable past the commit's deadline answers the
+/// original task still `working`, never a failure, and nothing resolves it in the background:
+/// the commit applied, so once the database is back the task reads completed from it.
 #[tokio::test]
-async fn an_unresolved_commit_answers_working_and_resolves_to_the_original_run() {
+async fn an_uncertain_commit_answers_working_and_the_applied_commit_stands() {
     let fx = Backend::Sqlite.fixture(None).await;
     let (s, faults) = fx.faulty_thread().await;
     faults.fail_next_commit(lk_agents_storage::testing::WriteFault::LoseAckAfter);

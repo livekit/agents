@@ -49,9 +49,9 @@ impl Partition {
         self.thread.ensure_schema().await?;
         let lease_ms = self.thread.timing.millis();
         let conn = &*self.thread.conn;
-        let (thread, wait, write) =
-            (self.thread.clone(), LEASE_WAIT_TIMEOUT, StorageWrite::Receive);
-        let mut pending = PendingLease::new(thread, self.name(), holder, None, wait, write);
+        let deadline = crate::deadline::or_default(self.thread.clock());
+        let (thread, write) = (self.thread.clone(), StorageWrite::Receive);
+        let mut pending = PendingLease::new(thread, self.name(), holder, None, deadline, write);
         let (received, lease) = loop {
             let (token, lost) = (pending.token().to_owned(), pending.lost());
             let request = async {
@@ -322,7 +322,6 @@ impl Partition {
             outcome: RunOutcome::Completed,
             reason: None,
             finished: false,
-            unresolved: None,
         })
     }
 
@@ -340,10 +339,10 @@ impl Partition {
         let epoch = clock.now();
         let elapsed = || clock.now().saturating_duration_since(epoch);
         let mut poll = Backoff::new(elapsed(), opts.wait_timeout);
-        let (thread, wait) = (self.thread.clone(), opts.wait_timeout);
+        let (thread, deadline) = (self.thread.clone(), epoch.saturating_add(opts.wait_timeout));
         let run_id = Some(opts.run_id.as_str());
         let mut pending =
-            PendingLease::new(thread, self.name(), owner, run_id, wait, StorageWrite::Acquire);
+            PendingLease::new(thread, self.name(), owner, run_id, deadline, StorageWrite::Acquire);
         let token = pending.token().to_owned();
         let timing = self.thread.timing;
         let stale = timing.renew_interval + RENEW_SLACK;

@@ -9,12 +9,12 @@ use parking_lot::Mutex;
 
 use crate::thread::run::{ItemRow, RunOutcome};
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
+use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::storage::thread::AbandonReason;
 use lk_agents_abi::storage::voice::{
     StorageWork, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as HostVoiceStore,
 };
-use lk_agents_abi::storage::{StorageError, Unacknowledged};
 use lk_agents_abi::{ChatContent, ChatItem, Role};
 
 use crate::backends::with_thread;
@@ -50,8 +50,6 @@ struct State {
     known: BTreeMap<String, ChatItem>,
     version: i64,
     active: Option<Active>,
-    /// The frozen staged fields of a commit left unresolved, and why its outcome is unknown.
-    uncertain_fields: Option<(tokio::sync::OwnedMutexGuard<()>, Unacknowledged)>,
 }
 
 struct Active {
@@ -149,12 +147,7 @@ impl VoiceStore {
             holder: Holder::new("voice"),
             activation,
             initial: explicit_history.is_none().then_some(items),
-            state: tokio::sync::Mutex::new(State {
-                known,
-                version,
-                active: None,
-                uncertain_fields: None,
-            }),
+            state: tokio::sync::Mutex::new(State { known, version, active: None }),
             lease: Mutex::new(None),
             generation: signal::signal(0).0,
             lost: Arc::new(AtomicBool::new(false)),
@@ -368,15 +361,15 @@ impl VoiceStore {
                 Err(error)
             }
         };
-        if let Err(StorageError::Uncertain(why)) = &result {
-            // Retain the resolver and frozen staged fields. Closing observes its real outcome.
-            state.active = Some(active);
-            state.uncertain_fields = Some((fields, why.clone()));
-            self.lost.store(true, Ordering::Release);
-            return result.map(|_| ());
-        }
         if result.is_err() {
-            if matches!(result, Err(StorageError::VersionConflict { .. })) || self.lease_lost() {
+            // A commit still unknown at its deadline is the host's to learn: what this store
+            // knows of the partition no longer holds, and the release fences out a commit that
+            // never applied.
+            let unknown = matches!(
+                result,
+                Err(StorageError::VersionConflict { .. } | StorageError::Uncertain(_))
+            );
+            if unknown || self.lease_lost() {
                 self.lost.store(true, Ordering::Release);
             }
             if let Some(lease) = active.run.lease() {
@@ -406,9 +399,6 @@ impl VoiceStore {
         active.speeches.remove(&speech);
         if !active.speeches.is_empty() {
             return Ok(());
-        }
-        if let Some((_, why)) = &state.uncertain_fields {
-            return Err(StorageError::Uncertain(why.clone()));
         }
         let fields = self.activation.lock_managed().await;
         let mut active = state.active.take().expect("the active voice turn");
@@ -548,23 +538,12 @@ impl HostVoiceStore for VoiceStore {
         let mut state = self.state.lock().await;
         let mut result = Ok(());
         if let Some(mut active) = state.active.take() {
-            let uncertain = state.uncertain_fields.take().map(|(fields, _)| fields);
-            let resolving = uncertain.is_some();
-            let fields = match uncertain {
-                Some(fields) => fields,
-                None => self.activation.lock_managed().await,
-            };
-            result = if resolving && !active.run.closed() {
-                match active.run.resolve_later().await {
-                    Some(result) => result.map(|_| ()),
-                    None => Err(StorageError::Invalid("the voice commit has no resolver".into())),
-                }
-            } else {
-                active.run.abandon(RunOutcome::Canceled, AbandonReason::VoiceClose.as_str()).await
-            };
+            let fields = self.activation.lock_managed().await;
+            result =
+                active.run.abandon(RunOutcome::Canceled, AbandonReason::VoiceClose.as_str()).await;
             self.released();
             active.thread.close().await;
-            self.activation.end_managed(result.is_ok() && resolving, fields);
+            self.activation.end_managed(false, fields);
         } else {
             self.released();
         }

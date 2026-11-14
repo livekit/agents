@@ -21,7 +21,7 @@ use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::owned::Background;
 
 use crate::telemetry::{Cx, StorageWrite};
-use crate::thread::{LeaseTiming, RESOLVE_WAIT, Resend, SchemaCell, Thread};
+use crate::thread::{LeaseTiming, Resend, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection};
 pub use connection::{Conn, Options as ConnOptions, TokenMinter, WriteError, WsdbError};
 
@@ -179,7 +179,7 @@ impl AgentDbStorage {
     /// The resends of one thread-service write.
     fn resend(&self) -> Resend {
         let clock = self.background.clock.clone();
-        Resend::new(clock, RESOLVE_WAIT, &self.cx, StorageWrite::Thread)
+        Resend::new(clock, &self.cx, StorageWrite::Thread)
     }
 }
 
@@ -340,14 +340,15 @@ struct Pooled {
 
 #[async_trait]
 impl ThreadDbConnection for Pooled {
+    /// Waits for the socket and the answer until the caller's deadline.
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         self.live()?;
-        Ok(self.conn.query_all(&statement).await?)
+        Ok(self.conn.query_all(&statement, self.conn.deadline()).await?)
     }
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.live()?;
-        Ok(self.conn.batch(&statements).await?)
+        Ok(self.conn.batch(&statements, self.conn.deadline()).await?)
     }
 
     async fn close(&self) {

@@ -177,7 +177,6 @@ fn minter() -> TokenMinter {
 pub(crate) async fn dial(url: &str, db: &str) -> Result<Conn, WsdbError> {
     let mut opts = Options::new(url, db);
     opts.reconnect.min_backoff = Duration::from_millis(10);
-    opts.reconnect.budget = Duration::from_secs(5);
     let background = crate::testing::background();
     Conn::dial(opts, minter(), background.spawner, background.clock).await
 }
@@ -196,12 +195,12 @@ async fn hello_carries_the_token_and_a_refused_database_is_a_server_error() {
 async fn exec_query_and_credits() {
     let (url, log) = serve(script, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
-    let r = conn.exec(&st("INSERT", vec!["v".into()])).await.unwrap();
+    let r = conn.exec(&st("INSERT", vec!["v".into()]), conn.deadline()).await.unwrap();
     assert_eq!((r.rows_affected, r.last_insert_id, r.tip), (1, 9, 8));
-    let err = conn.exec(&st("boom", vec![])).await.err().unwrap();
+    let err = conn.exec(&st("boom", vec![]), conn.deadline()).await.err().unwrap();
     assert!(matches!(err, WriteError::Sent(WsdbError::Server { code: ErrorCode::Exec, .. })));
     // Backpressure is returned once; the caller owns retry policy.
-    let err = conn.exec(&st("busy", vec![])).await.err().unwrap();
+    let err = conn.exec(&st("busy", vec![]), conn.deadline()).await.err().unwrap();
     assert!(matches!(
         err,
         WriteError::Sent(WsdbError::Server { code: ErrorCode::ResourceExhausted, .. })
@@ -214,7 +213,7 @@ async fn exec_query_and_credits() {
     };
     assert_eq!(busy(&log), 1);
 
-    let rows = conn.query_all(&st("SELECT", vec![])).await.unwrap();
+    let rows = conn.query_all(&st("SELECT", vec![]), conn.deadline()).await.unwrap();
     assert_eq!(
         rows,
         vec![vec![SqlValue::Int(1), "a".into()], vec![SqlValue::Int(2), SqlValue::Null]]
@@ -242,7 +241,7 @@ async fn a_batch_answers_per_statement_and_an_empty_returning_is_rows() {
     let (url, _) = serve(script, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
     let stmts: Vec<Statement> = (0..4).map(|_| st("S", vec![])).collect();
-    let out = conn.batch(&stmts).await.unwrap();
+    let out = conn.batch(&stmts, conn.deadline()).await.unwrap();
     assert_eq!(conn.tip(), 9);
     assert_eq!(out.results[0], StatementResult::Exec { rows_affected: 2, last_insert_id: 0 });
     assert_eq!(out.results[1].rows(), &[vec![SqlValue::Int(3)]]);
@@ -256,7 +255,10 @@ async fn a_batch_answer_missing_a_statement_is_malformed_not_a_zero_row_success(
     let (url, _) = serve(script, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
     let stmts: Vec<Statement> = (0..5).map(|_| st("S", vec![])).collect();
-    assert!(matches!(conn.batch(&stmts).await, Err(WriteError::Sent(WsdbError::Protocol(_)))));
+    assert!(matches!(
+        conn.batch(&stmts, conn.deadline()).await,
+        Err(WriteError::Sent(WsdbError::Protocol(_)))
+    ));
     conn.close();
 }
 
@@ -265,9 +267,9 @@ async fn a_dropped_socket_fails_the_request_in_flight_and_redials() {
     let (url, log) = serve(script, true).await;
     let conn = dial(&url, "DB_1").await.unwrap();
     // The fake drops the socket on this exec: the request fails and the client redials.
-    let err = conn.exec(&st("drop", vec![])).await.err().unwrap();
+    let err = conn.exec(&st("drop", vec![]), conn.deadline()).await.err().unwrap();
     assert!(matches!(err, WriteError::Sent(WsdbError::Disconnected)), "{err}");
-    let r = conn.exec(&st("INSERT", vec![])).await.unwrap();
+    let r = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.unwrap();
     assert_eq!(r.rows_affected, 1);
     let hellos = log
         .lock()
@@ -277,7 +279,7 @@ async fn a_dropped_socket_fails_the_request_in_flight_and_redials() {
     assert_eq!(hellos, 2, "one Hello per dial: the first and the redial");
     conn.close();
     assert!(matches!(
-        conn.exec(&st("INSERT", vec![])).await,
+        conn.exec(&st("INSERT", vec![]), conn.deadline()).await,
         Err(WriteError::NotSent(WsdbError::Closed))
     ));
 }
@@ -299,7 +301,7 @@ async fn an_idle_evicted_socket_is_redialed_only_when_a_call_wants_it() {
     }
     let (url, log) = serve(evicting, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
-    conn.exec(&st("idle", vec![])).await.unwrap();
+    conn.exec(&st("idle", vec![]), conn.deadline()).await.unwrap();
     for _ in 0..200 {
         if !conn.is_idle() {
             break;
@@ -309,7 +311,7 @@ async fn an_idle_evicted_socket_is_redialed_only_when_a_call_wants_it() {
     assert!(!conn.is_idle(), "an idle-evicted connection is dormant, no pool's to take back");
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(hellos(&log), 1, "nothing redials an idle socket");
-    let r = conn.exec(&st("INSERT", vec![])).await.unwrap();
+    let r = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.unwrap();
     assert_eq!(r.rows_affected, 1);
     assert_eq!(hellos(&log), 2, "the call redialed once");
     assert!(conn.is_idle());
@@ -321,8 +323,10 @@ fn hellos(log: &Served) -> usize {
     log.iter().filter(|m| matches!(m.message, Some(pb::client_message::Message::Hello(_)))).count()
 }
 
+/// A socket that stops answering pings is dropped past its read deadline, and the next request
+/// redials it: nothing redials while no request waits.
 #[tokio::test]
-async fn a_socket_that_stops_answering_pings_is_redialed() {
+async fn a_socket_that_stops_answering_pings_is_redialed_for_the_next_request() {
     fn silent(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         use pb::client_message::Message as C;
         match &m.message {
@@ -342,8 +346,10 @@ async fn a_socket_that_stops_answering_pings_is_redialed() {
     let (url, log) = serve(silent, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    assert!(hellos(&log) >= 2, "redialed past the read deadline");
-    assert_eq!(conn.exec(&st("INSERT", vec![])).await.unwrap().rows_affected, 1);
+    assert!(!conn.is_idle(), "dropped past the read deadline");
+    assert_eq!(hellos(&log), 1, "nothing redials while no request waits");
+    assert_eq!(conn.exec(&st("INSERT", vec![]), conn.deadline()).await.unwrap().rows_affected, 1);
+    assert_eq!(hellos(&log), 2, "the request redialed");
     conn.close();
 }
 
@@ -366,15 +372,105 @@ async fn a_redial_the_server_refuses_for_good_fails_later_calls_with_its_error()
     let (url, log) = serve(refuses_again, true).await;
     let conn = dial(&url, "DB_1").await.unwrap();
     assert!(matches!(
-        conn.exec(&st("drop", vec![])).await,
+        conn.exec(&st("drop", vec![]), conn.deadline()).await,
         Err(WriteError::Sent(WsdbError::Disconnected))
     ));
-    let err = conn.exec(&st("INSERT", vec![])).await.err().unwrap();
+    let err = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.err().unwrap();
     assert!(
         matches!(&err, WriteError::NotSent(WsdbError::Server { code: ErrorCode::NotFound, .. })),
         "{err}"
     );
     assert_eq!(hellos(&log), 2, "no redial after a final refusal");
+}
+
+/// Catches: a request waiting out a redial budget of the connection's own instead of its
+/// caller's deadline, or a redial that keeps dialing once no request waits. The request fails
+/// unsent at its deadline, and the redial stops with it.
+#[tokio::test]
+async fn a_request_waits_for_the_redial_only_until_its_deadline() {
+    fn unavailable_after_first(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        static HELLOS: AtomicU32 = AtomicU32::new(0);
+        match &m.message {
+            Some(pb::client_message::Message::Hello(_))
+                if HELLOS.fetch_add(1, Ordering::SeqCst) > 0 =>
+            {
+                vec![reply(pb::server_message::Message::Error(pb::Error {
+                    code: ErrorCode::Unavailable.as_str().into(),
+                    message: "draining".into(),
+                }))]
+            }
+            _ => script(m),
+        }
+    }
+    let (url, log) = serve(unavailable_after_first, true).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    assert!(conn.exec(&st("drop", vec![]), conn.deadline()).await.is_err());
+    let deadline = conn.0.clock.now().saturating_add(Duration::from_millis(300));
+    let err = conn.exec(&st("INSERT", vec![]), deadline).await.err().unwrap();
+    assert!(matches!(err, WriteError::NotSent(WsdbError::Timeout)), "{err}");
+    assert!(StorageError::from(err).retryable(), "unsent: only retryable");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let dialed = hellos(&log);
+    assert!(dialed > 2, "the request's wait redialed with backoff: {dialed}");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(hellos(&log), dialed, "nothing redials once no request waits");
+    assert!(!conn.is_closed(), "a refusal that may pass is not final");
+    conn.close();
+}
+
+/// The token rides the upgrade as a bearer header, never in the URL a proxy logs.
+#[tokio::test]
+async fn the_token_rides_the_upgrade_as_a_bearer_header_not_the_url() {
+    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/db", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut upgrade = None;
+        #[allow(clippy::result_large_err, reason = "tungstenite's callback signature")]
+        let record = |req: &Request, resp: Response| {
+            let auth = req.headers().get("authorization").map(|v| v.to_str().unwrap().to_owned());
+            upgrade = Some((req.uri().to_string(), auth));
+            Ok(resp)
+        };
+        let mut ws = tokio_tungstenite::accept_hdr_async(tcp, record).await.unwrap();
+        let Some(Ok(Message::Binary(bytes))) = ws.next().await else { panic!("no Hello") };
+        let hello = pb::ClientMessage::decode(bytes.as_ref()).unwrap();
+        let mut ok = hello_ok();
+        ok.request_id = hello.request_id;
+        ws.send(Message::binary(ok.encode_to_vec())).await.unwrap();
+        upgrade.unwrap()
+    });
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let (uri, auth) = server.await.unwrap();
+    assert_eq!(uri, "/db", "nothing rides the URL");
+    let token = auth.and_then(|a| a.strip_prefix("Bearer ").map(str::to_owned));
+    assert_eq!(token.map(|t| t.split('.').count()), Some(3), "a bearer JWT");
+    conn.close();
+}
+
+/// Catches: an answer queue that refuses or drops a frame when full. A server streaming more
+/// batches than a request's queue holds is read whole: the full queue holds the reader back.
+#[tokio::test]
+async fn answers_past_a_full_request_queue_wait_and_none_is_lost() {
+    fn flood(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        use pb::server_message::Message as S;
+        if !matches!(m.message, Some(pb::client_message::Message::Query(_))) {
+            return script(m);
+        }
+        let mut answer =
+            vec![reply(S::Columns(pb::Columns { names: vec!["n".into()], statement: 0 }))];
+        answer.extend(
+            (0..64).map(|n| reply(S::ColumnBatch(encode_batch(&[vec![SqlValue::Int(n)]], 1)))),
+        );
+        answer.push(reply(S::Done(pb::Done { tip: 8, total_rows: 64 })));
+        answer
+    }
+    let (url, _) = serve(flood, false).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let rows = conn.query_all(&st("SELECT", vec![]), conn.deadline()).await.unwrap();
+    assert_eq!(rows, (0..64).map(|n| vec![SqlValue::Int(n)]).collect::<Vec<_>>());
+    conn.close();
 }
 
 #[tokio::test]
@@ -383,10 +479,14 @@ async fn a_frame_over_the_limit_is_refused_before_it_is_sent() {
     let conn = dial(&url, "DB_1").await.unwrap();
     let big = SqlValue::Text("x".repeat(MAX_FRAME + 1));
     assert!(matches!(
-        conn.exec(&st("INSERT", vec![big])).await,
+        conn.exec(&st("INSERT", vec![big]), conn.deadline()).await,
         Err(WriteError::NotSent(WsdbError::TooLarge(_)))
     ));
-    assert_eq!(conn.exec(&st("INSERT", vec![])).await.unwrap().rows_affected, 1, "still open");
+    assert_eq!(
+        conn.exec(&st("INSERT", vec![]), conn.deadline()).await.unwrap().rows_affected,
+        1,
+        "still open"
+    );
     conn.close();
 }
 
@@ -403,7 +503,7 @@ async fn dropping_the_last_handle_closes_the_connection() {
     assert!(inner.upgrade().is_none(), "its tasks no longer hold it");
 }
 
-/// Real time until armed; then whichever task reads it panics.
+/// Real time until armed; then whichever task reads the time panics (waits still work).
 #[derive(Default)]
 struct Failing {
     real: lk_agents_net::clock::RealClock,
@@ -422,7 +522,6 @@ impl Clock for Failing {
         self.real.now()
     }
     fn wait_until(&self, at: lk_agents_abi::Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
-        self.check();
         self.real.wait_until(at)
     }
     fn wall(&self) -> std::time::SystemTime {
@@ -439,11 +538,11 @@ async fn a_supervisor_that_dies_mid_redial_fails_later_requests() {
     let clock = Arc::new(Failing::default());
     let spawner = crate::testing::background().spawner;
     let conn = Conn::dial(opts, minter(), spawner, clock.clone()).await.unwrap();
-    assert!(conn.exec(&st("drop", vec![])).await.is_err());
-    // The supervisor is redialing: its wait for the server's `Hello` answer panics.
+    assert!(conn.exec(&st("drop", vec![]), conn.deadline()).await.is_err());
+    // The next request wakes the redial, whose dial deadline panics the supervisor.
+    let (insert, deadline) = (st("INSERT", vec![]), conn.deadline());
     clock.armed.store(true, Ordering::Release);
-    let insert = st("INSERT", vec![]);
-    let next = tokio::time::timeout(Duration::from_secs(5), conn.exec(&insert));
+    let next = tokio::time::timeout(Duration::from_secs(5), conn.exec(&insert, deadline));
     assert!(matches!(next.await, Ok(Err(_))), "a request after the supervisor died hung");
     assert!(conn.is_closed());
 }
@@ -475,7 +574,10 @@ async fn a_query_refuses_rows_without_matching_columns() {
     }
     let (url, _) = serve(malformed, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
-    assert!(matches!(conn.query_all(&st("SELECT", vec![])).await, Err(WsdbError::Protocol(_))));
+    assert!(matches!(
+        conn.query_all(&st("SELECT", vec![]), conn.deadline()).await,
+        Err(WsdbError::Protocol(_))
+    ));
     conn.close();
 }
 
@@ -503,7 +605,7 @@ async fn duplicate_batch_results_cannot_overwrite_an_authoritative_result() {
     let (url, _) = serve(malformed, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
     assert!(matches!(
-        conn.batch(&[st("UPDATE", vec![])]).await,
+        conn.batch(&[st("UPDATE", vec![])], conn.deadline()).await,
         Err(WriteError::Sent(WsdbError::Protocol(_)))
     ));
     conn.close();

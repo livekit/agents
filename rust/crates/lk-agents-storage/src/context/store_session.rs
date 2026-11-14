@@ -68,7 +68,7 @@ impl ContextStore {
         let mut owned = self.owned_session.lock().await;
         let Some(mut active) = owned.take() else { return Ok(()) };
         let operation = self.lock_managed().await;
-        let mut result = if success {
+        let result = if success {
             if let Some(state) = self.session_state() {
                 active.run.set_state(state);
             }
@@ -78,12 +78,6 @@ impl ContextStore {
         } else {
             active.run.abandon(RunOutcome::Canceled, AbandonReason::RunDropped.as_str()).await
         };
-        if matches!(result, Err(StorageError::Uncertain(_))) {
-            // The run owns its resolver and fence until the outcome is known.
-            if let Some(resolved) = active.run.resolve_later().await {
-                result = resolved.map(drop);
-            }
-        }
         self.end_managed(success && result.is_ok(), operation);
         active.thread.close().await;
         result

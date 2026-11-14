@@ -10,6 +10,7 @@
 pub mod backends;
 pub mod context;
 mod cursor;
+pub mod deadline;
 pub mod http;
 pub mod session_binding;
 mod session_snapshot;

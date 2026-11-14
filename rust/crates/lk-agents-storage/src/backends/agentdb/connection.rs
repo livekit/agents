@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 pub use livekit_protocol::agent_db::wire;
-use lk_agents_abi::{Clock, Spawner};
+use lk_agents_abi::{Clock, Headers, Spawner, Ts};
 use lk_agents_net::signal::{self, Producer};
 use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::TransportError;
@@ -21,10 +21,13 @@ use lk_agents_abi::storage::agentdb_error::{ErrorCode, Retry};
 
 // Wire protocol: `Hello` first, with a token minted for this dial. `Exec` answers one `ExecResult`;
 // `Query` streams `Columns`, `ColumnBatch`* and `Done`, paced by `Credit`; `Batch` applies its
-// statements atomically, one result per statement, then `Done`. A dropped socket is redialed within
-// a budget; requests issued meanwhile wait, and those in flight fail `Disconnected` (outcome unknown).
-// A socket the server evicted for being idle (`idle_evicted`, on request id 0) is redialed only once
-// a call wants the connection: until then it is dormant, which no pool takes back.
+// statements atomically, one result per statement, then `Done`. Every request carries its caller's
+// deadline: it waits for a socket and for its answer until then, and is never sent again here. A
+// dropped socket (the server's `idle_evicted` notice on request id 0 included) is redialed only
+// while a request waits for it, so the redial lives exactly as long as a caller's deadline; those
+// in flight fail `Disconnected` (outcome unknown). Socket-less, the connection is dormant, which
+// no pool takes back. Answers and outgoing frames queue in bounded channels: a full one holds its
+// sender back.
 
 /// A bound value as the wire carries it.
 fn to_wire(v: &SqlValue) -> wire::Value {
@@ -209,13 +212,12 @@ pub const MAX_FRAME: usize = 16 << 20;
 const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Reconnection, on by default: a node draining or an idle database evicted severs the socket.
+/// Redials back off while requests wait; none waiting, nothing redials.
 #[derive(Debug, Clone)]
 pub struct Reconnect {
     pub disable: bool,
     pub min_backoff: Duration,
     pub max_backoff: Duration,
-    /// How long to keep trying before giving up.
-    pub budget: Duration,
 }
 
 impl Default for Reconnect {
@@ -224,10 +226,12 @@ impl Default for Reconnect {
             disable: false,
             min_backoff: Duration::from_millis(100),
             max_backoff: Duration::from_secs(5),
-            budget: Duration::from_secs(60),
         }
     }
 }
+
+/// Frames queued for the socket writer before a request's send waits.
+const WRITE_QUEUE: usize = 32;
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -261,15 +265,13 @@ pub struct ExecResult {
 }
 
 struct State {
-    pending: HashMap<u32, mpsc::UnboundedSender<pb::ServerMessage>>,
+    pending: HashMap<u32, mpsc::Sender<pb::ServerMessage>>,
     /// The live socket's writer; `None` between a drop and the redial.
-    tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    tx: Option<mpsc::Sender<Vec<u8>>>,
     closed: bool,
     /// Why the connection gave up for good; later calls fail with it.
     fatal: Option<WsdbError>,
     tip: i64,
-    /// The server evicted the socket for being idle: no socket until a call wants one.
-    dormant: bool,
 }
 
 struct Inner {
@@ -279,8 +281,8 @@ struct Inner {
     state: Mutex<State>,
     /// Whether a socket is live, published by the supervisor; ended once it is gone.
     ready: signal::Cell<bool>,
-    /// A call wants a dormant connection's socket back; the supervisor takes it.
-    wanted: signal::Shared<bool>,
+    /// How many requests wait for a socket: the supervisor redials while any does.
+    waiting: signal::Shared<usize>,
     /// The executor the connection's supervisor, heartbeat and writer run on.
     spawner: Arc<dyn Spawner>,
     /// What its dial bound, heartbeat, redial backoff and read deadline wait on.
@@ -372,8 +374,7 @@ impl Drop for Supervisor {
 }
 
 impl Supervisor {
-    /// Reads the live socket and redials when it dies: at once, or, evicted idle, once a call
-    /// wants the connection.
+    /// Reads the live socket and, once it dies, redials while a request waits for it.
     async fn run(self, mut socket: Socket) {
         let conn = &self.conn;
         loop {
@@ -381,14 +382,8 @@ impl Supervisor {
             if conn.is_closed() {
                 return;
             }
-            let idle = matches!(cause, WsdbError::Server { code: ErrorCode::IdleEvicted, .. });
-            // Dormant before the gate closes, so a call that finds it closed wakes the redial.
-            conn.0.state.lock().dormant = idle;
             self.ready.set(false);
             conn.dropped(&cause);
-            if idle {
-                conn.0.wanted.wait_until(|wanted| std::mem::take(wanted).then_some(())).await;
-            }
             if conn.0.opts.reconnect.disable {
                 return;
             }
@@ -396,9 +391,24 @@ impl Supervisor {
                 Some(next) => socket = next,
                 None => return,
             }
-            conn.0.state.lock().dormant = false;
             self.ready.set(true);
         }
+    }
+}
+
+/// A request waiting for a socket, counted while it waits: what keeps the redial going.
+struct Waiting<'a>(&'a signal::Shared<usize>);
+
+impl<'a> Waiting<'a> {
+    fn new(waiting: &'a signal::Shared<usize>) -> Self {
+        waiting.modify(|n| *n += 1);
+        Self(waiting)
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.modify(|n| *n -= 1);
     }
 }
 
@@ -421,10 +431,9 @@ impl Conn {
                 closed: false,
                 fatal: None,
                 tip: 0,
-                dormant: false,
             }),
             ready: ready_cell,
-            wanted: signal::Shared::new(false),
+            waiting: signal::Shared::new(0),
             spawner,
             clock,
             tasks: Arc::default(),
@@ -459,6 +468,11 @@ impl Conn {
         &self.0.opts.database_id
     }
 
+    /// The caller's deadline, else the default one from now on the connection's clock.
+    pub fn deadline(&self) -> Ts {
+        crate::deadline::or_default(&*self.0.clock)
+    }
+
     /// Dial, `Hello`, publish the writer.
     async fn connect(&self) -> Result<Socket, WsdbError> {
         let clock = &*self.0.clock;
@@ -468,11 +482,11 @@ impl Conn {
             .minter
             .mint(&self.0.opts.database_id)
             .map_err(|e| WsdbError::Io(e.to_string()))?;
-        // the token also rides the upgrade, so a proxy in front of agent-db can admit the socket
-        let mut url = url::Url::parse(&self.0.opts.url)
-            .map_err(|e| WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)))?;
-        url.query_pairs_mut().append_pair("access_token", &token);
-        let dial = connect_with_limit(url.as_str(), Default::default(), Some(MAX_FRAME));
+        // the token also rides the upgrade, so a proxy in front of agent-db can admit the socket;
+        // a header, never the URL, which proxies log
+        let mut headers = Headers::new();
+        headers.insert("Authorization", format!("Bearer {token}"));
+        let dial = connect_with_limit(&self.0.opts.url, headers, Some(MAX_FRAME));
         let ws = lk_agents_abi::before(clock, deadline, dial)
             .await
             .map_err(|_| WsdbError::Timeout)?
@@ -535,7 +549,7 @@ impl Conn {
         };
         // the writer owns the sink; a send that does not finish within the ping timeout is a dead
         // socket
-        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(WRITE_QUEUE);
         let (gone, writer_gone) = tokio::sync::oneshot::channel();
         let writer_clock = self.0.clock.clone();
         // Refused once the connection closed: the sink and `gone` then drop unstarted.
@@ -568,7 +582,7 @@ impl Conn {
     async fn read_loop(&self, socket: &mut Socket) -> WsdbError {
         loop {
             let routed = match socket.next_message(&*self.0.clock).await {
-                Ok(Message::Binary(bytes)) => self.route_response(bytes.as_ref()),
+                Ok(Message::Binary(bytes)) => self.route_response(bytes.as_ref()).await,
                 Ok(Message::Close(_)) => Err(WsdbError::Io("socket closed".into())),
                 Ok(_) => Ok(()),
                 Err(error) => Err(error),
@@ -579,8 +593,9 @@ impl Conn {
         }
     }
 
-    /// Hands a response to the request awaiting it; a pong only proves the socket is alive.
-    fn route_response(&self, bytes: &[u8]) -> Result<(), WsdbError> {
+    /// Hands a response to the request awaiting it, waiting while its answers are queued full;
+    /// a pong only proves the socket is alive.
+    async fn route_response(&self, bytes: &[u8]) -> Result<(), WsdbError> {
         let resp =
             pb::ServerMessage::decode(bytes).map_err(|e| WsdbError::Protocol(e.to_string()))?;
         match &resp.message {
@@ -594,9 +609,11 @@ impl Conn {
             }
             _ => {}
         }
-        let st = self.0.state.lock();
-        if let Some(ch) = st.pending.get(&resp.request_id) {
-            let _ = ch.send(resp);
+        let ch = self.0.state.lock().pending.get(&resp.request_id).cloned();
+        if let Some(ch) = ch
+            && ch.send(resp).await.is_err()
+        {
+            log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb answer for a request dropped meanwhile");
         }
         Ok(())
     }
@@ -611,12 +628,13 @@ impl Conn {
         log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb connection lost: {cause}");
     }
 
-    /// Exponential backoff until the budget runs out.
+    /// Dials once a request waits for the socket, again with exponential backoff while one
+    /// still does; `None` once a refusal is final.
     async fn redial(&self) -> Option<Socket> {
         let (r, clock) = (&self.0.opts.reconnect, &*self.0.clock);
-        let deadline = clock.now().saturating_add(r.budget);
         let mut backoff = r.min_backoff;
         loop {
+            self.0.waiting.wait_until(|n| (*n > 0).then_some(())).await;
             match self.connect().await {
                 Ok(socket) => {
                     log::info!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb reconnected");
@@ -631,7 +649,7 @@ impl Conn {
                     log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb redial failed: {e}")
                 }
             }
-            if clock.now() >= deadline || self.is_closed() {
+            if self.is_closed() {
                 return None;
             }
             clock.wait_until(clock.now().saturating_add(backoff)).await;
@@ -649,10 +667,9 @@ impl Conn {
                 continue; // mid-reconnect: a ping before Hello is a protocol error
             }
             let now = (lk_agents_abi::unix_secs(clock.wall()) * 1000.0) as i64;
-            let _ = self.write(
-                self.next_id(),
-                pb::client_message::Message::Ping(pb::Ping { timestamp_ms: now }),
-            );
+            // a writer queued full is busy sending: the ping is not needed to prove the socket
+            let ping = pb::client_message::Message::Ping(pb::Ping { timestamp_ms: now });
+            self.try_write(self.next_id(), ping);
         }
     }
 
@@ -660,11 +677,12 @@ impl Conn {
         self.0.state.lock().closed
     }
 
-    /// Open, its socket live or redialing, nothing in flight: a connection another opener can
-    /// take. A dormant one (evicted idle) is not: whoever needs the database dials afresh.
+    /// Open, its socket live, nothing in flight: a connection another opener can take. A
+    /// dormant one (its socket dropped or evicted idle) is not: whoever needs the database dials
+    /// afresh.
     pub fn is_idle(&self) -> bool {
         let st = self.0.state.lock();
-        !st.closed && !st.dormant && st.pending.is_empty()
+        !st.closed && self.0.ready.get() && st.pending.is_empty()
     }
 
     /// Ends the connection; every waiter and every later call fails [`WsdbError::Closed`].
@@ -688,53 +706,84 @@ impl Conn {
         self.0.next_id.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    async fn register(&self) -> Result<Request<'_>, WsdbError> {
-        // a request issued mid-reconnect is delayed rather than failed; the supervisor gone, it
-        // closed the connection first
-        if self.0.state.lock().dormant {
-            self.0.wanted.modify(|wanted| *wanted = true);
-        }
-        if self.is_closed() || self.0.ready.wait_for(|ready| *ready).await.is_err() {
+    /// A request issued without a socket waits for the redial until `deadline`, then fails
+    /// `Timeout`, unsent; the supervisor gone, it closed the connection first. Nothing is sent
+    /// with no time left for its answer.
+    async fn register(&self, deadline: Ts) -> Result<Request<'_>, WsdbError> {
+        if self.is_closed() {
             return Err(self.closed_error());
         }
+        if !self.0.ready.get() {
+            let _waiting = Waiting::new(&self.0.waiting);
+            let ready = self.0.ready.wait_for(|ready| *ready);
+            match lk_agents_abi::before(&*self.0.clock, Some(deadline), ready).await {
+                Err(_) => return Err(WsdbError::Timeout),
+                Ok(Err(_)) => return Err(self.closed_error()),
+                Ok(Ok(_)) => {}
+            }
+        }
+        if self.0.clock.now() >= deadline {
+            return Err(WsdbError::Timeout);
+        }
         let id = self.next_id();
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(self.0.opts.credits as usize + 2);
         let mut st = self.0.state.lock();
         if st.closed {
             drop(st);
             return Err(self.closed_error());
         }
         st.pending.insert(id, tx);
-        Ok(Request { conn: self, id, rx, answered: false })
+        Ok(Request { conn: self, id, rx, deadline, answered: false })
     }
 
-    fn write(
-        &self,
-        request_id: u32,
-        message: pb::client_message::Message,
-    ) -> Result<(), WsdbError> {
+    /// The frame for the socket writer, refused when over the server's limit.
+    fn frame(request_id: u32, message: pb::client_message::Message) -> Result<Vec<u8>, WsdbError> {
         let frame = pb::ClientMessage { request_id, message: Some(message) };
         let size = frame.encoded_len();
         if size > MAX_FRAME {
             return Err(WsdbError::TooLarge(size));
         }
-        let bytes = frame.encode_to_vec();
+        Ok(frame.encode_to_vec())
+    }
+
+    /// The live socket's writer.
+    fn writer(&self) -> Result<mpsc::Sender<Vec<u8>>, WsdbError> {
         let st = self.0.state.lock();
         if st.closed {
             drop(st);
             return Err(self.closed_error());
         }
-        match &st.tx {
-            Some(tx) => tx.send(bytes).map_err(|_| WsdbError::Disconnected),
-            None => Err(WsdbError::Disconnected),
+        st.tx.clone().ok_or(WsdbError::Disconnected)
+    }
+
+    /// Queues a frame for the socket, waiting while the writer's queue is full.
+    async fn write(
+        &self,
+        request_id: u32,
+        message: pb::client_message::Message,
+    ) -> Result<(), WsdbError> {
+        let bytes = Self::frame(request_id, message)?;
+        self.writer()?.send(bytes).await.map_err(|_| WsdbError::Disconnected)
+    }
+
+    /// Queues a frame nothing waits on (a ping, a cancel), dropped when the writer's queue is
+    /// full or the socket is gone: neither changes what the server committed.
+    fn try_write(&self, request_id: u32, message: pb::client_message::Message) {
+        let queued = Self::frame(request_id, message)
+            .and_then(|bytes| self.writer()?.try_send(bytes).map_err(|_| WsdbError::Disconnected));
+        if let Err(error) = queued {
+            log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb frame not queued: {error}");
         }
     }
 
+    /// The request's next answer, until its deadline: past it, `Timeout`.
     async fn wait(
         &self,
-        rx: &mut mpsc::UnboundedReceiver<pb::ServerMessage>,
+        rx: &mut mpsc::Receiver<pb::ServerMessage>,
+        deadline: Ts,
     ) -> Result<pb::ServerMessage, WsdbError> {
-        match rx.recv().await {
+        let next = lk_agents_abi::before(&*self.0.clock, Some(deadline), rx.recv());
+        match next.await.map_err(|_| WsdbError::Timeout)? {
             None if self.is_closed() => Err(self.closed_error()),
             None => Err(WsdbError::Disconnected),
             Some(pb::ServerMessage {
@@ -750,11 +799,12 @@ impl Conn {
         st.tip = st.tip.max(tip);
     }
 
-    /// One write statement; returns once durable.
-    pub async fn exec(&self, s: &Statement) -> Result<ExecResult, WriteError> {
+    /// One write statement; returns once durable, or fails by `deadline`.
+    pub async fn exec(&self, s: &Statement, deadline: Ts) -> Result<ExecResult, WriteError> {
         let stmt = statement(s);
-        let mut req = self.register().await.map_err(WriteError::NotSent)?;
-        self.write(req.id, pb::client_message::Message::Exec(stmt)).map_err(WriteError::NotSent)?;
+        let mut req = self.register(deadline).await.map_err(WriteError::NotSent)?;
+        let exec = pb::client_message::Message::Exec(stmt);
+        self.write(req.id, exec).await.map_err(WriteError::NotSent)?;
         self.exec_answer(&mut req).await.map_err(WriteError::Sent)
     }
 
@@ -774,19 +824,21 @@ impl Conn {
         })
     }
 
-    /// A query's rows, all of them: one credit back per batch consumed.
-    pub async fn query_all(&self, s: &Statement) -> Result<Vec<Row>, WsdbError> {
+    /// A query's rows, all of them, by `deadline`: one credit back per batch consumed, so the
+    /// server sends no further than the caller reads.
+    pub async fn query_all(&self, s: &Statement, deadline: Ts) -> Result<Vec<Row>, WsdbError> {
         let stmt = statement(s);
-        let mut req = self.register().await?;
+        let mut req = self.register(deadline).await?;
         let id = req.id;
-        self.write(id, pb::client_message::Message::Query(stmt))?;
+        self.write(id, pb::client_message::Message::Query(stmt)).await?;
         let mut results = Results::new(1);
         loop {
             match req.next().await?.message {
                 Some(pb::server_message::Message::Columns(columns)) => results.columns(columns)?,
                 Some(pb::server_message::Message::ColumnBatch(batch)) => {
                     results.batch(batch)?;
-                    self.write(id, pb::client_message::Message::Credit(pb::Credit { batches: 1 }))?;
+                    let credit = pb::client_message::Message::Credit(pb::Credit { batches: 1 });
+                    self.write(id, credit).await?;
                 }
                 Some(pb::server_message::Message::Done(done)) => {
                     let mut result = results.finish(&done)?;
@@ -806,13 +858,17 @@ impl Conn {
         }
     }
 
-    /// Statements applied atomically, in order, each answered in order.
-    pub async fn batch(&self, statements: &[Statement]) -> Result<BatchResult, WriteError> {
+    /// Statements applied atomically, in order, each answered in order, by `deadline`.
+    pub async fn batch(
+        &self,
+        statements: &[Statement],
+        deadline: Ts,
+    ) -> Result<BatchResult, WriteError> {
         let statements: Vec<pb::Statement> = statements.iter().map(statement).collect();
         let n = statements.len();
-        let mut req = self.register().await.map_err(WriteError::NotSent)?;
+        let mut req = self.register(deadline).await.map_err(WriteError::NotSent)?;
         let batch = pb::client_message::Message::Batch(pb::Batch { statements });
-        self.write(req.id, batch).map_err(WriteError::NotSent)?;
+        self.write(req.id, batch).await.map_err(WriteError::NotSent)?;
         self.batch_answer(&mut req, n).await.map_err(WriteError::Sent)
     }
 
@@ -822,17 +878,16 @@ impl Conn {
         n: usize,
     ) -> Result<BatchResult, WsdbError> {
         let id = req.id;
-        self.write(
-            id,
-            pb::client_message::Message::Credit(pb::Credit { batches: self.0.opts.credits }),
-        )?;
+        let credit = pb::Credit { batches: self.0.opts.credits };
+        self.write(id, pb::client_message::Message::Credit(credit)).await?;
         let mut results = Results::new(n);
         loop {
             match req.next().await?.message {
                 Some(pb::server_message::Message::Columns(columns)) => results.columns(columns)?,
                 Some(pb::server_message::Message::ColumnBatch(batch)) => {
                     results.batch(batch)?;
-                    self.write(id, pb::client_message::Message::Credit(pb::Credit { batches: 1 }))?;
+                    let credit = pb::client_message::Message::Credit(pb::Credit { batches: 1 });
+                    self.write(id, credit).await?;
                 }
                 Some(pb::server_message::Message::ExecResult(result)) => results.exec(result)?,
                 Some(pb::server_message::Message::Done(done)) => {
@@ -856,13 +911,15 @@ impl Conn {
 struct Request<'a> {
     conn: &'a Conn,
     id: u32,
-    rx: mpsc::UnboundedReceiver<pb::ServerMessage>,
+    rx: mpsc::Receiver<pb::ServerMessage>,
+    /// The caller's: its answer is awaited until then.
+    deadline: Ts,
     answered: bool,
 }
 
 impl Request<'_> {
     async fn next(&mut self) -> Result<pb::ServerMessage, WsdbError> {
-        self.conn.wait(&mut self.rx).await
+        self.conn.wait(&mut self.rx, self.deadline).await
     }
 }
 
@@ -870,7 +927,7 @@ impl Drop for Request<'_> {
     fn drop(&mut self) {
         self.conn.0.state.lock().pending.remove(&self.id);
         if !self.answered {
-            let _ = self.conn.write(self.id, pb::client_message::Message::Cancel(pb::Cancel {}));
+            self.conn.try_write(self.id, pb::client_message::Message::Cancel(pb::Cancel {}));
         }
     }
 }

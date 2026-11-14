@@ -36,7 +36,7 @@ pub enum A2aTaskEvent {
 }
 
 /// The operations the runtime executes against storage, the response stream and the handler.
-/// At most one run is open at a time: `Open` opens it, `Commit`, `Abandon`, `ResolveLater` and
+/// At most one run is open at a time: `Open` opens it, `Commit`, `Abandon`, `DropUncertain` and
 /// `CloseRun` end it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operation {
@@ -97,12 +97,9 @@ pub enum Operation {
         outcome: RunOutcome,
         reason: String,
     },
-    /// Hands the open run, whose commit is unresolved, to a background resolver: when it finds
-    /// the commit rejected ([`rejected_commit`]), `task_id` fails with the `failed` status message.
-    ResolveLater {
-        task_id: String,
-        failed: a2a::Message,
-    },
+    /// Drops the open run, whose commit's outcome stayed unknown at its deadline: its lease is
+    /// released by token, which fences the commit out if it never applied.
+    DropUncertain,
     /// Commits the open run with nothing of its own, when one is open.
     CloseRun,
     /// Releases the receive's or the drain's kept lease when nothing is pending past it.
@@ -280,7 +277,8 @@ enum Phase {
     FailRun,
     /// A run that could not be saved failed its tasks; an ended turn's run is abandoned next.
     RunFailed,
-    Resolve,
+    /// A run whose commit stayed uncertain is being dropped; the task is answered as it reads.
+    Uncertain,
     Answer {
         reason: Option<TaskReason>,
     },
@@ -647,11 +645,9 @@ impl TaskMachine {
         Operation::CloseRun
     }
 
-    fn resolve_later(&mut self) -> Operation {
-        self.phase = Phase::Resolve;
-        let task_id = self.task_id.clone();
-        let failed = failed_message(&task_id, TaskReason::StorageUnavailable, self.mint("msg"));
-        Operation::ResolveLater { task_id, failed }
+    fn drop_uncertain(&mut self) -> Operation {
+        self.phase = Phase::Uncertain;
+        Operation::DropUncertain
     }
 
     /// Fails `task_id` `reason` unless it already ended; `then` follows.
@@ -754,7 +750,7 @@ impl TaskMachine {
             Phase::FailRun | Phase::RunFailed | Phase::Abandon(_) => {
                 self.on_run_failure(completion)
             }
-            Phase::Resolve | Phase::Answer { .. } => self.on_answered(completion),
+            Phase::Uncertain | Phase::Answer { .. } => self.on_answered(completion),
             Phase::Observe => self.on_observed(completion, now),
             Phase::Inbox => self.on_inbox(completion, now),
             Phase::Release => self.on_released(completion),
@@ -1005,7 +1001,7 @@ impl TaskMachine {
 
     fn on_answered(&mut self, completion: Completion) -> Result<Option<Operation>, Finish> {
         match (self.phase, completion) {
-            (Phase::Resolve, Completion::Done) => Ok(Some(self.answer_task(None))),
+            (Phase::Uncertain, Completion::Done) => Ok(Some(self.answer_task(None))),
             (Phase::Answer { reason }, Completion::Done) => Ok(Some(self.answer_task(reason))),
             (Phase::Answer { .. }, Completion::Task(None)) if self.error.is_some() => {
                 // the failed run's message has no row (a `reject` partition writes it with `Submit`
@@ -1173,9 +1169,10 @@ impl TaskMachine {
             (Phase::Run { step: RunStep::Commit, .. } | Phase::Closing(_), _) => {
                 self.answer = None;
                 match error {
-                    // a lost acknowledgment is not a failure: the message's task stays as it is
-                    // while the resolver finds the run; once applied, it names its answer
-                    StorageError::Uncertain(_) => self.resolve_later(),
+                    // an outcome unknown at the deadline is not a failure: the message's task
+                    // stays as it is; applied, the commit names its answer, and a holder that
+                    // takes the partition fails it `worker-lost` if it never applied
+                    StorageError::Uncertain(_) => self.drop_uncertain(),
                     // the save was refused, whatever the reason: the message's own task fails;
                     // its staged changes are absent, so a question it answered still waits
                     _ => {
@@ -1188,12 +1185,6 @@ impl TaskMachine {
         };
         Ok(Some(operation))
     }
-}
-
-/// Whether a resolver found an unresolved commit rejected: the partition moved past its run, whose
-/// task fails `storage-unavailable`. Any other error leaves the outcome unknown.
-pub fn rejected_commit(error: &StorageError) -> bool {
-    matches!(error, StorageError::VersionConflict { .. })
 }
 
 /// Whether a turn answered the row: it ended, it asks a question, or its handler answered it

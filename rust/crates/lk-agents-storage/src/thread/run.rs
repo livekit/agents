@@ -264,12 +264,6 @@ impl EventLog {
     }
 }
 
-/// How long a commit whose acknowledgment was lost is resolved before the caller is answered
-/// [`StorageError::Uncertain`]; the run then still holds the commit for [`Run::resolve_later`].
-pub const RESOLVE_WAIT: Duration = Duration::from_secs(10);
-/// How long a resolver keeps checking a commit nobody could resolve in the caller's wait.
-pub const RESOLVE_LATER: Duration = Duration::from_secs(3600);
-
 /// What [`Run::commit`] does besides writing the run.
 #[derive(Debug, Clone, Default)]
 pub struct CommitOptions {
@@ -313,9 +307,6 @@ pub struct Run {
     pub(super) outcome: RunOutcome,
     pub(super) reason: Option<String>,
     pub(super) finished: bool,
-    /// The commit [`Run::commit`] could not resolve in its wait, whether it kept the lease, and
-    /// why its outcome is unknown.
-    pub(super) unresolved: Option<(Commit, LeaseAfterCommit, Unacknowledged)>,
 }
 
 impl Run {
@@ -493,8 +484,16 @@ impl Run {
     }
 
     /// Leaving normally: one fenced write of everything the run holds. A closed run releases the
-    /// lease and writes nothing. `VersionConflict` means its token or version was replaced.
+    /// lease and writes nothing. `VersionConflict` means its token or version was replaced. The
+    /// write, its resends and the resolution of a lost acknowledgment share the caller's
+    /// deadline; an outcome still unknown at it is `Uncertain`, and the run's dropped lease is
+    /// released by its token, which fences out a write that never applied.
     pub async fn commit(&mut self, opts: CommitOptions) -> Result<Committed, StorageError> {
+        let deadline = crate::deadline::or_default(self.partition_key.thread.clock());
+        crate::deadline::within(deadline, self.commit_once(opts)).await
+    }
+
+    async fn commit_once(&mut self, opts: CommitOptions) -> Result<Committed, StorageError> {
         self.finish()?;
         let version = self.version();
         if let Some(lease) = &self.lease
@@ -511,7 +510,8 @@ impl Run {
         let out = match self.writes(opts) {
             Ok(commit) => match self.send_until_answered(&commit, lease).await {
                 Err(StorageError::Uncertain(why)) => {
-                    self.resolve_lost_ack(commit, lease, why).await
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
+                    self.resolve(&commit, lease, why).await
                 }
                 Err(StorageError::Invalid(why)) if !commit.app_writes.is_empty() => {
                     Err(self.refused_commit(&commit, why).await)
@@ -524,34 +524,13 @@ impl Run {
         out
     }
 
-    /// The lease renews until the commit's outcome is known; one left unresolved keeps it for
-    /// [`Run::resolve_later`]. A commit that released it leaves its handle nothing to release.
+    /// The lease renews until the commit's outcome is known, or the deadline left it unknown. A
+    /// commit that released it leaves its handle nothing to release.
     fn settle(&self, out: &Result<Committed, StorageError>, after: LeaseAfterCommit) {
         let Some(lease) = &self.lease else { return };
-        if matches!(out, Err(StorageError::Uncertain(_))) {
-            return;
-        }
         lease.stop();
         if out.is_ok() && after == LeaseAfterCommit::Release {
             lease.mark_released();
-        }
-    }
-
-    /// Resolves a commit whose acknowledgment was lost, keeping it for a later resolution
-    /// while the answer is still uncertain.
-    async fn resolve_lost_ack(
-        &mut self,
-        commit: Commit,
-        lease: LeaseAfterCommit,
-        why: Unacknowledged,
-    ) -> Result<Committed, StorageError> {
-        log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
-        match self.resolve(&commit, lease, RESOLVE_WAIT, why).await {
-            Err(StorageError::Uncertain(why)) => {
-                self.unresolved = Some((commit, lease, why.clone()));
-                Err(StorageError::Uncertain(why))
-            }
-            resolved => resolved,
         }
     }
 
@@ -571,7 +550,7 @@ impl Run {
         }
     }
 
-    /// [`Run::send`] again while it is refused unapplied, up to [`RESOLVE_WAIT`]; a lost
+    /// [`Run::send`] again while it is refused unapplied, until the deadline; a lost
     /// acknowledgment is left to [`Run::resolve`], which reads back whether it applied.
     async fn send_until_answered(
         &self,
@@ -580,7 +559,7 @@ impl Run {
     ) -> Result<Committed, StorageError> {
         let mut resend = self.partition_key.thread.resend(crate::telemetry::StorageWrite::Commit);
         loop {
-            match self.send(commit, after).await {
+            match resend.attempt(self.send(commit, after)).await {
                 Err(StorageError::Uncertain(why)) => return Err(StorageError::Uncertain(why)),
                 out => {
                     if let ControlFlow::Break(out) = resend.after(out).await {
@@ -609,12 +588,11 @@ impl Run {
     /// A commit whose acknowledgment was lost, resolved by the run's identity: committed (its
     /// record), not applied while the fence holds (sent again: the fence and the run id make it
     /// safe), or rejected (`VersionConflict`: the partition moved on without it). `Uncertain` once
-    /// `wait` passes with no authoritative answer.
+    /// the deadline passes with no authoritative answer.
     async fn resolve(
         &self,
         commit: &Commit,
         lease: LeaseAfterCommit,
-        wait: Duration,
         lost: Unacknowledged,
     ) -> Result<Committed, StorageError> {
         let fence = self.lease.as_ref().map(Lease::fence);
@@ -634,18 +612,9 @@ impl Run {
         };
         let thread = &self.partition_key.thread;
         let (clock, cx) = (thread.background.clock.clone(), &thread.cx);
-        Resend::after_lost(clock, wait, cx, crate::telemetry::StorageWrite::Commit, lost)
+        Resend::after_lost(clock, cx, crate::telemetry::StorageWrite::Commit, lost)
             .probed(|| self.send(commit, lease), probe)
             .await
-    }
-
-    /// Keeps resolving a commit [`Run::commit`] left uncertain, up to [`RESOLVE_LATER`]: the
-    /// authoritative outcome, never a guess. `None` when nothing was left unresolved.
-    pub async fn resolve_later(mut self) -> Option<Result<Committed, StorageError>> {
-        let (commit, lease, lost) = self.unresolved.take()?;
-        let out = self.resolve(&commit, lease, RESOLVE_LATER, lost).await;
-        self.settle(&out, lease);
-        Some(out)
     }
 
     /// Leaving by error: `run_ended` with the outcome and the reason, and the release; nothing

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use lk_agents_abi::storage::journal::{JournalEvent, RunEnded};
 use lk_agents_abi::storage::thread::AbandonReason;
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, Ts};
-use lk_agents_abi::{OwnedTask, Spawner, SpawnerExt};
+use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::clock::unix_now_ms;
 use lk_agents_net::signal::{self, Producer};
 use lk_agents_net::task::TaskSet;
@@ -41,18 +41,6 @@ impl Holder {
 
     pub fn as_str(&self) -> &str {
         &self.id
-    }
-
-    /// Runs `cleanup` on `spawner`, in the set [`Holder::wait_released`] awaits, its result
-    /// published on `producer`: a cancel or a panic ends the signal instead.
-    pub(crate) fn spawn_settling_cleanup<T: Send + Sync + 'static>(
-        &self,
-        spawner: &dyn Spawner,
-        name: &str,
-        producer: Producer<Option<T>>,
-        cleanup: impl std::future::Future<Output = T> + Send + 'static,
-    ) {
-        self.releases.spawn_settling(spawner, name, producer, cleanup);
     }
 
     /// Waits, at most [`HOST_TEARDOWN_TIMEOUT`] on `clock`, for the releases dropped leases
@@ -99,26 +87,23 @@ fn release(
 }
 
 /// [`release`] from a drop, on the thread's storage executor (the caller may already be gone,
-/// or off the runtime), counted by its owner. One still running past [`HOST_TEARDOWN_TIMEOUT`]
-/// is a teardown overrun.
+/// or off the runtime), counted by its owner, until [`HOST_TEARDOWN_TIMEOUT`]: one that could
+/// not land by then is a teardown overrun, and the lease lapses at its TTL.
 fn release_detached(owner: &Holder, db: Thread, partition_key: &str, batch: Vec<Statement>) {
     let partition_key = partition_key.to_owned();
     let open = db.keep_open("lease release");
     let background = db.background.clone();
     owner.releases.spawn(&*background.spawner, "lease release", async move {
         let _open = open;
-        let release = db.resend(StorageWrite::Release).send(|| db.conn().batch(batch.clone()));
-        let mut release = std::pin::pin!(release);
-        let bounded = lk_agents_abi::timeout(db.clock(), HOST_TEARDOWN_TIMEOUT, &mut release);
-        let out = match bounded.await {
-            Ok(out) => out,
-            Err(_) => {
-                let stage = TeardownStage::LeaseRelease;
-                telemetry::teardown_overrun(&db.cx, db.clock(), stage, &partition_key);
-                release.await
-            }
-        };
-        if let Err(error) = out {
+        let deadline = db.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+        let release = db.resend_until(deadline, StorageWrite::Release);
+        if let Err(error) = release.send(|| db.conn().batch(batch.clone())).await {
+            telemetry::teardown_overrun(
+                &db.cx,
+                db.clock(),
+                TeardownStage::LeaseRelease,
+                &partition_key,
+            );
             log::debug!(target: lk_agents_abi::LOG_TARGET, "lease cleanup failed: {error}");
         }
     });
@@ -139,19 +124,19 @@ pub(crate) struct PendingLease {
 }
 
 impl PendingLease {
-    /// A lost acknowledgment is sent again under the same token for up to `wait`.
+    /// A lost acknowledgment is sent again under the same token until `deadline`.
     pub(crate) fn new(
         db: Thread,
         partition_key: &str,
         holder: &Holder,
         run_id: Option<&str>,
-        wait: std::time::Duration,
+        deadline: Ts,
         write: StorageWrite,
     ) -> Self {
         let (partition_key, token, holder) =
             (partition_key.to_owned(), shortuuid("lease_"), holder.clone());
         let run_id = run_id.map(str::to_owned);
-        let resend = db.resend_within(wait, write);
+        let resend = db.resend_until(deadline, write);
         Self { db, partition_key, token, holder, run_id, armed: false, resend }
     }
 
@@ -174,7 +159,7 @@ impl PendingLease {
     ) -> ControlFlow<Result<(T, Option<Lease>), StorageError>> {
         let at = self.db.clock().now();
         self.armed = true;
-        let out = request.await;
+        let out = self.resend.attempt(request).await;
         let answer = match self.resend.after(out).await {
             ControlFlow::Continue(()) => return ControlFlow::Continue(()),
             ControlFlow::Break(Ok(answer)) => answer,
@@ -454,12 +439,8 @@ impl LeaseRenewal {
         until: Ts,
         ttl: std::time::Duration,
     ) -> ControlFlow<()> {
-        let wait = self.ownership.deadline.lock().saturating_duration_since(started);
         let extend = || self.db.exec(extend(&self.fence, self.db.timing.millis()));
-        let resend = self.db.resend_within(wait, StorageWrite::Extend);
-        let outcome = lk_agents_abi::before(self.db.clock(), Some(until), resend.send(extend))
-            .await
-            .unwrap_or_else(|_| Err(StorageError::Unavailable("the extend timed out".into())));
+        let outcome = self.db.resend_until(until, StorageWrite::Extend).send(extend).await;
         if self.ownership.check().is_err() {
             return ControlFlow::Break(());
         }
@@ -475,8 +456,9 @@ impl LeaseRenewal {
                 return ControlFlow::Break(());
             }
             // A warning, as any retry: a renewal that keeps failing loses the lease at its
-            // deadline, and these lines are what precede that loss.
-            Err(error) if error.retryable() => {
+            // deadline, and these lines are what precede that loss. An extend still unanswered at
+            // the next tick is such a miss: keyed by the token, the next one supersedes it.
+            Err(error) if error.retryable() || matches!(error, StorageError::Uncertain(_)) => {
                 self.failures += 1;
                 let subject = format!("lease renewal ({})", self.fence.partition_key);
                 let delay = until.saturating_duration_since(self.db.clock().now());

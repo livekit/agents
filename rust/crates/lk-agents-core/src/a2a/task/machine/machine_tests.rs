@@ -253,7 +253,7 @@ fn recovery_fails_exactly_the_orphans_and_never_an_ended_task() {
 }
 
 #[test]
-fn a_lost_commit_acknowledgment_is_resolved_and_never_answered_failed() {
+fn a_commit_uncertain_at_its_deadline_is_dropped_and_never_answered_failed() {
     let mut m = machine(Policy::Queue);
     let commit = turn(&mut m, None, answered("hi"));
     assert!(matches!(commit, Operation::Commit { answer_task: Some(_), .. }));
@@ -262,7 +262,7 @@ fn a_lost_commit_acknowledgment_is_resolved_and_never_answered_failed() {
         Duration::ZERO,
         Err(StorageError::Uncertain(lk_agents_abi::storage::Unacknowledged::sent("lost"))),
     ));
-    assert!(matches!(resolve, Operation::ResolveLater { task_id, .. } if task_id == "receipt"));
+    assert_eq!(resolve, Operation::DropUncertain);
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
     // the database is still unreachable: the task as this worker left it, still working
     let effects = at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("down".into())));

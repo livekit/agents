@@ -137,12 +137,12 @@ async fn a_socket_closed_after_a_write_was_sent_leaves_it_uncertain() {
             let mut opts = connection::Options::new(url.clone(), "DB_1");
             opts.reconnect.disable = !redial;
             opts.reconnect.min_backoff = Duration::from_millis(10);
-            opts.reconnect.budget = Duration::from_secs(5);
             let minter = TokenMinter::new("devkey", "secret").unwrap();
             let background = crate::testing::background();
             Conn::dial(opts, minter, background.spawner, background.clock)
         };
-        let exec = dial().await.unwrap().exec(&Statement::raw("UPDATE t SET n = 1")).await;
+        let conn = dial().await.unwrap();
+        let exec = conn.exec(&Statement::raw("UPDATE t SET n = 1"), conn.deadline()).await;
         let exec = StorageError::from(exec.unwrap_err());
         assert!(matches!(exec, StorageError::Uncertain(_)), "redial {redial}: {exec:?}");
         let pooled = Pooled {
