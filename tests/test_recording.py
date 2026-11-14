@@ -497,7 +497,12 @@ async def test_upload_authorization(token_mode: bool, monkeypatch: pytest.Monkey
     mock_http = _make_mock_http()
 
     with _patch_upload_deps():
-        await _call_upload(report, http_session=mock_http)
+        if token_mode:
+            # nothing is signed: an AccessToken without a key and secret may raise
+            with patch(f"{_TRACES_MOD}.api.AccessToken", side_effect=ValueError):
+                await _call_upload(report, http_session=mock_http)
+        else:
+            await _call_upload(report, http_session=mock_http)
 
     authorization = mock_http.post.call_args.kwargs["headers"]["Authorization"]
     assert authorization == ("Bearer worker-token" if token_mode else "Bearer test-jwt")

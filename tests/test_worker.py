@@ -588,7 +588,8 @@ async def test_token_mode_needs_agent_protocol_2(
                 with contextlib.suppress(RuntimeError):
                     await task
 
-    assert received == ["register"], "one attempt, and no CreateJobToken"
+    assert received.count("register") == 1, "one attempt"
+    assert "create_job_token" not in received
 
 
 async def test_create_job_token_fails_when_the_connection_is_lost() -> None:
@@ -621,6 +622,51 @@ async def test_create_job_token_fails_when_the_connection_is_lost() -> None:
             finally:
                 await server.aclose()
                 await task
+
+
+async def test_jobs_get_tokens_while_the_worker_closes() -> None:
+    """A job's shutdown callbacks call the API, so the connection outlives the jobs."""
+
+    async def agent_ws(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for packet in ws:
+            message = agent.WorkerMessage.FromString(packet.data)
+            if message.HasField("register"):
+                reply = _register_response("AW_closing", agent_protocol=2)
+                await ws.send_bytes(agent.ServerMessage(register=reply).SerializeToString())
+            elif message.HasField("create_job_token"):
+                res = agent.CreateJobTokenResponse(
+                    request_id=message.create_job_token.request_id, token="job-token"
+                )
+                await ws.send_bytes(agent.ServerMessage(create_job_token=res).SerializeToString())
+        return ws
+
+    tokens: list[str] = []
+    close_pool = ProcPool.aclose
+
+    async def close_jobs(pool: ProcPool) -> None:
+        # what a job's shutdown callback asks for through the pool
+        tokens.append((await server._create_job_token("AJ_job", "{}")).token)
+        await close_pool(pool)
+
+    async with _fake_livekit(agent_ws) as port:
+        with patch.dict(os.environ, _NO_KEY_ENV):
+            server = AgentServer(ws_url=f"ws://127.0.0.1:{port}", num_idle_processes=0)
+            server.rtc_session()(_noop_entrypoint)
+            server._simulation = True  # skip the health HTTP server
+            registered = asyncio.Event()
+            server.on("worker_registered", lambda *_: registered.set())
+            task = asyncio.create_task(server.run(devmode=True))
+            try:
+                await asyncio.wait_for(registered.wait(), timeout=10)
+            finally:
+                with patch.object(ProcPool, "aclose", close_jobs):
+                    await asyncio.wait_for(server.aclose(), timeout=10)
+                await task
+
+    assert tokens == ["job-token"]
+    assert not server._is_available(), "a closing worker takes no new job"
 
 
 @pytest.mark.virtual_time

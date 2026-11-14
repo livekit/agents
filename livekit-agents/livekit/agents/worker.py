@@ -1103,9 +1103,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             logger.info("shutting down worker", extra={"id": self.id})
 
-            if self._conn_task is not None:
-                await utils.aio.cancel_and_wait(self._conn_task)
-
             if self._load_task is not None:
                 await utils.aio.cancel_and_wait(self._load_task)
 
@@ -1113,7 +1110,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             # before closing the proc pool (they accepted before shutdown)
             await asyncio.gather(*self._job_lifecycle_tasks, return_exceptions=True)
 
+            # the connection stays up while the jobs shut down: in token mode their
+            # shutdown callbacks get tokens for API calls through it
             await self._proc_pool.aclose()
+
+            if self._conn_task is not None:
+                await utils.aio.cancel_and_wait(self._conn_task)
 
             if self._inference_executor is not None:
                 await self._inference_executor.aclose()
@@ -1509,7 +1511,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return self._worker_load + self._reserved_slots * job_load_estimate
 
     def _is_available(self) -> bool:
-        if self._draining:
+        if self._draining or self._closed:
             return False
 
         if self._simulation:

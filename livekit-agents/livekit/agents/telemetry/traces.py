@@ -1423,13 +1423,15 @@ async def _upload_session_report(
         return
 
     # emit recording
-    access_token = (
-        api.AccessToken()
-        .with_observability_grants(api.ObservabilityGrants(write=True))
-        .with_ttl(timedelta(hours=6))
-    )
     # token mode: no secret to sign with, the worker token is sent as is
-    jwt = token_mode_token() or access_token.to_jwt()
+    jwt = token_mode_token()
+    if jwt is None:
+        jwt = (
+            api.AccessToken()
+            .with_observability_grants(api.ObservabilityGrants(write=True))
+            .with_ttl(timedelta(hours=6))
+            .to_jwt()
+        )
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=report.room_id,
