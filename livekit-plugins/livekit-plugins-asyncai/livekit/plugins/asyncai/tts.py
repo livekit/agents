@@ -114,6 +114,9 @@ class TTS(tts.TTS):
                 "AsyncAI API key is required, either as argument or set"
                 " ASYNCAI_API_KEY environment variable"
             )
+        # the emitter frames audio/pcm as 16-bit samples
+        if encoding in ("pcm_f32le", "pcm_mulaw"):
+            raise ValueError(f"Unsupported encoding: {encoding}")
 
         self._opts = _TTSOptions(
             model=model,
