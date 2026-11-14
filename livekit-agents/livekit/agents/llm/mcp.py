@@ -8,7 +8,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
