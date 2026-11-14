@@ -1905,3 +1905,156 @@ async def test_a_reply_restored_by_an_empty_resume_finishes_once_after_rollover(
     assert finished == [("finished", 0.02, False)], buffer.events
     assert buffer.events.count("started") == 1, buffer.events
     await asyncio.sleep(0)  # let the cancelled completion timers unwind
+
+
+async def _stop_forwarder(session: AvatarSession, forwarder: asyncio.Task) -> None:
+    await _stop_idle_end_timer(session)
+    forwarder.cancel()
+    await asyncio.gather(forwarder, return_exceptions=True)
+    await asyncio.gather(*list(session._background_tasks), return_exceptions=True)
+
+
+async def test_replies_after_exhausted_recovery_each_finish_once_as_interrupted() -> None:
+    """With recovery exhausted there is no provider, but each reply still has to finish."""
+    session = _session()
+    audio = _QueuedAudioBuffer()
+    session._avatarkit_session = _ProviderSpy()
+    session._audio_buffer = audio  # type: ignore[assignment]
+    forwarder = asyncio.create_task(session._run_main_task())
+    await asyncio.sleep(0)
+    session._avatarkit_session = None
+    session._provider_terminal_failure = True
+    try:
+        for value in (1, 2):
+            audio.items.put_nowait(_rtc_frame(value))
+            audio.items.put_nowait(_rtc_frame(value))
+            audio.items.put_nowait(AudioSegmentEnd())
+        for _ in range(40):
+            await asyncio.sleep(0)
+
+        assert [interrupted for _, interrupted in audio.playback_finished] == [True, True]
+        assert audio.playback_started == 2
+        assert not session._segments and not session._drop_frames_until_segment_end
+    finally:
+        await _stop_forwarder(session, forwarder)
+
+
+class _ReconnectGate:
+    """Stands in for an in-flight reconnect the test settles by hand."""
+
+    def __init__(self, session: AvatarSession, provider: _ProviderSpy | None) -> None:
+        self.release = asyncio.Event()
+        self._session = session
+        self._provider = provider
+
+    async def run(self) -> bool:
+        await self.release.wait()
+        if self._provider is None:
+            self._session._provider_terminal_failure = True
+            return False
+        self._session._avatarkit_session = self._provider
+        return True
+
+
+async def test_a_reply_during_a_reconnect_is_sent_to_the_new_connection() -> None:
+    session = _session()
+    audio = _QueuedAudioBuffer()
+    replacement = _ProviderSpy()
+    session._avatarkit_session = _ProviderSpy()
+    session._audio_buffer = audio  # type: ignore[assignment]
+    forwarder = asyncio.create_task(session._run_main_task())
+    await asyncio.sleep(0)
+    gate = _ReconnectGate(session, replacement)
+    session._avatarkit_session = None
+    session._provider_reconnect_task = asyncio.create_task(gate.run())
+    try:
+        audio.items.put_nowait(_rtc_frame(1))
+        audio.items.put_nowait(AudioSegmentEnd())
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert replacement.sent == [] and audio.playback_finished == []
+
+        gate.release.set()
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert replacement.sent == [
+            ("request-1", bytes([1, 0]) * 4, False),
+            ("request-1", b"", True),
+        ], replacement.sent
+
+        session._on_playback_signal(provider_end_signal("request-1"))
+        assert [interrupted for _, interrupted in audio.playback_finished] == [False]
+    finally:
+        await _stop_forwarder(session, forwarder)
+
+
+async def test_a_reply_during_a_failed_reconnect_finishes_once_as_interrupted() -> None:
+    session = _session()
+    audio = _QueuedAudioBuffer()
+    session._avatarkit_session = _ProviderSpy()
+    session._audio_buffer = audio  # type: ignore[assignment]
+    forwarder = asyncio.create_task(session._run_main_task())
+    await asyncio.sleep(0)
+    gate = _ReconnectGate(session, None)
+    session._avatarkit_session = None
+    session._provider_reconnect_task = asyncio.create_task(gate.run())
+    try:
+        audio.items.put_nowait(_rtc_frame(1))
+        audio.items.put_nowait(_rtc_frame(2))
+        audio.items.put_nowait(AudioSegmentEnd())
+        gate.release.set()
+        for _ in range(40):
+            await asyncio.sleep(0)
+
+        assert [interrupted for _, interrupted in audio.playback_finished] == [True]
+        assert not session._segments and not session._drop_frames_until_segment_end
+    finally:
+        await _stop_forwarder(session, forwarder)
+
+
+async def test_a_lost_connection_drops_the_rest_of_the_interrupted_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reply was reported interrupted; its tail must not open a second request."""
+    session, fake, buffer = make_session()
+    monkeypatch.setattr(session, "_schedule_provider_recovery", lambda **kw: None)
+    await session._send_audio_frame(make_frame())
+
+    session._on_provider_close(session._provider_session_generation)
+
+    assert buffer.events == ["started", ("finished", True)], buffer.events
+    assert session._drop_frames_until_segment_end is True
+    await _stop_idle_end_timer(session)
+
+
+async def test_a_stale_pause_timeout_does_not_interrupt_the_next_reply() -> None:
+    from spatialreal import InterruptReason, PlaybackState, PlaybackStateEvent
+
+    def timeout(req_id: str) -> PlaybackStateEvent:
+        return PlaybackStateEvent(
+            req_id=req_id,
+            state=PlaybackState.INTERRUPTED,
+            reason=InterruptReason.PAUSE_TIMEOUT,
+        )
+
+    session, fake, buffer = make_session()
+    session._server_playback_control = True
+    session._provider_session_generation = 2
+    await session._send_audio_frame(make_frame())
+    session._complete_segment(req_id="req-1", interrupted=True, reason="test")
+    await _stop_idle_end_timer(session)
+    session._active_req_id = None
+    fake.req_id = "req-2"
+    await session._send_audio_frame(make_frame())
+    buffer.events.clear()
+
+    session._on_playback_state(timeout("req-1"), generation=2)
+    session._on_playback_state(timeout("req-2"), generation=1)
+    await asyncio.gather(*list(session._background_tasks), return_exceptions=True)
+    assert buffer.events == [], "a stale pause timeout interrupted the new reply"
+    assert "req-2" in session._segments
+
+    session._on_playback_state(timeout("req-2"), generation=2)
+    await asyncio.gather(*list(session._background_tasks), return_exceptions=True)
+    assert buffer.events and buffer.events[-1] == ("finished", True)
+    await _stop_idle_end_timer(session)

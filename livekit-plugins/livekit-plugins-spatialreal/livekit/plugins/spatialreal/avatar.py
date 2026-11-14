@@ -679,26 +679,34 @@ class AvatarSession(BaseAvatarSession):
         error: Exception,
     ) -> None:
         """Release the current framework playout and keep forwarding later turns."""
-        logger.error(
-            "SpatialReal provider audio forwarding failed; abandoning affected segment",
-            exc_info=error,
-        )
+        if self._provider_terminal_failure:
+            # recovery is already exhausted; every later reply lands here, so keep it short
+            logger.warning(
+                "SpatialReal provider is unavailable; finishing the reply as interrupted",
+                extra={"reason": self._format_error_reason(error)},
+            )
+        else:
+            logger.error(
+                "SpatialReal provider audio forwarding failed; abandoning affected segment",
+                exc_info=error,
+            )
         clear_before_recovery = self._clear_during_provider_send
         self._clear_during_provider_send = False
         self._provider_recovery_in_flight = True
         self._clear_during_provider_recovery = False
         try:
             async with self._provider_io_lock:
-                if not self._avatarkit_session:
-                    return
-
-                try:
-                    await self._avatarkit_session.interrupt()
-                except Exception:
-                    logger.warning(
-                        "Failed to stop SpatialReal provider after audio forwarding error",
-                        exc_info=True,
-                    )
+                # With no provider (recovery exhausted or still reconnecting) the reply
+                # still has to be finished below, or its playout wait never returns.
+                provider = self._avatarkit_session
+                if provider is not None:
+                    try:
+                        await provider.interrupt()
+                    except Exception:
+                        logger.warning(
+                            "Failed to stop SpatialReal provider after audio forwarding error",
+                            exc_info=True,
+                        )
 
                 if (
                     isinstance(item, rtc.AudioFrame)
@@ -758,7 +766,7 @@ class AvatarSession(BaseAvatarSession):
             livekit_egress=self._livekit_egress,
             sample_rate=self._resolved_sample_rate,
             on_playback=self._on_playback_signal,
-            on_playback_state=self._on_playback_state,
+            on_playback_state=lambda event: self._on_playback_state(event, generation=generation),
             on_error=lambda error: self._on_provider_error(generation, error),
             on_close=lambda: self._on_provider_close(generation),
         )
@@ -845,7 +853,15 @@ class AvatarSession(BaseAvatarSession):
         # Audio already handed to the lost connection was never played out. Finish those
         # segments as interrupted — the same treatment a forwarding error gets — so the
         # framework is not told later that they played in full.
+        mid_reply = self._active_req_id is not None or (
+            self._paused_segment is not None and not self._paused_segment.input_finalized
+        )
         self._complete_all_segments(interrupted=True, reason=reason)
+        if mid_reply:
+            # The framework was just told this reply finished. Drop the rest of it
+            # instead of opening a new request on the replacement connection, which
+            # would report a second finish for the same reply.
+            self._drop_frames_until_segment_end = True
 
     def _schedule_provider_recovery(self, *, reason: str) -> asyncio.Task[bool] | None:
         if self._closing:
@@ -990,8 +1006,17 @@ class AvatarSession(BaseAvatarSession):
     async def _send_audio_frame(self, frame: rtc.AudioFrame) -> None:
         if self._provider_terminal_failure:
             raise SpatialRealException("SpatialReal provider recovery is exhausted")
-        if not self._avatarkit_session:
+        if self._closing:
             return
+        if not self._avatarkit_session:
+            # A reconnect is replacing the provider. Hold the frame until it settles
+            # rather than dropping it, so the reply is either sent to the new
+            # connection or, if recovery fails, finished as interrupted.
+            clear_generation = self._clear_generation
+            if not await self._wait_for_provider_recovery():
+                raise SpatialRealException("SpatialReal provider is unavailable")
+            if clear_generation != self._clear_generation:
+                return
 
         buffered_frame = _BufferedAudioFrame(
             audio=bytes(frame.data),
@@ -1215,6 +1240,21 @@ class AvatarSession(BaseAvatarSession):
                 extra={"request_id": req_id, "idle_timeout": timeout},
             )
 
+    async def _wait_for_provider_recovery(self) -> bool:
+        task = self._provider_reconnect_task
+        if task is not None and not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+        return (
+            self._avatarkit_session is not None
+            and not self._provider_terminal_failure
+            and not self._closing
+        )
+
     async def _finalize_active_segment(self, *, source: str) -> bool:
         if not self._avatarkit_session:
             return False
@@ -1368,7 +1408,9 @@ class AvatarSession(BaseAvatarSession):
                     extra={"request_id": req_id, "timeout": timeout},
                 )
 
-    def _on_playback_state(self, event: PlaybackStateEvent) -> None:
+    def _on_playback_state(
+        self, event: PlaybackStateEvent, *, generation: int | None = None
+    ) -> None:
         # Structured server-side playback state (egress playback_control). The
         # PLAYING/PAUSED/ENDED signals are already handled via on_playback
         # (ServerResponseAnimation); the one thing that path can't express is a
@@ -1381,6 +1423,19 @@ class AvatarSession(BaseAvatarSession):
             # explicit / preempted interrupts already flow through the framework's
             # own clear_buffer path; nothing extra to do.
             return
+        if generation is not None and generation != self._provider_session_generation:
+            logger.debug(
+                "Ignoring pause timeout from a previous provider connection",
+                extra={"request_id": event.req_id, "generation": generation},
+            )
+            return
+        if not self._pause_timeout_applies(event.req_id):
+            # the request already ended (interrupted, or replaced by a newer reply)
+            logger.debug(
+                "Ignoring pause timeout for a request that is no longer playing",
+                extra={"request_id": event.req_id},
+            )
+            return
         logger.warning(
             "SpatialReal avatar pause timed out on the server; finalizing segment as interrupted",
             extra={"request_id": event.req_id, "played_ms": event.played_ms},
@@ -1391,6 +1446,14 @@ class AvatarSession(BaseAvatarSession):
             self._handle_interrupt(),
             name="spatialreal_avatar_pause_timeout",
         )
+
+    def _pause_timeout_applies(self, req_id: str) -> bool:
+        if not req_id:
+            # an event without a request ID can only refer to a hold we still have
+            return any(segment.native_paused_at is not None for segment in self._segments.values())
+        if req_id in self._segments or req_id == self._active_req_id:
+            return True
+        return self._paused_segment is not None and self._paused_segment.req_id == req_id
 
     def _on_playback_signal(self, signal: PlaybackSignal) -> None:
         req_id = signal.req_id or None
