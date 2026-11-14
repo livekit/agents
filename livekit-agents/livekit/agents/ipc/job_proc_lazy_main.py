@@ -195,6 +195,11 @@ class _InfClient(InferenceExecutor):
             fut.set_result(resp)
 
 
+# above the worker's own limit for the server's answer (CREATE_JOB_TOKEN_TIMEOUT), so that
+# this one ends the wait only when the worker itself does not answer
+_JOB_TOKEN_TIMEOUT = 6.0
+
+
 class _JobTokenClient:
     """Gets tokens for the job from the worker, which asks the server with
     CreateJobTokenRequest. Used in token mode, where no process holds the API secret.
@@ -223,7 +228,15 @@ class _JobTokenClient:
             self._active_requests.pop(request_id, None)
             raise
 
-        resp = await fut
+        try:
+            resp = await asyncio.wait_for(fut, _JOB_TOKEN_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"the worker did not answer the job token request within {_JOB_TOKEN_TIMEOUT}s"
+            ) from None
+        finally:
+            self._active_requests.pop(request_id, None)
+
         if resp.error:
             raise RuntimeError(resp.error)
 

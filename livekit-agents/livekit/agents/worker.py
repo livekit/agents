@@ -67,7 +67,7 @@ HEARTBEAT_INTERVAL = 30
 HEALTH_RECONNECT_GRACE_PERIOD = 30.0
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
-CREATE_JOB_TOKEN_TIMEOUT = 10.0
+CREATE_JOB_TOKEN_TIMEOUT = 5.0
 # the first ServerInfo.agent_protocol that handles CreateJobTokenRequest; an older server
 # closes the worker connection on it
 JOB_TOKEN_AGENT_PROTOCOL = 2

@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from typing import ClassVar
+from unittest.mock import AsyncMock, MagicMock
 
 import psutil
 import pytest
@@ -944,6 +945,17 @@ async def test_job_token_error_is_raised_and_not_cached() -> None:
         with pytest.raises(RuntimeError, match="refused the job token: claim not allowed"):
             await worker.client.create_token('{"sha256": "x"}')
     assert len(worker.claims) == 2
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_job_token_request_times_out_when_the_worker_never_answers() -> None:
+    silent = MagicMock(send=AsyncMock())
+    client = ipc.job_proc_lazy_main._JobTokenClient(silent)
+
+    with pytest.raises(RuntimeError, match="worker did not answer the job token request"):
+        await client.create_token("{}")
+    assert not client._active_requests
 
 
 _job_token_results: list[str] = []
