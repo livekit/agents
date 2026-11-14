@@ -11,7 +11,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, Agent, AgentSession, utils
 from livekit.agents.types import TOPIC_CHAT
-from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.io import BufferedAudioOutput, PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
@@ -28,6 +28,7 @@ from livekit.agents.voice.room_io.types import (
     NoiseCancellationParams,
     RoomOptions,
     TextInputEvent,
+    TextOutputOptions,
 )
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
