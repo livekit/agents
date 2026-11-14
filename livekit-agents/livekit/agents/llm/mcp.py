@@ -25,6 +25,7 @@ try:
     from mcp.client.stdio import StdioServerParameters
     from mcp.client.streamable_http import streamable_http_client
     from mcp.shared.dispatcher import ProgressFnT
+    from mcp.shared.exceptions import MCPError
 except ImportError as e:
     raise ImportError(
         "The 'mcp' package is required to run the MCP server integration but is not installed.\n"
@@ -138,6 +139,18 @@ class MCPServer(ABC):
         self._cache_dirty = True
 
     async def initialize(self) -> None:
+        # a detected disconnect clears `_client` at once, but `_run_client` still has to wake and
+        # unwind. Its `_ready_fut` already succeeded, so joining it would report a connection that
+        # does not exist. Wait for that cleanup and connect afresh instead.
+        while (
+            self._client_task
+            and self._ready_fut
+            and self._client is None
+            and self._ready_fut.done()
+            and not self._client_task.done()
+        ):
+            await asyncio.wait([self._client_task])
+
         if self._client_task and self._ready_fut and not self._client_task.done():
             logger.warning("MCPServer is already initializing")
         else:
@@ -192,14 +205,41 @@ class MCPServer(ABC):
             self._raw_tools = None
             self._closing_ev.clear()
 
+    def _on_connection_closed(self, client: ClientSession) -> None:
+        """Record that the transport behind ``client`` is gone (e.g. the server process exited).
+
+        Stops reporting as initialized and wakes ``_run_client``, which is parked waiting for a
+        close request and would otherwise never notice, so it unwinds and cleans up.
+
+        Only the first caller to see the death does this. A later failure from a call that was
+        already in flight must not touch a newer connection, nor leave ``_closing_ev`` set for the
+        next ``initialize()`` to trip over.
+        """
+        if self._client is not client:
+            return
+
+        self._client = None
+        self._raw_tools = None
+        self._closing_ev.set()
+
     async def _list_raw_tools(self) -> list[mcp.types.Tool]:
-        if self._client is None:
+        client = self._client
+        if client is None:
             raise RuntimeError("MCPServer isn't initialized")
 
         if not self._cache_dirty and self._raw_tools is not None:
             return self._raw_tools
 
-        result = await self._client.list_tools()
+        try:
+            result = await client.list_tools()
+        except MCPError as e:
+            if e.code != mcp.types.CONNECTION_CLOSED:
+                raise
+            self._on_connection_closed(client)
+            raise RuntimeError(
+                "MCPServer connection closed: internal service is unavailable. "
+                "Please check that the MCPServer is still running."
+            ) from None
         self._raw_tools = result.tools
         self._cache_dirty = False
         return self._raw_tools
@@ -324,7 +364,16 @@ class MCPServer(ABC):
         """
         client = self._client
         assert client is not None
-        result = await client.call_tool(name, arguments, progress_callback=progress_callback)
+        try:
+            result = await client.call_tool(name, arguments, progress_callback=progress_callback)
+        except MCPError as e:
+            if e.code != mcp.types.CONNECTION_CLOSED:
+                raise
+            self._on_connection_closed(client)
+            raise ToolError(
+                "Tool invocation failed: internal service is unavailable. "
+                "Please check that the MCPServer is still running."
+            ) from None
         if not isinstance(result, mcp.types.CallToolResult):
             raise ToolError(
                 f"Tool '{name}' returned an unexpected MCP result ({type(result).__name__})."
