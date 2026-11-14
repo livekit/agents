@@ -143,6 +143,20 @@ class _BufferedAudioFrame:
 
 
 @dataclass
+class _Playout:
+    """One framework playout segment, which a req_id rollover can split across requests.
+
+    The framework counts one playback_finished per captured segment, so it is told
+    once, when the last request of the reply completes (or the first is interrupted).
+    """
+
+    parts: int = 1
+    played: float = 0.0
+    started: bool = False
+    finished: bool = False
+
+
+@dataclass
 class _SegmentState:
     req_id: str
     pushed_duration: float = 0.0
@@ -161,6 +175,7 @@ class _SegmentState:
     provider_events_trusted: bool = True
     # set while the server holds playback (native pause); time held is not playback
     native_paused_at: float | None = None
+    playout: _Playout = field(default_factory=_Playout)
 
 
 class AvatarSession(BaseAvatarSession):
@@ -626,12 +641,36 @@ class AvatarSession(BaseAvatarSession):
                             logger.debug("Avatar segment end received without an active request")
                 except asyncio.CancelledError:
                     raise
+                except _ProviderClearDuringSend:
+                    await self._finish_clear_during_send()
                 except Exception as e:
                     await self._recover_provider_forwarding_error(item=item, error=e)
         except asyncio.CancelledError:
             logger.debug("SpatialReal avatar audio forwarder cancelled")
         except Exception as e:
             logger.error("Error in SpatialReal avatar audio forwarder", exc_info=e)
+
+    async def _finish_clear_during_send(self) -> None:
+        """Run the interruption a clear deferred while a provider send was in flight.
+
+        The send itself succeeded, so this is a normal user interruption and the
+        connection stays up. A clear that landed before the send already scheduled
+        its interrupt; the frame is just dropped.
+        """
+        deferred = self._clear_during_provider_send
+        self._clear_during_provider_send = False
+        if not deferred:
+            return
+        if not self._segments and self._active_req_id is None and self._paused_segment is None:
+            # the cleared send may still have opened a request on the server
+            if self._avatarkit_session:
+                try:
+                    await self._avatarkit_session.interrupt()
+                except Exception as e:
+                    logger.warning("Failed to interrupt SpatialReal avatar", exc_info=e)
+            self._discard_requested = False
+            return
+        await self._handle_interrupt()
 
     async def _recover_provider_forwarding_error(
         self,
@@ -983,14 +1022,13 @@ class AvatarSession(BaseAvatarSession):
                 clear_generation=clear_generation,
             )
             provider_events_trusted = not self._reactivate_request_id(req_id)
+            previous_segment: _SegmentState | None = None
             if previous_req_id and previous_req_id != req_id:
                 logger.warning(
                     "Avatar request ID changed while streaming audio",
                     extra={"previous": previous_req_id, "current": req_id},
                 )
                 previous_segment = self._segments.get(previous_req_id)
-                if previous_segment is not None:
-                    self._mark_segment_waiting_for_completion(previous_segment)
 
             segment = self._segments.get(req_id)
             if segment is None:
@@ -998,11 +1036,18 @@ class AvatarSession(BaseAvatarSession):
                     req_id=req_id,
                     provider_events_trusted=provider_events_trusted,
                 )
+                if previous_segment is not None:
+                    # the same reply continues on a new request
+                    segment.playout = previous_segment.playout
+                    segment.playout.parts += 1
                 self._segments[req_id] = segment
             else:
                 segment.provider_events_trusted = (
                     segment.provider_events_trusted and provider_events_trusted
                 )
+
+            if previous_segment is not None:
+                self._mark_segment_waiting_for_completion(previous_segment)
 
             if not segment.provider_events_trusted:
                 logger.warning(
@@ -1116,9 +1161,18 @@ class AvatarSession(BaseAvatarSession):
             segment.provider_playback_completed = True
 
     def _cancel_active_segment_idle_end(self) -> None:
-        if self._active_segment_idle_end_task and not self._active_segment_idle_end_task.done():
-            self._active_segment_idle_end_task.cancel()
+        task = self._active_segment_idle_end_task
         self._active_segment_idle_end_task = None
+        if task is None or task.done():
+            return
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        # the fallback finalizes the segment from inside this task; cancelling it there
+        # would abort its own end=True send
+        if task is not current:
+            task.cancel()
 
     def _schedule_active_segment_idle_end(self) -> None:
         active_req_id = self._active_req_id
@@ -1145,6 +1199,9 @@ class AvatarSession(BaseAvatarSession):
             return
         try:
             finalized = await self._finalize_active_segment(source="idle_timeout")
+        except _ProviderClearDuringSend:
+            await self._finish_clear_during_send()
+            return
         except Exception as error:
             await self._recover_provider_forwarding_error(
                 item=AudioSegmentEnd(),
@@ -1560,8 +1617,9 @@ class AvatarSession(BaseAvatarSession):
         segment.playback_started = True
         segment.playback_started_at = time.time()
         segment.playback_start_source = source
-        if self._audio_buffer:
+        if self._audio_buffer and not segment.playout.started:
             self._audio_buffer.notify_playback_started()
+        segment.playout.started = True
         if segment.req_id in self._pending_segment_ids:
             self._schedule_segment_completion(segment)
         logger.debug(
@@ -1621,16 +1679,26 @@ class AvatarSession(BaseAvatarSession):
             else segment.pushed_duration
         )
 
-        if self._audio_buffer:
-            # with wait_playback_start the framework only sees playback_started
-            # when we notify it; guarantee started precedes finished even if no
-            # playback signal was ever observed
-            if not segment.playback_started:
-                self._audio_buffer.notify_playback_started()
-            self._audio_buffer.notify_playback_finished(
-                playback_position=playback_position,
-                interrupted=interrupted,
-            )
+        playout = segment.playout
+        playout.parts -= 1
+        if playout.finished:
+            pass  # an earlier request of this reply already reported it
+        elif not interrupted and playout.parts > 0:
+            # the reply continues on a later request
+            playout.played += playback_position
+        else:
+            playout.finished = True
+            if self._audio_buffer:
+                # with wait_playback_start the framework only sees playback_started
+                # when we notify it; guarantee started precedes finished even if no
+                # playback signal was ever observed
+                if not (playout.started or segment.playback_started):
+                    self._audio_buffer.notify_playback_started()
+                playout.started = True
+                self._audio_buffer.notify_playback_finished(
+                    playback_position=playout.played + playback_position,
+                    interrupted=interrupted,
+                )
 
         logger.debug(
             "SpatialReal avatar segment playback completed",
@@ -1681,6 +1749,8 @@ class AvatarSession(BaseAvatarSession):
     @staticmethod
     def _merge_segment_state(target: _SegmentState, source: _SegmentState) -> None:
         """Preserve retained audio and lifecycle state across provider ID rollover."""
+        if source.playout is target.playout:
+            target.playout.parts -= 1
         target.pushed_duration = max(target.pushed_duration, source.pushed_duration)
         target.attempt_duration = max(target.attempt_duration, source.attempt_duration)
         target.playback_position_offset = max(
@@ -2199,7 +2269,6 @@ class AvatarSession(BaseAvatarSession):
                 self._room.off("track_published", self._on_track_published)
                 self._room.off("track_subscribed", self._on_track_subscribed)
                 self._room.off("track_unsubscribed", self._on_track_unsubscribed)
-                self._room = None
 
             if self._avatar_audio_monitor_task and not self._avatar_audio_monitor_task.done():
                 self._avatar_audio_monitor_task.cancel()
@@ -2281,6 +2350,7 @@ class AvatarSession(BaseAvatarSession):
                 logger.warning("Error in base avatar session close", exc_info=e)
 
             self._initialized = False
+            self._room = None
             self._agent_session = None
             self._livekit_egress = None
             self._resolved_sample_rate = None
