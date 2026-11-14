@@ -25,6 +25,7 @@ import aiohttp
 
 from livekit.agents import (
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -156,7 +157,19 @@ class STT(stt.STT):
                         "total_seconds": end - start,
                     },
                 )
-                if not text or "error" in response_data:
+                if response.status >= 400 or "error" in response_data:
+                    error_msg = (
+                        response_data.get("error") or response_data.get("message")
+                        if isinstance(response_data, dict)
+                        else None
+                    ) or f"Clova STT error: {response_data}"
+                    raise APIStatusError(
+                        message=str(error_msg),
+                        status_code=response.status if response.status >= 400 else 400,
+                        request_id=None,
+                        body=response_data,
+                    )
+                if not text:
                     raise ValueError(f"Unexpected response: {response_data}")
                 if confidence < self.threshold:
                     raise ValueError(
@@ -165,6 +178,8 @@ class STT(stt.STT):
                 logger.info("clova stt final event", extra={"lk.pii.data": response_data})
                 return self._transcription_to_speech_event(text=text, language=lang)
 
+        except (APIStatusError, APIError):
+            raise
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
