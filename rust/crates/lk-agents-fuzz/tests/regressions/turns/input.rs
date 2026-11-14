@@ -606,18 +606,51 @@ mod unset_detection_stt_only {
 mod stt_flush_is_filler {
     //! The silence `commit_user_turn` flushes the recogniser with never pushes the person's
     //! queued audio out of the recogniser's input.
-    use lk_agents_fuzz::search;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{Count, Input, Millis, Ref};
+    use lk_agents_fuzz::record::{Kind, Tag};
 
     // Catches: a 15 s flush of silence into the recogniser's 10 s input queue dropping the
-    // person's frames queued ahead of it (`forwarded_while_enabled`, campaign seeds 6573, 30122
-    // and 32653).
+    // person's frames queued ahead of it (`forwarded_while_enabled`).
     #[test]
     fn a_long_flush_keeps_the_queued_microphone_audio() {
-        for seed in [6573, 30122, 32653] {
-            let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-            let outcome = search::explore(setup, seed, 3000);
-            let failed = outcome.failures.iter().any(|f| f.contract == "forwarded_while_enabled");
-            assert!(!failed, "seed {seed}: the flush dropped the person's audio");
-        }
+        let setup = Setup { stt: true, connect_ms: Some(500), ..Setup::default() };
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            let inputs = [
+                Input::Advance { ms: Millis(100) },
+                Input::MicFrames { mic: Ref::new(0), chunks: Count(10) },
+                Input::Advance { ms: Millis(100) },
+                // The recogniser reconnects for 500 ms: the person's next frames wait in its
+                // input, and the flush lands behind them.
+                Input::SttFail { stt: Ref::new(0) },
+                Input::Advance { ms: Millis(10) },
+                Input::MicFrames { mic: Ref::new(0), chunks: Count(10) },
+                Input::Advance { ms: Millis(100) },
+                Input::CommitUserTurn {
+                    transcript_timeout: Millis(2_000),
+                    stt_flush: Millis(15_000),
+                    skip_reply: true,
+                },
+                Input::Advance { ms: Millis(3_000) },
+            ];
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            run
+        });
+        let mut heard: Vec<u16> = run
+            .record
+            .forwarded()
+            .iter()
+            .filter(|(_, kind, ..)| *kind == Kind::Stt)
+            .flat_map(|(.., tags)| tags)
+            .filter_map(|tag| match tag {
+                Tag::Mic { mic: 0, chunk } => Some(*chunk),
+                _ => None,
+            })
+            .collect();
+        heard.dedup();
+        assert_eq!(heard, (0..20).collect::<Vec<_>>(), "the recogniser heard every queued frame");
     }
 }

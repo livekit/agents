@@ -307,18 +307,51 @@ mod failed_step_releases_floor {
 
 mod failed_voice_releases_floor {
     //! A step whose model and voice both failed gives the floor back before waiting for its tools.
-    use lk_agents_fuzz::search;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
 
     // Catches: a step whose model request failed while its voice failed too kept its speech
     // current while its tool waited for idle (`ctx.foreground()`), until the close: only a voice
-    // that spoke released the floor (`speech_settles`, survey seed 27049).
+    // that spoke released the floor (`speech_settles`).
     #[test]
     fn a_tool_waiting_for_idle_outlives_its_failed_voice() {
-        let seed = 27049;
-        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-        let outcome = search::explore(setup, seed, 3000);
-        let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.to_string()).collect();
-        assert!(!failed.iter().any(|c| c == "speech_settles"), "{failed:?}");
+        // The transcription output raises, so the voice fails once its words played out.
+        let setup = Setup {
+            tools: vec!["lookup".into()],
+            tts: true,
+            transcription_output_raises: true,
+            ..Setup::default()
+        };
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            let inputs = [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(20) },
+                Input::LlmText { chat: Ref::new(0), text: AgentText("Let me check.".into()) },
+                Input::LlmToolCall {
+                    chat: Ref::new(0),
+                    name: "lookup".into(),
+                    args: ToolArgs("{}".into()),
+                },
+                Input::Advance { ms: Millis(20) },
+                Input::LlmFail { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(20) },
+                Input::ToolAnswered {
+                    tool: Ref::new(0),
+                    answer: ToolAnswer::AfterIdle,
+                    text: AgentText(String::new()),
+                },
+                Input::Advance { ms: Millis(5_000) },
+            ];
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            assert!(run.record.applied().iter().all(|a| a.accepted), "every input landed");
+            run
+        });
+        let speeches = run.record.host_view().speeches();
+        let [speech] = &speeches[..] else { panic!("one speech, got {}", speeches.len()) };
+        assert!(speech.is_done(), "the speech waits on a tool that waits on it");
     }
 }
 
