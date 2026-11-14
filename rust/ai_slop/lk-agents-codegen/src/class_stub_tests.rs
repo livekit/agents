@@ -1,8 +1,7 @@
 // Catches: a host class generic over several type parameters annotated with one (or none), which
-// strict type checking refuses in the generated stub; or a value that may be a native class
-// annotated with the host class alone.
+// strict type checking refuses in the generated stub.
 #[test]
-fn a_proxy_is_annotated_with_its_annotation_and_each_type_parameter() {
+fn a_proxy_is_annotated_with_each_type_parameter() {
     let source = |generic: &str| {
         format!(
             r#"use crate::errors::HostError;
@@ -22,7 +21,6 @@ fn a_proxy_is_annotated_with_its_annotation_and_each_type_parameter() {
         ("", "host: Mux)"),
         (", generic", "host: Mux[Any])"),
         (", generic = 2", "host: Mux[Any, Any])"),
-        (", annotation = \"livekit.agents.Sockets\"", "host: Sockets)"),
     ] {
         let text = stub(generic);
         assert!(text.contains(want), "{want}\n{text}");

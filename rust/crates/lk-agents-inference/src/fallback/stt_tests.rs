@@ -517,6 +517,7 @@ fn merging_stt_capabilities_uses_a_different_rule_per_field() {
         keyterms: true,
         chat_context: false,
         reports_usage: false,
+        transcribes_after_speech_ends: true,
     };
     let plain = SttCapabilities {
         streaming: true,
@@ -527,6 +528,7 @@ fn merging_stt_capabilities_uses_a_different_rule_per_field() {
         keyterms: false,
         chat_context: true,
         reports_usage: false,
+        transcribes_after_speech_ends: false,
     };
 
     let merged = crate::fallback::stt::merge_capabilities(&[rich, plain]);

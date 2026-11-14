@@ -97,7 +97,7 @@ class _ResponseGeneration:
     """Accumulated output text from agent responses"""
 
 
-class RealtimeModel(llm.RealtimeSessionModel):
+class RealtimeModel(llm.RealtimeModel):
     """Real-time language model using Ultravox.
 
     Connects to Ultravox's WebSocket API for streaming STT, LLM, and TTS.

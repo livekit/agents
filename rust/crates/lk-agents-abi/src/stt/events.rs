@@ -249,9 +249,10 @@ impl Transcript {
 #[crate::host(class(name = "SpeechState", pid = false))]
 pub trait SpeechState: Send + Sized + 'static {
     /// `provider_vad`: the provider detects speech itself, so its reported end closes the
-    /// speech and a final transcript does not.
+    /// speech and a final transcript does not. `transcribes_after_speech_ends`: the
+    /// `STTCapabilities` of that name.
     #[host(new)]
-    fn new(provider_vad: bool) -> Self;
+    fn new(provider_vad: bool, transcribes_after_speech_ends: bool) -> Self;
 
     /// Whether a speech is open.
     #[host(getter)]
@@ -272,8 +273,9 @@ pub trait SpeechState: Send + Sized + 'static {
         #[host(default = None)] speech_start_time: Option<f64>,
     ) -> Vec<SpeechEvent>;
 
-    /// The provider heard speech end: before the final of its words, the speech stays open until
-    /// that final, a new speech or the connection's end.
+    /// The provider heard speech end: while words are still owed (an interim's final, or the
+    /// words of a provider that transcribes after the speech ends), the speech stays open until
+    /// a final, a new speech or the connection's end.
     #[host(call)]
     fn ended(&mut self) -> Vec<SpeechEvent>;
 

@@ -78,6 +78,10 @@ pub struct SttCapabilities {
     /// True when the provider reports its own usage events, so the framework does not measure audio
     #[host(default = false)]
     pub reports_usage: bool,
+    /// The provider transcribes a speech only after its VAD ends it, and always sends a final
+    /// for it, empty for noise: its end of a speech no words arrived in waits for that final.
+    #[host(default = false)]
+    pub transcribes_after_speech_ends: bool,
 }
 
 impl Default for SttCapabilities {
@@ -91,6 +95,7 @@ impl Default for SttCapabilities {
             keyterms: false,
             chat_context: false,
             reports_usage: false,
+            transcribes_after_speech_ends: false,
         }
     }
 }

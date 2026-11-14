@@ -177,6 +177,10 @@ class STTCapabilities:
     """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
     reports_usage: bool = False
     """True when the provider reports its own usage events, so the framework does not measure audio"""
+    transcribes_after_speech_ends: bool = False
+    """The provider transcribes a speech only after its VAD ends it, and always sends a final
+    for it, empty for noise: its end of a speech no words arrived in waits for that final.
+    """
 
 
 class STTError(BaseModel):
@@ -475,7 +479,9 @@ class RecognizeStream(ABC):
         self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
             "stt_stream", attempted, self
         )
-        self._core_speech = _core.SpeechState(self.provider_vad)
+        self._core_speech = _core.SpeechState(
+            self.provider_vad, stt.capabilities.transcribes_after_speech_ends
+        )
         self._core_attempt_task: asyncio.Task[None] | None = None
         self._core_cancelled = False
         self._attempt_started = 0.0

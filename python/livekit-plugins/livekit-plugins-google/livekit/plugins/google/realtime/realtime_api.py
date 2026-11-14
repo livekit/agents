@@ -199,7 +199,7 @@ class _ResponseGeneration:
         self.text_ch.send_nowait(text)
 
 
-class RealtimeModel(llm.RealtimeSessionModel):
+class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,

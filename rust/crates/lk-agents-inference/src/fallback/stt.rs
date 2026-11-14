@@ -425,6 +425,8 @@ pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {
         chat_context: any(|c| c.chat_context),
         // each member is measured inside the chain
         reports_usage: true,
+        // each member holds its own speech's end
+        transcribes_after_speech_ends: false,
     }
 }
 

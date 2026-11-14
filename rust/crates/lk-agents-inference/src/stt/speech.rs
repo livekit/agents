@@ -7,11 +7,14 @@ use lk_agents_abi::{SpeechEvent, SpeechEventType};
 /// and a connection boundary ends the open speech, its pending interim made final.
 ///
 /// Each speech is one utterance, numbered on its events. A provider that detects speech may end
-/// one before its words are final: the speech stays open until that final, a new speech or the
+/// one while words are still owed (an interim not yet final, or no words yet from a provider that
+/// transcribes after the speech ends): the speech stays open until a final, a new speech or the
 /// connection's end, so the final is still that utterance's.
 #[derive(Debug, Clone, Default)]
 pub struct Speech {
     provider_vad: bool,
+    /// The provider transcribes a speech after its end and always sends a final for it.
+    transcribes_after_speech_ends: bool,
     speaking: bool,
     /// The open speech produced words.
     heard: bool,
@@ -19,15 +22,15 @@ pub struct Speech {
     interim: Option<Transcript>,
     /// The request id of the open speech's words, on the events minted for it.
     request_id: String,
-    /// The provider ended the speech before its words were final: the end waits for them.
+    /// The provider ended the speech while words were owed: the end waits for them.
     ending: bool,
     /// The number of the open (or last) speech.
     utterance: u64,
 }
 
 impl Speech {
-    pub fn new(provider_vad: bool) -> Self {
-        Speech { provider_vad, ..Speech::default() }
+    pub fn new(provider_vad: bool, transcribes_after_speech_ends: bool) -> Self {
+        Speech { provider_vad, transcribes_after_speech_ends, ..Speech::default() }
     }
 
     pub fn speaking(&self) -> bool {
@@ -52,10 +55,11 @@ impl Speech {
         }
     }
 
-    /// The provider heard speech end: while its words are not final, the speech stays open for
-    /// them; one no words were heard in ends now. Whether it ended an open speech.
+    /// The provider heard speech end: while words are still owed, the speech stays open for them;
+    /// otherwise it ends now. Whether it ended an open speech.
     pub fn ended(&mut self, out: &mut Vec<SpeechEvent>) -> bool {
-        if self.provider_vad && self.speaking && self.interim.is_some() {
+        let owed = self.interim.is_some() || (self.transcribes_after_speech_ends && !self.heard);
+        if self.provider_vad && self.speaking && owed {
             self.ending = true;
             return false;
         }
@@ -100,6 +104,8 @@ impl Speech {
         }
         if !self.speaking {
             self.open();
+            // words outside the provider's speech are of one it already ended: its final ends it
+            self.ending = self.provider_vad && self.transcribes_after_speech_ends;
             let start = SpeechEvent {
                 request_id: self.request_id.clone(),
                 ..SpeechEvent::new(SpeechEventType::StartOfSpeech)
@@ -175,8 +181,8 @@ fn event(kind: SpeechEventType, transcript: Transcript) -> SpeechEvent {
 }
 
 impl lk_agents_abi::stt::events::SpeechState for Speech {
-    fn new(provider_vad: bool) -> Self {
-        Speech::new(provider_vad)
+    fn new(provider_vad: bool, transcribes_after_speech_ends: bool) -> Self {
+        Speech::new(provider_vad, transcribes_after_speech_ends)
     }
 
     fn speaking(&self) -> bool {

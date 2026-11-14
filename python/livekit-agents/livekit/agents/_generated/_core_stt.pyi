@@ -22,9 +22,10 @@ class SpeechState:
     the stream reports, the provider's own boundaries deduplicated, and open speech ends at each
     connection boundary.
     """
-    def __new__(cls, provider_vad: bool) -> Self:
+    def __new__(cls, provider_vad: bool, transcribes_after_speech_ends: bool) -> Self:
         """`provider_vad`: the provider detects speech itself, so its reported end closes the
-        speech and a final transcript does not.
+        speech and a final transcript does not. `transcribes_after_speech_ends`: the
+        `STTCapabilities` of that name.
         """
     @property
     def speaking(self) -> bool:
@@ -37,8 +38,9 @@ class SpeechState:
     def started(self, speech_start_time: float | None = None) -> list[SpeechEvent]:
         """The provider heard speech start, at `speech_start_time` (wall clock) when it says."""
     def ended(self) -> list[SpeechEvent]:
-        """The provider heard speech end: before the final of its words, the speech stays open until
-        that final, a new speech or the connection's end.
+        """The provider heard speech end: while words are still owed (an interim's final, or the
+        words of a provider that transcribes after the speech ends), the speech stays open until
+        a final, a new speech or the connection's end.
         """
     def boundary(self) -> list[SpeechEvent]:
         """A connection ended: its pending interim becomes final and the open speech ends, before

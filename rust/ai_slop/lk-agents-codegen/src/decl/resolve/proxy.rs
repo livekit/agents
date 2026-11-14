@@ -16,17 +16,7 @@ impl Resolver<'_> {
         voc::only(
             at,
             &proxy.nested,
-            &[
-                "host",
-                "annotation",
-                "view",
-                "base",
-                "generic",
-                "sdk",
-                "events",
-                "self_events",
-                "owns",
-            ],
+            &["host", "view", "base", "generic", "sdk", "events", "self_events", "owns"],
         )?;
         let self_events = voc::find(&proxy.nested, "self_events").is_some();
         let owns = voc::find(&proxy.nested, "owns").is_some();

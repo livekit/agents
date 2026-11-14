@@ -231,7 +231,7 @@ class Boto3CredentialsResolver(IdentityResolver[AWSCredentialsIdentity, Mapping[
         )
 
 
-class RealtimeModel(llm.RealtimeSessionModel):
+class RealtimeModel(llm.RealtimeModel):
     """High-level entry point that conforms to the LiveKit RealtimeModel interface.
 
     The object is very light-weight-– it mainly stores default inference options and

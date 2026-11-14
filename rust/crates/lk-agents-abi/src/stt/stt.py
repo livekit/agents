@@ -293,7 +293,9 @@ class RecognizeStream(ABC):
         self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
             "stt_stream", attempted, self
         )
-        self._core_speech = _core.SpeechState(self.provider_vad)
+        self._core_speech = _core.SpeechState(
+            self.provider_vad, stt.capabilities.transcribes_after_speech_ends
+        )
         self._core_attempt_task: asyncio.Task[None] | None = None
         self._core_cancelled = False
         self._attempt_started = 0.0

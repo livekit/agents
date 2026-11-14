@@ -33,12 +33,20 @@ pub struct SpeechState(pub(crate) SpeechStateImpl);
 #[pymethods]
 impl SpeechState {
     /// `provider_vad`: the provider detects speech itself, so its reported end closes the
-    /// speech and a final transcript does not.
+    /// speech and a final transcript does not. `transcribes_after_speech_ends`: the
+    /// `STTCapabilities` of that name.
     #[new]
-    #[pyo3(signature = (provider_vad))]
-    fn new(py: Python<'_>, provider_vad: bool) -> PyResult<SpeechState> {
+    #[pyo3(signature = (provider_vad, transcribes_after_speech_ends))]
+    fn new(
+        py: Python<'_>,
+        provider_vad: bool,
+        transcribes_after_speech_ends: bool,
+    ) -> PyResult<SpeechState> {
         let out = py.detach(|| {
-            <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::new(provider_vad)
+            <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::new(
+                provider_vad,
+                transcribes_after_speech_ends,
+            )
         });
         ::pyo3::PyResult::Ok(SpeechState(out))
     }
@@ -103,8 +111,9 @@ impl SpeechState {
         )
     }
 
-    /// The provider heard speech end: before the final of its words, the speech stays open until
-    /// that final, a new speech or the connection's end.
+    /// The provider heard speech end: while words are still owed (an interim's final, or the
+    /// words of a provider that transcribes after the speech ends), the speech stays open until
+    /// a final, a new speech or the connection's end.
     fn ended<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let out =
             <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::ended(&mut self.0);

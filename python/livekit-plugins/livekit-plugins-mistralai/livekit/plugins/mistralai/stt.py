@@ -95,6 +95,8 @@ class STT(stt.STT):
                 offline_recognize=not is_realtime,
                 # usage events carry Mistral's billed prompt audio seconds
                 reports_usage=True,
+                # the VAD's end flushes the audio, which is transcribed after it
+                transcribes_after_speech_ends=True,
             )
         )
         self._opts = _STTOptions(
@@ -351,8 +353,6 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
         self._mistral = stt
         self._vad = vad_instance
         self._vad_stream: VADStream | None = None
-        # whether the VAD's speech is open: a final after its end ends it
-        self._vad_speaking = False
         self._request_id = ""
         self._text = ""
         self._detected_language = LanguageCode(language) if is_given(language) else LanguageCode("")
@@ -372,13 +372,10 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
     async def _listen(self, vad_stream: VADStream) -> None:
         async for ev in vad_stream:
             if ev.type == VADEventType.START_OF_SPEECH:
-                self._vad_speaking = True
-                self.report(stt.SpeechEnded())
                 self.report(stt.SpeechStarted())
             elif ev.type == VADEventType.END_OF_SPEECH:
-                # force Mistral to finalize the current speech segment: its words come after the
-                # speech, so its final (or the next speech's start) ends it
-                self._vad_speaking = False
+                self.report(stt.SpeechEnded())
+                # force Mistral to finalize the current speech segment
                 self.send_now(_AudioControl(type="input_audio.flush"))
 
     async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
@@ -432,9 +429,6 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
             self._text = ""
             self._report_usage(message.get("usage") or _Usage())
             self.report(self._final(message))
-            # each final ends its speech, unless the VAD hears it going on
-            if not self._vad_speaking:
-                self.report(stt.SpeechEnded())
         else:
             assert_never(message)
 

@@ -639,14 +639,13 @@ pub struct Truncate {
     pub audio_transcript: Option<String>,
 }
 
-// A host `RealtimeSessionModel`, as a session binds it to its tools: the model half, through the
+// A host `RealtimeModel`, as a session binds it to its tools: the model half, through the
 // `_core_*` surface of its hand-written base class (`realtime.py`).
-/// A realtime model whose sessions run in Python.
+/// A realtime model: speech in, speech out, over one live session.
 ///
 /// Plugins implement `session()`, returning a `RealtimeSession`.
 #[crate::host(proxy(
-    host = "livekit.agents.llm.realtime.RealtimeSessionModel",
-    annotation = "livekit.agents.llm.realtime.RealtimeModel",
+    host = "livekit.agents.llm.realtime.RealtimeModel",
     base = "realtime.py",
     owns
 ))]

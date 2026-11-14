@@ -94,9 +94,29 @@ TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 class RealtimeModel(ABC, rtc.EventEmitter[TEvent], Generic[TEvent]):
     """A realtime model: speech in, speech out, over one live session.
 
-    A plugin whose sessions run in Python subclasses ``RealtimeSessionModel``; the OpenAI-protocol
-    models and the fallback and duplex adapters run theirs in the core.
+    Plugins implement ``session()``, returning a ``RealtimeSession``; a subclass without one is
+    refused when it is defined. The core-run models (the OpenAI-protocol models, the fallback and
+    duplex adapters) have none.
     """
+
+    if TYPE_CHECKING:
+
+        def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+            """Create a new session, optionally with server-side turn detection disabled.
+
+            The model itself is left unchanged and reusable.
+
+            Args:
+                turn_detection_disabled: Hand turn-taking to the framework; honored only by
+                    plugins reporting ``can_disable_turn_detection``.
+            """
+            ...
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        native = any(base.__module__ == _core.__name__ for base in cls.__mro__)
+        if not native and getattr(cls, "session", None) is None:
+            raise TypeError(f"{cls.__qualname__} subclasses RealtimeModel without a session()")
 
     def __init__(self, *, capabilities: RealtimeCapabilities) -> None:
         super().__init__()
@@ -141,23 +161,6 @@ class RealtimeModel(ABC, rtc.EventEmitter[TEvent], Generic[TEvent]):
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
-
-
-class RealtimeSessionModel(RealtimeModel[TEvent], Generic[TEvent]):
-    """A realtime model whose sessions run in Python: plugins implement ``session()``, returning
-    a ``RealtimeSession``.
-    """
-
-    @abstractmethod
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        """Create a new session, optionally with server-side turn detection disabled.
-
-        The model itself is left unchanged and reusable.
-
-        Args:
-            turn_detection_disabled: Hand turn-taking to the framework; honored only by plugins
-                reporting ``can_disable_turn_detection``.
-        """
 
     def _core_instance_id(self) -> int | None:
         return id(self)
@@ -493,5 +496,4 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
 
 # The public module identity is assigned after all classes are built.
 RealtimeModel.__module__ = "livekit.agents.llm.realtime"
-RealtimeSessionModel.__module__ = "livekit.agents.llm.realtime"
 RealtimeSession.__module__ = "livekit.agents.llm.realtime"

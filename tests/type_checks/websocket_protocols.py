@@ -403,7 +403,7 @@ class LoopbackRealtimeSession(llm.RealtimeWebSocketSession[RealtimeMessage, Real
         pass
 
 
-class LoopbackRealtime(llm.RealtimeSessionModel):
+class LoopbackRealtime(llm.RealtimeModel):
     def __init__(self, url: str, conn_options: APIConnectOptions) -> None:
         super().__init__(
             capabilities=llm.RealtimeCapabilities(

@@ -7,7 +7,6 @@ from .realtime import (
     RealtimeCapabilities as RealtimeCapabilities,
     RealtimeModel as RealtimeModel,
     RealtimeSession as RealtimeSession,
-    RealtimeSessionModel as RealtimeSessionModel,
 )
 from .realtime_availability import (
     RealtimeAvailabilityChangedEvent as RealtimeAvailabilityChangedEvent,
@@ -35,6 +34,5 @@ __all__: list[str] = [
     "GenerationCreatedEvent",
     "RealtimeError",
     "RealtimeModel",
-    "RealtimeSessionModel",
     "RealtimeSession",
 ]

@@ -195,8 +195,8 @@ async def test_a_realtime_model_replies() -> None:
 
 
 async def test_only_a_model_whose_sessions_run_in_python_opens_one() -> None:
-    """The models whose sessions run in the core have no ``session()`` to call (and fail); a
-    plugin model whose sessions run in Python must declare one."""
+    """The models whose sessions run in the core have no ``session()``; a plugin model without
+    one is refused when its class is defined."""
     core_run = [
         OpenAIRealtimeModel(api_key="test"),
         llm.RealtimeModelFallbackAdapter([FakeRealtime(), FakeRealtime()]),
@@ -208,11 +208,10 @@ async def test_only_a_model_whose_sessions_run_in_python_opens_one() -> None:
         for model in core_run:
             await model.aclose()
 
-    class Sessionless(llm.RealtimeSessionModel):
-        pass
-
     with pytest.raises(TypeError, match="session"):
-        Sessionless(capabilities=FakeRealtime().capabilities)  # type: ignore[abstract]
+
+        class Sessionless(llm.RealtimeModel):
+            pass
 
 
 async def test_a_duplex_model_receives_its_configuration_as_one_unit() -> None:

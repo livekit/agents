@@ -66,7 +66,7 @@ class _ResponseGeneration:
     output_text: str = ""
 
 
-class RealtimeModel(llm.RealtimeSessionModel):
+class RealtimeModel(llm.RealtimeModel):
     """Real-time language model using NVIDIA PersonaPlex.
 
     Connects to a PersonaPlex WebSocket server for full-duplex

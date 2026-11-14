@@ -27,19 +27,19 @@ async def _ultravox_call(peer: WsPeer) -> web.Response:
     return web.json_response({"joinUrl": peer.ws_url + "/join"})
 
 
-def _ultravox(peer: WsPeer) -> llm.RealtimeSessionModel:
+def _ultravox(peer: WsPeer) -> llm.RealtimeModel:
     peer.http = lambda _: _ultravox_call(peer)
     return ultravox.realtime.RealtimeModel(api_key="key", base_url=peer.url + "/api")
 
 
-MODELS: dict[str, Callable[[WsPeer], llm.RealtimeSessionModel]] = {
+MODELS: dict[str, Callable[[WsPeer], llm.RealtimeModel]] = {
     "ultravox": _ultravox,
     "phonic": lambda peer: phonic.realtime.RealtimeModel(api_key="key", base_url=peer.ws_url),
     "nvidia": lambda peer: personaplex.RealtimeModel(base_url=peer.ws_url),
 }
 
 
-async def _open(model: llm.RealtimeSessionModel) -> llm.RealtimeSession:
+async def _open(model: llm.RealtimeModel) -> llm.RealtimeSession:
     """A session as a VoiceSession opens one: its instructions and tools set first."""
     session = model.session()
     await session.update_instructions("Be brief.")
@@ -102,7 +102,7 @@ async def test_closing_a_gemini_live_session_ends_every_pending_wait(
     await until(lambda: gemini_live.sockets[0].closed, "the session closes its socket")
 
 
-NEVER_READY: dict[str, Callable[[WsPeer, APIConnectOptions], llm.RealtimeSessionModel]] = {
+NEVER_READY: dict[str, Callable[[WsPeer, APIConnectOptions], llm.RealtimeModel]] = {
     "phonic": lambda peer, options: phonic.realtime.RealtimeModel(
         api_key="key", base_url=peer.ws_url, conn_options=options
     ),

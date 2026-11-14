@@ -882,7 +882,6 @@ pub enum Ty {
     /// object behind the generated proxy.
     Proxy {
         rust: String,
-        /// The class a value is annotated with: the proxy's `annotation`, else its host class.
         host: String,
         /// `proxy(generic)`: the host class's type parameter count, each `Any`, so any
         /// instantiation is accepted.

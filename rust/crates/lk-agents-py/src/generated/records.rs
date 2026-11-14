@@ -19667,6 +19667,12 @@ pub mod stt {
                 "reports_usage",
                 |v| v.extract::<bool>(),
             )?,
+            transcribes_after_speech_ends: crate::py_values::attr_with(
+                obj,
+                "STTCapabilities",
+                "transcribes_after_speech_ends",
+                |v| v.extract::<bool>(),
+            )?,
         })
     }
 
@@ -19683,6 +19689,7 @@ pub mod stt {
             keyterms,
             chat_context,
             reports_usage,
+            transcribes_after_speech_ends,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("streaming", ::pyo3::IntoPyObjectExt::into_bound_py_any(streaming, py)?)?;
@@ -19710,6 +19717,10 @@ pub mod stt {
         kwargs.set_item(
             "reports_usage",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(reports_usage, py)?,
+        )?;
+        kwargs.set_item(
+            "transcribes_after_speech_ends",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(transcribes_after_speech_ends, py)?,
         )?;
         crate::py_calls::call(
             STT_CAPABILITIES

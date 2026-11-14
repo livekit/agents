@@ -28,7 +28,7 @@ impl TranscriptMachine {
     pub fn new(request_id: impl Into<String>, language: Option<&str>) -> Self {
         TranscriptMachine {
             // the gateway reports onsets, but each final ends the turn
-            speech: Speech::new(false),
+            speech: Speech::new(false, false),
             speech_duration: 0.0,
             request_id: request_id.into(),
             // `self._opts.language or "en"`.

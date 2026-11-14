@@ -264,6 +264,8 @@ class STT(stt.STT):
                 keyterms=_supports_context_hints(model),
                 # streaming usage carries the server's speech timing or billed seconds
                 reports_usage=True,
+                # a speech is transcribed once its audio is committed, at its end
+                transcribes_after_speech_ends=True,
             )
         )
         # the last language asked for, kept while detection is on so it can be restored
@@ -729,9 +731,6 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
         self._language = _transcript_language(opts.languages)
         self._vad = vad_instance
         self._vad_stream: VADStream | None = None
-        # whether the server's or the local VAD's speech is open: a final after its end ends it,
-        # a transcript outside it is a speech of its own
-        self._provider_speaking = False
         self._text = ""
         self._item_id = ""
         self._interim_at = 0.0
@@ -774,20 +773,12 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
     async def _listen(self, vad_stream: VADStream) -> None:
         async for ev in vad_stream:
             if ev.type == VADEventType.START_OF_SPEECH:
-                self._provider_speech(started=True)
+                self.report(stt.SpeechStarted())
             elif ev.type == VADEventType.END_OF_SPEECH:
-                self._provider_speech(started=False)
+                self.report(stt.SpeechEnded())
                 # a server-endpointed model closes the segment itself; this would cut it twice
                 if _is_realtime_only(self._opts.model):
                     self.send_now(_Commit(type="input_audio_buffer.commit"))
-
-    def _provider_speech(self, *, started: bool) -> None:
-        # a speech is transcribed once its audio is committed, at its end: its words come after
-        # it, so its final (or the next speech's start) ends it
-        self._provider_speaking = started
-        if started:
-            self.report(stt.SpeechEnded())
-            self.report(stt.SpeechStarted())
 
     async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         self._text = ""
@@ -841,13 +832,13 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
             item_id = self._item_id = message.get("item_id", "")
             self._item_timing[item_id] = (message.get("audio_start_ms", 0), None)
             if self._vad is None:
-                self._provider_speech(started=True)
+                self.report(stt.SpeechStarted())
         elif message["type"] == "input_audio_buffer.speech_stopped":
             item_id = message.get("item_id", "")
             if (timing := self._item_timing.get(item_id)) is not None:
                 self._item_timing[item_id] = (timing[0], message.get("audio_end_ms", 0))
             if self._vad is None:
-                self._provider_speech(started=False)
+                self.report(stt.SpeechEnded())
         elif message["type"] == "conversation.item.input_audio_transcription.delta":
             self._item_id = message.get("item_id") or self._item_id
             if delta := message.get("delta"):
@@ -888,8 +879,6 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
                 request_id=item_id,
             )
         )
-        if not self._provider_speaking:
-            self.report(stt.SpeechEnded())
 
         audio_duration: float | None = None
         start_ms, end_ms = self._item_timing.pop(item_id, (0, None))

@@ -169,6 +169,7 @@ pub fn capabilities(
         chat_context: supports_agent_context_carryover(model),
         // each final transcript is preceded by the audio sent for it
         reports_usage: true,
+        transcribes_after_speech_ends: false,
     }
 }
 
