@@ -82,7 +82,7 @@ class ConnectionPool(Generic[T]):
             # has already run, so nothing else would reach it until the next acquisition.
             self._to_close.add(connection)
             await self._drain_to_close()
-        self._connections[connection] = time.time()
+        self._connections[connection] = time.perf_counter()
         return connection
 
     async def _drain_to_close(self) -> None:
@@ -124,7 +124,7 @@ class ConnectionPool(Generic[T]):
         """
         async with self._connect_lock:
             await self._drain_to_close()
-            now = time.time()
+            now = time.perf_counter()
 
             # try to reuse an available connection that hasn't expired
             while self._available:
