@@ -110,3 +110,22 @@ async def test_stream_pacer_keeps_tail_across_end_input_wakeup_race(k: int) -> N
     await asyncio.gather(produce(), consume())
     await stream.aclose()
     assert len(synthesized) == 2
+
+
+async def test_stream_pacer_batches_stay_within_max_text_length() -> None:
+    """Sentences are batched without the batch growing past max_text_length."""
+    sentence = "Each of these sentences is a bit longer than fifty characters."
+    adapter = StreamAdapter(
+        tts=FakeTTS(),
+        text_pacing=SentenceStreamPacer(min_remaining_audio=3.0, max_text_length=100),
+    )
+    stream = adapter.stream()
+    stream.push_text(" ".join([sentence] * 6))
+    stream.end_input()
+
+    async for _ in stream:
+        pass
+    await stream.aclose()
+
+    assert " ".join(synthesized).split() == " ".join([sentence] * 6).split()
+    assert all(len(text) <= 100 for text in synthesized), [len(t) for t in synthesized]
