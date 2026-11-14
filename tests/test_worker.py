@@ -944,3 +944,56 @@ async def test_watch_client_reports_token_mode_and_applies_credentials() -> None
     assert received[1].HasField("get_running_jobs_request")
     assert tokens == ["first", "second"]
     server._reload_jobs.assert_not_awaited()  # no jobs to reload
+
+
+async def test_watch_client_applies_credentials_while_jobs_reload() -> None:
+    """A job reload that waits for registration does not block the Credentials that come
+    after it, which registration can need."""
+    from livekit.agents.cli.watcher import WatchClient, _recv_proto, _send_proto
+    from livekit.protocol.agent_pb import agent_dev
+
+    token_applied = asyncio.Event()
+    reloaded: list[list[RunningJobInfo]] = []
+
+    async def update_token(token: str) -> None:
+        token_applied.set()
+
+    async def reload_jobs(jobs: list[RunningJobInfo]) -> None:
+        await token_applied.wait()  # registers only with the token that comes next
+        reloaded.append(jobs)
+
+    server = MagicMock(
+        _agent_name="my-agent",
+        _ws_url="wss://example.livekit.cloud",
+        _update_token=update_token,
+        _reload_jobs=reload_jobs,
+    )
+    done = asyncio.Event()
+
+    async def cli(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        for _ in range(2):  # ServerInfo, GetRunningJobsRequest
+            await _recv_proto(reader)
+        job = agent_dev.RunningAgentJobInfo(job=agent.Job(id="job-1").SerializeToString())
+        jobs = agent_dev.GetRunningAgentJobsResponse(jobs=[job])
+        msg = agent_dev.AgentDevMessage(get_running_jobs_response=jobs)
+        await _send_proto(writer, msg.SerializeToString())
+        creds = agent_dev.Credentials(url="wss://x", token="fresh", expires_at=1)
+        await _send_proto(writer, agent_dev.AgentDevMessage(credentials=creds).SerializeToString())
+        await done.wait()
+        writer.close()
+
+    cli_server = await asyncio.start_server(cli, "127.0.0.1", 0)
+    port = cli_server.sockets[0].getsockname()[1]
+    client = WatchClient(server, f"127.0.0.1:{port}", loop=asyncio.get_running_loop())
+    client.start()
+    try:
+        await asyncio.wait_for(token_applied.wait(), timeout=5)
+        assert client._reload_task is not None
+        await asyncio.wait_for(client._reload_task, timeout=5)
+    finally:
+        done.set()
+        await client.aclose()
+        cli_server.close()
+        await cli_server.wait_closed()
+
+    assert [[j.job.id for j in jobs] for jobs in reloaded] == [["job-1"]]

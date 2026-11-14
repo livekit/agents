@@ -7,6 +7,7 @@ import struct
 from livekit.protocol.agent_pb import agent_dev
 
 from .. import utils
+from ..job import RunningJobInfo
 from ..log import logger
 from ..worker import AgentServer
 from . import proto
@@ -37,6 +38,7 @@ class WatchClient:
         self._worker = worker
         self._cli_addr = cli_addr
         self._main_task: asyncio.Task | None = None
+        self._reload_task: asyncio.Task | None = None
 
     def start(self) -> None:
         self._main_task = self._loop.create_task(self._run())
@@ -81,7 +83,9 @@ class WatchClient:
                     if jobs_resp.jobs:
                         running_jobs = [proto.running_job_from_proto(j) for j in jobs_resp.jobs]
                         logger.info(f"reloading {len(running_jobs)} job(s)")
-                        await self._worker._reload_jobs(running_jobs)
+                        # not awaited here: in token mode the reload waits for registration,
+                        # which can need a token that comes later on this channel (Credentials)
+                        self._reload_task = self._loop.create_task(self._reload_jobs(running_jobs))
                 elif msg.HasField("get_running_jobs_request"):
                     jobs = self._worker.active_jobs
                     job_protos = [proto.running_job_to_proto(j) for j in jobs]
@@ -100,6 +104,10 @@ class WatchClient:
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
 
+    @utils.log_exceptions(logger=logger)
+    async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
+        await self._worker._reload_jobs(jobs)
+
     async def aclose(self) -> None:
         if not self._main_task:
             return
@@ -107,3 +115,6 @@ class WatchClient:
         self._main_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
+
+        if self._reload_task:
+            await utils.aio.cancel_and_wait(self._reload_task)

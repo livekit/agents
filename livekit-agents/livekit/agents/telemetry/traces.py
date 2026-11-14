@@ -728,6 +728,10 @@ class _AuthHeaderProvider:
         self._expires_at = datetime.now(timezone.utc) + _TOKEN_TTL
 
     def __call__(self) -> dict[str, str]:
+        if (token := token_mode_token()) is not None:
+            # the worker can replace the token at any time (refresh): send the current one
+            return {"Authorization": f"Bearer {token}"}
+
         now = datetime.now(timezone.utc)
         if now >= self._expires_at - _TOKEN_REFRESH_MARGIN:
             with self._lock:

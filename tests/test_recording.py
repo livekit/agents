@@ -522,6 +522,22 @@ def test_telemetry_auth_header(token_mode: bool, monkeypatch: pytest.MonkeyPatch
     assert headers == {"Authorization": "Bearer worker-token" if token_mode else "Bearer test-jwt"}
 
 
+def test_telemetry_auth_header_follows_refreshed_worker_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker token refreshed after the provider was created is sent on the next export."""
+    from livekit.agents.telemetry.traces import _AuthHeaderProvider
+
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+    monkeypatch.delenv("LIVEKIT_API_KEY", raising=False)
+    monkeypatch.delenv("LIVEKIT_API_SECRET", raising=False)
+    provider = _AuthHeaderProvider()
+    assert provider() == {"Authorization": "Bearer worker-token"}
+
+    monkeypatch.setenv("LIVEKIT_TOKEN", "refreshed-worker-token")
+    assert provider() == {"Authorization": "Bearer refreshed-worker-token"}
+
+
 async def test_upload_uses_extended_timeout() -> None:
     report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
     mock_http = _make_mock_http()
