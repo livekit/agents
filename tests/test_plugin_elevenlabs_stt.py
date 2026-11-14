@@ -456,7 +456,7 @@ def test_secondary_languages_ignored_for_batch_model(caplog: pytest.LogCaptureFi
         )
 
     assert instance._opts.secondary_languages is NOT_GIVEN
-    assert "only supported for Scribe v2 realtime" in caplog.text
+    assert "only supported for realtime models" in caplog.text
 
 
 async def test_connect_ws_requests_language_detection_when_no_language_is_pinned() -> None:
