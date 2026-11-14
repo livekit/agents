@@ -90,10 +90,6 @@ async def test_first_chunk_emits_before_provider_finishes(
 
 
 @pytest.mark.parametrize("ended", [False, True])
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/pull/8006 reproduces: abandoned context drains instead of canceling",
-)
 async def test_abandoning_stream_sends_cancel_context(ended: bool) -> None:
     """Abandoning synthesis cancels server work even after input completion. https://github.com/livekit/agents/pull/8006"""
     packets = []

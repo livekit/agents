@@ -14,18 +14,23 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
+from typing import Any
 
-from livekit.agents import APIConnectOptions, APIError, http, tts, utils
+from rime_api import text_to_speech_pb2 as proto
+
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, http, tts
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from . import _websocket_v1
-from ._pool_manager import PoolManager
+from . import _websocket_v1 as v1
 from ._stream_tts import StreamTTS
 
-_Pool = utils.ConnectionPool[_websocket_v1.Connection]
+_Response = proto.WebSocketResponse
+# decode() reads protobuf envelopes: the generic Inbound, which the base validates with
+# pydantic, stays Any
+_Inbound = Any
+_Frame = bytes | str
 
 
 @dataclass(frozen=True)
@@ -35,56 +40,59 @@ class V1SynthesisOptions:
     model: str
     speaker: str
     language: NotGivenOr[str] = NOT_GIVEN
-    audio_format: _websocket_v1.RimeAudioFormat = _websocket_v1.DEFAULT_AUDIO_FORMAT
+    audio_format: v1.RimeAudioFormat = v1.DEFAULT_AUDIO_FORMAT
     sampling_rate: NotGivenOr[int] = NOT_GIVEN
     time_scale_factor: NotGivenOr[float] = NOT_GIVEN
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
 
 
-class WebSocketV1Adapter:
-    """Adapt LiveKit streaming to the Rime WebSocket v1 protocol."""
+class WebSocketV1Adapter(http.Multiplexer[_Inbound, _Frame]):
+    """Rime WebSocket v1 sockets, one stream at a time each: every segment is one Rime context,
+    started with its first text and ended with its last."""
+
+    max_session_duration = 300
+    max_contexts = 1
 
     def __init__(
         self,
         *,
         websocket_v1_url: str,
-        websocket_protocol: _websocket_v1.WebSocketProtocol,
+        websocket_protocol: v1.WebSocketProtocol,
         api_key: str,
-        ensure_session: Callable[[], http.HttpSession],
         allow_custom_endpoint: bool = False,
     ) -> None:
-        _websocket_v1.validate_websocket_url(
-            websocket_v1_url, allow_custom_endpoint=allow_custom_endpoint
-        )
-        _websocket_v1.codec_for_protocol(websocket_protocol)
+        v1.validate_websocket_url(websocket_v1_url, allow_custom_endpoint=allow_custom_endpoint)
+        self._subprotocol = v1.subprotocol(websocket_protocol)
         self._websocket_v1_url = websocket_v1_url
-        self._websocket_protocol: _websocket_v1.WebSocketProtocol = websocket_protocol
+        self.protocol: v1.WebSocketProtocol = websocket_protocol
         self._api_key = api_key
-        self._ensure_session = ensure_session
         self._allow_custom_endpoint = allow_custom_endpoint
-        self._pools = PoolManager(self._new_pool())
-        self._drains = utils.aio.TaskSet()
 
-    def _new_pool(self) -> _Pool:
-        websocket_v1_url = self._websocket_v1_url
-
-        async def _connect(conn_options: APIConnectOptions) -> _websocket_v1.Connection:
-            return await _websocket_v1.connect(
-                self._ensure_session(),
-                websocket_url=websocket_v1_url,
-                api_key=self._api_key,
-                protocol=self._websocket_protocol,
-                conn_options=conn_options,
-                allow_custom_endpoint=self._allow_custom_endpoint,
-            )
-
-        return utils.ConnectionPool[_websocket_v1.Connection](
-            connect_cb=_connect,
-            close_cb=_websocket_v1.close,
-            max_session_duration=300,
-            mark_refreshed_on_get=True,
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        return http.SocketTarget(
+            self._websocket_v1_url,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            protocols=[self._subprotocol],
         )
+
+    def decode(self, frame: bytes | str) -> _Response | None:
+        return v1.decode(self.protocol, frame)
+
+    def route(self, message: _Response) -> str | None:
+        if message.context_id:
+            return message.context_id
+        payload = message.WhichOneof("payload")
+        if payload == "error":
+            raise v1.rime_error(message.error, fallback_request_id=None)
+        if payload != "ready":
+            raise v1.protocol_error(f"Rime v1 sent a {payload} event naming no context")
+        if message.ready.protocol != v1.PROTOCOL_VERSION:
+            raise v1.protocol_error("Rime v1 reported an unsupported protocol version")
+        return None
+
+    def close_context(self, context_id: str) -> _Frame:
+        return v1.encode(self.protocol, v1.request(context_id, "cancel"))
 
     def stream(
         self,
@@ -95,7 +103,7 @@ class WebSocketV1Adapter:
     ) -> _WebSocketV1SynthesizeStream:
         if not is_given(options.language):
             raise APIError("Rime v1 requires a language", kind="invalid_request")
-        protocol_options = _websocket_v1.SynthesisOptions(
+        protocol_options = v1.SynthesisOptions(
             model=options.model,
             speaker=options.speaker,
             language=options.language,
@@ -111,139 +119,73 @@ class WebSocketV1Adapter:
             if is_given(options.phonemize_between_brackets)
             else None,
         )
-        pool = self._pools.current
-        stream = _WebSocketV1SynthesizeStream(
-            tts_instance=tts_instance,
-            pool=pool,
-            pool_manager=self._pools,
-            reuse_after_cancel=self._reuse_after_cancel,
-            options=protocol_options,
-            conn_options=conn_options,
+        return _WebSocketV1SynthesizeStream(
+            tts_instance=tts_instance, mux=self, options=protocol_options, conn_options=conn_options
         )
-        return stream
-
-    def _reuse_after_cancel(
-        self,
-        pool: _Pool,
-        connection: _websocket_v1.Connection,
-        context_id: str,
-        read_timeout: float | None,
-    ) -> None:
-        """Returns a socket whose context was cancelled to its pool once Rime ends the context.
-        The adapter owns the drain, so closing the stream never waits on it."""
-        if self._drains.closed:
-            pool.remove(connection)
-            return
-
-        async def _drain() -> None:
-            reusable = False
-            try:
-                reusable = await _websocket_v1.cancel_and_drain(
-                    connection, context_id=context_id, read_timeout=read_timeout
-                )
-            finally:
-                if reusable:
-                    pool.put(connection)
-                else:
-                    pool.remove(connection)
-
-        self._drains.spawn(_drain(), name="rime-v1-cancel-drain")
-
-    def prewarm(self) -> None:
-        self._pools.current.prewarm()
 
     def update_endpoint(self, websocket_v1_url: str, *, model_changed: bool) -> None:
         """Update the connection URL after validating its model binding."""
-        _websocket_v1.validate_websocket_url(
+        v1.validate_websocket_url(
             websocket_v1_url, allow_custom_endpoint=self._allow_custom_endpoint
         )
-        model_endpoint_changed = _websocket_v1.model_endpoint_identity(
+        model_endpoint_changed = v1.model_endpoint_identity(
             websocket_v1_url
-        ) != _websocket_v1.model_endpoint_identity(self._websocket_v1_url)
+        ) != v1.model_endpoint_identity(self._websocket_v1_url)
         if model_changed and not model_endpoint_changed:
             raise ValueError("model cannot change without changing websocket_url")
         if websocket_v1_url == self._websocket_v1_url:
             return
 
         self._websocket_v1_url = websocket_v1_url
-        self._pools.replace(self._new_pool())
-
-    async def aclose(self) -> None:
-        # each drain hands its socket back to its pool first
-        await self._drains.aclose()
-        await self._pools.aclose()
+        self.invalidate()
 
 
-class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
-    """Run one LiveKit stream as one Rime WebSocket v1 synthesis context."""
+class _WebSocketV1SynthesizeStream(tts.SocketStream[_Inbound, _Frame]):
+    """One LiveKit stream on a Rime WebSocket v1 socket, each segment its own Rime context."""
 
     def __init__(
         self,
         *,
         tts_instance: tts.TTS,
-        pool: _Pool,
-        pool_manager: PoolManager[_websocket_v1.Connection],
-        reuse_after_cancel: Callable[[_Pool, _websocket_v1.Connection, str, float | None], None],
-        options: _websocket_v1.SynthesisOptions,
+        mux: WebSocketV1Adapter,
+        options: v1.SynthesisOptions,
         conn_options: APIConnectOptions,
     ) -> None:
-        self._sample_rate = tts_instance.sample_rate
         super().__init__(
             tts=StreamTTS(tts_instance, model=options.model), conn_options=conn_options
         )
-        self._pool = pool
-        self._reuse_after_cancel = reuse_after_cancel
-        self._options = options
-        pool_manager.track_stream(pool, self._task)
+        self.multiplexer = mux
+        self.mime_type = v1.emitter_mime_type(options.audio_format)
+        self._protocol = mux.protocol
+        self._start = v1.start_payload(options)
+        self._request_ids: dict[str, str] = {}
 
-    def flush(self) -> None:
-        """Keep the Rime context open: the v1 protocol has no ``flush`` operation.
+    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> list[_Frame] | _Frame | None:
+        if isinstance(item, tts.SegmentStart):
+            return self._frame(item.segment_id, "start", self._start)
+        if isinstance(item, tts.SegmentText):
+            return self._frame(item.segment_id, "text", item.chunk.text + " ")
+        if isinstance(item, tts.SegmentEnd):
+            return self._frame(item.segment_id, "end")
+        return None
 
-        The stream is one Rime context and one LiveKit segment, so no segment boundary
-        is recorded and the stream accepts more text after this call.
-        """
+    def on_message(self, message: _Response) -> tts.SegmentOutput | None:
+        context_id = message.context_id
+        payload = message.WhichOneof("payload")
+        if payload == "audio":
+            return tts.SegmentAudio(context_id, message.audio)
+        if payload == "done":
+            self._request_ids.pop(context_id, None)
+            return tts.SegmentDone(context_id)
+        if payload == "error":
+            request_id = self._request_ids.get(context_id)
+            raise v1.rime_error(message.error, fallback_request_id=request_id)
+        if payload == "cancelled":
+            raise APIConnectionError("Rime v1 cancelled an active context unexpectedly")
+        if payload != "started" or not message.started.request_id:
+            raise v1.protocol_error(f"Unexpected Rime v1 event {payload!r}")
+        self._request_ids[context_id] = message.started.request_id
+        return None
 
-    def end_input(self) -> None:
-        """Finalize Rime input and let the stream wait for the provider ``done`` event."""
-        self.input.close()
-
-    async def aclose(self) -> None:
-        """Cancel the active Rime context when synthesis has not finished."""
-        await super().aclose()
-
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        async def input_events() -> AsyncIterable[str]:
-            async for chunk in self.input:
-                if isinstance(chunk, tts.SpeechChunk):
-                    yield chunk.text + " "
-
-        connection = await self._pool.get(conn_options=self._conn_options)
-        reusable = handed_off = False
-        try:
-            result = await _websocket_v1.run_context(
-                connection,
-                context_id=utils.shortuuid(),
-                options=self._options,
-                sample_rate=self._sample_rate,
-                input_events=input_events(),
-                output_emitter=output_emitter,
-                read_timeout=self._conn_options.read_timeout,
-                write_timeout=self._conn_options.write_timeout,
-                mark_started=self.mark_started,
-            )
-            reusable = result.reusable
-        except _websocket_v1.ContextCancelled as error:
-            if error.open_context is not None:
-                handed_off = True
-                self._reuse_after_cancel(
-                    self._pool, connection, error.open_context, self._conn_options.read_timeout
-                )
-            else:
-                reusable = True
-            raise
-        finally:
-            if reusable:
-                self._pool.put(connection)
-            elif not handed_off:
-                self._pool.remove(connection)
-                await _websocket_v1.close(connection)
+    def _frame(self, context_id: str, payload: str, value: object = None) -> _Frame:
+        return v1.encode(self._protocol, v1.request(context_id, payload, value))

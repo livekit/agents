@@ -961,13 +961,13 @@ impl CoreStreamText {
 /// [`::lk_agents_abi::agent::AgentCallbacks`] over a host `livekit.agents.voice.agent_run.AgentCallbacks`.
 #[derive(Clone)]
 pub struct AgentCallbacksProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The `notify` calls, delivered in order.
     notifier: crate::py_calls::Notifier,
 }
 
 impl AgentCallbacksProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
+    /// A registered native class as itself, any other host object behind this proxy, held weakly.
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::AgentCallbacks>> {
@@ -976,10 +976,10 @@ impl AgentCallbacksProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, false)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -989,7 +989,7 @@ impl AgentCallbacksProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -1001,18 +1001,20 @@ impl AgentCallbacksProxy {
                 "a native `AgentCallbacks` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(AgentCallbacksProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
-            notifier: ::std::default::Default::default(),
-        })
+        Ok(AgentCallbacksProxy { host, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -1025,7 +1027,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
         'a,
         ::std::result::Result<bool, ::lk_agents_abi::errors::HostError>,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -1037,7 +1039,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
                 Ok((
-                    host.bind(py).getattr("checkpoint")?,
+                    host.bind(py)?.getattr("checkpoint")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1067,7 +1069,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
         'a,
         ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -1079,7 +1081,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
                 Ok((
-                    host.bind(py).getattr("render_instructions")?,
+                    host.bind(py)?.getattr("render_instructions")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1112,7 +1114,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -1124,7 +1126,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
                 Ok((
-                    host.bind(py).getattr("list_tools")?,
+                    host.bind(py)?.getattr("list_tools")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1162,7 +1164,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let arguments_arg = arguments;
         let started = ::lk_agents_runtime::host::call(
@@ -1177,7 +1179,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     crate::py_values::extra_to_py(py, &arguments_arg)?.into_any(),
                 ];
                 Ok((
-                    host.bind(py).getattr("prepare_tool")?,
+                    host.bind(py)?.getattr("prepare_tool")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1215,7 +1217,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let prepared_arg = ::std::clone::Clone::clone(prepared);
         let started = ::lk_agents_runtime::host::call(
@@ -1230,7 +1232,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     crate::py_objects::object_ref_to_py(py, prepared_arg)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("read_back")?,
+                    host.bind(py)?.getattr("read_back")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1265,7 +1267,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let prepared_arg = ::std::clone::Clone::clone(prepared);
         let started = ::lk_agents_runtime::host::call(
@@ -1280,7 +1282,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     crate::py_objects::object_ref_to_py(py, prepared_arg)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("run_tool")?,
+                    host.bind(py)?.getattr("run_tool")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1316,7 +1318,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let prepared_arg = ::std::clone::Clone::clone(prepared);
         let report_arg = report;
@@ -1333,7 +1335,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     crate::generated::records::tool_report::tool_report_to_py(py, report_arg)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("validate_tool_completion")?,
+                    host.bind(py)?.getattr("validate_tool_completion")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1368,7 +1370,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let candidate_arg = candidate;
         let started = ::lk_agents_runtime::host::call(
@@ -1386,7 +1388,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     )?,
                 ];
                 Ok((
-                    host.bind(py).getattr("validate_output")?,
+                    host.bind(py)?.getattr("validate_output")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1422,7 +1424,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let key_arg = key;
         let template_arg = template;
@@ -1439,7 +1441,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     crate::generated::records::agent_run::tool_template_to_py(py, template_arg)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("render_template")?,
+                    host.bind(py)?.getattr("render_template")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1462,7 +1464,10 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
     }
 
     fn cancel(&self, invocation: &::lk_agents_abi::agent::Invocation) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -1473,7 +1478,11 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
-                Ok((host.bind(py).getattr("cancel")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((
+                    host.bind(py)?.getattr("cancel")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
     }
@@ -1483,7 +1492,10 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
         invocation: &::lk_agents_abi::agent::Invocation,
         answer: ::std::string::String,
     ) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let answer_arg = answer;
         ::lk_agents_runtime::host::notify(
@@ -1498,7 +1510,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(answer_arg, py)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("answer_expert")?,
+                    host.bind(py)?.getattr("answer_expert")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1512,7 +1524,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
 /// [`::lk_agents_abi::agent::HostInstructions`] over a host `livekit.agents.voice.agent_session._DynamicInstructions`.
 #[derive(Clone)]
 pub struct HostInstructionsProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -1528,10 +1540,10 @@ impl HostInstructionsProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -1541,7 +1553,7 @@ impl HostInstructionsProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -1554,18 +1566,23 @@ impl HostInstructionsProxy {
                 "a native `HostInstructions` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        Ok(HostInstructionsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
+        Ok(HostInstructionsProxy { host, context })
     }
 }
 
@@ -1578,7 +1595,7 @@ impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
         'a,
         ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let speech_arg = speech;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -1589,7 +1606,7 @@ impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [<dyn ::lk_agents_abi::voice::speech_handle::Speech as super::NativeToHost>::to_host(py, speech_arg)?];
                 Ok((
-                    host.bind(py).getattr("_core_render")?,
+                    host.bind(py)?.getattr("_core_render")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1617,7 +1634,7 @@ impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
 /// [`::lk_agents_abi::agent::resources::ContextHydration`] over a host `livekit.agents.storage.context.ContextStore`.
 #[derive(Clone)]
 pub struct ContextHydrationProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl ContextHydrationProxy {
@@ -1631,10 +1648,10 @@ impl ContextHydrationProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -1645,7 +1662,7 @@ impl ContextHydrationProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -1661,27 +1678,32 @@ impl ContextHydrationProxy {
                 "a native `ContextHydration` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(ContextHydrationProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(ContextHydrationProxy { host })
     }
 }
 
 impl ::lk_agents_abi::agent::resources::ContextHydration for ContextHydrationProxy {
     fn release(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_release_hydration")?,
+                    host.bind(py)?.getattr("_core_release_hydration")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1714,7 +1736,7 @@ impl ::lk_agents_abi::agent::resources::ContextHydration for ContextHydrationPro
 /// [`::lk_agents_abi::agent::resources::BindingCleanup`] over a host `livekit.agents.storage.context._SessionBinding`.
 #[derive(Clone)]
 pub struct BindingCleanupProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl BindingCleanupProxy {
@@ -1727,10 +1749,10 @@ impl BindingCleanupProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -1740,7 +1762,7 @@ impl BindingCleanupProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -1754,27 +1776,32 @@ impl BindingCleanupProxy {
                 "a native `BindingCleanup` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(BindingCleanupProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(BindingCleanupProxy { host })
     }
 }
 
 impl ::lk_agents_abi::agent::resources::BindingCleanup for BindingCleanupProxy {
     fn release(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_release_hydration")?,
+                    host.bind(py)?.getattr("_core_release_hydration")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

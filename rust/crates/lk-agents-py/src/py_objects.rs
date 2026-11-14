@@ -7,31 +7,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 struct Store<T> {
     entries: Mutex<HashMap<u64, T>>,
-    /// Separate so `release` never contends with a lookup.
-    pending: Mutex<Vec<u64>>,
-    /// So "nothing to drain" is one atomic load.
-    pending_len: AtomicUsize,
     /// Never reused; shared by every key type into this table.
     next_id: AtomicU64,
 }
 
 impl<T: Send + 'static> RefRegistry for Store<T> {
+    /// The payload is dropped at once, after the guard: a finaliser can run host code that
+    /// interns into `entries`. Off the GIL, the host's reference pool releases it at its next
+    /// entry.
     fn release(&self, id: u64) {
-        let mut queue = self.pending.lock();
-        queue.push(id);
-        self.pending_len.store(queue.len(), Ordering::Release);
+        let removed = self.entries.lock().remove(&id);
+        drop(removed);
     }
 
-    /// Does not drain; `pending` is a subset of `entries`.
     fn outstanding(&self) -> usize {
-        let pending = self.pending.lock();
-        let entries = self.entries.lock();
-        entries.len().saturating_sub(pending.len())
+        self.entries.lock().len()
     }
 }
 
@@ -51,8 +45,6 @@ impl<T: Send + 'static> PayloadTable<T> {
     pub fn new() -> Self {
         let store = Arc::new(Store {
             entries: Mutex::new(HashMap::new()),
-            pending: Mutex::new(Vec::new()),
-            pending_len: AtomicUsize::new(0),
             // Ids start at 1 so that 0 is never a live entry.
             next_id: AtomicU64::new(1),
         });
@@ -66,7 +58,6 @@ impl<T: Send + 'static> PayloadTable<T> {
 
     /// One entry per call.
     pub fn insert(&self, payload: T) -> u64 {
-        self.drain_if_pending();
         let id = self.store.next_id.fetch_add(1, Ordering::Relaxed);
         self.store.entries.lock().insert(id, payload);
         id
@@ -82,7 +73,6 @@ impl<T: Send + 'static> PayloadTable<T> {
         if !entry.is_from_registry(self.registry()) {
             return None;
         }
-        self.drain_if_pending();
         self.store.entries.lock().get(&entry.id()).map(f)
     }
 
@@ -91,43 +81,12 @@ impl<T: Send + 'static> PayloadTable<T> {
         if !key.as_ref().is_from_registry(self.registry()) {
             return None;
         }
-        self.drain_if_pending();
         let id = key.take()?;
         self.store.entries.lock().remove(&id)
     }
 
-    fn drain_if_pending(&self) {
-        if self.store.pending_len.load(Ordering::Acquire) > 0 {
-            self.drain();
-        }
-    }
-
-    /// Call where the payload's `Drop` is legal (with the GIL, for Python).
-    pub fn drain(&self) -> usize {
-        let store = &self.store;
-        let ids = {
-            let mut queue = store.pending.lock();
-            store.pending_len.store(0, Ordering::Release);
-            std::mem::take(&mut *queue)
-        };
-
-        // Drop after the guard: a finaliser can run host code that interns into `entries`.
-        let removed: Vec<T> = {
-            let mut entries = store.entries.lock();
-            ids.iter().filter_map(|id| entries.remove(id)).collect()
-        };
-        let n = removed.len();
-        drop(removed);
-        n
-    }
-
     pub fn outstanding(&self) -> usize {
         self.store.outstanding()
-    }
-
-    pub fn len_after_drain(&self) -> usize {
-        self.drain();
-        self.store.entries.lock().len()
     }
 }
 
@@ -137,18 +96,17 @@ mod tests {
 
     use lk_agents_abi::HostRef;
 
-    // Catches: release removing the entry inline instead of queueing, or the queue never draining.
+    // Catches: a dropped key's payload kept until the table's next use (a host object outliving
+    // the last native reference to it).
     #[test]
-    fn a_dropped_key_queues_its_entry_and_the_next_drain_removes_it() {
+    fn a_dropped_key_releases_its_payload_at_once() {
         let table = PayloadTable::<String>::new();
         let id = table.insert("frame".to_owned());
         let key = HostRef::new(id, table.registry());
         assert_eq!(table.outstanding(), 1);
 
         std::thread::spawn(move || drop(key)).join().unwrap();
-        assert_eq!(table.outstanding(), 0, "released, even before the drain");
-        assert_eq!(table.len_after_drain(), 0);
-        assert_eq!(table.drain(), 0, "a second drain finds nothing");
+        assert_eq!(table.outstanding(), 0);
     }
 
     // Catches: `take` leaving the entry, or the key's drop after a take releasing the id again.
@@ -162,7 +120,7 @@ mod tests {
         drop(key);
         let second = table.insert(2);
         assert_ne!(second, first);
-        assert_eq!(table.len_after_drain(), 1, "the taken key's drop released nothing");
+        assert_eq!(table.outstanding(), 1, "the taken key's drop released nothing");
         let second_key = HostRef::new(second, table.registry());
         assert_eq!(table.resolve(&second_key, |v| *v), Some(2));
     }
@@ -250,8 +208,7 @@ pub fn native<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> PyResult<Option<Ar
     Ok(None)
 }
 
-// Two tables, counted separately so neither hides a leak in the other. Dropping a `Py<PyAny>`
-// needs the GIL and there is no drain thread, so they drain at every GIL-holding entry point.
+// Two tables, counted separately so neither hides a leak in the other.
 
 /// Both live for the process, so keys never outlive a registry.
 pub type Table = PayloadTable<Py<PyAny>>;
@@ -298,4 +255,43 @@ pub fn captured_error_to_py<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     Ok(crate::py_errors::release(value)
         .map_or_else(|| py.None().into_bound(py), |obj| obj.into_bound(py)))
+}
+
+/// The host object behind a generated proxy: owned, or a back-reference to an object that owns
+/// what holds the proxy, held weakly so the two never form a cycle the collector cannot see.
+#[derive(Clone)]
+pub enum HostObject {
+    Owned(Arc<Py<PyAny>>),
+    Weak(Arc<Py<pyo3::types::PyWeakrefReference>>),
+}
+
+impl HostObject {
+    pub fn owned(obj: &Bound<'_, PyAny>) -> Self {
+        HostObject::Owned(Arc::new(obj.clone().unbind()))
+    }
+
+    /// Refused for an object that takes no weak reference.
+    pub fn weak(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(HostObject::Weak(Arc::new(pyo3::types::PyWeakrefReference::new(obj)?.unbind())))
+    }
+
+    /// The object; `ReferenceError` once a back-reference's object is gone.
+    pub fn bind<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        use pyo3::types::PyWeakrefMethods as _;
+        match self {
+            HostObject::Owned(obj) => Ok(obj.bind(py).clone()),
+            HostObject::Weak(weak) => weak.bind(py).upgrade().ok_or_else(|| {
+                pyo3::exceptions::PyReferenceError::new_err("the host object is gone")
+            }),
+        }
+    }
+
+    /// Whether a back-reference's object is gone: its notices go nowhere.
+    pub fn gone(&self) -> bool {
+        use pyo3::types::PyWeakrefMethods as _;
+        match self {
+            HostObject::Owned(_) => false,
+            HostObject::Weak(weak) => Python::attach(|py| weak.bind(py).upgrade().is_none()),
+        }
+    }
 }

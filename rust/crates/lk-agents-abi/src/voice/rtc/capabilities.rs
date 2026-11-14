@@ -56,7 +56,8 @@ pub struct PublishedAudioTrack {
             digit = "event.digit",
             participant = "event.participant.identity"
         ),
-    )
+    ),
+    owns
 ))]
 pub trait RtcRoom: Send + Sync {
     #[host(call, name = "_core_create_audio_source")]
@@ -141,7 +142,7 @@ pub trait RtcRoom: Send + Sync {
 
 /// The agent itself in the room: `room_io.LocalParticipant`, whose `sdk` is the room's
 /// `rtc.LocalParticipant`, resolved on each read.
-#[crate::host(proxy(host = "livekit.agents.voice.room_io.LocalParticipant", sdk))]
+#[crate::host(proxy(host = "livekit.agents.voice.room_io.LocalParticipant", sdk, owns))]
 pub trait LocalParticipant: Send + Sync {
     #[host(await, name = "_core_publish_audio_source")]
     fn publish_audio_source(
@@ -292,7 +293,7 @@ pub trait LocalParticipant: Send + Sync {
 }
 
 /// An open byte stream. `rtc.ByteStreamWriter`; `close` ends it (the stream's trailer).
-#[crate::host(proxy(host = "livekit.rtc.ByteStreamWriter"))]
+#[crate::host(proxy(host = "livekit.rtc.ByteStreamWriter", owns))]
 pub trait ByteStreamWriter: Send + Sync {
     #[host(read_once, getter = "info.stream_id")]
     fn id(&self) -> &str;
@@ -315,7 +316,7 @@ pub trait ByteStreamWriter: Send + Sync {
 /// afterwards. Dropping a host stream does not close it, so the close must be explicit
 /// and structural rather than remembered -- the reference's own pattern is
 /// `writer = self._writer; self._writer = None; await writer.aclose()`.
-#[crate::host(proxy(host = "livekit.rtc.TextStreamWriter"))]
+#[crate::host(proxy(host = "livekit.rtc.TextStreamWriter", owns))]
 pub trait TextStreamWriter: Send + Sync {
     #[host(await)]
     fn write<'a>(
@@ -338,7 +339,7 @@ pub trait TextStreamWriter: Send + Sync {
 /// expressible: the avatar path publishes its own source alongside `RoomIO`'s, and an interruption
 /// must truncate one and not the other. `room_io.AudioSource`: its `rtc.AudioSource` as `sdk`,
 /// with the ledger of what it played and threw away.
-#[crate::host(proxy(host = "livekit.agents.voice.room_io.AudioSource"))]
+#[crate::host(proxy(host = "livekit.agents.voice.room_io.AudioSource", owns))]
 pub trait AudioSource: Any + Send + Sync {
     /// Push one frame. **Awaits when the source's queue is full**, and that is the point: the
     /// `queue_size_ms` bound is what paces the forwarding loop against real playout
@@ -398,7 +399,7 @@ pub trait AudioSource: Any + Send + Sync {
 }
 
 /// Someone else in the room: `room_io.RemoteParticipant`, its `rtc.RemoteParticipant` as `sdk`.
-#[crate::host(proxy(host = "livekit.agents.voice.room_io.RemoteParticipant", sdk))]
+#[crate::host(proxy(host = "livekit.agents.voice.room_io.RemoteParticipant", sdk, owns))]
 pub trait RemoteParticipant: Send + Sync {
     #[host(read_once, getter = "sdk.sid")]
     fn sid(&self) -> &str;
@@ -434,7 +435,7 @@ pub trait RemoteParticipant: Send + Sync {
 /// where both derive from `TrackPublication`. The two side-specific methods default to
 /// [`RtcError::Unsupported`] so a shim implements only its own half; see that variant for why this
 /// is one trait and not two. `room_io.TrackPublication`: its SDK publication as `sdk`.
-#[crate::host(proxy(host = "livekit.agents.voice.room_io.TrackPublication", sdk))]
+#[crate::host(proxy(host = "livekit.agents.voice.room_io.TrackPublication", sdk, owns))]
 pub trait TrackPublication: Send + Sync {
     #[host(read_once, getter = "sdk.sid")]
     fn sid(&self) -> &TrackSid;
@@ -508,7 +509,7 @@ pub trait TrackPublication: Send + Sync {
 }
 
 /// One SDK audio stream, including the processor state shared by its buffered head and live frames.
-#[crate::host(proxy(host = "livekit.agents.voice.room_io._AudioStream"))]
+#[crate::host(proxy(host = "livekit.agents.voice.room_io._AudioStream", owns))]
 pub trait AudioInputStream: Send + Sync {
     #[host(call, name = "_core_frames")]
     fn frames(&self) -> Result<Box<dyn StreamOutput<AudioStreamItem>>, RtcError>;

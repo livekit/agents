@@ -17,11 +17,10 @@
 This module provides an STT implementation that uses the SimpliSmart API.
 """
 
-import asyncio
 import base64
 import os
-from collections.abc import Callable
-from typing import Any, Literal, cast
+import weakref
+from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
@@ -34,12 +33,10 @@ from livekit.agents import (
     LanguageCode,
     http,
     stt,
-    utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import STTModels
 
 SIMPLISMART_BASE_URL = "https://api.simplismart.live/predict"
@@ -136,9 +133,6 @@ class STT(stt.STT):
             repetition_penalty (float): Penalty for repeated words during decoding.
             strict_hallucination_reduction (bool): Whether to apply hallucination reduction.
         """
-        if streaming:
-            base_url = f"wss://{urlparse(base_url).netloc}/ws/audio"
-
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=streaming,
@@ -178,11 +172,11 @@ class STT(stt.STT):
             strict_hallucination_reduction=strict_hallucination_reduction,
         )
         self._base_url = base_url
+        parsed = urlparse(base_url)
+        scheme = "ws" if parsed.scheme in ("http", "ws") else "wss"
+        self._stream_url = f"{scheme}://{parsed.netloc}/ws/audio"
         self._session = http_session
-        # Strong ownership: a stream that finishes and gets garbage collected would
-        # otherwise take its still-open per-stream HttpSession with it.
-        # Streams discard themselves in SpeechStream.aclose() once closed.
-        self._streams: set[SpeechStream] = set()
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
     def provider(self) -> str:
@@ -267,47 +261,32 @@ class STT(stt.STT):
         """Create a streaming transcription session."""
         opts_language = LanguageCode(language) if is_given(language) else self._opts.language
 
-        # Create options for the stream
-        stream_opts = SimplismartSTTOptions(language=opts_language)
-
-        # Create a fresh session for this stream to avoid conflicts
-        stream_session = http.HttpSession()
-
         if self._api_key is None:
             raise ValueError("API key cannot be None")
         stream = SpeechStream(
             stt=self,
-            opts=stream_opts,
+            opts=SimplismartSTTOptions(language=opts_language),
             conn_options=conn_options,
             api_key=self._api_key,
-            http_session=stream_session,
-            base_url=self._base_url,
-            on_closed=self._streams.discard,
+            url=self._stream_url,
         )
         self._streams.add(stream)
         return stream
 
     async def aclose(self) -> None:
-        """Close every stream this instance created.
-
-        ``stream()`` gives each ``SpeechStream`` its own ``HttpSession``,
-        and only ``SpeechStream.aclose()`` closes it. Streams are owned strongly
-        (see ``self._streams``) so a finished, garbage-collected stream cannot take
-        its open session with it; closed streams discard themselves, so the set
-        never grows without bound.
-        """
-        closed = list(self._streams)
-        for stream in closed:
+        for stream in list(self._streams):
             await stream.aclose()
-        # Remove only what this call closed: a stream created concurrently (or one
-        # whose aclose was cancelled mid-cleanup) stays tracked for a later close.
-        self._streams.difference_update(closed)
 
 
-class SpeechStream(stt.RecognizeStream):
-    """Simplismart streaming speech-to-text implementation."""
+class _Config(TypedDict):
+    language: str | None
 
-    _CHUNK_DURATION_MS = 50
+
+class SpeechStream(stt.SocketStream[bytes, _Config]):
+    """Simplismart streaming speech-to-text implementation: each binary message is a final
+    transcript."""
+
+    frame_ms = 50
     _SAMPLE_RATE = 16000
 
     def __init__(
@@ -317,96 +296,33 @@ class SpeechStream(stt.RecognizeStream):
         opts: SimplismartSTTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: http.HttpSession,
-        base_url: str,
-        on_closed: Callable[["SpeechStream"], None],
+        url: str,
     ) -> None:
-        self._opts = opts
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=self._SAMPLE_RATE)
+        self._opts = opts
         self._api_key = api_key
-        self._session = http_session
         self._request_id = str(id(self))
-        self.ws_url = base_url
-        self._on_closed = on_closed
+        self._url = url
 
-    async def _run(self) -> None:
-        async def send_task(ws: http.WebSocket) -> None:
-            # forward audio to simplismart in chunks of 50ms
-            samples_50ms = self._SAMPLE_RATE // 20
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._SAMPLE_RATE,
-                num_channels=1,
-                samples_per_channel=samples_50ms,
-            )
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        return http.SocketTarget(self._url, headers={"Authorization": f"Bearer {self._api_key}"})
 
-            async for data in self.input:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.push(data.data.tobytes()))
-                else:
-                    frames.extend(audio_bstream.flush())
+    def setup(self) -> _Config:
+        return _Config(language=self._opts.language)
 
-                for frame in frames:
-                    await ws.send_bytes(frame.data.tobytes())
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_Config]:
+        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
 
-        async def recv_task(ws: http.WebSocket) -> None:
-            while True:
-                try:
-                    msg = await ws.receive()
-                except APIConnectionError:
-                    if self._session.closed:
-                        return
-                    raise
-                if msg.type == http.WebSocketMessageType.CLOSE:
-                    # the agent session ending closes the http session
-                    if self._session.closed:
-                        return
-                    raise ws.close_error("Simplismart STT connection closed")
-                if msg.type != http.WebSocketMessageType.BINARY:
-                    logger.warning("unexpected simplismart message type %s", msg.type)
-                    continue
-                try:
-                    transcript = msg.binary.decode("utf-8")
-                except UnicodeDecodeError as e:
-                    raise APIError(
-                        "Simplismart STT sent a malformed message",
-                        kind="protocol",
-                        detail=repr(msg.binary),
-                    ) from e
-                self._handle_transcript_data(transcript)
-
-        ws = await self._connect_ws()
+    def on_message(self, message: bytes) -> stt.Transcript:
         try:
-            await ws.send_json({"language": self._opts.language})
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-        finally:
-            await ws.close()
-
-    async def _connect_ws(self) -> http.WebSocket:
-        return await self._session.ws_connect(
-            self.ws_url,
-            headers={"Authorization": f"Bearer {self._api_key}"},
-            # notices a silently dropped socket (half-open TCP, no FIN/RST)
-            heartbeat=30.0,
-            conn_options=self._conn_options,
-        )
-
-    async def aclose(self) -> None:
-        await super().aclose()
-        await self._session.aclose()
-        # Release the STT's strong ownership only after session cleanup succeeds.
-        self._on_closed(self)
-
-    def _handle_transcript_data(self, transcript: str) -> None:
-        self.send(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                request_id=self._request_id,
-                alternatives=[
-                    stt.SpeechData(
-                        language=LanguageCode(self._opts.language or "en"), text=transcript
-                    )
-                ],
-            )
+            text = message.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise http.protocol_error(self, repr(message)) from e
+        return stt.Transcript(
+            text,
+            LanguageCode(self._opts.language or "en"),
+            final=True,
+            request_id=self._request_id,
         )

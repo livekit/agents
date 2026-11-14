@@ -431,7 +431,7 @@ fn callable_annotations_follow_the_declared_call_and_its_iterable_result_reader(
     );
     assert!(
         code.contains("lk_agents_runtime::host::call_now(&crate::py_calls::Entry")
-            && code.contains("host.bind(py).getattr(\"__call__\")?"),
+            && code.contains("host.bind(py)?.getattr(\"__call__\")?"),
         "the declared callback must dispatch through HostInvoker's Python entry: {code}"
     );
     let conversions = crate::records::conversions(&declarations).unwrap().text;
@@ -846,7 +846,7 @@ fn annotated_aliases_keep_their_boundary_contract_instead_of_expanding_private_s
 fn an_init_class_is_built_once_by_init_and_its_events_are_a_weak_proxy() {
     let declarations = read(
         r#"
-        #[crate::host(proxy(host = "livekit.agents._bindings.ProviderEvents", weak))]
+        #[crate::host(proxy(host = "livekit.agents._bindings.ProviderEvents", self_events))]
         pub trait Events: Send + Sync {
             #[host(notify, name = "_core_failed")]
             fn failed(&self, message: String);
@@ -880,8 +880,8 @@ fn an_init_class_is_built_once_by_init_and_its_events_are_a_weak_proxy() {
         "Engine.__init__ runs once",
         "let engine = self.engine()?;",
         "crate::py_objects::built(obj, engine, \"Engine\")",
-        "host: ::std::sync::Arc<Py<::pyo3::types::PyWeakrefReference>>,",
-        "self.host.bind(py).upgrade()",
+        "false => crate::py_objects::HostObject::weak(obj)?,",
+        "if self.host.gone() {",
     ] {
         assert!(llm.contains(expected), "missing {expected}:\n{llm}");
     }

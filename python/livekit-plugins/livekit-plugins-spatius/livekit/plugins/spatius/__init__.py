@@ -14,9 +14,7 @@
 
 """Spatius avatar plugin for LiveKit Agents."""
 
-from spatius import AudioFormat
-
-from .avatar import AvatarSession, SpatiusException
+from .avatar import AudioFormat, AvatarSession, SpatiusException
 from .version import __version__
 from .warmup import prewarm
 

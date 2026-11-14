@@ -12,23 +12,17 @@ from aiohttp.test_utils import TestServer
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, http, stt
 from livekit.plugins import deepgram, elevenlabs, inworld, openai, telnyx
+from livekit.plugins.openai import stt as openai_stt
 
 HEARTBEAT = 0.05  # the heartbeat a plugin asks for, scaled down from its ~45 s
-
-_UNDETECTED = pytest.mark.xfail(
-    strict=True,
-    raises=TimeoutError,
-    reason="https://github.com/livekit/agents/issues/7900 reproduces: no heartbeat, "
-    "receive() waits forever on a silent socket",
-)
 
 
 @pytest.mark.parametrize(
     "provider_name",
     [
-        pytest.param("openai", marks=_UNDETECTED),
-        pytest.param("elevenlabs", marks=_UNDETECTED),
-        pytest.param("inworld", marks=_UNDETECTED),
+        "openai",
+        "elevenlabs",
+        "inworld",
         "deepgram",
         "telnyx",
     ],
@@ -61,7 +55,10 @@ async def test_a_silent_socket_fails_the_stream_with_a_connection_error(
 
     monkeypatch.setattr(http.HttpSession, "ws_connect", scaled)
     # a socket protocol's pings are the framework's
-    monkeypatch.setattr(deepgram.SpeechStream, "ping_interval", HEARTBEAT)
+    for socket_stream in (deepgram.SpeechStream, elevenlabs.SpeechStream, inworld.SpeechStream):
+        monkeypatch.setattr(socket_stream, "ping_interval", HEARTBEAT)
+    monkeypatch.setattr(telnyx.stt.SpeechStream, "ping_interval", HEARTBEAT)
+    monkeypatch.setattr(openai_stt.SpeechStream, "ping_interval", HEARTBEAT)
 
     app = web.Application()
     app.router.add_route("GET", "/{tail:.*}", blackhole)
@@ -77,7 +74,7 @@ async def test_a_silent_socket_fails_the_stream_with_a_connection_error(
         elif provider_name == "inworld":
             provider = inworld.STT(api_key="key", base_url=url, http_session=session)
         elif provider_name == "telnyx":
-            provider = telnyx.STT(api_key="key", base_url=url, http_session=session)
+            provider = telnyx.STT(api_key="key", base_url=url)
         else:
             provider = deepgram.STT(api_key="key", base_url=url, http_session=session)
         frame = rtc.AudioFrame(

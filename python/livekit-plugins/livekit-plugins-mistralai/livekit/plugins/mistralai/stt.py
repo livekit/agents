@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-import asyncio
+import base64
 import os
 import weakref
 from dataclasses import dataclass
+from typing import Annotated, Literal, NotRequired, TypedDict
+from urllib.parse import urlencode
 
 import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
-from websockets.exceptions import ConnectionClosed
+from pydantic import Field, JsonValue
 
 from livekit import rtc
 from livekit.agents import (
     VAD,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -31,16 +32,9 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
-from mistralai.client import Mistral
+from mistralai.client import Mistral, models
 from mistralai.client.errors import HTTPValidationError, SDKError
-from mistralai.client.models import (
-    RealtimeTranscriptionError,
-    RealtimeTranscriptionSessionCreated,
-    TranscriptionStreamDone,
-    TranscriptionStreamLanguage,
-    TranscriptionStreamTextDelta,
-)
-from mistralai.extra.realtime import RealtimeConnection, RealtimeTranscription
+from mistralai.client.utils import get_security, get_security_from_env
 
 from ._http import close_client, request_timeout_ms
 from .models import STTModels
@@ -49,6 +43,8 @@ from .models import STTModels
 def _is_realtime(model: str) -> bool:
     return "realtime" in model
 
+
+_HTTP_CLIENT_DEFAULTS = frozenset({"accept", "accept-encoding", "connection", "user-agent"})
 
 DEFAULT_MODEL: STTModels = "voxtral-mini-latest"
 
@@ -127,43 +123,36 @@ class STT(stt.STT):
             raise ValueError("Mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._owns_client = client is None
         self._client = client or Mistral(api_key=mistral_api_key)
-        self._reconnect_events: weakref.WeakSet[asyncio.Event] = weakref.WeakSet()
-        self._pool = utils.ConnectionPool[RealtimeConnection](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-        )
+        self._streams = weakref.WeakSet[SpeechStream]()
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> RealtimeConnection:
-        rt = RealtimeTranscription(self._client.sdk_configuration)
-        http_headers = None
+    def _realtime_target(self) -> http.SocketTarget:
+        """The realtime socket, authorized and routed as the client's own requests are."""
         cfg = self._client.sdk_configuration
+        base_url, _ = cfg.get_server_details()
+        security = cfg.security() if callable(cfg.security) else cfg.security
+        resolved = get_security_from_env(security, models.Security)
+        headers, query = get_security(resolved) if resolved is not None else ({}, {})
         client_headers = getattr(cfg.async_client, "headers", None) or getattr(
             cfg.client, "headers", None
         )
-        if client_headers:
-            http_headers = dict(client_headers)
-        return await asyncio.wait_for(
-            rt.connect(
-                model=self._opts.model,
-                target_streaming_delay_ms=self._opts.target_streaming_delay_ms,
-                http_headers=http_headers,
-            ),
-            timeout=conn_options.connect_timeout,
-        )
-
-    async def _close_ws(self, conn: RealtimeConnection) -> None:
-        await conn.close()
-
-    def prewarm(self) -> None:
-        if _is_realtime(self._opts.model):
-            self._pool.prewarm()
+        # the HTTP client's defaults (connection, accept-encoding, ...) do not belong on a
+        # websocket handshake: only the application's own headers are carried over
+        custom = {
+            name: value
+            for name, value in dict(client_headers or {}).items()
+            if name.lower() not in _HTTP_CLIENT_DEFAULTS
+        }
+        headers = {"User-Agent": cfg.user_agent, **headers, **custom}
+        params = {key: values[-1] for key, values in query.items() if values}
+        params["model"] = self._opts.model
+        url = f"{base_url.rstrip('/')}/v1/audio/transcriptions/realtime?{urlencode(params)}"
+        if url.startswith("http"):
+            url = url.replace("http", "ws", 1)
+        return http.SocketTarget(url, headers=headers)
 
     async def aclose(self) -> None:
-        try:
-            await self._pool.aclose()
-        finally:
-            if self._owns_client:
-                await close_client(self._client)
+        if self._owns_client:
+            await close_client(self._client)
 
     @property
     def model(self) -> str:
@@ -196,9 +185,8 @@ class STT(stt.STT):
             self._opts.context_bias = context_bias
         if is_given(target_streaming_delay_ms):
             self._opts.target_streaming_delay_ms = target_streaming_delay_ms
-            self._pool.invalidate()
-            for event in self._reconnect_events:
-                event.set()
+            for stream in list(self._streams):
+                stream.reconnect("options changed")
 
     async def _recognize_impl(
         self,
@@ -256,11 +244,6 @@ class STT(stt.STT):
                 request_id=e.headers.get("x-request-id"),
                 body=e.body,
             ) from e
-        except ConnectionClosed as e:
-            code = e.rcvd.code if e.rcvd is not None else None
-            raise APIConnectionError(
-                f"Mistral closed the connection (close code {code})", kind=http.close_kind(code)
-            ) from e
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -270,219 +253,215 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        reconnect_event = asyncio.Event()
         stream = SpeechStream(
-            stt=self,
-            pool=self._pool,
-            conn_options=conn_options,
-            language=language,
-            vad_instance=self._vad,
-            reconnect_event=reconnect_event,
+            stt=self, conn_options=conn_options, language=language, vad_instance=self._vad
         )
-        self._reconnect_events.add(reconnect_event)
+        self._streams.add(stream)
         return stream
 
 
-class SpeechStream(stt.RecognizeStream):
+class _Session(TypedDict):
+    request_id: NotRequired[str]
+
+
+class _SessionCreated(TypedDict):
+    type: Literal["session.created"]
+    session: NotRequired[_Session | None]
+
+
+class _Language(TypedDict):
+    type: Literal["transcription.language"]
+    audio_language: NotRequired[str | None]
+
+
+class _TextDelta(TypedDict):
+    type: Literal["transcription.text.delta"]
+    text: str
+
+
+class _Segment(TypedDict):
+    text: str
+    start: NotRequired[float | None]
+    end: NotRequired[float | None]
+
+
+class _Usage(TypedDict):
+    prompt_tokens: NotRequired[int | None]
+    completion_tokens: NotRequired[int | None]
+    prompt_audio_seconds: NotRequired[int | None]
+
+
+class _Done(TypedDict):
+    type: Literal["transcription.done"]
+    text: str
+    language: NotRequired[str | None]
+    segments: NotRequired[list[_Segment] | None]
+    usage: NotRequired[_Usage | None]
+
+
+class _ErrorDetail(TypedDict):
+    message: NotRequired[JsonValue]
+    code: NotRequired[int]
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    error: _ErrorDetail
+
+
+_Message = Annotated[
+    _SessionCreated | _Language | _TextDelta | _Done | _Error, Field(discriminator="type")
+]
+
+
+class _AudioAppend(TypedDict):
+    type: Literal["input_audio.append"]
+    audio: str
+
+
+class _AudioControl(TypedDict):
+    type: Literal["input_audio.flush", "input_audio.end"]
+
+
+class _SessionUpdate(TypedDict):
+    type: Literal["session.update"]
+    session: dict[str, int]
+
+
+_Command = _AudioAppend | _AudioControl | _SessionUpdate
+
+
+class SpeechStream(stt.SocketStream[_Message, _Command]):
     """Realtime speech recognition stream for Voxtral Realtime."""
+
+    frame_ms = 50
+    # audio waits for session.created
+    awaits_ready = True
+    # the local VAD bounds the speech: Voxtral has no server-side endpointing
+    provider_vad = True
 
     def __init__(
         self,
         *,
         stt: STT,
-        pool: utils.ConnectionPool[RealtimeConnection],
-        reconnect_event: asyncio.Event,
         conn_options: APIConnectOptions,
         language: NotGivenOr[str] = NOT_GIVEN,
         vad_instance: VAD | None = None,
     ) -> None:
-        super().__init__(
-            stt=stt,
-            conn_options=conn_options,
-            sample_rate=SAMPLE_RATE,
-        )
-        self._pool = pool
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
+        self._mistral = stt
         self._vad = vad_instance
-        self._reconnect_event = reconnect_event
+        self._vad_stream: VADStream | None = None
+        # whether the VAD's speech is open. Its transcript comes after its end, so the end waits
+        # for it: the final, or the next speech's start, ends the speech
+        self._vad_speaking = False
         self._request_id = ""
-        self._speaking = False
+        self._text = ""
         self._detected_language = LanguageCode(language) if is_given(language) else LanguageCode("")
 
-    async def _send_task(
-        self,
-        connection: RealtimeConnection,
-        vad_stream: VADStream | None,
-    ) -> None:
-        samples_per_chunk = SAMPLE_RATE // 20  # 50ms chunks
-        audio_bstream = utils.media.AudioByteStream(
-            sample_rate=SAMPLE_RATE,
-            num_channels=NUM_CHANNELS,
-            samples_per_channel=samples_per_chunk,
-        )
+    async def _run(self) -> None:
+        if self._vad is None:
+            await super()._run()
+            return
+        vad_stream = self._vad_stream = self._vad.stream()
+        try:
+            async with utils.aio.TaskSet() as tasks:
+                await tasks.first_completed(super()._run(), self._listen(vad_stream))
+        finally:
+            self._vad_stream = None
+            await vad_stream.aclose()
 
-        async for data in self.input:
-            if isinstance(data, self.Flush):
-                for frame in audio_bstream.flush():
-                    await connection.send_audio(frame.data.tobytes())
-                await connection.flush_audio()
-            else:
-                if vad_stream is not None:
-                    vad_stream.push_frame(data)
-
-                for frame in audio_bstream.push(data.data.tobytes()):
-                    await connection.send_audio(frame.data.tobytes())
-
-        if vad_stream is not None:
-            vad_stream.end_input()
-        await connection.end_audio()
-
-    async def _vad_task(
-        self,
-        vad_stream: VADStream,
-        connection: RealtimeConnection,
-    ) -> None:
+    async def _listen(self, vad_stream: VADStream) -> None:
         async for ev in vad_stream:
             if ev.type == VADEventType.START_OF_SPEECH:
-                if not self._speaking:
-                    self._speaking = True
-                    self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+                self._vad_speaking = True
+                self.report(stt.SpeechEnded())
+                self.report(stt.SpeechStarted())
             elif ev.type == VADEventType.END_OF_SPEECH:
                 # force Mistral to finalize the current speech segment
-                await connection.flush_audio()
-                if self._speaking:
-                    self._speaking = False
-                    self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self.send_command(_AudioControl(type="input_audio.flush"))
+                self._vad_speaking = False
 
-    async def _recv_task(self, connection: RealtimeConnection) -> None:
-        current_text = ""
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        self._text = ""
+        return self._mistral._realtime_target()
 
-        async for event in connection.events():
-            if isinstance(event, RealtimeTranscriptionSessionCreated):
-                if event.session:
-                    self._request_id = event.session.request_id
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_Command]:
+        if isinstance(item, rtc.AudioFrame):
+            if self._vad_stream is not None:
+                self._vad_stream.push_frame(item)
+            return _AudioAppend(
+                type="input_audio.append", audio=base64.b64encode(item.data).decode("ascii")
+            )
+        if isinstance(item, stt.RecognizeStream.Flush):
+            return _AudioControl(type="input_audio.flush")
+        return _AudioControl(type="input_audio.end")
 
-            elif isinstance(event, TranscriptionStreamLanguage):
-                if event.audio_language:
-                    self._detected_language = LanguageCode(event.audio_language)
-
-            elif isinstance(event, TranscriptionStreamTextDelta):
-                current_text += event.text
-                self.send(
-                    stt.SpeechEvent(
-                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                        request_id=self._request_id,
-                        alternatives=[
-                            stt.SpeechData(
-                                text=current_text,
-                                language=self._detected_language,
-                            )
-                        ],
+    def on_message(
+        self, message: _SessionCreated | _Language | _TextDelta | _Done | _Error
+    ) -> stt.Report | list[stt.Report] | http.Ready | None:
+        if message["type"] == "session.created":
+            self._request_id = (message.get("session") or _Session()).get("request_id", "")
+            if (delay := self._mistral._opts.target_streaming_delay_ms) is not None:
+                self.send_command(
+                    _SessionUpdate(
+                        type="session.update", session={"target_streaming_delay_ms": delay}
                     )
                 )
-
-            elif isinstance(event, TranscriptionStreamDone):
-                current_text = ""
-                words = (
-                    [
-                        TranscriptChunk(
-                            text=seg.text,
-                            start_time=(
-                                seg.start + self.start_time_offset
-                                if seg.start is not None
-                                else None
-                            ),
-                            end_time=(
-                                seg.end + self.start_time_offset if seg.end is not None else None
-                            ),
-                        )
-                        for seg in event.segments
-                    ]
-                    if event.segments
-                    else None
-                )
-
-                self.send(
-                    stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        request_id=self._request_id,
-                        alternatives=[
-                            stt.SpeechData(
-                                text=event.text,
-                                language=LanguageCode(event.language)
-                                if event.language
-                                else self._detected_language,
-                                words=words,
-                            )
-                        ],
-                    )
-                )
-
-                audio_seconds = event.usage.prompt_audio_seconds  # unset when not measured
-                self.send(
-                    stt.SpeechEvent(
-                        type=stt.SpeechEventType.RECOGNITION_USAGE,
-                        request_id=self._request_id,
-                        recognition_usage=stt.RecognitionUsage(
-                            audio_duration=audio_seconds
-                            if isinstance(audio_seconds, int)
-                            else None,
-                            tokens=TokenUsage(
-                                input_tokens=event.usage.prompt_tokens or 0,
-                                output_tokens=event.usage.completion_tokens or 0,
-                            ),
-                        ),
-                    )
-                )
-
-            elif isinstance(event, RealtimeTranscriptionError):
-                raise APIStatusError(
-                    "Mistral transcription error",
-                    status_code=event.error.code,
-                    body=event.error,
-                    detail=str(event.error.message),
-                )
-
-    async def _run(self) -> None:
-        try:
-            while True:
-                # a segment left open across a reconnect would block the next START_OF_SPEECH
-                self._speaking = False
-                async with self._pool.connection(conn_options=self._conn_options) as connection:
-                    vad_stream = self._vad.stream() if self._vad else None
-
-                    try:
-                        async with utils.aio.TaskSet() as tasks:
-                            io_tasks = [
-                                tasks.spawn(self._send_task(connection, vad_stream)),
-                                tasks.spawn(self._recv_task(connection)),
-                            ]
-                            if vad_stream is not None:
-                                io_tasks.append(tasks.spawn(self._vad_task(vad_stream, connection)))
-                            io = asyncio.gather(*io_tasks)
-                            reconnect = tasks.spawn(self._reconnect_event.wait())
-                            if await tasks.first_completed(io, reconnect) is not reconnect:
-                                break
-
-                            self._reconnect_event.clear()
-                    finally:
-                        if vad_stream is not None:
-                            await vad_stream.aclose()
-
-        except APIError:
-            raise
-        except (TimeoutError, httpx.TimeoutException) as e:
-            raise APITimeoutError() from e
-        except (SDKError, HTTPValidationError) as e:
+            return http.READY
+        if message["type"] == "transcription.language":
+            if language := message.get("audio_language"):
+                self._detected_language = LanguageCode(language)
+            return None
+        if message["type"] == "transcription.text.delta":
+            self._text += message["text"]
+            return stt.Transcript(self._text, self._detected_language, request_id=self._request_id)
+        if message["type"] == "error":
+            error = message["error"]
             raise APIStatusError(
-                e.message,
-                status_code=e.status_code,
-                request_id=e.headers.get("x-request-id"),
-                body=e.body,
-            ) from e
-        except ConnectionClosed as e:
-            code = e.rcvd.code if e.rcvd is not None else None
-            raise APIConnectionError(
-                f"Mistral closed the connection (close code {code})", kind=http.close_kind(code)
-            ) from e
-        except Exception as e:
-            raise APIConnectionError() from e
+                "Mistral transcription error",
+                status_code=error.get("code", -1),
+                body=error,
+                detail=str(error.get("message")),
+            )
+        self._text = ""
+        self._report_usage(message.get("usage") or _Usage())
+        transcript = self._final(message)
+        return transcript if self._vad_speaking else [transcript, stt.SpeechEnded()]
+
+    def _final(self, message: _Done) -> stt.Transcript:
+        offset = self.start_time_offset
+        segments = message.get("segments") or []
+        language = message.get("language")
+        return stt.Transcript(
+            message["text"],
+            LanguageCode(language) if language else self._detected_language,
+            final=True,
+            request_id=self._request_id,
+            words=[
+                TranscriptChunk(
+                    text=seg["text"],
+                    start_time=start + offset if (start := seg.get("start")) is not None else None,
+                    end_time=end + offset if (end := seg.get("end")) is not None else None,
+                )
+                for seg in segments
+            ]
+            or None,
+        )
+
+    def _report_usage(self, usage: _Usage) -> None:
+        self.send(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                request_id=self._request_id,
+                recognition_usage=stt.RecognitionUsage(
+                    audio_duration=usage.get("prompt_audio_seconds"),
+                    tokens=TokenUsage(
+                        input_tokens=usage.get("prompt_tokens") or 0,
+                        output_tokens=usage.get("completion_tokens") or 0,
+                    ),
+                ),
+            )
+        )

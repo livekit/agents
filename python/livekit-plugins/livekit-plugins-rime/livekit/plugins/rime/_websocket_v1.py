@@ -14,13 +14,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import binascii
 import ipaddress
-from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from typing import Literal, cast
 from urllib.parse import unquote, urlsplit
 
 from google.protobuf import json_format
@@ -28,17 +26,7 @@ from google.protobuf.message import DecodeError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from rime_api import text_to_speech_pb2 as proto
 
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    APIError,
-    APIStatusError,
-    APITimeoutError,
-    http,
-    redacted_cause,
-    tts,
-    utils,
-)
+from livekit.agents import APIError, APIStatusError, redacted_cause
 
 from .models import is_mist_model
 
@@ -54,7 +42,6 @@ RimeAudioFormat = Literal[
 BINARY_SUBPROTOCOL = "rime.v1.binary"
 JSON_SUBPROTOCOL = "rime.v1.json"
 PROTOCOL_VERSION = 1
-CANCEL_TIMEOUT = 1.0
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 NUM_CHANNELS = 1
 DEFAULT_AUDIO_FORMAT: RimeAudioFormat = "audio/pcm"
@@ -82,17 +69,6 @@ class SynthesisOptions:
     phonemize_between_brackets: bool | None = None
 
 
-@dataclass(frozen=True)
-class RunResult:
-    reusable: bool
-
-
-@dataclass(frozen=True)
-class Connection:
-    websocket: http.WebSocket
-    codec: _EnvelopeCodec
-
-
 def validate_audio_format(audio_format: str) -> RimeAudioFormat:
     """Return a supported canonical Rime audio MIME type."""
     if audio_format not in SUPPORTED_AUDIO_FORMATS:
@@ -103,75 +79,49 @@ def validate_audio_format(audio_format: str) -> RimeAudioFormat:
     return cast(RimeAudioFormat, audio_format)
 
 
-def _emitter_mime_type(audio_format: RimeAudioFormat) -> str:
+def emitter_mime_type(audio_format: RimeAudioFormat) -> str:
     return audio_format.partition(";")[0]
 
 
-class _EnvelopeCodec(Protocol):
-    """Encode and decode one semantic v1 envelope per WebSocket frame."""
-
-    subprotocol: str
-
-    async def send_request(
-        self, websocket: http.WebSocket, request: proto.WebSocketRequest
-    ) -> None: ...
-
-    def decode_response(self, message: http.WebSocketMessage) -> proto.WebSocketResponse | None: ...
+def subprotocol(protocol: WebSocketProtocol | str) -> str:
+    if protocol == "binary":
+        return BINARY_SUBPROTOCOL
+    if protocol == "json":
+        return JSON_SUBPROTOCOL
+    raise ValueError('websocket_protocol must be "binary" or "json"')
 
 
-class _BinaryEnvelopeCodec:
-    subprotocol = BINARY_SUBPROTOCOL
+def encode(protocol: WebSocketProtocol, request: proto.WebSocketRequest) -> bytes | str:
+    """One request envelope as the negotiated encoding frames it."""
+    if protocol == "binary":
+        return request.SerializeToString()
+    return json_format.MessageToJson(request, preserving_proto_field_name=False, indent=None)
 
-    async def send_request(
-        self, websocket: http.WebSocket, request: proto.WebSocketRequest
-    ) -> None:
-        await websocket.send_bytes(request.SerializeToString())
 
-    def decode_response(self, message: http.WebSocketMessage) -> proto.WebSocketResponse | None:
-        if message.type is not http.WebSocketMessageType.BINARY:
+def decode(protocol: WebSocketProtocol, frame: bytes | str) -> proto.WebSocketResponse | None:
+    """One response envelope, or ``None`` for a frame or payload this client does not handle."""
+    response = proto.WebSocketResponse()
+    if protocol == "binary":
+        if not isinstance(frame, bytes):
             return None
-        response = proto.WebSocketResponse()
         try:
-            response.ParseFromString(message.binary)
+            response.ParseFromString(frame)
         except (DecodeError, TypeError) as cause:
-            raise _protocol_error("Rime v1 sent invalid protobuf") from redacted_cause(cause)
-        return response
-
-
-class _JsonEnvelopeCodec:
-    subprotocol = JSON_SUBPROTOCOL
-
-    async def send_request(
-        self, websocket: http.WebSocket, request: proto.WebSocketRequest
-    ) -> None:
-        await websocket.send_str(
-            json_format.MessageToJson(
-                request,
-                preserving_proto_field_name=False,
-                indent=None,
-            )
-        )
-
-    def decode_response(self, message: http.WebSocketMessage) -> proto.WebSocketResponse | None:
-        if message.type is not http.WebSocketMessageType.TEXT:
+            raise protocol_error("Rime v1 sent invalid protobuf") from redacted_cause(cause)
+    else:
+        if not isinstance(frame, str):
             return None
         try:
-            envelope = _JSON_OBJECT.validate_json(message.data)
+            envelope = _JSON_OBJECT.validate_json(frame)
         except (ValidationError, TypeError) as cause:
-            raise _protocol_error("Rime v1 sent invalid JSON", message.text) from redacted_cause(
-                cause
-            )
+            raise protocol_error("Rime v1 sent invalid JSON", frame) from redacted_cause(cause)
         if not _validate_json_envelope(envelope):
             return None
-
-        response = proto.WebSocketResponse()
         try:
             json_format.ParseDict(envelope, response, ignore_unknown_fields=True)
         except (json_format.ParseError, TypeError) as cause:
-            raise _protocol_error("Rime v1 sent invalid JSON", message.text) from redacted_cause(
-                cause
-            )
-        return response
+            raise protocol_error("Rime v1 sent invalid JSON", frame) from redacted_cause(cause)
+    return response if response.WhichOneof("payload") is not None else None
 
 
 _JSON_RESPONSE_PAYLOADS = ("ready", "started", "audio", "done", "cancelled", "error")
@@ -183,43 +133,24 @@ def _validate_json_envelope(envelope: dict[str, JsonValue]) -> bool:
     if not payloads:
         return False
     if len(payloads) > 1:
-        raise _protocol_error("Rime v1 envelope must contain exactly one payload")
+        raise protocol_error("Rime v1 envelope must contain exactly one payload")
 
     payload = payloads[0]
     value = envelope[payload]
     if payload == "audio":
         if not isinstance(value, str):
-            raise _protocol_error("Rime v1 sent a non-string audio payload")
+            raise protocol_error("Rime v1 sent a non-string audio payload")
         try:
             base64.b64decode(value, validate=True)
         except (binascii.Error, ValueError) as cause:
-            raise _protocol_error("Rime v1 sent invalid Base64 audio") from redacted_cause(cause)
+            raise protocol_error("Rime v1 sent invalid Base64 audio") from redacted_cause(cause)
     elif not isinstance(value, dict):
-        raise _protocol_error(f"Rime v1 sent a malformed {payload} event", str(value))
+        raise protocol_error(f"Rime v1 sent a malformed {payload} event", str(value))
     return True
 
 
-def codec_for_protocol(protocol: WebSocketProtocol | str) -> _EnvelopeCodec:
-    if protocol == "binary":
-        return _BinaryEnvelopeCodec()
-    if protocol == "json":
-        return _JsonEnvelopeCodec()
-    raise ValueError('websocket_protocol must be "binary" or "json"')
-
-
-class _ContaminatedConnection(APIConnectionError):
-    pass
-
-
-def _protocol_error(message: str, payload: str | None = None) -> APIError:
+def protocol_error(message: str, payload: str | None = None) -> APIError:
     return APIError(message, kind="protocol", detail=payload)
-
-
-class ContextCancelled(asyncio.CancelledError):
-    def __init__(self, *, open_context: str | None) -> None:
-        super().__init__()
-        self.open_context = open_context
-        """The context left open on the socket, which `cancel_and_drain` must end before reuse."""
 
 
 def _is_loopback_host(hostname: str | None) -> bool:
@@ -289,241 +220,7 @@ def model_from_websocket_url(
     return unquote(path_segments[-2])
 
 
-async def connect(
-    session: http.HttpSession,
-    *,
-    websocket_url: str,
-    api_key: str,
-    protocol: WebSocketProtocol,
-    conn_options: APIConnectOptions,
-    allow_custom_endpoint: bool = False,
-) -> Connection:
-    """Open a v1 socket and consume its one connection-level ready event (a response, under
-    ``read_timeout``)."""
-    validate_websocket_url(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
-    codec = codec_for_protocol(protocol)
-    try:
-        ws = await session.ws_connect(
-            websocket_url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            protocols=(codec.subprotocol,),
-            conn_options=conn_options,
-        )
-        selected = ws.headers.get("Sec-WebSocket-Protocol")
-        if selected != codec.subprotocol:
-            await ws.close()
-            raise APIConnectionError(
-                f"Rime selected WebSocket subprotocol {selected!r}, expected {codec.subprotocol!r}",
-                kind="invalid_request",
-            )
-
-        connection = Connection(websocket=ws, codec=codec)
-        try:
-            envelope = await _receive_envelope(connection, timeout=conn_options.read_timeout)
-            payload = _payload(envelope)
-            if payload == "error":
-                raise _rime_error(envelope.error, fallback_request_id=None)
-            if payload != "ready" or envelope.context_id:
-                raise _protocol_error("Rime v1 did not send a connection-level ready event")
-            if envelope.ready.protocol != PROTOCOL_VERSION:
-                raise _protocol_error("Rime v1 reported an unsupported protocol version")
-        except BaseException:
-            await ws.close()
-            raise
-        return connection
-    except APIError:
-        raise
-    except Exception as cause:
-        raise APIConnectionError("Failed to connect to Rime v1") from redacted_cause(cause)
-
-
-async def close(connection: Connection) -> None:
-    await connection.websocket.close()
-
-
-async def run_context(
-    connection: Connection,
-    *,
-    context_id: str,
-    options: SynthesisOptions,
-    sample_rate: int,
-    input_events: AsyncIterable[str],
-    output_emitter: tts.AudioEmitter,
-    read_timeout: float | None,
-    write_timeout: float | None,
-    mark_started: Callable[[], None],
-) -> RunResult:
-    """Run one LiveKit output turn as one Rime synthesis context."""
-    emitter_mime_type = _emitter_mime_type(options.audio_format)
-    context_started = asyncio.Event()
-    input_complete = asyncio.Event()
-    input_ended = asyncio.Event()
-    server_started = asyncio.Event()
-    server_activity = asyncio.Event()
-    terminal_received = asyncio.Event()
-    state = _ContextState()
-
-    async def _write(payload: str, value: object) -> None:
-        try:
-            await asyncio.wait_for(
-                _send_envelope(connection, context_id, payload, value), timeout=write_timeout
-            )
-        except TimeoutError as cause:
-            raise APITimeoutError("Timed out writing to the Rime v1 WebSocket") from redacted_cause(
-                cause
-            )
-
-    async def _send() -> None:
-        async for event in input_events:
-            if not event:
-                continue
-            if not state.active:
-                state.active = True
-                # Start the response watchdog before writing, since the write can stall.
-                context_started.set()
-                await _write("start", _start_payload(options))
-                mark_started()
-            await _write("text", event)
-
-        if state.active:
-            # The server can acknowledge end before the write returns.
-            state.input_ending = True
-            await _write("end", None)
-            input_ended.set()
-        else:
-            input_complete.set()
-            context_started.set()
-            output_emitter.initialize(
-                request_id=context_id,
-                sample_rate=sample_rate,
-                num_channels=NUM_CHANNELS,
-                mime_type=emitter_mime_type,
-                stream=True,
-            )
-            state.emitter_initialized = True
-            output_emitter.end_input()
-
-    async def _receive() -> None:
-        await context_started.wait()
-        if input_complete.is_set():
-            return
-        while True:
-            # A live context can remain silent during an input pause. Start and
-            # terminal watchdogs enforce bounded waits where the protocol requires
-            # progress.
-            envelope = await _receive_envelope(connection, timeout=None)
-            server_activity.set()
-            payload = _payload(envelope)
-            if payload == "error" and not envelope.context_id:
-                raise _rime_error(envelope.error, fallback_request_id=state.request_id)
-            _check_context(envelope, context_id)
-            if payload == "started":
-                if state.server_started:
-                    raise _protocol_error("Rime v1 sent started more than once")
-                request_id = envelope.started.request_id
-                if not request_id:
-                    raise _protocol_error("Rime v1 sent a malformed started event")
-                state.server_started = True
-                server_started.set()
-                state.request_id = request_id
-                output_emitter.initialize(
-                    request_id=request_id,
-                    sample_rate=sample_rate,
-                    num_channels=NUM_CHANNELS,
-                    mime_type=emitter_mime_type,
-                    stream=True,
-                )
-                state.emitter_initialized = True
-                output_emitter.start_segment(segment_id=context_id)
-            elif payload == "audio":
-                if not state.server_started:
-                    raise _protocol_error("Rime v1 sent audio before started")
-                output_emitter.push(envelope.audio)
-            elif payload == "done":
-                if not state.server_started:
-                    raise _protocol_error("Rime v1 sent done before started")
-                if not state.input_ending:
-                    raise _protocol_error("Rime v1 sent done before input ended")
-                state.terminal = True
-                terminal_received.set()
-                output_emitter.end_input()
-                return
-            elif payload == "cancelled":
-                terminal_received.set()
-                raise _ContaminatedConnection("Rime v1 cancelled an active context unexpectedly")
-            elif payload == "error":
-                state.terminal = True
-                terminal_received.set()
-                raise _rime_error(envelope.error, fallback_request_id=state.request_id)
-            else:
-                raise _protocol_error(f"Unexpected Rime v1 event {payload!r}")
-
-    async def _watch_started() -> None:
-        await context_started.wait()
-        if input_complete.is_set():
-            return
-        try:
-            await asyncio.wait_for(server_started.wait(), timeout=read_timeout)
-        except TimeoutError as cause:
-            raise APITimeoutError(
-                "Timed out waiting for the Rime v1 started event"
-            ) from redacted_cause(cause)
-
-    async def _watch_terminal() -> None:
-        await context_started.wait()
-        if input_complete.is_set():
-            return
-        await input_ended.wait()
-
-        while not terminal_received.is_set():
-            server_activity.clear()
-            if terminal_received.is_set():
-                return
-            try:
-                await asyncio.wait_for(server_activity.wait(), timeout=read_timeout)
-            except TimeoutError as cause:
-                raise APITimeoutError(
-                    "Timed out waiting for a Rime v1 event after end"
-                ) from redacted_cause(cause)
-
-    tasks = utils.aio.TaskSet()
-    try:
-        await asyncio.gather(
-            tasks.spawn(_send()),
-            tasks.spawn(_receive()),
-            tasks.spawn(_watch_started()),
-            tasks.spawn(_watch_terminal()),
-        )
-        return RunResult(reusable=True)
-    except asyncio.CancelledError:
-        await tasks.aclose()
-        if not state.emitter_initialized:
-            output_emitter.initialize(
-                request_id=context_id,
-                sample_rate=sample_rate,
-                num_channels=NUM_CHANNELS,
-                mime_type=emitter_mime_type,
-                stream=True,
-            )
-            state.emitter_initialized = True
-        open_context = None if not state.active or state.terminal else context_id
-        raise ContextCancelled(open_context=open_context) from None
-    finally:
-        context_started.set()
-        await tasks.aclose()
-
-
-@dataclass
-class _ContextState:
-    active: bool = False
-    input_ending: bool = False
-    server_started: bool = False
-    emitter_initialized: bool = False
-    terminal: bool = False
-    request_id: str | None = None
-
-
-def _start_payload(options: SynthesisOptions) -> proto.SynthesisRequest:
+def start_payload(options: SynthesisOptions) -> proto.SynthesisRequest:
     audio_parameters = proto.AudioParameters(audio_format=options.audio_format)
     if options.sampling_rate is not None:
         audio_parameters.sampling_rate = options.sampling_rate
@@ -544,62 +241,25 @@ def _start_payload(options: SynthesisOptions) -> proto.SynthesisRequest:
     return request
 
 
-async def _send_envelope(
-    connection: Connection,
-    context_id: str,
-    payload: str,
-    value: object,
-) -> None:
-    request = proto.WebSocketRequest(context_id=context_id)
+def request(context_id: str, payload: str, value: object = None) -> proto.WebSocketRequest:
+    envelope = proto.WebSocketRequest(context_id=context_id)
     if payload == "start" and isinstance(value, proto.SynthesisRequest):
-        request.start.CopyFrom(value)
+        envelope.start.CopyFrom(value)
     elif payload == "text" and isinstance(value, str):
-        request.text = value
+        envelope.text = value
     elif payload == "end":
-        request.end.SetInParent()
+        envelope.end.SetInParent()
     elif payload == "cancel":
-        request.cancel.SetInParent()
+        envelope.cancel.SetInParent()
     else:
         raise ValueError(f"unsupported Rime v1 request payload {payload!r}")
-    try:
-        await connection.codec.send_request(connection.websocket, request)
-    except asyncio.CancelledError:
-        raise
-    except Exception as cause:
-        raise APIConnectionError("Failed to write to the Rime v1 WebSocket") from redacted_cause(
-            cause
-        )
+    return envelope
 
 
-async def _receive_envelope(
-    connection: Connection, *, timeout: float | None
-) -> proto.WebSocketResponse:
-    while True:
-        message = await connection.websocket.receive(timeout=timeout)
-        if message.type is http.WebSocketMessageType.CLOSE:
-            raise _ContaminatedConnection("Rime v1 closed the WebSocket unexpectedly")
-        response = connection.codec.decode_response(message)
-        # a frame or payload this client does not handle is skipped
-        if response is not None and response.WhichOneof("payload") is not None:
-            return response
-
-
-def _payload(envelope: proto.WebSocketResponse) -> str:
-    payload = envelope.WhichOneof("payload")
-    if payload is None:
-        raise _protocol_error("Rime v1 envelope must contain exactly one payload")
-    return cast(str, payload)
-
-
-def _check_context(envelope: proto.WebSocketResponse, expected: str) -> None:
-    if envelope.context_id != expected:
-        raise _ContaminatedConnection("Rime v1 event has an unexpected contextId")
-
-
-def _rime_error(error: proto.WebSocketError, *, fallback_request_id: str | None) -> APIError:
+def rime_error(error: proto.WebSocketError, *, fallback_request_id: str | None) -> APIError:
     kind = error.kind
     if not kind:
-        return _protocol_error("Rime v1 sent a malformed error")
+        return protocol_error("Rime v1 sent a malformed error")
     request_id = error.request_id if error.HasField("request_id") else fallback_request_id
     status_codes = {
         "invalid_input": 400,
@@ -622,33 +282,3 @@ def _rime_error(error: proto.WebSocketError, *, fallback_request_id: str | None)
         kind="invalid_request" if kind == "unimplemented" else None,
         detail=error.message or None,
     )
-
-
-async def cancel_and_drain(
-    connection: Connection, *, context_id: str, read_timeout: float | None
-) -> bool:
-    """Cancels an open context and reads it to its end: whether the socket is reusable."""
-    timeout = CANCEL_TIMEOUT if read_timeout is None else min(read_timeout, CANCEL_TIMEOUT)
-    try:
-
-        async def _cancel() -> None:
-            await _send_envelope(connection, context_id, "cancel", None)
-            while True:
-                envelope = await _receive_envelope(connection, timeout=timeout)
-                payload = _payload(envelope)
-                if payload == "error" and not envelope.context_id:
-                    raise _rime_error(envelope.error, fallback_request_id=None)
-                _check_context(envelope, context_id)
-                if payload in ("cancelled", "done"):
-                    return
-                if payload == "error":
-                    raise _rime_error(envelope.error, fallback_request_id=None)
-                if payload not in ("started", "audio"):
-                    raise _ContaminatedConnection(
-                        f"Unexpected Rime v1 event while cancelling: {payload!r}"
-                    )
-
-        await asyncio.wait_for(_cancel(), timeout=timeout)
-        return True
-    except (Exception, asyncio.CancelledError):
-        return False

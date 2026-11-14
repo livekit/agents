@@ -276,7 +276,7 @@ pub type TtsSource = Box<dyn ProviderStream<SynthesizedAudio>>;
 ///
 /// Plugins implement `synthesize()` for one-shot synthesis, and override `stream()` when the
 /// service synthesizes text as it arrives.
-#[crate::host(proxy(host = "livekit.agents.tts.TTS", base = "tts.py", generic))]
+#[crate::host(proxy(host = "livekit.agents.tts.TTS", base = "tts.py", generic, owns))]
 pub trait Tts: Send + Sync {
     /// The host object's identity, independent of proxy instances and bound connection options;
     /// `None` for a native provider.

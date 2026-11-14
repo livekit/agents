@@ -19,7 +19,9 @@ struct Control {
 
 pub struct Runner {
     config: TextSessionConfig,
-    agents: BTreeMap<String, TextSessionAgent>,
+    /// Handed to the one request: its host callbacks reach the host's run, which holds this
+    /// runner, so they live only as long as that request.
+    agents: Mutex<Option<BTreeMap<String, TextSessionAgent>>>,
     control: Mutex<Option<Control>>,
     spawner: fn() -> Result<Arc<dyn Spawner>, lk_agents_net::env::ProcessError>,
     clock: Arc<dyn Clock>,
@@ -57,8 +59,9 @@ impl TextSessionRunner for Runner {
             max_depth,
         )
         .map_err(|e| Invalid(e.to_string()))?;
-        let resources =
-            agents.into_iter().map(|agent| (agent.definition.name.clone(), agent)).collect();
+        let resources = Mutex::new(Some(
+            agents.into_iter().map(|agent| (agent.definition.name.clone(), agent)).collect(),
+        ));
         let (control, spawner, clock) = (Mutex::new(None), env.spawner, env.clock.clone());
         Ok(Self { config, agents: resources, control, spawner, clock, tracer: env.tracer.clone() })
     }
@@ -66,13 +69,12 @@ impl TextSessionRunner for Runner {
     fn run(&self, request: TextSessionRequest) -> Result<Updates, Invalid> {
         let spawner = (self.spawner)().map_err(|error| Invalid(error.to_string()))?;
         let mut current = self.control.lock();
-        if current.as_ref().is_some_and(|c| !c.release.is_closed()) {
-            return Err(Invalid("this runner already has an active request".into()));
-        }
+        let agents =
+            self.agents.lock().take().ok_or_else(|| Invalid("this runner already ran".into()))?;
         let (updates, control) = start(
             spawner,
             self.config.clone(),
-            self.agents.clone(),
+            agents,
             request,
             self.clock.clone(),
             self.tracer.root(),

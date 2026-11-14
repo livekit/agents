@@ -8,16 +8,12 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions, APIStatusError, http, tts
+from livekit.agents import APIConnectOptions, APIError, APIStatusError, http, tts
 from livekit.plugins.gradium import TTS
 
 
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("failure", ["error", "close"])
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/pull/7672 reproduces: synthesis ignores provider errors and premature closes",
-)
 async def test_synthesis_surfaces_provider_failure(streaming: bool, failure: str) -> None:
     """Synthesis preserves server error details and abnormal close codes. https://github.com/livekit/agents/pull/7672"""
 
@@ -51,20 +47,18 @@ async def test_synthesis_surfaces_provider_failure(streaming: bool, failure: str
         else:
             stream = provider.synthesize("Hello.", conn_options=APIConnectOptions(max_retry=0))
         async with stream:
-            with pytest.raises(APIStatusError) as error:
+            with pytest.raises(APIError) as error:
                 async with asyncio.timeout(2):
                     _ = [ev async for ev in stream]
             if failure == "close":
-                assert error.value.status_code == 1011
+                assert error.value.kind == "server"  # close code 1011
             else:
-                assert "quota exhausted" in str(error.value)
+                assert isinstance(error.value, APIStatusError)
+                assert error.value.status_code == 429
+                assert error.value.detail == "quota exhausted"
 
 
 @pytest.mark.parametrize("updated", [False, True])
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/pull/7813 reproduces: default voice_id overrides explicit voice",
-)
 async def test_explicit_voice_does_not_send_competing_default(updated: bool) -> None:
     """An explicit speaker never competes with the default voice ID. https://github.com/livekit/agents/pull/7813"""
     setups = []

@@ -32,7 +32,7 @@ pub enum WorkerError {
 
 /// The host's side of one job runner (`ipc.JobLauncher`): it starts the runner, finishes the start
 /// method's bookkeeping once the runner ended, and writes the supervisor's diagnostics.
-#[crate::host(proxy(host = "livekit.agents.ipc.JobLauncher"))]
+#[crate::host(proxy(host = "livekit.agents.ipc.JobLauncher", owns))]
 pub trait JobLauncher: Send + Sync {
     /// Start the runner on the job's end of the channel: a thread of this process when
     /// `launch` is a `ThreadLaunch`, else a `ProcessLaunch`. Each reports only its own outcome.
@@ -56,7 +56,7 @@ pub trait JobLauncher: Send + Sync {
 
 /// The factory of the job runners' launchers: one per process the pool starts, made on the host's
 /// loop.
-#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait JobLaunchers: Send + Sync {
     #[host(await, name = "__call__")]
     fn create(
@@ -181,14 +181,14 @@ pub trait JobSupervisor: Send + Sync + Sized + 'static {
 }
 
 /// The process's setup, called with the parent's HTTP proxy before readiness.
-#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait ChildInitialize: Send + Sync {
     #[host(call, name = "__call__")]
     fn initialize(&self, http_proxy: Option<String>) -> Result<(), HostError>;
 }
 
 /// The entrypoint's `asyncio.Task`, awaited and cancelled in the context the job's run captured.
-#[crate::host(proxy(host = "asyncio.Task"))]
+#[crate::host(proxy(host = "asyncio.Task", owns))]
 pub trait JobTask: Send + Sync {
     /// Until it settles; stopping the wait leaves it running.
     #[host(await, function = "asyncio.shield")]
@@ -207,7 +207,7 @@ pub trait JobTask: Send + Sync {
 
 /// The job process's runner (`ipc.child._JobProc`): it starts the job the parent hands over and
 /// runs each step of the job's run, in the context the run captured.
-#[crate::host(proxy(host = "livekit.agents.ipc.child._JobProc"))]
+#[crate::host(proxy(host = "livekit.agents.ipc.child._JobProc", owns))]
 pub trait JobProcess: Send + Sync {
     /// Answers once its loop ran it: a pong measures the loop's responsiveness.
     #[host(await, name = "_core_ping")]
@@ -265,7 +265,7 @@ pub trait JobProcess: Send + Sync {
 
 /// An awaited application call of the job's (`connect`, `delete_room`, ...), run in its caller's
 /// context.
-#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait JobCall: Send + Sync {
     #[host(await, name = "__call__")]
     fn call<'a>(

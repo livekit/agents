@@ -14,10 +14,8 @@
 
 from __future__ import annotations  # noqa: I001
 
-import asyncio
 import base64
 import binascii
-import json
 import os
 import weakref
 from collections.abc import Callable
@@ -124,32 +122,8 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
-        self._pool = utils.ConnectionPool[http.WebSocket](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=300,
-            mark_refreshed_on_get=True,
-        )
+        self._mux = _Mux(self._opts)
         self._streams = weakref.WeakSet[SynthesizeStream]()
-
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        url = self._opts.get_ws_url(
-            f"/speak/{self._opts.lang_code.language}?speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&encoding={self._opts.encoding}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
-        )
-        if self._opts.jwt_token:
-            url += f"&jwt_token={self._opts.jwt_token}"
-
-        if self._opts.api_key:
-            headers = {API_AUTH_HEADER: self._opts.api_key}
-        else:
-            headers = None
-
-        return await self._ensure_session().ws_connect(
-            url, headers=headers, conn_options=conn_options
-        )
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await ws.close()
 
     @property
     def model(self) -> str:
@@ -166,7 +140,7 @@ class TTS(tts.TTS):
         return self._session
 
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        self._mux.prewarm()
 
     def update_options(
         self,
@@ -205,12 +179,8 @@ class TTS(tts.TTS):
             connection_params_changed = True
 
         if connection_params_changed:
-            # lang_code, voice_id and speed are all baked into the URL _connect_ws
-            # builds, so a pooled connection keeps synthesising with the previous
-            # settings. mark_refreshed_on_get=True restarts max_session_duration on
-            # every acquire, so under steady use that connection can outlive the
-            # change indefinitely.
-            self._pool.invalidate()
+            # lang_code, voice_id and speed are part of the socket URL
+            self._mux.invalidate()
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
@@ -230,12 +200,7 @@ class TTS(tts.TTS):
         )
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            conn_options=conn_options,
-            opts=replace(self._opts),
-            pool=self._pool,
-        )
+        stream = SynthesizeStream(tts=self, conn_options=conn_options, opts=replace(self._opts))
         self._streams.add(stream)
         return stream
 
@@ -244,7 +209,7 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
-        await self._pool.aclose()
+        await self._mux.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -317,6 +282,11 @@ class _AudioData(TypedDict, total=False):
     stop: bool | None
 
 
+class _Speak(TypedDict):
+    text: str
+    context_id: str
+
+
 class _Response(TypedDict, total=False):
     data: _AudioData | None
     type: str
@@ -370,116 +340,71 @@ def _parse_sse_message(message: str) -> _Response | None:
     return message_dict
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-        opts: _TTSOptions,
-        pool: utils.ConnectionPool[http.WebSocket],
-    ) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
+class _Mux(http.Multiplexer[_Response, _Speak]):
+    """One NeuPhonic socket carries every stream's segments, each its own context."""
+
+    max_session_duration = 300
+
+    def __init__(self, opts: _TTSOptions) -> None:
         self._opts = opts
-        self._pool = pool
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            mime_type=_encoding_to_mime_type(self._opts.encoding),
-            stream=True,
-        )
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        opts = self._opts
+        lang = opts.lang_code.language
+        params = {
+            "speed": str(opts.speed),
+            "lang_code": lang,
+            "encoding": opts.encoding,
+            "sampling_rate": str(opts.sample_rate),
+            "voice_id": opts.voice_id,
+        }
+        if opts.jwt_token:
+            params["jwt_token"] = opts.jwt_token
+        headers = {API_AUTH_HEADER: opts.api_key} if opts.api_key else {}
+        return http.SocketTarget(opts.get_ws_url(f"/speak/{lang}"), headers=headers, params=params)
 
-        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
+    def route(self, message: _Response) -> str | None:
+        if message.get("type") == "error":
+            raise _error(message)
+        return (message.get("data") or {}).get("context_id")
 
-        async def _split_segments() -> None:
-            segment: utils.aio.Chan[str] | None = None
-            async for item in self.input:
-                if isinstance(item, tts.SpeechChunk):
-                    if segment is None:
-                        segment = utils.aio.Chan[str]()
-                        segments_ch.send_nowait(segment)
-                    segment.send_nowait(item.text)
-                elif segment is not None:
-                    segment.close()
-                    segment = None
-            if segment is not None:
-                segment.close()
-            segments_ch.close()
 
-        async def _run_segments() -> None:
-            async for segment in segments_ch:
-                await self._run_ws(segment, output_emitter)
+class SynthesizeStream(tts.SocketStream[_Response, _Speak]):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: _TTSOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self.multiplexer = tts._mux
+        self.mime_type = _encoding_to_mime_type(opts.encoding)
+        # each text is sent ending in <STOP> and answered with a stop: the stops each segment
+        # still owes, and the segments whose text ended
+        self._owed: dict[str, int] = {}
+        self._ended: set[str] = set()
 
-        try:
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(tasks.spawn(_split_segments()), tasks.spawn(_run_segments()))
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
+    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Speak | None:
+        if isinstance(item, tts.SegmentText):
+            self._owed[item.segment_id] = self._owed.get(item.segment_id, 0) + 1
+            return {"text": f"{item.chunk.text}<STOP>", "context_id": item.segment_id}
+        if isinstance(item, tts.SegmentEnd):
+            self._ended.add(item.segment_id)
+            if not self._owed.get(item.segment_id):
+                # every stop already came: nothing more will
+                self._socket_deliver(self._done(item.segment_id))
+        return None
 
-    async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
-        chunks = 0
+    def on_message(self, message: _Response) -> list[tts.SegmentOutput]:
+        data = message.get("data") or {}
+        context_id = data.get("context_id")
+        if context_id is None:
+            return []
+        outputs: list[tts.SegmentOutput] = []
+        if audio := data.get("audio"):
+            outputs.append(tts.SegmentAudio(context_id, _decode_audio(audio)))
+        if data.get("stop"):
+            self._owed[context_id] = self._owed.get(context_id, 0) - 1
+            if self._owed[context_id] <= 0 and context_id in self._ended:
+                outputs.append(self._done(context_id))
+        return outputs
 
-        read_deadline = self._core_attempts
-
-        async def send_task(ws: http.WebSocket) -> None:
-            async for text in segment:
-                self.mark_started()
-
-                nonlocal chunks
-                chunks += 1
-
-                msg = {"text": f"{text}<STOP>", "context_id": segment_id}
-                await ws.send_str(json.dumps(msg))
-                read_deadline.expect_response()
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            while True:
-                msg = await ws.receive()
-
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error("NeuPhonic websocket connection closed unexpectedly")
-
-                if msg.type is http.WebSocketMessageType.TEXT:
-                    try:
-                        resp = _RESPONSE.validate_json(msg.data)
-                    except ValidationError as error:
-                        raise APIError(
-                            "Malformed Neuphonic response", kind="protocol", detail=msg.text
-                        ) from error
-
-                    if resp.get("type") == "error":
-                        raise _error(resp)
-
-                    data = resp.get("data") or {}
-                    audio_data = data.get("audio")
-                    if audio_data and data.get("context_id") == segment_id:
-                        b64data = _decode_audio(audio_data)
-                        if b64data:
-                            read_deadline.progress()
-                            output_emitter.push(b64data)
-
-                    nonlocal chunks
-                    if data.get("stop"):
-                        chunks -= 1
-                        if chunks == 0:
-                            read_deadline.complete_response()
-
-                    if data.get("context_id") != segment_id or chunks == 0:
-                        output_emitter.end_segment()
-                        break
-                elif msg.type is http.WebSocketMessageType.BINARY:
-                    pass
-
-        async with (
-            self._pool.connection(conn_options=self._conn_options) as ws,
-            utils.aio.TaskSet() as tasks,
-        ):
-            await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
+    def _done(self, context_id: str) -> tts.SegmentDone:
+        self._owed.pop(context_id, None)
+        self._ended.discard(context_id)
+        return tts.SegmentDone(context_id)

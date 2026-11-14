@@ -79,8 +79,6 @@ _ERROR_KINDS: dict[str, ErrorKind] = {
 Role = Literal["user", "assistant"]
 GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone", "vesper"]
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
-
 
 class ResponsesDelegationOptions(TypedDict, total=False):
     """The backend Responses model delegated work runs on, under ``delegation="responses"``.
@@ -616,7 +614,7 @@ class GPTVoiceSession(
         if self._opts.service_tier:
             headers["OpenAI-Service-Tier"] = self._opts.service_tier
         url = _live_sessions_url(self._opts.base_url, is_azure=self._opts.is_azure)
-        if lk_oai_debug:
+        if utils.env_int("LK_OPENAI_DEBUG", 0):
             logger.debug("connecting to GPT-Live API", extra={"lk.pii.url": url})
 
         t0 = time.perf_counter()
@@ -741,7 +739,7 @@ class GPTVoiceSession(
     ) -> None:
         raw = event if isinstance(event, dict) else event.model_dump(exclude_none=True)
         self.emit("openai_client_event_queued", raw)
-        if lk_oai_debug and raw.get("type") != "session.input_audio.append":
+        if utils.env_int("LK_OPENAI_DEBUG", 0) and raw.get("type") != "session.input_audio.append":
             logger.debug("gpt-live client event", extra={"lk.pii.event": raw})
         await ws_conn.send_str(json.dumps(raw))
 
@@ -749,7 +747,7 @@ class GPTVoiceSession(
 
     def _handle_event(self, event: dict[str, Any]) -> None:
         etype = event.get("type", "")
-        if lk_oai_debug and etype != "session.output_audio.delta":
+        if utils.env_int("LK_OPENAI_DEBUG", 0) and etype != "session.output_audio.delta":
             logger.debug("gpt-live server event", extra={"lk.pii.event": event})
 
         if etype == "session.started":
@@ -786,7 +784,7 @@ class GPTVoiceSession(
                 "gpt-live acknowledged a command",
                 extra={"type": etype, "client_event_id": event.get("client_event_id")},
             )
-        elif lk_oai_debug:
+        elif utils.env_int("LK_OPENAI_DEBUG", 0):
             logger.debug("unhandled gpt-live event", extra={"lk.pii.type": etype})
 
     def _handle_session_started(self, event: types.SessionStartedEvent) -> None:

@@ -19,7 +19,7 @@ pub struct ReplacedWords {
 }
 
 /// A synchronous, application-supplied tokenizer, invoked by the runtime.
-#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait TokenizerCallback: Send + Sync {
     #[host(call, name = "__call__")]
     fn tokenize(&self, text: &str) -> Result<Vec<TokenizerToken>, HostError>;

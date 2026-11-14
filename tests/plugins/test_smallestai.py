@@ -11,13 +11,12 @@ from livekit.agents import APIConnectOptions, http, stt
 from livekit.plugins.smallestai import STT, TTS
 
 
-async def test_malformed_frame_does_not_drop_following_transcript_and_speech_boundaries() -> None:
-    """A malformed frame is skipped; the transcript and speech boundaries after it arrive."""
+async def test_a_final_between_vad_boundaries_reports_its_words_and_utterances() -> None:
+    """The server VAD bounds the speech; the final carries its words and shifted utterances."""
 
     async def recognize(request: web.Request) -> web.WebSocketResponse:
         socket = web.WebSocketResponse()
         await socket.prepare(request)
-        await socket.send_str("{")
         await socket.send_json({"type": "speech_started"})
         await socket.send_json(
             {

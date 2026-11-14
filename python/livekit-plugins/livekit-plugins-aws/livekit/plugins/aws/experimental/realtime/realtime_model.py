@@ -4,7 +4,6 @@ import asyncio
 import base64
 import concurrent.futures
 import json
-import os
 import time
 import uuid
 import weakref
@@ -87,8 +86,6 @@ RECOVERABLE_VALIDATION_ERROR_MESSAGES = (
     "System instability detected. Please retry your request.",
 )
 # Session recycling: restart before 8-min AWS limit or credential expiry
-# Override with LK_SESSION_MAX_DURATION env var for testing (e.g., "60" for 1 minute)
-MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
 # A recycle waits for the assistant's audio to stay quiet this long before closing the stream.
 RECYCLE_QUIET_PERIOD_SECONDS = 1.0
 # How long a recycle waits for the open generation's completionEnd after the prompt ends.
@@ -124,8 +121,6 @@ DEFAULT_SYSTEM_PROMPT = (
     "- Please respond in the language the user is talking to you in. If you have a question or suggestion, ask it in the language the user is talking in.\n"
     "- Ensure that our communication remains in the same language as the user."
 )
-
-lk_bedrock_debug = int(os.getenv("LK_BEDROCK_DEBUG", 0))
 
 
 @dataclass
@@ -601,7 +596,8 @@ class RealtimeSession(  # noqa: F811
                 self._session_recycle_task.cancel()
 
         # within the validity botocore keeps on refreshable credentials (over 10 minutes)
-        duration = MAX_SESSION_DURATION_SECONDS
+        # LK_SESSION_MAX_DURATION overrides it for testing (e.g., "60" for 1 minute)
+        duration = utils.env_int("LK_SESSION_MAX_DURATION", 6 * 60)
 
         self._session_recycle_task = self._tasks.spawn(
             self._session_recycle_timer(duration), name="RealtimeSession._session_recycle_timer"
@@ -1949,7 +1945,7 @@ class RealtimeSession(  # noqa: F811
         """Utility that prints a debug message when the audio chunk has non-trivial RMS energy."""
         squared_sum = sum(sample**2 for sample in audio_bytes)
         if (squared_sum / len(audio_bytes)) ** 0.5 > 200:
-            if lk_bedrock_debug:
+            if utils.env_int("LK_BEDROCK_DEBUG", 0):
                 log_message("Enqueuing significant audio chunk", AnsiColors.BLUE)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:

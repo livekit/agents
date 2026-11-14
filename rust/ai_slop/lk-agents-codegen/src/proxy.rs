@@ -9,21 +9,23 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     let name = format!("{}Proxy", p.rust_name);
     let tr = &p.trait_path;
     let mut s = format!("// Declared in {}.\n\n", p.source);
-    if p.weak && (p.handed_back || p.view.is_some() || p.returned_owned) {
+    if p.self_events && (p.handed_back || p.view.is_some() || p.returned_owned) {
         return Err(format!(
-            "{tr}: a weak proxy is only the events of the object it was filled from"
+            "{tr}: `self_events` are only the events of the object they were filled from"
         ));
     }
-    let (mut fields, mut inits) = match p.weak {
-        true => (
-            vec!["    /// The object whose events these are: not kept alive by them.\n    host: ::std::sync::Arc<Py<::pyo3::types::PyWeakrefReference>>,\n".to_owned()],
-            vec!["host: ::std::sync::Arc::new(::pyo3::types::PyWeakrefReference::new(obj)?.unbind())".to_owned()],
-        ),
-        false => (
-            vec!["    host: ::std::sync::Arc<Py<PyAny>>,\n".to_owned()],
-            vec!["host: ::std::sync::Arc::new(obj.clone().unbind())".to_owned()],
-        ),
+    // A view is built here, so only the proxy holds it.
+    let held = match p.view {
+        Some(_) if !p.handed_back => {
+            "{\n            let _ = owned;\n            crate::py_objects::HostObject::owned(obj)\n        }"
+        }
+        Some(_) => "crate::py_objects::HostObject::owned(obj)",
+        None => {
+            "match owned {\n            true => crate::py_objects::HostObject::owned(obj),\n            false => crate::py_objects::HostObject::weak(obj)?,\n        }"
+        }
     };
+    let mut fields = vec!["    host: crate::py_objects::HostObject,\n".to_owned()];
+    let mut inits = vec!["host".to_owned()];
     let mut reads = match &p.view {
         Some((module, class)) => format!(
             "        let view = crate::py_calls::call(&obj.py().import({module:?})?.getattr({class:?})?, (obj,), None)?;\n        let obj = &view;\n"
@@ -31,12 +33,14 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         None => String::new(),
     };
     if p.handed_back {
-        // The object the host passed, before any view over it.
-        fields.push("    /// The host object it was taken from, handed back as itself.\n    source: ::std::sync::Arc<Py<PyAny>>,\n".into());
+        // The object the host passed, before any view over it, held as the host is.
+        fields.push("    /// The host object it was taken from, handed back as itself.\n    source: crate::py_objects::HostObject,\n".into());
         inits.push("source".into());
-        reads =
-            format!("        let source = ::std::sync::Arc::new(obj.clone().unbind());\n{reads}");
+        reads = format!(
+            "        let source = match owned {{\n            true => crate::py_objects::HostObject::owned(obj),\n            false => crate::py_objects::HostObject::weak(obj)?,\n        }};\n{reads}"
+        );
     }
+    reads.push_str(&format!("        let host = {held};\n"));
     let context_arg = "context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>";
     if p.captures_context() {
         reads.push_str("        let context = match context {\n            Some(context) => Some(::std::clone::Clone::clone(context)),\n            None => crate::py_calls::proxy_context(obj.py()),\n        };\n");
@@ -106,15 +110,17 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         "        if crate::py_objects::native::<dyn {tr}>(obj)?.is_some() {{\n            return Err(::pyo3::exceptions::PyTypeError::new_err(\"a native `{}` is shared, never handed over to be owned\"));\n        }}\n",
         p.rust_name
     );
-    let constructors = match p.weak {
+    let constructors = match p.self_events {
         true => format!(
-            "    /// The events of `obj`, which they do not keep alive.\n    pub fn weak(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        Ok(::std::sync::Arc::new(Self::take(obj, None)?))\n    }}\n\n"
+            "    /// The events of `obj`, which they do not keep alive.\n    pub fn weak(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        Ok(::std::sync::Arc::new(Self::take(obj, None, false)?))\n    }}\n\n"
         ),
         false => format!(
-            "    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::py_objects::native::<dyn {tr}>(obj)? {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, None)?))\n    }}\n\n    /// A host object a call returned, its calls run in a copy of the context that call ran in.\n    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::py_objects::native::<dyn {tr}>(obj)? {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n{refuse_native}        Ok(::std::boxed::Box::new(Self::take(obj, None)?))\n    }}\n\n{owned_in_context}",
+            "    /// A registered native class as itself, any other host object behind this proxy{held}.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::py_objects::native::<dyn {tr}>(obj)? {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, None, {owns})?))\n    }}\n\n    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.\n    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::py_objects::native::<dyn {tr}>(obj)? {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n{refuse_native}        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))\n    }}\n\n{owned_in_context}",
+            held = if p.owns { "" } else { ", held weakly" },
+            owns = p.owns,
             owned_in_context = if p.returned_owned {
                 format!(
-                    "    /// A host object a call returned for the core to own, run in a copy of that call's context.\n    pub fn owned_in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n{refuse_native}        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))\n    }}\n\n"
+                    "    /// A host object a call returned for the core to own, run in a copy of that call's context.\n    pub fn owned_in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n{refuse_native}        Ok(::std::boxed::Box::new(Self::take(obj, Some(context), true)?))\n    }}\n\n"
                 )
             } else {
                 String::new()
@@ -122,14 +128,14 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         ),
     };
     s.push_str(&format!(
-        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n{constructors}    fn take(obj: &Bound<'_, PyAny>, {context_arg}) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
+        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n{constructors}    fn take(obj: &Bound<'_, PyAny>, {context_arg}, owned: bool) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
         fields.concat(),
         inits.join(", "),
         host = p.host,
     ));
     if p.handed_back {
         s.push_str(&format!(
-            "impl {name} {{\n    /// The host object behind a proxy of `{tr}`; a native implementation has none.\n    pub fn to_host<'py>(py: Python<'py>, value: ::std::sync::Arc<dyn {tr}>) -> PyResult<Bound<'py, PyAny>> {{\n        let any: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = value;\n        match any.downcast::<Self>() {{\n            Ok(proxy) => Ok(proxy.source.bind(py).clone()),\n            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(\"a native `{}` has no host object to hand back\")),\n        }}\n    }}\n}}\n\n",
+            "impl {name} {{\n    /// The host object behind a proxy of `{tr}`; a native implementation has none.\n    pub fn to_host<'py>(py: Python<'py>, value: ::std::sync::Arc<dyn {tr}>) -> PyResult<Bound<'py, PyAny>> {{\n        let any: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = value;\n        match any.downcast::<Self>() {{\n            Ok(proxy) => proxy.source.bind(py),\n            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(\"a native `{}` has no host object to hand back\")),\n        }}\n    }}\n}}\n\n",
             p.rust_name
         ));
     }
@@ -263,25 +269,25 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     // What the call reaches: a method along its path, an attribute read through the host's
     // `getattr`, or a module function taking the host object first.
     let callable = match &m.target {
-        Target::Method(path) => format!("host.bind(py){}", attributes(path)),
+        Target::Method(path) => format!("host.bind(py)?{}", attributes(path)),
         Target::Attribute(path) | Target::Present(path) => {
             let (last, along) = path.split_last().expect("a path has a name");
             args.insert(0, format!("::pyo3::types::PyString::new(py, {last:?}).into_any()"));
             // An owned bound object: the host itself when the attribute is its own.
             let owner = match along {
-                [] => "host.bind(py).clone()".to_owned(),
-                along => format!("host.bind(py){}", attributes(along)),
+                [] => "host.bind(py)?".to_owned(),
+                along => format!("host.bind(py)?{}", attributes(along)),
             };
             args.insert(0, owner);
             "py.import(\"builtins\")?.getattr(\"getattr\")?".to_owned()
         }
         Target::Function { module, name } => {
-            args.insert(0, "host.bind(py).clone()".to_owned());
+            args.insert(0, "host.bind(py)?".to_owned());
             format!("py.import({module:?})?.getattr({name:?})?")
         }
         Target::Emit(event) => {
             args.insert(0, format!("::pyo3::types::PyString::new(py, {event:?}).into_any()"));
-            "host.bind(py).getattr(\"emit\")?".to_owned()
+            "host.bind(py)?.getattr(\"emit\")?".to_owned()
         }
         // `anext(iterator, None)`, the iterator opened on the loop by the first pull.
         Target::Iter(along) => {
@@ -290,8 +296,8 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
                 m.rust_name
             ));
             let iterable = match along.as_slice() {
-                [] => "host.bind(py).clone()".to_owned(),
-                along => format!("host.bind(py){}", attributes(along)),
+                [] => "host.bind(py)?".to_owned(),
+                along => format!("host.bind(py)?{}", attributes(along)),
             };
             args.insert(0, format!("iterator.get_or_try_init(py, || crate::py_calls::call(&py.import(\"builtins\")?.getattr(\"aiter\")?, ({iterable},), None).map(::pyo3::Bound::unbind))?.bind(py).clone()"));
             args.push("py.None().into_bound(py)".to_owned());
@@ -351,12 +357,12 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         ),
         false => String::new(),
     };
-    let host = match p.weak {
-        // Once the object is gone, its events go nowhere.
-        true => {
-            "        let Some(host) = ::pyo3::Python::attach(|py| self.host.bind(py).upgrade().map(|host| ::std::sync::Arc::new(host.unbind()))) else {\n            return;\n        };\n"
+    let host = match m.kind {
+        // Once a back-reference's object is gone, its notices go nowhere.
+        ProxyCall::Notify => {
+            "        if self.host.gone() {\n            return;\n        }\n        let host = ::std::clone::Clone::clone(&self.host);\n"
         }
-        false => "        let host = ::std::sync::Arc::clone(&self.host);\n",
+        _ => "        let host = ::std::clone::Clone::clone(&self.host);\n",
     };
     if m.kind == ProxyCall::Call {
         let (ret, refused, wrap, err) = result_shape(m, &at)?;
@@ -846,13 +852,13 @@ mod tests {
         let emitted: Vec<String> =
             p.methods.iter().map(|m| super::method(p, m).expect("emits")).collect();
         assert!(
-            emitted[0].contains("[host.bind(py).getattr(\"rtc\")?, ::pyo3::types::PyString::new(py, \"name\").into_any()]")
+            emitted[0].contains("[host.bind(py)?.getattr(\"rtc\")?, ::pyo3::types::PyString::new(py, \"name\").into_any()]")
                 && emitted[0].contains("py.import(\"builtins\")?.getattr(\"getattr\")?"),
             "{}",
             emitted[0]
         );
         assert!(
-            emitted[2].contains("host.bind(py).getattr(\"rtc\")?.getattr(\"aclose\")?")
+            emitted[2].contains("host.bind(py)?.getattr(\"rtc\")?.getattr(\"aclose\")?")
                 && emitted[2].contains("PyAny>; 0] = []")
                 && emitted[2].contains("kwargs.set_item(\"reason\", ")
                 && emitted[2].contains("kwargs.set_item(\"code\", "),
@@ -860,7 +866,7 @@ mod tests {
             emitted[2]
         );
         assert!(
-            emitted[3].contains("[host.bind(py).clone()]")
+            emitted[3].contains("[host.bind(py)?]")
                 && emitted[3]
                     .contains("py.import(\"livekit.agents._bindings\")?.getattr(\"next_frame\")?"),
             "{}",
@@ -869,14 +875,14 @@ mod tests {
         // Awaited, the read runs on the host's loop through HostInvoker.
         assert!(
             emitted[4].contains("::lk_agents_runtime::host::call(")
-                && emitted[4].contains("[host.bind(py).getattr(\"session\")?, ::pyo3::types::PyString::new(py, \"usage\").into_any()]"),
+                && emitted[4].contains("[host.bind(py)?.getattr(\"session\")?, ::pyo3::types::PyString::new(py, \"usage\").into_any()]"),
             "{}",
             emitted[4]
         );
         // The host's own attribute is read on the host itself.
         assert!(
             emitted[5].contains(
-                "[host.bind(py).clone(), ::pyo3::types::PyString::new(py, \"label\").into_any()]"
+                "[host.bind(py)?, ::pyo3::types::PyString::new(py, \"label\").into_any()]"
             ),
             "{}",
             emitted[5]
@@ -929,21 +935,21 @@ mod tests {
             p.methods.iter().map(|m| super::method(p, m).expect("emits")).collect();
         assert!(
             emitted[0].contains("[::pyo3::types::PyString::new(py, \"clear_buffer\").into_any()]")
-                && emitted[0].contains("host.bind(py).getattr(\"emit\")?"),
+                && emitted[0].contains("host.bind(py)?.getattr(\"emit\")?"),
             "{}",
             emitted[0]
         );
         assert!(
             emitted[1].contains("let iterator = ::std::sync::Arc::clone(&self.next_iter);")
                 && emitted[1].contains("iterator.get_or_try_init(py, ")
-                && emitted[1].contains("getattr(\"aiter\")?, (host.bind(py).clone(),)")
+                && emitted[1].contains("getattr(\"aiter\")?, (host.bind(py)?,)")
                 && emitted[1].contains("py.None().into_bound(py)]")
                 && emitted[1].contains("py.import(\"builtins\")?.getattr(\"anext\")?")
                 && emitted[1].contains("::lk_agents_runtime::host::call("),
             "{}",
             emitted[1]
         );
-        assert!(emitted[2].contains("(host.bind(py).getattr(\"stream\")?,)"), "{}", emitted[2]);
+        assert!(emitted[2].contains("(host.bind(py)?.getattr(\"stream\")?,)"), "{}", emitted[2]);
         let whole = super::proxy(p).expect("emits");
         assert!(
             whole.contains("next_iter: ::std::sync::Arc<::pyo3::sync::PyOnceLock<Py<PyAny>>>")

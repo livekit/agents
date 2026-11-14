@@ -13,6 +13,7 @@ from livekit import rtc
 
 from .. import _core
 from .._core import shortuuid as shortuuid
+from ..log import logger
 from ..types import NotGiven, NotGivenOr
 from . import aio, media
 from .aio import ConnectionPool
@@ -35,6 +36,31 @@ def is_dev_mode() -> bool:
 def is_hosted() -> bool:
     """Whether the agent is hosted on LiveKit Cloud."""
     return os.getenv("LIVEKIT_REMOTE_EOT_URL") is not None
+
+
+_warned_env: set[str] = set()
+
+
+def env_int(name: str, default: int) -> int:
+    """Read an integer environment flag.
+
+    Args:
+        name: The environment variable.
+        default: The value when the variable is unset, blank or not an integer.
+
+    Returns:
+        The flag's value, or ``default``. A non-integer value logs one warning per variable.
+    """
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        if name not in _warned_env:
+            _warned_env.add(name)
+            logger.warning("%s=%r is not an integer, using %d", name, value, default)
+        return default
 
 
 _P = ParamSpec("_P")
@@ -206,5 +232,6 @@ __all__ = [
     "aio",
     "media",
     "is_given",
+    "env_int",
     "ConnectionPool",
 ]

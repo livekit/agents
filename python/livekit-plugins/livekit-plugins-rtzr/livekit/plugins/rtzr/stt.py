@@ -14,24 +14,18 @@
 
 from __future__ import annotations
 
-import asyncio
-import time
 from dataclasses import dataclass
-from enum import Enum, auto
 
-from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     LanguageCode,
     http,
     stt,
-    utils,
 )
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -40,12 +34,9 @@ from livekit.agents.types import (
 from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
-from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZROpenAPIClient, RTZRStatusError
+from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZROpenAPIClient
 
 _DEFAULT_CHUNK_MS = 100
-_IDLE_TIMEOUT_SECONDS = 25.0
-_RECV_COMPLETION_TIMEOUT = 5.0
-_IDLE_CHECK_INTERVAL = 1.0
 
 
 class _Word(TypedDict, total=False):
@@ -69,9 +60,6 @@ class _Transcript(TypedDict, total=False):
     final: bool | None
 
 
-_TRANSCRIPT = TypeAdapter(_Transcript)
-
-
 @dataclass
 class _STTOptions:
     model_name: str = "sommers_ko"  # sommers_ko: "ko", sommers_ja: "ja"
@@ -84,15 +72,6 @@ class _STTOptions:
     active_threshold: float = 0.80
     use_punctuation: bool = False
     keywords: list[str] | list[tuple[str, float]] | None = None
-
-
-class _StreamState(Enum):
-    """State machine for SpeechStream lifecycle."""
-
-    IDLE = auto()  # No active speech, no WS connection
-    ACTIVE = auto()  # Speech active, WS connected
-    CLOSING = auto()  # Sending EOS, waiting for recv completion
-    CLOSED = auto()  # Stream fully closed
 
 
 class STT(stt.STT):
@@ -172,7 +151,11 @@ class STT(stt.STT):
         )
 
 
-class SpeechStream(stt.RecognizeStream):
+class SpeechStream(stt.SocketStream[_Transcript, None]):
+    # ends a segment: the server sends what it holds, then closes
+    goodbye = "EOS"
+    frame_ms = _DEFAULT_CHUNK_MS
+
     def __init__(
         self,
         *,
@@ -184,16 +167,10 @@ class SpeechStream(stt.RecognizeStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=params.sample_rate)
         self._params = params
         self._client = client
-        self._ws: http.WebSocket | None = None
-        self._recv_task: asyncio.Task[None] | None = None
-        self._state = _StreamState.IDLE
-        self._connection_lock = asyncio.Lock()
-        self._idle_timeout = _IDLE_TIMEOUT_SECONDS
-        self._last_audio_at: float | None = None
-        self._idle_task: asyncio.Task[None] | None = None
-        self._tasks = utils.aio.TaskSet()
+        self._segment_audio = False
 
-    async def _connect_ws(self) -> http.WebSocket:
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        self._segment_audio = False
         config = self._client.build_config(
             model_name=self._params.model_name,
             domain=self._params.domain,
@@ -205,259 +182,52 @@ class SpeechStream(stt.RecognizeStream):
             use_punctuation=self._params.use_punctuation,
             keywords=self._params.keywords,
         )
+        return await self._client.streaming_target(config, conn_options=conn_options)
 
-        try:
-            ws = await self._client.connect_websocket(config, conn_options=self._conn_options)
-            logger.debug(
-                "RTZR STT WS connected (model=%s, sr=%s, epd=%.2fs, "
-                "noise=%.2f, active=%.2f, punct=%s)",
-                self._params.model_name,
-                self._params.sample_rate,
-                self._params.epd_time,
-                self._params.noise_threshold,
-                self._params.active_threshold,
-                self._params.use_punctuation,
-            )
-            return ws
-        except RTZRStatusError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status_code or 500,
-                request_id=None,
-                body=None,
-            ) from e
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[None]:
+        if isinstance(item, rtc.AudioFrame):
+            self._segment_audio = True
+            return bytes(item.data)
+        if (
+            isinstance(item, stt.RecognizeStream.Flush)
+            and self._segment_audio
+            and not self.input.closed
+        ):
+            # each segment is one connection: EOS, then the next segment connects again (the
+            # input's end sends its own EOS)
+            self.reconnect("segment ended")
+        return None
 
-    async def _run(self) -> None:
-        async with utils.aio.TaskSet() as self._tasks:
-            self._idle_task = self._tasks.spawn(self._idle_watchdog(), name="RTZR.idle_watchdog")
-            try:
-                await self._send_audio_task()
-            finally:
-                self._state = _StreamState.CLOSED
-                await utils.aio.cancel_and_wait(self._idle_task)
-                await self._await_recv_completion()
-                await self._cleanup_connection()
-
-    async def _ensure_connected(self) -> None:
-        """Lazy connect on first audio."""
-        async with self._connection_lock:
-            if self._ws is not None:
-                return
-            try:
-                ws = await self._connect_ws()
-                self._ws = ws
-                self._state = _StreamState.ACTIVE
-                self._recv_task = self._tasks.spawn(self._recv_loop(ws), name="RTZR.recv_loop")
-                self._last_audio_at = time.monotonic()
-            except Exception:
-                self._state = _StreamState.IDLE
-                raise
-
-    async def _end_segment(self) -> None:
-        """Close current segment, prepare for next."""
-        async with self._connection_lock:
-            if not self._ws:
-                return
-            self._state = _StreamState.CLOSING
-            try:
-                await self._ws.send_str("EOS")
-                logger.info("Sent EOS to close audio segment")
-            except Exception:
-                logger.exception("Failed to send EOS")
-            await self._await_recv_completion()
-            await self._cleanup_connection()
-            self._state = _StreamState.IDLE
-            self._last_audio_at = None
-
-    async def _idle_watchdog(self) -> None:
-        try:
-            while self._state != _StreamState.CLOSED:
-                await asyncio.sleep(_IDLE_CHECK_INTERVAL)
-                if self._state != _StreamState.ACTIVE or not self._ws:
-                    continue
-                if self._last_audio_at is None:
-                    continue
-                if time.monotonic() - self._last_audio_at >= self._idle_timeout:
-                    logger.info(
-                        "RTZR STT idle timeout reached (%.0fs); closing segment",
-                        self._idle_timeout,
-                    )
-                    await self._end_segment()
-        except asyncio.CancelledError:
-            pass
-
-    async def _cleanup_connection(self) -> None:
-        if self._ws:
-            try:
-                await self._ws.close()
-            finally:
-                self._ws = None
-
-    async def _await_recv_completion(self) -> None:
-        if self._recv_task:
-            try:
-                await asyncio.wait_for(self._recv_task, timeout=_RECV_COMPLETION_TIMEOUT)
-            except TimeoutError:
-                await utils.aio.cancel_and_wait(self._recv_task)
-            finally:
-                self._recv_task = None
-
-    async def _send_audio_task(self) -> None:
-        audio_bstream = utils.media.AudioByteStream(
-            sample_rate=self._params.sample_rate,
-            num_channels=1,
-            samples_per_channel=self._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),
-        )
-
-        has_ended = False
-        async for data in self.input:
-            frames: list[rtc.AudioFrame] = []
-
-            if isinstance(data, rtc.AudioFrame):
-                frames.extend(audio_bstream.push(data.data.tobytes()))
-            else:
-                frames.extend(audio_bstream.flush())
-                has_ended = True
-
-            if frames and not self._ws:
-                await self._ensure_connected()
-
-            for frame in frames:
-                if self._ws:
-                    await self._ws.send_bytes(frame.data.tobytes())
-                    self._last_audio_at = time.monotonic()
-
-            if has_ended:
-                if self._ws:
-                    await self._end_segment()
-                has_ended = False  # always reset - flush without active WS is a no-op
-
-        # Final shutdown
-        if self._ws:
-            self._state = _StreamState.CLOSING
-            try:
-                await self._ws.send_str("EOS")
-                logger.info("Sent final EOS to close audio stream")
-            except Exception:
-                logger.exception("Failed to send final EOS")
-            await self._await_recv_completion()
-            await self._cleanup_connection()
-        self._state = _StreamState.IDLE
-
-    def _parse_words(self, words: list[_Word]) -> list[TranscriptChunk]:
-        """Parse word timing data from RTZR response."""
-        return [
-            TranscriptChunk(
-                text=w.get("text") or "",
-                start_time=(w.get("start_at") or 0) / 1000.0 + self.start_time_offset,
-                end_time=((w.get("start_at") or 0) + (w.get("duration") or 0)) / 1000.0
-                + self.start_time_offset,
-            )
-            for w in words
-        ]
-
-    def _check_error_response(self, data: _Transcript) -> None:
-        """Check for error in RTZR response and raise if found."""
-        if "error" in data:
+    def on_message(self, message: _Transcript) -> stt.Transcript | None:
+        if "error" in message or message.get("type") == "error":
             raise APIStatusError(
                 "RTZR STT server error",
                 status_code=500,
-                request_id=None,
-                body=None,
-                detail=str(data["error"]),
+                detail=str(message.get("error", message.get("message"))),
             )
-        if data.get("type") == "error" and "message" in data:
-            raise APIStatusError(
-                "RTZR STT server error",
-                status_code=500,
-                request_id=None,
-                body=None,
-                detail=str(data["message"]),
-            )
-
-    def _process_transcript_event(
-        self,
-        data: _Transcript,
-        in_speech: bool,
-        speech_started_at: float | None,
-    ) -> tuple[list[stt.SpeechEvent], bool, float | None]:
-        """Parse RTZR response into SpeechEvents.
-
-        Returns: (events, in_speech, speech_started_at)
-        """
-        start_time = (data.get("start_at") or 0) / 1000.0
-        duration = (data.get("duration") or 0) / 1000.0
-        words = data.get("words") or []
-
-        alternatives = data.get("alternatives")
-        if not alternatives:
-            return [], in_speech, speech_started_at
-
-        text = alternatives[0].get("text") or ""
-        is_final = bool(data.get("final", False))
-
+        alternatives = message.get("alternatives")
+        text = (alternatives[0].get("text") or "") if alternatives else ""
         if not text:
-            return [], in_speech, speech_started_at
-
-        events: list[stt.SpeechEvent] = []
-
-        if not in_speech:
-            in_speech = True
-            speech_started_at = time.monotonic()
-            events.append(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
-
-        event_type = (
-            stt.SpeechEventType.FINAL_TRANSCRIPT
-            if is_final
-            else stt.SpeechEventType.INTERIM_TRANSCRIPT
-        )
-
-        events.append(
-            stt.SpeechEvent(
-                type=event_type,
-                alternatives=[
-                    stt.SpeechData(
-                        text=text,
-                        language=self._params.language,
-                        start_time=start_time + self.start_time_offset,
-                        end_time=start_time + duration + self.start_time_offset,
-                        words=self._parse_words(words) if words else None,
-                    )
-                ],
-            )
-        )
-
-        if is_final:
-            speech_duration = (
-                time.monotonic() - speech_started_at if speech_started_at is not None else 0.0
-            )
-            logger.debug("RTZR final transcript received (speech_duration=%.2fs)", speech_duration)
-            events.append(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-            in_speech = False
-            speech_started_at = None
-
-        return events, in_speech, speech_started_at
-
-    async def _recv_loop(self, ws: http.WebSocket) -> None:
-        in_speech = False
-        speech_started_at: float | None = None
-
-        async for msg in ws:
-            if msg.type == http.WebSocketMessageType.TEXT:
-                try:
-                    data = _TRANSCRIPT.validate_json(msg.data)
-                except ValidationError as error:
-                    raise APIError(
-                        "Malformed RTZR response", kind="protocol", detail=str(msg.data)
-                    ) from error
-
-                self._check_error_response(data)
-
-                events, in_speech, speech_started_at = self._process_transcript_event(
-                    data, in_speech, speech_started_at
+            return None
+        offset = self.start_time_offset
+        start = (message.get("start_at") or 0) / 1000.0 + offset
+        words = message.get("words") or []
+        return stt.Transcript(
+            text,
+            self._params.language,
+            final=bool(message.get("final", False)),
+            start_time=start,
+            end_time=start + (message.get("duration") or 0) / 1000.0,
+            words=[
+                TranscriptChunk(
+                    text=w.get("text") or "",
+                    start_time=(w.get("start_at") or 0) / 1000.0 + offset,
+                    end_time=((w.get("start_at") or 0) + (w.get("duration") or 0)) / 1000.0
+                    + offset,
                 )
-                for event in events:
-                    self.send(event)
-
-            else:
-                logger.debug("Ignored WebSocket message type: %s", msg.type)
+                for w in words
+            ]
+            or None,
+        )

@@ -40,7 +40,7 @@ pub enum RemoteEvent {
 
 /// What a delegation runs on the host: its tool call's progress and retained state and, on a
 /// call, the person's answers to the expert. Each runs in the tool call's context.
-#[crate::host(proxy(host = "livekit.agents.a2a._Delegation"))]
+#[crate::host(proxy(host = "livekit.agents.a2a._Delegation", owns))]
 pub trait DelegationHost: Send + Sync {
     /// The interaction changed: `extra` is the function call's retained state, `text` a
     /// progress message for the person (`ctx.update()`).

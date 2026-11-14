@@ -719,7 +719,7 @@ pub fn tool_proxy_arguments<'py>(
 /// [`::lk_agents_abi::tokenize::bindings::TokenizerCallback`] over a host `collections.abc.Callable`.
 #[derive(Clone)]
 pub struct TokenizerCallbackProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl TokenizerCallbackProxy {
@@ -734,10 +734,10 @@ impl TokenizerCallbackProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -749,7 +749,7 @@ impl TokenizerCallbackProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -766,15 +766,20 @@ impl TokenizerCallbackProxy {
                 "a native `TokenizerCallback` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(TokenizerCallbackProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(TokenizerCallbackProxy { host })
     }
 }
 
@@ -786,7 +791,7 @@ impl ::lk_agents_abi::tokenize::bindings::TokenizerCallback for TokenizerCallbac
         ::std::vec::Vec<::lk_agents_abi::tokenize::bindings::TokenizerToken>,
         ::lk_agents_abi::errors::HostError,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let text_arg = text.to_owned();
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
@@ -794,7 +799,7 @@ impl ::lk_agents_abi::tokenize::bindings::TokenizerCallback for TokenizerCallbac
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("__call__")?,
+                    host.bind(py)?.getattr("__call__")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

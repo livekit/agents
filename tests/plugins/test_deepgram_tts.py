@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 
 import pytest
@@ -129,3 +130,27 @@ async def test_flux_turn_ends_on_speech_metadata_and_the_pooled_socket_speaks_ag
     assert first[: len(PCM)] == PCM
     assert second[: len(PCM)] == PCM
     assert connections == 1
+
+
+# Catches: closing the model waiting a real second for an acknowledgement of Close that the
+# provider never sends, at the end of every session.
+async def test_closing_the_model_never_waits_for_a_close_acknowledgement() -> None:
+    async def peer(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        speaking = False
+        async for message in ws:
+            kind = message.json()["type"]
+            if kind == "Speak":
+                speaking = True
+            elif kind == "Flush" and speaking:  # an empty flush at the close owes nothing
+                speaking = False
+                await ws.send_bytes(PCM)
+                await ws.send_json({"type": "Flushed"})
+        return ws
+
+    async with _server(peer) as server, http.open():
+        model = deepgram.TTS(api_key="test", base_url=str(server.make_url("/speak")))
+        assert await _speak(model, "Hello world.") == PCM
+        async with asyncio.timeout(0.5):
+            await model.aclose()

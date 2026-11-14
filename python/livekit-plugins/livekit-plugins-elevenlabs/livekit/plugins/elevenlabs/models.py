@@ -68,16 +68,6 @@ class STTWord(BaseModel):
     speaker_id: str | None = None
 
 
-class STTResponse(BaseModel):
-    message_type: str = ""
-    text: str = ""
-    language_code: str | None = None
-    words: list[STTWord] | None = None
-    session_id: object = "unknown"
-    message: object = "Unknown error"
-    details: object = ""
-
-
 class STTBatchResponse(BaseModel):
     text: str
     language_code: str | None = None

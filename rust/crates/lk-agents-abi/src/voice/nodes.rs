@@ -15,7 +15,7 @@ use crate::{
 /// `transcription_node` registered on the session, each call in a copy of the binding of
 /// the agent holding the call. Whatever a node returns (an async iterable, an awaitable of one, one value or `None`)
 /// reaches the core as an async iterable.
-#[crate::host(proxy(host = "livekit.agents.voice.agent_session._SessionNodes"))]
+#[crate::host(proxy(host = "livekit.agents.voice.agent_session._SessionNodes", owns))]
 pub trait SessionNodes: Send + Sync {
     /// `trace`: the step's `llm_node` span current, so application spans nest under it.
     /// `calls` carries the step's trace to the default `llm_node` the node runs (`ProviderCalls`).

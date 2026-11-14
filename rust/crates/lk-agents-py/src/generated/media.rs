@@ -668,7 +668,7 @@ impl AudioStreamDecoder {
 /// [`::lk_agents_abi::media::emitter::EmitterOutput`] over a host `livekit.agents.utils.aio.Chan[livekit.agents.tts.SynthesizedAudio]`.
 #[derive(Clone)]
 pub struct EmitterOutputProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -686,10 +686,10 @@ impl EmitterOutputProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -699,7 +699,7 @@ impl EmitterOutputProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -713,12 +713,13 @@ impl EmitterOutputProxy {
                 "a native `EmitterOutput` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
         let view = crate::py_calls::call(
             &obj.py().import("livekit.agents.tts")?.getattr("_EmitterOutput")?,
@@ -726,15 +727,15 @@ impl EmitterOutputProxy {
             None,
         )?;
         let obj = &view;
+        let host = {
+            let _ = owned;
+            crate::py_objects::HostObject::owned(obj)
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        Ok(EmitterOutputProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
-            context,
-            notifier: ::std::default::Default::default(),
-        })
+        Ok(EmitterOutputProxy { host, context, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -750,7 +751,10 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
         characters_count: ::std::option::Option<u64>,
         provider_request_ids: ::std::vec::Vec<::std::string::String>,
     ) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let frame_arg = frame;
         let request_id_arg = request_id;
         let segment_id_arg = segment_id;
@@ -788,18 +792,22 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(characters_count_arg, py)?,
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(provider_request_ids_arg, py)?,
                 ];
-                Ok((host.bind(py).getattr("send")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((host.bind(py)?.getattr("send")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
     }
 
     fn closed(&self) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("closed")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((
+                    host.bind(py)?.getattr("closed")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {

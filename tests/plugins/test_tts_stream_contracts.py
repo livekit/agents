@@ -157,12 +157,13 @@ def _gnani(_: Connection, message: str | bytes) -> list[Frame]:
 
 
 def _gradium(_: Connection, message: str | bytes) -> list[Frame]:
-    kind = json.loads(message)["type"]
-    if kind == "setup":
-        return [{"type": "ready"}]
-    if kind == "text":
-        return [{"type": "audio", "audio": _b64(PCM * 2)}]  # 100 ms at 48 kHz
-    return [{"type": "end_of_stream"}]
+    packet = json.loads(message)
+    request = {"client_req_id": packet["client_req_id"]}
+    if packet["type"] == "setup":
+        return [{**request, "type": "ready"}]
+    if packet["type"] == "text":
+        return [{**request, "type": "audio", "audio": _b64(PCM * 2)}]  # 100 ms at 48 kHz
+    return [{**request, "type": "end_of_stream"}]
 
 
 def _inworld(_: Connection, message: str | bytes) -> list[Frame]:
@@ -192,7 +193,10 @@ def _minimax(_: Connection, message: str | bytes) -> list[Frame]:
 
 def _murf(_: Connection, message: str | bytes) -> list[Frame]:
     packet = json.loads(message)
-    return [{"final": True}] if packet.get("end") else [{"audio": _b64(PCM)}]
+    if "clear" in packet:
+        return []
+    context = {"context_id": packet["context_id"]}
+    return [{**context, "final": True}] if packet["end"] else [{**context, "audio": _b64(PCM)}]
 
 
 def _neuphonic(_: Connection, message: str | bytes) -> list[Frame]:
@@ -229,11 +233,10 @@ def _respeecher(_: Connection, message: str | bytes) -> list[Frame]:
 
 def _rime(_: Connection, message: str | bytes) -> list[Frame]:
     packet = json.loads(message)
+    context = {"contextId": packet["contextId"]}
     if "text" in packet:
-        return [{"type": "chunk", "data": _b64(PCM)}]
-    if packet["operation"] == "flush":
-        return [{"type": "done"}]
-    return [Close(1000)]  # eos: the server ends the session
+        return [{**context, "type": "chunk", "data": _b64(PCM)}]
+    return [{**context, "type": "done"}]  # a flush
 
 
 def _rime_v1_on(peer: WsPeer) -> tts.TTS:
@@ -303,6 +306,22 @@ def _telnyx(_: Connection, message: str | bytes) -> list[Frame]:
     if not text:
         return [Close(1000)]  # the end of the text: the server closes once it is spoken
     return [{"audio": _b64(TONE_MP3)}] if text.strip() else []
+
+
+def _upliftai_on(peer: WsPeer) -> tts.TTS:
+    peer.hello = ['0{"sid":"s","pingInterval":25000,"pingTimeout":20000}']
+    return upliftai.TTS(api_key="key", base_url=peer.ws_url, output_format="PCM_22050_16")
+
+
+def _upliftai(_: Connection, message: str | bytes) -> list[Frame]:
+    namespace = "/text-to-speech/multi-stream"
+    assert isinstance(message, str)
+    if message.startswith(f"40{namespace},"):
+        return [f'40{namespace},{{"sid":"n"}}']
+    _, request = json.loads(message.split(",", 1)[1])
+    context = {"requestId": request["requestId"]}
+    answers = [{**context, "type": "audio", "audio": _b64(PCM)}, {**context, "type": "audio_end"}]
+    return [f"42{namespace},{json.dumps(['message', answer])}" for answer in answers]
 
 
 def _vakyam_on(peer: WsPeer) -> tts.TTS:
@@ -401,18 +420,17 @@ CASES: dict[str, TtsCase] = {
     ),
     # -- resemble .. xai
     "resemble": TtsCase(
-        make=lambda peer: resemble.TTS(api_key="key", http_session=_ToPeer(peer)),
+        make=lambda peer: resemble.TTS(api_key="key", websocket_url=peer.ws_url),
         answer=_resemble,
     ),
     "respeecher": TtsCase(
-        make=lambda peer: respeecher.TTS(api_key="key", http_session=_ToPeer(peer)),
+        make=lambda peer: respeecher.TTS(api_key="key", base_url=peer.url + "/"),
         answer=_respeecher,
     ),
     "rime": TtsCase(make=lambda peer: rime.TTS(api_key="key", base_url=peer.ws_url), answer=_rime),
     "rime_v1": TtsCase(
         make=_rime_v1_on,
         answer=_rime_v1,
-        loop_deadline="the started and terminal watchdogs are asyncio.wait_for(read_timeout)",
     ),
     "sarvam": TtsCase(
         make=lambda peer: sarvam.TTS(
@@ -444,11 +462,7 @@ CASES: dict[str, TtsCase] = {
     "telnyx": TtsCase(
         make=lambda peer: telnyx.TTS(api_key="key", base_url=peer.ws_url), answer=_telnyx
     ),
-    "upliftai": TtsCase(
-        make=lambda peer: upliftai.TTS(api_key="key", base_url=peer.ws_url),
-        answer=lambda _c, _m: [],
-        skip="speaks Socket.IO (an Engine.IO handshake and packet framing), not plain frames",
-    ),
+    "upliftai": TtsCase(make=_upliftai_on, answer=_upliftai, setup=1),
     "vakyam": TtsCase(
         make=_vakyam_on,
         answer=_vakyam,
@@ -463,19 +477,7 @@ CASES: dict[str, TtsCase] = {
 # (contract, plugin): what reproduces a known product bug, as a strict xfail
 KNOWN: dict[tuple[str, str], str] = {
     # -- asyncai .. palabra
-    ("idle_input", "gradium"): "a segment's end_of_stream answer never disarms the "
-    "expect_response(final=True) deadline (gradium/tts.py:349, 372), so the next sentence's "
-    "wait times out",
     # -- resemble .. xai
-    ("idle_input", "slng"): "a segment's audio_end leaves the final read deadline armed, never "
-    "completed (livekit-plugins-slng/livekit/plugins/slng/tts.py:1288): waiting for the next "
-    "sentence times out",
-    ("idle_input", "telnyx"): "a segment's close leaves the final read deadline armed, never "
-    "completed (livekit-plugins-telnyx/livekit/plugins/telnyx/tts.py:181): waiting for the next "
-    "sentence times out",
-    ("idle_input", "xai"): "audio.done leaves the segment's final read deadline armed, never "
-    "completed (livekit-plugins-xai/livekit/plugins/xai/tts.py:335): waiting for the next "
-    "sentence times out",
 }
 
 

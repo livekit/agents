@@ -274,7 +274,7 @@ fn seconds(value: f64, path: &'static str) -> std::result::Result<Duration, Inva
 
 /// The host stage a native output was wrapped by (`next_in_chain=`): the output's playback reports
 /// reach it through `io.AudioOutput`'s `on_playback_*`, called by keyword, in order, on its loop.
-#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput"))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput", owns))]
 pub trait PlaybackListener: Send + Sync {
     /// The stage's own tracker, one per stage: its identity in the chain.
     #[host(read_once, getter = "_tracker")]
@@ -309,7 +309,7 @@ pub struct InputFrame {
 
 /// `io.AudioInput`: the source end of the audio-in chain. Exactly one reader: two tasks pulling
 /// one host-backed async iterator lose data.
-#[crate::host(proxy(host = "livekit.agents.voice.io.AudioInput"))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.AudioInput", owns))]
 pub trait AudioInput: Send + Sync {
     #[host(read_once, getter = "label")]
     fn label(&self) -> &str;
@@ -339,7 +339,7 @@ pub trait AudioInput: Send + Sync {
 }
 
 /// `io.VideoInput`: the source end of the video-in chain; one reader. Frames are side-table keys.
-#[crate::host(proxy(host = "livekit.agents.voice.io.VideoInput"))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.VideoInput", owns))]
 pub trait VideoInput: Send + Sync {
     #[host(read_once, getter = "label")]
     fn label(&self) -> &str;
@@ -360,7 +360,7 @@ pub trait VideoInput: Send + Sync {
 
 /// `io.AudioOutput`: one link in the audio-out chain. Implement [`capture`](Self::capture) and
 /// [`flush_segment`](Self::flush_segment); call [`AudioOutputExt::capture_frame`] and [`AudioOutputExt::flush`].
-#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput"))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput", owns))]
 pub trait AudioOutput: Send + Sync {
     #[host(read_once, getter = "label")]
     fn label(&self) -> &str;
@@ -487,7 +487,7 @@ pub trait AudioOutputExt: AudioOutput {
 impl<T: AudioOutput + ?Sized> AudioOutputExt for T {}
 
 /// `io.TranscriptionOutput`: one link in the transcript chain; `flush` is the whole protocol.
-#[crate::host(proxy(host = "livekit.agents.voice.io.TranscriptionOutput"))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.TranscriptionOutput", owns))]
 pub trait TranscriptionOutput: Send + Sync {
     #[host(read_once, getter = "label")]
     fn label(&self) -> &str;

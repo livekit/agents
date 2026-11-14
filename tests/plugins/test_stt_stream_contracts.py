@@ -11,6 +11,7 @@ missing.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -53,8 +54,10 @@ from livekit.plugins import (
     telnyx,
     xai,
 )
+from livekit.plugins.aws import stt as aws_stt
 from livekit.plugins.google.beta import GeminiSTT
 from tests.fakes import FakeVAD, until
+from tests.plugins.test_aws_speech import exception_event, transcript_event
 
 if TYPE_CHECKING:
     from tests.plugins.conftest import Frame, WsPeer
@@ -90,6 +93,11 @@ def _deepgram_interim(text: str) -> Frame:
         "is_final": False,
         "channel": {"alternatives": [{"transcript": text, "confidence": 0.9}]},
     }
+
+
+def _azure(path: str, body: dict[str, object]) -> str:
+    """A Speech service message: its header block, then its JSON body."""
+    return f"Path: {path}\r\nX-RequestId: R\r\n\r\n{json.dumps(body)}"
 
 
 def _gladia(peer: WsPeer) -> stt.STT:
@@ -135,7 +143,7 @@ def _palabra(peer: WsPeer) -> stt.STT:
 
 
 def _speechmatics(peer: WsPeer) -> stt.STT:
-    """Speechmatics answers EndOfStream with EndOfTranscript, which the SDK's close awaits."""
+    """Speechmatics answers EndOfStream with EndOfTranscript, which ends the session."""
     peer.reply = lambda _, message: (
         [{"message": "EndOfTranscript"}] if '"EndOfStream"' in str(message) else []
     )
@@ -155,16 +163,18 @@ CASES: dict[str, SttCase] = {
     ),
     # -- aws .. microsoft_ai
     "aws": SttCase(
-        make=lambda _: aws.STT(region="us-east-1"),
-        speech=[],
-        error=None,
-        skip="Transcribe streams over the AWS SDK's HTTP/2 event stream, not a websocket",
+        make=lambda peer: aws.STT(
+            region="us-east-1",
+            base_url=peer.ws_url,
+            credentials=aws_stt.Credentials("key", "secret"),
+        ),
+        speech=[transcript_event("hello", partial=True)],
+        error=[exception_event("BadRequestException", "invalid audio")],
     ),
     "azure": SttCase(
-        make=lambda _: azure.STT(speech_key="key", speech_region="region"),
-        speech=[],
-        error=None,
-        skip="the Azure Speech SDK owns its native transport and takes no websocket URL",
+        make=lambda peer: azure.STT(speech_key="key", speech_endpoint=peer.ws_url + "/stt"),
+        speech=[_azure("speech.hypothesis", {"Text": "hello", "Offset": 0, "Duration": 0})],
+        error=[_azure("speech.phrase", {"RecognitionStatus": "BadRequest"})],
     ),
     "baseten": SttCase(
         make=lambda peer: baseten.STT(api_key="key", model_endpoint=peer.ws_url + "/websocket"),
@@ -321,9 +331,8 @@ CASES: dict[str, SttCase] = {
     ),
     "simplismart": SttCase(
         make=lambda peer: simplismart.STT(api_key="key", base_url=peer.url, streaming=True),
-        speech=[],
+        speech=[b"hello"],
         error=None,
-        skip="streaming always dials wss://<host>/ws/audio and the peer serves plain ws://",
     ),
     "slng": SttCase(
         make=lambda peer: slng.STT(api_key="key", model="deepgram/nova:3", slng_base_url=peer.url),
@@ -346,14 +355,6 @@ CASES: dict[str, SttCase] = {
         speech=[{"message": "StartOfTurn"}],
         error=[{"message": "Error", "type": "invalid_config", "reason": "invalid audio"}],
         hello=[{"message": "RecognitionStarted", "id": "session"}],
-        racy={
-            "reconnect": "when the SDK records a close as a session error before the next audio "
-            "send, _process_audio breaks silently and the stream hangs (speechmatics/stt.py:667)",
-            "close": "the SDK's socket close races its session task: the socket sometimes stays "
-            "open after aclose()",
-            "auth_close": "a close is noticed only when the next audio is sent: with none left, "
-            "the stream hangs before it reads the close code (speechmatics/stt.py:667)",
-        },
     ),
     "telnyx": SttCase(
         make=lambda peer: telnyx.STT(api_key="key", base_url=peer.ws_url),
@@ -382,22 +383,6 @@ KNOWN: dict[tuple[str, str], str] = {
     ("speech_reconnect", "gladia"): (
         "a 1011 close mid-speech ends the recognition instead of reconnecting (gladia/stt.py:900)"
     ),
-    ("reconnect", "gnani"): (
-        "stream() forces max_retry=0 (gnani/stt.py:235): a 1011 close or a dropped connection "
-        "fails the stream"
-    ),
-    ("speech_reconnect", "gnani"): (
-        "stream() forces max_retry=0 (gnani/stt.py:235), and the plugin keeps no speaking state "
-        "to end on a reconnect"
-    ),
-    ("usage", "gnani"): (
-        "stream() forces max_retry=0 (gnani/stt.py:235): a 1011 close fails the stream before "
-        "the second attempt's audio is taken"
-    ),
-    ("speech_reconnect", "gradium"): (
-        "the speaking flag is local to recv_task (gradium/stt.py:281): a reconnect drops it "
-        "without END_OF_SPEECH, so the new socket's text opens a second speech"
-    ),
     ("speech_reconnect", "meta"): (
         "a reconnect keeps the open turn in _turns (meta/stt.py:384) without ending it: no "
         "END_OF_SPEECH, and the new socket's speechStart never opens a speech"
@@ -422,18 +407,6 @@ KNOWN: dict[tuple[str, str], str] = {
     ("speech_reconnect", "soniox"): (
         "is_speaking is local to one connection's receive task: a reconnect drops it without "
         "END_OF_SPEECH (soniox/stt.py:410)"
-    ),
-    ("usage", "speechmatics"): (
-        "a close is noticed only when the next audio is sent: once input stops, the closed "
-        "last attempt never fails the stream (speechmatics/stt.py:663)"
-    ),
-    ("speech_reconnect", "speechmatics"): (
-        "StartOfTurn opens speech with no speaking state: a reconnect sends no END_OF_SPEECH "
-        "(speechmatics/stt.py:785)"
-    ),
-    ("speech_reconnect", "telnyx"): (
-        "_run resets _speaking on a new connection without sending END_OF_SPEECH "
-        "(telnyx/stt.py:192)"
     ),
 }
 

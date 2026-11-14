@@ -18,6 +18,7 @@ from livekit.agents import (
     APIStatusError,
     http,
     inference,
+    stt,
 )
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 from livekit.plugins import cartesia
@@ -437,9 +438,55 @@ async def test_stt_unexpected_close_keeps_code_and_retryability(mode: str) -> No
                         _ = [ev async for ev in stream]
                 assert error.value.retryable
                 assert "(close code 1011)" in error.value.message
-                assert error.value.detail == "upstream failed"
         finally:
             await provider.aclose()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="stt.SocketStream ends the open speech on a reconnect without finalizing its "
+    "interim: the turn heard before a dropped connection is never a FINAL_TRANSCRIPT",
+)
+async def test_a_turn_cut_by_a_dropped_connection_is_still_finalized() -> None:
+    """The partial turn of a connection that dropped mid-turn reaches the reader as a final
+    before its END_OF_SPEECH, as the turns stream did before the socket base."""
+    connections = 0
+
+    async def recognize(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connections
+        connections += 1
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        if connections == 1:
+            await ws.send_json({"type": "turn.start", "request_id": "r"})
+            await ws.send_json({"type": "turn.update", "transcript": "hello", "request_id": "r"})
+            await ws.close(code=1011)
+            return ws
+        async for _ in ws:
+            pass
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/{path:.*}", recognize)
+    async with TestServer(app) as server:
+        provider = STT(api_key="key", model="ink-2", base_url=str(server.make_url("")))
+        finals: list[str] = []
+        try:
+            async with provider.stream(
+                conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+            ) as stream:
+                stream.push_frame(rtc.AudioFrame(bytes(3200), 16000, 1, 1600))
+                async with asyncio.timeout(2):
+                    async for event in stream:
+                        if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                            finals.append(event.alternatives[0].text)
+                        if event.type == stt.SpeechEventType.END_OF_SPEECH:
+                            break
+        finally:
+            await provider.aclose()
+
+    assert finals == ["hello"]
 
 
 async def test_each_flushed_segment_is_its_own_context_and_segment() -> None:

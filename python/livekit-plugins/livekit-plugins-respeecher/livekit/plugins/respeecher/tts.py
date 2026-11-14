@@ -14,14 +14,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
 import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast
+from urllib.parse import urlsplit
+
+from pydantic import Field
 
 from livekit.agents import (
     APIConnectionError,
@@ -36,7 +37,6 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import TTSEncoding, TTSModels, Voice, VoiceSettings
 from .version import __version__
 
@@ -51,15 +51,39 @@ DEFAULT_VOICES: dict[str, str] = {
 }
 
 
-def _decode(raw: str | bytes) -> dict[str, Any]:
-    """A provider message, which must be a JSON object."""
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        data = None
-    if not isinstance(data, dict):
-        raise APIError("Respeecher sent a malformed message", kind="protocol", detail=str(raw))
-    return data
+_LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+# Respeecher's websocket: each segment is one context, ended by `continue: false`. Each message
+# declares only the fields read.
+
+
+class _Chunk(TypedDict):
+    type: Literal["chunk"]
+    context_id: str
+    data: str
+
+
+class _Done(TypedDict):
+    type: Literal["done"]
+    context_id: str
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    context_id: NotRequired[str]
+    error: NotRequired[object]
+
+
+_Message = Annotated[_Chunk | _Done | _Error, Field(discriminator="type")]
+
+_Continue = TypedDict("_Continue", {"continue": bool})  # a keyword: the functional form
+
+
+class _Speak(_Continue):
+    context_id: str
+    transcript: str
+    voice: dict[str, object]
+    output_format: dict[str, object]
 
 
 @dataclass
@@ -166,10 +190,7 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._pool = utils.ConnectionPool[http.WebSocket](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-        )
+        self._mux = _Mux(self._opts)
 
     @property
     def model(self) -> str:
@@ -178,19 +199,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Respeecher"
-
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        session = self._ensure_session()
-        # WebSocket protocol does not support custom headers, using query parameter
-        ws_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
-        if not ws_url.startswith("wss://"):
-            raise APIConnectionError("Secure WebSocket connection (wss://) required")
-
-        full_ws_url = f"{ws_url}{self._opts.model}/tts/websocket?api_key={self._opts.api_key}&source={API_VERSION_HEADER}&version={API_VERSION}"
-        return await session.ws_connect(full_ws_url, conn_options=conn_options)
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await ws.close()
 
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:
@@ -210,11 +218,9 @@ class TTS(tts.TTS):
         super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
-            # The model is baked into the WebSocket URL, so pooled connections
-            # can't serve the new one. invalidate() stops reusing them: idle ones
-            # are closed on the next drain, and one a stream is still using keeps
-            # working until it is returned, then is closed.
-            self._pool.invalidate()
+            # the model is part of the socket URL: idle sockets close now, busy ones once
+            # their streams ended
+            self._mux.invalidate()
 
         if is_given(voice_id):
             self._opts.voice_id = voice_id
@@ -233,15 +239,10 @@ class TTS(tts.TTS):
         )
 
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        self._mux.prewarm()
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            conn_options=conn_options,
-            opts=replace(self._opts),
-            pool=self._pool,
-        )
+        stream = SynthesizeStream(tts=self, conn_options=conn_options, opts=replace(self._opts))
         self._streams.add(stream)
         return stream
 
@@ -250,7 +251,7 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
-        await self._pool.aclose()
+        await self._mux.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -319,127 +320,72 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class SynthesizeStream(tts.SynthesizeStream):
+class _Mux(http.Multiplexer[_Message, _Speak]):
+    """One Respeecher socket carries every stream's segments, each its own context."""
+
+    def __init__(self, opts: _TTSOptions) -> None:
+        self._opts = opts
+
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
+        parts = urlsplit(url)
+        # the API key travels in the query: plain ws only to this machine
+        if parts.scheme != "wss" and parts.hostname not in _LOOPBACK:
+            raise APIError("Secure WebSocket connection (wss://) required", kind="invalid_request")
+        return http.SocketTarget(
+            f"{url}{self._opts.model}/tts/websocket",
+            params={
+                "api_key": self._opts.api_key,
+                "source": API_VERSION_HEADER,
+                "version": API_VERSION,
+            },
+        )
+
+    def route(self, message: _Chunk | _Done | _Error) -> str:
+        if "context_id" not in message:
+            # an error naming no context fails every stream on the socket
+            raise _error(message)
+        return message["context_id"]
+
+
+class SynthesizeStream(tts.SocketStream[_Message, _Speak]):
     """Streamed API using WebSocket for real-time synthesis"""
 
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-        opts: _TTSOptions,
-        pool: utils.ConnectionPool[http.WebSocket],
-    ) -> None:
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: _TTSOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._opts = opts
-        self._pool = pool
+        self.multiplexer = tts._mux
+        voice: dict[str, object] = {"id": opts.voice_id}
+        if is_given(opts.voice_settings) and opts.voice_settings.sampling_params:
+            voice["sampling_params"] = opts.voice_settings.sampling_params
+        self._voice = voice
+        self._output_format = {"encoding": opts.encoding, "sample_rate": opts.sample_rate}
 
-    async def aclose(self) -> None:
-        await super().aclose()
+    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Speak | None:
+        if isinstance(item, tts.SegmentText):
+            return self._speak(item.segment_id, item.chunk.text + " ", more=True)
+        if isinstance(item, tts.SegmentEnd):
+            return self._speak(item.segment_id, " ", more=False)
+        return None
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        context_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=context_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            stream=True,
-            mime_type="audio/pcm",
-        )
-        output_emitter.start_segment(segment_id=context_id)
+    def on_message(self, message: _Chunk | _Done | _Error) -> tts.SegmentOutput:
+        if message["type"] == "chunk":
+            return tts.SegmentAudio(message["context_id"], base64.b64decode(message["data"]))
+        if message["type"] == "done":
+            return tts.SegmentDone(message["context_id"])
+        raise _error(message)
 
-        input_ended = False
+    def _speak(self, context_id: str, transcript: str, *, more: bool) -> _Speak:
+        return {
+            "context_id": context_id,
+            "transcript": transcript,
+            "voice": self._voice,
+            "continue": more,
+            "output_format": self._output_format,
+        }
 
-        def _voice_payload() -> dict[str, object]:
-            voice: dict[str, object] = {"id": self._opts.voice_id}
-            if is_given(self._opts.voice_settings) and self._opts.voice_settings.sampling_params:
-                voice["sampling_params"] = self._opts.voice_settings.sampling_params
-            return voice
 
-        async def _send_task(ws: http.WebSocket) -> None:
-            nonlocal input_ended
-            output_format = {
-                "encoding": self._opts.encoding,
-                "sample_rate": self._opts.sample_rate,
-            }
-            async for chunk in self.input:
-                if not isinstance(chunk, tts.SpeechChunk):
-                    continue
-                self.mark_started()
-                await ws.send_str(
-                    json.dumps(
-                        {
-                            "context_id": context_id,
-                            "transcript": chunk.text + " ",
-                            "voice": _voice_payload(),
-                            "continue": True,
-                            "output_format": output_format,
-                        }
-                    )
-                )
-
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "context_id": context_id,
-                        "transcript": " ",
-                        "voice": _voice_payload(),
-                        "continue": False,
-                        "output_format": output_format,
-                    }
-                )
-            )
-            input_ended = True
-            # the read deadline runs only from here: before, a pause in the text owes nothing
-            self._core_attempts.expect_response(final=True)
-
-        async def _recv_task(ws: http.WebSocket) -> None:
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error("Respeecher connection closed unexpectedly")
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("Unexpected Respeecher message type %s", msg.type)
-                    continue
-
-                data = _decode(msg.data)
-
-                if data.get("context_id") != context_id:
-                    logger.warning(
-                        "Received a message with context_id=%s instead of expected %s",
-                        data.get("context_id"),
-                        context_id,
-                    )
-                    continue
-
-                if data.get("type") == "error":
-                    # in-band errors reject the request (voice, format, quota): retrying repeats it
-                    raise APIError(
-                        "Respeecher returned an error",
-                        kind="invalid_request",
-                        detail=str(data.get("error")),
-                    )
-
-                if data.get("type") == "chunk":
-                    self._core_attempts.audio_received()
-                    output_emitter.push(base64.b64decode(data["data"]))
-
-                elif data.get("type") == "done":
-                    if input_ended:
-                        break
-
-        try:
-            async with (
-                self._pool.connection(conn_options=self._conn_options) as ws,
-                utils.aio.TaskSet() as tasks,
-            ):
-                await asyncio.gather(tasks.spawn(_send_task(ws)), tasks.spawn(_recv_task(ws)))
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
-        finally:
-            output_emitter.end_segment()
+def _error(message: _Error) -> APIError:
+    # in-band errors reject the request (voice, format, quota): retrying repeats it
+    return APIError(
+        "Respeecher returned an error", kind="invalid_request", detail=str(message.get("error"))
+    )

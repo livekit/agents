@@ -12,59 +12,49 @@
 
 from __future__ import annotations
 
-import asyncio
-import concurrent.futures
-import contextlib
 import os
-import sys
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, replace
+from typing import Annotated, Literal, NotRequired, TypedDict
+from urllib.parse import urlencode
+
+from aiobotocore.session import AioSession
+from botocore.auth import SigV4QueryAuth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import ReadOnlyCredentials
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
+    APIError,
     LanguageCode,
+    http,
     stt,
-    utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
-from .log import logger
-from .utils import DEFAULT_REGION
+from . import _eventstream
+from .utils import DEFAULT_REGION, resolve_session
 
-if TYPE_CHECKING or sys.version_info >= (3, 12):
-    # Transcribe requires Python 3.12; its namespace modules have no typing marker.
-    from aws_sdk_transcribe_streaming.client import (  # pyright: ignore[reportMissingTypeStubs]
-        AsyncTranscribeStreamingClient as TranscribeStreamingClient,
-    )
-    from aws_sdk_transcribe_streaming.config import (  # pyright: ignore[reportMissingTypeStubs]
-        AsyncTranscribeStreamingConfig as Config,
-    )
-    from aws_sdk_transcribe_streaming.models import (  # pyright: ignore[reportMissingTypeStubs]
-        AudioEvent,
-        AudioStream,
-        AudioStreamAudioEvent,
-        BadRequestException,
-        Result,
-        StartStreamTranscriptionInput,
-        TranscriptEvent,
-        TranscriptResultStream,
-        TranscriptResultStreamTranscriptEvent,
-    )
-    from smithy_aws_core.identity import (
-        AWSCredentialsIdentity,
-        ContainerCredentialsResolver,
-        EnvironmentCredentialsResolver,
-        IMDSCredentialsResolver,
-        StaticCredentialsResolver,
-    )
-    from smithy_core.aio.identity import ChainedIdentityResolver
-    from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
-    from smithy_core.aio.retries import StandardRetryStrategy
-    from smithy_http.aio.crt import AWSCRTHTTPClient
+# a presigned URL is valid for at most 5 minutes; each connection signs a fresh one
+_URL_EXPIRES = 300
+_AUDIO_HEADERS = {
+    ":content-type": "application/octet-stream",
+    ":event-type": "AudioEvent",
+    ":message-type": "event",
+}
+# Transcribe ends a stream that received no audio for 15 s with this BadRequestException
+_IDLE_TIMEOUT = "Your request timed out"
+_EXCEPTION_KINDS: dict[str, ErrorKind] = {
+    "BadRequestException": "invalid_request",
+    "ConflictException": "invalid_request",
+    "LimitExceededException": "rate_limit",
+    "InternalFailureException": "server",
+    "ServiceUnavailableException": "server",
+}
 
 
 @dataclass
@@ -96,12 +86,42 @@ class STTOptions:
     preferred_language: NotGivenOr[str]
     vocabulary_names: NotGivenOr[str]
     vocabulary_filter_names: NotGivenOr[str]
+    base_url: str
+
+    def query(self) -> dict[str, str]:
+        """The StartStreamTranscription parameters of the websocket URL."""
+        params: dict[str, object] = {
+            "media-encoding": self.encoding,
+            "sample-rate": self.sample_rate,
+            "vocabulary-name": self.vocabulary_name,
+            "session-id": self.session_id,
+            "vocabulary-filter-method": self.vocab_filter_method,
+            "vocabulary-filter-name": self.vocab_filter_name,
+            "show-speaker-label": self.show_speaker_label,
+            "enable-channel-identification": self.enable_channel_identification,
+            "number-of-channels": self.number_of_channels,
+            "enable-partial-results-stabilization": self.enable_partial_results_stabilization,
+            "partial-results-stability": self.partial_results_stability,
+            "language-model-name": self.language_model_name,
+        }
+        # automatic language identification excludes language-code
+        if self.identify_language or self.identify_multiple_languages:
+            mode = "identify-language" if self.identify_language else "identify-multiple-languages"
+            params[mode] = True
+            params["language-options"] = self.language_options
+            params["preferred-language"] = self.preferred_language
+            params["vocabulary-names"] = self.vocabulary_names
+            params["vocabulary-filter-names"] = self.vocabulary_filter_names
+        elif self.language:
+            params["language-code"] = self.language
+        return {
+            name: str(value).lower() if isinstance(value, bool) else str(value)
+            for name, value in params.items()
+            if is_given(value)
+        }
 
 
 class STT(stt.STT):
-    _config: STTOptions
-    _credentials: Credentials | None
-
     def __init__(
         self,
         *,
@@ -126,7 +146,16 @@ class STT(stt.STT):
         preferred_language: NotGivenOr[str] = NOT_GIVEN,
         vocabulary_names: NotGivenOr[str] = NOT_GIVEN,
         vocabulary_filter_names: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        session: AioSession | None = None,
     ):
+        """Amazon Transcribe streaming over its websocket API.
+
+        Args:
+            credentials: Signs the requests; the default AWS credential chain when not given.
+            base_url: The websocket endpoint; the region's Transcribe endpoint when not given.
+            session: The aiobotocore session whose credential chain signs the requests.
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -135,12 +164,6 @@ class STT(stt.STT):
                 offline_recognize=False,
             )
         )
-
-        if sys.version_info < (3, 12):
-            raise ImportError(
-                "The 'aws_sdk_transcribe_streaming' package is not installed. "
-                "This implementation requires Python 3.12+ and the 'aws_sdk_transcribe_streaming' dependency."
-            )
 
         if not is_given(region):
             region = os.getenv("AWS_REGION") or DEFAULT_REGION
@@ -177,9 +200,12 @@ class STT(stt.STT):
             preferred_language=preferred_language,
             vocabulary_names=vocabulary_names,
             vocabulary_filter_names=vocabulary_filter_names,
+            base_url=base_url
+            if is_given(base_url)
+            else f"wss://transcribestreaming.{region}.amazonaws.com:8443",
         )
-
         self._credentials = credentials if is_given(credentials) else None
+        self._session = resolve_session(session)
 
     @property
     def model(self) -> str:
@@ -192,9 +218,6 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Amazon Transcribe"
-
-    async def aclose(self) -> None:
-        await super().aclose()
 
     async def _recognize_impl(
         self,
@@ -211,284 +234,161 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        return SpeechStream(
-            stt=self,
-            conn_options=conn_options,
-            opts=self._config,
-            credentials=self._credentials,
-        )
+        opts = replace(self._config)
+        if is_given(language):
+            opts.language = LanguageCode(language)
+        return SpeechStream(stt=self, opts=opts, conn_options=conn_options)
 
-
-class SpeechStream(stt.RecognizeStream):
-    def __init__(
-        self,
-        stt: STT,
-        opts: STTOptions,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        credentials: Credentials | None = None,
-    ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
-        self._opts = opts
-        self._credentials = credentials
-        self._http_client: AWSCRTHTTPClient | None = None
-
-    async def aclose(self) -> None:
-        await super().aclose()
-        if self._http_client is not None:
-            await self._http_client.close()
-
-    async def _run(self) -> None:
-
-        while True:
-            # a restarted attempt needs its own transport: the pooled HTTP/2 connection
-            # of the finished stream cannot carry a second StartStreamTranscription
-            if self._http_client is not None:
-                await self._http_client.close()
-            self._http_client = AWSCRTHTTPClient()
-
-            config_kwargs: dict[str, Any] = {"region": self._opts.region}
-            if self._credentials:
-                # Use a credentials resolver for explicit credentials
-                # for some reason, Config with direct values doesn't work
-                class StaticCredsResolver:
-                    def __init__(self, creds: Credentials):
-                        self._identity = AWSCredentialsIdentity(
-                            access_key_id=creds.access_key_id,
-                            secret_access_key=creds.secret_access_key,
-                            session_token=creds.session_token,
-                        )
-
-                    async def get_identity(self, **kwargs: Any) -> AWSCredentialsIdentity:
-                        return self._identity
-
-                config_kwargs["aws_credentials_identity_resolver"] = StaticCredsResolver(
-                    self._credentials
-                )
-            else:
-                config_kwargs["aws_credentials_identity_resolver"] = ChainedIdentityResolver(
-                    resolvers=(
-                        StaticCredentialsResolver(),
-                        # Smithy's constructor has no return annotation in the published SDK.
-                        EnvironmentCredentialsResolver(),  # type: ignore[no-untyped-call]
-                        ContainerCredentialsResolver(http_client=self._http_client),
-                        IMDSCredentialsResolver(http_client=self._http_client),
-                    )
-                )
-
-            client = TranscribeStreamingClient(
-                config=await Config.resolve(
-                    transport=self._http_client,
-                    retry_strategy=StandardRetryStrategy(max_attempts=1),
-                    **config_kwargs,
-                )
+    async def _signing_credentials(self) -> ReadOnlyCredentials:
+        if (explicit := self._credentials) is not None:
+            return ReadOnlyCredentials(
+                explicit.access_key_id, explicit.secret_access_key, explicit.session_token
             )
+        found = await self._session.get_credentials()
+        if found is None:
+            raise APIError("no AWS credentials found to sign Transcribe requests", kind="auth")
+        return await found.get_frozen_credentials()
 
-            live_config = {
-                "media_sample_rate_hertz": self._opts.sample_rate,
-                "media_encoding": self._opts.encoding,
-                "vocabulary_name": self._opts.vocabulary_name,
-                "session_id": self._opts.session_id,
-                "vocab_filter_method": self._opts.vocab_filter_method,
-                "vocab_filter_name": self._opts.vocab_filter_name,
-                "show_speaker_label": self._opts.show_speaker_label,
-                "enable_channel_identification": self._opts.enable_channel_identification,
-                "number_of_channels": self._opts.number_of_channels,
-                "enable_partial_results_stabilization": self._opts.enable_partial_results_stabilization,
-                "partial_results_stability": self._opts.partial_results_stability,
-                "language_model_name": self._opts.language_model_name,
-            }
 
-            # Auto language detection is mutually exclusive with language_code
-            if self._opts.identify_language:
-                live_config["identify_language"] = True
-                if is_given(self._opts.language_options):
-                    live_config["language_options"] = self._opts.language_options
-                if is_given(self._opts.preferred_language):
-                    live_config["preferred_language"] = self._opts.preferred_language
-                if is_given(self._opts.vocabulary_names):
-                    live_config["vocabulary_names"] = self._opts.vocabulary_names
-                if is_given(self._opts.vocabulary_filter_names):
-                    live_config["vocabulary_filter_names"] = self._opts.vocabulary_filter_names
-            elif self._opts.identify_multiple_languages:
-                live_config["identify_multiple_languages"] = True
-                if is_given(self._opts.language_options):
-                    live_config["language_options"] = self._opts.language_options
-                if is_given(self._opts.preferred_language):
-                    live_config["preferred_language"] = self._opts.preferred_language
-                if is_given(self._opts.vocabulary_names):
-                    live_config["vocabulary_names"] = self._opts.vocabulary_names
-                if is_given(self._opts.vocabulary_filter_names):
-                    live_config["vocabulary_filter_names"] = self._opts.vocabulary_filter_names
-            else:
-                if self._opts.language:
-                    live_config["language_code"] = self._opts.language
+class _Item(TypedDict):
+    Content: str
+    StartTime: float
+    EndTime: float
+    Confidence: NotRequired[float]
 
-            filtered_config: dict[str, Any] = {}
-            for k, v in live_config.items():
-                if isinstance(v, bool):
-                    filtered_config[k] = v
-                elif isinstance(v, (int, float)):
-                    filtered_config[k] = v
-                elif is_given(v):
-                    filtered_config[k] = v
 
-            owner = utils.aio.TaskSet()
-            tasks: list[asyncio.Task[None]] = []
-            gather_future: asyncio.Future[list[None]] | None = None
+class _Alternative(TypedDict):
+    Transcript: str
+    Items: NotRequired[list[_Item]]
 
-            try:
-                stream = await client.start_stream_transcription(
-                    input=StartStreamTranscriptionInput(**filtered_config)
-                )
 
-                # Get the output stream
-                _, output_stream = await stream.await_output()
+class _Result(TypedDict):
+    StartTime: float
+    EndTime: float
+    IsPartial: bool
+    Alternatives: list[_Alternative]
+    LanguageCode: NotRequired[str]
 
-                async def input_generator(
-                    audio_stream: EventPublisher[AudioStream],
-                ) -> None:
-                    try:
-                        async for frame in self.input:
-                            if isinstance(frame, rtc.AudioFrame):
-                                await audio_stream.send(
-                                    AudioStreamAudioEvent(
-                                        value=AudioEvent(audio_chunk=frame.data.tobytes())
-                                    )
-                                )
-                    finally:
-                        # Send empty frame to close (required by AWS Transcribe)
-                        try:
-                            await audio_stream.send(
-                                AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
-                            )
-                        except Exception:
-                            pass
-                        finally:
-                            with contextlib.suppress(Exception):
-                                await audio_stream.close()
 
-                async def handle_transcript_events(
-                    output_stream: EventReceiver[TranscriptResultStream],
-                ) -> None:
-                    try:
-                        async for event in output_stream:
-                            if isinstance(event, TranscriptResultStreamTranscriptEvent):
-                                self._process_transcript_event(event.value)
-                    except BadRequestException as e:
-                        if (
-                            e.message
-                            and "complete signal was sent without the preceding empty frame"
-                            in e.message
-                        ):
-                            # This can happen during cancellation if the empty frame wasn't sent in time
-                            logger.warning(
-                                "AWS Transcribe stream closed with empty frame error (this is usually harmless)"
-                            )
-                        else:
-                            raise
-                    except concurrent.futures.InvalidStateError:
-                        logger.warning(
-                            "AWS Transcribe stream closed unexpectedly (InvalidStateError)"
-                        )
-                        pass
+class _Transcript(TypedDict):
+    Results: list[_Result]
 
-                tasks = [
-                    owner.spawn(input_generator(stream.input_stream)),
-                    owner.spawn(handle_transcript_events(output_stream)),
-                ]
-                gather_future = asyncio.gather(*tasks)
 
-                await asyncio.shield(gather_future)
-            except BadRequestException as e:
-                if e.message and e.message.startswith("Your request timed out"):
-                    # AWS times out after 15s of inactivity, this tends to happen
-                    # at the end of the session, when the input is gone, we'll ignore it and
-                    # just treat it as a silent retry
-                    logger.info("restarting transcribe session")
-                    continue
-                else:
-                    raise e
-            finally:
-                if tasks:
-                    # Close input stream first
-                    await utils.aio.cancel_and_wait(tasks[0])
+class _TranscriptEvent(TypedDict):
+    type: Literal["TranscriptEvent"]
+    Transcript: _Transcript
 
-                    # Wait for output stream to close cleanly
-                    try:
-                        await asyncio.wait_for(tasks[1], timeout=3.0)
-                    except (TimeoutError, asyncio.CancelledError):
-                        await utils.aio.cancel_and_wait(tasks[1])
-                    except BadRequestException:
-                        # Already handled above (e.g. idle-timeout retry). Swallow so
-                        # re-awaiting the failed task here cannot override `continue`.
-                        pass
 
-                # Ensure gather future is retrieved to avoid "exception never retrieved"
-                if gather_future is not None:
-                    with contextlib.suppress(Exception):
-                        await gather_future
-                await owner.aclose()
+class _Exception(TypedDict):
+    """An exception or error message: ``name`` is its type, ``Message`` its text."""
 
-    def _process_transcript_event(self, transcript_event: TranscriptEvent) -> None:
-        if not transcript_event.transcript or not transcript_event.transcript.results:
-            return
+    type: Literal["exception"]
+    name: str
+    Message: NotRequired[str]
 
-        stream = transcript_event.transcript.results
-        for resp in stream:
-            if resp.start_time == 0.0:
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
-            if resp.end_time > 0.0:
-                if resp.is_partial:
-                    self.send(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[self._streaming_recognize_response_to_speech_data(resp)],
-                        )
-                    )
+_Event = Annotated[_TranscriptEvent | _Exception, Field(discriminator="type")]
+_EVENT: TypeAdapter[_TranscriptEvent | _Exception] = TypeAdapter(_Event)
+_JSON = TypeAdapter(dict[str, JsonValue])
 
-                else:
-                    self.send(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[self._streaming_recognize_response_to_speech_data(resp)],
-                        )
-                    )
 
-            if not resp.is_partial:
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+class SpeechStream(stt.SocketStream[_Event, bytes]):
+    frame_ms = 50
 
-    def _streaming_recognize_response_to_speech_data(self, resp: Result) -> stt.SpeechData:
-        confidence = 0.0
-        if resp.alternatives and (items := resp.alternatives[0].items):
-            confidence = items[0].confidence or 0.0
+    def __init__(self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions) -> None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+        self._transcribe = stt
+        self._opts = opts
 
-        detected_lang = resp.language_code or self._opts.language or "en-US"
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        credentials = await self._transcribe._signing_credentials()
+        request = AWSRequest(
+            method="GET",
+            url=f"{self._opts.base_url}/stream-transcription-websocket?"
+            + urlencode(self._opts.query()),
+        )
+        SigV4QueryAuth(credentials, "transcribe", self._opts.region, _URL_EXPIRES).add_auth(request)
+        assert request.url is not None, "signing keeps the URL"
+        return http.SocketTarget(request.url, request_id_header="x-amzn-request-id")
 
-        # Populate source_languages when language identification is active
-        source_languages: list[LanguageCode] | None = None
-        if (
-            self._opts.identify_language or self._opts.identify_multiple_languages
-        ) and resp.language_code:
-            source_languages = [LanguageCode(resp.language_code)]
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[bytes]:
+        if isinstance(item, rtc.AudioFrame):
+            return _eventstream.encode(_AUDIO_HEADERS, bytes(item.data))
+        if isinstance(item, http.EndOfInput):
+            # an empty audio event ends the stream: Transcribe sends its last results and closes
+            return _eventstream.encode(_AUDIO_HEADERS, b"")
+        return None
 
-        return stt.SpeechData(
-            language=LanguageCode(detected_lang),
-            start_time=(resp.start_time or 0.0) + self.start_time_offset,
-            end_time=(resp.end_time or 0.0) + self.start_time_offset,
-            text=(resp.alternatives[0].transcript or "") if resp.alternatives else "",
-            confidence=confidence,
-            source_languages=source_languages,
+    def decode(self, frame: bytes | str) -> _TranscriptEvent | _Exception | None:
+        if isinstance(frame, str):
+            raise http.protocol_error(self, f"an unexpected text frame: {frame}")
+        try:
+            headers, payload = _eventstream.decode(frame)
+            match headers.get(":message-type"), headers.get(":event-type"):
+                case "event", "TranscriptEvent":
+                    body = {"type": "TranscriptEvent", **_JSON.validate_json(payload)}
+                case "exception", _:
+                    # the exception's text is "Message" in its JSON payload
+                    body = {
+                        **_JSON.validate_json(payload or b"{}"),
+                        "type": "exception",
+                        "name": headers.get(":exception-type", ""),
+                    }
+                case "error", _:
+                    body = {
+                        "type": "exception",
+                        "name": headers.get(":error-code", ""),
+                        "Message": headers.get(":error-message", ""),
+                    }
+                case _:
+                    return None
+            return _EVENT.validate_python(body)
+        except (ValueError, ValidationError) as e:
+            raise http.protocol_error(self, f"{e}; frame: {frame!r}") from e
+
+    def on_message(self, message: _TranscriptEvent | _Exception) -> list[stt.Transcript] | None:
+        if message["type"] == "exception":
+            text = message.get("Message", "")
+            if message["name"] == "BadRequestException" and text.startswith(_IDLE_TIMEOUT):
+                # no audio reached Transcribe for 15 s: a new stream waits for the next audio
+                self.reconnect("Transcribe idle timeout")
+                return None
+            raise APIError(
+                f"Amazon Transcribe {message['name']}",
+                kind=_EXCEPTION_KINDS.get(message["name"], "server"),
+                detail=text or None,
+            )
+        return [
+            self._transcript(result)
+            for result in message["Transcript"]["Results"]
+            if result["Alternatives"]
+        ]
+
+    def _transcript(self, result: _Result) -> stt.Transcript:
+        alternative = result["Alternatives"][0]
+        items = alternative.get("Items", [])
+        offset = self.start_time_offset
+        detected = result.get("LanguageCode")
+        identifying = self._opts.identify_language or self._opts.identify_multiple_languages
+        return stt.Transcript(
+            alternative["Transcript"],
+            LanguageCode(detected or self._opts.language or "en-US"),
+            final=not result["IsPartial"],
+            start_time=result["StartTime"] + offset,
+            end_time=result["EndTime"] + offset,
+            confidence=items[0].get("Confidence", 0.0) if items else 0.0,
+            source_languages=[LanguageCode(detected)] if identifying and detected else None,
             words=[
                 TranscriptChunk(
-                    text=item.content or "",
-                    start_time=item.start_time + self.start_time_offset,
-                    end_time=item.end_time + self.start_time_offset,
-                    start_time_offset=self.start_time_offset,
-                    confidence=item.confidence or 0.0,
+                    text=item["Content"],
+                    start_time=item["StartTime"] + offset,
+                    end_time=item["EndTime"] + offset,
+                    start_time_offset=offset,
+                    confidence=item.get("Confidence", 0.0),
                 )
-                for item in resp.alternatives[0].items
+                for item in items
             ]
-            if resp.alternatives and resp.alternatives[0].items
-            else None,
+            or None,
         )

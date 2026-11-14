@@ -14,13 +14,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
+import itertools
 import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from typing import Annotated, Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -35,7 +35,6 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
-from .log import logger
 from .models import TTSModels
 
 RESEMBLE_WEBSOCKET_URL = "wss://websocket.cluster.resemble.ai/stream"
@@ -51,10 +50,32 @@ class _SynthesisResponse(BaseModel):
     audio_content: str | None = None
 
 
-class _WebSocketMessage(BaseModel):
-    type: str = ""
-    audio_content: str | None = None
-    request_id: int | str | None = None
+# Resemble's websocket: each text is one request, answered with its audio, then audio_end.
+# Each message declares only the fields read.
+
+
+class _Audio(TypedDict):
+    type: Literal["audio"]
+    request_id: int
+    audio_content: NotRequired[str | None]
+
+
+class _AudioEnd(TypedDict):
+    type: Literal["audio_end"]
+    request_id: int
+
+
+_Message = Annotated[_Audio | _AudioEnd, Field(discriminator="type")]
+
+
+class _Speak(TypedDict):
+    voice_uuid: str
+    data: str
+    request_id: int
+    sample_rate: int
+    precision: str
+    output_format: str
+    model: NotRequired[str]
 
 
 @dataclass
@@ -74,6 +95,7 @@ class TTS(tts.TTS):
         sample_rate: int = 44100,
         http_session: http.HttpSession | None = None,
         use_streaming: bool = True,
+        websocket_url: str = RESEMBLE_WEBSOCKET_URL,
     ) -> None:
         """
         Create a new instance of the Resemble TTS.
@@ -87,6 +109,7 @@ class TTS(tts.TTS):
             api_key (str | None, optional): The Resemble API key. If not provided, it will be read from the RESEMBLE_API_KEY environment variable.
             http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, a new session will be created.
             use_streaming (bool, optional): Whether to use streaming or not. Defaults to True.
+            websocket_url (str, optional): The streaming websocket URL.
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=use_streaming),
@@ -113,10 +136,7 @@ class TTS(tts.TTS):
 
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._pool = utils.ConnectionPool[http.WebSocket](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-        )
+        self._mux = _Mux(websocket_url, api_key)
 
     @property
     def model(self) -> str:
@@ -126,16 +146,6 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Resemble"
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        return await self._ensure_session().ws_connect(
-            RESEMBLE_WEBSOCKET_URL,
-            headers={"Authorization": f"Bearer {self._api_key}"},
-            conn_options=conn_options,
-        )
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await ws.close()
-
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:
             self._session = http.http_session()
@@ -143,7 +153,7 @@ class TTS(tts.TTS):
         return self._session
 
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        self._mux.prewarm()
 
     def update_options(
         self,
@@ -181,9 +191,7 @@ class TTS(tts.TTS):
         )
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self, opts=replace(self._opts), pool=self._pool, conn_options=conn_options
-        )
+        stream = SynthesizeStream(tts=self, opts=replace(self._opts), conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -192,7 +200,7 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
-        await self._pool.aclose()
+        await self._mux.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -271,136 +279,83 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    """Stream-based text-to-speech synthesis using Resemble AI WebSocket API.
+class _Mux(http.Multiplexer[_Message, _Speak]):
+    """Resemble sockets, one stream at a time each; every text is its own request, routed by a
+    request id unique across the sockets."""
 
+    max_contexts = 1
+
+    def __init__(self, url: str, api_key: str) -> None:
+        self._url = url
+        self._api_key = api_key
+        self._request_ids = itertools.count(1)
+        self.requests: dict[int, str] = {}
+        """Each request's segment, until its audio ended."""
+
+    def request(self, segment_id: str) -> int:
+        request_id = next(self._request_ids)
+        self.requests[request_id] = segment_id
+        return request_id
+
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        return http.SocketTarget(self._url, headers={"Authorization": f"Bearer {self._api_key}"})
+
+    def route(self, message: _Audio | _AudioEnd) -> str | None:
+        return self.requests.get(message["request_id"])
+
+
+class SynthesizeStream(tts.SocketStream[_Message, _Speak]):
+    """Stream-based text-to-speech synthesis using Resemble AI WebSocket API.
 
     This implementation connects to Resemble's WebSocket API for real-time streaming
     synthesis. Note that this requires a Business plan subscription with Resemble AI.
     """
 
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        opts: _TTSOptions,
-        pool: utils.ConnectionPool[http.WebSocket],
-        conn_options: APIConnectOptions,
-    ) -> None:
+    mime_type = "audio/mp3"
+
+    def __init__(self, *, tts: TTS, opts: _TTSOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
+        self._mux = self.multiplexer = tts._mux
         self._opts = opts
-        self._pool = pool
+        # the requests each segment still owes, and the segments whose text ended
+        self._owed: dict[str, int] = {}
+        self._ended: set[str] = set()
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            stream=True,
-            mime_type="audio/mp3",
-        )
+    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Speak | None:
+        if isinstance(item, tts.SegmentText):
+            self._owed[item.segment_id] = self._owed.get(item.segment_id, 0) + 1
+            speak: _Speak = {
+                "voice_uuid": self._opts.voice_uuid,
+                "data": item.chunk.text,
+                "request_id": self._mux.request(item.segment_id),
+                "sample_rate": self._opts.sample_rate,
+                "precision": "PCM_16",
+                "output_format": "mp3",
+            }
+            if self._opts.model is not None:
+                speak["model"] = self._opts.model
+            return speak
+        if isinstance(item, tts.SegmentEnd):
+            self._ended.add(item.segment_id)
+            if not self._owed.get(item.segment_id):
+                # every request already ended: nothing more will
+                self._socket_deliver(self._done(item.segment_id))
+        return None
 
-        async def _split_segments() -> None:
-            segment: utils.aio.Chan[str] | None = None
-            async for item in self.input:
-                if isinstance(item, tts.SpeechChunk):
-                    if segment is None:
-                        segment = utils.aio.Chan[str]()
-                        segments_ch.send_nowait(segment)
-                    segment.send_nowait(item.text)
-                elif segment is not None:
-                    segment.close()
-                    segment = None
+    def on_message(self, message: _Audio | _AudioEnd) -> list[tts.SegmentOutput]:
+        segment_id = self._mux.requests.get(message["request_id"])
+        if segment_id is None:
+            return []
+        if message["type"] == "audio":
+            audio = message.get("audio_content")
+            return [tts.SegmentAudio(segment_id, base64.b64decode(audio))] if audio else []
+        del self._mux.requests[message["request_id"]]
+        self._owed[segment_id] -= 1
+        if self._owed[segment_id] <= 0 and segment_id in self._ended:
+            return [self._done(segment_id)]
+        return []
 
-            if segment is not None:
-                segment.close()
-
-            segments_ch.close()
-
-        async def _process_segments() -> None:
-            async for segment in segments_ch:
-                await self._run_ws(segment, output_emitter)
-
-        try:
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(
-                    tasks.spawn(_split_segments()), tasks.spawn(_process_segments())
-                )
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
-
-    async def _run_ws(self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
-
-        last_index = 0
-        input_ended = False
-
-        read_deadline = self._core_attempts
-
-        async def _send_task(ws: http.WebSocket) -> None:
-            nonlocal input_ended, last_index
-            async for text in segment:
-                last_index += 1
-                payload: dict[str, object] = {
-                    "voice_uuid": self._opts.voice_uuid,
-                    "data": text,
-                    "request_id": last_index,
-                    "sample_rate": self._opts.sample_rate,
-                    "precision": "PCM_16",
-                    "output_format": "mp3",
-                }
-                if self._opts.model is not None:
-                    payload["model"] = self._opts.model
-                self.mark_started()
-                await ws.send_str(json.dumps(payload))
-                read_deadline.expect_response()
-
-            input_ended = True
-
-        async def _recv_task(ws: http.WebSocket) -> None:
-            while True:
-                msg = await ws.receive()
-                if msg.type == http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error("Resemble connection closed unexpectedly")
-
-                if msg.type != http.WebSocketMessageType.TEXT:
-                    logger.warning("Unexpected Resemble message type %s", msg.type)
-                    continue
-
-                try:
-                    data = _WebSocketMessage.model_validate_json(msg.data)
-                except ValidationError as e:
-                    raise APIError(
-                        "Resemble sent a malformed message", kind="protocol", detail=str(msg.data)
-                    ) from e
-                if data.type == "audio":
-                    if data.audio_content:
-                        b64data = base64.b64decode(data.audio_content)
-                        read_deadline.progress()
-                        output_emitter.push(b64data)
-
-                elif data.type == "audio_end":
-                    index = data.request_id
-                    if index is None:
-                        raise APIConnectionError("Resemble completion omitted request identity")
-                    if index == last_index:
-                        read_deadline.complete_response()
-                    if index == last_index and input_ended:
-                        output_emitter.end_segment()
-                        break
-                else:
-                    logger.error(
-                        "Unexpected Resemble message",
-                        extra={"lk.pii.data": data.model_dump(mode="json")},
-                    )
-
-        async with (
-            self._pool.connection(conn_options=self._conn_options) as ws,
-            utils.aio.TaskSet() as tasks,
-        ):
-            await asyncio.gather(tasks.spawn(_send_task(ws)), tasks.spawn(_recv_task(ws)))
+    def _done(self, segment_id: str) -> tts.SegmentDone:
+        self._owed.pop(segment_id, None)
+        self._ended.discard(segment_id)
+        return tts.SegmentDone(segment_id)

@@ -16,18 +16,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import json
 import os
 import weakref
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
     LanguageCode,
@@ -35,13 +33,12 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.stt import SpeechEvent
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
 from ._qwen3_stt import Qwen3Backend
-from ._stt_response import decode_transcript
+from ._stt_response import TranscriptResponse
 from .log import logger
 from .models import STTModels
 
@@ -313,7 +310,6 @@ class STT(stt.STT):
             opts=config,
             api_key=self._api_key,
             model_endpoint=self._model_endpoint,
-            http_session=self.session,
         )
         self._streams.add(stream)
         return stream
@@ -373,11 +369,14 @@ class STT(stt.STT):
             )
 
 
-class SpeechStream(stt.RecognizeStream):
+class _Terminate(TypedDict):
+    terminate_session: bool
+
+
+class SpeechStream(stt.SocketStream[TranscriptResponse, _Terminate]):
     """A streaming speech-to-text session connected to Baseten via WebSocket."""
 
-    # Used to close websocket
-    _CLOSE_MSG: str = json.dumps({"terminate_session": True})
+    goodbye = _Terminate(terminate_session=True)
 
     def __init__(
         self,
@@ -387,18 +386,15 @@ class SpeechStream(stt.RecognizeStream):
         conn_options: APIConnectOptions,
         api_key: str,
         model_endpoint: str,
-        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         self._opts = opts
         self._api_key = api_key
         self._model_endpoint = model_endpoint
-        self._session = http_session
-
-        # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
-        self._final_events: list[SpeechEvent] = []
-        self._reconnect_event = asyncio.Event()
+        self._chunks = utils.media.AudioByteStream(
+            sample_rate=opts.sample_rate, num_channels=1, samples_per_channel=512
+        )
 
     def update_options(
         self,
@@ -423,169 +419,16 @@ class SpeechStream(stt.RecognizeStream):
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
-        self._reconnect_event.set()
+        # the metadata is sent at each connection
+        self.reconnect("options changed")
 
-    async def _run(self) -> None:
-        """
-        Run a single websocket connection to Baseten and make sure to reconnect
-        when something went wrong.
-        """
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        return http.SocketTarget(
+            self._model_endpoint, headers={"Authorization": f"Api-Key {self._api_key}"}
+        )
 
-        closing_ws = False
-
-        async def send_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            samples_per_buffer = 512
-
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_per_buffer,
-            )
-
-            try:
-                async for data in self.input:
-                    if isinstance(data, self.Flush):
-                        frames = audio_bstream.flush()
-                    else:
-                        frames = audio_bstream.push(data.data.tobytes())
-
-                    for frame in frames:
-                        await ws.send_bytes(frame.data.tobytes())
-                closing_ws = True
-                await ws.send_str(self._CLOSE_MSG)
-            except APIConnectionError:
-                if self._session.closed:
-                    return
-                raise
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            while True:
-                try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
-                except TimeoutError:
-                    if closing_ws:
-                        break
-                    continue
-
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    if closing_ws:
-                        return
-                    raise ws.close_error("Baseten connection closed unexpectedly")
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.error("Unexpected Baseten message type: %s", msg.type)
-                    continue
-
-                data = decode_transcript(msg.text)
-
-                msg_type = data.type
-                if msg_type == "error":
-                    raise APIError(
-                        "Baseten STT error",
-                        kind="invalid_request",
-                        body=msg.text,
-                        detail=data.message,
-                    )
-                # Skip other non-transcription messages (e.g. status)
-                if msg_type and msg_type not in ("transcription",):
-                    logger.debug("Ignoring message type: %s", msg_type)
-                    continue
-
-                is_final = data.is_final is not False
-                segments = data.segments or []
-
-                # Build transcript text: prefer top-level "transcript" if present,
-                # otherwise concatenate segment texts (Baseten standard format).
-                text = data.transcript or " ".join(seg.text for seg in segments).strip()
-
-                confidence = data.confidence
-
-                # Build timed words – prefer word-level timestamps when available,
-                # fall back to segment-level timing.
-                timed_words: list[TranscriptChunk] = []
-                for segment in segments:
-                    word_timestamps = segment.word_timestamps or []
-                    if word_timestamps:
-                        for w in word_timestamps:
-                            timed_words.append(
-                                TranscriptChunk(
-                                    text=w.word,
-                                    start_time=(w.start_time + self.start_time_offset),
-                                    end_time=(w.end_time + self.start_time_offset),
-                                    start_time_offset=self.start_time_offset,
-                                )
-                            )
-                    else:
-                        timed_words.append(
-                            TranscriptChunk(
-                                text=segment.text,
-                                start_time=(segment.start_time + self.start_time_offset),
-                                end_time=(segment.end_time + self.start_time_offset),
-                                start_time_offset=self.start_time_offset,
-                            )
-                        )
-
-                start_time = (segments[0].start_time if segments else 0.0) + self.start_time_offset
-                end_time = (segments[-1].end_time if segments else 0.0) + self.start_time_offset
-
-                if not is_final:
-                    if text:
-                        event = stt.SpeechEvent(
-                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[
-                                stt.SpeechData(
-                                    language=LanguageCode(""),
-                                    text=text,
-                                    confidence=confidence,
-                                    start_time=start_time,
-                                    end_time=end_time,
-                                    words=timed_words,
-                                )
-                            ],
-                        )
-                        self.send(event)
-
-                elif is_final:
-                    language = LanguageCode(data.language_code or self._opts.language)
-
-                    if text:
-                        event = stt.SpeechEvent(
-                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[
-                                stt.SpeechData(
-                                    language=language,
-                                    text=text,
-                                    confidence=confidence,
-                                    start_time=start_time,
-                                    end_time=end_time,
-                                    words=timed_words,
-                                )
-                            ],
-                        )
-                        self._final_events.append(event)
-                        self.send(event)
-
-        ws: http.WebSocket | None = None
-
-        while True:
-            closing_ws = False
-            try:
-                ws = await self._connect_ws()
-                async with utils.aio.TaskSet() as tasks:
-                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-                    reconnect = tasks.spawn(self._reconnect_event.wait())
-                    if await tasks.first_completed(io, reconnect) is not reconnect:
-                        break
-
-                    self._reconnect_event.clear()
-            finally:
-                if ws is not None:
-                    await ws.close()
-
-    async def _connect_ws(self) -> http.WebSocket:
-        """Open a WebSocket and send the ``StreamingWhisperInput`` metadata message.
+    def setup(self) -> http.Encoded[_Terminate]:
+        """The ``StreamingWhisperInput`` metadata message.
 
         The metadata schema must match the Baseten server's ``StreamingWhisperInput``
         Pydantic model exactly (which uses ``extra="forbid"``).  Field names are:
@@ -594,15 +437,6 @@ class SpeechStream(stt.RecognizeStream):
         - ``streaming_params`` – encoding, sample rate, partial transcript settings
         - ``streaming_vad_config`` – server-side Silero VAD configuration
         """
-        headers = {
-            "Authorization": f"Api-Key {self._api_key}",
-        }
-
-        ws = await self._session.ws_connect(
-            self._model_endpoint, headers=headers, conn_options=self._conn_options
-        )
-
-        # Build metadata matching Baseten's StreamingWhisperInput schema.
         # See: https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api
         metadata: dict[str, dict[str, Any]] = {
             "whisper_params": {
@@ -630,5 +464,73 @@ class SpeechStream(stt.RecognizeStream):
                 str(lang) for lang in self._opts.language_options
             ]
 
-        await ws.send_str(json.dumps(metadata))
-        return ws
+        return json.dumps(metadata)
+
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_Terminate]:
+        frames = (
+            self._chunks.push(item.data)
+            if isinstance(item, rtc.AudioFrame)
+            else self._chunks.flush()
+        )
+        return [bytes(frame.data) for frame in frames]
+
+    def on_message(self, message: TranscriptResponse) -> stt.Transcript | None:
+        msg_type = message.get("type", "transcription")
+        if msg_type == "error":
+            raise APIError(
+                "Baseten STT error",
+                kind="invalid_request",
+                body=dict(message),
+                detail=message.get("message", "unknown STT error"),
+            )
+        # Skip other non-transcription messages (e.g. status)
+        if msg_type != "transcription":
+            logger.debug("Ignoring message type: %s", msg_type)
+            return None
+
+        is_final = message.get("is_final") is not False
+        segments = message.get("segments") or []
+        # prefer top-level "transcript" if present, else the segments' text (Baseten standard)
+        text = (
+            message.get("transcript") or " ".join(seg.get("text", "") for seg in segments).strip()
+        )
+        if not text:
+            return None
+
+        offset = self.start_time_offset
+        # word-level timestamps when available, else segment-level timing
+        timed_words: list[TranscriptChunk] = []
+        for segment in segments:
+            if word_timestamps := segment.get("word_timestamps") or []:
+                timed_words.extend(
+                    TranscriptChunk(
+                        text=w.get("word", ""),
+                        start_time=w.get("start_time", 0.0) + offset,
+                        end_time=w.get("end_time", 0.0) + offset,
+                        start_time_offset=offset,
+                    )
+                    for w in word_timestamps
+                )
+            else:
+                timed_words.append(
+                    TranscriptChunk(
+                        text=segment.get("text", ""),
+                        start_time=segment.get("start_time", 0.0) + offset,
+                        end_time=segment.get("end_time", 0.0) + offset,
+                        start_time_offset=offset,
+                    )
+                )
+
+        return stt.Transcript(
+            text,
+            LanguageCode(message.get("language_code") or self._opts.language)
+            if is_final
+            else LanguageCode(""),
+            final=is_final,
+            confidence=message.get("confidence", 0.0),
+            start_time=(segments[0].get("start_time", 0.0) if segments else 0.0) + offset,
+            end_time=(segments[-1].get("end_time", 0.0) if segments else 0.0) + offset,
+            words=timed_words,
+        )

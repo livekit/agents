@@ -87,10 +87,10 @@ impl Resolver<'_> {
             let filled = m
                 .params
                 .iter()
-                .any(|p| matches!(p.ty, Ty::ClassLabel | Ty::Proxy { weak: true, .. }));
+                .any(|p| matches!(p.ty, Ty::ClassLabel | Ty::Proxy { self_events: true, .. }));
             if filled && !(init && m.kind == MethodKind::New) {
                 return Err(format!(
-                    "{at}::{}: a label or a weak proxy is filled from the object an `init` constructor builds",
+                    "{at}::{}: a label or a `self_events` proxy is filled from the object an `init` constructor builds",
                     m.rust_name
                 ));
             }

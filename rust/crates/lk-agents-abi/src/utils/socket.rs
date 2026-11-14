@@ -81,7 +81,7 @@ pub struct SocketSend {
 
 /// A plugin's socket protocol (`http.SocketProtocol`), as the executor drives one connection
 /// after another. Its hooks run on the host loop.
-#[crate::host(proxy(host = "livekit.agents.http.SocketProtocol"))]
+#[crate::host(proxy(host = "livekit.agents.http.SocketProtocol", owns))]
 pub trait SocketHost: Send + Sync {
     /// The next connection, built from the current options.
     #[host(await, name = "_core_connect")]
@@ -125,7 +125,7 @@ pub trait SocketHost: Send + Sync {
 }
 
 /// A plugin's `http.Multiplexer`: one provider socket carrying many streams, each a context.
-#[crate::host(proxy(host = "livekit.agents.http.Multiplexer"))]
+#[crate::host(proxy(host = "livekit.agents.http.Multiplexer", owns))]
 pub trait MuxHost: Send + Sync {
     #[host(await, name = "_core_connect")]
     fn connect(

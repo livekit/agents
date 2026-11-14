@@ -770,7 +770,7 @@ inventory::submit! {
 /// [`::lk_agents_abi::utils::socket::SocketHost`] over a host `livekit.agents.http.SocketProtocol`.
 #[derive(Clone)]
 pub struct SocketHostProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -788,10 +788,10 @@ impl SocketHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -801,7 +801,7 @@ impl SocketHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -815,22 +815,23 @@ impl SocketHostProxy {
                 "a native `SocketHost` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        Ok(SocketHostProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
-            context,
-            notifier: ::std::default::Default::default(),
-        })
+        Ok(SocketHostProxy { host, context, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -846,7 +847,7 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let conn_options_arg = conn_options;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -861,7 +862,7 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
                         conn_options_arg,
                     )?];
                 Ok((
-                    host.bind(py).getattr("_core_connect")?,
+                    host.bind(py)?.getattr("_core_connect")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -897,7 +898,7 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "SocketHost._core_next",
@@ -907,7 +908,7 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_next")?,
+                    host.bind(py)?.getattr("_core_next")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -941,7 +942,7 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
         '_,
         ::std::result::Result<bool, ::lk_agents_abi::errors::ProviderError>,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let frame_arg = frame;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -953,7 +954,7 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::socket::ws_frame_to_py(py, frame_arg)?];
                 Ok((
-                    host.bind(py).getattr("_core_on_message")?,
+                    host.bind(py)?.getattr("_core_on_message")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -976,7 +977,10 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
     }
 
     fn retrying(&self, error: ::lk_agents_abi::errors::ProviderError) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let error_arg = error;
         let error_arg = match ::pyo3::Python::attach(
             |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
@@ -998,7 +1002,7 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [error_arg.into_bound(py)];
                 Ok((
-                    host.bind(py).getattr("_core_retrying")?,
+                    host.bind(py)?.getattr("_core_retrying")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1007,7 +1011,10 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
     }
 
     fn sent(&self, command: u64) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let command_arg = command;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -1019,7 +1026,7 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(command_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_sent")?,
+                    host.bind(py)?.getattr("_core_sent")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1028,7 +1035,10 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
     }
 
     fn returned(&self, command: u64) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let command_arg = command;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -1040,7 +1050,7 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(command_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_returned")?,
+                    host.bind(py)?.getattr("_core_returned")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1049,13 +1059,13 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
     }
 
     fn settled(&self) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_settled")?,
+                    host.bind(py)?.getattr("_core_settled")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1084,7 +1094,7 @@ impl ::lk_agents_abi::utils::socket::SocketHost for SocketHostProxy {
 /// [`::lk_agents_abi::utils::socket::MuxHost`] over a host `livekit.agents.http.Multiplexer`.
 #[derive(Clone)]
 pub struct MuxHostProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -1100,10 +1110,10 @@ impl MuxHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -1113,7 +1123,7 @@ impl MuxHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -1126,18 +1136,23 @@ impl MuxHostProxy {
                 "a native `MuxHost` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        Ok(MuxHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
+        Ok(MuxHostProxy { host, context })
     }
 }
 
@@ -1153,7 +1168,7 @@ impl ::lk_agents_abi::utils::socket::MuxHost for MuxHostProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let conn_options_arg = conn_options;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -1168,7 +1183,7 @@ impl ::lk_agents_abi::utils::socket::MuxHost for MuxHostProxy {
                         conn_options_arg,
                     )?];
                 Ok((
-                    host.bind(py).getattr("_core_connect")?,
+                    host.bind(py)?.getattr("_core_connect")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1205,7 +1220,7 @@ impl ::lk_agents_abi::utils::socket::MuxHost for MuxHostProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let frame_arg = frame;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -1217,7 +1232,7 @@ impl ::lk_agents_abi::utils::socket::MuxHost for MuxHostProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::socket::ws_frame_to_py(py, frame_arg)?];
                 Ok((
-                    host.bind(py).getattr("_core_route")?,
+                    host.bind(py)?.getattr("_core_route")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1250,7 +1265,7 @@ impl ::lk_agents_abi::utils::socket::MuxHost for MuxHostProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let context_id_arg = context_id;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -1262,7 +1277,7 @@ impl ::lk_agents_abi::utils::socket::MuxHost for MuxHostProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(context_id_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_open_context")?,
+                    host.bind(py)?.getattr("_core_open_context")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1299,7 +1314,7 @@ impl ::lk_agents_abi::utils::socket::MuxHost for MuxHostProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let context_id_arg = context_id;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -1311,7 +1326,7 @@ impl ::lk_agents_abi::utils::socket::MuxHost for MuxHostProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(context_id_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_close_context")?,
+                    host.bind(py)?.getattr("_core_close_context")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1343,9 +1358,9 @@ impl ::lk_agents_abi::utils::socket::MuxHost for MuxHostProxy {
 /// [`::lk_agents_abi::utils::video::RtcVideoFrame`] over a host `livekit.rtc.VideoFrame`.
 #[derive(Clone)]
 pub struct RtcVideoFrameProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host object it was taken from, handed back as itself.
-    source: ::std::sync::Arc<Py<PyAny>>,
+    source: crate::py_objects::HostObject,
 }
 
 impl RtcVideoFrameProxy {
@@ -1358,10 +1373,10 @@ impl RtcVideoFrameProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -1371,7 +1386,7 @@ impl RtcVideoFrameProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -1385,16 +1400,24 @@ impl RtcVideoFrameProxy {
                 "a native `RtcVideoFrame` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
-        let source = ::std::sync::Arc::new(obj.clone().unbind());
+        let source = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(RtcVideoFrameProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), source })
+        Ok(RtcVideoFrameProxy { host, source })
     }
 }
 
@@ -1406,7 +1429,7 @@ impl RtcVideoFrameProxy {
     ) -> PyResult<Bound<'py, PyAny>> {
         let any: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = value;
         match any.downcast::<Self>() {
-            Ok(proxy) => Ok(proxy.source.bind(py).clone()),
+            Ok(proxy) => proxy.source.bind(py),
             Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(
                 "a native `RtcVideoFrame` has no host object to hand back",
             )),
@@ -1421,11 +1444,11 @@ impl ::lk_agents_abi::utils::video::RtcVideoFrame for RtcVideoFrameProxy {
         ::lk_agents_abi::utils::video::VideoFrame,
         ::lk_agents_abi::errors::HostError,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [host.bind(py).clone()];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [host.bind(py)?];
                 Ok((
                     py.import("livekit.agents._bindings")?.getattr("rgba_frame")?,
                     ::pyo3::types::PyTuple::new(py, args)?,

@@ -309,7 +309,7 @@ impl InferenceVadStream {
 /// [`::lk_agents_abi::vad::inference::VadModels`] over a host `collections.abc.Callable`.
 #[derive(Clone)]
 pub struct VadModelsProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl VadModelsProxy {
@@ -322,10 +322,10 @@ impl VadModelsProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -335,7 +335,7 @@ impl VadModelsProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -349,15 +349,20 @@ impl VadModelsProxy {
                 "a native `VadModels` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(VadModelsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(VadModelsProxy { host })
     }
 }
 
@@ -368,13 +373,13 @@ impl ::lk_agents_abi::vad::inference::VadModels for VadModelsProxy {
         ::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModel>,
         ::lk_agents_abi::errors::HostError,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("__call__")?,
+                    host.bind(py)?.getattr("__call__")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -399,7 +404,7 @@ impl ::lk_agents_abi::vad::inference::VadModels for VadModelsProxy {
 /// [`::lk_agents_abi::vad::inference::VadModel`] over a host `livekit.local_inference.VAD`.
 #[derive(Clone)]
 pub struct VadModelProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl VadModelProxy {
@@ -412,10 +417,10 @@ impl VadModelProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -425,7 +430,7 @@ impl VadModelProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -439,15 +444,20 @@ impl VadModelProxy {
                 "a native `VadModel` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(VadModelProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(VadModelProxy { host })
     }
 }
 
@@ -456,7 +466,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
         &self,
         window: ::std::vec::Vec<i16>,
     ) -> ::std::result::Result<f64, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let window_arg = window;
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
@@ -464,7 +474,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(window_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("predict")?,
+                    host.bind(py)?.getattr("predict")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -484,12 +494,12 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
     }
 
     fn reset(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("reset")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((host.bind(py)?.getattr("reset")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -519,7 +529,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
 /// [`::lk_agents_abi::Vad`] over a host `livekit.agents.vad.VAD`.
 #[derive(Clone)]
 pub struct VadProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -537,10 +547,10 @@ impl VadProxy {
         if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Vad>(obj)? {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -548,7 +558,7 @@ impl VadProxy {
         if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Vad>(obj)? {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -558,13 +568,18 @@ impl VadProxy {
                 "a native `Vad` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
@@ -578,7 +593,7 @@ impl VadProxy {
             crate::generated::records::vad::vad_capabilities_from_py(v.as_any())?
         };
         Ok(VadProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            host,
             context,
             notifier: ::std::default::Default::default(),
             label,
@@ -600,7 +615,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
         &self,
     ) -> ::std::result::Result<::lk_agents_abi::ProviderId, ::lk_agents_abi::errors::HostError>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(
             &crate::py_calls::calling_context(&self.context),
         )
@@ -610,7 +625,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_id")?,
+                    host.bind(py)?.getattr("_core_id")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -643,7 +658,10 @@ impl ::lk_agents_abi::Vad for VadProxy {
     }
 
     fn prewarm(&self, _cx: &::lk_agents_abi::telemetry::Cx) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Vad._core_prewarm",
@@ -653,7 +671,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_prewarm")?,
+                    host.bind(py)?.getattr("_core_prewarm")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -674,7 +692,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_streams::StreamCall,
             "Vad._core_stream",
@@ -684,7 +702,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_stream")?,
+                    host.bind(py)?.getattr("_core_stream")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

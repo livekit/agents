@@ -32,7 +32,6 @@ Wire contract of the Pulse streaming API, as this plugin relies on it:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 import os
@@ -40,9 +39,10 @@ import re
 import weakref
 from collections import Counter
 from dataclasses import dataclass, replace
+from typing import Literal, TypedDict
 from urllib.parse import urlencode
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter
 
 from livekit import rtc
 from livekit.agents import (
@@ -60,11 +60,8 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import STTEncoding, STTModels
 from .version import __version__
-
-_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 NUM_CHANNELS = 1
 # Base URL for the Smallest AI API.
@@ -82,38 +79,39 @@ _STREAMING_MODELS: frozenset[str] = frozenset({"pulse"})
 _WORD_RE = re.compile(r"\w")
 
 
-class _Word(BaseModel):
-    word: str = ""
-    start: float = 0.0
-    end: float = 0.0
-    confidence: float | None = None
-    speaker: str | int | None = None
+class _Word(TypedDict, total=False):
+    word: str
+    start: float
+    end: float
+    confidence: float
+    speaker: str | int
 
 
-class _Utterance(BaseModel):
-    model_config = ConfigDict(extra="allow")
+class _Message(TypedDict, total=False):
+    """Every Pulse message: transcripts carry no ``type``, and a server reached directly reports
+    errors as ``{"error": ...}``."""
 
-    start: float = 0.0
-    end: float = 0.0
+    type: str
+    error: JsonValue
+    status: str
+    session_id: str
+    transcript: str
+    transcription: str
+    is_final: bool
+    is_last: bool
+    from_finalize: bool
+    speech_final: bool
+    words: list[_Word]
+    utterances: list[dict[str, JsonValue]]
+    language: str
+    redacted_entities: list[str]
 
 
-class _Transcript(BaseModel):
-    model_config = ConfigDict(extra="allow")
+class _Command(TypedDict):
+    type: Literal["finalize", "close_stream", "keepalive"]
 
-    error: JsonValue = None
-    status: str | None = None
-    session_id: str = ""
-    type: str = ""
-    transcript: str = ""
-    transcription: str = ""
-    is_final: bool = False
-    is_last: bool = False
-    from_finalize: bool = False
-    speech_final: bool = False
-    words: list[_Word] | None = None
-    utterances: list[_Utterance] | None = None
-    language: str | None = None
-    redacted_entities: list[str] | None = None
+
+_MESSAGE = TypeAdapter(_Message)
 
 
 @dataclass
@@ -338,7 +336,7 @@ class STT(stt.STT):
                 conn_options=conn_options,
             ) as resp:
                 await resp.raise_for_status()
-                data = _Transcript.model_validate(await resp.json())
+                data = _MESSAGE.validate_python(await resp.json())
                 return _batch_transcription_to_speech_event(config.language, data)
 
         except TimeoutError as e:
@@ -363,7 +361,6 @@ class STT(stt.STT):
             stt=self,
             conn_options=conn_options,
             opts=config,
-            http_session=self._ensure_session(),
         )
         self._streams.add(stream)
         return stream
@@ -484,25 +481,21 @@ def _apply_updates(
     )
 
 
-class SpeechStream(stt.RecognizeStream):
-    _FINALIZE_MSG: str = json.dumps({"type": "finalize"})
-    _CLOSE_STREAM_MSG: str = json.dumps({"type": "close_stream"})
-    _KEEPALIVE_MSG: str = json.dumps({"type": "keepalive"})
+class SpeechStream(stt.SocketStream[_Message, _Command]):
+    goodbye = _Command(type="close_stream")
+    # 50 ms packets, the cadence the Pulse docs recommend
+    frame_ms = 50
+    # speech_started and speech_ended come from the server's acoustic VAD; without them each
+    # final ends the turn
+    provider_vad = True
 
-    def __init__(
-        self,
-        *,
-        stt: STT,
-        opts: _STTOptions,
-        conn_options: APIConnectOptions,
-        http_session: http.HttpSession,
-    ) -> None:
+    def __init__(self, *, stt: STT, opts: _STTOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
-        self._session = http_session
-        self._speaking = False
         self._session_id = ""
-        self._reconnect_event = asyncio.Event()
+        if opts.keepalive_interval:
+            # resets the public API's inactivity timer while no audio flows
+            self.keepalive = http.Keepalive(opts.keepalive_interval, _Command(type="keepalive"))
 
     def update_options(
         self,
@@ -541,143 +534,7 @@ class SpeechStream(stt.RecognizeStream):
             vad_events=vad_events,
             finalize_on_flush=finalize_on_flush,
         )
-        self._reconnect_event.set()
-
-    async def _run(self) -> None:
-        closing_ws = False
-
-        async def keepalive_task(ws: http.WebSocket) -> None:
-            # Resets the public API's inactivity timer while no audio flows; the server
-            # answers with a pong that recv_task ignores.
-            interval = self._opts.keepalive_interval
-            try:
-                while interval and interval > 0 and not closing_ws:
-                    await asyncio.sleep(interval)
-                    await ws.send_str(SpeechStream._KEEPALIVE_MSG)
-            except APIConnectionError:
-                # With no audio flowing this write is where a dropped socket shows first.
-                if not (closing_ws or self._session.closed):
-                    raise
-            # never ends on its own: that would end the session before recv_task reads is_last
-            await asyncio.Event().wait()
-
-        async def send_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-
-            # 50 ms packets, the cadence the Pulse docs recommend.
-            samples_per_chunk = self._opts.sample_rate // 20
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=NUM_CHANNELS,
-                samples_per_channel=samples_per_chunk,
-            )
-
-            try:
-                async for data in self.input:
-                    frames: list[rtc.AudioFrame] = []
-                    flushed = False
-                    if isinstance(data, rtc.AudioFrame):
-                        frames.extend(audio_bstream.push(data.data.tobytes()))
-                    else:
-                        frames.extend(audio_bstream.flush())
-                        flushed = True
-
-                    for frame in frames:
-                        await ws.send_bytes(frame.data.tobytes())
-
-                    if flushed:
-                        # The framework marked a segment end: the buffered tail is on the
-                        # wire, now ask for it back as a final instead of leaving it to
-                        # the server's endpointing.
-                        if self._opts.finalize_on_flush:
-                            await ws.send_str(SpeechStream._FINALIZE_MSG)
-
-                # Input closed: the server flushes, answers with is_last and closes.
-                closing_ws = True
-                await ws.send_str(SpeechStream._CLOSE_STREAM_MSG)
-            except APIConnectionError as e:
-                # A dropped socket surfaces on the write side first. Expected closes just
-                # return; anything else reconnects through _run, like recv_task.
-                if closing_ws or self._session.closed:
-                    return
-                raise APIConnectionError("Smallest AI STT connection closed unexpectedly") from e
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            while True:
-                try:
-                    msg = await ws.receive()
-                except APIConnectionError:
-                    # An unanswered heartbeat ping fails the socket from our side.
-                    if closing_ws or self._session.closed:
-                        return
-                    raise
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    if closing_ws or self._session.closed:
-                        return
-                    raise ws.close_error("Smallest AI STT connection closed unexpectedly")
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected Smallest AI STT message type: %s", msg.type)
-                    continue
-
-                try:
-                    data = _Transcript.model_validate_json(msg.data)
-                except ValidationError:
-                    logger.warning(
-                        "failed to parse Smallest AI STT message", extra={"lk.pii.data": msg.data}
-                    )
-                    continue
-
-                # Errors: {"type": "error", "status", "message"} from the public API,
-                # {"error": "..."} from a server reached directly.
-                if data.type == "error" or (
-                    "error" in data.model_fields_set
-                    and "transcript" not in data.model_fields_set
-                    and "transcription" not in data.model_fields_set
-                ):
-                    payload = data.model_dump(mode="json", exclude_unset=True)
-                    message = f"Smallest AI STT error ({data.status or 'error'})"
-                    if data.status is not None and data.status.isdigit():
-                        raise APIStatusError(
-                            message,
-                            status_code=int(data.status),
-                            request_id=self._session_id or None,
-                            body=payload,
-                            detail=json.dumps(payload),
-                        )
-                    raise APIError(
-                        message, kind="invalid_request", body=payload, detail=json.dumps(payload)
-                    )
-                if data.type == "pong":
-                    continue
-
-                self._process_stream_event(data)
-
-                # The session is fully flushed; nothing else will arrive.
-                if data.is_last:
-                    return
-
-        ws: http.WebSocket | None = None
-        while True:
-            try:
-                ws = await self._connect_ws()
-                async with utils.aio.TaskSet() as tasks:
-                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-                    # Not in the gather: recv_task ends on is_last before the socket closes, and
-                    # the session must not wait on a keepalive loop. Its failure still ends it.
-                    keepalive = tasks.spawn(keepalive_task(ws))
-                    reconnect = tasks.spawn(self._reconnect_event.wait())
-                    if await tasks.first_completed(io, reconnect, keepalive) is not reconnect:
-                        break
-                    self._reconnect_event.clear()
-
-            finally:
-                if ws is not None:
-                    await ws.close()
-                # A socket that ends mid-utterance (reconnect, drop) takes the server's
-                # speech_ended with it: close the turn here so START/END stay paired.
-                self._end_speech()
+        self.reconnect("options changed")
 
     def _stream_params(self) -> dict[str, JsonValue]:
         """Query parameters for the streaming connection; unset knobs are left to the server."""
@@ -711,195 +568,171 @@ class SpeechStream(stt.RecognizeStream):
             params["keywords"] = ",".join(f"{kw}:{boost:g}" for kw, boost in o.keywords)
         return params
 
-    def _ws_url(self) -> str:
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
         base = self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
-        return f"{base.rstrip('/')}{self._opts.stream_path}?{urlencode(self._stream_params())}"
-
-    async def _connect_ws(self) -> http.WebSocket:
-        ws = await self._session.ws_connect(
-            self._ws_url(),
+        return http.SocketTarget(
+            f"{base.rstrip('/')}{self._opts.stream_path}?{urlencode(self._stream_params())}",
             headers={
                 "Authorization": f"Bearer {self._opts.api_key}",
                 "X-Source": "livekit",
                 "X-LiveKit-Version": __version__,
             },
-            # Without a heartbeat a half-open socket is never noticed: recv_task
-            # parks on receive() and the exception-driven reconnect never runs.
-            heartbeat=30.0,
-            conn_options=self._conn_options,
         )
-        logger.debug("established Smallest AI STT WebSocket connection")
-        return ws
 
-    def _start_speech(self) -> None:
-        if not self._speaking:
-            self._speaking = True
-            self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_Command]:
+        if isinstance(item, rtc.AudioFrame):
+            return bytes(item.data)
+        if isinstance(item, stt.RecognizeStream.Flush) and self._opts.finalize_on_flush:
+            # return the buffered tail as a final now instead of at the server's endpointing
+            return _Command(type="finalize")
+        return None
 
-    def _end_speech(self) -> None:
-        if self._speaking:
-            self._speaking = False
-            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+    def on_message(self, message: _Message) -> http.Done | None:
+        # errors: {"type": "error", "status", "message"} from the public API, {"error": "..."}
+        # from a server reached directly
+        if message.get("type") == "error" or (
+            "error" in message and "transcript" not in message and "transcription" not in message
+        ):
+            status = message.get("status")
+            detail = json.dumps(message)
+            error = f"Smallest AI STT error ({status or 'error'})"
+            if status is not None and status.isdigit():
+                raise APIStatusError(
+                    error,
+                    status_code=int(status),
+                    request_id=self._session_id or None,
+                    body=message,
+                    detail=detail,
+                )
+            raise APIError(error, kind="invalid_request", body=message, detail=detail)
 
-    def _process_stream_event(self, data: _Transcript) -> None:
-        session_id = data.session_id
-        if session_id:
+        if session_id := message.get("session_id"):
             self._session_id = session_id
+        kind = message.get("type")
+        if kind == "speech_started":
+            self.report(stt.SpeechStarted())
+            return None
+        if kind == "speech_ended":
+            self.report(stt.SpeechEnded())
+            return None
 
-        msg_type = data.type
-        # Acoustic VAD messages: the speaker started or stopped, independent of decoding.
-        if msg_type == "speech_started":
-            self._start_speech()
-            return
-        if msg_type == "speech_ended":
-            self._end_speech()
-            return
-
-        # The gateway duplicates the server's `transcript` into `transcription`.
-        transcript = data.transcript or data.transcription
-        is_final = data.is_final
-        is_last = data.is_last
-        from_finalize = data.from_finalize
-
-        # Punctuation-only text ("." or "।" landing in its own chunk) is not a user turn.
-        if _WORD_RE.search(transcript):
-            # Quiet speech the server VAD missed, or vad_events off: the text opens the turn.
-            self._start_speech()
-            alts = _transcript_to_speech_data(
-                language=self._opts.language,
-                data=data,
-                transcript=transcript,
-                start_time_offset=self.start_time_offset,
-                diarize=self._opts.diarize,
-            )
-            self.send(
-                stt.SpeechEvent(
-                    type=(
-                        stt.SpeechEventType.FINAL_TRANSCRIPT
-                        if is_final
-                        else stt.SpeechEventType.INTERIM_TRANSCRIPT
-                    ),
+        # the gateway duplicates the server's `transcript` into `transcription`
+        text = message.get("transcript") or message.get("transcription", "")
+        final = message.get("is_final", False)
+        # punctuation-only text ("." or a lone danda) is not a user turn
+        if _WORD_RE.search(text):
+            self.report(
+                _transcript(
+                    self._opts.language,
+                    message,
+                    text=text,
+                    final=final,
                     request_id=self._session_id,
-                    alternatives=alts,
+                    offset=self.start_time_offset,
+                    diarize=self._opts.diarize,
                 )
             )
-
-        # A final closes the turn when it answers a finalize, ends the stream, or the
-        # server says the speaker paused. Other finals are cuts inside an utterance
-        # (word rollover, blank-token endpoint); with vad_events the turn end comes
-        # from speech_ended, without them every final has to count as one.
-        if is_final and (
-            is_last or from_finalize or data.speech_final or not self._opts.vad_events
+        # a final ends the turn when it answers a finalize, ends the stream, or the server says
+        # the speaker paused; other finals are cuts inside an utterance (word rollover,
+        # blank-token endpoint), so only without vad_events does every final end it
+        last = message.get("is_last", False)
+        if final and (
+            last
+            or message.get("from_finalize", False)
+            or message.get("speech_final", False)
+            or not self._opts.vad_events
         ):
-            self._end_speech()
+            self.report(stt.SpeechEnded())
+        # the session is fully flushed: nothing else arrives
+        return http.DONE if last else None
 
 
-def _aggregate_confidence(raw_words: list[_Word]) -> float:
+def _aggregate_confidence(words: list[_Word]) -> float:
     """Geometric mean of the per-word confidences (each already a geometric mean over its pieces)."""
-    probs = [w.confidence for w in raw_words if w.confidence is not None]
+    probs = [w["confidence"] for w in words if "confidence" in w]
     if not probs:
         return 0.0
     return min(1.0, max(0.0, math.exp(sum(math.log(max(p, 1e-10)) for p in probs) / len(probs))))
 
 
-def _transcript_to_speech_data(
-    language: str,
-    data: _Transcript,
-    *,
-    transcript: str,
-    start_time_offset: float,
-    diarize: bool,
-) -> list[stt.SpeechData]:
-    raw_words = data.words or []
+def _shifted(utterance: dict[str, JsonValue], offset: float) -> dict[str, JsonValue]:
+    start, end = utterance.get("start"), utterance.get("end")
+    return {
+        **utterance,
+        "start": (start if isinstance(start, int | float) else 0.0) + offset,
+        "end": (end if isinstance(end, int | float) else 0.0) + offset,
+    }
 
-    words: list[TranscriptChunk] | None = (
-        [
+
+def _transcript(
+    language: str,
+    message: _Message,
+    *,
+    text: str,
+    final: bool,
+    request_id: str,
+    offset: float,
+    diarize: bool,
+) -> stt.Transcript:
+    words = message.get("words", [])
+    # streaming diarization: per-word speaker ids; the utterance takes the majority
+    speakers = Counter(w["speaker"] for w in words if "speaker" in w) if diarize else Counter()
+    metadata: dict[str, JsonValue] = {}
+    if utterances := message.get("utterances"):
+        metadata["utterances"] = [_shifted(u, offset) for u in utterances]
+    if redacted := message.get("redacted_entities"):
+        metadata["redacted_entities"] = list[JsonValue](redacted)
+    return stt.Transcript(
+        text.strip(),
+        # with language="multi" the server reports the detected language on finals
+        LanguageCode(message.get("language") or language),
+        final=final,
+        request_id=request_id,
+        start_time=words[0].get("start", 0.0) + offset if words else 0.0,
+        end_time=words[-1].get("end", 0.0) + offset if words else 0.0,
+        confidence=_aggregate_confidence(words),
+        speaker_id=f"S{speakers.most_common(1)[0][0]}" if speakers else None,
+        words=[
             TranscriptChunk(
-                text=w.word,
-                start_time=w.start + start_time_offset,
-                end_time=w.end + start_time_offset,
-                start_time_offset=start_time_offset,
+                text=w.get("word", ""),
+                start_time=w.get("start", 0.0) + offset,
+                end_time=w.get("end", 0.0) + offset,
+                start_time_offset=offset,
             )
-            for w in raw_words
+            for w in words
         ]
-        if raw_words
-        else None
+        or None,
+        metadata=metadata or None,
     )
 
-    start_time = raw_words[0].start + start_time_offset if raw_words else 0.0
-    end_time = raw_words[-1].end + start_time_offset if raw_words else 0.0
 
-    # Streaming diarization: per-word speaker ids are integers; the utterance takes the majority.
-    speaker_id: str | None = None
-    if diarize and raw_words:
-        speaker_counts = Counter(w.speaker for w in raw_words if w.speaker is not None)
-        if speaker_counts:
-            speaker_id = f"S{speaker_counts.most_common(1)[0][0]}"
-
-    # With language="multi" the server reports the detected language on finals.
-    detected_language = data.language or language
-
-    metadata: dict[str, JsonValue] = {}
-    raw_utterances = data.utterances or []
-    if raw_utterances:
-        metadata["utterances"] = [
-            {
-                **_JSON_OBJECT.validate_python(u.model_dump(mode="json", exclude_unset=True)),
-                "start": u.start + start_time_offset,
-                "end": u.end + start_time_offset,
-            }
-            for u in raw_utterances
-        ]
-    redacted_entities = data.redacted_entities or []
-    if redacted_entities:
-        metadata["redacted_entities"] = list[JsonValue](redacted_entities)
-
-    return [
-        stt.SpeechData(
-            language=LanguageCode(detected_language),
-            text=transcript.strip(),
-            start_time=start_time,
-            end_time=end_time,
-            confidence=_aggregate_confidence(raw_words),
-            words=words,
-            speaker_id=speaker_id,
-            metadata=metadata or None,
-        )
-    ]
-
-
-def _batch_transcription_to_speech_event(language: str, data: _Transcript) -> stt.SpeechEvent:
+def _batch_transcription_to_speech_event(language: str, data: _Message) -> stt.SpeechEvent:
     # Batch HTTP response: {"status", "transcription", "audio_length", "words": [...],
     # "utterances": [...] (when word_timestamps=True), "language", "metadata"}.
-    transcript = data.transcription
-    raw_words = data.words or []
-    raw_utterances = data.utterances or []
-    detected_language = data.language or language
-
-    words: list[TranscriptChunk] | None = (
-        [TranscriptChunk(text=w.word, start_time=w.start, end_time=w.end) for w in raw_words]
-        if raw_words
-        else None
-    )
-
+    words = data.get("words", [])
+    utterances = data.get("utterances", [])
     return stt.SpeechEvent(
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
         request_id=utils.shortuuid(),
         alternatives=[
             stt.SpeechData(
-                language=LanguageCode(detected_language),
-                text=transcript,
-                start_time=raw_words[0].start if raw_words else 0.0,
-                end_time=raw_words[-1].end if raw_words else 0.0,
-                confidence=_aggregate_confidence(raw_words),
-                words=words,
-                metadata={
-                    "utterances": [
-                        u.model_dump(mode="json", exclude_unset=True) for u in raw_utterances
-                    ]
-                }
-                if raw_utterances
-                else None,
+                language=LanguageCode(data.get("language") or language),
+                text=data.get("transcription", ""),
+                start_time=words[0].get("start", 0.0) if words else 0.0,
+                end_time=words[-1].get("end", 0.0) if words else 0.0,
+                confidence=_aggregate_confidence(words),
+                words=[
+                    TranscriptChunk(
+                        text=w.get("word", ""),
+                        start_time=w.get("start", 0.0),
+                        end_time=w.get("end", 0.0),
+                    )
+                    for w in words
+                ]
+                or None,
+                metadata={"utterances": list[JsonValue](utterances)} if utterances else None,
             )
         ],
     )

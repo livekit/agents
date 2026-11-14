@@ -14,20 +14,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import contextlib
 import dataclasses
-import json
 import os
 import time
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Annotated, Any, Literal, NotRequired, TypedDict
 from urllib.parse import urlencode, urlparse
 
 import httpx2 as httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import Field, TypeAdapter
 
 import openai
 from livekit import rtc
@@ -81,7 +79,7 @@ from .utils import AsyncAzureADTokenProvider, error_kind, http_timeout
 
 # OpenAI Realtime API has a timeout of 15 mins, we'll attempt to restart the session
 # before that timeout is reached
-_max_session_duration = 10 * 60
+_max_session_duration = 10.0 * 60
 # emit interim transcriptions every 0.5 seconds
 _delta_transcript_interval = 0.5
 SAMPLE_RATE = 24000
@@ -134,13 +132,6 @@ def _validate_context(model: str, languages: list[str], keywords: list[str]) -> 
 def _transcript_language(languages: list[str]) -> LanguageCode:
     """The code to tag transcripts with, empty unless exactly one language is set."""
     return LanguageCode(languages[0]) if len(languages) == 1 else LanguageCode("")
-
-
-class _DetectedLanguage(BaseModel):
-    code: str | None = None
-
-
-_DETECTED_LANGUAGES = TypeAdapter(list[_DetectedLanguage])
 
 
 @dataclass
@@ -332,12 +323,6 @@ class STT(stt.STT):
         )
 
         self._streams = weakref.WeakSet[SpeechStream]()
-        self._session: http.HttpSession | None = None
-        self._pool = utils.ConnectionPool[http.WebSocket](
-            max_session_duration=_max_session_duration,
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-        )
 
     @property
     def model(self) -> str:
@@ -457,7 +442,6 @@ class STT(stt.STT):
             _validate_context(opts.model, opts.languages, opts.keywords)
         stream = SpeechStream(
             stt=self,
-            pool=self._pool,
             conn_options=conn_options,
             opts=opts,
             options_factory=lambda: dataclasses.replace(self._opts),
@@ -537,7 +521,6 @@ class STT(stt.STT):
                 )
 
         languages_changed = languages != self._opts.languages
-        model_changed = resolved_model != self._opts.model
         # a stream keeps a language of its own unless this call names or moves the language
         languages_given = is_given(language) or languages_changed
         self._opts.model = resolved_model
@@ -571,11 +554,6 @@ class STT(stt.STT):
         for stream in self._streams:
             stream.update_options(language=languages if languages_given else NOT_GIVEN)
 
-        if model_changed:
-            # every stream has dropped its own socket by now, so this reaches the idle ones the
-            # pool holds between two speech sessions
-            self._pool.invalidate()
-
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         if not self.capabilities.keyterms:
             super()._update_session_keyterms(keyterms)
@@ -586,47 +564,6 @@ class STT(stt.STT):
         self._opts.keywords = list(dict.fromkeys([*self._user_keywords, *keyterms]))
         for stream in self._streams:
             stream.update_options()
-
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        query_params: dict[str, str] = {
-            "intent": "transcription",
-        }
-        # OpenAI's native realtime endpoint treats ?model= as selecting a
-        # conversation session and rejects the transcription-mode
-        # session.update with invalid_model — the model is conveyed via
-        # audio.input.transcription.model instead. Gateways need the model
-        # on the upgrade URL to route the connection before the first frame.
-        if urlparse(str(self._client.base_url)).hostname != "api.openai.com":
-            query_params["model"] = self._opts.model
-        headers = {
-            "User-Agent": "LiveKit Agents",
-            "Authorization": f"Bearer {self._client.api_key}",
-        }
-        url = f"{str(self._client.base_url).rstrip('/')}/realtime?{urlencode(query_params)}"
-        if url.startswith("http"):
-            url = url.replace("http", "ws", 1)
-
-        session = self._ensure_session()
-        # the config is sent once the stream acquires the connection, since the pool also
-        # hands back sockets it opened earlier
-        return await session.ws_connect(url, headers=headers, conn_options=conn_options)
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await ws.close()
-
-    async def aclose(self) -> None:
-        """Close the websocket connection pool this STT owns.
-
-        Without this the pool's ``close_cb`` never runs for pooled sockets, so
-        they stay open after the STT is closed.
-        """
-        await self._pool.aclose()
-
-    def _ensure_session(self) -> http.HttpSession:
-        if not self._session:
-            self._session = http.http_session()
-
-        return self._session
 
     async def _recognize_impl(
         self,
@@ -690,34 +627,117 @@ class STT(stt.STT):
             raise APIConnectionError() from e
 
 
-class SpeechStream(stt.RecognizeStream):
+class _SpeechStarted(TypedDict):
+    type: Literal["input_audio_buffer.speech_started"]
+    item_id: NotRequired[str]
+    audio_start_ms: NotRequired[int]
+
+
+class _SpeechStopped(TypedDict):
+    type: Literal["input_audio_buffer.speech_stopped"]
+    item_id: NotRequired[str]
+    audio_end_ms: NotRequired[int]
+
+
+class _Delta(TypedDict):
+    type: Literal["conversation.item.input_audio_transcription.delta"]
+    item_id: NotRequired[str | None]
+    delta: NotRequired[str | None]
+
+
+class _DetectedLanguage(TypedDict):
+    code: NotRequired[str | None]
+
+
+class _InputTokenDetails(TypedDict):
+    audio_tokens: NotRequired[int | None]
+
+
+class _Usage(TypedDict):
+    """``{"type": "tokens", ...}`` or ``{"type": "duration", "seconds": N}``."""
+
+    type: NotRequired[str]
+    input_tokens: NotRequired[int]
+    output_tokens: NotRequired[int]
+    input_token_details: NotRequired[_InputTokenDetails | None]
+    seconds: NotRequired[float]
+
+
+class _Completed(TypedDict):
+    type: Literal["conversation.item.input_audio_transcription.completed"]
+    item_id: NotRequired[str]
+    transcript: NotRequired[str | None]
+    languages: NotRequired[list[_DetectedLanguage] | None]
+    usage: NotRequired[_Usage | None]
+
+
+class _ErrorBody(TypedDict):
+    code: NotRequired[str | None]
+    type: NotRequired[str | None]
+    message: NotRequired[str | None]
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    error: NotRequired[_ErrorBody]
+
+
+_Message = Annotated[
+    _SpeechStarted | _SpeechStopped | _Delta | _Completed | _Error,
+    Field(discriminator="type"),
+]
+
+
+class _Append(TypedDict):
+    type: Literal["input_audio_buffer.append"]
+    audio: str
+
+
+class _Commit(TypedDict):
+    type: Literal["input_audio_buffer.commit"]
+
+
+class _SessionUpdate(TypedDict):
+    type: Literal["session.update"]
+    session: dict[str, Any]
+
+
+_Command = _Append | _Commit | _SessionUpdate
+
+
+class SpeechStream(stt.SocketStream[_Message, _Command]):
+    # forward audio to OAI in chunks of 50ms
+    frame_ms = 50
+    # the Realtime API ends a session after 15 minutes: rotate before
+    max_session_duration = _max_session_duration
+    # the server's (or the local VAD's) speech_started/stopped bound the speech
+    provider_vad = True
+
     def __init__(
         self,
         *,
         stt: STT,
         conn_options: APIConnectOptions,
-        pool: utils.ConnectionPool[http.WebSocket],
         opts: _STTOptions,
         options_factory: Callable[[], _STTOptions],
         vad_instance: VAD | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
-
-        self._pool = pool
         # this stream's own options, and the STT's to refresh them from
         self._opts = opts
         self._options_factory = options_factory
         self._stt: STT = stt
         self._language = _transcript_language(opts.languages)
-        self._request_id = ""
-        self._reconnect_event = asyncio.Event()
-        self._ws: http.WebSocket | None = None
-        self._tasks = utils.aio.TaskSet()
-        self._update_task: asyncio.Task[None] | None = None
-        # serializes the config a connection is set up with against any later change to it
-        self._config_lock = asyncio.Lock()
         self._vad = vad_instance
-        self._speaking = False
+        self._vad_stream: VADStream | None = None
+        # whether the server's or the local VAD's speech is open. The transcript of a speech
+        # comes after its end, so the end waits for it: the final, or the next speech's start,
+        # ends the speech
+        self._provider_speaking = False
+        self._text = ""
+        self._item_id = ""
+        self._interim_at = 0.0
+        self._item_timing: dict[str, tuple[int, int | None]] = {}
 
     def validate_model(self, model: str, keywords: list[str]) -> None:
         """Validate a prospective model against this stream's independent language."""
@@ -737,289 +757,155 @@ class SpeechStream(stt.RecognizeStream):
         self._opts = opts
         self._language = _transcript_language(opts.languages)
         if rebuild:
-            # only this stream's own socket: invalidating the pool would close the ones the
-            # other streams are still reading from
-            if self._ws is not None:
-                self._pool.remove(self._ws)
-            self._reconnect_event.set()
-        elif not self._tasks.closed:
-            self._update_task = self._tasks.spawn(
-                self._send_update(_session_update(opts), old_task=self._update_task)
-            )
-
-    async def _send_update(
-        self, event: SessionUpdateEvent, *, old_task: asyncio.Task[None] | None
-    ) -> None:
-        if old_task is not None:
-            with contextlib.suppress(Exception):
-                await old_task
-
-        ws = self._ws
-        if ws is None:
-            return  # the next connection is configured when the stream acquires it
-
-        try:
-            async with self._config_lock:
-                await ws.send_json(event.model_dump(by_alias=True, exclude_unset=True))
-        except Exception:
-            # a dropped update is not worth failing the stream over
-            logger.warning("failed to update the transcription session", exc_info=True)
-
-    async def aclose(self) -> None:
-        await self._tasks.aclose()
-        await super().aclose()
-
-    def _start_speaking(self) -> None:
-        if self._speaking:
-            return
-        self._speaking = True
-        self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
-
-    def _stop_speaking(self) -> None:
-        if not self._speaking:
-            return
-        self._speaking = False
-        self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            self.reconnect("options changed")
+        else:
+            self.send_command(self.setup())
 
     async def _run(self) -> None:
-        closing_ws = False
+        if self._vad is None:
+            await super()._run()
+            return
+        vad_stream = self._vad_stream = self._vad.stream()
+        try:
+            async with utils.aio.TaskSet() as tasks:
+                await tasks.first_completed(super()._run(), self._listen(vad_stream))
+        finally:
+            self._vad_stream = None
+            await vad_stream.aclose()
 
-        async def send_task(ws: http.WebSocket, vad_stream: VADStream | None) -> None:
-            nonlocal closing_ws
+    async def _listen(self, vad_stream: VADStream) -> None:
+        async for ev in vad_stream:
+            if ev.type == VADEventType.START_OF_SPEECH:
+                self._provider_speech(started=True)
+            elif ev.type == VADEventType.END_OF_SPEECH:
+                self._provider_speech(started=False)
+                # a server-endpointed model closes the segment itself; this would cut it twice
+                if _is_realtime_only(self._opts.model):
+                    self.send_command(_Commit(type="input_audio_buffer.commit"))
 
-            # forward audio to OAI in chunks of 50ms
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=SAMPLE_RATE,
-                num_channels=NUM_CHANNELS,
-                samples_per_channel=SAMPLE_RATE // 20,
+    def _provider_speech(self, *, started: bool) -> None:
+        self._provider_speaking = started
+        if started:
+            self.report(stt.SpeechEnded())
+            self.report(stt.SpeechStarted())
+
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        self._text = ""
+        self._item_id = ""
+        self._interim_at = 0.0
+        self._item_timing.clear()
+        query_params: dict[str, str] = {"intent": "transcription"}
+        client = self._stt._client
+        # OpenAI's native realtime endpoint treats ?model= as selecting a conversation session
+        # and rejects the transcription-mode session.update with invalid_model: the model is
+        # conveyed via audio.input.transcription.model instead. Gateways need the model on the
+        # upgrade URL to route the connection before the first frame.
+        if urlparse(str(client.base_url)).hostname != "api.openai.com":
+            query_params["model"] = self._opts.model
+        url = f"{str(client.base_url).rstrip('/')}/realtime?{urlencode(query_params)}"
+        if url.startswith("http"):
+            url = url.replace("http", "ws", 1)
+        return http.SocketTarget(
+            url,
+            headers={
+                "User-Agent": "LiveKit Agents",
+                "Authorization": f"Bearer {client.api_key}",
+            },
+        )
+
+    def setup(self) -> _SessionUpdate:
+        event = _session_update(self._opts)
+        return _SessionUpdate(
+            type="session.update",
+            session=event.session.model_dump(by_alias=True, exclude_unset=True),
+        )
+
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_Command]:
+        if not isinstance(item, rtc.AudioFrame):
+            return None
+        if self._vad_stream is not None:
+            self._vad_stream.push_frame(item)
+        return _Append(
+            type="input_audio_buffer.append",
+            audio=base64.b64encode(item.data.tobytes()).decode("utf-8"),
+        )
+
+    def on_message(
+        self, message: _SpeechStarted | _SpeechStopped | _Delta | _Completed | _Error
+    ) -> stt.Report | list[stt.Report] | None:
+        if message["type"] == "input_audio_buffer.speech_started":
+            item_id = self._item_id = message.get("item_id", "")
+            self._item_timing[item_id] = (message.get("audio_start_ms", 0), None)
+            if self._vad is None:
+                self._provider_speech(started=True)
+        elif message["type"] == "input_audio_buffer.speech_stopped":
+            item_id = message.get("item_id", "")
+            if (timing := self._item_timing.get(item_id)) is not None:
+                self._item_timing[item_id] = (timing[0], message.get("audio_end_ms", 0))
+            if self._vad is None:
+                self._provider_speech(started=False)
+        elif message["type"] == "conversation.item.input_audio_transcription.delta":
+            self._item_id = message.get("item_id") or self._item_id
+            if delta := message.get("delta"):
+                self._text += delta
+                # interims at most every _delta_transcript_interval
+                if time.time() - self._interim_at > _delta_transcript_interval:
+                    self._interim_at = time.time()
+                    return stt.Transcript(self._text, self._language, request_id=self._item_id)
+        elif message["type"] == "conversation.item.input_audio_transcription.completed":
+            self._text = ""
+            self._completed(message)
+        else:
+            error = message.get("error", {})
+            raise APIError(
+                "OpenAI Realtime STT error",
+                kind=error_kind(error.get("code") or error.get("type")),
+                body=error,
+                detail=error.get("message"),
             )
+        return None
 
-            try:
-                async for data in self.input:
-                    frames: list[rtc.AudioFrame] = []
-                    if isinstance(data, rtc.AudioFrame):
-                        if vad_stream is not None:
-                            vad_stream.push_frame(data)
-                        frames.extend(audio_bstream.push(data.data.tobytes()))
-                    else:
-                        frames.extend(audio_bstream.flush())
+    def _completed(self, message: _Completed) -> None:
+        item_id = message.get("item_id", "")
+        if transcript := message.get("transcript"):
+            # what the model detected beats the hint that was sent
+            detected = [
+                LanguageCode(code)
+                for lang in message.get("languages") or []
+                if (code := lang.get("code"))
+            ]
+            self.report(
+                stt.Transcript(
+                    transcript,
+                    detected[0] if detected else self._language,
+                    final=True,
+                    request_id=item_id,
+                )
+            )
+        if not self._provider_speaking:
+            self.report(stt.SpeechEnded())
 
-                    for frame in frames:
-                        encoded_frame = {
-                            "type": "input_audio_buffer.append",
-                            "audio": base64.b64encode(frame.data.tobytes()).decode("utf-8"),
-                        }
-                        await ws.send_json(encoded_frame)
-            except APIConnectionError:
-                if closing_ws:
-                    return
-                raise
-            finally:
-                if vad_stream is not None:
-                    vad_stream.end_input()
-
-            closing_ws = True
-
-        async def vad_task(ws: http.WebSocket, vad_stream: VADStream) -> None:
-            try:
-                async for ev in vad_stream:
-                    if ev.type == VADEventType.START_OF_SPEECH:
-                        self._start_speaking()
-                    elif ev.type == VADEventType.END_OF_SPEECH:
-                        self._stop_speaking()
-                        # a server-endpointed model closes the segment itself; this would cut it twice
-                        if _is_realtime_only(self._opts.model):
-                            await ws.send_json({"type": "input_audio_buffer.commit"})
-            except APIConnectionError:
-                if closing_ws:
-                    return
-                raise
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            current_text = ""
-            current_item_id = ""
-            last_interim_at: float = 0
-            connected_at = time.time()
-            item_audio_timing: dict[str, dict[str, int]] = {}
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    if closing_ws:  # close is expected, see SpeechStream.aclose
-                        return
-
-                    # this will trigger a reconnection, see the _run loop
-                    raise ws.close_error("OpenAI Realtime STT connection closed unexpectedly")
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected OpenAI message type %s", msg.type)
-                    continue
-
-                try:
-                    data = json.loads(msg.data)
-                except json.JSONDecodeError:
-                    data = None
-                if not isinstance(data, dict):
-                    raise APIError(
-                        "OpenAI sent a malformed message", kind="protocol", detail=msg.text
-                    )
-                msg_type = data.get("type")
-                if msg_type == "input_audio_buffer.speech_started":
-                    item_id = data.get("item_id", "")
-                    current_item_id = item_id
-                    audio_start_ms = data.get("audio_start_ms", 0)
-                    item_audio_timing[item_id] = {"start_ms": audio_start_ms}
-                    if self._vad is None:
-                        self._start_speaking()
-
-                elif msg_type == "input_audio_buffer.speech_stopped":
-                    item_id = data.get("item_id", "")
-                    audio_end_ms = data.get("audio_end_ms", 0)
-                    if item_id in item_audio_timing:
-                        item_audio_timing[item_id]["end_ms"] = audio_end_ms
-                    if self._vad is None:
-                        self._stop_speaking()
-
-                elif msg_type == "conversation.item.input_audio_transcription.delta":
-                    delta = data.get("delta", "")
-                    item_id = data.get("item_id", "") or current_item_id
-                    if item_id:
-                        current_item_id = item_id
-                    if delta:
-                        current_text += delta
-                        if time.time() - last_interim_at > _delta_transcript_interval:
-                            self.send(
-                                stt.SpeechEvent(
-                                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                                    request_id=current_item_id,
-                                    alternatives=[
-                                        stt.SpeechData(
-                                            text=current_text,
-                                            language=self._language,
-                                        )
-                                    ],
-                                )
-                            )
-                            last_interim_at = time.time()
-
-                elif msg_type == "conversation.item.input_audio_transcription.completed":
-                    current_text = ""
-                    transcript = data.get("transcript", "")
-                    item_id = data.get("item_id", "")
-                    # what the model detected beats the hint that was sent
-                    detected = [
-                        LanguageCode(lang.code)
-                        for lang in _DETECTED_LANGUAGES.validate_python(data.get("languages") or [])
-                        if lang.code
-                    ]
-
-                    if transcript:
-                        self.send(
-                            stt.SpeechEvent(
-                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                request_id=item_id,
-                                alternatives=[
-                                    stt.SpeechData(
-                                        text=transcript,
-                                        language=detected[0] if detected else self._language,
-                                    )
-                                ],
-                            )
-                        )
-
-                    audio_duration: float | None = None
-                    timing = item_audio_timing.pop(item_id, None)
-                    if timing is not None:
-                        start_ms = timing.get("start_ms", 0)
-                        end_ms = timing.get("end_ms", 0)
-                        if end_ms > start_ms:
-                            audio_duration = (end_ms - start_ms) / 1000.0
-
-                    # the usage is either {"type": "tokens", ...} or
-                    # {"type": "duration", "seconds": N}
-                    usage = data.get("usage") or {}
-                    tokens = TokenUsage()
-                    if usage.get("type") == "tokens":
-                        tokens = TokenUsage(
-                            input_tokens=usage.get("input_tokens", 0),
-                            output_tokens=usage.get("output_tokens", 0),
-                            input_audio_tokens=(usage.get("input_token_details") or {}).get(
-                                "audio_tokens"
-                            ),
-                        )
-                    elif usage.get("type") == "duration":
-                        audio_duration = usage.get("seconds", audio_duration)
-                    self.send(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.RECOGNITION_USAGE,
-                            alternatives=[],
-                            recognition_usage=stt.RecognitionUsage(
-                                audio_duration=audio_duration, tokens=tokens
-                            ),
-                        )
-                    )
-
-                    # restart session if needed
-                    if time.time() - connected_at > _max_session_duration:
-                        logger.info("resetting Realtime STT session due to timeout")
-                        self._pool.remove(ws)
-                        self._reconnect_event.set()
-                        return
-                elif msg_type == "error":
-                    error_body = data.get("error", {})
-                    raise APIError(
-                        "OpenAI Realtime STT error",
-                        kind=error_kind(error_body.get("code") or error_body.get("type")),
-                        body=error_body,
-                        detail=error_body.get("message"),
-                    )
-
-        while True:
-            closing_ws = False  # reset the flag
-            # a segment left open across the reconnect gap would fuse into the next utterance
-            self._stop_speaking()
-            async with self._pool.connection(conn_options=self._conn_options) as ws:
-                if self._pool.last_connection_reused and not self._opts.languages:
-                    # detecting the language needs a session that was never given one, and a
-                    # pooled socket carries whatever the stream before it set
-                    self._pool.remove(ws)
-                    continue
-                # published before the config is sent, so a change made during the send lands
-                # after it rather than finding no live connection
-                self._ws = ws
-                # a pooled connection may carry older options; the lock is taken before the
-                # first await, so no queued update overtakes this one
-                try:
-                    async with self._config_lock:
-                        await ws.send_json(
-                            _session_update(self._opts).model_dump(
-                                by_alias=True, exclude_unset=True
-                            )
-                        )
-                except APIConnectionError:
-                    # the retry gets its own connection; no update should reach this one
-                    self._ws = None
-                    raise
-                vad_stream = self._vad.stream() if self._vad is not None else None
-                try:
-                    async with utils.aio.TaskSet() as tasks:
-                        io_tasks = [
-                            tasks.spawn(send_task(ws, vad_stream)),
-                            tasks.spawn(recv_task(ws)),
-                        ]
-                        if vad_stream is not None:
-                            io_tasks.append(tasks.spawn(vad_task(ws, vad_stream)))
-                        reconnect = tasks.spawn(self._reconnect_event.wait())
-                        try:
-                            winner = await tasks.first_completed(
-                                asyncio.gather(*io_tasks), reconnect
-                            )
-                        finally:
-                            self._ws = None
-                    if winner is not reconnect:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    if vad_stream is not None:
-                        await vad_stream.aclose()
+        audio_duration: float | None = None
+        start_ms, end_ms = self._item_timing.pop(item_id, (0, None))
+        if end_ms is not None and end_ms > start_ms:
+            audio_duration = (end_ms - start_ms) / 1000.0
+        usage = message.get("usage") or _Usage()
+        tokens = TokenUsage()
+        if usage.get("type") == "tokens":
+            tokens = TokenUsage(
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                input_audio_tokens=(usage.get("input_token_details") or {}).get("audio_tokens"),
+            )
+        elif usage.get("type") == "duration":
+            audio_duration = usage.get("seconds", audio_duration)
+        self.send(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                recognition_usage=stt.RecognitionUsage(
+                    audio_duration=audio_duration, tokens=tokens
+                ),
+            )
+        )

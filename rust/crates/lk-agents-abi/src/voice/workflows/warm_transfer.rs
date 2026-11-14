@@ -63,7 +63,7 @@ pub enum TransferFailed {
 }
 
 /// The hold music playing while the caller waits (`PlayHandle`).
-#[crate::host(proxy(host = "livekit.agents.voice.background_audio.PlayHandle"))]
+#[crate::host(proxy(host = "livekit.agents.voice.background_audio.PlayHandle", owns))]
 pub trait HoldMusic: Send + Sync {
     #[host(notify)]
     fn stop(&self);
@@ -71,7 +71,7 @@ pub trait HoldMusic: Send + Sync {
 
 /// What the transfer executor asks of the SDK (rooms, sessions, hold music), each entered through
 /// HostInvoker. Its LiveKit and Twilio requests are the runtime's own.
-#[crate::host(proxy(host = "livekit.agents.beta.workflows._TransferHost"))]
+#[crate::host(proxy(host = "livekit.agents.beta.workflows._TransferHost", owns))]
 pub trait TransferHost: Send + Sync {
     #[host(await, name = "_core_start_hold")]
     fn start_hold(

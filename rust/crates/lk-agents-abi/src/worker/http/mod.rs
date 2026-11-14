@@ -133,7 +133,7 @@ pub enum ExchangeError {
 }
 
 /// The binding's application server: it adapts each exchange to its framework.
-#[crate::host(proxy(host = "livekit.agents.http.AgentRoutes"))]
+#[crate::host(proxy(host = "livekit.agents.http.AgentRoutes", owns))]
 pub trait EndpointHandler: Send + Sync {
     #[host(await, name = "_core_handle")]
     fn handle(

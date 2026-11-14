@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import struct
 
@@ -26,9 +27,12 @@ def _pcm(num_samples: int) -> bytes:
 class _BlandPeer:
     """``/v2/tts/ws`` speaking Bland's turn protocol: ready, utterance_start, audio, utterance_end."""
 
-    def __init__(self, frames: list[bytes], *, stale_end: bool = False) -> None:
+    def __init__(
+        self, frames: list[bytes], *, stale_end: bool = False, answers_close: bool = True
+    ) -> None:
         self.frames = frames
         self.stale_end = stale_end  # replay the previous turn's utterance_end mid-turn
+        self.answers_close = answers_close
         self.received: list[dict[str, object]] = []
         self.headers: dict[str, str] = {}
 
@@ -76,7 +80,7 @@ class _BlandPeer:
                         "reason": "cancelled",
                     }
                 )
-            elif message["type"] == "close":
+            elif message["type"] == "close" and self.answers_close:
                 await ws.send_json({"type": "done", "session_id": "s"})
                 await ws.close()
         return ws
@@ -196,3 +200,17 @@ async def test_a_stale_utterance_end_does_not_end_the_next_turn() -> None:
     expected = b"".join(frames)
     assert len(peer.of_type("init")) == 1
     assert audio[: len(expected)] == expected
+
+
+# Catches: closing the model waiting a real second for an answer to `close` that the provider
+# never sends, at the end of every session.
+async def test_closing_the_model_never_waits_for_a_close_answer() -> None:
+    peer = _BlandPeer([_pcm(960)], answers_close=False)
+    app = web.Application()
+    app.router.add_get("/v2/tts/ws", peer.handle)
+    async with TestServer(app) as server, http.open():
+        tts = TTS(api_key="k", base_url=str(server.make_url("/v2")))
+        assert await _say(tts, "Hello.")
+        async with asyncio.timeout(0.5):
+            await tts.aclose()
+    assert peer.of_type("close")

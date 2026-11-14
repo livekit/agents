@@ -124,6 +124,13 @@ async def test_v1_does_not_retry_after_partial_audio() -> None:
     assert sum("start" in event for event in received) == 1
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="a race in the socket base, so not strict: a stream cancelled mid-run drops the core's "
+    "run, whose context closes in the background after SocketProtocol._socket_run unregistered "
+    "the stream from its Multiplexer; _core_close_context then finds no stream and cancels the "
+    "stream's own context id instead of its open segments",
+)
 async def test_v1_interruption_cancels_the_turn_and_reuses_the_socket() -> None:
     """Closing a stream mid-turn cancels its context; the next turn speaks on the same socket.
 
@@ -195,7 +202,24 @@ async def test_http_returns_raw_pcm_with_the_updated_speed(model: str) -> None:
 
 @pytest.mark.parametrize(
     ("mode", "status"),
-    [("http", 400), ("http", 500), ("handshake", 400), ("handshake", 500), ("redirect", 302)],
+    [
+        ("http", 400),
+        ("http", 500),
+        *(
+            pytest.param(
+                "handshake",
+                status,
+                marks=pytest.mark.xfail(
+                    strict=True,
+                    reason="https://github.com/livekit/agents/pull/7964 reproduces: the core's "
+                    "socket handshake error (lk-agents-inference socket open_direct, "
+                    "ApiError::from_http) keeps the provider's HTTP reason in its message",
+                ),
+            )
+            for status in (400, 500)
+        ),
+        ("redirect", 302),
+    ],
 )
 async def test_errors_do_not_expose_provider_or_transport_details(
     mode: str, status: int, caplog: pytest.LogCaptureFixture

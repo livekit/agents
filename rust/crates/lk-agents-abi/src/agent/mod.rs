@@ -469,7 +469,7 @@ pub struct Retries {
 /// The agent's `@agent.instructions` functions, rendered by the host for each model request of a
 /// reply (`Agent._render_dynamic_instructions`). `speech` is the reply's, as the host's
 /// `SpeechHandle` sees it.
-#[crate::host(proxy(host = "livekit.agents.voice.agent_session._DynamicInstructions"))]
+#[crate::host(proxy(host = "livekit.agents.voice.agent_session._DynamicInstructions", owns))]
 pub trait HostInstructions: Send + Sync {
     #[host(await, name = "_core_render")]
     fn render<'a>(

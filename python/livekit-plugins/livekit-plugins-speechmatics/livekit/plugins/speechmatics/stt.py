@@ -17,18 +17,18 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
+import weakref
 from collections.abc import Sequence
 from enum import Enum, StrEnum
-from typing import Protocol, TypeVar, cast
-from urllib.parse import urlparse
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, TypeVar
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     VAD,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
     LanguageCode,
@@ -44,40 +44,48 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from speechmatics.agent_stt import (
-    DEFAULT_CHUNK_SIZE,
-    DEFAULT_MODEL,
-    AdditionalVocabEntry,
-    AgentSttAsyncClient,
-    AudioEncoding,
-    AudioFormat,
-    ClientMessageType,
-    ConnectionError as SMConnectionError,
-    Model,
-    Segment,
-    ServerMessageType,
-    SessionError,
-    SpeakerDiarizationConfig,
-    SpeakerIdentifier,
-    TimeoutError as SMTimeoutError,
-    TranscriptionConfig,
-    TranscriptionError,
-    TransportError,
-    TurnConfig,
-    TurnDetectionMode as AgentTurnDetectionMode,
-)
 
 from .log import logger
 from .version import __version__ as lk_version
 
 _OptionT = TypeVar("_OptionT")
+
+
+class Model(StrEnum):
+    """Models available on the Agent STT service."""
+
+    LINDEN_1 = "linden-1"
+
+
+DEFAULT_MODEL = Model.LINDEN_1
+
+
+class AudioEncoding(StrEnum):
+    """Audio encodings of the real-time service."""
+
+    PCM_F32LE = "pcm_f32le"
+    PCM_S16LE = "pcm_s16le"
+    MULAW = "mulaw"
+
+
+@dataclasses.dataclass
+class AdditionalVocabEntry:
+    """A word to bias the engine towards, optionally with pronunciation hints."""
+
+    content: str
+    sounds_like: list[str] | None = None
+
+
+@dataclasses.dataclass
+class SpeakerIdentifier:
+    """Known identifiers of one speaker, used to attribute words to it across sessions."""
+
+    label: str = ""
+    speaker_identifiers: list[str] = dataclasses.field(default_factory=list[str])
+
+
 _SPEAKERS = TypeAdapter(list[SpeakerIdentifier])
-
-
-class _Socket(Protocol):
-    @property
-    def close_code(self) -> int | None: ...
-
+_VOCAB_ENTRY = TypeAdapter(AdditionalVocabEntry)
 
 # An `Error` message's type; any other type refused the session.
 _ERROR_KINDS: dict[str, ErrorKind] = {
@@ -89,7 +97,6 @@ _ERROR_KINDS: dict[str, ErrorKind] = {
     "idle_timeout": "timeout",
     "session_timeout": "timeout",
 }
-_VOCAB_ENTRY = TypeAdapter(AdditionalVocabEntry)
 
 # Endpoint resolution. The default is the EU real-time Agent STT host; the env var
 # overrides it (e.g. to target another region or a self-hosted endpoint), and an explicit
@@ -115,12 +122,11 @@ class TurnDetectionMode(StrEnum):
     endpoint on its own, and the caller drives turns by calling `finalize()` (for
     example from an external VAD).
 
-    The member names and values mirror the Agent STT SDK's own turn-detection modes so
-    the two never drift.
+    The values are the service's `turn_config.turn_detection_mode`.
     """
 
-    VAD = AgentTurnDetectionMode.VAD.value
-    EXTERNAL = AgentTurnDetectionMode.EXTERNAL.value
+    VAD = "vad"
+    EXTERNAL = "external"
 
 
 # The mode a caller gets when they ask for none. `EXTERNAL` for parity with the plugin's
@@ -348,8 +354,7 @@ class STT(stt.STT):
         self._sample_rate = sample_rate
         self._audio_encoding = audio_encoding
 
-        # Initialize list of streams
-        self._streams: list[SpeechStream] = []
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
     def provider(self) -> str:
@@ -375,27 +380,19 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.RecognizeStream:
         """Create a new SpeechStream."""
-
-        # Create the stream
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
             config=self._prepare_config(language),
             turn_detection_mode=self._stt_options.turn_detection_mode,
-            id=len(self._streams),
             vad_instance=self._vad,
             api_key=self._api_key,
-            base_url=self._base_url,
+            url=_session_url(self._base_url),
             audio_encoding=self._audio_encoding,
             sample_rate=self._sample_rate,
             options=self._stt_options,
-            streams=self._streams,
         )
-
-        # Add to the list of streams
-        self._streams.append(stream)
-
-        # Return the stream
+        self._streams.add(stream)
         return stream
 
     def _validate_stt_options(self) -> list[str]:
@@ -413,32 +410,26 @@ class STT(stt.STT):
 
         return errors
 
-    def _prepare_config(self, language: NotGivenOr[str] = NOT_GIVEN) -> TranscriptionConfig:
-        """Prepare an Agent STT TranscriptionConfig from STTOptions.
-
-        This is the only place the config crosses from the plugin's public options into
-        the Agent STT session driver. Only the fields agent-STT accepts on the wire are set.
-
-        Turn detection is configured separately: it is a top-level `turn_config` sibling of
-        `transcription_config` on the wire, passed to the client as a `TurnConfig` (see
-        `SpeechStream._run`), not a member of this config.
-        """
-
-        # Reference to STT options
+    def _prepare_config(self, language: NotGivenOr[str] = NOT_GIVEN) -> _TranscriptionConfig:
+        """The session's `transcription_config`: only the fields agent-STT accepts, and none
+        left unset. Turn detection is the `turn_config` beside it."""
         opts = self._stt_options
-
-        return TranscriptionConfig(
-            language=language if is_given(language) else opts.language,
-            # The SDK types `model` as the `Model` enum, but the proxy resolves any model
-            # string (see its docstring), and `opts.model` is the resolved wire string.
-            model=cast(Model, opts.model),
-            diarization="speaker" if opts.enable_diarization else None,
-            speaker_diarization_config=_build_diarization_config(opts),
-            additional_vocab=list(opts.additional_vocab) or None,
-            output_locale=opts.output_locale,
-            domain=opts.domain,
-            enable_partials=opts.include_partials,
+        config = _TranscriptionConfig(
+            language=language if is_given(language) else opts.language, model=opts.model
         )
+        if opts.enable_diarization:
+            config["diarization"] = "speaker"
+        if (diarization := _build_diarization_config(opts)) is not None:
+            config["speaker_diarization_config"] = diarization
+        if opts.additional_vocab:
+            config["additional_vocab"] = [_vocab_entry(e) for e in opts.additional_vocab]
+        if opts.output_locale is not None:
+            config["output_locale"] = opts.output_locale
+        if opts.domain is not None:
+            config["domain"] = opts.domain
+        if opts.include_partials is not None:
+            config["enable_partials"] = opts.include_partials
+        return config
 
     def finalize(self) -> None:
         """Force the current turn to end, flushing buffered words as final segments.
@@ -447,7 +438,7 @@ class STT(stt.STT):
         service endpoints on its own and this is a no-op.
         """
 
-        for stream in self._streams:
+        for stream in list(self._streams):
             stream.finalize()
 
     async def get_speaker_ids(
@@ -463,390 +454,314 @@ class STT(stt.STT):
             list[SpeakerIdentifier]: List of speakers in the session.
         """
 
-        results = [await stream.get_speaker_ids() for stream in self._streams]
+        results = [await stream.get_speaker_ids() for stream in list(self._streams)]
         if len(results) == 1:
             return results[0]
         return results
 
 
-class SpeechStream(stt.RecognizeStream):
+class _TranscriptionConfig(TypedDict):
+    language: str
+    model: str
+    diarization: NotRequired[str]
+    speaker_diarization_config: NotRequired[dict[str, Any]]
+    additional_vocab: NotRequired[list[dict[str, Any]]]
+    output_locale: NotRequired[str]
+    domain: NotRequired[str]
+    enable_partials: NotRequired[bool]
+
+
+class _RecognitionStarted(TypedDict):
+    message: Literal["RecognitionStarted"]
+    id: NotRequired[str]
+
+
+class _Logged(TypedDict):
+    message: Literal["Info", "Warning"]
+
+
+class _Error(TypedDict):
+    message: Literal["Error"]
+    type: NotRequired[str]
+    reason: NotRequired[str]
+
+
+class _SegmentBody(TypedDict):
+    transcript: NotRequired[str]
+    speaker: NotRequired[str | None]
+
+
+class _SegmentTiming(TypedDict):
+    start_time: NotRequired[float]
+    end_time: NotRequired[float]
+
+
+class _Segment(TypedDict):
+    message: Literal["AddSegment", "AddPartialSegment"]
+    segment: NotRequired[_SegmentBody | None]
+    metadata: NotRequired[_SegmentTiming | None]
+
+
+class _Turn(TypedDict):
+    message: Literal["StartOfTurn", "EndOfTurn", "EndOfTranscript"]
+
+
+class _SpeakersResult(TypedDict):
+    message: Literal["SpeakersResult"]
+    # read on its own, so a bad reply fails only get_speaker_ids()
+    speakers: NotRequired[JsonValue]
+
+
+_Message = Annotated[
+    _RecognitionStarted | _Logged | _Error | _Segment | _Turn | _SpeakersResult,
+    Field(discriminator="message"),
+]
+
+
+class _StartRecognition(TypedDict):
+    message: Literal["StartRecognition"]
+    audio_format: dict[str, Any]
+    transcription_config: _TranscriptionConfig
+    turn_config: dict[str, str]
+
+
+class _EndOfStream(TypedDict):
+    message: Literal["EndOfStream"]
+    last_seq_no: int
+
+
+class _ForceEndOfUtterance(TypedDict):
+    message: Literal["ForceEndOfUtterance"]
+    timestamp: float
+
+
+class _GetSpeakers(TypedDict):
+    message: Literal["GetSpeakers"]
+
+
+_Command = _StartRecognition | _EndOfStream | _ForceEndOfUtterance | _GetSpeakers
+
+
+class SpeechStream(stt.SocketStream[_Message, _Command]):
+    frame_ms = 100
+    # audio waits for RecognitionStarted
+    awaits_ready = True
+    # StartOfTurn and EndOfTurn are the service's own turns
+    provider_vad = True
+
     def __init__(
         self,
         stt: STT,
         conn_options: APIConnectOptions,
-        config: TranscriptionConfig,
+        config: _TranscriptionConfig,
         turn_detection_mode: TurnDetectionMode,
-        id: int,
         vad_instance: VAD | None = None,
         *,
         api_key: str,
-        base_url: str,
+        url: str,
         audio_encoding: AudioEncoding,
         sample_rate: int,
         options: STTOptions,
-        streams: list[SpeechStream],
     ) -> None:
-        super().__init__(
-            stt=stt,
-            conn_options=conn_options,
-            sample_rate=sample_rate,
-        )
-
-        self._stt: STT = stt
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
         self._api_key = api_key
-        self._base_url = base_url
+        self._url = url
         self._audio_encoding = audio_encoding
         self._sample_rate = sample_rate
         self._opts = options
-        self._streams = streams
-        self._id: int = id
-        self._config: TranscriptionConfig = config
-        self._turn_detection_mode: TurnDetectionMode = turn_detection_mode
-        self._client: AgentSttAsyncClient | None = None
-        self._msg_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-
-        self._vad: VAD | None = vad_instance
+        self._config = config
+        self._turn_detection_mode = turn_detection_mode
+        self._vad = vad_instance
         self._vad_stream: VADStream | None = None
-
-        self._tasks: list[asyncio.Task[None]] = []
-
-        # Speaker result event
-        self._speaker_result_event: asyncio.Event = asyncio.Event()
-        self._speaker_result: list[SpeakerIdentifier] | None = None
-        self._speaker_error: ValidationError | None = None
+        self._session_id: str | None = None
+        # whether the service's turn is open: a final segment outside one (EXTERNAL mode sends
+        # no turns) is a speech of its own
+        self._in_turn = False
+        # audio chunks and bytes sent on this connection: EndOfStream names the last chunk,
+        # ForceEndOfUtterance the audio time it ends at
+        self._seq_no = 0
+        self._audio_bytes = 0
+        self._speakers: asyncio.Future[list[SpeakerIdentifier]] | None = None
 
     @property
     def session_id(self) -> str | None:
-        """The service-assigned session id, set once `RecognitionStarted` arrives.
-
-        Read from the client's `session_info`. Returns `None` before the session starts
-        and after the stream is closed (which drops the client).
-        """
-        if self._client is None:
-            return None
-        info = self._client.session_info
-        return info.session_id
+        """The service-assigned session id, set once `RecognitionStarted` arrives."""
+        return self._session_id
 
     def finalize(self) -> None:
         """End the current turn when external endpointing controls this stream."""
-        if self._client is not None and self._client.is_connected:
-            if self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
-                self._client.finalize()
+        if self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
+            seconds = self._audio_bytes / (2 * self._sample_rate)
+            self.send_command(
+                _ForceEndOfUtterance(message="ForceEndOfUtterance", timestamp=seconds)
+            )
 
     async def get_speaker_ids(self) -> list[SpeakerIdentifier]:
         """Request the current session's speaker identifiers."""
-        if self._client is None or not self._client.is_connected:
-            logger.warning(f"Not connected in stream {self._id}")
+        if self._session_id is None:
+            logger.warning("Speechmatics stream is not connected")
             return []
-        if not self._config.diarization:
-            logger.warning(f"Diarization is not enabled in stream {self._id}")
+        if "diarization" not in self._config:
+            logger.warning("Diarization is not enabled in this Speechmatics stream")
             return []
 
-        self._speaker_result_event.clear()
-        self._speaker_error = None
-        await self._client.send_message({"message": ClientMessageType.GET_SPEAKERS.value})
+        speakers: asyncio.Future[list[SpeakerIdentifier]]
+        speakers = self._speakers = asyncio.get_running_loop().create_future()
+        self.send_command(_GetSpeakers(message="GetSpeakers"))
         try:
-            await asyncio.wait_for(self._speaker_result_event.wait(), timeout=5.0)
+            async with asyncio.timeout(5.0):
+                return await speakers
         except TimeoutError:
-            logger.warning(f"GetSpeakers timed-out for stream {self._id}")
+            logger.warning("GetSpeakers timed out")
             return []
-        if self._speaker_error is not None:
-            raise APIError(
-                "Speechmatics returned invalid speaker identifiers",
-                kind="protocol",
-                detail=str(self._speaker_error),
-            ) from self._speaker_error
-        return self._speaker_result or []
+        finally:
+            self._speakers = None
 
     async def _run(self) -> None:
-        """Run the STT stream."""
-        logger.debug("Connecting to Speechmatics STT service")
+        if self._vad is None or self._turn_detection_mode != TurnDetectionMode.EXTERNAL:
+            await super()._run()
+            return
+        vad_stream = self._vad_stream = self._vad.stream()
+        try:
+            async with utils.aio.TaskSet() as tasks:
+                await tasks.first_completed(super()._run(), self._finalize_on_vad(vad_stream))
+        finally:
+            self._vad_stream = None
+            await vad_stream.aclose()
 
-        # Config is required
-        if not self._config:
-            raise ValueError("Config is required")
+    async def _finalize_on_vad(self, vad_stream: VADStream) -> None:
+        """Call `finalize()` whenever the external VAD reports end of speech."""
+        async for ev in vad_stream:
+            if ev.type == VADEventType.END_OF_SPEECH:
+                self.finalize()
 
-        # Create the Agent STT client. Turn detection is a top-level `turn_config` (a sibling
-        # of the transcription config on the wire), not a field on the transcription config;
-        # audio encoding / sample rate go via AudioFormat.
-        self._client = AgentSttAsyncClient(
-            api_key=self._api_key,
-            url=self._base_url,
-            app=f"livekit/{lk_version}",
-            transcription_config=self._config,
-            turn_config=TurnConfig(
-                turn_detection_mode=_handle_turn_detection_mode(self._turn_detection_mode)
-            ),
-            audio_format=AudioFormat(
-                encoding=self._audio_encoding,
-                sample_rate=self._sample_rate,
-                chunk_size=DEFAULT_CHUNK_SIZE,
-            ),
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        self._session_id = None
+        self._in_turn = False
+        self._seq_no = self._audio_bytes = 0
+        return http.SocketTarget(
+            self._url,
+            headers={"Authorization": f"Bearer {self._api_key}", "X-Request-Id": utils.shortuuid()},
         )
 
-        # Add message handlers
-        def add_message(message: dict[str, object]) -> None:
-            self._msg_queue.put_nowait(message)
+    def setup(self) -> _StartRecognition:
+        return _StartRecognition(
+            message="StartRecognition",
+            audio_format={
+                "type": "raw",
+                "encoding": self._audio_encoding.value,
+                "sample_rate": self._sample_rate,
+            },
+            transcription_config=self._config,
+            turn_config={"turn_detection_mode": self._turn_detection_mode.value},
+        )
 
-        # Default messages to listen to
-        messages: list[ServerMessageType] = [
-            ServerMessageType.RECOGNITION_STARTED,
-            ServerMessageType.INFO,
-            ServerMessageType.ERROR,
-            ServerMessageType.WARNING,
-            ServerMessageType.ADD_PARTIAL_SEGMENT,
-            ServerMessageType.ADD_SEGMENT,
-            ServerMessageType.START_OF_TURN,
-            ServerMessageType.END_OF_TURN,
-        ]
-
-        # Speaker IDs message handler
-        if self._config.diarization:
-            messages.append(ServerMessageType.SPEAKERS_RESULT)
-
-        # Add message handlers
-        for event in messages:
-            # The inherited SDK emitter types RT events, while Agent STT adds its own enum.
-            self._client.on(event, add_message)  # type: ignore[arg-type]
-
-        owned = utils.aio.TaskSet()
-        try:
-            async with self._client:
-                logger.debug("Connected to Speechmatics STT service")
-                # the SDK drops its socket on a close: keep it to read the close code
-                socket = self._client._transport._websocket
-                if (
-                    self._vad is not None
-                    and self._turn_detection_mode == TurnDetectionMode.EXTERNAL
-                ):
-                    self._vad_stream = self._vad.stream()
-
-                audio_task = owned.spawn(self._process_audio(socket))
-                message_task = owned.spawn(self._process_messages())
-                self._tasks = [audio_task, message_task]
-                vad_task: asyncio.Task[None] | None = None
-                if self._vad_stream is not None:
-                    vad_task = owned.spawn(self._process_vad(self._vad_stream))
-                    self._tasks.append(vad_task)
-
-                try:
-                    # the receiver outlives this wait: the SDK exit below flushes through it
-                    await owned.first_completed(
-                        asyncio.shield(message_task),
-                        *(t for t in self._tasks if t is not message_task),
-                    )
-                finally:
-                    await utils.aio.cancel_and_wait(audio_task)
-                    if self._vad_stream is not None:
-                        await self._vad_stream.aclose()
-                        self._vad_stream = None
-                    if vad_task is not None:
-                        await utils.aio.cancel_and_wait(vad_task)
-                # SDK exit flushes final messages while the receiver is still running.
-        except (TranscriptionError, SessionError) as e:
-            raise APIError(
-                "Speechmatics rejected the session", kind="invalid_request", detail=str(e)
-            ) from e
-        except (SMConnectionError, SMTimeoutError, TransportError) as e:
-            raise APIConnectionError(f"failed to connect to Speechmatics: {e}") from e
-        finally:
-            await owned.aclose()
-            if self in self._streams:
-                self._streams.remove(self)
-
-    async def _process_audio(self, socket: _Socket | None) -> None:
-        """Process audio from the input channel."""
-        try:
-            # Input audio stream
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._sample_rate,
-                num_channels=1,
-            )
-
-            # Process input audio
-            async for data in self.input:
-                # Handle flush sentinel
-                if isinstance(data, self.Flush):
-                    frames = audio_bstream.flush()
-                else:
-                    # Forward the original frame to the VAD before resampling/repacking
-                    if self._vad_stream is not None:
-                        self._vad_stream.push_frame(data)
-                    frames = audio_bstream.push(data.data.tobytes())
-
-                if self._client:
-                    for frame in frames:
-                        await self._client.send_audio(frame.data.tobytes())
-
-                        # send_audio never raises: it closes the audio gate and drops
-                        # this and every later frame. A session error is already raised
-                        # as fatal in _handle_message, so only a clean gate close is a
-                        # lost connection.
-                        if not self._client.is_ready_for_audio:
-                            if self._client.session_error is None:
-                                code = socket.close_code if socket is not None else None
-                                raise APIConnectionError(
-                                    "lost connection to Speechmatics while sending audio",
-                                    kind=http.close_kind(code),
-                                )
-                            break
-
-            # No more input — let the VAD flush any pending event
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_Command]:
+        if isinstance(item, rtc.AudioFrame):
             if self._vad_stream is not None:
-                self._vad_stream.end_input()
+                self._vad_stream.push_frame(item)
+            self._seq_no += 1
+            self._audio_bytes += len(item.data) * 2
+            return bytes(item.data)
+        if isinstance(item, http.EndOfInput):
+            return _EndOfStream(message="EndOfStream", last_seq_no=self._seq_no)
+        return None
 
-        except asyncio.CancelledError:
-            pass
-
-    async def _process_vad(self, vad_stream: VADStream) -> None:
-        """Call `client.finalize()` whenever the external VAD reports end of speech."""
-        try:
-            async for ev in vad_stream:
-                if ev.type == VADEventType.END_OF_SPEECH:
-                    if self._client and self._client.is_connected:
-                        self._client.finalize()
-        except asyncio.CancelledError:
-            pass
-
-    async def _process_messages(self) -> None:
-        """Process messages from the STT client."""
-        try:
-            while True:
-                message = await self._msg_queue.get()
-                self._handle_message(message)
-        except asyncio.CancelledError:
-            pass
-
-    def _handle_message(self, message: dict[str, object]) -> None:
-        """Handle a message from the STT client."""
-
-        # Get the message type
-        event = message.get("message", None)
-
-        # Only handle valid messages
-        if event is None:
-            return
-
-        # Log info, error and warning messages
-        elif event in [
-            ServerMessageType.RECOGNITION_STARTED,
-            ServerMessageType.INFO,
-        ]:
-            logger.info(f"received {event} message", extra={"lk.pii.message": message})
-        elif event == ServerMessageType.WARNING:
-            logger.warning(f"received {event} message", extra={"lk.pii.message": message})
-        elif event == ServerMessageType.ERROR:
-            # An agent-STT `Error` means the session is over. Raise it as an APIError so the
-            # stream fails with the reason instead of silently hanging until timeout. It
-            # propagates out of the message task and is re-raised by `_run`.
-            reason = message.get("reason", "unknown")
+    def on_message(
+        self,
+        message: _RecognitionStarted | _Logged | _Error | _Segment | _Turn | _SpeakersResult,
+    ) -> stt.Report | list[stt.Report] | http.Ready | http.Done | None:
+        if message["message"] == "RecognitionStarted":
+            self._session_id = message.get("id")
+            logger.info("Speechmatics session started", extra={"session_id": self._session_id})
+            return http.READY
+        if message["message"] == "Info":
+            logger.info("received Info message", extra={"lk.pii.message": message})
+            return None
+        if message["message"] == "Warning":
+            logger.warning("received Warning message", extra={"lk.pii.message": message})
+            return None
+        if message["message"] == "Error":
+            # the session is over
             error_type = message.get("type", "error")
             raise APIError(
                 f"Speechmatics returned an error [{error_type}]",
-                kind=_ERROR_KINDS.get(str(error_type), "invalid_request"),
+                kind=_ERROR_KINDS.get(error_type, "invalid_request"),
                 body=message,
-                detail=str(reason),
+                detail=message.get("reason", "unknown"),
             )
+        if message["message"] == "StartOfTurn":
+            self._in_turn = True
+            return stt.SpeechStarted()
+        if message["message"] == "EndOfTurn":
+            self._in_turn = False
+            return stt.SpeechEnded()
+        if message["message"] == "EndOfTranscript":
+            return http.DONE
+        if message["message"] == "SpeakersResult":
+            self._speakers_result(message)
+            return None
+        transcript = self._transcript(message)
+        if transcript.final and not self._in_turn:
+            return [transcript, stt.SpeechEnded()]
+        return transcript
 
-        # Handle the messages
-        elif event == ServerMessageType.ADD_PARTIAL_SEGMENT:
-            self._handle_segment(Segment.from_message(message), is_final=False)
-        elif event == ServerMessageType.ADD_SEGMENT:
-            self._handle_segment(Segment.from_message(message), is_final=True)
-        elif event == ServerMessageType.START_OF_TURN:
-            self._handle_start_of_turn()
-        elif event == ServerMessageType.END_OF_TURN:
-            self._handle_end_of_turn()
-
-        # Handle the speaker result message
-        elif event == ServerMessageType.SPEAKERS_RESULT:
-            try:
-                speakers = _SPEAKERS.validate_python(message.get("speakers", []))
-            except ValidationError as exc:
-                self._speaker_error = exc
-                self._speaker_result = None
-                self._speaker_result_event.set()
-            else:
-                self._handle_speakers_result(speakers)
-
-        # Log all other messages
-        else:
-            logger.debug(f"received {event} message", extra={"lk.pii.message": message})
-
-    def _handle_segment(self, seg: Segment, is_final: bool) -> None:
-        """Handle AddSegment / AddPartialSegment events.
-
-        agent-STT sends a singular `segment` (`transcript`/`speaker`) plus message-level
-        `metadata`; `Segment.from_message` parses it into a SpeechData event.
-        """
-        opts = self._opts
-
-        # Segments the service did not attribute are labelled UU
-        speaker_id = seg.speaker or "UU"
-        format_str = opts.speaker_format or "{text}"
-        text = format_str.format(speaker_id=speaker_id, text=seg.transcript)
-
-        # Create speech event. Label with the stream's own configured language (which honors a
-        # per-stream `stream(language=...)` override), not the constructor default, so the labeled
-        # language matches the one recognition actually ran with.
-        speech_data = stt.SpeechData(
-            language=LanguageCode(self._config.language),
-            text=text,
+    def _transcript(self, message: _Segment) -> stt.Transcript:
+        segment = message.get("segment") or _SegmentBody()
+        timing = message.get("metadata") or _SegmentTiming()
+        # segments the service did not attribute are labelled UU
+        speaker_id = segment.get("speaker") or "UU"
+        text = (self._opts.speaker_format or "{text}").format(
+            speaker_id=speaker_id, text=segment.get("transcript", "")
+        )
+        offset = self.start_time_offset
+        return stt.Transcript(
+            text,
+            # the stream's own language, which honors a stream(language=...) override
+            LanguageCode(self._config["language"]),
+            final=message["message"] == "AddSegment",
             speaker_id=speaker_id,
-            start_time=seg.start_time + self.start_time_offset,
-            end_time=seg.end_time + self.start_time_offset,
+            start_time=timing.get("start_time", 0.0) + offset,
+            end_time=timing.get("end_time", 0.0) + offset,
         )
 
-        # Determine the event type
-        event_type = (
-            stt.SpeechEventType.FINAL_TRANSCRIPT
-            if is_final
-            else stt.SpeechEventType.INTERIM_TRANSCRIPT
-        )
-
-        # Send the event
-        self.send(stt.SpeechEvent(type=event_type, alternatives=[speech_data]))
-
-    def _handle_start_of_turn(self) -> None:
-        """Handle StartOfTurn events."""
-        logger.debug("StartOfTurn received")
-        self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
-
-    def _handle_end_of_turn(self) -> None:
-        """Handle EndOfTurn events."""
-        logger.debug("EndOfTurn received")
-        self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-
-    def _handle_speakers_result(self, speakers: list[SpeakerIdentifier]) -> None:
-        """Handle SpeakersResult events."""
-        logger.debug("SpeakersResult received")
-        self._speaker_result = speakers
-        self._speaker_error = None
-        self._speaker_result_event.set()
-
-    async def aclose(self) -> None:
-        """Close the STT stream."""
-        await super().aclose()
-
-        # a task's failure already failed the stream: read, not raised again
-        await utils.aio.cancel_and_wait(*self._tasks)
-
-        # Close the VAD stream if it's still open
-        if self._vad_stream is not None:
-            await self._vad_stream.aclose()
-            self._vad_stream = None
-
-        # Close the client
-        if self._client and self._client.is_connected:
-            await self._client.disconnect()
-        self._client = None
-
-        # Remove from active streams
-        if self in self._streams:
-            self._streams.remove(self)
+    def _speakers_result(self, message: _SpeakersResult) -> None:
+        if (speakers := self._speakers) is None or speakers.done():
+            return
+        try:
+            speakers.set_result(_SPEAKERS.validate_python(message.get("speakers", [])))
+        except ValidationError as e:
+            error = APIError(
+                "Speechmatics returned invalid speaker identifiers",
+                kind="protocol",
+                detail=str(e),
+            )
+            error.__cause__ = e
+            speakers.set_exception(error)
 
 
-def _build_diarization_config(opts: STTOptions) -> SpeakerDiarizationConfig | None:
+def _vocab_entry(entry: AdditionalVocabEntry) -> dict[str, Any]:
+    if entry.sounds_like is None:
+        return {"content": entry.content}
+    return {"content": entry.content, "sounds_like": entry.sounds_like}
+
+
+def _session_url(base_url: str) -> str:
+    """The Agent STT endpoint: `/agent` appended unless present, the app named as `sm-app`."""
+    parsed = urlparse(base_url)
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if "agent" not in segments:
+        segments.append("agent")
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    params["sm-app"] = [f"livekit/{lk_version}"]
+    return urlunparse(
+        parsed._replace(path="/" + "/".join(segments), query=urlencode(params, doseq=True))
+    )
+
+
+def _build_diarization_config(opts: STTOptions) -> dict[str, Any] | None:
     """Build the wire `speaker_diarization_config` from the diarization options.
 
     Returns `None` when diarization is off or no diarization knob was set, so an empty
@@ -855,19 +770,16 @@ def _build_diarization_config(opts: STTOptions) -> SpeakerDiarizationConfig | No
     if not opts.enable_diarization:
         return None
 
-    if not (
-        opts.max_speakers is not None
-        or opts.speaker_sensitivity is not None
-        or opts.prefer_current_speaker is not None
-        or opts.known_speakers
-    ):
-        return None
-    return SpeakerDiarizationConfig(
-        max_speakers=opts.max_speakers,
-        speaker_sensitivity=opts.speaker_sensitivity,
-        prefer_current_speaker=opts.prefer_current_speaker,
-        speakers=opts.known_speakers or None,
-    )
+    config: dict[str, Any] = {}
+    if opts.max_speakers is not None:
+        config["max_speakers"] = opts.max_speakers
+    if opts.speaker_sensitivity is not None:
+        config["speaker_sensitivity"] = opts.speaker_sensitivity
+    if opts.prefer_current_speaker is not None:
+        config["prefer_current_speaker"] = opts.prefer_current_speaker
+    if opts.known_speakers:
+        config["speakers"] = [dataclasses.asdict(s) for s in opts.known_speakers]
+    return config or None
 
 
 def _load_default_vad() -> VAD | None:
@@ -934,19 +846,6 @@ def _normalize_additional_vocab(entries: Sequence[object]) -> list[AdditionalVoc
         )
 
     return normalized
-
-
-def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMode:
-    """Map the plugin's turn detection mode onto the session driver's.
-
-    - `VAD`      -> the service runs its own VAD and closes turns.
-    - `EXTERNAL` -> the caller closes turns by calling `finalize()`.
-
-    The plugin's enum values are the SDK's values, so this is a direct lookup — but it
-    is still required: `TurnConfig.to_dict()` reads the enum member's value, so the
-    `TurnConfig` must carry the SDK's own enum member, not the plugin's.
-    """
-    return AgentTurnDetectionMode(mode.value)
 
 
 def _resolve_base_url(base_url: NotGivenOr[str]) -> str:

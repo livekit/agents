@@ -11,25 +11,10 @@ from urllib.parse import urlencode
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
-from livekit.agents import APIConnectOptions, http
+from livekit.agents import APIConnectOptions, APIError, http
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 logger = logging.getLogger(__name__)
-
-
-class RTZRAPIError(Exception):
-    """Base exception for RTZR API errors."""
-
-    pass
-
-
-class RTZRStatusError(RTZRAPIError):
-    """Exception raised when RTZR API returns an error status."""
-
-    def __init__(self, message: str, status_code: int | None = None):
-        super().__init__(message)
-        self.message = message
-        self.status_code = status_code
 
 
 DEFAULT_SAMPLE_RATE = 8000
@@ -105,16 +90,8 @@ class RTZROpenAPIClient:
     both manual session management and async context manager usage.
 
     Example:
-        # Manual session management
-        client = RTZROpenAPIClient()
-        token = await client.get_token()
-        ws = await client.connect_websocket(config)
-        await client.close()
-
-        # Context manager (recommended)
         async with RTZROpenAPIClient() as client:
-            token = await client.get_token()
-            ws = await client.connect_websocket(config)
+            target = await client.streaming_target(client.build_config())
     """
 
     def __init__(
@@ -153,14 +130,10 @@ class RTZROpenAPIClient:
         """Get a valid access token, refreshing if necessary."""
         token = self._token
         if token is None or token["expire_at"] < time.time() - 3600:
-            await self._refresh_token(conn_options)
-            token = self._token
-        if token is None:
-            raise RTZRAPIError("Failed to obtain RTZR access token")
+            token = self._token = await self._fetch_token(conn_options)
         return token["access_token"]
 
-    async def _refresh_token(self, conn_options: APIConnectOptions) -> None:
-        """Refresh the access token."""
+    async def _fetch_token(self, conn_options: APIConnectOptions) -> _Token:
         sess = self._ensure_http_session()
         url = f"{self._api_base}/v1/authenticate"
 
@@ -172,11 +145,15 @@ class RTZROpenAPIClient:
             data=urlencode(form),
         ) as resp:
             await resp.raise_for_status()
-            try:
-                self._token = _TOKEN.validate_python(await resp.json(), strict=True)
-            except ValidationError:
-                raise RTZRStatusError("Invalid token response payload") from None
-            logger.debug("Successfully refreshed RTZR access token")
+            body = await resp.json()
+        try:
+            token = _TOKEN.validate_python(body, strict=True)
+        except ValidationError as e:
+            raise APIError(
+                "RTZR sent an invalid token response", kind="protocol", detail=str(body)
+            ) from e
+        logger.debug("Successfully refreshed RTZR access token")
+        return token
 
     def _ensure_http_session(self) -> http.HttpSession:
         """Ensure HTTP session is available."""
@@ -187,29 +164,19 @@ class RTZROpenAPIClient:
     async def close(self) -> None:
         """Nothing to release: the HTTP session belongs to the caller or the job."""
 
-    async def connect_websocket(
+    async def streaming_target(
         self,
         config: dict[str, str],
-        headers: dict[str, str] | None = None,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> http.WebSocket:
-        """Connect to the streaming WebSocket endpoint."""
-        # Build URL like reference client
+    ) -> http.SocketTarget:
+        """Where the streaming WebSocket connects, with a fresh token."""
         query_string = "&".join(f"{k}={v}" for k, v in config.items())
-        url = f"{self._ws_base}/v1/transcribe:streaming?{query_string}"
-
-        # Prepare headers
         token = await self.get_token(conn_options=conn_options)
-        ws_headers = {"Authorization": f"bearer {token}"}
-        if headers:
-            ws_headers.update(headers)
-
-        session = self._ensure_http_session()
-
-        ws = await session.ws_connect(url, headers=ws_headers, conn_options=conn_options)
-        logger.debug("Connected to RTZR WebSocket at %s", url)
-        return ws
+        return http.SocketTarget(
+            f"{self._ws_base}/v1/transcribe:streaming?{query_string}",
+            headers={"Authorization": f"bearer {token}"},
+        )
 
     def build_config(
         self,

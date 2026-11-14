@@ -230,7 +230,7 @@ impl ChatRequestView for ChatRequest {
 /// A language model.
 ///
 /// Plugins implement `chat()`, returning an `LLMStream` whose `_run` sends the provider's chunks.
-#[crate::host(proxy(host = "livekit.agents.llm.LLM", base = "llm.py", generic))]
+#[crate::host(proxy(host = "livekit.agents.llm.LLM", base = "llm.py", generic, owns))]
 pub trait Llm: Send + Sync {
     /// The host object's identity, independent of proxy instances and bound connection options;
     /// `None` for a native provider.

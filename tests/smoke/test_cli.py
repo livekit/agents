@@ -209,11 +209,6 @@ def test_cli_logging_quiets_noisy_libraries_below_warning() -> None:
     ],
 )
 @pytest.mark.parametrize("value", ["", "yes"], ids=["blank", "non_numeric"])
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/pull/7470 reproduces: the flag is parsed with int() "
-    "at import",
-)
 def test_a_debug_flag_value_cannot_break_an_import(flag: str, module: str, value: str) -> None:
     """Importing the package or a plugin succeeds whatever a numeric debug flag holds.
     https://github.com/livekit/agents/pull/7470"""

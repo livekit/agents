@@ -956,7 +956,7 @@ impl SttAdapterStream {
 /// [`::lk_agents_abi::Stt`] over a host `livekit.agents.stt.STT`.
 #[derive(Clone)]
 pub struct SttProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -979,10 +979,10 @@ impl SttProxy {
         if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Stt>(obj)? {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -990,7 +990,7 @@ impl SttProxy {
         if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Stt>(obj)? {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -1000,13 +1000,18 @@ impl SttProxy {
                 "a native `Stt` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
@@ -1042,7 +1047,7 @@ impl SttProxy {
             }?
         };
         Ok(SttProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            host,
             context,
             notifier: ::std::default::Default::default(),
             instance_id,
@@ -1072,7 +1077,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         &self,
     ) -> ::std::result::Result<::lk_agents_abi::ProviderId, ::lk_agents_abi::errors::HostError>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(
             &crate::py_calls::calling_context(&self.context),
         )
@@ -1082,7 +1087,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_id")?,
+                    host.bind(py)?.getattr("_core_id")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1115,7 +1120,10 @@ impl ::lk_agents_abi::Stt for SttProxy {
     }
 
     fn prewarm(&self, _cx: &::lk_agents_abi::telemetry::Cx) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Stt._core_prewarm",
@@ -1125,7 +1133,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_prewarm")?,
+                    host.bind(py)?.getattr("_core_prewarm")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1134,7 +1142,10 @@ impl ::lk_agents_abi::Stt for SttProxy {
     }
 
     fn update_keyterms(&self, keyterms: &[::std::string::String]) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let keyterms_arg = keyterms.to_vec();
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -1146,7 +1157,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(keyterms_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_update_keyterms")?,
+                    host.bind(py)?.getattr("_core_update_keyterms")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1155,7 +1166,10 @@ impl ::lk_agents_abi::Stt for SttProxy {
     }
 
     fn push_conversation_item(&self, role: &str, text: &str) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let role_arg = role.to_owned();
         let text_arg = text.to_owned();
         ::lk_agents_runtime::host::notify(
@@ -1170,7 +1184,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_push_conversation_item")?,
+                    host.bind(py)?.getattr("_core_push_conversation_item")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1179,7 +1193,10 @@ impl ::lk_agents_abi::Stt for SttProxy {
     }
 
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let error_arg = error;
         let error_arg = match ::pyo3::Python::attach(
             |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
@@ -1205,7 +1222,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_failed")?,
+                    host.bind(py)?.getattr("_core_failed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1241,7 +1258,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         '_,
         ::std::result::Result<::lk_agents_abi::SpeechEvent, ::lk_agents_abi::errors::ProviderError>,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let buffer_arg = buffer.to_vec();
         let language_arg = language.map(::std::borrow::ToOwned::to_owned);
         let bound = ::std::clone::Clone::clone(&self.conn);
@@ -1275,7 +1292,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                     )?);
                 }
                 Ok((
-                    host.bind(py).getattr("_core_recognize")?,
+                    host.bind(py)?.getattr("_core_recognize")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1322,7 +1339,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let language_arg = language.map(::std::borrow::ToOwned::to_owned);
         let start_time_offset_arg = start_time_offset;
         let bound = ::std::clone::Clone::clone(&self.conn);
@@ -1347,7 +1364,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                     )?);
                 }
                 Ok((
-                    host.bind(py).getattr("_core_stream")?,
+                    host.bind(py)?.getattr("_core_stream")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

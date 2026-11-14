@@ -11,10 +11,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pytest
-from _pytest.mark import ParameterSet
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-from spatius.proto.generated import message_pb2
 
 from livekit.agents import APIConnectOptions, APIError, APITimeoutError, http
 from livekit.agents.voice.avatar import AvatarSession
@@ -61,9 +59,8 @@ async def spatius_ingress(request: web.Request) -> web.StreamResponse:
     socket = web.WebSocketResponse()
     await socket.prepare(request)
     await socket.receive_bytes()  # the session configuration
-    confirm = message_pb2.Message(type=message_pb2.MESSAGE_SERVER_CONFIRM_SESSION)
-    confirm.server_confirm_session.connection_id = "s"
-    await socket.send_bytes(confirm.SerializeToString())
+    # Message{type: SERVER_CONFIRM_SESSION, server_confirm_session: {connection_id: "s"}}
+    await socket.send_bytes(b"\x08\x02\x1a\x03\x0a\x01s")
     async for _ in socket:
         pass
     return socket
@@ -211,15 +208,6 @@ AVATARS: dict[str, Avatar] = {
 
 Reply = tuple[int, object] | None  # None holds the answer until the test ends
 
-NO_READ_TIMEOUT = {
-    "spatius": "the spatius SDK posts its session token under a fixed 10 s total timeout",
-}
-
-
-def _every_avatar(**marks: pytest.MarkDecorator) -> list[ParameterSet]:
-    return [pytest.param(name, marks=marks.get(name, ())) for name in AVATARS]
-
-
 async def _start(
     provider: str,
     replies: list[Reply],
@@ -315,10 +303,7 @@ async def test_unavailable_start_is_retried(provider: str, avatar_host: AvatarHo
     assert requests.count(AVATARS[provider].session) == 2
 
 
-@pytest.mark.parametrize(
-    "provider",
-    _every_avatar(**{name: pytest.mark.skip(reason=why) for name, why in NO_READ_TIMEOUT.items()}),
-)
+@pytest.mark.parametrize("provider", AVATARS)
 async def test_read_timeout_start_is_not_resent(provider: str, avatar_host: AvatarHost) -> None:
     """A session request the provider received but did not answer within read_timeout fails
     start with APITimeoutError and is never sent again. Catches an avatar whose retry could

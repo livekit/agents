@@ -2933,7 +2933,7 @@ inventory::submit! {
 /// [`::lk_agents_abi::llm::duplex::AudioGate`] over a host `livekit.agents.llm.AudioGate`.
 #[derive(Clone)]
 pub struct AudioGateProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl AudioGateProxy {
@@ -2946,10 +2946,10 @@ impl AudioGateProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -2959,7 +2959,7 @@ impl AudioGateProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -2972,15 +2972,20 @@ impl AudioGateProxy {
                 "a native `AudioGate` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(AudioGateProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(AudioGateProxy { host })
     }
 }
 
@@ -2989,14 +2994,18 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
         &self,
         frame: ::lk_agents_abi::AudioFrame,
     ) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let frame_arg = frame;
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::rtc_frames::audio_frame_to_py(py, frame_arg)?];
-                Ok((host.bind(py).getattr("update")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((
+                    host.bind(py)?.getattr("update")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -3017,13 +3026,13 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
     }
 
     fn deactivate(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("deactivate")?,
+                    host.bind(py)?.getattr("deactivate")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3056,7 +3065,7 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
 /// [`::lk_agents_abi::llm::duplex::DuplexHost`] over a host `livekit.agents.llm.duplex.DuplexModel`.
 #[derive(Clone)]
 pub struct DuplexHostProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -3072,10 +3081,10 @@ impl DuplexHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -3085,7 +3094,7 @@ impl DuplexHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -3098,18 +3107,23 @@ impl DuplexHostProxy {
                 "a native `DuplexHost` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        Ok(DuplexHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
+        Ok(DuplexHostProxy { host, context })
     }
 }
 
@@ -3117,12 +3131,12 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
     fn label(
         &self,
     ) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] =
-                    [host.bind(py).clone(), ::pyo3::types::PyString::new(py, "label").into_any()];
+                    [host.bind(py)?, ::pyo3::types::PyString::new(py, "label").into_any()];
                 Ok((
                     py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -3153,7 +3167,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
         ::lk_agents_abi::llm::duplex::DuplexCapabilities,
         ::lk_agents_abi::errors::HostError,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(
             &crate::py_calls::calling_context(&self.context),
         )
@@ -3161,10 +3175,8 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).clone(),
-                    ::pyo3::types::PyString::new(py, "capabilities").into_any(),
-                ];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] =
+                    [host.bind(py)?, ::pyo3::types::PyString::new(py, "capabilities").into_any()];
                 Ok((
                     py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -3204,7 +3216,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
         ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate>>,
         ::lk_agents_abi::errors::HostError,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(
             &crate::py_calls::calling_context(&self.context),
         )
@@ -3214,7 +3226,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("audio_gate")?,
+                    host.bind(py)?.getattr("audio_gate")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3261,7 +3273,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let tools_arg = tools;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -3275,7 +3287,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
                     Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
                 }];
                 Ok((
-                    host.bind(py).getattr("_core_session")?,
+                    host.bind(py)?.getattr("_core_session")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3311,7 +3323,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
 /// [`::lk_agents_abi::llm::duplex::DuplexSession`] over a host `livekit.agents._bindings._DuplexSession`.
 #[derive(Clone)]
 pub struct DuplexSessionProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -3330,10 +3342,10 @@ impl DuplexSessionProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -3343,7 +3355,7 @@ impl DuplexSessionProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -3357,13 +3369,18 @@ impl DuplexSessionProxy {
                 "a native `DuplexSession` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
@@ -3383,7 +3400,7 @@ impl DuplexSessionProxy {
             })?
         };
         Ok(DuplexSessionProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            host,
             context,
             input,
             next_audio_iter: ::std::sync::Arc::new(::pyo3::sync::PyOnceLock::new()),
@@ -3404,7 +3421,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         names: ::std::vec::Vec<::std::string::String>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let instructions_arg = instructions;
         let items_arg = items;
         let names_arg = names;
@@ -3432,7 +3449,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(names_arg, py)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_configure")?,
+                    host.bind(py)?.getattr("_core_configure")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3460,7 +3477,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         instructions: ::std::string::String,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let instructions_arg = instructions;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -3472,7 +3489,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("plugin")?.getattr("_update_instructions")?,
+                    host.bind(py)?.getattr("plugin")?.getattr("_update_instructions")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3500,7 +3517,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         items: ::std::vec::Vec<::lk_agents_abi::ChatItem>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let items_arg = items;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -3518,7 +3535,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 )?
                 .into_any()];
                 Ok((
-                    host.bind(py).getattr("plugin")?.getattr("_append_items")?,
+                    host.bind(py)?.getattr("plugin")?.getattr("_append_items")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3546,7 +3563,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         names: ::std::vec::Vec<::std::string::String>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let names_arg = names;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -3558,7 +3575,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(names_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_update_tools")?,
+                    host.bind(py)?.getattr("_core_update_tools")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3587,7 +3604,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let instructions_arg = instructions;
         let tool_choice_arg = tool_choice;
         let started = ::lk_agents_runtime::host::call(
@@ -3608,7 +3625,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                     },
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_generate")?,
+                    host.bind(py)?.getattr("_core_generate")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3640,7 +3657,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let iterator = ::std::sync::Arc::clone(&self.next_audio_iter);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -3654,7 +3671,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                         .get_or_try_init(py, || {
                             crate::py_calls::call(
                                 &py.import("builtins")?.getattr("aiter")?,
-                                (host.bind(py).getattr("plugin")?.getattr("audio_stream")?,),
+                                (host.bind(py)?.getattr("plugin")?.getattr("audio_stream")?,),
                                 None,
                             )
                             .map(::pyo3::Bound::unbind)
@@ -3700,7 +3717,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession.events.get",
@@ -3710,7 +3727,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("events")?.getattr("get")?,
+                    host.bind(py)?.getattr("events")?.getattr("get")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3741,7 +3758,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         cx: &::lk_agents_abi::telemetry::Cx,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession.plugin.aclose",
@@ -3751,7 +3768,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("plugin")?.getattr("aclose")?,
+                    host.bind(py)?.getattr("plugin")?.getattr("aclose")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3778,7 +3795,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         cx: &::lk_agents_abi::telemetry::Cx,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession._core_aclose",
@@ -3788,7 +3805,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_aclose")?,
+                    host.bind(py)?.getattr("_core_aclose")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3816,7 +3833,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 /// [`::lk_agents_abi::llm::duplex::AudioGateFactory`] over a host `collections.abc.Callable`.
 #[derive(Clone)]
 pub struct AudioGateFactoryProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl AudioGateFactoryProxy {
@@ -3829,10 +3846,10 @@ impl AudioGateFactoryProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -3842,7 +3859,7 @@ impl AudioGateFactoryProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -3856,15 +3873,20 @@ impl AudioGateFactoryProxy {
                 "a native `AudioGateFactory` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(AudioGateFactoryProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(AudioGateFactoryProxy { host })
     }
 }
 
@@ -3875,13 +3897,13 @@ impl ::lk_agents_abi::llm::duplex::AudioGateFactory for AudioGateFactoryProxy {
         ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate>,
         ::lk_agents_abi::errors::HostError,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("__call__")?,
+                    host.bind(py)?.getattr("__call__")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3906,8 +3928,7 @@ impl ::lk_agents_abi::llm::duplex::AudioGateFactory for AudioGateFactoryProxy {
 /// [`::lk_agents_abi::llm::fallback::ChainObserver`] over a host `livekit.agents._bindings.FallbackListener`.
 #[derive(Clone)]
 pub struct ChainObserverProxy {
-    /// The object whose events these are: not kept alive by them.
-    host: ::std::sync::Arc<Py<::pyo3::types::PyWeakrefReference>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -3920,32 +3941,32 @@ impl ChainObserverProxy {
     pub fn weak(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::fallback::ChainObserver>> {
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, false)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        Ok(ChainObserverProxy {
-            host: ::std::sync::Arc::new(::pyo3::types::PyWeakrefReference::new(obj)?.unbind()),
-            context,
-            notifier: ::std::default::Default::default(),
-        })
+        Ok(ChainObserverProxy { host, context, notifier: ::std::default::Default::default() })
     }
 }
 
 impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
     fn availability_changed(&self, ev: ::lk_agents_abi::llm::fallback::AvailabilityChanged) {
-        let Some(host) = ::pyo3::Python::attach(|py| {
-            self.host.bind(py).upgrade().map(|host| ::std::sync::Arc::new(host.unbind()))
-        }) else {
+        if self.host.gone() {
             return;
-        };
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let ev_arg = ev;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -3959,7 +3980,7 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
                         py, ev_arg,
                     )?];
                 Ok((
-                    host.bind(py).getattr("_core_availability_changed")?,
+                    host.bind(py)?.getattr("_core_availability_changed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3968,11 +3989,10 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
     }
 
     fn all_unavailable(&self) {
-        let Some(host) = ::pyo3::Python::attach(|py| {
-            self.host.bind(py).upgrade().map(|host| ::std::sync::Arc::new(host.unbind()))
-        }) else {
+        if self.host.gone() {
             return;
-        };
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "ChainObserver._core_all_unavailable",
@@ -3982,7 +4002,7 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_all_unavailable")?,
+                    host.bind(py)?.getattr("_core_all_unavailable")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3991,11 +4011,10 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
     }
 
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
-        let Some(host) = ::pyo3::Python::attach(|py| {
-            self.host.bind(py).upgrade().map(|host| ::std::sync::Arc::new(host.unbind()))
-        }) else {
+        if self.host.gone() {
             return;
-        };
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let error_arg = error;
         let error_arg = match ::pyo3::Python::attach(
             |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
@@ -4021,7 +4040,7 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_failed")?,
+                    host.bind(py)?.getattr("_core_failed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4035,7 +4054,7 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
 /// [`::lk_agents_abi::llm::mcp::McpProgress`] over a host `livekit.agents.voice.events.RunContext`.
 #[derive(Clone)]
 pub struct McpProgressProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl McpProgressProxy {
@@ -4048,10 +4067,10 @@ impl McpProgressProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -4061,7 +4080,7 @@ impl McpProgressProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -4073,15 +4092,20 @@ impl McpProgressProxy {
                 "a native `McpProgress` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(McpProgressProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(McpProgressProxy { host })
     }
 }
 
@@ -4093,7 +4117,7 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
         message: &str,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let message_arg = message.to_owned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -4104,7 +4128,11 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?];
-                Ok((host.bind(py).getattr("update")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((
+                    host.bind(py)?.getattr("update")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -4129,11 +4157,11 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
 /// [`::lk_agents_abi::llm::mcp::McpToolsetHost`] over a host `livekit.agents.llm.mcp.MCPToolset`.
 #[derive(Clone)]
 pub struct McpToolsetHostProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl McpToolsetHostProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
+    /// A registered native class as itself, any other host object behind this proxy, held weakly.
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>> {
@@ -4142,10 +4170,10 @@ impl McpToolsetHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, false)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -4155,7 +4183,7 @@ impl McpToolsetHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -4169,15 +4197,20 @@ impl McpToolsetHostProxy {
                 "a native `McpToolsetHost` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(McpToolsetHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(McpToolsetHostProxy { host })
     }
 }
 
@@ -4189,7 +4222,7 @@ impl ::lk_agents_abi::llm::mcp::McpToolsetHost for McpToolsetHostProxy {
         cancel: ::std::sync::Arc<dyn ::lk_agents_abi::invoke::Cancellation>,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call_cancellable(
             &crate::py_calls::Entry,
             "McpToolsetHost._core_list",
@@ -4200,7 +4233,7 @@ impl ::lk_agents_abi::llm::mcp::McpToolsetHost for McpToolsetHostProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_list")?,
+                    host.bind(py)?.getattr("_core_list")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4228,7 +4261,7 @@ impl ::lk_agents_abi::llm::mcp::McpToolsetHost for McpToolsetHostProxy {
         context: &::lk_agents_abi::invoke::CallContext,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "McpToolsetHost._core_close_idle",
@@ -4238,7 +4271,7 @@ impl ::lk_agents_abi::llm::mcp::McpToolsetHost for McpToolsetHostProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_close_idle")?,
+                    host.bind(py)?.getattr("_core_close_idle")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4266,7 +4299,7 @@ impl ::lk_agents_abi::llm::mcp::McpToolsetHost for McpToolsetHostProxy {
 /// [`::lk_agents_abi::llm::realtime::HostRealtime`] over a host `livekit.agents.llm.realtime.RealtimeModel`.
 #[derive(Clone)]
 pub struct HostRealtimeProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -4285,10 +4318,10 @@ impl HostRealtimeProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -4298,7 +4331,7 @@ impl HostRealtimeProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -4312,13 +4345,18 @@ impl HostRealtimeProxy {
                 "a native `HostRealtime` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
@@ -4343,13 +4381,7 @@ impl HostRealtimeProxy {
             let v = crate::py_calls::read(obj, "_core_capabilities")?;
             crate::generated::records::realtime::realtime_capabilities_from_py(v.as_any())?
         };
-        Ok(HostRealtimeProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
-            context,
-            instance_id,
-            label,
-            capabilities,
-        })
+        Ok(HostRealtimeProxy { host, context, instance_id, label, capabilities })
     }
 }
 
@@ -4370,7 +4402,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
         &self,
     ) -> ::std::result::Result<::lk_agents_abi::ProviderId, ::lk_agents_abi::errors::HostError>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(
             &crate::py_calls::calling_context(&self.context),
         )
@@ -4380,7 +4412,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_id")?,
+                    host.bind(py)?.getattr("_core_id")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4424,7 +4456,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let turn_detection_disabled_arg = turn_detection_disabled;
         let tools_arg = tools;
         let started = ::lk_agents_runtime::host::call(
@@ -4442,7 +4474,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
                     },
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_session")?,
+                    host.bind(py)?.getattr("_core_session")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4478,7 +4510,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
 /// [`::lk_agents_abi::llm::realtime::HostRealtimeSession`] over a host `livekit.agents.llm.realtime.RealtimeSession`.
 #[derive(Clone)]
 pub struct HostRealtimeSessionProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -4497,10 +4529,10 @@ impl HostRealtimeSessionProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -4511,7 +4543,7 @@ impl HostRealtimeSessionProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -4527,28 +4559,32 @@ impl HostRealtimeSessionProxy {
                 "a native `HostRealtimeSession` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        Ok(HostRealtimeSessionProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
-            context,
-            notifier: ::std::default::Default::default(),
-        })
+        Ok(HostRealtimeSessionProxy { host, context, notifier: ::std::default::Default::default() })
     }
 }
 
 impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSessionProxy {
     fn send(&self, cmd: ::lk_agents_abi::RealtimeCommand) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let cmd_arg = cmd;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -4562,7 +4598,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                         py, cmd_arg,
                     )?];
                 Ok((
-                    host.bind(py).getattr("_core_send")?,
+                    host.bind(py)?.getattr("_core_send")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4576,7 +4612,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         instructions: ::std::string::String,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let instructions_arg = instructions;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -4588,7 +4624,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_update_instructions")?,
+                    host.bind(py)?.getattr("_core_update_instructions")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4616,7 +4652,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         items: ::std::vec::Vec<::lk_agents_abi::ChatItem>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let items_arg = items;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -4634,7 +4670,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 )?
                 .into_any()];
                 Ok((
-                    host.bind(py).getattr("_core_update_chat_ctx")?,
+                    host.bind(py)?.getattr("_core_update_chat_ctx")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4662,7 +4698,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         item: ::lk_agents_abi::ChatItem,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let item_arg = item;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -4674,7 +4710,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::chat_items::chat_item_to_py(py, item_arg)?];
                 Ok((
-                    host.bind(py).getattr("_core_push_item")?,
+                    host.bind(py)?.getattr("_core_push_item")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4702,7 +4738,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         names: ::std::vec::Vec<::std::string::String>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let names_arg = names;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -4714,7 +4750,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(names_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_update_tools")?,
+                    host.bind(py)?.getattr("_core_update_tools")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4747,7 +4783,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             ::lk_agents_abi::llm::realtime::RealtimeError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let cmd_arg = cmd;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -4761,7 +4797,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                         py, cmd_arg,
                     )?];
                 Ok((
-                    host.bind(py).getattr("_core_request")?,
+                    host.bind(py)?.getattr("_core_request")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4798,7 +4834,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             ::lk_agents_abi::llm::realtime::RealtimeError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let request_arg = request;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -4810,7 +4846,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_objects::object_ref_to_py(py, request_arg)?];
                 Ok((
-                    host.bind(py).getattr("_core_generation")?,
+                    host.bind(py)?.getattr("_core_generation")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4842,7 +4878,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         request: ::lk_agents_abi::HostRef,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let request_arg = request;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -4854,7 +4890,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_objects::object_ref_to_py(py, request_arg)?];
                 Ok((
-                    host.bind(py).getattr("_core_cancel")?,
+                    host.bind(py)?.getattr("_core_cancel")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4883,7 +4919,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         req_id: ::std::option::Option<::std::string::String>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let generation_arg = generation;
         let req_id_arg = req_id;
         let started = ::lk_agents_runtime::host::call(
@@ -4898,7 +4934,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(req_id_arg, py)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_drain")?,
+                    host.bind(py)?.getattr("_core_drain")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4930,7 +4966,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_next_event",
@@ -4940,7 +4976,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_next_event")?,
+                    host.bind(py)?.getattr("_core_next_event")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -4971,7 +5007,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         cx: &::lk_agents_abi::telemetry::Cx,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtimeSession._core_aclose",
@@ -4981,7 +5017,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_aclose")?,
+                    host.bind(py)?.getattr("_core_aclose")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -5009,7 +5045,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
 /// [`::lk_agents_abi::Llm`] over a host `livekit.agents.llm.LLM`.
 #[derive(Clone)]
 pub struct LlmProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -5030,10 +5066,10 @@ impl LlmProxy {
         if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Llm>(obj)? {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -5041,7 +5077,7 @@ impl LlmProxy {
         if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Llm>(obj)? {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -5051,13 +5087,18 @@ impl LlmProxy {
                 "a native `Llm` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
@@ -5080,7 +5121,7 @@ impl LlmProxy {
             v.extract::<bool>()?
         };
         Ok(LlmProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            host,
             context,
             notifier: ::std::default::Default::default(),
             instance_id,
@@ -5103,13 +5144,13 @@ impl ::lk_agents_abi::Llm for LlmProxy {
     fn read_model(
         &self,
     ) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_model")?,
+                    host.bind(py)?.getattr("_core_model")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -5136,7 +5177,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         &self,
     ) -> ::std::result::Result<::lk_agents_abi::ProviderId, ::lk_agents_abi::errors::HostError>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(
             &crate::py_calls::calling_context(&self.context),
         )
@@ -5146,7 +5187,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_id")?,
+                    host.bind(py)?.getattr("_core_id")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -5179,7 +5220,10 @@ impl ::lk_agents_abi::Llm for LlmProxy {
     }
 
     fn prewarm(&self, _cx: &::lk_agents_abi::telemetry::Cx) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Llm._core_prewarm",
@@ -5189,7 +5233,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_prewarm")?,
+                    host.bind(py)?.getattr("_core_prewarm")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -5212,7 +5256,10 @@ impl ::lk_agents_abi::Llm for LlmProxy {
     }
 
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let error_arg = error;
         let error_arg = match ::pyo3::Python::attach(
             |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
@@ -5238,7 +5285,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_failed")?,
+                    host.bind(py)?.getattr("_core_failed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -5257,7 +5304,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let req_arg = ::std::clone::Clone::clone(req);
         let bound = ::std::clone::Clone::clone(&self.conn);
         let started = ::lk_agents_runtime::host::call(
@@ -5279,7 +5326,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                     )?);
                 }
                 Ok((
-                    host.bind(py).getattr("_core_chat")?,
+                    host.bind(py)?.getattr("_core_chat")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -5315,7 +5362,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
 /// [`::lk_agents_abi::llm::toolsets::ToolsetHooks`] over a host `livekit.agents.llm.Toolset`.
 #[derive(Clone)]
 pub struct ToolsetHooksProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -5323,7 +5370,7 @@ pub struct ToolsetHooksProxy {
 }
 
 impl ToolsetHooksProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
+    /// A registered native class as itself, any other host object behind this proxy, held weakly.
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>> {
@@ -5332,10 +5379,10 @@ impl ToolsetHooksProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, false)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -5345,7 +5392,7 @@ impl ToolsetHooksProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -5359,13 +5406,18 @@ impl ToolsetHooksProxy {
                 "a native `ToolsetHooks` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
@@ -5382,11 +5434,7 @@ impl ToolsetHooksProxy {
                     })
                 })?
         };
-        Ok(ToolsetHooksProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
-            context,
-            lifetime,
-        })
+        Ok(ToolsetHooksProxy { host, context, lifetime })
     }
 }
 
@@ -5401,7 +5449,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
         cancel: ::std::sync::Arc<dyn ::lk_agents_abi::invoke::Cancellation>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call_cancellable(
             &crate::py_calls::Entry,
             "ToolsetHooks.setup",
@@ -5411,7 +5459,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
             cancel,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("setup")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((host.bind(py)?.getattr("setup")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -5435,7 +5483,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
         cx: &::lk_agents_abi::telemetry::Cx,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "ToolsetHooks.aclose",
@@ -5444,7 +5492,11 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("aclose")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((
+                    host.bind(py)?.getattr("aclose")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -5469,14 +5521,12 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
         ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::LeaseGroup>>,
         ::lk_agents_abi::errors::HostError,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).clone(),
-                    ::pyo3::types::PyString::new(py, "_children").into_any(),
-                ];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] =
+                    [host.bind(py)?, ::pyo3::types::PyString::new(py, "_children").into_any()];
                 Ok((
                     py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,

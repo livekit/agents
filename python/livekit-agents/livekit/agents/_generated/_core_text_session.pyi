@@ -31,7 +31,8 @@ class TextSessionRunner:
         agents: Sequence[TextSessionAgent],
         max_depth: int,
     ) -> Self: ...
-    def run(self, request: TextSessionRequest) -> TextSessionUpdates: ...
+    def run(self, request: TextSessionRequest) -> TextSessionUpdates:
+        """Runs the one request a runner serves; a second is refused."""
     def run_stream(
         self,
         request: TextSessionRequest,

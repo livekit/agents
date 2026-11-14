@@ -14,27 +14,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
 import os
 import weakref
-from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypedDict
 
-from pydantic import BaseModel, Field, JsonValue, ValidationError
+from pydantic import JsonValue
 
 from livekit import rtc
-from livekit.agents import (
-    APIConnectionError,
-    APIError,
-    APITimeoutError,
-    LanguageCode,
-    http,
-    stt,
-    utils,
-)
-from livekit.agents.stt import SpeechEventType
+from livekit.agents import LanguageCode, http, stt, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -57,19 +46,26 @@ WS_ENDPOINT = "stt/v1/transcribe:streamBidirectional"
 # without a plugin update.
 
 
-class _Transcription(BaseModel):
-    transcript: str = ""
-    is_final: bool = Field(default=False, alias="isFinal")
-    voice_profile: JsonValue = Field(default=None, alias="voiceProfile")
+class _Transcription(TypedDict, total=False):
+    transcript: str
+    isFinal: bool
+    voiceProfile: JsonValue
 
 
-class _TranscriptionResult(BaseModel):
-    speech_started: object = Field(default=None, alias="speechStarted")
-    transcription: _Transcription | None = None
+class _Result(TypedDict, total=False):
+    speechStarted: JsonValue
+    transcription: _Transcription
 
 
-class _StreamEvent(BaseModel):
-    result: _TranscriptionResult = Field(default_factory=_TranscriptionResult)
+class _Event(TypedDict, total=False):
+    result: _Result
+
+
+class _Command(TypedDict, total=False):
+    transcribeConfig: dict[str, object]
+    audioChunk: dict[str, str]
+    endTurn: dict[str, object]
+    closeStream: dict[str, object]
 
 
 @dataclass
@@ -199,11 +195,6 @@ class STT(stt.STT):
         if utils.is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
 
-    def _ensure_session(self) -> http.HttpSession:
-        if not self._http_session:
-            self._http_session = http.http_session()
-        return self._http_session
-
     async def _recognize_impl(
         self,
         buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
@@ -224,7 +215,6 @@ class STT(stt.STT):
         stream = SpeechStream(
             stt=self,
             opts=self._opts,
-            get_session=self._ensure_session,
             base_url=self._base_url,
             authorization=self._authorization,
             conn_options=conn_options,
@@ -234,29 +224,26 @@ class STT(stt.STT):
         return stream
 
 
-class SpeechStream(stt.RecognizeStream):
+class SpeechStream(stt.SocketStream[_Event, _Command]):
+    goodbye = _Command(closeStream={})
+    # speechStarted and the final transcription are Inworld's own speech boundaries
+    provider_vad = True
+
     def __init__(
         self,
         *,
         stt: STT,
         opts: _STTOptions,
-        get_session: Callable[[], http.HttpSession],
         base_url: str,
         authorization: str,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         language: str = DEFAULT_LANGUAGE,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
-        self._stt: STT = stt
         self._opts = opts
-        self._get_session = get_session
         self._base_url = base_url
         self._authorization = authorization
         self._language = language
-        self._ws: http.WebSocket | None = None
-        self._reconnect_event = asyncio.Event()
-        self._speaking = False
-        self._input_closed = False
         self._request_id = ""
 
     def _build_transcribe_config(self) -> dict[str, object]:
@@ -286,147 +273,51 @@ class SpeechStream(stt.RecognizeStream):
 
         return config
 
-    async def _connect_ws(self) -> http.WebSocket:
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
         ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
-        ws_url = ws_url.rstrip("/") + "/" + WS_ENDPOINT
-
-        ws = await self._get_session().ws_connect(
-            ws_url,
+        self._request_id = utils.shortuuid()
+        return http.SocketTarget(
+            ws_url.rstrip("/") + "/" + WS_ENDPOINT,
             headers={"Authorization": self._authorization},
-            conn_options=self._conn_options,
         )
 
-        self._request_id = utils.shortuuid()
-        await ws.send_str(json.dumps({"transcribeConfig": self._build_transcribe_config()}))
-        logger.debug("Inworld STT WebSocket connection established")
-        return ws
+    def setup(self) -> http.Encoded[_Command]:
+        return _Command(transcribeConfig=self._build_transcribe_config())
 
-    async def _run(self) -> None:
-        while True:
-            self._input_closed = False
-            try:
-                ws = await self._connect_ws()
-                self._ws = ws
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_Command]:
+        if isinstance(item, rtc.AudioFrame):
+            return _Command(audioChunk={"content": base64.b64encode(item.data).decode()})
+        if isinstance(item, stt.RecognizeStream.Flush):
+            return _Command(endTurn={})
+        return None
 
-                async with utils.aio.TaskSet() as tasks:
-                    io = asyncio.gather(
-                        tasks.spawn(self._send_audio_task()),
-                        tasks.spawn(self._recv_messages_task()),
-                    )
-                    reconnect = tasks.spawn(self._reconnect_event.wait())
-                    if await tasks.first_completed(io, reconnect) is not reconnect:
-                        break
-
-                    self._reconnect_event.clear()
-
-            except TimeoutError as e:
-                raise APITimeoutError("Timeout connecting to Inworld STT API") from e
-            except APIError:
-                raise
-            except Exception as e:
-                raise APIConnectionError(f"Unexpected error: {e}") from e
-            finally:
-                if self._speaking:
-                    self._speaking = False
-                    if not self.closed:
-                        self.send(
-                            stt.SpeechEvent(
-                                type=SpeechEventType.END_OF_SPEECH, request_id=self._request_id
-                            )
-                        )
-                if self._ws is not None:
-                    await self._ws.close()
-                    self._ws = None
-
-    async def _send_audio_task(self) -> None:
-        if not self._ws:
-            return
-
-        async for data in self.input:
-            if isinstance(data, self.Flush):
-                await self._ws.send_str(json.dumps({"endTurn": {}}))
-            else:
-                pcm_bytes = data.data.tobytes()
-                audio_b64 = base64.b64encode(pcm_bytes).decode()
-                await self._ws.send_str(json.dumps({"audioChunk": {"content": audio_b64}}))
-
-        # Input channel closed: tell the server to close the stream
-        self._input_closed = True
-        await self._ws.send_str(json.dumps({"closeStream": {}}))
-
-    async def _recv_messages_task(self) -> None:
-        if not self._ws:
-            return
-
-        async for msg in self._ws:
-            if msg.type == http.WebSocketMessageType.TEXT:
-                try:
-                    event = _StreamEvent.model_validate_json(msg.data)
-                except ValidationError as exc:
-                    raise APIError(
-                        "Inworld STT sent an invalid event", kind="protocol", detail=msg.text
-                    ) from exc
-                self._process_stream_event(event)
-        if not self._input_closed:
-            raise self._ws.close_error("Inworld STT connection closed unexpectedly")
-
-    def _process_stream_event(self, event: _StreamEvent) -> None:
-        result = event.result
-
-        if "speech_started" in result.model_fields_set and not self._speaking:
-            self._speaking = True
-            self.send(
-                stt.SpeechEvent(
-                    type=SpeechEventType.START_OF_SPEECH,
-                    request_id=self._request_id,
-                )
-            )
-            return
-
-        t = result.transcription
-        if not t:
-            return
-
-        text = t.transcript
-        is_final = t.is_final
-        voice_profile = t.voice_profile
-
-        # An empty-text final (VAD false positive, unrecognizable noise) must still
-        # reach the END_OF_SPEECH emission below — otherwise _speaking stays True
-        # and subsequent speechStarted events are ignored, wedging the stream.
-        if not text and not is_final:
-            return
-
+    def on_message(self, message: _Event) -> stt.Report | list[stt.Report] | None:
+        result = message.get("result", {})
+        if "speechStarted" in result:
+            return stt.SpeechStarted()
+        if (t := result.get("transcription")) is None:
+            return None
+        text = t.get("transcript", "")
+        is_final = t.get("isFinal", False)
+        reports: list[stt.Report] = []
         if text:
-            event_type = (
-                SpeechEventType.FINAL_TRANSCRIPT if is_final else SpeechEventType.INTERIM_TRANSCRIPT
-            )
-
             metadata: dict[str, JsonValue] | None = None
-            if voice_profile:
+            if voice_profile := t.get("voiceProfile"):
                 metadata = {"voice_profile": voice_profile}
                 if is_final:
                     logger.info(f"Inworld voice profile: {voice_profile}")
-
-            self.send(
-                stt.SpeechEvent(
-                    type=event_type,
+            reports.append(
+                stt.Transcript(
+                    text,
+                    LanguageCode(self._language),
+                    final=is_final,
                     request_id=self._request_id,
-                    alternatives=[
-                        stt.SpeechData(
-                            text=text,
-                            language=LanguageCode(self._language),
-                            metadata=metadata,
-                        )
-                    ],
+                    metadata=metadata,
                 )
             )
-
-        if is_final and self._speaking:
-            self._speaking = False
-            self.send(
-                stt.SpeechEvent(
-                    type=SpeechEventType.END_OF_SPEECH,
-                    request_id=self._request_id,
-                )
-            )
+        # an empty final (a false start, unrecognizable noise) still ends the speech
+        if is_final:
+            reports.append(stt.SpeechEnded())
+        return reports

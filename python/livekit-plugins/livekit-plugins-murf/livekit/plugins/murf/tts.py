@@ -14,14 +14,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
 import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 from livekit.agents import (
     APIConnectionError,
@@ -35,7 +33,6 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import (
     TTSDefaultVoiceId,
     TTSDefaultVoiceStyle,
@@ -46,17 +43,6 @@ from .models import (
 )
 
 API_AUTH_HEADER = "api-key"
-
-
-def _decode(raw: str | bytes) -> dict[str, Any]:
-    """A provider message, which must be a JSON object."""
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        data = None
-    if not isinstance(data, dict):
-        raise APIError("Murf sent a malformed message", kind="protocol", detail=str(raw))
-    return data
 
 
 @dataclass
@@ -147,12 +133,7 @@ class TTS(tts.TTS):
             max_buffer_delay_in_ms=max_buffer_delay_in_ms,
         )
         self._session = http_session
-        self._pool = utils.ConnectionPool[http.WebSocket](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=300,
-            mark_refreshed_on_get=True,
-        )
+        self._mux = _Mux(self._opts)
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     @property
@@ -163,17 +144,6 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Murf"
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        session = self._ensure_session()
-        url = self._opts.get_ws_url(
-            f"/v1/speech/stream-input?sample_rate={self._opts.sample_rate}&format={self._opts.encoding}&model={self._opts.model}"
-        )
-        headers = {API_AUTH_HEADER: self._opts.api_key}
-        return await session.ws_connect(url, headers=headers, conn_options=conn_options)
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await ws.close()
-
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:
             self._session = http.http_session()
@@ -181,7 +151,7 @@ class TTS(tts.TTS):
         return self._session
 
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        self._mux.prewarm()
 
     def update_options(
         self,
@@ -236,7 +206,6 @@ class TTS(tts.TTS):
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         stream = SynthesizeStream(
-            pool=self._pool,
             opts=replace(self._opts),
             tts=self,
             conn_options=conn_options,
@@ -249,7 +218,7 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
-        await self._pool.aclose()
+        await self._mux.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -308,102 +277,108 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        pool: utils.ConnectionPool[http.WebSocket],
-        opts: _TTSOptions,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-    ):
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = opts
-        self._pool = pool
+# Murf's stream-input websocket: each segment is one context, ended by `end`. Each message
+# declares only the fields read.
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            mime_type="audio/pcm",
-            stream=True,
+
+class _Message(TypedDict):
+    context_id: NotRequired[str | None]
+    audio: NotRequired[str]
+    final: NotRequired[bool]
+    error: NotRequired[str]
+    error_code: NotRequired[str | int]
+
+
+class _Config(TypedDict):
+    voice_config: dict[str, Any]
+    min_buffer_size: int
+    max_buffer_delay_in_ms: int
+
+
+class _Speak(_Config):
+    context_id: str
+    text: str
+    end: bool
+
+
+class _Clear(TypedDict):
+    clear: bool
+    context_id: str
+
+
+class _Mux(http.Multiplexer[_Message, _Speak | _Clear]):
+    """One Murf socket carries every stream's segments, each its own context."""
+
+    max_session_duration = 300
+
+    def __init__(self, opts: _TTSOptions) -> None:
+        self._opts = opts
+
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        return http.SocketTarget(
+            self._opts.get_ws_url("/v1/speech/stream-input"),
+            headers={API_AUTH_HEADER: self._opts.api_key},
+            params={
+                "sample_rate": str(self._opts.sample_rate),
+                "format": self._opts.encoding,
+                "model": self._opts.model,
+            },
         )
 
-        input_sent_event = asyncio.Event()
-        input_done = False
+    def route(self, message: _Message) -> str | None:
+        if context_id := message.get("context_id"):
+            return context_id
+        if "error" in message:
+            # an error naming no context fails every stream on the socket
+            raise _error(message)
+        return None
 
-        read_deadline = self._core_attempts
-
-        async def _send_task(ws: http.WebSocket) -> None:
-            nonlocal input_done
-            context_id = utils.shortuuid()
-            base_pkt = _to_murf_websocket_pkt(self._opts)
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    continue
-                token_pkt = base_pkt.copy()
-                token_pkt["context_id"] = context_id
-                token_pkt["text"] = data.text + " "
-                self.mark_started()
-                await ws.send_str(json.dumps(token_pkt))
-                read_deadline.expect_response()
-                input_sent_event.set()
-
-            input_done = True
-            end_pkt = base_pkt.copy()
-            end_pkt["context_id"] = context_id
-            end_pkt["end"] = True
-            await ws.send_str(json.dumps(end_pkt))
-            read_deadline.expect_response(final=True)
-            input_sent_event.set()
-
-        async def _recv_task(ws: http.WebSocket) -> None:
-            current_segment_id: str | None = None
-            await input_sent_event.wait()
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error("Murf AI connection closed unexpectedly")
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected Murf AI message type %s", msg.type)
-                    continue
-
-                data = _decode(msg.data)
-                if current_segment_id is None:
-                    current_segment_id = request_id
-                    output_emitter.start_segment(segment_id=request_id)
-                if data.get("audio"):
-                    b64data = base64.b64decode(data["audio"])
-                    read_deadline.audio_received()
-                    output_emitter.push(b64data)
-                elif data.get("final"):
-                    if input_done:
-                        # close only if the input stream is closed
-                        output_emitter.end_input()
-                        break
-                else:
-                    logger.warning("unexpected Murf message", extra={"lk.pii.data": data})
-
-        try:
-            async with self._pool.connection(conn_options=self._conn_options) as ws:
-                async with utils.aio.TaskSet() as tasks:
-                    try:
-                        await asyncio.gather(
-                            tasks.spawn(_send_task(ws)), tasks.spawn(_recv_task(ws))
-                        )
-                    finally:
-                        input_sent_event.set()
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
+    def close_context(self, context_id: str) -> _Clear:
+        return _Clear(clear=True, context_id=context_id)
 
 
-def _to_murf_websocket_pkt(opts: _TTSOptions) -> dict[str, Any]:
+class SynthesizeStream(tts.SocketStream[_Message, _Speak | _Clear]):
+    def __init__(self, *, opts: _TTSOptions, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self.multiplexer = tts._mux
+        self._opts = opts
+        # contexts whose text ended: a final before the end is not the context's last answer
+        self._ended: set[str] = set()
+
+    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Speak | None:
+        if isinstance(item, tts.SegmentText):
+            return self._speak(item.segment_id, item.chunk.text + " ", end=False)
+        if isinstance(item, tts.SegmentEnd):
+            self._ended.add(item.segment_id)
+            return self._speak(item.segment_id, "", end=True)
+        return None
+
+    def on_message(self, message: _Message) -> tts.SegmentOutput | None:
+        context_id = message.get("context_id") or ""
+        if "error" in message:
+            raise _error(message)
+        if audio := message.get("audio"):
+            return tts.SegmentAudio(context_id, base64.b64decode(audio))
+        if message.get("final") and context_id in self._ended:
+            self._ended.discard(context_id)
+            return tts.SegmentDone(context_id)
+        return None
+
+    def _speak(self, context_id: str, text: str, *, end: bool) -> _Speak:
+        config = _to_murf_websocket_pkt(self._opts)
+        return {**config, "context_id": context_id, "text": text, "end": end}
+
+
+def _error(message: _Message) -> APIError:
+    return APIError(
+        f"Murf returned an error ({message.get('error_code')})",
+        kind="invalid_request",
+        body=message,
+        detail=message.get("error"),
+    )
+
+
+def _to_murf_websocket_pkt(opts: _TTSOptions) -> _Config:
     voice_config: dict[str, Any] = {}
 
     if opts.voice:

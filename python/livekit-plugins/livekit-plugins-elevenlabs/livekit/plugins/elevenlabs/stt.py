@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import math
@@ -22,10 +21,10 @@ import os
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict
 from urllib.parse import quote
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field
 
 from livekit import rtc
 from livekit.agents import (
@@ -37,7 +36,6 @@ from livekit.agents import (
     LanguageCode,
     http,
     stt,
-    utils,
 )
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
@@ -46,7 +44,7 @@ from livekit.agents.voice.io import TranscriptChunk
 
 from ._utils import TRACE_ID_HEADER, trace_id_from_headers
 from .log import logger
-from .models import STTBatchResponse, STTRealtimeSampleRates, STTResponse, STTWord
+from .models import STTBatchResponse, STTRealtimeSampleRates, STTWord
 
 # ElevenLabs STT error messages by what failed
 _ERROR_KINDS: dict[str, ErrorKind] = {
@@ -435,14 +433,57 @@ class STT(stt.STT):
             opts=self._opts,
             conn_options=conn_options,
             language=LanguageCode(language) if is_given(language) else self._opts.language_code,
-            http_session=self._ensure_session(),
         )
         self._streams.add(stream)
         return stream
 
 
-class SpeechStream(stt.RecognizeStream):
+class _Word(TypedDict, total=False):
+    text: str
+    start: float
+    end: float
+    type: str
+    logprob: float | None
+
+
+class _Transcript(TypedDict):
+    message_type: Literal[
+        "partial_transcript", "committed_transcript", "committed_transcript_with_timestamps"
+    ]
+    text: NotRequired[str]
+    words: NotRequired[list[_Word] | None]
+    language_code: NotRequired[str | None]
+
+
+class _SessionStarted(TypedDict):
+    message_type: Literal["session_started"]
+    session_id: NotRequired[object]
+
+
+class _Error(TypedDict):
+    message_type: Literal[
+        "auth_error", "quota_exceeded", "transcriber_error", "input_error", "error"
+    ]
+    message: NotRequired[object]
+    details: NotRequired[object]
+
+
+_Message = Annotated[_Transcript | _SessionStarted | _Error, Field(discriminator="message_type")]
+
+
+class _AudioChunk(TypedDict):
+    message_type: Literal["input_audio_chunk"]
+    audio_base_64: str
+    commit: bool
+    sample_rate: int
+    previous_text: NotRequired[str]
+
+
+class SpeechStream(stt.SocketStream[_Message, _AudioChunk]):
     """Streaming speech recognition using ElevenLabs Scribe v2 realtime API"""
+
+    # the plugin ends the speech: on the empty commit, or on each commit with server VAD
+    provider_vad = True
 
     def __init__(
         self,
@@ -451,15 +492,14 @@ class SpeechStream(stt.RecognizeStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         language: LanguageCode | None,
-        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._language = language
-        self._session = http_session
-        self._reconnect_event = asyncio.Event()
-        self._speaking = False  # Track if we're currently in a speech segment
         self._last_partial_text = ""
+        self.frame_ms = opts.audio_chunk_duration_ms
+        # scribe_v2_realtime takes an empty chunk as its keepalive, not a ping
+        self.keepalive = http.Keepalive(10.0, self._chunk(""))
 
     def update_options(
         self,
@@ -471,18 +511,17 @@ class SpeechStream(stt.RecognizeStream):
     ) -> None:
         if is_given(server_vad):
             self._opts.server_vad = server_vad
-            self._reconnect_event.set()
         if is_given(no_verbatim):
             self._opts.no_verbatim = no_verbatim
-            self._reconnect_event.set()
         if is_given(keyterms):
             self._opts.keyterms = keyterms
-            self._reconnect_event.set()
         if is_given(secondary_languages):
             self._opts.secondary_languages = [
                 LanguageCode(language) for language in secondary_languages
             ]
-            self._reconnect_event.set()
+        if any(is_given(o) for o in (server_vad, no_verbatim, keyterms, secondary_languages)):
+            # the options are read at each connection
+            self.reconnect("options changed")
 
     @property
     def _server_vad(self) -> VADOptions | None:
@@ -511,143 +550,17 @@ class SpeechStream(stt.RecognizeStream):
 
         return "committed_transcript"
 
-    async def _run(self) -> None:
-        """Run the streaming transcription session"""
-        closing_ws = False
+    def _chunk(self, audio_b64: str, *, commit: bool = False) -> _AudioChunk:
+        return _AudioChunk(
+            message_type="input_audio_chunk",
+            audio_base_64=audio_b64,
+            commit=commit,
+            sample_rate=self._opts.sample_rate,
+        )
 
-        async def keepalive_task(ws: http.WebSocket) -> None:
-            try:
-                while True:
-                    # scribe_v2_realtime model requires a keepalive message instead of a ping
-                    await asyncio.sleep(10)
-                    await ws.send_str(
-                        json.dumps(
-                            {
-                                "message_type": "input_audio_chunk",
-                                "audio_base_64": "",
-                                "commit": False,
-                                "sample_rate": self._opts.sample_rate,
-                            }
-                        )
-                    )
-            except Exception:
-                return
-
-        async def send_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-
-            # Buffer audio into chunks of the configured duration.
-            samples_per_chunk = self._opts.sample_rate * self._opts.audio_chunk_duration_ms // 1000
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_per_chunk,
-            )
-
-            has_ended = False
-            try:
-                async for data in self.input:
-                    # Write audio bytes to the buffer and get complete chunks
-                    frames: list[rtc.AudioFrame] = []
-                    if isinstance(data, rtc.AudioFrame):
-                        frames.extend(audio_bstream.push(data.data.tobytes()))
-                    else:
-                        frames.extend(audio_bstream.flush())
-                        has_ended = True
-
-                    for frame in frames:
-                        audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                        await ws.send_str(
-                            json.dumps(
-                                {
-                                    "message_type": "input_audio_chunk",
-                                    "audio_base_64": audio_b64,
-                                    "commit": False,
-                                    "sample_rate": self._opts.sample_rate,
-                                }
-                            )
-                        )
-
-                    if has_ended:
-                        await ws.send_str(
-                            json.dumps(
-                                {
-                                    "message_type": "input_audio_chunk",
-                                    "audio_base_64": "",
-                                    "commit": True,
-                                    "sample_rate": self._opts.sample_rate,
-                                }
-                            )
-                        )
-                        has_ended = False
-
-                closing_ws = True
-            except APIConnectionError as e:
-                if closing_ws or self._session.closed:
-                    return
-                raise APIConnectionError("ElevenLabs STT connection closed unexpectedly") from e
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-
-            while True:
-                msg = await ws.receive()
-
-                if msg.type == http.WebSocketMessageType.CLOSE:
-                    if closing_ws or self._session.closed:
-                        return
-                    raise ws.close_error("ElevenLabs STT connection closed unexpectedly")
-
-                if msg.type != http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected ElevenLabs STT message type %s", msg.type)
-                    continue
-
-                try:
-                    event = json.loads(msg.data)
-                    response = STTResponse.model_validate(event)
-                except (json.JSONDecodeError, ValidationError):
-                    raise APIError(
-                        "ElevenLabs STT sent a malformed message", kind="protocol", detail=msg.text
-                    ) from None
-                self._process_stream_event(event, response)
-
-        ws: http.WebSocket | None = None
-
-        while True:
-            if self._speaking:  # a new connection starts outside any speech
-                self._speaking = False
-                self.send(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
-            try:
-                ws = await self._connect_ws()
-                self._last_partial_text = ""
-                if self._opts.previous_text:
-                    # Must be the first input_audio_chunk on the connection.
-                    await ws.send_str(
-                        json.dumps(
-                            {
-                                "message_type": "input_audio_chunk",
-                                "audio_base_64": "",
-                                "commit": False,
-                                "sample_rate": self._opts.sample_rate,
-                                "previous_text": self._opts.previous_text,
-                            }
-                        )
-                    )
-                async with utils.aio.TaskSet() as tasks:
-                    # the keepalive is cancelled with the set: it never keeps a session running
-                    tasks.spawn(keepalive_task(ws))
-                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-                    reconnect = tasks.spawn(self._reconnect_event.wait())
-                    if await tasks.first_completed(io, reconnect) is not reconnect:
-                        break
-
-                    self._reconnect_event.clear()
-            finally:
-                if ws is not None:
-                    await ws.close()
-
-    async def _connect_ws(self) -> http.WebSocket:
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
         """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
+        self._last_partial_text = ""
         commit_strategy = "vad" if self._server_vad is not None else "manual"
         params = [
             f"model_id={self._opts.model_id}",
@@ -695,115 +608,90 @@ class SpeechStream(stt.RecognizeStream):
 
         # Convert HTTPS URL to WSS
         base_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
-        ws_url = f"{base_url}/speech-to-text/realtime?{query_string}"
-
-        return await self._session.ws_connect(
-            ws_url,
+        return http.SocketTarget(
+            f"{base_url}/speech-to-text/realtime?{query_string}",
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
-            conn_options=self._conn_options,
+            request_id_header=TRACE_ID_HEADER,
         )
 
-    def _process_stream_event(self, data: object, response: STTResponse) -> None:
+    def setup(self) -> http.Encoded[_AudioChunk]:
+        if not self._opts.previous_text:
+            return None
+        # must be the first input_audio_chunk on the connection
+        chunk = self._chunk("")
+        chunk["previous_text"] = self._opts.previous_text
+        return chunk
+
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_AudioChunk]:
+        if isinstance(item, rtc.AudioFrame):
+            return self._chunk(base64.b64encode(item.data).decode("utf-8"))
+        if isinstance(item, stt.RecognizeStream.Flush):
+            return self._chunk("", commit=True)
+        return None
+
+    def on_message(self, message: _Message) -> stt.Report | list[stt.Report] | None:
         """Process incoming WebSocket messages from ElevenLabs"""
-        message_type = response.message_type
-        text = response.text
-        words = response.words or []
-        start_time = words[0].start if words else 0
-        end_time = words[-1].end if words else 0
-        language_code = response.language_code or self._language
-
-        normalized_language = LanguageCode(language_code) if language_code else LanguageCode("en")
-
-        # 11labs only sends word timestamps for final transcripts
-        speech_data = stt.SpeechData(
-            language=normalized_language,
-            text=text,
-            start_time=start_time + self.start_time_offset,
-            end_time=end_time + self.start_time_offset,
-            confidence=_speech_confidence(words),
+        if message["message_type"] == "session_started":
+            logger.debug("Session started with ID: %s", message.get("session_id"))
+            return None
+        if message["message_type"] == "partial_transcript":
+            logger.debug("Received message type partial_transcript", extra={"lk.pii.data": message})
+            text = message.get("text", "")
+            if not text or text == self._last_partial_text:
+                return None
+            self._last_partial_text = text
+            return self._transcript(message, final=False)
+        if message["message_type"] in (
+            "committed_transcript",
+            "committed_transcript_with_timestamps",
+        ):
+            return self._committed(message)
+        details = message.get("details")
+        raise APIError(
+            f"ElevenLabs STT {message['message_type']}",
+            kind=_ERROR_KINDS[message["message_type"]],
+            body=dict(message),
+            detail=f"{message.get('message', 'Unknown error')}"
+            + (f" - {details}" if details else ""),
         )
-        if words and self._opts.include_timestamps:
-            speech_data.words = [
+
+    def _committed(self, message: _Transcript) -> stt.Report | list[stt.Report] | None:
+        # 11labs sends every commit twice; _final_message_type picks the copy this session reads
+        if message["message_type"] != self._final_message_type:
+            return None
+        self._last_partial_text = ""
+        if not message.get("text"):
+            # the empty commit ends the speech its commits grouped
+            return stt.SpeechEnded()
+        final = self._transcript(message, final=True)
+        return [final, stt.SpeechEnded()] if self._server_vad is not None else final
+
+    def _transcript(self, message: _Transcript, *, final: bool) -> stt.Transcript:
+        words = message.get("words") or []
+        offset = self.start_time_offset
+        language = message.get("language_code") or self._language
+        # 11labs only sends word timestamps for final transcripts
+        return stt.Transcript(
+            message.get("text", ""),
+            LanguageCode(language) if language else LanguageCode("en"),
+            final=final,
+            start_time=words[0].get("start", 0.0) + offset if words else offset,
+            end_time=words[-1].get("end", 0.0) + offset if words else offset,
+            confidence=_speech_confidence(words),
+            words=[
                 TranscriptChunk(
-                    text=word.text,
-                    start_time=word.start + self.start_time_offset,
-                    end_time=word.end + self.start_time_offset,
-                    start_time_offset=self.start_time_offset,
+                    text=word.get("text", ""),
+                    start_time=word.get("start", 0.0) + offset,
+                    end_time=word.get("end", 0.0) + offset,
+                    start_time_offset=offset,
                 )
                 for word in words
             ]
-
-        if message_type == "partial_transcript":
-            logger.debug("Received message type partial_transcript", extra={"lk.pii.data": data})
-
-            if text and text != self._last_partial_text:
-                self._last_partial_text = text
-
-                # Send START_OF_SPEECH if we're not already speaking
-                if not self._speaking:
-                    self.send(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
-                    self._speaking = True
-
-                # Send INTERIM_TRANSCRIPT
-                interim_event = stt.SpeechEvent(
-                    type=SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[speech_data],
-                )
-                self.send(interim_event)
-
-        # 11labs sends every commit twice; _final_message_type picks the copy this session reads
-        elif message_type == self._final_message_type:
-            # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
-            # and trigger agent responses (unlike partial transcripts which are UI-only)
-            self._last_partial_text = ""
-
-            if text:
-                # Send START_OF_SPEECH if we're not already speaking
-                if not self._speaking:
-                    self.send(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
-                    self._speaking = True
-
-                # Send FINAL_TRANSCRIPT but keep speaking=True
-                # Multiple commits can occur within the same speech segment
-                final_event = stt.SpeechEvent(
-                    type=SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[speech_data],
-                )
-                self.send(final_event)
-                if self._server_vad is not None:
-                    self.send(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
-                    self._speaking = False
-            else:
-                # Empty commit signals end of speech segment (similar to Cartesia's is_final flag)
-                # This groups multiple committed transcripts into one speech segment
-                if self._speaking:
-                    self.send(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
-                    self._speaking = False
-
-        elif message_type in ("committed_transcript", "committed_transcript_with_timestamps"):
-            # the other copy of a commit the branch above already emitted
-            pass
-
-        elif message_type == "session_started":
-            # Session initialization message - informational only
-            session_id = response.session_id
-            logger.debug("Session started with ID: %s", session_id)
-
-        # Error handling for known ElevenLabs error types
-        elif message_type in _ERROR_KINDS:
-            details_suffix = f" - {response.details}" if response.details else ""
-            raise APIError(
-                f"ElevenLabs STT {message_type}",
-                kind=_ERROR_KINDS[message_type],
-                body=data,
-                detail=f"{response.message}{details_suffix}",
-            )
-        else:
-            logger.warning(
-                "ElevenLabs STT unknown message type: %s",
-                message_type,
-                extra={"lk.pii.data": data},
-            )
+            if words and self._opts.include_timestamps
+            else None,
+        )
 
 
 def _synthesize_url(opts: STTOptions) -> str:

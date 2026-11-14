@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
 
@@ -9,7 +8,7 @@ from pydantic import JsonValue
 
 from livekit.protocol import agent_simulation as proto
 
-from . import _core
+from . import _core, utils
 from ._generated import public_evals as _public
 from ._generated.evals import (
     IntentJudgment,
@@ -82,9 +81,6 @@ class Judge:
         Must be overridden in subclasses.
         """
         raise NotImplementedError(f"Judge '{self._name}' does not implement evaluate().")
-
-
-_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
 
 
 class JudgeGroup:
@@ -164,7 +160,7 @@ class JudgeGroup:
                 continue
             judgments[outcome.name] = outcome.judgment
 
-        if _evals_verbose:
+        if utils.env_int("LIVEKIT_EVALS_VERBOSE", 0):
             print("\n+ JudgeGroup evaluation results:")
             for name, result in judgments.items():
                 print(f"  [{name}] verdict={result.verdict}")

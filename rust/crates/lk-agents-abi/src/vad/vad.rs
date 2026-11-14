@@ -31,7 +31,7 @@ pub type VadSource = Box<dyn ProviderStream<VadEvent>>;
 ///
 /// Plugins implement `stream()`, returning a `VADStream` whose `_main_task` turns the pushed
 /// audio into `VADEvent`s.
-#[crate::host(proxy(host = "livekit.agents.vad.VAD", base = "vad.py", generic))]
+#[crate::host(proxy(host = "livekit.agents.vad.VAD", base = "vad.py", generic, owns))]
 pub trait Vad: Send + Sync {
     /// The name logs and metrics give this instance: its class path.
     #[host(read_once, name = "_core_label")]

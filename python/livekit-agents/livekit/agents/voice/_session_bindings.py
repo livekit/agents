@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
+import weakref
 from collections import deque
 from collections.abc import AsyncIterable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -159,6 +161,8 @@ def initialize(
     session._store = None
 
     session._native = _core._core_SessionOwner(session._options)
+    session._host = None
+    session._hooks = None
     session._room = None
     session._amd = None
     session._event_settled = set()
@@ -349,6 +353,12 @@ def _detection_llm(stt_context: STTContextOptions | None) -> LLM | None:
         return None
 
 
+def _realtime_tools(session: weakref.ref[VoiceSession[Any]]) -> list[llm.Tool | llm.Toolset]:
+    # a realtime session keeps this past the session's close: it must not keep the session
+    current = session()
+    return current._adapter._pool(current.current_agent) if current is not None else []
+
+
 class SessionHost:
     def __init__(
         self,
@@ -412,7 +422,7 @@ class SessionHost:
         else:
             session._store = ContextStore(activation=storage.activation, scope_id=storage.scope_id)
 
-        hooks = _AgentHooks(session)
+        hooks = session._hooks = _AgentHooks(session)
         frame = session._frame(agent)
         model = frame.llm if is_given(frame.llm) else session._llm
         realtime = model if isinstance(model, llm.RealtimeModel) else None
@@ -429,7 +439,7 @@ class SessionHost:
             vad=session.vad,
             llm=None if isinstance(model, llm.RealtimeModel) else model,
             realtime=realtime,
-            realtime_tools=lambda: session._adapter._pool(session.current_agent),
+            realtime_tools=functools.partial(_realtime_tools, weakref.ref(session)),
             tts=frame.tts if is_given(frame.tts) else None,
             host_audio_input=session._input.audio,
             host_video_input=session._input.video,

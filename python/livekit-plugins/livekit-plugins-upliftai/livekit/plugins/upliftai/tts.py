@@ -4,32 +4,25 @@ Uplift TTS Plugin for LiveKit, this will soon be available as a python lib
 
 from __future__ import annotations
 
-import asyncio
 import base64
+import json
 import os
-import time
-import uuid
 import weakref
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
-import socketio  # type: ignore[import-untyped]  # python-socketio does not ship a py.typed marker.
-from pydantic import BaseModel, JsonValue, ValidationError
+from pydantic import Field, TypeAdapter
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APITimeoutError,
+    http,
     tokenize,
     tts,
-    utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-
-from .log import logger
 
 # Output format options
 OutputFormat = Literal[
@@ -70,9 +63,9 @@ def get_content_type_from_output_format(output_format: OutputFormat) -> str:
         raise ValueError(f"Unsupported output format: {output_format}")
 
 
-def _provider_sample_rate(opts: _TTSOptions) -> int:
+def _sample_rate(output_format: OutputFormat) -> int:
     """G.711 is sent at 8 kHz and decoded without resampling; every other format at 22.05 kHz."""
-    return 8000 if opts.voice_settings.output_format == "ULAW_8000_8" else opts.sample_rate
+    return 8000 if output_format == "ULAW_8000_8" else DEFAULT_SAMPLE_RATE
 
 
 @dataclass
@@ -90,7 +83,6 @@ class _TTSOptions:
     base_url: str
     api_key: str
     voice_settings: VoiceSettings
-    sample_rate: int
     num_channels: int
     phrase_replacement_config_id: str | None
 
@@ -124,7 +116,6 @@ class TTS(tts.TTS):
                 - 'MP3_22050_128': MP3 format, 22.05kHz, 128kbps
                 - 'OGG_22050_16': OGG format, 22.05kHz, 16-bit
                 - 'ULAW_8000_8': μ-law format, 8kHz, 8-bit
-            sample_rate: Sample rate for audio output. Defaults to 22050
             num_channels: Number of audio channels. Defaults to 1 (mono)
             phrase_replacement_config_id: Optional ID for phrase replacement configuration
         """
@@ -133,7 +124,7 @@ class TTS(tts.TTS):
                 streaming=True,
                 aligned_transcript=False,
             ),
-            sample_rate=DEFAULT_SAMPLE_RATE,
+            sample_rate=_sample_rate(output_format),
             num_channels=num_channels,
         )
 
@@ -156,14 +147,12 @@ class TTS(tts.TTS):
             base_url=resolved_base_url,
             api_key=resolved_api_key,
             voice_settings=VoiceSettings(voice_id=voice_id, output_format=output_format),
-            sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=num_channels,
             phrase_replacement_config_id=phrase_replacement_config_id
             if is_given(phrase_replacement_config_id)
             else None,
         )
 
-        self._client: WebSocketClient | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     def update_options(
@@ -189,34 +178,18 @@ class TTS(tts.TTS):
             self._opts.voice_settings.voice_id = voice_id
         if is_given(output_format):
             self._opts.voice_settings.output_format = output_format
+            # G.711 is 8 kHz: the stream's audio follows the format
+            self._sample_rate = _sample_rate(output_format)
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
-    ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            opts=self._opts,
-            synthesize_request=self._synthesize_request,
-            input_text=chunk.text,
-            conn_options=conn_options,
-        )
+    ) -> tts.ChunkedStream:
+        return self._synthesize_with_stream(chunk, conn_options=conn_options)
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            opts=self._opts,
-            synthesize_request=self._synthesize_request,
-            conn_options=conn_options,
-        )
+        stream = SynthesizeStream(tts=self, opts=self._opts, conn_options=conn_options)
         self._streams.add(stream)
         return stream
-
-    async def _synthesize_request(
-        self, text: str, request_id: str
-    ) -> asyncio.Queue[bytes | APIError | None]:
-        if self._client is None:
-            self._client = WebSocketClient(self._opts)
-        return await self._client.synthesize(text, request_id)
 
     async def aclose(self) -> None:
         """Clean up resources"""
@@ -225,340 +198,146 @@ class TTS(tts.TTS):
 
         self._streams.clear()
 
-        if self._client:
-            await self._client.disconnect()
-            self._client = None
+
+# Uplift speaks Socket.IO over Engine.IO: each frame is an Engine.IO packet (a type digit, then
+# its payload); a message packet carries a Socket.IO packet (a type digit, the namespace, then
+# its JSON). The server pings, the client answers with a pong.
+_EIO_PING = "2"
+_EIO_PONG = "3"
+_EIO_MESSAGE = "4"
+_SIO_CONNECT = "0"
+_SIO_DISCONNECT = "1"
+_SIO_EVENT = "2"
+_SIO_CONNECT_ERROR = "4"
 
 
-class _SocketClient(Protocol):
-    connected: bool
-
-    def on(
-        self,
-        event: str,
-        handler: Callable[[], Awaitable[None]] | Callable[[object], Awaitable[None]],
-        *,
-        namespace: str,
-    ) -> None: ...
-    async def connect(
-        self,
-        url: str,
-        *,
-        auth: dict[str, str],
-        namespaces: list[str],
-        transports: list[str],
-        wait_timeout: float,
-    ) -> None: ...
-    async def emit(self, event: str, data: dict[str, JsonValue], *, namespace: str) -> None: ...
-    async def disconnect(self) -> None: ...
+class _Ping(TypedDict):
+    type: Literal["ping"]
 
 
-class _SocketFactory(Protocol):
-    def __call__(
-        self,
-        *,
-        reconnection: bool,
-        reconnection_attempts: int,
-        reconnection_delay: float,
-        logger: bool,
-        engineio_logger: bool,
-    ) -> _SocketClient: ...
+class _Connected(TypedDict):
+    type: Literal["connected"]
 
 
-class _ServerMessage(BaseModel):
-    type: str
-    requestId: str | None = None
-    sessionId: str | None = None
-    audio: str | None = None
-    message: str | None = None
+class _Refused(TypedDict):
+    type: Literal["refused"]
+    data: object
 
 
-class WebSocketClient:
-    """Manages WebSocket connection to TTS service"""
-
-    def __init__(self, opts: _TTSOptions):
-        self.opts = opts
-        self.sio: _SocketClient | None = None
-        self.connected = False
-        self.audio_callbacks: dict[str, asyncio.Queue[bytes | APIError | None]] = {}
-        self.active_requests: dict[str, bool] = {}
-
-    async def connect(self) -> bool:
-        """Establish WebSocket connection"""
-        if self.connected:
-            return True
-
-        try:
-            # python-socketio does not annotate the consumed AsyncClient constructor contract.
-            factory = cast(_SocketFactory, socketio.AsyncClient)  # pyright: ignore[reportUnknownMemberType]
-            self.sio = factory(
-                reconnection=True,
-                reconnection_attempts=3,
-                reconnection_delay=1,
-                logger=False,
-                engineio_logger=False,
-            )
-
-            # Register handlers
-            self.sio.on("message", self._on_message, namespace=WEBSOCKET_NAMESPACE)
-            self.sio.on("connect", self._on_connect, namespace=WEBSOCKET_NAMESPACE)
-            self.sio.on("disconnect", self._on_disconnect, namespace=WEBSOCKET_NAMESPACE)
-
-            # Prepare auth
-            auth_data = {"token": self.opts.api_key}
-
-            # Connect
-            await self.sio.connect(
-                self.opts.base_url,
-                auth=auth_data,
-                namespaces=[WEBSOCKET_NAMESPACE],
-                transports=["websocket"],
-                wait_timeout=10,
-            )
-
-            # Wait for connection
-            max_wait = 5.0
-            start_time = time.time()
-            while not self.connected and (time.time() - start_time) < max_wait:
-                await asyncio.sleep(0.1)
-
-            if not self.connected and self.sio.connected:
-                self.connected = True
-
-            return self.connected
-
-        except Exception as e:
-            logger.error(f"Connection failed: {e}")
-            return False
-
-    async def synthesize(
-        self, text: str, request_id: str | None = None
-    ) -> asyncio.Queue[bytes | APIError | None]:
-        """Send synthesis request and return audio queue"""
-        if not self.sio or not self.connected:
-            if not await self.connect():
-                raise ConnectionError("Failed to connect to TTS service")
-
-        if not request_id:
-            request_id = str(uuid.uuid4())
-
-        # Create audio queue
-        audio_queue: asyncio.Queue[bytes | APIError | None] = asyncio.Queue()
-        self.audio_callbacks[request_id] = audio_queue
-        self.active_requests[request_id] = True
-
-        # Build message
-        message: dict[str, JsonValue] = {
-            "type": "synthesize",
-            "requestId": request_id,
-            "text": text,
-            "voiceId": self.opts.voice_settings.voice_id,
-            "outputFormat": self.opts.voice_settings.output_format,
-        }
-
-        if self.opts.phrase_replacement_config_id:
-            message["phraseReplacementConfigId"] = self.opts.phrase_replacement_config_id
-
-        logger.debug(
-            f"Sending synthesis request {request_id[:8]}", extra={"lk.pii.text": text[:50]}
-        )
-
-        try:
-            if self.sio is not None:
-                await self.sio.emit("synthesize", message, namespace=WEBSOCKET_NAMESPACE)
-        except Exception as e:
-            logger.error(f"Failed to emit synthesis: {e}")
-            del self.audio_callbacks[request_id]
-            del self.active_requests[request_id]
-            raise
-
-        return audio_queue
-
-    async def disconnect(self) -> None:
-        """Disconnect from service"""
-        if self.sio and self.connected:
-            await self.sio.disconnect()
-            self.connected = False
-
-    async def _on_connect(self) -> None:
-        """Handle connection"""
-        logger.debug("WebSocket connected")
-
-    async def _on_message(self, data: object) -> None:
-        try:
-            message = _ServerMessage.model_validate(data)
-        except ValidationError as exc:
-            # An invalid frame cannot reliably identify which shared request it belongs to.
-            queues = list(self.audio_callbacks.values())
-            self.audio_callbacks.clear()
-            self.active_requests.clear()
-            for pending_queue in queues:
-                error = APIError(
-                    "Uplift returned an invalid message", kind="protocol", detail=str(data)
-                )
-                error.__cause__ = exc
-                await pending_queue.put(error)
-            return
-        if message.type == "ready":
-            self.connected = True
-            logger.debug("Ready with session: %s", message.sessionId)
-            return
-        request_id = message.requestId
-        if request_id is None:
-            return
-        queue = self.audio_callbacks.get(request_id)
-        if message.type == "audio":
-            if message.audio and queue is not None and self.active_requests.get(request_id, False):
-                await queue.put(base64.b64decode(message.audio))
-        elif message.type == "audio_end":
-            if queue is not None:
-                await queue.put(None)
-                self.audio_callbacks.pop(request_id, None)
-                self.active_requests.pop(request_id, None)
-        elif message.type == "error" and queue is not None:
-            await queue.put(
-                APIError(
-                    "Uplift rejected the synthesis request",
-                    kind="invalid_request",
-                    body=message.model_dump(exclude_none=True),
-                )
-            )
-            self.audio_callbacks.pop(request_id, None)
-            self.active_requests.pop(request_id, None)
-
-    async def _on_disconnect(self) -> None:
-        self.connected = False
-        for queue in self.audio_callbacks.values():
-            await queue.put(APIConnectionError("Uplift disconnected before synthesis completed"))
-        self.audio_callbacks.clear()
-        self.active_requests.clear()
+class _Disconnected(TypedDict):
+    type: Literal["disconnected"]
 
 
-class ChunkedStream(tts.ChunkedStream):
-    """Chunked synthesis implementation"""
-
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        opts: _TTSOptions,
-        synthesize_request: Callable[[str, str], Awaitable[asyncio.Queue[bytes | APIError | None]]],
-        input_text: str,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts = opts
-        self._synthesize_request = synthesize_request
-
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Execute synthesis"""
-        request_id = utils.shortuuid()
-
-        try:
-            # Initialize emitter
-            output_emitter.initialize(
-                request_id=request_id,
-                sample_rate=_provider_sample_rate(self._opts),
-                num_channels=self._opts.num_channels,
-                mime_type=get_content_type_from_output_format(
-                    self._opts.voice_settings.output_format
-                ),
-            )
-
-            audio_queue = await self._synthesize_request(self._input_text, request_id)
-
-            read_deadline = self._core_attempts
-            read_deadline.expect_response(final=True)
-            while True:
-                audio_data = await audio_queue.get()
-                if audio_data is None:
-                    break
-                if isinstance(audio_data, APIError):
-                    raise audio_data
-                read_deadline.progress()
-                output_emitter.push(audio_data)
-
-            output_emitter.flush()
-
-        except TimeoutError as e:
-            raise APITimeoutError() from e
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError("Uplift synthesis failed") from e
+# Uplift's own messages, each declaring only the fields read
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    """Streaming synthesis implementation"""
+class _Audio(TypedDict):
+    type: Literal["audio"]
+    requestId: str
+    audio: NotRequired[str | None]
 
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        opts: _TTSOptions,
-        synthesize_request: Callable[[str, str], Awaitable[asyncio.Queue[bytes | APIError | None]]],
-        conn_options: APIConnectOptions,
-    ) -> None:
+
+class _AudioEnd(TypedDict):
+    type: Literal["audio_end"]
+    requestId: str
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    requestId: NotRequired[str]
+    message: NotRequired[str]
+
+
+_Message = Annotated[_Audio | _AudioEnd | _Error, Field(discriminator="type")]
+_MESSAGE: TypeAdapter[_Audio | _AudioEnd | _Error] = TypeAdapter(_Message)
+_Inbound = _Ping | _Connected | _Refused | _Disconnected | _Audio | _AudioEnd | _Error
+
+
+class SynthesizeStream(tts.SocketStream[_Inbound, str]):
+    """Each segment is one synthesis request, its id the segment's."""
+
+    awaits_ready = True
+
+    def __init__(self, *, tts: TTS, opts: _TTSOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
-        self._synthesize_request = synthesize_request
+        self.mime_type = get_content_type_from_output_format(opts.voice_settings.output_format)
+        self._text: dict[str, list[str]] = {}
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Execute streaming synthesis"""
-        request_id = utils.shortuuid()
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        url = self._opts.base_url.replace("http", "ws", 1).rstrip("/")
+        return http.SocketTarget(f"{url}/socket.io/", params={"EIO": "4", "transport": "websocket"})
 
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=_provider_sample_rate(self._opts),
-            num_channels=self._opts.num_channels,
-            stream=True,
-            mime_type=get_content_type_from_output_format(self._opts.voice_settings.output_format),
-        )
+    def setup(self) -> str:
+        return _event(_SIO_CONNECT, {"token": self._opts.api_key})
 
+    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> str | None:
+        if isinstance(item, tts.SegmentText):
+            self._text.setdefault(item.segment_id, []).append(item.chunk.text)
+            return None
+        if not isinstance(item, tts.SegmentEnd):
+            return None
+        request: dict[str, object] = {
+            "type": "synthesize",
+            "requestId": item.segment_id,
+            "text": " ".join(self._text.pop(item.segment_id, [])),
+            "voiceId": self._opts.voice_settings.voice_id,
+            "outputFormat": self._opts.voice_settings.output_format,
+        }
+        if self._opts.phrase_replacement_config_id:
+            request["phraseReplacementConfigId"] = self._opts.phrase_replacement_config_id
+        return _event(_SIO_EVENT, ["synthesize", request])
+
+    def decode(self, frame: bytes | str) -> _Inbound | None:
+        if not isinstance(frame, str):
+            raise http.protocol_error(self, "a binary frame")
+        if frame == _EIO_PING:
+            return {"type": "ping"}
+        prefix = f"{_EIO_MESSAGE}{{}}{WEBSOCKET_NAMESPACE},"
+        packet = next((t for t in "0124" if frame.startswith(prefix.format(t))), None)
+        if packet is None:
+            return None  # the open packet, another namespace
+        body = frame[len(prefix.format(packet)) :]
         try:
-            parts: list[str] = []
-            async for data in self.input:
-                if isinstance(data, tts.SpeechChunk):
-                    parts.append(data.text)
-                elif parts:
-                    await self._run_segment(" ".join(parts), output_emitter)
-                    parts = []
-            if parts:
-                await self._run_segment(" ".join(parts), output_emitter)
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
+            data: Any = json.loads(body) if body else None
+            if packet == _SIO_CONNECT:
+                return {"type": "connected"}
+            if packet == _SIO_CONNECT_ERROR:
+                return {"type": "refused", "data": data}
+            if packet == _SIO_DISCONNECT:
+                return {"type": "disconnected"}
+            name, message = data
+            if name != "message" or message.get("type") not in ("audio", "audio_end", "error"):
+                return None
+            return _MESSAGE.validate_python(message)
+        except (ValueError, TypeError, AttributeError) as e:
+            raise http.protocol_error(self, f"{e}; frame: {frame}") from e
 
-    async def _run_segment(
-        self,
-        text: str,
-        output_emitter: tts.AudioEmitter,
-    ) -> None:
-        """Synthesize one segment's text in a single request"""
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
+    # Any: a segment's output, or READY once the namespace connected
+    def on_message(self, message: _Inbound) -> Any:
+        if message["type"] == "ping":
+            self.send_command(_EIO_PONG)
+        elif message["type"] == "connected":
+            return http.READY
+        elif message["type"] == "refused":
+            raise APIError(
+                "Uplift refused the connection", kind="invalid_request", body=message["data"]
+            )
+        elif message["type"] == "disconnected":
+            raise APIConnectionError("Uplift disconnected before synthesis completed")
+        elif message["type"] == "audio":
+            audio = message.get("audio")
+            return (
+                tts.SegmentAudio(message["requestId"], base64.b64decode(audio)) if audio else None
+            )
+        elif message["type"] == "audio_end":
+            return tts.SegmentDone(message["requestId"])
+        else:
+            raise APIError(
+                "Uplift rejected the synthesis request", kind="invalid_request", body=message
+            )
+        return None
 
-        try:
-            self.mark_started()
-            audio_queue = await self._synthesize_request(text, segment_id)
 
-            read_deadline = self._core_attempts
-            read_deadline.expect_response(final=True)
-            while True:
-                audio_data = await audio_queue.get()
-                if audio_data is None:
-                    break
-                if isinstance(audio_data, APIError):
-                    raise audio_data
-                read_deadline.progress()
-                output_emitter.push(audio_data)
-
-            output_emitter.end_input()
-
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIError("Uplift segment synthesis failed", kind="server") from e
+def _event(packet: str, data: object) -> str:
+    return f"{_EIO_MESSAGE}{packet}{WEBSOCKET_NAMESPACE},{json.dumps(data)}"

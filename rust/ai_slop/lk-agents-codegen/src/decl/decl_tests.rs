@@ -478,14 +478,14 @@ fn declared_proxies_call_the_host_in_their_context() {
         "let started = ::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"Callbacks.render\", at, &[], cx, ::std::boxed::Box::new(move |py| {",
         "\"Callbacks.prepare\", at, &[::lk_agents_abi::invoke::Scope::ToolCall], ",
         "let out = started.await;",
-        "Ok((host.bind(py).getattr(\"render\")?",
+        "Ok((host.bind(py)?.getattr(\"render\")?",
         "crate::py_values::extra_to_py(py, &args_arg)?.into_any()",
         "if e.is_instance(py, &py.import(\"livekit.agents\").and_then(|m| m.getattr(\"Refused\"))",
         "return Ok(Err(<::lk_agents_abi::errors::Refused as ::std::convert::From<String>>::from(e.value(py).to_string())));",
         "<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e)",
         "fn cancel(&self, at: &::lk_agents_abi::llm::chat::Report) {",
         "::lk_agents_runtime::host::notify(&self.notifier, \"Callbacks.abort\", at, &[], false, ::std::boxed::Box::new(move |py| {",
-        "Ok((host.bind(py).getattr(\"abort\")?",
+        "Ok((host.bind(py)?.getattr(\"abort\")?",
         "let host = crate::generated::llm::CallbacksProxy::from_host(host.as_any())?;",
         "native::<dyn ::lk_agents_abi::llm::class::Callbacks>(obj)",
     ] {
@@ -1045,7 +1045,7 @@ fn a_value_implementing_a_declared_class_crosses_as_a_handle_over_a_clone() {
 fn a_viewed_proxy_calls_its_view_and_shares_core_objects() {
     let decls = read(
         "pub struct Tracker;\n#[crate::host(class(name = \"Tracker\"))]\npub trait Tracked: Sized {}\nimpl Tracked for Tracker {}\n\
-         #[crate::host(proxy(host = \"livekit.agents.io.Sink\", view = \"livekit.agents.view._Sink\"))]\n\
+         #[crate::host(proxy(host = \"livekit.agents.io.Sink\", view = \"livekit.agents.view._Sink\", owns))]\n\
          pub trait Sink: Send + Sync {\n\
              #[host(read_once, name = \"_core_options\")] fn tracker(&self) -> &std::sync::Arc<Tracker>;\n\
              #[host(notify, name = \"_core_flush\")] fn flush(&self);\n\
@@ -1158,7 +1158,7 @@ fn a_declared_proxy_is_handed_back_as_its_host_object() {
         r#"use std::sync::Arc;
         use std::any::Any;
         use crate::errors::HostError;
-        #[crate::host(proxy(host = "livekit.agents.Noise", view = "livekit.agents._NoiseView"))]
+        #[crate::host(proxy(host = "livekit.agents.Noise", view = "livekit.agents._NoiseView", owns))]
         pub trait Noise: Any + Send + Sync {
             #[host(read_once, name = "_core_label")] fn kind(&self) -> String;
         }
@@ -1173,8 +1173,8 @@ fn a_declared_proxy_is_handed_back_as_its_host_object() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
         llm.contains(
-            "let source = ::std::sync::Arc::new(obj.clone().unbind());\n        let view ="
-        ) && llm.contains("Ok(proxy) => Ok(proxy.source.bind(py).clone()),")
+            "            true => crate::py_objects::HostObject::owned(obj),\n            false => crate::py_objects::HostObject::weak(obj)?,\n        };\n        let view ="
+        ) && llm.contains("Ok(proxy) => proxy.source.bind(py),")
             && llm.contains(
                 "Some(x) => super::llm::NoiseProxy::to_host(py, ::std::sync::Arc::clone(&x))?"
             )
@@ -1194,4 +1194,38 @@ fn a_declared_proxy_is_handed_back_as_its_host_object() {
         }"#,
     );
     assert!(not_any.err().is_some_and(|e| e.contains("Noise: Any + Send + Sync")));
+}
+
+// Catches: a host object taken from an argument held strongly without `owns` (a back-reference
+// cycle the host's collector cannot see), one a host call returned held weakly, or a view built
+// only for the proxy held weakly.
+#[test]
+fn a_proxy_holds_its_host_weakly_unless_it_owns_it() {
+    let declarations = |owns: &str| {
+        format!(
+            r#"use crate::errors::HostError;
+            #[crate::host(proxy(host = "livekit.agents.Hooks"{owns}))]
+            pub trait Hooks: Send + Sync {{
+                #[host(call)] fn ping(&self) -> Result<(), HostError>;
+            }}"#
+        )
+    };
+    let emitted = |source: &str| {
+        let decls = read(source).expect("resolves");
+        let out = crate::adapter::emit(&decls).expect("emits");
+        out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text.clone()
+    };
+    let weak = emitted(&declarations(""));
+    assert!(weak.contains("Ok(::std::sync::Arc::new(Self::take(obj, None, false)?))"), "{weak}");
+    assert!(weak.contains("Self::take(obj, Some(context), true)"), "returned: owned\n{weak}");
+    let owned = emitted(&declarations(", owns"));
+    assert!(owned.contains("Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))"), "{owned}");
+    let viewed = read(
+        r#"use crate::errors::HostError;
+        #[crate::host(proxy(host = "livekit.agents.Hooks", view = "livekit.agents._HooksView"))]
+        pub trait Hooks: Send + Sync {
+            #[host(call)] fn ping(&self) -> Result<(), HostError>;
+        }"#,
+    );
+    assert!(viewed.err().is_some_and(|e| e.contains("`owns` the view it builds")));
 }

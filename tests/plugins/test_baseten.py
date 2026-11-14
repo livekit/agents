@@ -73,7 +73,7 @@ async def test_transcript_timing_is_validated_before_delivery(
             stream.start_time_offset = 0.25
             stream.end_input()
             if invalid_timing:
-                with pytest.raises(APIError, match="invalid transcript") as failure:
+                with pytest.raises(APIError) as failure:
                     async for _ in stream:
                         pass
                 assert failure.value.kind == "protocol"

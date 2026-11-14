@@ -15,14 +15,15 @@
 See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more information.
 """
 
-from speechmatics.agent_stt import (
+from .stt import (
+    STT,
     AdditionalVocabEntry,
     AudioEncoding,
     Model,
     SpeakerIdentifier,
+    SpeechStream,
+    TurnDetectionMode,
 )
-
-from .stt import STT, SpeechStream, TurnDetectionMode
 from .tts import TTS
 from .version import __version__
 

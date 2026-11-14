@@ -3,7 +3,7 @@ use crate::media::emitter::EmitterError;
 
 /// A host `tokenize.SentenceStream`: text in, sentences out. The native pacer and sentence
 /// adapter read it; its calls run on the host loop, in order.
-#[crate::host(proxy(host = "livekit.agents.tokenize.SentenceStream"))]
+#[crate::host(proxy(host = "livekit.agents.tokenize.SentenceStream", owns))]
 pub trait HostSentenceStream: Send + Sync {
     #[host(notify, name = "push_text")]
     fn push_text(&self, text: String);

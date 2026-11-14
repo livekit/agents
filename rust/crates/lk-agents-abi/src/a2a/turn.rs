@@ -126,7 +126,7 @@ pub trait HandlerTurn: Send + Sync + Sized + 'static {
 }
 
 /// The handler a turn runs on the host.
-#[crate::host(proxy(host = "livekit.agents.storage.session._TurnHost"))]
+#[crate::host(proxy(host = "livekit.agents.storage.session._TurnHost", owns))]
 pub trait TurnHost: Send + Sync {
     /// Run the handler on `ctx` to its output, reporting through `turn`. Cancelled when the turn
     /// closes it (a lost lease, a failed step); the turn then waits for its cleanup, within the

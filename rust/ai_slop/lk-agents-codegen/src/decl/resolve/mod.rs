@@ -894,9 +894,9 @@ impl Resolver<'_> {
             .ok_or_else(|| format!("{at}: proxy `{}` names no host class", tr.ident))?;
         // A plugin base class that is an `EventEmitter` generic over the plugin's own events.
         let generic = voc::find(&proxy.nested, "generic").is_some();
-        let weak = voc::find(&proxy.nested, "weak").is_some();
-        if weak && boxed {
-            return Err(format!("{at}: a weak proxy is shared, never owned"));
+        let self_events = voc::find(&proxy.nested, "self_events").is_some();
+        if self_events && boxed {
+            return Err(format!("{at}: `self_events` are shared, never owned"));
         }
         let declared = declares_calls(tr).then(|| {
             (k.modules[module].path.first().cloned().unwrap_or_default(), tr.ident.to_string())
@@ -913,7 +913,7 @@ impl Resolver<'_> {
             generic,
             declared,
             boxed,
-            weak,
+            self_events,
         })
     }
 

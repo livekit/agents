@@ -1,13 +1,16 @@
-"""Azure plugin: Speech SDK recognizer behaviour of the streaming STT, and the REST TTS."""
+"""Azure plugin: the streaming STT on a local peer speaking the Speech service's websocket
+protocol (header blocks, speech.config/context, audio framing, turns), and the REST TTS."""
 
 from __future__ import annotations
 
 import asyncio
+import json
+import struct
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from types import SimpleNamespace
+from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
-import azure.cognitiveservices.speech as speechsdk  # type: ignore[import-untyped]  # no stubs
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
@@ -23,105 +26,95 @@ from livekit.agents import (
     stt,
 )
 from livekit.plugins.azure import stt as azure_stt, tts as azure_tts
-from tests.fakes import until
+from tests.plugins.conftest import Connection, Frame, WsPeer
 
-# Speech SDK recognizer seam
-
-
-class Signal:
-    def __init__(self) -> None:
-        self.callbacks: list[Callable[[object], None]] = []
-
-    def connect(self, callback: Callable[[object], None]) -> None:
-        self.callbacks.append(callback)
-
-    def fire(self, event: object = None) -> None:
-        for callback in self.callbacks:
-            callback(event)
+# Speech service wire
 
 
-class PushStream:
-    def __init__(self, stream_format: SimpleNamespace) -> None:
-        self.format = stream_format
-        self.audio = bytearray()
-        self.recognizer: Recognizer | None = None
-
-    def write(self, data: bytes) -> None:
-        self.audio += data
-
-    def close(self) -> None:
-        assert self.recognizer is not None
-        self.recognizer.input_closed()
-
-
-class Recognizer:
-    """A Speech SDK recognizer that, like the service, finalizes buffered audio on close."""
-
-    def __init__(
-        self,
-        sdk: SpeechSDK,
-        speech_config: speechsdk.SpeechConfig,
-        audio_config: SimpleNamespace,
-        **kwargs: object,
-    ) -> None:
-        self.config = speech_config
-        self.kwargs = kwargs
-        self.push: PushStream = audio_config.stream
-        self.push.recognizer = self
-        self.log: list[str] = []
-        self.recognizing = Signal()
-        self.recognized = Signal()
-        self.speech_start_detected = Signal()
-        self.speech_end_detected = Signal()
-        self.session_started = Signal()
-        self.session_stopped = Signal()
-        self.canceled = Signal()
-        sdk.recognizers.append(self)
-        self.sdk = sdk
-
-    def start_continuous_recognition(self) -> None:
-        self.log.append("start")
-        self.session_started.fire()
-
-    def stop_continuous_recognition(self) -> None:
-        self.log.append("stop")
-
-    def input_closed(self) -> None:
-        self.log.append("input closed")
-        for text in self.sdk.finals_on_close:
-            result = SimpleNamespace(text=text, offset=0, duration=10**7, language="")
-            self.recognized.fire(SimpleNamespace(result=result))
-        self.session_stopped.fire()
+def headers_of(message: str | bytes) -> tuple[dict[str, str], str | bytes]:
+    """A client message's headers and body: text has a blank line after its headers, binary a
+    2-byte header length first."""
+    if isinstance(message, str):
+        head, _, body = message.partition("\r\n\r\n")
+        raw: str | bytes = body
+    else:
+        length = int.from_bytes(message[:2], "big")
+        head, raw = message[2 : 2 + length].decode(), message[2 + length :]
+    lines = [line.partition(":") for line in head.split("\r\n") if line]
+    return {name.strip(): value.strip() for name, _, value in lines}, raw
 
 
-class SpeechSDK:
-    def __init__(self) -> None:
-        self.recognizers: list[Recognizer] = []
-        self.finals_on_close: list[str] = []
-
-    async def recognizer(self, index: int) -> Recognizer:
-        await until(lambda: len(self.recognizers) > index, f"recognizer {index} was made")
-        return self.recognizers[index]
+def sent(connection: Connection, path: str) -> list[tuple[dict[str, str], str | bytes]]:
+    return [m for m in map(headers_of, connection.received) if m[0]["Path"] == path]
 
 
-@pytest.fixture
-def sdk(monkeypatch: pytest.MonkeyPatch) -> SpeechSDK:
-    fake = SpeechSDK()
-    monkeypatch.setattr(speechsdk, "SpeechRecognizer", lambda **kwargs: Recognizer(fake, **kwargs))
-    monkeypatch.setattr(speechsdk.audio, "AudioStreamFormat", lambda **kw: SimpleNamespace(**kw))
-    monkeypatch.setattr(speechsdk.audio, "PushAudioInputStream", PushStream)
-    monkeypatch.setattr(
-        speechsdk.audio, "AudioConfig", lambda stream: SimpleNamespace(stream=stream)
+def request_id(connection: Connection) -> str:
+    """The current turn's request id: the last speech.context's."""
+    return sent(connection, "speech.context")[-1][0]["X-RequestId"]
+
+
+def service(path: str, connection: Connection, body: object | None = None) -> str:
+    """A message the service sends for the connection's current turn."""
+    return (
+        f"Path: {path}\r\nX-RequestId: {request_id(connection)}\r\n"
+        f"Content-Type: application/json; charset=utf-8\r\n\r\n"
+        + ("" if body is None else json.dumps(body))
     )
-    monkeypatch.setattr(
-        speechsdk.languageconfig,
-        "AutoDetectSourceLanguageConfig",
-        lambda languages: SimpleNamespace(languages=languages),
-    )
-    monkeypatch.setattr(
-        speechsdk, "AutoDetectSourceLanguageResult", lambda result: SimpleNamespace(language="")
-    )
-    return fake
+
+
+def phrase(
+    connection: Connection, text: str, *, status: str = "Success", language: str = ""
+) -> str:
+    body: dict[str, object] = {
+        "RecognitionStatus": status,
+        "DisplayText": text,
+        "Offset": 0,
+        "Duration": 10**7,
+    }
+    if language:
+        body["PrimaryLanguage"] = {"Language": language, "Confidence": "High"}
+    return service("speech.phrase", connection, body)
+
+
+def hypothesis(connection: Connection, text: str) -> str:
+    return service("speech.hypothesis", connection, {"Text": text, "Offset": 0, "Duration": 10**6})
+
+
+def ends_audio(message: str | bytes) -> bool:
+    headers, body = headers_of(message)
+    return headers["Path"] == "audio" and "Content-Type" not in headers and body == b""
+
+
+def carries_audio(message: str | bytes) -> bool:
+    headers, body = headers_of(message)
+    return headers["Path"] == "audio" and "Content-Type" not in headers and body != b""
+
+
+def finish_with(
+    *texts: str, language: str = ""
+) -> Callable[[Connection, str | bytes], list[Frame]]:
+    """A service that answers the end of the audio with ``texts`` as phrases, then turn.end."""
+
+    def reply(connection: Connection, message: str | bytes) -> list[Frame]:
+        if not ends_audio(message):
+            return []
+        return [
+            *(phrase(connection, text, language=language) for text in texts),
+            service("turn.end", connection),
+        ]
+
+    return reply
+
+
+def query(connection: Connection) -> dict[str, str]:
+    return {k: v[0] for k, v in parse_qs(urlsplit(str(connection.request.url)).query).items()}
+
+
+def context(connection: Connection) -> dict[str, Any]:
+    body = sent(connection, "speech.context")[-1][1]
+    assert isinstance(body, str)
+    parsed: dict[str, Any] = json.loads(body)
+    return parsed
 
 
 def frame(duration_ms: int, sample_rate: int) -> rtc.AudioFrame:
@@ -146,9 +139,9 @@ async def finals(stream: azure_stt.SpeechStream) -> list[stt.SpeechData]:
 OPTIONS = APIConnectOptions(max_retry=0, connect_timeout=1, read_timeout=1)
 
 
-def language_mode(recognizer: Recognizer) -> str:
-    return str(
-        recognizer.config.get_property(speechsdk.PropertyId.SpeechServiceConnection_LanguageIdMode)
+def azure(peer: WsPeer, **kwargs: Any) -> azure_stt.STT:
+    return azure_stt.STT(
+        speech_key="key", speech_endpoint=peer.ws_url + "/stt/speech/universal/v2", **kwargs
     )
 
 
@@ -162,92 +155,105 @@ def language_mode(recognizer: Recognizer) -> str:
     ],
 )
 async def test_recognizer_uses_the_requested_languages(
-    sdk: SpeechSDK, configured: str | list[str], override: str | None, expected: list[str]
+    ws_peer: WsPeer, configured: str | list[str], override: str | None, expected: list[str]
 ) -> None:
     """One language is set explicitly, several enable continuous identification, and the
     stream() and update_options() languages are honored.
 
     https://github.com/livekit/agents/issues/1858 https://github.com/livekit/agents/issues/4449
     """
-    provider = azure_stt.STT(speech_key="key", speech_region="westus", language=configured)
+    ws_peer.reply = finish_with("hello")
+    provider = azure(ws_peer, language=configured)
     kwargs = {"language": override} if override else {}
     async with provider.stream(conn_options=OPTIONS, **kwargs) as stream:
-        recognizer = await sdk.recognizer(0)
+        first = await ws_peer.connected()
         provider.update_options(language="it-IT")
-        updated = await sdk.recognizer(1)
-        sdk.finals_on_close = ["hello"]
+        updated = await ws_peer.connected(2)
+        stream.push_frame(frame(100, 16000))
         stream.end_input()
         final = await finals(stream)
 
-    for languages, current in ((expected, recognizer), (["it-IT"], updated)):
+    for languages, current in ((expected, first), (["it-IT"], updated)):
+        detection = context(current)["phraseDetection"]
+        assert isinstance(detection, dict)
         if len(languages) == 1:
-            assert current.kwargs == {"language": languages[0]}
-            assert language_mode(current) == ""
+            assert query(current)["language"] == languages[0]
+            assert detection["language"] == languages[0]
+            assert "languageId" not in context(current)
         else:
-            detection = current.kwargs["auto_detect_source_language_config"]
-            assert isinstance(detection, SimpleNamespace) and detection.languages == languages
-            assert "language" not in current.kwargs
-            assert language_mode(current) == "Continuous"
+            language_id = context(current)["languageId"]
+            assert isinstance(language_id, dict)
+            assert (language_id["languages"], language_id["mode"]) == (
+                languages,
+                "DetectContinuous",
+            )
+            assert query(current)["lidEnabled"] == "true"
+            assert "language" not in query(current)
     assert [(speech.text, speech.language) for speech in final] == [("hello", "it-IT")]
 
 
-async def test_end_input_flushes_buffered_finals_before_teardown(sdk: SpeechSDK) -> None:
+async def test_end_input_flushes_buffered_finals_before_teardown(ws_peer: WsPeer) -> None:
     """Ending input delivers every pending final before recognition stops.
 
     https://github.com/livekit/agents/pull/6118
     """
-    sdk.finals_on_close = ["first phrase", "second phrase"]
-    provider = azure_stt.STT(speech_key="key", speech_region="westus")
+    ws_peer.reply = finish_with("first phrase", "second phrase")
+    provider = azure(ws_peer)
     async with provider.stream(conn_options=OPTIONS) as stream:
         stream.push_frame(frame(100, 16000))
         stream.end_input()
         final = await finals(stream)
-    recognizer = await sdk.recognizer(0)
     assert [speech.text for speech in final] == ["first phrase", "second phrase"]
-    assert recognizer.log == ["start", "input closed", "stop"]
+    assert len(ws_peer.connections) == 1
 
 
 @pytest.mark.parametrize("sample_rate", [8000, 48000])
 async def test_recognizer_audio_matches_the_configured_sample_rate(
-    sdk: SpeechSDK, sample_rate: int
+    ws_peer: WsPeer, sample_rate: int
 ) -> None:
-    """The push stream is declared and fed at the configured rate, whatever the frames' rate.
+    """The wave header declares the configured rate and the audio is sent at it, whatever the
+    frames' rate.
 
     https://github.com/livekit/agents/pull/1072
     """
-    provider = azure_stt.STT(speech_key="key", speech_region="westus", sample_rate=sample_rate)
+    ws_peer.reply = finish_with()
+    provider = azure(ws_peer, sample_rate=sample_rate)
     async with provider.stream(conn_options=OPTIONS) as stream:
         for _ in range(10):
             stream.push_frame(frame(20, 16000))
         stream.end_input()
         await finals(stream)
-    push = (await sdk.recognizer(0)).push
-    assert (push.format.samples_per_second, push.format.channels) == (sample_rate, 1)
-    seconds = len(push.audio) / 2 / sample_rate
+
+    (header, wave), *audio = sent(ws_peer.connections[0], "audio")
+    assert header["Content-Type"] == "audio/x-wav" and isinstance(wave, bytes)
+    channels, rate = struct.unpack_from("<HI", wave, 22)
+    assert (rate, channels) == (sample_rate, 1)
+    seconds = sum(len(body) for _, body in audio) / 2 / sample_rate
     assert seconds == pytest.approx(0.2, abs=0.02)
 
 
-async def test_stt_custom_endpoint_needs_no_region(sdk: SpeechSDK) -> None:
-    """A key plus a private endpoint configures the recognizer for that endpoint.
+async def test_stt_custom_endpoint_needs_no_region(ws_peer: WsPeer) -> None:
+    """A key plus a private endpoint connects to that endpoint with the key.
 
     https://github.com/livekit/agents/issues/1361
     """
-    endpoint = "wss://speech.private.example/stt/speech/universal/v2"
-    provider = azure_stt.STT(speech_key="key", speech_endpoint=endpoint)
+    ws_peer.reply = finish_with()
+    provider = azure(ws_peer)
     async with provider.stream(conn_options=OPTIONS) as stream:
         stream.end_input()
         await finals(stream)
-    config = (await sdk.recognizer(0)).config
-    assert config.get_property(speechsdk.PropertyId.SpeechServiceConnection_Endpoint) == endpoint
-    assert config.get_property(speechsdk.PropertyId.SpeechServiceConnection_Region) == ""
+    request = ws_peer.connections[0].request
+    assert request.path == "/stt/speech/universal/v2"
+    assert request.headers["Ocp-Apim-Subscription-Key"] == "key"
 
 
-async def test_processed_audio_is_reported_as_usage(sdk: SpeechSDK) -> None:
-    """The audio a stream fed the recognizer is reported as recognition usage.
+async def test_processed_audio_is_reported_as_usage(ws_peer: WsPeer) -> None:
+    """The audio a stream sent is reported as recognition usage.
 
     https://github.com/livekit/agents/issues/6151
     """
-    provider = azure_stt.STT(speech_key="key", speech_region="westus")
+    ws_peer.reply = finish_with()
+    provider = azure(ws_peer)
     async with provider.stream(conn_options=OPTIONS) as stream:
         for _ in range(5):
             stream.push_frame(frame(100, 16000))
@@ -262,26 +268,73 @@ async def test_processed_audio_is_reported_as_usage(sdk: SpeechSDK) -> None:
     assert sum(usage) == pytest.approx(0.5)
 
 
-async def test_an_error_cancellation_fails_the_stream_instead_of_hanging(sdk: SpeechSDK) -> None:
-    """A service-side cancellation ends the stream with an API error naming its cause.
+@pytest.mark.parametrize(
+    "status, kind", [("Error", "server"), ("TooManyRequests", "rate_limit"), ("Forbidden", "auth")]
+)
+async def test_a_canceled_phrase_fails_the_stream_by_its_status(
+    ws_peer: WsPeer, status: str, kind: str
+) -> None:
+    """A speech.phrase whose status cancels the recognition ends the stream with an API error of
+    its kind instead of hanging.
 
     https://github.com/livekit/agents/issues/5322
     """
-    provider = azure_stt.STT(speech_key="key", speech_region="westus")
-    details = SimpleNamespace(
-        reason=speechsdk.CancellationReason.Error,
-        code=speechsdk.CancellationErrorCode.ServiceTimeout,
-        error_details="service timeout",
+    ws_peer.reply = lambda connection, message: (
+        [phrase(connection, "", status=status)] if carries_audio(message) else []
     )
+    provider = azure(ws_peer)
     async with provider.stream(conn_options=OPTIONS) as stream:
-        recognizer = await sdk.recognizer(0)
-
-        recognizer.canceled.fire(SimpleNamespace(cancellation_details=details))
-
+        stream.push_frame(frame(100, 16000))
         with pytest.raises(APIError) as caught:
             await finals(stream)
 
-    assert caught.value.detail == "service timeout"
+    assert caught.value.kind == kind
+
+
+async def test_a_turn_the_service_ends_is_followed_by_a_new_one(ws_peer: WsPeer) -> None:
+    """While audio still flows, a turn.end opens the next turn on the same connection: a new
+    request id with its speech.context and wave header; that turn's phrases are read and a late
+    one of the ended turn is dropped."""
+    provider = azure(ws_peer)
+    async with provider.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(frame(100, 16000))
+        connection = await ws_peer.connected()
+        first = request_id(connection)
+        await ws_peer.send(service("turn.end", connection))
+        await until_turns(connection, 2)
+        stream.push_frame(frame(100, 16000))
+        late = phrase(connection, "late").replace(request_id(connection), first)
+        await ws_peer.send(late, phrase(connection, "second turn"))
+        ws_peer.reply = finish_with()
+        stream.end_input()
+        final = await finals(stream)
+
+    contexts = sent(connection, "speech.context")
+    assert [h["X-RequestId"] == first for h, _ in contexts] == [True, False]
+    waves = [h for h, _ in sent(connection, "audio") if h.get("Content-Type") == "audio/x-wav"]
+    assert [h["X-RequestId"] for h in waves] == [h["X-RequestId"] for h, _ in contexts]
+    assert [speech.text for speech in final] == ["second turn"]
+    assert len(ws_peer.connections) == 1
+
+
+async def until_turns(connection: Connection, count: int) -> None:
+    async with asyncio.timeout(2):
+        while len(sent(connection, "speech.context")) < count:
+            await asyncio.sleep(0.01)
+
+
+async def test_a_message_without_a_header_block_is_a_protocol_error(ws_peer: WsPeer) -> None:
+    """A text frame that is not a header block and a body breaks the protocol: the stream
+    fails for good."""
+    ws_peer.hello = ["not a speech message"]
+    provider = azure(ws_peer)
+    async with provider.stream(conn_options=APIConnectOptions(max_retry=2)) as stream:
+        stream.push_frame(frame(100, 16000))
+        with pytest.raises(APIError) as caught:
+            await finals(stream)
+
+    assert caught.value.kind == "protocol"
+    assert len(ws_peer.connections) == 1
 
 
 # REST TTS

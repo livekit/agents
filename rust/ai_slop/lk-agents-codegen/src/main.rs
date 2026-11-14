@@ -11,6 +11,7 @@ mod decl;
 mod exceptions;
 mod exports;
 mod facade;
+mod facade_freed;
 mod forward;
 mod implementations;
 mod imports;
@@ -112,6 +113,7 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let with_bases = python::emit(&declared, &bases)?;
     let (core_pyi, core_names) = surface::emit(class_stubs.iter())?;
     o.add(PathBuf::from(CORE_NAMES), &core_names.text);
+    o.add(PathBuf::from(facade_freed::PATH), &facade_freed::emit(&declared));
     let mut forward = forward::emit(&declared)?;
     forward.extend(facade::emit(&declared, &bases)?);
     for package in python_packages {

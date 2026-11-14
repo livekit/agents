@@ -34,7 +34,7 @@ pub struct RpcCallInfo {
 
 /// `rtc.RpcInvocationData`: an incoming call, as its handler receives it. Read as the SDK's own
 /// object, which the SDK marks with its cancel reason before it cancels the handler chain.
-#[crate::host(proxy(host = "livekit.rtc.RpcInvocationData"))]
+#[crate::host(proxy(host = "livekit.rtc.RpcInvocationData", owns))]
 pub trait RpcInvocation: Any + Send + Sync {
     #[host(read_once, getter = "request_id")]
     fn request_id(&self) -> String;
@@ -56,7 +56,7 @@ pub trait RpcInvocation: Any + Send + Sync {
 }
 
 /// `next` of `RpcInterceptor.intercept_outgoing`: the rest of the chain, which performs the call.
-#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait OutgoingRpc: Send + Sync {
     #[host(await, name = "__call__")]
     fn call(
@@ -67,7 +67,7 @@ pub trait OutgoingRpc: Send + Sync {
 }
 
 /// `next` of `RpcInterceptor.intercept_incoming`: the rest of the chain, which runs the handler.
-#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait IncomingRpc: Send + Sync {
     #[host(await, name = "__call__")]
     fn call(

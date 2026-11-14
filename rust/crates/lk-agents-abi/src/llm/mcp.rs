@@ -128,7 +128,7 @@ pub type McpCause = std::sync::Arc<dyn std::error::Error + Send + Sync>;
 
 /// A `report_progress` tool's progress messages: its `RunContext.update()`, run in the host
 /// context captured at the MCP operation's entry.
-#[crate::host(proxy(host = "livekit.agents.voice.events.RunContext"))]
+#[crate::host(proxy(host = "livekit.agents.voice.events.RunContext", owns))]
 pub trait McpProgress: Send + Sync {
     #[host(await)]
     fn update<'a>(

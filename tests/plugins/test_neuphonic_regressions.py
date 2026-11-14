@@ -162,3 +162,37 @@ async def test_retry_after_ended_input_delivers_replayed_audio() -> None:
             assert connections == 2
         finally:
             await provider.aclose()
+
+
+async def test_a_sentence_answered_before_the_next_keeps_its_segment_open() -> None:
+    """A segment's first sentence spoken before the second arrives still speaks the second.
+
+    Each sentence is answered with its own stop: the first stop is not the segment's end.
+    """
+
+    async def speak(request: web.Request) -> web.StreamResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            ctx = {"context_id": json.loads(msg.data)["context_id"]}
+            await ws.send_json({"data": {**ctx, "audio": base64.b64encode(PCM).decode()}})
+            await ws.send_json({"data": {**ctx, "stop": True}})
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/speak/en", speak)
+    async with TestServer(app) as server, http.open():
+        provider = TTS(api_key="key", base_url=str(server.make_url("")))
+        try:
+            async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+                # the second sentence's start releases the first, which is answered at once
+                stream.push_text("Hello there, it is a fine day today. And")
+                frames = aiter(stream)
+                heard = bytes((await anext(frames)).frame.data)
+                stream.push_text(" the sun is shining on all of us.")
+                stream.end_input()
+                async with asyncio.timeout(2):
+                    heard += b"".join([bytes(ev.frame.data) async for ev in frames])
+            assert heard == PCM * 2
+        finally:
+            await provider.aclose()

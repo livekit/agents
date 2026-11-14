@@ -106,6 +106,7 @@ dev = [
     { name = "livekit-plugins-noise-cancellation", specifier = ">=0.3.3" },
     { name = "mcp", specifier = ">=2.3,<3" },
     { name = "mypy" },
+    { name = "opentelemetry-proto", specifier = ">=1.45,<1.46" },
     { name = "opentelemetry-sdk", specifier = ">=1.45,<1.46" },
     { name = "pytest", specifier = ">=9.1.1,<9.2" },
     { name = "pytest-asyncio", specifier = ">=0.25.3" },
@@ -547,20 +548,6 @@ wheels = [
 ]
 
 [[package]]
-name = "aws-sdk-transcribe-streaming"
-version = "0.11.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "smithy-aws-core", extra = ["eventstream", "json"], marker = "python_full_version >= '3.12'" },
-    { name = "smithy-core", marker = "python_full_version >= '3.12'" },
-    { name = "smithy-http", extra = ["aiohttp"], marker = "python_full_version >= '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d6/8a/f4556fed694b0f4e5e6bcf1105fe5d0b6a95a7633308242dd10e53bd6492/aws_sdk_transcribe_streaming-0.11.0.tar.gz", hash = "sha256:ec9fa7d635aed09df6be51a55ad9e39018b0a1451428916fcdf2b412714b00b3", size = 463385, upload-time = "2026-08-24T21:17:15.188Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f5/c4/4a4e48769e98542e5709c8e168dd5971d3c152d972bc0e60636a55498725/aws_sdk_transcribe_streaming-0.11.0-py3-none-any.whl", hash = "sha256:3a5fdad60b08ae8c2fa45831775ccf6978bc2a28a2d5fd29e3d3820f77b58ba3", size = 64556, upload-time = "2026-08-24T21:17:14.01Z" },
-]
-
-[[package]]
 name = "awscrt"
 version = "0.32.2"
 source = { registry = "https://pypi.org/simple" }
@@ -595,35 +582,6 @@ wheels = [
 ]
 
 [[package]]
-name = "azure-cognitiveservices-speech"
-version = "1.50.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "azure-core" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/15/74435b6b1d25f1c1bd419dd54623c75b5ab4fe4e503b3cd39c09fe77249f/azure_cognitiveservices_speech-1.50.0-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:a199cac027f4f3c4972b9c76efb425dd7479eabd4beb9c613140fe5549c649c6", size = 3447238, upload-time = "2026-05-12T23:06:10.517Z" },
-    { url = "https://files.pythonhosted.org/packages/3c/ef/c8677f5776c92dcaedad37df0eea2bd92063160c84266e39a847a6e1f175/azure_cognitiveservices_speech-1.50.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2621d1c95741c0864d418f88c59d1355bde0d893beb57c609b6ae4819c99e591", size = 3246184, upload-time = "2026-05-12T23:06:12.322Z" },
-    { url = "https://files.pythonhosted.org/packages/dd/bb/ff715a28d81fbd8627558033865c68ee44db08ce4151cc655769d1acfc5d/azure_cognitiveservices_speech-1.50.0-py3-none-manylinux1_x86_64.whl", hash = "sha256:e58faf51d82963b395c06a7e65dd6bead71c242e013695c62949ff8b9607d77e", size = 2773363, upload-time = "2026-05-12T23:06:14.327Z" },
-    { url = "https://files.pythonhosted.org/packages/06/af/159d198d8d8771586dba7ec762c7737b273284b34533c3eeb0fa5a8afde5/azure_cognitiveservices_speech-1.50.0-py3-none-manylinux2014_aarch64.whl", hash = "sha256:828891baac849137d9773d980910939c0541cbfc4653265597fea592684efafd", size = 2707839, upload-time = "2026-05-12T23:06:16.471Z" },
-    { url = "https://files.pythonhosted.org/packages/36/a6/ecea3fa6faa41e75c765072e714af546e0c1b117e6fd5b1c1b132849785f/azure_cognitiveservices_speech-1.50.0-py3-none-win_amd64.whl", hash = "sha256:c600bdab8bcc12b3e7e1297c0026dbe09edf90d9b399a719303132c216bc8002", size = 2588072, upload-time = "2026-05-12T23:06:18.91Z" },
-    { url = "https://files.pythonhosted.org/packages/58/c2/c96085f2b74c0eab8e2e9cd34c57b4768768777d575199905747fcabbe2c/azure_cognitiveservices_speech-1.50.0-py3-none-win_arm64.whl", hash = "sha256:44279ad5430db7484ef412d89599f926e623b184a365a2258056f4ffdee34e55", size = 2340337, upload-time = "2026-05-12T23:06:20.495Z" },
-]
-
-[[package]]
-name = "azure-core"
-version = "1.41.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "requests" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a6/f3/b416179e408990df5db0d516283022dde0f5d0111d98c1a848e41853e81c/azure_core-1.41.0.tar.gz", hash = "sha256:f46ff5dfcd230f25cf1c19e8a34b8dc08a337b2503e268bb600a16c00db8ad5a", size = 381042, upload-time = "2026-05-07T23:30:54.302Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/db/325c6d7312d2200251c52323878281045aaffcb5586612296484e4280eaa/azure_core-1.41.0-py3-none-any.whl", hash = "sha256:522b4011e8180b1a3dcd2024396a4e7fe9ac37fb8597db47163d230b5efe892d", size = 220920, upload-time = "2026-05-07T23:30:56.357Z" },
-]
-
-[[package]]
 name = "beartype"
 version = "0.23.1"
 source = { registry = "https://pypi.org/simple" }
@@ -643,18 +601,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/43/65/318323f98dbee45d42dff61d8f047181bc6f2268a9068cfad035a46be5af/beautifulsoup4-4.15.0.tar.gz", hash = "sha256:288e3ca7d54b06f2ac191970bc275c1939cb46d450b255bf6718b04aa37ab4f7", size = 632571, upload-time = "2026-06-07T16:44:20.453Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/88/c6/92fcd42f1ba33e1184263f25bfabf3d27c383410470f169e4b8163bf9c17/beautifulsoup4-4.15.0-py3-none-any.whl", hash = "sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9", size = 109924, upload-time = "2026-06-07T16:44:21.566Z" },
-]
-
-[[package]]
-name = "bidict"
-version = "0.24.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/f2/8d2dd8276ca05e1f5157b6a0d34efb2f585f47a0fbed61e8aad04b221f0b/bidict-0.24.1.tar.gz", hash = "sha256:4dca6c17f0b01700e9f24359daa5ebabf7be022d99f4cb2a257b6af2a5076c88", size = 30818, upload-time = "2026-08-25T23:45:52.214Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/53/2a3c7d562271ec6b6e38e7216b3104899f8aa4180c0713cb8aaf69e29cd5/bidict-0.24.1-py3-none-any.whl", hash = "sha256:fd3eaa737917d8a14f4baa391670c433c4e3f6f5fd2cd99d4bf436437f432364", size = 36175, upload-time = "2026-08-25T23:45:51.096Z" },
 ]
 
 [[package]]
@@ -2662,9 +2608,7 @@ name = "livekit-plugins-aws"
 source = { editable = "python/livekit-plugins/livekit-plugins-aws" }
 dependencies = [
     { name = "aiobotocore" },
-    { name = "aws-sdk-transcribe-streaming", marker = "python_full_version >= '3.12'" },
     { name = "livekit-agents" },
-    { name = "smithy-http", extra = ["awscrt"], marker = "python_full_version >= '3.12'" },
 ]
 
 [package.optional-dependencies]
@@ -2680,10 +2624,8 @@ requires-dist = [
     { name = "aiobotocore", specifier = ">=3.0.0" },
     { name = "aws-sdk-bedrock-runtime", marker = "python_full_version >= '3.12' and extra == 'realtime'", specifier = ">=0.11.0" },
     { name = "aws-sdk-signers", marker = "python_full_version >= '3.12' and extra == 'realtime'", specifier = ">=0.0.3" },
-    { name = "aws-sdk-transcribe-streaming", marker = "python_full_version >= '3.12'", specifier = ">=0.11.0" },
     { name = "boto3", marker = "extra == 'realtime'", specifier = ">1.35.10" },
     { name = "livekit-agents", editable = "python/livekit-agents" },
-    { name = "smithy-http", extras = ["awscrt"], marker = "python_full_version >= '3.12'" },
     { name = "smithy-http", extras = ["awscrt"], marker = "python_full_version >= '3.12' and extra == 'realtime'" },
 ]
 provides-extras = ["realtime"]
@@ -2692,14 +2634,12 @@ provides-extras = ["realtime"]
 name = "livekit-plugins-azure"
 source = { editable = "python/livekit-plugins/livekit-plugins-azure" }
 dependencies = [
-    { name = "azure-cognitiveservices-speech" },
     { name = "httpx2" },
     { name = "livekit-agents", extra = ["openai"] },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-cognitiveservices-speech", specifier = ">=1.48.2" },
     { name = "httpx2", specifier = ">=2.12,<3" },
     { name = "livekit-agents", extras = ["openai"], editable = "python/livekit-agents" },
 ]
@@ -3131,13 +3071,13 @@ name = "livekit-plugins-mistralai"
 source = { editable = "python/livekit-plugins/livekit-plugins-mistralai" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "mistralai", extra = ["realtime"] },
+    { name = "mistralai" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "python/livekit-agents" },
-    { name = "mistralai", extras = ["realtime"], specifier = ">=2.0.0,<3.0.0" },
+    { name = "mistralai", specifier = ">=2.0.0,<3.0.0" },
 ]
 
 [[package]]
@@ -3439,13 +3379,13 @@ name = "livekit-plugins-spatius"
 source = { editable = "python/livekit-plugins/livekit-plugins-spatius" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "spatius", extra = ["opus"] },
+    { name = "opuslib-next" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "python/livekit-agents" },
-    { name = "spatius", extras = ["opus"], specifier = ">=1.1.0" },
+    { name = "opuslib-next", specifier = ">=1.3.0" },
 ]
 
 [[package]]
@@ -3469,14 +3409,10 @@ name = "livekit-plugins-speechmatics"
 source = { editable = "python/livekit-plugins/livekit-plugins-speechmatics" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "speechmatics-agent-stt" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "livekit-agents", editable = "python/livekit-agents" },
-    { name = "speechmatics-agent-stt", specifier = "~=0.1.0" },
-]
+requires-dist = [{ name = "livekit-agents", editable = "python/livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-spitch"
@@ -3551,17 +3487,10 @@ name = "livekit-plugins-upliftai"
 source = { editable = "python/livekit-plugins/livekit-plugins-upliftai" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "python-socketio", extra = ["asyncio-client"] },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "livekit-agents", editable = "python/livekit-agents" },
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "python-socketio", extras = ["asyncio-client"], specifier = ">=5.13" },
-]
+requires-dist = [{ name = "livekit-agents", editable = "python/livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-vakyam"
@@ -3798,11 +3727,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ca/db/a80c4ab96b1fec9529115dafaa3f14b28d0407fe1cb9b051ec2df9336fb7/mistralai-2.10.1.tar.gz", hash = "sha256:43b61643ba4f120463e5faf7305a6f40eb29f8e3a21321893969e56c20ed3fbc", size = 590127, upload-time = "2026-09-15T08:12:30.79Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/98/f64b54166a607ece4e5c8494c843ac1f9c7c0af6f1014272cc420fe1d519/mistralai-2.10.1-py3-none-any.whl", hash = "sha256:443b306392ae1e86edaec39dbafcf79deb735799a00abef4611531004e22b1b2", size = 1392946, upload-time = "2026-09-15T08:12:28.704Z" },
-]
-
-[package.optional-dependencies]
-realtime = [
-    { name = "websockets" },
 ]
 
 [[package]]
@@ -4055,15 +3979,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/87/07/7ffb897eee5c01e816e037f51a6720bf1a0a8c17cca1a2382ae554f43044/mypy_protobuf-5.1.0.tar.gz", hash = "sha256:8493758852a9cdc075a11dbe96c6e37ea2feba5fd5f33ef7442b9a275322a94c", size = 37529, upload-time = "2026-04-28T15:56:40.356Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/ec/5ffcf8f5f53757e01afdece10c664e694ac60d2f17c2036811b85b842a5b/mypy_protobuf-5.1.0-py3-none-any.whl", hash = "sha256:d7031f563f806b8bcd448a3e86768bf0994c0af5b0017b344a4fbbba4191f43c", size = 26313, upload-time = "2026-04-28T15:56:39.096Z" },
-]
-
-[[package]]
-name = "nanoid"
-version = "2.0.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b7/9d/0250bf5935d88e214df469d35eccc0f6ff7e9db046fc8a9aeb4b2a192775/nanoid-2.0.0.tar.gz", hash = "sha256:5a80cad5e9c6e9ae3a41fa2fb34ae189f7cb420b2a5d8f82bd9d23466e4efa68", size = 3290, upload-time = "2018-11-20T14:45:51.578Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/0d/8630f13998638dc01e187fadd2e5c6d42d127d08aeb4943d231664d6e539/nanoid-2.0.0-py3-none-any.whl", hash = "sha256:90aefa650e328cffb0893bbd4c236cfd44c48bc1f2d0b525ecc53c3187b653bb", size = 5844, upload-time = "2018-11-20T14:45:50.165Z" },
 ]
 
 [[package]]
@@ -4344,76 +4259,15 @@ wheels = [
 ]
 
 [[package]]
-name = "opentelemetry-exporter-http-transport"
-version = "0.66b1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "opentelemetry-api" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/62/0c/e3ebdb4b507f66afcc905e6885a4946969bd75b45988492643356fbbdc63/opentelemetry_exporter_http_transport-0.66b1.tar.gz", hash = "sha256:443080203bf52586ce0b2ad901e8951c61833eab1aa539ae6f1f16fe9e8e7952", size = 11693, upload-time = "2026-10-06T17:32:59.65Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/04/69/6af86ff66492b481c6a4c05dcfd68beb47ed8ba046440a26a2aac76b95c7/opentelemetry_exporter_http_transport-0.66b1-py3-none-any.whl", hash = "sha256:2f95404bdee7f9d2d529c7de56c7bd86d014d774d8fbf137810e0167f8a492bf", size = 12155, upload-time = "2026-10-06T17:32:35.454Z" },
-]
-
-[package.optional-dependencies]
-requests = [
-    { name = "requests" },
-]
-
-[[package]]
-name = "opentelemetry-exporter-otlp-common"
-version = "0.66b1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "opentelemetry-sdk" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/cb/19/41de712173f43057e4532d42ece7d0c6d4210d353e5752433cb14987643f/opentelemetry_exporter_otlp_common-0.66b1.tar.gz", hash = "sha256:6b1403487a2185ac1feb45fd5546fdf8630ce71c36bcefaadf51e2130e9e23f9", size = 14325, upload-time = "2026-10-06T17:33:01.725Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fc/39/8c23d67665c762aa51840fa06f86e902e8f6f1693bc8d7e3d98cd6e2f753/opentelemetry_exporter_otlp_common-0.66b1-py3-none-any.whl", hash = "sha256:00ff8592c3a7cb729ff3fdc7ffa12372c243bdf2163e80c180994d0c7bd83ee9", size = 12385, upload-time = "2026-10-06T17:32:38.177Z" },
-]
-
-[[package]]
-name = "opentelemetry-exporter-otlp-proto-common"
-version = "1.45.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "opentelemetry-proto" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c1/8e/65e85e5137991a3c493b11682151d198638a5bc1dd4b4c5f67e013c57d7c/opentelemetry_exporter_otlp_proto_common-1.45.1.tar.gz", hash = "sha256:2e4adcc3a67bcf57804fc49514f0ef64974ca7590aa3491da389852b4a0628f6", size = 18873, upload-time = "2026-10-06T17:33:04.471Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/aa/92f225d353904e7f70b8b3e3c1b02db0cf56f744c2e83c581dc372e78873/opentelemetry_exporter_otlp_proto_common-1.45.1-py3-none-any.whl", hash = "sha256:2f446183ae7047b036226f1d846c41a834b0e8755ad13b51a51dd38952eb466c", size = 15393, upload-time = "2026-10-06T17:32:41.911Z" },
-]
-
-[[package]]
-name = "opentelemetry-exporter-otlp-proto-http"
-version = "1.45.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "googleapis-common-protos" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-http-transport", extra = ["requests"] },
-    { name = "opentelemetry-exporter-otlp-common" },
-    { name = "opentelemetry-exporter-otlp-proto-common" },
-    { name = "opentelemetry-proto" },
-    { name = "opentelemetry-sdk" },
-    { name = "requests" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/1b/17/26487707ea4caa97b17e6e4b5fa72133a53512ffa2f5cf7a49ef284b29cb/opentelemetry_exporter_otlp_proto_http-1.45.1.tar.gz", hash = "sha256:45c218405ce3fd879596924b1874bf9a8f6880206d61065c5a912c8e5c297fb7", size = 28839, upload-time = "2026-10-06T17:33:05.713Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/1f/517eaa0187ba106a9da97160ce2add3a371812681dc440930b267f714e42/opentelemetry_exporter_otlp_proto_http-1.45.1-py3-none-any.whl", hash = "sha256:24a97cf3753c7fb52fad44a696e452ff371686339e2acf3309e2eda3d0230700", size = 22180, upload-time = "2026-10-06T17:32:43.946Z" },
-]
-
-[[package]]
 name = "opentelemetry-proto"
-version = "1.45.1"
+version = "1.45.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4b/7f/15f014fb195da6c2dbb6c71399b8e76824878718e94de6454038488eed28/opentelemetry_proto-1.45.1.tar.gz", hash = "sha256:79e0fb95e4616691a469439238aa9224d75779b3e108e895d1aa125ab29ca77c", size = 46488, upload-time = "2026-10-06T17:33:11.49Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/9c/1aa4ce60e9bc72af20dc49c92cc0566825092d92b3d6a277439fb5fb7c01/opentelemetry_proto-1.45.2.tar.gz", hash = "sha256:bd8d23cf770605b0af9b7be2071d26a464fea289d35429abfd2a66226114ad64", size = 46486, upload-time = "2026-10-29T17:29:53.007Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ab/9a/42ec8180a769516ae757e893b69736826efceac7332553915b4528a91c6d/opentelemetry_proto-1.45.1-py3-none-any.whl", hash = "sha256:f38e2a8413053c180cd3d2637fbb279673ec2f6a6e09c995aafa2f452c52b46e", size = 72488, upload-time = "2026-10-06T17:32:53.057Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/0d/a0b8f2b9efe2ec1abdf639d3696db9b1563ebeb11d91aac08ba7341e9122/opentelemetry_proto-1.45.2-py3-none-any.whl", hash = "sha256:03a7ca1b43f89fd5b965d5975902bb2515c0c86e2428b456836e9a6149c6235a", size = 72484, upload-time = "2026-10-29T17:29:31.403Z" },
 ]
 
 [[package]]
@@ -5235,42 +5089,12 @@ wheels = [
 ]
 
 [[package]]
-name = "python-engineio"
-version = "4.14.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "simple-websocket" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fc/65/f8bae11b228647e2e2f45b63dec7448efaddb7cb51f529de1fdba69e63b5/python_engineio-4.14.0.tar.gz", hash = "sha256:eaa1e386baf9c2c7959eef7f9d9165c5ea910c5b392f5316e78d29ed073cb43d", size = 80863, upload-time = "2026-08-30T19:52:01.32Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/de/07cfd386974c2a26a7bde41f2111be29bbfc92b9ea0bb76694415a4a1a78/python_engineio-4.14.0-py3-none-any.whl", hash = "sha256:9f0fe275fb7d67bfc1a632421adf22949fd4843bd9c458c004b0a89cede302a2", size = 60291, upload-time = "2026-08-30T19:51:59.776Z" },
-]
-
-[[package]]
 name = "python-multipart"
 version = "0.0.32"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz", hash = "sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e", size = 46881, upload-time = "2026-06-04T16:18:58.647Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl", hash = "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23", size = 30042, upload-time = "2026-06-04T16:18:57.319Z" },
-]
-
-[[package]]
-name = "python-socketio"
-version = "5.17.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "bidict" },
-    { name = "python-engineio" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b9/04/8647675c93b5e74a3daa41a2a03930bac0cbdcfcf307900f0441ae6550ba/python_socketio-5.17.0.tar.gz", hash = "sha256:c3bbfc4937dcfea7c4d1b182afa94d4a30335d153987e8f2078b344beacf95a0", size = 134574, upload-time = "2026-09-14T22:51:02.968Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/be/44b558c944bc16618483967ecd3424c578705aa33ceee7df8c1e4ab43ea0/python_socketio-5.17.0-py3-none-any.whl", hash = "sha256:b5826fd2f8aa02e11347816349b74ac6b53e8a4f4e4b1cf1388e1aff19b7f3f4", size = 82548, upload-time = "2026-09-14T22:51:01.405Z" },
-]
-
-[package.optional-dependencies]
-asyncio-client = [
-    { name = "aiohttp" },
 ]
 
 [[package]]
@@ -5959,18 +5783,6 @@ wheels = [
 ]
 
 [[package]]
-name = "simple-websocket"
-version = "1.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "wsproto" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b0/d4/bfa032f961103eba93de583b161f0e6a5b63cebb8f2c7d0c6e6efe1e3d2e/simple_websocket-1.1.0.tar.gz", hash = "sha256:7939234e7aa067c534abdab3a9ed933ec9ce4691b0713c78acb195560aa52ae4", size = 17300, upload-time = "2024-10-10T22:39:31.412Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/59/0782e51887ac6b07ffd1570e0364cf901ebc36345fea669969d2084baebb/simple_websocket-1.1.0-py3-none-any.whl", hash = "sha256:4af6069630a38ed6c561010f0e11a5bc0d4ca569b36306eb257cd9a192497c8c", size = 13842, upload-time = "2024-10-10T22:39:29.645Z" },
-]
-
-[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6097,29 +5909,6 @@ wheels = [
 ]
 
 [[package]]
-name = "spatius"
-version = "1.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "nanoid" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-sdk" },
-    { name = "protobuf" },
-    { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/27/e5/bcc84a81d1aa7254d91869f2ebac0bfdf6e9d3c43510ee98abee6b478d04/spatius-1.1.0.tar.gz", hash = "sha256:5b2d6ce92ce58172dc2ed98f5184de0e961f781ed390f7466b471836c2d04658", size = 160375, upload-time = "2026-08-28T11:45:57.494Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/22/73/b13dda4c6376aaeb4cd61eb0c0f340afa35582b81b9c97262f85f2d32064/spatius-1.1.0-py3-none-any.whl", hash = "sha256:887ee65021a7dd52470a29bd341b40b4a2ee9c21e423e59d011097329a460b34", size = 38519, upload-time = "2026-08-28T11:45:56.303Z" },
-]
-
-[package.optional-dependencies]
-opus = [
-    { name = "opuslib-next" },
-]
-
-[[package]]
 name = "speechify-api"
 version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6132,31 +5921,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/90/3c/4cef771d24e89577b5819b12b351434deb3b5bfd647c21c57c5ece6b2935/speechify_api-4.0.0.tar.gz", hash = "sha256:461ca9f3b6ec3f95a604f299c59152c46bda594a441570a80a4f04d88657f11e", size = 66631, upload-time = "2026-08-18T18:39:42.634Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fd/70/b783459bd5729da204dfd077301a7a85399a5ccd0e3bb53c655ef421e600/speechify_api-4.0.0-py3-none-any.whl", hash = "sha256:0d811377a4a2a20eeca3c3f443b7853a379df1a8d9fa859f264f8d70b8fd36f0", size = 103832, upload-time = "2026-08-18T18:39:41.424Z" },
-]
-
-[[package]]
-name = "speechmatics-agent-stt"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "speechmatics-rt" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b5/52/fdc366b34c77aef07b5af89e764c2a40457f125bbcba9df825cfad24bb56/speechmatics_agent_stt-0.1.0.tar.gz", hash = "sha256:ca17027d43aab73df16ce757600027f107b07de60aa2434274a0fe0bc0889452", size = 16798, upload-time = "2026-09-07T08:58:17.231Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/0b/71650f93c1328a6a96313b26c60830c9903d01177f8821aaec4b8c45d097/speechmatics_agent_stt-0.1.0-py3-none-any.whl", hash = "sha256:0e87e1a954660515763834ff268b509a0025cd5484aef092e13a047621d11d5b", size = 17896, upload-time = "2026-09-07T08:58:16.158Z" },
-]
-
-[[package]]
-name = "speechmatics-rt"
-version = "1.1.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions" },
-    { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/83/2b/2270997af25f5e5a288fe8887d434683eb25c0486e6a51654d228f851285/speechmatics_rt-1.1.1.tar.gz", hash = "sha256:c560df8edcf0af3a565310f1a744feee9a9c0bb35e665225305ae7e7343a390f", size = 29797, upload-time = "2026-08-26T08:21:14.822Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/f4/45fec42d4d7356f611c66491537ca6d8c003bcc6ad7c3b21b103ba1e0da4/speechmatics_rt-1.1.1-py3-none-any.whl", hash = "sha256:4c1154d8862c838e307861207fcd590477b3f473c9084ef30ee2b65419adbcd6", size = 36258, upload-time = "2026-08-26T08:21:13.776Z" },
 ]
 
 [[package]]
@@ -6943,18 +6707,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/79/d9/7cfd5a312760ac4dd8bf0184a6ee9e43c33e47f3dadc303032ce012b8fa3/wrapt-1.17.3-cp314-cp314t-win_amd64.whl", hash = "sha256:73d496de46cd2cdbdbcce4ae4bcdb4afb6a11234a1df9c085249d55166b95116", size = 41334, upload-time = "2025-08-12T05:53:14.178Z" },
     { url = "https://files.pythonhosted.org/packages/46/78/10ad9781128ed2f99dbc474f43283b13fea8ba58723e98844367531c18e9/wrapt-1.17.3-cp314-cp314t-win_arm64.whl", hash = "sha256:f38e60678850c42461d4202739f9bf1e3a737c7ad283638251e79cc49effb6b6", size = 38471, upload-time = "2025-08-12T05:52:57.784Z" },
     { url = "https://files.pythonhosted.org/packages/1f/f6/a933bd70f98e9cf3e08167fc5cd7aaaca49147e48411c0bd5ae701bb2194/wrapt-1.17.3-py3-none-any.whl", hash = "sha256:7171ae35d2c33d326ac19dd8facb1e82e5fd04ef8c6c0e394d7af55a55051c22", size = 23591, upload-time = "2025-08-12T05:53:20.674Z" },
-]
-
-[[package]]
-name = "wsproto"
-version = "1.3.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "h11" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c7/79/12135bdf8b9c9367b8701c2c19a14c913c120b882d50b014ca0d38083c2c/wsproto-1.3.2.tar.gz", hash = "sha256:b86885dcf294e15204919950f666e06ffc6c7c114ca900b060d6e16293528294", size = 50116, upload-time = "2025-11-20T18:18:01.871Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a4/f5/10b68b7b1544245097b2a1b8238f66f2fc6dcaeb24ba5d917f52bd2eed4f/wsproto-1.3.2-py3-none-any.whl", hash = "sha256:61eea322cdf56e8cc904bd3ad7573359a242ba65688716b0710a5eb12beab584", size = 24405, upload-time = "2025-11-20T18:18:00.454Z" },
 ]
 
 [[package]]

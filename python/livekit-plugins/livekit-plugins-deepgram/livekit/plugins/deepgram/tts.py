@@ -11,7 +11,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APITimeoutError,
     http,
     tokenize,
     tts,
@@ -126,17 +125,11 @@ class _DeepgramTTS(tts.TTS):
 
     async def _close_ws(self, ws: http.WebSocket) -> None:
         try:
-            # Send Flush and Close messages to ensure Deepgram processes all remaining audio
-            # and properly terminates the session, preventing lingering TTS sessions
+            # Flush and Close end the session on Deepgram's side, so none lingers (a lingering
+            # one counts against the concurrency limit); the close handshake then waits for
+            # Deepgram to close
             await ws.send_str(_FLUSH_MSG)
             await ws.send_str(_CLOSE_MSG)
-
-            # Wait for server acknowledgment to prevent race conditions and ensure
-            # proper cleanup, avoiding 429 Too Many Requests errors from lingering sessions
-            try:
-                await ws.receive(timeout=1.0)
-            except APITimeoutError:
-                pass
         except Exception as e:
             logger.warning(f"Error during WebSocket close sequence: {e}")
         finally:

@@ -6,14 +6,14 @@ use crate::{AudioFrame, Maybe, VadEvent};
 
 /// The host's model factory (`livekit.local_inference.VAD`): called once per stream, as each
 /// stream needs its own recurrent state. Never called when the model is native.
-#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait VadModels: Send + Sync {
     #[host(call, name = "__call__")]
     fn create(&self) -> Result<Arc<dyn VadModel>, HostError>;
 }
 
 /// One host model, called from its stream's admitted worker.
-#[crate::host(proxy(host = "livekit.local_inference.VAD"))]
+#[crate::host(proxy(host = "livekit.local_inference.VAD", owns))]
 pub trait VadModel: Send + Sync {
     /// The speech probability of one window of 16 kHz samples.
     #[host(call)]

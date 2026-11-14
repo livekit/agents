@@ -6,7 +6,7 @@ use super::{
 use crate::decl::{Class, Method, Ty};
 
 /// An `init` constructor: an empty object (`__new__`, taking whatever its host subclass is called
-/// with), then `__init__`, which builds the implementation once, its events through a weak proxy
+/// with), then `__init__`, which builds the implementation once, its events through a `self_events` proxy
 /// of the object and its label the object's host class.
 pub(super) fn init(c: &Class, m: &Method) -> Result<String, String> {
     let at = format!("{}::{}", c.trait_path, m.rust_name);
@@ -24,7 +24,7 @@ pub(super) fn init(c: &Class, m: &Method) -> Result<String, String> {
             Ty::Cx => Some("crate::py_calls::entry_cx()?".to_owned()),
             Ty::CallContext => Some("crate::py_calls::entered()".to_owned()),
             Ty::ClassLabel => Some("crate::py_objects::class_label(slf.as_any())?".to_owned()),
-            Ty::Proxy { weak: true, declared: Some((family, name)), .. } => {
+            Ty::Proxy { self_events: true, declared: Some((family, name)), .. } => {
                 Some(format!("crate::generated::{family}::{name}Proxy::weak(slf.as_any())?"))
             }
             _ => None,

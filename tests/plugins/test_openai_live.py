@@ -27,7 +27,7 @@ from livekit.agents import (
     http,
     llm,
 )
-from livekit.plugins.openai.realtime import ResponsesDelegationOptions, gpt_live_model
+from livekit.plugins.openai.realtime import ResponsesDelegationOptions
 from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveDelegation,
     GPTLiveModel,
@@ -420,7 +420,7 @@ async def test_provider_content_is_only_logged_under_pii_fields(
 
     https://github.com/livekit/agents/pull/7212
     """
-    monkeypatch.setattr(gpt_live_model, "lk_oai_debug", 1)
+    monkeypatch.setenv("LK_OPENAI_DEBUG", "1")
     caplog.set_level(logging.DEBUG, logger="livekit.plugins.openai")
     private = "private-customer-payload"
     peer = _Peer()

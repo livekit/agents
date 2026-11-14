@@ -14,22 +14,19 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import os
-import time
 import uuid
 import weakref
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field, replace
-from enum import Enum
-from typing import Any, Literal, cast, get_args
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from typing import Any, Literal, NotRequired, TypedDict, cast, get_args
 from urllib.parse import urljoin
 
 from pydantic import TypeAdapter
 
-from livekit.agents import ProviderAttempts, http, tokenize, tts, utils
+from livekit.agents import http, tokenize, tts, utils
 from livekit.agents._bindings import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -37,7 +34,7 @@ from livekit.agents.types import (
     ErrorKind,
     NotGivenOr,
 )
-from livekit.agents.utils import aio, is_given
+from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
@@ -130,747 +127,134 @@ class _TTSOptions:
             return "audio/wav"
 
 
-# Shared WebSocket connection infrastructure
-class _ContextState(Enum):
-    ACTIVE = "active"
-    CREATING = "creating"
-    CLOSING = "closing"
+# Inworld's bidirectional websocket: each segment is one context, created with the stream's
+# options, closed once its text ended. Each message declares only the fields read.
 
 
-@dataclass
-class _ContextInfo:
-    context_id: str
-    state: _ContextState
-    read_deadline: ProviderAttempts
-    emitter: tts.AudioEmitter | None = None
-    waiter: asyncio.Future[None] | None = None
-    input_sent: bool = False
-    segment_started: bool = False
-    flush_after_push: bool = False
-    created_at: float = field(default_factory=time.time)
-    close_started_at: float | None = None
-    # Cumulative timestamp tracking for monotonic timestamps across generations.
-    # When auto_mode is enabled or flush_context() is called, the server resets
-    # timestamps to 0 after each generation. We add cumulative_time to maintain
-    # monotonically increasing timestamps within an agent turn.
-    cumulative_time: float = 0.0
-    generation_end_time: float = 0.0
-    # PCM byte rate (0 for compressed encodings) and the audio received so far: a generation's
-    # audio can run past its last word, so the next generation starts where the audio ended
-    pcm_byte_rate: int = 0
-    audio_time: float = 0.0
-    # On the WebSocket, `usage.processedCharactersCount` is the characters processed so far.
-    billed_characters: int | None = None
+class _Status(TypedDict):
+    code: NotRequired[int]
+    message: NotRequired[str]
 
 
-@dataclass
-class _CreateContextMsg:
-    context_id: str
-    opts: _TTSOptions
+class _WordAlignment(TypedDict):
+    words: NotRequired[list[str]]
+    wordStartTimeSeconds: NotRequired[list[float]]
+    wordEndTimeSeconds: NotRequired[list[float]]
 
 
-@dataclass
-class _SendTextMsg:
-    context_id: str
+class _CharacterAlignment(TypedDict):
+    characters: NotRequired[list[str]]
+    characterStartTimeSeconds: NotRequired[list[float]]
+    characterEndTimeSeconds: NotRequired[list[float]]
+
+
+class _TimestampInfo(TypedDict):
+    wordAlignment: NotRequired[_WordAlignment]
+    characterAlignment: NotRequired[_CharacterAlignment]
+
+
+class _Usage(TypedDict):
+    processedCharactersCount: NotRequired[int]
+
+
+class _AudioChunk(TypedDict):
+    audioContent: NotRequired[str]
+    timestampInfo: NotRequired[_TimestampInfo]
+    usage: NotRequired[_Usage]
+
+
+class _Result(TypedDict):
+    contextId: NotRequired[str]
+    status: NotRequired[_Status]
+    audioChunk: NotRequired[_AudioChunk]
+    flushCompleted: NotRequired[dict[str, Any]]
+    contextClosed: NotRequired[dict[str, Any]]
+
+
+class _Message(TypedDict):
+    result: NotRequired[_Result]
+    error: NotRequired[_Status]
+
+
+class _Text(TypedDict):
     text: str
 
 
-@dataclass
-class _FlushContextMsg:
-    context_id: str
+class _Create(TypedDict):
+    create: dict[str, Any]
+    contextId: str
 
 
-@dataclass
-class _CloseContextMsg:
-    context_id: str
+class _SendText(TypedDict):
+    send_text: _Text
+    contextId: str
 
 
-_OutboundMessage = _CreateContextMsg | _SendTextMsg | _FlushContextMsg | _CloseContextMsg
+class _Flush(TypedDict):
+    flush_context: dict[str, Any]
+    contextId: str
 
 
-class _InworldConnection:
-    """Manages a single shared WebSocket connection with up to 5 concurrent contexts."""
+class _Close(TypedDict):
+    close_context: dict[str, Any]
+    contextId: str
 
-    MAX_CONTEXTS = 5
 
-    @property
-    def closed(self) -> bool:
-        return self._closed
+class _Cancel(TypedDict):
+    cancel_context: dict[str, Any]
+    contextId: str
 
-    def __init__(
-        self,
-        session: http.HttpSession,
-        ws_url: str,
-        authorization: str,
-        on_capacity_available: Callable[[], None] | None = None,
-    ) -> None:
-        self._session = session
+
+_Command = _Create | _SendText | _Flush | _Close | _Cancel
+
+
+class _Mux(http.Multiplexer[_Message, _Command]):
+    """One Inworld socket carries up to five contexts."""
+
+    max_contexts = 5
+
+    def __init__(self, ws_url: str, authorization: str) -> None:
         self._ws_url = ws_url
         self._authorization = authorization
-        self._on_capacity_available = on_capacity_available
-        self._ws: http.WebSocket | None = None
 
-        # Context pool
-        self._contexts: dict[str, _ContextInfo] = {}
-        self._context_available = asyncio.Event()
-        self._pending_acquisitions: int = 0  # Reserved slots not yet in _contexts
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        return http.SocketTarget(
+            urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional").replace("http", "ws", 1),
+            headers={
+                "Authorization": self._authorization,
+                "X-User-Agent": USER_AGENT,
+                "X-Request-Id": str(uuid.uuid4()),
+            },
+        )
 
-        # Message queue for outbound messages
-        self._outbound_queue: asyncio.Queue[_OutboundMessage] = asyncio.Queue()
-
-        # Connection state
-        self._closed = False
-        self._connect_lock = asyncio.Lock()
-        self._acquire_lock = asyncio.Lock()  # Ensures atomic capacity check + context creation
-        self._last_activity: float = time.time()
-
-        self._tasks = aio.TaskSet()
-
-    @property
-    def context_count(self) -> int:
-        """Number of contexts using server resources.
-
-        Includes all states (CREATING, ACTIVE, CLOSING) until contextClosed is received
-        from the server and the context is removed from _contexts.
-        """
-        return len(self._contexts)
-
-    @property
-    def has_capacity(self) -> bool:
-        """Whether this connection can accept more contexts.
-
-        Accounts for both active contexts and pending acquisitions (reserved slots
-        that haven't completed context creation yet).
-        """
-        return (self.context_count + self._pending_acquisitions) < self.MAX_CONTEXTS
-
-    def reserve_capacity(self) -> None:
-        """Reserve a slot for a pending context acquisition.
-
-        Call this before releasing the pool lock to prevent other callers from
-        over-subscribing this connection. The reservation is released when
-        acquire_context() completes (success or failure).
-        """
-        self._pending_acquisitions += 1
-
-    def release_reservation(self) -> None:
-        """Release a previously reserved slot.
-
-        Called automatically by acquire_context() on success, or manually on failure.
-        """
-        if self._pending_acquisitions > 0:
-            self._pending_acquisitions -= 1
-
-    @property
-    def is_idle(self) -> bool:
-        """Whether this connection has no active contexts and no pending acquisitions."""
-        return self.context_count == 0 and self._pending_acquisitions == 0
-
-    @property
-    def last_activity(self) -> float:
-        """Timestamp of last context acquisition or release."""
-        return self._last_activity
-
-    async def connect(self, *, conn_options: APIConnectOptions) -> None:
-        """Establish WebSocket connection and start background loops."""
-        async with self._connect_lock:
-            if self._ws is not None or self._closed:
-                return
-
-            url = urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional")
-            request_id = str(uuid.uuid4())
-            self._ws = await self._session.ws_connect(
-                url,
-                headers={
-                    "Authorization": self._authorization,
-                    "X-User-Agent": USER_AGENT,
-                    "X-Request-Id": request_id,
+    def route(self, message: _Message) -> str | None:
+        if "result" not in message:
+            # an error naming no context is the socket's, and fails none of its streams
+            logger.warning(
+                "Received error from Inworld",
+                extra={
+                    "error_code": message.get("error", {}).get("code", 0),
+                    "error_message": message.get("error", {}).get("message", "Unknown error"),
                 },
-                conn_options=conn_options,
             )
-            logger.debug(
-                "Established Inworld TTS WebSocket connection (shared)",
-                extra={"request_id": request_id},
-            )
-
-            self._tasks.spawn(self._send_loop(), name="inworld-tts-send")
-            self._tasks.spawn(self._recv_loop(), name="inworld-tts-recv")
-            self._tasks.spawn(self._cleanup_stale_contexts(), name="inworld-tts-cleanup")
-
-    async def acquire_context(
-        self,
-        emitter: tts.AudioEmitter,
-        opts: _TTSOptions,
-        timeout: float | None,
-        *,
-        conn_options: APIConnectOptions,
-        read_deadline: ProviderAttempts,
-    ) -> tuple[str, asyncio.Future[None]]:
-        """Acquire a new context for TTS synthesis.
-
-        Note: Caller should check has_capacity before calling this method when using
-        a connection pool. This method will still wait if at capacity, but the pool
-        should route to connections with available capacity first.
-        """
-        await self.connect(conn_options=conn_options)
-
-        # Fail fast if connection is closed
-        if self._closed:
-            raise APIConnectionError("Connection is closed")
-
-        start_time = time.time()
-
-        while True:
-            # Check closed state at start of each iteration
-            if self._closed:
-                raise APIConnectionError("Connection is closed")
-
-            # Use lock to ensure atomic capacity check + context creation
-            async with self._acquire_lock:
-                # Check raw context_count, not has_capacity, because we ARE one of
-                # the pending acquisitions - has_capacity would always be false
-                if self.context_count < self.MAX_CONTEXTS:
-                    self._last_activity = time.time()
-                    ctx_id = utils.shortuuid()
-                    waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-
-                    ctx_info = _ContextInfo(
-                        context_id=ctx_id,
-                        state=_ContextState.CREATING,
-                        read_deadline=read_deadline,
-                        emitter=emitter,
-                        waiter=waiter,
-                        flush_after_push=opts.encoding == "PCM",
-                        pcm_byte_rate=(
-                            opts.sample_rate * 2 * NUM_CHANNELS
-                            if opts.encoding in ("PCM", "LINEAR16")
-                            else 0
-                        ),
-                    )
-                    self._contexts[ctx_id] = ctx_info
-                    # Release reservation now that we have a real context
-                    self.release_reservation()
-
-                    await self._outbound_queue.put(_CreateContextMsg(context_id=ctx_id, opts=opts))
-                    return ctx_id, waiter
-
-            # No capacity - wait outside the lock
-            elapsed = time.time() - start_time
-            remaining = None if timeout is None else timeout - elapsed
-            if remaining is not None and remaining <= 0:
-                raise APITimeoutError()
-
-            try:
-                await asyncio.wait_for(self._context_available.wait(), timeout=remaining)
-                # Clear after wait returns to avoid lost-wakeup race
-                self._context_available.clear()
-
-                # Check closed state after waking
-                if self._closed:
-                    raise APIConnectionError("Connection is closed")
-            except TimeoutError:
-                raise APITimeoutError() from None
-
-    def send_text(self, context_id: str, text: str) -> None:
-        """Queue text to be sent to a context."""
-        try:
-            self._outbound_queue.put_nowait(_SendTextMsg(context_id=context_id, text=text))
-        except asyncio.QueueFull:
-            logger.warning("Outbound queue full, dropping text")
-
-    def flush_context(self, context_id: str) -> None:
-        """Queue a flush message for a context."""
-        try:
-            self._outbound_queue.put_nowait(_FlushContextMsg(context_id=context_id))
-        except asyncio.QueueFull:
-            logger.warning("Outbound queue full, dropping flush")
-
-    def _release_context(self, context_id: str) -> None:
-        """Remove a context and signal that capacity is available."""
-        self._contexts.pop(context_id, None)
-        self._last_activity = time.time()
-        self._context_available.set()
-        if self._on_capacity_available:
-            self._on_capacity_available()
-
-    def close_context(self, context_id: str) -> None:
-        """Queue a close message for a context (removes from pool)."""
-        ctx = self._contexts.get(context_id)
-        if ctx:
-            ctx.state = _ContextState.CLOSING
-            ctx.close_started_at = time.time()
-        try:
-            self._outbound_queue.put_nowait(_CloseContextMsg(context_id=context_id))
-        except asyncio.QueueFull:
-            logger.warning("Outbound queue full, dropping close")
-
-    async def _send_loop(self) -> None:
-        """Process outbound messages to WebSocket."""
-        try:
-            while not self._closed and self._ws:
-                try:
-                    msg = await asyncio.wait_for(self._outbound_queue.get(), timeout=1.0)
-                except TimeoutError:
-                    continue
-
-                if self._closed or not self._ws:
-                    break
-
-                if isinstance(msg, _CreateContextMsg):
-                    opts = msg.opts
-                    pkt: dict[str, Any] = {
-                        "create": {
-                            "voiceId": opts.voice,
-                            "modelId": opts.model,
-                            "audioConfig": {
-                                "audioEncoding": opts.encoding,
-                                "sampleRateHertz": opts.sample_rate,
-                                "bitrate": opts.bit_rate,
-                                "speakingRate": opts.speaking_rate,
-                            },
-                            "temperature": opts.temperature,
-                            "bufferCharThreshold": opts.buffer_char_threshold,
-                            "maxBufferDelayMs": opts.max_buffer_delay_ms,
-                            "timestampTransportStrategy": opts.timestamp_transport_strategy,
-                        },
-                        "contextId": msg.context_id,
-                    }
-                    if is_given(opts.language):
-                        pkt["create"]["language"] = opts.language
-                    if is_given(opts.timestamp_type):
-                        pkt["create"]["timestampType"] = opts.timestamp_type
-                    if is_given(opts.text_normalization):
-                        pkt["create"]["applyTextNormalization"] = opts.text_normalization
-                    if is_given(opts.delivery_mode):
-                        pkt["create"]["deliveryMode"] = opts.delivery_mode
-                    # Always enable auto_mode since we always use SentenceTokenizer
-                    pkt["create"]["autoMode"] = True
-
-                elif isinstance(msg, _SendTextMsg):
-                    pkt = {
-                        "send_text": {"text": msg.text},
-                        "contextId": msg.context_id,
-                    }
-
-                elif isinstance(msg, _FlushContextMsg):
-                    pkt = {"flush_context": {}, "contextId": msg.context_id}
-
-                else:
-                    pkt = {"close_context": {}, "contextId": msg.context_id}
-
-                await self._ws.send_str(json.dumps(pkt))
-                if ctx := self._contexts.get(msg.context_id):
-                    if isinstance(msg, _SendTextMsg):
-                        ctx.input_sent = True
-                    ctx.read_deadline.expect_response(
-                        final=isinstance(msg, (_FlushContextMsg, _CloseContextMsg))
-                    )
-
-        except Exception as e:
-            logger.error("Inworld send loop error", exc_info=e)
-        finally:
-            if not self._closed:
-                await self._handle_connection_error(APIConnectionError())
-
-    async def _recv_loop(self) -> None:
-        """Process inbound messages and route to correct context."""
-        try:
-            while not self._closed and self._ws:
-                msg = await self._ws.receive()
-                if msg.type == http.WebSocketMessageType.CLOSE:
-                    break
-
-                if msg.type != http.WebSocketMessageType.TEXT:
-                    continue
-
-                try:
-                    data = json.loads(msg.data)
-                except json.JSONDecodeError:
-                    data = None
-                if not isinstance(data, dict):
-                    raise APIError(
-                        "Inworld TTS sent a malformed message", kind="protocol", detail=msg.text
-                    )
-
-                # Check for errors that are not associated with a context
-                if err_obj := data.get("error"):
-                    logger.warning(
-                        "Received error from Inworld",
-                        extra={
-                            "error_code": err_obj.get("code", 0),
-                            "error_message": err_obj.get("message", "Unknown error"),
-                        },
-                    )
-                    continue
-
-                result = data.get("result", {})
-                context_id = result.get("contextId")
-
-                ctx = self._contexts.get(context_id) if context_id else None
-
-                # Check for errors in status
-                status = result.get("status", {})
-                if status.get("code", 0) != 0:
-                    error = APIError(
-                        "Inworld TTS context error",
-                        kind=_grpc_error_kind(status.get("code")),
-                        detail=status.get("message"),
-                    )
-                    logger.warning(
-                        "Received error from Inworld",
-                        extra={
-                            "context_id": context_id,
-                            "error_code": status.get("code"),
-                            "context_state": ctx.state.value if ctx else "unknown",
-                            "context_known": ctx is not None,
-                        },
-                    )
-                    if ctx:
-                        if ctx.waiter and not ctx.waiter.done():
-                            ctx.waiter.set_exception(error)
-                        self._release_context(context_id)
-                    continue
-
-                if not ctx:
-                    continue
-
-                if "contextCreated" in result:
-                    if ctx.input_sent:
-                        ctx.read_deadline.progress()
-                    else:
-                        ctx.read_deadline.complete_response()
-                    ctx.state = _ContextState.ACTIVE
-                    logger.info(
-                        "Context created confirmed by server",
-                        extra={"context_id": context_id},
-                    )
-                    continue
-
-                if audio_chunk := result.get("audioChunk"):
-                    ctx.read_deadline.audio_received()
-                    if ctx.emitter:
-                        if not ctx.segment_started:
-                            ctx.emitter.start_segment(segment_id=context_id)
-                            ctx.segment_started = True
-
-                        # Adjust timestamps for cumulative offset
-                        if timestamp_info := audio_chunk.get("timestampInfo"):
-                            if word_align := timestamp_info.get("wordAlignment"):
-                                raw_words = word_align.get("words", [])
-                                raw_starts = word_align.get("wordStartTimeSeconds", [])
-                                raw_ends = word_align.get("wordEndTimeSeconds", [])
-                                logger.debug(
-                                    "Raw timestamps from server",
-                                    extra={
-                                        "context_id": context_id,
-                                        "cumulative_offset": ctx.cumulative_time,
-                                        "lk.pii.raw_words": raw_words,
-                                        "raw_starts": raw_starts,
-                                        "raw_ends": raw_ends,
-                                    },
-                                )
-
-                            timed_strings = _parse_timestamp_info(
-                                timestamp_info, cumulative_time=ctx.cumulative_time
-                            )
-                            # Track generation end time from last word for cumulative offset
-                            if timed_strings:
-                                last_ts = timed_strings[-1]
-                                if last_ts.end_time is not None:
-                                    ctx.generation_end_time = last_ts.end_time
-
-                                logger.debug(
-                                    "Adjusted timestamps (with cumulative offset)",
-                                    extra={
-                                        "context_id": context_id,
-                                        "lk.pii.words": [ts.text for ts in timed_strings],
-                                        "adjusted_starts": [ts.start_time for ts in timed_strings],
-                                        "adjusted_ends": [ts.end_time for ts in timed_strings],
-                                        "generation_end_time": ctx.generation_end_time,
-                                    },
-                                )
-
-                            for ts in timed_strings:
-                                ctx.emitter.push_timed_transcript(ts)
-
-                        if usage := audio_chunk.get("usage"):
-                            ctx.billed_characters = max(
-                                ctx.billed_characters or 0,
-                                usage.get("processedCharactersCount", 0),
-                            )
-                        if audio_content := audio_chunk.get("audioContent"):
-                            audio = base64.b64decode(audio_content)
-                            if ctx.pcm_byte_rate:
-                                pcm_len = len(audio) - (44 if audio[:4] == b"RIFF" else 0)
-                                ctx.audio_time += pcm_len / ctx.pcm_byte_rate
-                            ctx.emitter.push(audio)
-                            if ctx.flush_after_push:
-                                ctx.emitter.flush()
-                    continue
-
-                if "flushCompleted" in result:
-                    ctx.read_deadline.progress()
-                    # Signals the end of a generation, subsequent timestampes from the server
-                    # will reset offset to 0. We need to update the cumulative time to the
-                    # generation end time to maintain monotonically increasing timestamps
-                    # within the agent turn.
-                    if ctx.pcm_byte_rate:
-                        ctx.cumulative_time = ctx.audio_time
-                    elif ctx.generation_end_time > 0:
-                        ctx.cumulative_time = ctx.generation_end_time
-                    continue
-
-                if "contextClosed" in result:
-                    if ctx.emitter and ctx.segment_started and ctx.billed_characters is not None:
-                        ctx.emitter.report_usage(characters_count=ctx.billed_characters)
-                    if ctx.waiter and not ctx.waiter.done():
-                        ctx.waiter.set_result(None)
-                    self._release_context(context_id)
-                    continue
-
-        except Exception as e:
-            logger.error("Inworld recv loop error", exc_info=e)
-        finally:
-            if not self._closed:
-                await self._handle_connection_error(APIConnectionError())
-
-    async def _cleanup_stale_contexts(self) -> None:
-        """Periodically clean up orphaned contexts stuck in CLOSING state."""
-        while not self._closed:
-            await asyncio.sleep(60.0)
-            now = time.time()
-            for ctx in list(self._contexts.values()):
-                # Use close_started_at if available, otherwise fall back to created_at
-                close_time = ctx.close_started_at or ctx.created_at
-                if ctx.state == _ContextState.CLOSING and now - close_time > 120.0:
-                    if ctx.waiter and not ctx.waiter.done():
-                        ctx.waiter.set_result(None)
-                    self._release_context(ctx.context_id)
-
-    async def _handle_connection_error(self, error: Exception) -> None:
-        """Handle connection-level error by failing all active contexts."""
-        for ctx in list(self._contexts.values()):
-            if ctx.waiter and not ctx.waiter.done():
-                ctx.waiter.set_exception(error)
-        self._contexts.clear()
-        self._closed = True
-
-        # Wake local waiters so they can fail fast
-        self._context_available.set()
-
-        # Notify pool so callers blocked on capacity can create replacement connections
-        if self._on_capacity_available:
-            self._on_capacity_available()
-
-    async def aclose(self) -> None:
-        """Close the connection and all contexts."""
-        self._closed = True
-        await self._tasks.aclose()
-
-        # Close all contexts and fail their waiters
-        for ctx in list(self._contexts.values()):
-            if ctx.waiter and not ctx.waiter.done():
-                ctx.waiter.cancel()
-
-        self._contexts.clear()
-
-        if self._ws:
-            await self._ws.close()
-            self._ws = None
-
-
-DEFAULT_MAX_CONNECTIONS = 20
-DEFAULT_IDLE_CONNECTION_TIMEOUT = 300.0  # 5 minutes
-
-
-class _ConnectionPool:
-    """Manages a pool of _InworldConnection instances for high-concurrency scenarios.
-
-    Each connection supports up to 5 concurrent contexts. The pool automatically creates
-    new connections when all existing ones are at capacity, up to max_connections (default 20).
-    Idle connections are automatically cleaned up after idle_timeout seconds.
-    """
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
-
-    def __init__(
-        self,
-        session: http.HttpSession,
-        ws_url: str,
-        authorization: str,
-        max_connections: int = DEFAULT_MAX_CONNECTIONS,
-        idle_timeout: float = DEFAULT_IDLE_CONNECTION_TIMEOUT,
-    ) -> None:
-        self._session = session
-        self._ws_url = ws_url
-        self._authorization = authorization
-        self._max_connections = max_connections
-        self._idle_timeout = idle_timeout
-
-        self._connections: list[_InworldConnection] = []
-        self._pool_lock = asyncio.Lock()
-        self._closed = False
-
-        # Event signaled when any connection has capacity available
-        self._capacity_available = asyncio.Event()
-        self._capacity_available.set()  # Initially available since we can create connections
-
-        self._tasks = aio.TaskSet()
-        self._cleanup_task: asyncio.Task[None] | None = None
-
-    async def acquire_context(
-        self,
-        emitter: tts.AudioEmitter,
-        opts: _TTSOptions,
-        timeout: float | None,
-        *,
-        conn_options: APIConnectOptions,
-        read_deadline: ProviderAttempts,
-    ) -> tuple[str, asyncio.Future[None], _InworldConnection]:
-        """Acquire a context from the pool, creating new connections as needed.
-
-        Returns:
-            tuple of (context_id, waiter future, connection) - the connection is returned
-            so the caller can call send_text/flush_context/close_context on it.
-        """
-        if self._closed:
-            raise APIConnectionError("Connection pool is closed")
-
-        start_time = time.time()
-        remaining_timeout = timeout
-
-        while True:
-            conn: _InworldConnection | None = None
-            created_new = False
-
-            async with self._pool_lock:
-                # Start cleanup task if not already running
-                if self._cleanup_task is None and not self._tasks.closed:
-                    self._cleanup_task = self._tasks.spawn(
-                        self._cleanup_idle_connections(), name="inworld-tts-pool-cleanup"
-                    )
-
-                # Prune closed connections first
-                failed = [c for c in self._connections if c.closed]
-                self._connections = [c for c in self._connections if not c.closed]
-
-                # First, try to find a connection with capacity
-                for existing in self._connections:
-                    if not existing.closed and existing.has_capacity:
-                        conn = existing
-                        break
-
-                # No available capacity - can we create a new connection?
-                if conn is None and len(self._connections) < self._max_connections:
-                    conn = _InworldConnection(
-                        session=self._session,
-                        ws_url=self._ws_url,
-                        authorization=self._authorization,
-                        on_capacity_available=self.notify_capacity_available,
-                    )
-                    created_new = True
-                    # Add to pool IMMEDIATELY so other callers can see it
-                    self._connections.append(conn)
-                    logger.debug(
-                        "Created new Inworld connection",
-                        extra={"pool_size": len(self._connections)},
-                    )
-
-                # Reserve capacity BEFORE releasing lock so other callers see it
-                if conn:
-                    conn.reserve_capacity()
-
-            # a connection that failed is pruned closed, but its loops and socket still run
-            for dropped in failed:
-                await dropped.aclose()
-
-            # Acquire context OUTSIDE the lock to avoid head-of-line blocking
-            if conn:
-                try:
-                    ctx_id, waiter = await conn.acquire_context(
-                        emitter,
-                        opts,
-                        remaining_timeout,
-                        conn_options=conn_options,
-                        read_deadline=read_deadline,
-                    )
-                except BaseException:
-                    # Release reservation since we didn't get a context
-                    conn.release_reservation()
-                    # Remove failed new connection from pool
-                    if created_new:
-                        async with self._pool_lock:
-                            if conn in self._connections:
-                                self._connections.remove(conn)
-                        await conn.aclose()
-                    raise
-
-                return ctx_id, waiter, conn
-
-            # At max connections and all at capacity - wait for one to free up
-            elapsed = time.time() - start_time
-            remaining_timeout = None if timeout is None else timeout - elapsed
-            if remaining_timeout is not None and remaining_timeout <= 0:
-                raise APITimeoutError("Timed out waiting for available connection capacity")
-
-            try:
-                await asyncio.wait_for(
-                    self._capacity_available.wait(),
-                    timeout=remaining_timeout,
-                )
-                # Clear after wait returns to avoid lost-wakeup race
-                self._capacity_available.clear()
-            except TimeoutError:
-                raise APITimeoutError(
-                    "Timed out waiting for available connection capacity"
-                ) from None
-
-    def notify_capacity_available(self) -> None:
-        """Called when a context is released and capacity may be available."""
-        self._capacity_available.set()
-
-    async def _cleanup_idle_connections(self) -> None:
-        """Periodically close idle connections that have been unused for a while."""
-        while not self._closed:
-            await asyncio.sleep(60.0)  # Check every minute
-
-            async with self._pool_lock:
-                now = time.time()
-                # Keep at least one connection, close others if idle
-                connections_to_close: list[_InworldConnection] = []
-
-                for conn in self._connections:
-                    if (
-                        conn.is_idle
-                        and now - conn.last_activity > self._idle_timeout
-                        and len(self._connections) - len(connections_to_close) > 1
-                    ):
-                        connections_to_close.append(conn)
-
-                for conn in connections_to_close:
-                    self._connections.remove(conn)
-                    logger.debug(
-                        "Closing idle Inworld connection",
-                        extra={"pool_size": len(self._connections)},
-                    )
-
-            # Close connections outside the lock
-            for conn in connections_to_close:
-                await conn.aclose()
-
-    async def aclose(self) -> None:
-        """Close all connections in the pool."""
-        self._closed = True
-        await self._tasks.aclose()
-
-        async with self._pool_lock:
-            connections = list(self._connections)
-            self._connections.clear()
-
-        for conn in connections:
-            await conn.aclose()
+            return None
+        return message["result"].get("contextId")
+
+    def close_context(self, context_id: str) -> _Cancel:
+        return _Cancel(cancel_context={}, contextId=context_id)
+
+
+@dataclass
+class _Segment:
+    """One context's timeline: the server restarts its timestamps after each generation (a
+    flush in auto mode), so each generation is offset by where the audio before it ended."""
+
+    pcm_byte_rate: int
+    cumulative_time: float = 0.0
+    generation_end_time: float = 0.0
+    audio_time: float = 0.0
+    # on the websocket, `usage.processedCharactersCount` is the characters processed so far
+    billed_characters: int | None = None
 
 
 class TTS(tts.TTS):
@@ -895,8 +279,6 @@ class TTS(tts.TTS):
         base_url: str = DEFAULT_URL,
         ws_url: str = DEFAULT_WS_URL,
         http_session: http.HttpSession | None = None,
-        max_connections: int = DEFAULT_MAX_CONNECTIONS,
-        idle_connection_timeout: float = DEFAULT_IDLE_CONNECTION_TIMEOUT,
     ) -> None:
         """
         Create a new instance of Inworld TTS.
@@ -940,10 +322,6 @@ class TTS(tts.TTS):
             ws_url (str, optional): The WebSocket URL for streaming TTS.
                 Defaults to "wss://api.inworld.ai/".
             http_session (http.HttpSession, optional): The HTTP session to use.
-            max_connections (int, optional): Maximum number of concurrent WebSocket connections.
-                Each connection supports up to 5 concurrent synthesis streams. Defaults to 20.
-            idle_connection_timeout (float, optional): Time in seconds after which idle connections
-                are closed. Defaults to 300 (5 minutes).
         """
         if not is_given(sample_rate):
             sample_rate = DEFAULT_SAMPLE_RATE
@@ -1007,12 +385,7 @@ class TTS(tts.TTS):
             else DEFAULT_MAX_BUFFER_DELAY_MS,
         )
 
-        self._max_connections = max_connections
-        self._idle_connection_timeout = idle_connection_timeout
-        self._pool: _ConnectionPool | None = None
-        self._pool_lock = asyncio.Lock()
-        self._tasks = aio.TaskSet()
-        self._prewarm_task: asyncio.Task[None] | None = None
+        self._mux = _Mux(ws_url, self._authorization)
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     class Markup(tts.TTS.Markup):
@@ -1030,19 +403,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Inworld"
-
-    async def _get_pool(self) -> _ConnectionPool:
-        """Get the connection pool, creating if needed."""
-        async with self._pool_lock:
-            if self._pool is None or self._pool.closed:
-                self._pool = _ConnectionPool(
-                    session=self._ensure_session(),
-                    ws_url=self._ws_url,
-                    authorization=self._authorization,
-                    max_connections=self._max_connections,
-                    idle_timeout=self._idle_connection_timeout,
-                )
-            return self._pool
 
     def update_options(
         self,
@@ -1138,14 +498,7 @@ class TTS(tts.TTS):
         return self._session
 
     def prewarm(self) -> None:
-        if self._tasks.closed:
-            return
-        if self._prewarm_task is None or self._prewarm_task.done():
-            self._prewarm_task = self._tasks.spawn(self._prewarm_impl(), name="inworld-tts-prewarm")
-
-    async def _prewarm_impl(self) -> None:
-        # Just ensure the pool is created - first acquire will establish a connection
-        await self._get_pool()
+        self._mux.prewarm()
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
@@ -1164,25 +517,16 @@ class TTS(tts.TTS):
         stream = SynthesizeStream(
             tts=self,
             opts=replace(self._opts),
-            get_pool=self._get_pool,
             conn_options=conn_options,
         )
         self._streams.add(stream)
         return stream
 
     async def aclose(self) -> None:
-        # Cancel first: _prewarm_impl calls _get_pool, which builds a new pool when
-        # self._pool is None. A prewarm still in flight here would otherwise recreate
-        # the pool after it was closed, leaving a live connection nothing owns.
-        await self._tasks.aclose()
-
         for stream in list(self._streams):
             await stream.aclose()
-
         self._streams.clear()
-        if self._pool:
-            await self._pool.aclose()
-            self._pool = None
+        await self._mux.aclose()
 
     async def list_voices(self, language: str | None = None) -> list[dict[str, object]]:
         """
@@ -1332,68 +676,100 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        opts: _TTSOptions,
-        get_pool: Callable[[], Awaitable[_ConnectionPool]],
-        conn_options: APIConnectOptions,
-    ):
+class SynthesizeStream(tts.SocketStream[_Message, _Command]):
+    def __init__(self, *, tts: TTS, opts: _TTSOptions, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
+        self.multiplexer = tts._mux
+        self.mime_type = opts.mime_type
         self._opts = opts
-        self._get_pool = get_pool
+        self._contexts: dict[str, _Segment] = {}
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-            mime_type=self._opts.mime_type,
-            stream=True,
-        )
+    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> http.Encoded[_Command]:
+        if isinstance(item, tts.SegmentStart):
+            rate = self._opts.sample_rate * 2 * NUM_CHANNELS
+            pcm = self._opts.encoding in ("PCM", "LINEAR16")
+            self._contexts[item.segment_id] = _Segment(pcm_byte_rate=rate if pcm else 0)
+            return _Create(create=_create_config(self._opts), contextId=item.segment_id)
+        if isinstance(item, tts.SegmentText):
+            return _SendText(send_text={"text": item.chunk.text + " "}, contextId=item.segment_id)
+        if isinstance(item, tts.SegmentEnd):
+            return [
+                _Flush(flush_context={}, contextId=item.segment_id),
+                _Close(close_context={}, contextId=item.segment_id),
+            ]
+        return None
 
-        pool = await self._get_pool()
-        context_id, waiter, connection = await pool.acquire_context(
-            emitter=output_emitter,
-            opts=self._opts,
-            timeout=self._conn_options.pool_timeout,
-            conn_options=self._conn_options,
-            read_deadline=self._core_attempts,
-        )
+    def on_message(self, message: _Message) -> list[tts.SegmentOutput]:
+        result = message.get("result", {})
+        segment_id = result.get("contextId", "")
+        status = result.get("status", {})
+        if status.get("code", 0) != 0:
+            raise APIError(
+                "Inworld TTS context error",
+                kind=_grpc_error_kind(status.get("code")),
+                detail=status.get("message"),
+            )
+        segment = self._contexts.get(segment_id)
+        if segment is None:
+            return []
+        outputs: list[tts.SegmentOutput] = []
+        if (chunk := result.get("audioChunk")) is not None:
+            if timestamp_info := chunk.get("timestampInfo"):
+                words = _parse_timestamp_info(
+                    cast(dict[str, Any], timestamp_info), cumulative_time=segment.cumulative_time
+                )
+                if words and words[-1].end_time is not None:
+                    segment.generation_end_time = words[-1].end_time
+                outputs.append(tts.SegmentWords(segment_id, words))
+            if usage := chunk.get("usage"):
+                segment.billed_characters = max(
+                    segment.billed_characters or 0, usage.get("processedCharactersCount", 0)
+                )
+            if audio_content := chunk.get("audioContent"):
+                audio = base64.b64decode(audio_content)
+                if segment.pcm_byte_rate:
+                    pcm_len = len(audio) - (44 if audio[:4] == b"RIFF" else 0)
+                    segment.audio_time += pcm_len / segment.pcm_byte_rate
+                outputs.append(tts.SegmentAudio(segment_id, audio))
+        if "flushCompleted" in result:
+            # the next generation's timestamps restart at 0
+            segment.cumulative_time = (
+                segment.audio_time if segment.pcm_byte_rate else segment.generation_end_time
+            )
+        if "contextClosed" in result:
+            del self._contexts[segment_id]
+            if segment.billed_characters is not None and self._emitter is not None:
+                self._emitter.report_usage(characters_count=segment.billed_characters)
+            outputs.append(tts.SegmentDone(segment_id))
+        return outputs
 
-        async def _send_task() -> None:
-            async for chunk in self.input:
-                if isinstance(chunk, self.Flush):
-                    continue
-                connection.send_text(context_id, chunk.text + " ")
-                self.mark_started()
-            connection.flush_context(context_id)
-            connection.close_context(context_id)
 
-        tasks = utils.aio.TaskSet()
-        tasks.spawn(_send_task(), name="inworld-tts-send-text")
-
-        try:
-            await waiter
-        except TimeoutError:
-            connection.close_context(context_id)
-            raise APITimeoutError() from None
-        except asyncio.CancelledError:
-            connection.close_context(context_id)
-            raise
-        except APIError:
-            connection.close_context(context_id)
-            raise
-        except Exception as e:
-            connection.close_context(context_id)
-            raise APIConnectionError("Inworld TTS stream failed", detail=str(e)) from e
-        finally:
-            await tasks.aclose()
-            output_emitter.end_input()
+def _create_config(opts: _TTSOptions) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "voiceId": opts.voice,
+        "modelId": opts.model,
+        "audioConfig": {
+            "audioEncoding": opts.encoding,
+            "sampleRateHertz": opts.sample_rate,
+            "bitrate": opts.bit_rate,
+            "speakingRate": opts.speaking_rate,
+        },
+        "temperature": opts.temperature,
+        "bufferCharThreshold": opts.buffer_char_threshold,
+        "maxBufferDelayMs": opts.max_buffer_delay_ms,
+        "timestampTransportStrategy": opts.timestamp_transport_strategy,
+        # each chunk is a sentence of the framework's tokenizer
+        "autoMode": True,
+    }
+    if is_given(opts.language):
+        config["language"] = opts.language
+    if is_given(opts.timestamp_type):
+        config["timestampType"] = opts.timestamp_type
+    if is_given(opts.text_normalization):
+        config["applyTextNormalization"] = opts.text_normalization
+    if is_given(opts.delivery_mode):
+        config["deliveryMode"] = opts.delivery_mode
+    return config
 
 
 def _parse_timestamp_info(

@@ -353,7 +353,6 @@ class TTS(tts.TTS):
                 websocket_v1_url=websocket_v1_url,
                 websocket_protocol=websocket_protocol,
                 api_key=self._api_key,
-                ensure_session=self._ensure_session,
                 allow_custom_endpoint=allow_custom_endpoint,
             )
             if websocket_v1_url is not None
@@ -364,9 +363,7 @@ class TTS(tts.TTS):
         self._legacy_websocket_adapter: LegacyWebSocketAdapter | None = None
         if self._use_websocket and self._websocket_v1_adapter is None:
             self._legacy_websocket_adapter = LegacyWebSocketAdapter(
-                websocket_url=self._ws_url(),
-                api_key=self._api_key,
-                ensure_session=self._ensure_session,
+                websocket_url=self._ws_url(), api_key=self._api_key
             )
 
     @property
@@ -544,7 +541,7 @@ class TTS(tts.TTS):
 
         _check_time_scale_factor_supported(effective_model, time_scale_factor)
 
-        # Each WS3 pool is bound to one URL. Replace it when URL options change.
+        # The WS3 sockets are bound to one URL: a change closes them once idle.
         prev_ws_url = self._ws_url() if self._legacy_websocket_adapter is not None else None
         if is_given(websocket_url):
             assert self._websocket_v1_adapter is not None

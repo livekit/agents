@@ -369,8 +369,7 @@ inventory::submit! {
 /// [`::lk_agents_abi::types::provider::ProviderEvents`] over a host `livekit.agents._bindings.ProviderEvents`.
 #[derive(Clone)]
 pub struct ProviderEventsProxy {
-    /// The object whose events these are: not kept alive by them.
-    host: ::std::sync::Arc<Py<::pyo3::types::PyWeakrefReference>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -383,32 +382,32 @@ impl ProviderEventsProxy {
     pub fn weak(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::types::provider::ProviderEvents>> {
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, false)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        Ok(ProviderEventsProxy {
-            host: ::std::sync::Arc::new(::pyo3::types::PyWeakrefReference::new(obj)?.unbind()),
-            context,
-            notifier: ::std::default::Default::default(),
-        })
+        Ok(ProviderEventsProxy { host, context, notifier: ::std::default::Default::default() })
     }
 }
 
 impl ::lk_agents_abi::types::provider::ProviderEvents for ProviderEventsProxy {
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
-        let Some(host) = ::pyo3::Python::attach(|py| {
-            self.host.bind(py).upgrade().map(|host| ::std::sync::Arc::new(host.unbind()))
-        }) else {
+        if self.host.gone() {
             return;
-        };
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let error_arg = error;
         let error_arg = match ::pyo3::Python::attach(
             |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
@@ -434,7 +433,7 @@ impl ::lk_agents_abi::types::provider::ProviderEvents for ProviderEventsProxy {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_failed")?,
+                    host.bind(py)?.getattr("_core_failed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -448,7 +447,7 @@ impl ::lk_agents_abi::types::provider::ProviderEvents for ProviderEventsProxy {
 /// [`::lk_agents_abi::types::provider::AttemptHost`] over a host `livekit.agents._bindings.AttemptHost`.
 #[derive(Clone)]
 pub struct AttemptHostProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -457,7 +456,7 @@ pub struct AttemptHostProxy {
 }
 
 impl AttemptHostProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
+    /// A registered native class as itself, any other host object behind this proxy, held weakly.
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::types::provider::AttemptHost>> {
@@ -466,10 +465,10 @@ impl AttemptHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, false)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -479,7 +478,7 @@ impl AttemptHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -493,22 +492,23 @@ impl AttemptHostProxy {
                 "a native `AttemptHost` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        Ok(AttemptHostProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
-            context,
-            notifier: ::std::default::Default::default(),
-        })
+        Ok(AttemptHostProxy { host, context, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -526,7 +526,7 @@ impl ::lk_agents_abi::types::provider::AttemptHost for AttemptHostProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let retry_arg = retry;
         let started = ::lk_agents_runtime::host::call_cancellable(
             &crate::py_calls::Entry,
@@ -539,7 +539,7 @@ impl ::lk_agents_abi::types::provider::AttemptHost for AttemptHostProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(retry_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_attempt")?,
+                    host.bind(py)?.getattr("_core_attempt")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -563,13 +563,13 @@ impl ::lk_agents_abi::types::provider::AttemptHost for AttemptHostProxy {
     }
 
     fn produced(&self) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_produced")?,
+                    host.bind(py)?.getattr("_core_produced")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -593,13 +593,13 @@ impl ::lk_agents_abi::types::provider::AttemptHost for AttemptHostProxy {
     }
 
     fn settled(&self) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_settled")?,
+                    host.bind(py)?.getattr("_core_settled")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -623,7 +623,10 @@ impl ::lk_agents_abi::types::provider::AttemptHost for AttemptHostProxy {
     }
 
     fn retrying(&self, error: ::lk_agents_abi::errors::ProviderError) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let error_arg = error;
         let error_arg = match ::pyo3::Python::attach(
             |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
@@ -645,7 +648,7 @@ impl ::lk_agents_abi::types::provider::AttemptHost for AttemptHostProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [error_arg.into_bound(py)];
                 Ok((
-                    host.bind(py).getattr("_core_retrying")?,
+                    host.bind(py)?.getattr("_core_retrying")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

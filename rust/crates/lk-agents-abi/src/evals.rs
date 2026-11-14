@@ -106,7 +106,7 @@ pub struct EvaluationScore {
 
 /// The host side of one evaluation: runs an application evaluator on the conversation under
 /// evaluation, with the evaluation's model.
-#[crate::host(proxy(host = "livekit.agents.evals._Evaluation"))]
+#[crate::host(proxy(host = "livekit.agents.evals._Evaluation", owns))]
 pub trait EvaluationHost: Send + Sync {
     /// Runs `evaluator` with its judge's span current.
     #[host(await)]

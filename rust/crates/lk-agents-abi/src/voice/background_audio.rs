@@ -3,7 +3,7 @@ use crate::errors::ProviderError;
 use std::sync::Arc;
 
 /// A caller-supplied stream: a host `AsyncIterator[rtc.AudioFrame]`.
-#[crate::host(proxy(host = "collections.abc.AsyncIterator"))]
+#[crate::host(proxy(host = "collections.abc.AsyncIterator", owns))]
 pub trait FrameStream: Send + Sync {
     /// The next frame, `None` once exhausted. `cancel` reaches the host's pending pull, which
     /// settles before the read does.

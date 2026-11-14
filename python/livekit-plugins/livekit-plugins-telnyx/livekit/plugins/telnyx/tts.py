@@ -195,6 +195,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         tasks.spawn(recv_task(ws)),
                         tasks.spawn(decode_task()),
                     )
+                # the segment is spoken: nothing is owed until the next one
+                read_deadline.complete_response()
             finally:
                 await ws.close()
 

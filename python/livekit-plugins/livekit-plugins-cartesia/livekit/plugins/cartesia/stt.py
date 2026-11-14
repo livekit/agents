@@ -30,7 +30,6 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN
 
 from ._recognize_streams.auto_finalize_recognize_stream import AutoFinalizeRecognizeStream
-from ._recognize_streams.cartesia_recognize_stream import CartesiaRecognizeStream
 from ._recognize_streams.legacy_recognize_stream import LegacyRecognizeStream
 from .log import logger
 
@@ -274,12 +273,6 @@ class STT(stt.STT):
 
         self._warn_on_unexpected_args(language=resolved_language)
 
-        if self._session is None:
-            session = http.http_session()
-            self._session = session
-        else:
-            session = self._session
-
         stream: CartesiaRecognizeStream
         match self._final_transcript_mode:
             case "auto":
@@ -291,7 +284,6 @@ class STT(stt.STT):
                     model=self._model,
                     api_key=self._api_key,
                     ws_base_url=self._ws_base_url,
-                    session=session,
                     language=resolved_language or LanguageCode("en"),
                     turn_start_threshold=self._turn_start_threshold,
                     turn_eager_end_threshold=self._turn_eager_end_threshold,
@@ -308,7 +300,6 @@ class STT(stt.STT):
                     model=self._model,
                     api_key=self._api_key,
                     ws_base_url=self._ws_base_url,
-                    session=session,
                     language=resolved_language,
                 )
             case _:
@@ -362,4 +353,5 @@ class STT(stt.STT):
             )
 
 
+CartesiaRecognizeStream = AutoFinalizeRecognizeStream | LegacyRecognizeStream
 SpeechStream = CartesiaRecognizeStream

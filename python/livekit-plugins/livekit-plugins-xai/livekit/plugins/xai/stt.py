@@ -14,16 +14,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
-import json
 import os
 import uuid
 import weakref
 from dataclasses import dataclass
+from typing import Annotated, Literal, NotRequired, TypedDict
 from urllib.parse import urlencode
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
@@ -35,7 +34,6 @@ from livekit.agents import (
     LanguageCode,
     http,
     stt,
-    utils,
 )
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -44,7 +42,6 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .types import STTLanguages
 
 SAMPLE_RATE = 16000
@@ -65,30 +62,22 @@ class STTOptions:
     keyterm: NotGivenOr[list[str]] = NOT_GIVEN
 
 
-class _Word(BaseModel):
-    model_config = ConfigDict(strict=True)
-    text: str = ""
-    start: float = 0.0
-    end: float = 0.0
-    speaker: int | str | None = None
+class _Word(TypedDict, total=False):
+    text: str
+    start: float
+    end: float
+    speaker: int | str
 
 
-class _Transcript(BaseModel):
-    model_config = ConfigDict(strict=True)
-    type: str = ""
-    text: str = ""
-    language: str = ""
-    is_final: bool = False
-    speech_final: bool = False
-    words: list[_Word] = Field(default_factory=list[_Word])
-    message: str = "unknown error"
+class _Result(TypedDict, total=False):
+    """A batch transcript, and the fields of a streamed one."""
+
+    text: str
+    language: str
+    words: list[_Word]
 
 
-def _decode_transcript(data: object) -> _Transcript:
-    try:
-        return _Transcript.model_validate(data)
-    except ValidationError as error:
-        raise APIError("invalid xAI transcript", kind="protocol", detail=str(data)) from error
+_RESULT = TypeAdapter(_Result)
 
 
 class STT(stt.STT):
@@ -221,7 +210,6 @@ class STT(stt.STT):
             conn_options=conn_options,
             opts=config,
             api_key=self._api_key,
-            http_session=self._ensure_session(),
         )
         self._streams.add(stream)
         return stream
@@ -280,26 +268,45 @@ class STT(stt.STT):
             )
 
 
-class SpeechStream(stt.RecognizeStream):
+class _Created(TypedDict):
+    type: Literal["transcript.created"]
+
+
+class _Partial(_Result):
+    type: Literal["transcript.partial", "transcript.done"]
+    is_final: NotRequired[bool]
+    speech_final: NotRequired[bool]
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    message: NotRequired[str]
+
+
+_Message = Annotated[_Created | _Partial | _Error, Field(discriminator="type")]
+
+
+class _AudioDone(TypedDict):
+    type: Literal["audio.done"]
+
+
+class SpeechStream(stt.SocketStream[_Message, _AudioDone]):
+    goodbye = _AudioDone(type="audio.done")
+    frame_ms = 50
+    # audio waits for transcript.created
+    awaits_ready = True
+    # speech_final is xAI's own end of the utterance
+    provider_vad = True
+
     def __init__(
-        self,
-        *,
-        stt: STT,
-        opts: STTOptions,
-        conn_options: APIConnectOptions,
-        api_key: str,
-        http_session: http.HttpSession,
+        self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions, api_key: str
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._api_key = api_key
-        self._session = http_session
-        self._speaking = False
-        self._emitted_chunk_final = False
-
         self._request_id = str(uuid.uuid4())
-        self._reconnect_event = asyncio.Event()
-        self._server_ready = asyncio.Event()
+        # the utterance's text already went out as chunk finals: its speech_final repeats it
+        self._emitted_chunk_final = False
 
     def update_options(
         self,
@@ -341,85 +348,10 @@ class SpeechStream(stt.RecognizeStream):
         if is_given(keyterm):
             self._opts.keyterm = keyterm
 
-        self._reconnect_event.set()
+        self.reconnect("options changed")
 
-    async def _run(self) -> None:
-        closing_ws = False
-
-        async def send_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-
-            await self._server_ready.wait()
-
-            samples_50ms = self._opts.sample_rate // 20
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_50ms,
-            )
-
-            async for data in self.input:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.push(data.data.tobytes()))
-                else:
-                    frames.extend(audio_bstream.flush())
-
-                for frame in frames:
-                    await ws.send_bytes(frame.data.tobytes())
-
-            await ws.send_str(json.dumps({"type": "audio.done"}))
-            closing_ws = True
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            while True:
-                # a heartbeat timeout raises APIConnectionError here, so _main_task reconnects
-                try:
-                    msg = await ws.receive()
-                except APIConnectionError:
-                    if closing_ws or self._session.closed:
-                        return
-                    raise
-                if msg.type == http.WebSocketMessageType.CLOSE:
-                    if closing_ws or self._session.closed:
-                        return
-
-                    raise ws.close_error("xAI connection closed unexpectedly")
-
-                if msg.type != http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected xAI message type %s", msg.type)
-                    continue
-
-                try:
-                    raw = json.loads(msg.data)
-                except json.JSONDecodeError as e:
-                    raise APIError(
-                        "xAI sent a malformed message", kind="protocol", detail=str(msg.data)
-                    ) from e
-                self._process_stream_event(raw)
-
-        ws: http.WebSocket | None = None
-
-        while True:
-            try:
-                closing_ws = False
-                self._speaking = False
-                self._emitted_chunk_final = False
-                ws = await self._connect_ws()
-                self._server_ready.clear()
-                async with utils.aio.TaskSet() as tasks:
-                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-                    reconnect = tasks.spawn(self._reconnect_event.wait())
-                    if await tasks.first_completed(io, reconnect) is not reconnect:
-                        break
-                    self._reconnect_event.clear()
-
-            finally:
-                if ws is not None:
-                    await ws.close()
-
-    async def _connect_ws(self) -> http.WebSocket:
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        self._emitted_chunk_final = False
         # keyterm may repeat, so params is a list of pairs rather than a dict
         params = [
             ("encoding", "pcm"),
@@ -437,146 +369,114 @@ class SpeechStream(stt.RecognizeStream):
             params.append(("smart_turn_timeout", str(self._opts.smart_turn_timeout)))
         if is_given(self._opts.keyterm):
             params.extend(("keyterm", term) for term in self._opts.keyterm)
-        return await self._session.ws_connect(
-            f"{XAI_WEBSOCKET_URL}?{urlencode(params)}",
+        url = XAI_WEBSOCKET_URL.replace("http", "ws", 1)
+        return http.SocketTarget(
+            f"{url}?{urlencode(params)}",
             headers={"Authorization": f"Bearer {self._api_key}"},
-            # Without this a silently dropped socket (half-open TCP, no FIN/RST)
-            # is never noticed: recv_task parks on ws.receive() forever, and the
-            # retry in _main_task only runs when something raises. Matches the
-            # Deepgram and Muse STT plugins.
-            heartbeat=30.0,
-            conn_options=self._conn_options,
         )
 
-    def _process_stream_event(self, raw_data: object) -> None:
-        data = _decode_transcript(raw_data)
-        msg_type = data.type
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_AudioDone]:
+        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
 
-        if msg_type == "transcript.created":
-            self._server_ready.set()
+    def on_message(
+        self, message: _Created | _Partial | _Error
+    ) -> stt.Report | list[stt.Report] | http.Ready | http.Done | None:
+        if message["type"] == "transcript.created":
+            return http.READY
+        if message["type"] == "error":
+            raise APIError("xAI STT error", kind="invalid_request", detail=message.get("message"))
 
-        elif msg_type == "transcript.partial":
-            text = data.text
-            is_final = data.is_final
-            speech_final = data.speech_final
-            words = data.words
-            language = data.language
-
-            if not text:
-                return
-
-            if not self._speaking:
-                self._speaking = True
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
-
-            if is_final:
-                if not speech_final:
-                    self._emitted_chunk_final = True
-                    self.send(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            request_id=self._request_id,
-                            alternatives=[
-                                _words_to_speech_data(
-                                    words,
-                                    text,
-                                    language=language,
-                                    enable_diarization=self._opts.enable_diarization,
-                                )
-                            ],
-                        )
-                    )
-                else:
-                    if not self._emitted_chunk_final:
-                        self.send(
-                            stt.SpeechEvent(
-                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                request_id=self._request_id,
-                                alternatives=[
-                                    _words_to_speech_data(
-                                        words,
-                                        text,
-                                        language=language,
-                                        enable_diarization=self._opts.enable_diarization,
-                                    )
-                                ],
-                            )
-                        )
-                    self._emitted_chunk_final = False
-                    self._speaking = False
-                    self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-            else:
-                if self._opts.enable_interim_results:
-                    self.send(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            request_id=self._request_id,
-                            alternatives=[
-                                stt.SpeechData(language=LanguageCode(language), text=text)
-                            ],
-                        )
-                    )
-
-        elif msg_type == "transcript.done":
-            text = data.text
-            words = data.words
-            language = data.language
+        text = message.get("text", "")
+        if message["type"] == "transcript.done":
+            # the whole stream is transcribed
             if text:
-                self.send(
-                    stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        request_id=self._request_id,
-                        alternatives=[
-                            _words_to_speech_data(
-                                words,
-                                text,
-                                language=language,
-                                enable_diarization=self._opts.enable_diarization,
-                            )
-                        ],
-                    )
-                )
-            if self._speaking:
-                self._speaking = False
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self.report(self._transcript(message, final=True))
+            self.report(stt.SpeechEnded())
+            return http.DONE
 
-        elif msg_type == "error":
-            raise APIConnectionError("xAI STT error", detail=data.message)
+        if not text:
+            return None
+        if not message.get("is_final", False):
+            if not self._opts.enable_interim_results:
+                return None
+            return stt.Transcript(text, self._language(message), request_id=self._request_id)
+        if not message.get("speech_final", False):
+            self._emitted_chunk_final = True
+            return self._transcript(message, final=True)
+        reports: list[stt.Report] = []
+        if not self._emitted_chunk_final:
+            reports.append(self._transcript(message, final=True))
+        self._emitted_chunk_final = False
+        return [*reports, stt.SpeechEnded()]
 
-        else:
-            logger.warning("received unexpected message from xAI: %s", msg_type)
+    def _language(self, message: _Partial) -> LanguageCode:
+        return LanguageCode(message.get("language") or self._opts.language)
+
+    def _transcript(self, message: _Partial, *, final: bool) -> stt.Transcript:
+        data = _words_to_speech_data(
+            message.get("words", []),
+            message.get("text", ""),
+            language=self._language(message),
+            enable_diarization=self._opts.enable_diarization,
+            offset=self.start_time_offset,
+        )
+        return stt.Transcript(
+            data.text,
+            data.language,
+            final=final,
+            request_id=self._request_id,
+            start_time=data.start_time,
+            end_time=data.end_time,
+            speaker_id=data.speaker_id,
+            words=data.words,
+        )
 
 
 def _words_to_speech_data(
-    words: list[_Word], text: str, *, language: str, enable_diarization: bool
+    words: list[_Word],
+    text: str,
+    *,
+    language: LanguageCode,
+    enable_diarization: bool,
+    offset: float = 0.0,
 ) -> stt.SpeechData:
-    speaker_id = (
-        f"S{words[0].speaker}"
-        if enable_diarization and words and words[0].speaker is not None
-        else None
-    )
+    speaker = words[0].get("speaker") if enable_diarization and words else None
     return stt.SpeechData(
-        language=LanguageCode(language),
+        language=language,
         text=text,
-        start_time=words[0].start if words else 0.0,
-        end_time=words[-1].end if words else 0.0,
-        speaker_id=speaker_id,
-        words=[TranscriptChunk(w.text, start_time=w.start, end_time=w.end) for w in words] or None,
+        start_time=words[0].get("start", 0.0) + offset if words else 0.0,
+        end_time=words[-1].get("end", 0.0) + offset if words else 0.0,
+        speaker_id=f"S{speaker}" if speaker is not None else None,
+        words=[
+            TranscriptChunk(
+                w.get("text", ""),
+                start_time=w.get("start", 0.0) + offset,
+                end_time=w.get("end", 0.0) + offset,
+                start_time_offset=offset,
+            )
+            for w in words
+        ]
+        or None,
     )
 
 
 def _prerecorded_transcription_to_speech_event(
     raw_data: object, *, enable_diarization: bool
 ) -> stt.SpeechEvent:
-    data = _decode_transcript(raw_data)
-    text = data.text
-    words = data.words
-    language = data.language
+    try:
+        data = _RESULT.validate_python(raw_data)
+    except ValidationError as error:
+        raise APIError("invalid xAI transcript", kind="protocol", detail=str(raw_data)) from error
     return stt.SpeechEvent(
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
             _words_to_speech_data(
-                words, text, language=language, enable_diarization=enable_diarization
+                data.get("words", []),
+                data.get("text", ""),
+                language=LanguageCode(data.get("language", "")),
+                enable_diarization=enable_diarization,
             )
         ],
     )

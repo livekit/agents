@@ -1312,6 +1312,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 async with utils.aio.TaskSet() as tasks:
                     await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
+                # the segment is spoken: nothing is owed until the next one
+                self._core_attempts.complete_response()
             finally:
                 input_sent_event.set()
                 close_started_at = time.perf_counter()

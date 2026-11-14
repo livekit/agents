@@ -81,7 +81,7 @@ pub struct VideoFrame {
 
 /// A host `rtc.VideoFrame` whose pixels stay in the host until an image of it is made. Two
 /// handles are equal only when one is a clone of the other: each read of a host frame is its own.
-#[crate::host(proxy(host = "livekit.rtc.VideoFrame"))]
+#[crate::host(proxy(host = "livekit.rtc.VideoFrame", owns))]
 pub trait RtcVideoFrame: std::any::Any + Send + Sync {
     /// The frame's pixels as RGBA: the frame itself when it already is, else its conversion.
     #[host(call, function = "livekit.agents._bindings.rgba_frame")]

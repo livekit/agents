@@ -119,6 +119,8 @@ dev = [
     "pytest-timeout>=2.3",
     # the tests bridge an application's SDK provider
     "opentelemetry-sdk>=1.45,<1.46",
+    # tests/host decode the OTLP export the core sends
+    "opentelemetry-proto>=1.45,<1.46",
     # .github/update_versions.py, the release version bump
     "colorama",
     # published noise cancellation models, tested unchanged against 2.0
@@ -247,7 +249,7 @@ module = "aws_sdk_bedrock_runtime.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["aws_sdk_transcribe_streaming.*"]
+module = "opuslib_next.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -270,10 +272,6 @@ ignore_missing_imports = true
 module = "mistralai.*"
 follow_imports = "skip"
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "speechmatics.*"
-follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
 module = "bithuman.*"

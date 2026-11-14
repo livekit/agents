@@ -150,7 +150,7 @@ async def test_segments_become_transcripts_with_provider_timing(
 
     events = await transcribe(stream)
 
-    interim, final = events
+    interim, final = [event for event in events if event.alternatives]
     assert final.type == stt.SpeechEventType.FINAL_TRANSCRIPT
     assert interim.type == stt.SpeechEventType.INTERIM_TRANSCRIPT
     data = final.alternatives[0]
@@ -163,7 +163,7 @@ async def test_segments_become_transcripts_with_provider_timing(
 
 
 async def test_turns_become_speech_events(peer: tuple[SpeechmaticsPeer, str]) -> None:
-    """StartOfTurn / EndOfTurn frame speech.
+    """StartOfTurn / EndOfTurn frame speech; a repeated EndOfTurn ends nothing more.
 
     https://github.com/livekit/agents/pull/7028
     """
@@ -180,7 +180,6 @@ async def test_turns_become_speech_events(peer: tuple[SpeechmaticsPeer, str]) ->
         event.type for event in events if event.type != stt.SpeechEventType.RECOGNITION_USAGE
     ] == [
         stt.SpeechEventType.START_OF_SPEECH,
-        stt.SpeechEventType.END_OF_SPEECH,
         stt.SpeechEventType.END_OF_SPEECH,
     ]
 
@@ -205,7 +204,9 @@ async def test_server_error_fails_the_stream_without_retry(
         finally:
             await stream.aclose()
 
-    assert [event.alternatives[0].text for event in received] == ["still here"]
+    assert [event.alternatives[0].text for event in received if event.alternatives] == [
+        "still here"
+    ]
     assert raised.value.retryable is False
     assert raised.value.body == error
     assert raised.value.detail == "nope"
@@ -228,7 +229,7 @@ async def test_invalid_speaker_reply_fails_the_request_not_recognition(
     speakers = await model.get_speaker_ids()
     assert server.socket is not None
     await server.socket.send_json(segment("Still listening"))
-    event = await anext(stream)
+    event = await anext(event async for event in stream if event.alternatives)
     await stream.aclose()
 
     assert isinstance(raised.value.__cause__, ValidationError)
@@ -259,10 +260,6 @@ async def test_tts_incomplete_pcm_sample_is_a_provider_failure() -> None:
                     pass
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a server Error after end_input ends `async for` cleanly; only aclose() raises it",
-)
 async def test_server_error_after_end_of_input_fails_the_iteration(
     peer: tuple[SpeechmaticsPeer, str],
 ) -> None:

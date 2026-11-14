@@ -14,185 +14,59 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
-from typing import TYPE_CHECKING
+from typing import Annotated, Literal, NotRequired, TypedDict
 from urllib.parse import urlencode
 
+from pydantic import Field
+
 from livekit import rtc
-from livekit.agents import (
-    APIConnectionError,
-    APIStatusError,
-    LanguageCode,
-    http,
-    stt,
-    utils,
-)
-from livekit.agents.types import NOT_GIVEN
+from livekit.agents import APIConnectOptions, APIStatusError, LanguageCode, http, stt, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
-from ..constants import (
-    API_AUTH_HEADER,
-    API_VERSION,
-    API_VERSION_HEADER,
-    AUDIO_ENCODING,
-    REQUEST_ID_HEADER,
-    USER_AGENT,
-)
+from ..constants import API_AUTH_HEADER, API_VERSION, API_VERSION_HEADER, AUDIO_ENCODING, USER_AGENT
 from ..log import logger
-from .cartesia_recognize_stream import CartesiaRecognizeStream
+from ..models import STTLanguages, TurnDetectingSTTModel
 
-if TYPE_CHECKING:
-    from typing import Literal, NotRequired
 
-    from typing_extensions import TypedDict
+class STTConnectedEvent(TypedDict):
+    """Fires once when the WebSocket connection is established; audio need not wait for it."""
 
-    from livekit.agents import APIConnectOptions
-    from livekit.agents.types import NotGivenOr
+    type: Literal["connected"]
+    request_id: NotRequired[str]
 
-    from ..models import STTLanguages, TurnDetectingSTTModel
 
-    class STTConnectedEvent(TypedDict):
-        """Fires once when the WebSocket connection is established.
+class STTTurnEvent(TypedDict):
+    """A user turn's progress.
 
-        You do not need to wait for this event before sending audio.
-
-        Attributes:
-            type: Event discriminator.
-            request_id: Unique identifier for this connection. Does not change between turns.
-
-        See also:
-            https://docs.cartesia.ai/api-reference/stt/turns/websocket
-        """
-
-        type: Literal["connected"]
-        request_id: str
-
-    class STTTurnStartEvent(TypedDict):
-        """Model predicts the start of a user turn.
-
-        Attributes:
-            type: Event discriminator.
-            request_id: Unique identifier for this connection. Does not change between turns.
-
-        See also:
-            https://docs.cartesia.ai/api-reference/stt/turns/websocket
-        """
-
-        type: Literal["turn.start"]
-        request_id: str
-
-    class STTTurnUpdateEvent(TypedDict):
-        """Fires repeatedly as the model transcribes the current user turn.
-
-        Used for interim transcript events.
-
-        Attributes:
-            type: Event discriminator.
-            transcript: Cumulative text for the current turn, i.e. the full text transcribed
-                so far in this turn, not a delta.
-            request_id: Unique identifier for this connection. Does not change between turns.
-
-        See also:
-            https://docs.cartesia.ai/api-reference/stt/turns/websocket
-        """
-
-        type: Literal["turn.update"]
-        transcript: str
-        request_id: str
-
-    class STTTurnEagerEndEvent(TypedDict):
-        """Fires when the model predicts the user might be done speaking.
-
-        Used for preflight transcript events.
-
-        Attributes:
-            type: Event discriminator.
-            transcript: Cumulative text for the current turn, i.e. the full text transcribed
-                so far in this turn, not a delta.
-            request_id: Unique identifier for this connection. Does not change between turns.
-
-        See also:
-            https://docs.cartesia.ai/api-reference/stt/turns/websocket
-        """
-
-        type: Literal["turn.eager_end"]
-        transcript: str
-        request_id: str
-
-    class STTTurnResumeEvent(TypedDict):
-        """Fires after ``turn.eager_end`` if the user turn has not actually ended.
-
-        Attributes:
-            type: Event discriminator.
-            request_id: Unique identifier for this connection. Does not change between turns.
-
-        See also:
-            https://docs.cartesia.ai/api-reference/stt/turns/websocket
-        """
-
-        type: Literal["turn.resume"]
-        request_id: str
-
-    class STTTurnEndEvent(TypedDict):
-        """Marks the end of a user turn.
-
-        Used for end-of-speech and final transcript events.
-
-        Attributes:
-            type: Event discriminator.
-            transcript: Cumulative text for the current turn, i.e. the full text transcribed
-                so far in this turn, not a delta.
-            request_id: Unique identifier for this connection. Does not change between turns.
-
-        See also:
-            https://docs.cartesia.ai/api-reference/stt/turns/websocket
-        """
-
-        type: Literal["turn.end"]
-        transcript: str
-        request_id: str
-
-    class STTErrorEvent(TypedDict):
-        """Error event sent by the server.
-
-        Attributes:
-            type: Event discriminator.
-            error_code: Stable code identifying the error.
-            status_code: HTTP-style status code; values >= 500 are treated as retryable.
-            title: Short human-readable error title.
-            message: Detailed human-readable error message.
-            doc_url: URL to documentation describing this error.
-            request_id: Unique identifier for this connection. Does not change between turns.
-
-        See also:
-            https://docs.cartesia.ai/api-reference/stt/turns/websocket
-        """
-
-        type: Literal["error"]
-        error_code: NotRequired[str]
-        status_code: NotRequired[int]
-        title: NotRequired[str]
-        message: NotRequired[str]
-        doc_url: NotRequired[str]
-        request_id: NotRequired[str]
-
-    STTEventMessage = (
-        STTConnectedEvent
-        | STTTurnStartEvent
-        | STTTurnUpdateEvent
-        | STTTurnEagerEndEvent
-        | STTTurnResumeEvent
-        | STTTurnEndEvent
-        | STTErrorEvent
-    )
-    """Server-sent message on the ``/stt/turns/websocket`` endpoint.
+    ``turn.start`` and ``turn.resume`` carry no transcript; ``turn.update``, ``turn.eager_end``
+    and ``turn.end`` carry the cumulative text of the turn so far, not a delta.
 
     See also:
         https://docs.cartesia.ai/api-reference/stt/turns/websocket
     """
 
+    type: Literal["turn.start", "turn.update", "turn.eager_end", "turn.resume", "turn.end"]
+    transcript: NotRequired[str]
+    request_id: NotRequired[str]
 
-class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
+
+class STTErrorEvent(TypedDict):
+    """Error event sent by the server; ``status_code`` is HTTP-style."""
+
+    type: Literal["error"]
+    status_code: NotRequired[int]
+    title: NotRequired[str]
+    message: NotRequired[str]
+    request_id: NotRequired[str]
+
+
+STTEventMessage = Annotated[
+    STTConnectedEvent | STTTurnEvent | STTErrorEvent, Field(discriminator="type")
+]
+"""Server-sent message on the ``/stt/turns/websocket`` endpoint."""
+
+
+class AutoFinalizeRecognizeStream(stt.SocketStream[STTEventMessage, None]):
     """
     Cartesia STT stream implementation with turn detection.
 
@@ -204,6 +78,10 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         - [Compare STT Endpoints](https://docs.cartesia.ai/use-the-api/compare-stt-endpoints)
     """
 
+    goodbye = '{"type":"close"}'
+    # turn.start and turn.end are Cartesia's own turn boundaries
+    provider_vad = True
+
     def __init__(
         self,
         *,
@@ -214,7 +92,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         model: TurnDetectingSTTModel | str,
         api_key: str,
         ws_base_url: str,
-        session: http.HttpSession,
         language: LanguageCode,
         turn_start_threshold: NotGivenOr[float] = NOT_GIVEN,
         turn_eager_end_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -223,12 +100,11 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
+        self.frame_ms = audio_chunk_duration_ms
         self._sample_rate = sample_rate
-        self._audio_chunk_duration_ms = audio_chunk_duration_ms
         self._model = model
         self._api_key = api_key
         self._ws_base_url = ws_base_url
-        self._session = session
         self._language = language
         self._turn_start_threshold = turn_start_threshold
         self._turn_eager_end_threshold = turn_eager_end_threshold
@@ -236,97 +112,11 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self._turn_end_timeout_ms = turn_end_timeout_ms
         self._keyterm = keyterm
         self._request_id = ""
-        self._speaking = False
-        self._closing_ws = False
         # cumulative transcript for the current turn; used to re-emit on turn.resume
         self._current_transcript = ""
 
-    async def _run(self) -> None:
-        if self.input.closed:
-            return
-
-        async def send_task(ws: http.WebSocket) -> None:
-            samples_per_chunk = self._sample_rate * self._audio_chunk_duration_ms // 1000
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_per_chunk,
-            )
-
-            try:
-                async for data in self.input:
-                    if isinstance(data, rtc.AudioFrame):
-                        for frame in audio_bstream.push(data.data.tobytes()):
-                            await ws.send_bytes(frame.data.tobytes())
-                    else:
-                        if not self.input.closed:
-                            logger.warning(
-                                "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."
-                            )
-
-                for frame in audio_bstream.flush():
-                    await ws.send_bytes(frame.data.tobytes())
-
-                self._closing_ws = True
-                await ws.send_str('{"type":"close"}')
-            except APIConnectionError as e:
-                if self._closing_ws or self._session.closed:
-                    return
-                raise APIConnectionError(
-                    message="Cartesia STT connection closed unexpectedly"
-                ) from e
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    if self._closing_ws or self._session.closed:
-                        return
-                    raise ws.close_error("Cartesia STT connection closed unexpectedly")
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected Cartesia STT message type %s", msg.type)
-                    continue
-
-                data: STTEventMessage = json.loads(msg.data)
-                self._process_stream_event(data)
-
-        # Reset per-connection state so a transport-error retry (a new _run
-        # invocation by the base class) starts fresh. Without this, stale
-        # `_speaking=True` silently drops the next turn.start,
-        # `_current_transcript` can leak into turn.eager_end / turn.end
-        # transcript fallbacks, and a stale `_closing_ws=True` makes recv_task
-        # suppress legitimate unexpected-close failures on the new connection.
-        self._speaking = False
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
         self._current_transcript = ""
-        self._closing_ws = False
-
-        ws: http.WebSocket | None = None
-
-        try:
-            ws = await self._connect_ws()
-            try:
-                async with utils.aio.TaskSet() as tasks:
-                    await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-            finally:
-                # If the websocket dropped mid-turn, flush the partial
-                # transcript as a FINAL_TRANSCRIPT so the consumer can finalize
-                # the turn instead of losing it. In the normal close path the
-                # server sends turn.end first and _speaking is already False.
-                if self._speaking:
-                    if not self.closed:
-                        if self._current_transcript:
-                            self._send_transcript_event(
-                                stt.SpeechEventType.FINAL_TRANSCRIPT, self._current_transcript
-                            )
-                        self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-                    self._speaking = False
-                    self._current_transcript = ""
-        finally:
-            if ws is not None:
-                await ws.close()
-
-    async def _connect_ws(self) -> http.WebSocket:
         # keyterm may repeat, so params is a list of pairs rather than a dict
         params: list[tuple[str, str]] = [
             ("model", str(self._model)),
@@ -344,113 +134,81 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         if utils.is_given(self._keyterm):
             params.extend(("keyterm", term) for term in self._keyterm)
 
-        ws_url = f"{self._ws_base_url}/stt/turns/websocket?{urlencode(params)}"
-
-        ws = await self._session.ws_connect(
-            ws_url,
+        return http.SocketTarget(
+            f"{self._ws_base_url}/stt/turns/websocket?{urlencode(params)}",
             headers={
                 API_VERSION_HEADER: API_VERSION,
                 API_AUTH_HEADER: self._api_key,
                 "User-Agent": USER_AGENT,
             },
-            conn_options=self._conn_options,
-            heartbeat=30,
         )
-        logger.debug(
-            "Established new Cartesia STT WebSocket connection",
-            extra={"cartesia_request_id": ws.headers.get(REQUEST_ID_HEADER)},
-        )
-        return ws
 
-    def _send_transcript_event(self, event_type: stt.SpeechEventType, transcript: str) -> None:
-        if self.closed:
-            return
-
-        speech_data = stt.SpeechData(
-            text=transcript,
-            language=self._language,
-        )
-        self.send(
-            stt.SpeechEvent(
-                type=event_type,
-                request_id=self._request_id,
-                alternatives=[speech_data],
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[None]:
+        if isinstance(item, rtc.AudioFrame):
+            return bytes(item.data)
+        if isinstance(item, stt.RecognizeStream.Flush) and not self.input.closed:
+            logger.warning(
+                "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."
             )
+        return None
+
+    def _transcript(
+        self, text: str, *, final: bool = False, preflight: bool = False
+    ) -> stt.Transcript:
+        return stt.Transcript(
+            text, self._language, final=final, preflight=preflight, request_id=self._request_id
         )
 
-    def _process_stream_event(self, data: STTEventMessage) -> None:
-        if request_id := data.get("request_id"):
+    def on_message(self, message: STTEventMessage) -> stt.Report | list[stt.Report] | None:
+        if request_id := message.get("request_id"):
             self._request_id = request_id
 
-        if data["type"] == "connected":
-            return
+        if message["type"] == "connected":
+            return None
 
-        if data["type"] == "turn.start":
-            if self._speaking:
-                return
-            self._speaking = True
-            self._current_transcript = ""
-            if not self.closed:
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
-            return
-
-        if data["type"] == "turn.update":
-            if not self._speaking:
-                return
-            transcript = data["transcript"]
-            if not transcript:
-                return
-            # only send interim transcript events if there's a change
-            # this avoids canceling the preflight transcript if there's no change
-            if self._current_transcript == transcript:
-                return
-            self._current_transcript = transcript
-            self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, transcript)
-            return
-
-        if data["type"] == "turn.eager_end":
-            if not self._speaking:
-                return
-            transcript = data["transcript"] or self._current_transcript
-            if not transcript:
-                return
-            self._current_transcript = transcript
-            self._send_transcript_event(stt.SpeechEventType.PREFLIGHT_TRANSCRIPT, transcript)
-            return
-
-        if data["type"] == "turn.resume":
-            # turn.resume has no transcript; re-emit the most recent cumulative
-            # transcript as an interim so the pipeline cancels the preflight.
-            if not self._speaking or not self._current_transcript:
-                return
-            self._send_transcript_event(
-                stt.SpeechEventType.INTERIM_TRANSCRIPT, self._current_transcript
-            )
-            return
-
-        if data["type"] == "turn.end":
-            if not self._speaking:
-                return
-            transcript = data["transcript"] or self._current_transcript
-
-            self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, transcript)
-            if not self.closed:
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-
-            self._speaking = False
-            self._current_transcript = ""
-            return
-
-        if data["type"] == "error":
+        if message["type"] == "error":
             # an HTTP-style status: a 5xx is retried, a rejected request is not
             raise APIStatusError(
                 "Cartesia STT returned an error",
-                status_code=data.get("status_code") or 500,
-                body=data,
-                detail=data.get("message") or data.get("title"),
+                status_code=message.get("status_code") or 500,
+                body=dict(message),
+                detail=message.get("message") or message.get("title"),
             )
 
-        logger.warning("received unexpected message from Cartesia STT", extra={"lk.pii.data": data})
+        if message["type"] == "turn.start":
+            if self.speaking:
+                return None
+            self._current_transcript = ""
+            return stt.SpeechStarted()
+
+        if not self.speaking:
+            return None
+        transcript = message.get("transcript", "")
+
+        if message["type"] == "turn.update":
+            # only an interim that changed: an unchanged one would cancel the preflight
+            if not transcript or transcript == self._current_transcript:
+                return None
+            self._current_transcript = transcript
+            return self._transcript(transcript)
+
+        if message["type"] == "turn.eager_end":
+            transcript = transcript or self._current_transcript
+            if not transcript:
+                return None
+            self._current_transcript = transcript
+            return self._transcript(transcript, preflight=True)
+
+        if message["type"] == "turn.resume":
+            # no transcript: the last one again as an interim, so the preflight is cancelled
+            return self._transcript(self._current_transcript) if self._current_transcript else None
+
+        # turn.end
+        transcript = transcript or self._current_transcript
+        self._current_transcript = ""
+        return [self._transcript(transcript, final=True), stt.SpeechEnded()]
 
     def update_options(
         self,

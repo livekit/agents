@@ -269,8 +269,9 @@ UTTERANCES = [
 
 @pytest.mark.parametrize("local_vad", [False, True], ids=["server_vad", "local_vad"])
 async def test_realtime_keeps_turn_boundaries_and_late_final_transcripts(local_vad: bool) -> None:
-    """Speech boundaries come from one source, and a final arriving after the next turn began
-    still lands on its own item.
+    """Speech boundaries come from one source, a speech ends with its final (or where the next
+    begins), a final arriving after the next turn began still lands on its own item, and a final
+    outside the source's speech is a speech of its own.
 
     https://github.com/livekit/agents/issues/3312 https://github.com/livekit/agents/issues/3331
     https://github.com/livekit/agents/pull/4232 https://github.com/livekit/agents/pull/6297
@@ -293,7 +294,7 @@ async def test_realtime_keeps_turn_boundaries_and_late_final_transcripts(local_v
                 stream.push_frame(audio_frame(0.2))
                 stream.push_frame(audio_frame(0.3, level=0))
                 async with asyncio.timeout(3):
-                    while not events or events[-1].type != stt.SpeechEventType.END_OF_SPEECH:
+                    while not events or events[-1].type != stt.SpeechEventType.START_OF_SPEECH:
                         events.append(await anext(stream))
             for frame in UTTERANCES:
                 await peer.sockets[0].send_json(frame)
@@ -312,7 +313,8 @@ async def test_realtime_keeps_turn_boundaries_and_late_final_transcripts(local_v
         for e in events
         if e.type in (stt.SpeechEventType.START_OF_SPEECH, stt.SpeechEventType.END_OF_SPEECH)
     ]
-    turns = 1 if local_vad else 2
+    # the server's two turns, or the local VAD's one ended by "hello"; then "bye" on its own
+    turns = 2 if local_vad else 3
     assert (
         boundaries
         == [stt.SpeechEventType.START_OF_SPEECH, stt.SpeechEventType.END_OF_SPEECH] * turns

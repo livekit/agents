@@ -346,6 +346,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     output_emitter.push(base64.b64decode(data["delta"]))
                 elif msg_type == "audio.done":
                     if input_ended:
+                        read_deadline.complete_response()
                         output_emitter.end_segment()
                         break
                 elif msg_type == "error":

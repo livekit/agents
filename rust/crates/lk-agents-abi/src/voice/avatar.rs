@@ -51,7 +51,7 @@ pub trait AvatarAudioReceiver: AvatarAudio {
 }
 
 /// A host `AudioReceiver` (`voice/avatar.py`): its audio iterated, and its playback reports.
-#[crate::host(proxy(host = "livekit.agents.voice.avatar.AudioReceiver"))]
+#[crate::host(proxy(host = "livekit.agents.voice.avatar.AudioReceiver", owns))]
 pub trait AudioReceiverHost: Send + Sync {
     /// The next frame or segment end; `None` once the receiver is exhausted.
     #[host(await, iter)]
@@ -101,7 +101,7 @@ pub trait HostAudioReceiver: Send + Sync + Sized + 'static {
 
 /// `VideoGenerator`: the avatar's model, fed the audio and yielding the frames to publish. A host
 /// `VideoGenerator` carries this surface (`voice/avatar.py`).
-#[crate::host(proxy(host = "livekit.agents.voice.avatar.VideoGenerator"))]
+#[crate::host(proxy(host = "livekit.agents.voice.avatar.VideoGenerator", owns))]
 pub trait AvatarVideoGenerator: Send + Sync {
     /// An audio frame, or `AudioSegmentEnd`.
     #[host(await)]
@@ -338,7 +338,7 @@ pub struct AvatarOptions {
 }
 
 /// The agent's `AvatarSession`, as its lifecycle reaches it.
-#[crate::host(proxy(host = "livekit.agents.voice.avatar.AvatarSession"))]
+#[crate::host(proxy(host = "livekit.agents.voice.avatar.AvatarSession", owns))]
 pub trait AvatarHost: Send + Sync {
     /// The avatar's `metrics_collected` event.
     #[host(notify, emit = "metrics_collected")]

@@ -107,7 +107,7 @@ pub type SttSource = Box<dyn ProviderStream<SpeechEvent>>;
 ///
 /// Plugins implement `_recognize_impl` for batch recognition, and override `stream()` when the
 /// service recognizes live audio.
-#[crate::host(proxy(host = "livekit.agents.stt.STT", base = "stt.py", generic))]
+#[crate::host(proxy(host = "livekit.agents.stt.STT", base = "stt.py", generic, owns))]
 pub trait Stt: Send + Sync {
     /// The host object's identity, independent of proxy instances and bound connection options;
     /// `None` for a native provider.

@@ -644,7 +644,11 @@ pub struct Truncate {
 /// A realtime model: speech in, speech out, over one live session.
 ///
 /// Plugins implement `session()`, returning a `RealtimeSession`.
-#[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeModel", base = "realtime.py"))]
+#[crate::host(proxy(
+    host = "livekit.agents.llm.realtime.RealtimeModel",
+    base = "realtime.py",
+    owns
+))]
 pub trait HostRealtime: Send + Sync {
     /// The host object's identity, independent of proxy instances and bound connection options;
     /// `None` for a native provider.
@@ -702,7 +706,11 @@ pub trait HostRealtime: Send + Sync {
 /// A host `RealtimeSession`, flattened: the leg orders the commands, the session's callbacks
 /// report one event at a time.
 // A dropped call cancels its host coroutine.
-#[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeSession", base = "realtime.py"))]
+#[crate::host(proxy(
+    host = "livekit.agents.llm.realtime.RealtimeSession",
+    base = "realtime.py",
+    owns
+))]
 pub trait HostRealtimeSession: Send + Sync {
     /// A command that applies at once (`PushAudio`, `Interrupt`, `CommitAudio`, `ClearAudio`,
     /// `Truncate`), queued on the host loop in order.

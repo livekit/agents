@@ -1,49 +1,38 @@
-"""Uplift AI TTS: provider errors fail synthesis, against a local Socket.IO peer."""
+"""Uplift AI TTS: Socket.IO framing and provider errors, against a local Engine.IO peer."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+import json
 
 import pytest
-import socketio  # type: ignore[import-untyped]  # python-socketio ships no type information
-from aiohttp import web
-from aiohttp.test_utils import TestServer
 from pydantic import ValidationError
 
 from livekit.agents import APIConnectOptions, APIError
 from livekit.plugins.upliftai.tts import TTS, WEBSOCKET_NAMESPACE
-from tests.fakes import until
+from tests.plugins.conftest import Connection, Frame, WsPeer
+
+OPEN = '0{"sid":"s","upgrades":[],"pingInterval":25000,"pingTimeout":20000,"maxPayload":1000000}'
 
 
-@pytest.fixture
-async def uplift() -> AsyncIterator[tuple[TTS, list[dict[str, object]]]]:
-    """A TTS on a local Uplift peer that answers each synthesis with the next queued message."""
-    replies: list[dict[str, object]] = []
-    server = socketio.AsyncServer(async_mode="aiohttp", ping_interval=0.01)
-    app = web.Application()
-    server.attach(app)
+def uplift(peer: WsPeer, replies: list[dict[str, object]]) -> TTS:
+    """A TTS on ``peer`` speaking Uplift's Socket.IO namespace: the connect is acknowledged,
+    then each synthesis answered with ``replies``, under its request id."""
+    peer.hello = [OPEN, "2"]  # opened, then pinged
 
-    # python-socketio's decorators are untyped
-    @server.on("connect", namespace=WEBSOCKET_NAMESPACE)  # type: ignore[untyped-decorator]
-    async def connected(sid: str, environ: dict[str, object], auth: object) -> None:
-        await server.emit("message", {"type": "ready"}, to=sid, namespace=WEBSOCKET_NAMESPACE)
+    def reply(_: Connection, message: str | bytes) -> list[Frame]:
+        assert isinstance(message, str)
+        if message.startswith(f"40{WEBSOCKET_NAMESPACE},"):
+            ready = json.dumps(["message", {"type": "ready"}])
+            return [f'40{WEBSOCKET_NAMESPACE},{{"sid":"n"}}', f"42{WEBSOCKET_NAMESPACE},{ready}"]
+        if message.startswith(f"42{WEBSOCKET_NAMESPACE},"):
+            _, request = json.loads(message.split(",", 1)[1])
+            answers = [{**r, "requestId": request["requestId"]} for r in replies]
+            return [f"42{WEBSOCKET_NAMESPACE},{json.dumps(['message', a])}" for a in answers]
+        return []
 
-    @server.on("synthesize", namespace=WEBSOCKET_NAMESPACE)  # type: ignore[untyped-decorator]
-    async def synthesize(sid: str, data: dict[str, str]) -> None:
-        reply = {**replies.pop(0), "requestId": data["requestId"]}
-        await server.emit("message", reply, to=sid, namespace=WEBSOCKET_NAMESPACE)
-
-    async with TestServer(app) as peer:
-        provider = TTS(api_key="key", base_url=str(peer.make_url("")), output_format="PCM_22050_16")
-        yield provider, replies
-        await provider.aclose()
-        await server.shutdown()
-        # Engine.IO cancels its scheduled ping after shutdown() returns
-        await until(
-            lambda: not [t for t in asyncio.all_tasks() if "_send_ping" in repr(t.get_coro())],
-            "Engine.IO's ping task ended",
-        )
+    peer.reply = reply
+    return TTS(api_key="key", base_url=peer.url, output_format="PCM_22050_16")
 
 
 async def _synthesize(provider: TTS) -> None:
@@ -52,15 +41,35 @@ async def _synthesize(provider: TTS) -> None:
             pytest.fail("a failed synthesis produced audio")
 
 
-async def test_provider_rejection_fails_synthesis(
-    uplift: tuple[TTS, list[dict[str, object]]],
-) -> None:
-    """A provider error fails synthesis for good, carrying the provider's message."""
-    provider, replies = uplift
-    replies.append({"type": "error", "message": "voice unavailable"})
+async def test_synthesis_authenticates_on_the_namespace_and_answers_pings(ws_peer: WsPeer) -> None:
+    """The namespace connect carries the key, the request goes out once it is acknowledged, and
+    the server's ping is answered with a pong."""
+    provider = uplift(ws_peer, [{"type": "audio", "audio": "AAAA"}, {"type": "audio_end"}])
+    try:
+        async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+            stream.push_text("hello")
+            stream.end_input()
+            async with asyncio.timeout(2):
+                audio = [event async for event in stream]
+    finally:
+        await provider.aclose()
 
-    with pytest.raises(APIError) as error:
-        await _synthesize(provider)
+    assert audio
+    connection = ws_peer.connections[0]
+    assert connection.request.path == "/socket.io/"
+    assert connection.request.query["EIO"] == "4"
+    assert connection.texts[0] == f'40{WEBSOCKET_NAMESPACE},{{"token": "key"}}'
+    assert "3" in connection.texts
+
+
+async def test_provider_rejection_fails_synthesis(ws_peer: WsPeer) -> None:
+    """A provider error fails synthesis for good, carrying the provider's message."""
+    provider = uplift(ws_peer, [{"type": "error", "message": "voice unavailable"}])
+    try:
+        with pytest.raises(APIError) as error:
+            await _synthesize(provider)
+    finally:
+        await provider.aclose()
 
     assert error.value.retryable is False
     assert isinstance(error.value.body, dict)
@@ -68,15 +77,16 @@ async def test_provider_rejection_fails_synthesis(
 
 
 async def test_malformed_socket_message_fails_pending_synthesis_without_waiting_for_timeout(
-    uplift: tuple[TTS, list[dict[str, object]]],
+    ws_peer: WsPeer,
 ) -> None:
     """A malformed audio message fails the pending synthesis at once, not at its timeout."""
-    provider, replies = uplift
-    replies.append({"type": "audio", "audio": []})
-
-    with pytest.raises(APIError) as failure:
-        async with asyncio.timeout(1):
-            await _synthesize(provider)
+    provider = uplift(ws_peer, [{"type": "audio", "audio": []}])
+    try:
+        with pytest.raises(APIError) as failure:
+            async with asyncio.timeout(1):
+                await _synthesize(provider)
+    finally:
+        await provider.aclose()
 
     assert failure.value.kind == "protocol"
     assert isinstance(failure.value.__cause__, ValidationError)

@@ -5,30 +5,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import struct
 import weakref
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
-
-from pydantic import BaseModel, ValidationError
+from typing import Literal, NotRequired, TypedDict
+from urllib.parse import urlencode
 
 from livekit import rtc
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    APIError,
-    LanguageCode,
-    http,
-    stt,
-    utils,
-)
+from livekit.agents import APIConnectOptions, LanguageCode, http, stt
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .common import NUM_CHANNELS, SAMPLE_RATE, STT_ENDPOINT, SessionManager, get_api_key
-from .log import logger
+from .common import NUM_CHANNELS, SAMPLE_RATE, STT_ENDPOINT, get_api_key
 
 TranscriptionEngine = Literal["telnyx", "google", "deepgram", "azure"]
 
@@ -43,12 +31,6 @@ class _STTOptions:
     sample_rate: int
 
 
-class _Transcript(BaseModel):
-    transcript: str = ""
-    is_final: bool = False
-    confidence: float = 0.0
-
-
 class STT(stt.STT):
     def __init__(
         self,
@@ -59,7 +41,6 @@ class STT(stt.STT):
         api_key: str | None = None,
         base_url: str = STT_ENDPOINT,
         sample_rate: int = SAMPLE_RATE,
-        http_session: http.HttpSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -76,7 +57,6 @@ class STT(stt.STT):
             base_url=base_url,
             sample_rate=sample_rate,
         )
-        self._session_manager = SessionManager(http_session)
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
@@ -133,7 +113,6 @@ class STT(stt.STT):
             conn_options=conn_options,
             language=resolved_language,
             opts=self._opts,
-            ensure_session=self._session_manager.ensure_session,
         )
         self._streams.add(stream)
         return stream
@@ -142,7 +121,6 @@ class STT(stt.STT):
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
-        await self._session_manager.close()
 
 
 def _create_streaming_wav_header(sample_rate: int, num_channels: int) -> bytes:
@@ -172,7 +150,15 @@ def _create_streaming_wav_header(sample_rate: int, num_channels: int) -> bytes:
     return header
 
 
-class SpeechStream(stt.RecognizeStream):
+class _Transcript(TypedDict):
+    transcript: NotRequired[str]
+    is_final: NotRequired[bool]
+    confidence: NotRequired[float]
+
+
+class SpeechStream(stt.SocketStream[_Transcript, None]):
+    frame_ms = 50
+
     def __init__(
         self,
         *,
@@ -180,139 +166,40 @@ class SpeechStream(stt.RecognizeStream):
         conn_options: APIConnectOptions,
         language: LanguageCode,
         opts: _STTOptions,
-        ensure_session: Callable[[], http.HttpSession],
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
-        self._ensure_session = ensure_session
         self._language = language
-        self._speaking = False
 
-    async def _run(self) -> None:
-        closing_ws = False
-        self._speaking = False
-
-        async def send_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-
-            wav_header = _create_streaming_wav_header(self._opts.sample_rate, NUM_CHANNELS)
-            await ws.send_bytes(wav_header)
-
-            samples_per_chunk = self._opts.sample_rate // 20
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=NUM_CHANNELS,
-                samples_per_channel=samples_per_chunk,
-            )
-
-            async for data in self.input:
-                if isinstance(data, rtc.AudioFrame):
-                    for frame in audio_bstream.push(data.data.tobytes()):
-                        await ws.send_bytes(frame.data.tobytes())
-                else:
-                    for frame in audio_bstream.flush():
-                        await ws.send_bytes(frame.data.tobytes())
-
-            for frame in audio_bstream.flush():
-                await ws.send_bytes(frame.data.tobytes())
-
-            # Don't close the WS here — let recv_task read the final
-            # transcript before the server closes the connection.
-            closing_ws = True
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            while True:
-                try:
-                    msg = await ws.receive()
-                except APIConnectionError:
-                    # The heartbeat fails the socket when a ping goes unanswered; that is
-                    # only an error before the input is done.
-                    if closing_ws:
-                        return
-                    raise
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    if closing_ws:
-                        return
-                    raise ws.close_error("Telnyx STT WebSocket closed unexpectedly")
-
-                if msg.type is http.WebSocketMessageType.TEXT:
-                    try:
-                        data = _Transcript.model_validate_json(msg.data)
-                    except ValidationError as e:
-                        raise APIError(
-                            "Telnyx STT sent a malformed message",
-                            kind="protocol",
-                            detail=str(msg.data),
-                        ) from e
-                    self._process_stream_event(data)
-
-        ws: http.WebSocket | None = None
-        try:
-            ws = await self._connect_ws()
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-
-        finally:
-            if ws is not None:
-                await ws.close()
-
-    async def _connect_ws(self) -> http.WebSocket:
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
         opts = self._opts
         params = {
             "transcription_engine": opts.transcription_engine,
             "language": self._language,
             "input_format": "wav",
         }
-        query_string = "&".join(f"{k}={v}" for k, v in params.items())
-        url = f"{opts.base_url}?{query_string}"
-        headers = {"Authorization": f"Bearer {opts.api_key}"}
-
-        ws = await self._ensure_session().ws_connect(
-            url,
-            headers=headers,
-            # Without this a silently dropped socket (half-open TCP, no FIN/RST)
-            # is never noticed: recv_task parks on ws.receive() forever, and the
-            # retry in _main_task only runs when something raises. Matches the
-            # Deepgram and Muse STT plugins.
-            heartbeat=30.0,
-            conn_options=self._conn_options,
+        base_url = opts.base_url
+        if base_url.startswith("http"):
+            base_url = base_url.replace("http", "ws", 1)
+        return http.SocketTarget(
+            f"{base_url}?{urlencode(params)}",
+            headers={"Authorization": f"Bearer {opts.api_key}"},
         )
-        logger.debug("Established Telnyx STT WebSocket connection")
-        return ws
 
-    def _process_stream_event(self, data: _Transcript) -> None:
-        transcript = data.transcript
-        is_final = data.is_final
+    def setup(self) -> bytes:
+        return _create_streaming_wav_header(self._opts.sample_rate, NUM_CHANNELS)
 
-        if not transcript:
-            return
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[None]:
+        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
 
-        if not self._speaking:
-            self._speaking = True
-            self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
-
-        alternatives = [
-            stt.SpeechData(
-                language=self._language,
-                text=transcript,
-                confidence=data.confidence,
-            )
-        ]
-
-        if is_final:
-            self.send(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=alternatives,
-                )
-            )
-            self._speaking = False
-            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-        else:
-            self.send(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=alternatives,
-                )
-            )
+    def on_message(self, message: _Transcript) -> stt.Transcript | None:
+        if not (text := message.get("transcript", "")):
+            return None
+        return stt.Transcript(
+            text,
+            self._language,
+            final=message.get("is_final", False),
+            confidence=message.get("confidence", 0.0),
+        )

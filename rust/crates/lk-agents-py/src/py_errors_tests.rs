@@ -56,9 +56,7 @@ mod side_tables {
         });
     }
 
-    /// The table drained and counted; the drain is what decrefs.
     fn outstanding() -> usize {
-        exception_table().drain();
         exception_table().outstanding()
     }
 

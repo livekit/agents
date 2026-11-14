@@ -8,7 +8,8 @@ use crate::{AudioFrame, TranscriptChunk};
 /// queue in order and run on the host loop, in the context the emitter was built in.
 #[crate::host(proxy(
     host = "livekit.agents.utils.aio.Chan[livekit.agents.tts.SynthesizedAudio]",
-    view = "livekit.agents.tts._EmitterOutput"
+    view = "livekit.agents.tts._EmitterOutput",
+    owns
 ))]
 pub trait EmitterOutput: Send + Sync {
     /// One `SynthesizedAudio`; its frame's userdata carries the words it covers.

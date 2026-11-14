@@ -23,8 +23,6 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.8.6",
-    "numpy>=1.26",
-    "python-socketio[asyncio_client]>=5.13",
 ]
 
 [project.urls]

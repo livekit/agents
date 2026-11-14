@@ -641,7 +641,7 @@ inventory::submit! {
 /// [`::lk_agents_abi::tts::stream_adapter::HostSentenceTokenizer`] over a host `livekit.agents.tokenize.SentenceTokenizer`.
 #[derive(Clone)]
 pub struct HostSentenceTokenizerProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -659,10 +659,10 @@ impl HostSentenceTokenizerProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -674,7 +674,7 @@ impl HostSentenceTokenizerProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -691,21 +691,23 @@ impl HostSentenceTokenizerProxy {
                 "a native `HostSentenceTokenizer` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
-        Ok(HostSentenceTokenizerProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
-            context,
-        })
+        Ok(HostSentenceTokenizerProxy { host, context })
     }
 }
 
@@ -720,7 +722,7 @@ impl ::lk_agents_abi::tts::stream_adapter::HostSentenceTokenizer for HostSentenc
             ::lk_agents_abi::errors::HostError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostSentenceTokenizer.stream",
@@ -729,7 +731,11 @@ impl ::lk_agents_abi::tts::stream_adapter::HostSentenceTokenizer for HostSentenc
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("stream")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((
+                    host.bind(py)?.getattr("stream")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         let context = ::lk_agents_abi::agent::HostContext::host_context(
@@ -762,7 +768,7 @@ impl ::lk_agents_abi::tts::stream_adapter::HostSentenceTokenizer for HostSentenc
 /// [`::lk_agents_abi::tts::stream_pacer::HostSentenceStream`] over a host `livekit.agents.tokenize.SentenceStream`.
 #[derive(Clone)]
 pub struct HostSentenceStreamProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -784,10 +790,10 @@ impl HostSentenceStreamProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -799,7 +805,7 @@ impl HostSentenceStreamProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -816,19 +822,24 @@ impl HostSentenceStreamProxy {
                 "a native `HostSentenceStream` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
         };
         Ok(HostSentenceStreamProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            host,
             context,
             notifier: ::std::default::Default::default(),
             next_iter: ::std::sync::Arc::new(::pyo3::sync::PyOnceLock::new()),
@@ -838,7 +849,10 @@ impl HostSentenceStreamProxy {
 
 impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStreamProxy {
     fn push_text(&self, text: ::std::string::String) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let text_arg = text;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
@@ -850,7 +864,7 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("push_text")?,
+                    host.bind(py)?.getattr("push_text")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -859,7 +873,10 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
     }
 
     fn flush(&self) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "HostSentenceStream.flush",
@@ -868,13 +885,16 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("flush")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((host.bind(py)?.getattr("flush")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
     }
 
     fn end_input(&self) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "HostSentenceStream.end_input",
@@ -884,7 +904,7 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("end_input")?,
+                    host.bind(py)?.getattr("end_input")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -902,7 +922,7 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let iterator = ::std::sync::Arc::clone(&self.next_iter);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -916,7 +936,7 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
                         .get_or_try_init(py, || {
                             crate::py_calls::call(
                                 &py.import("builtins")?.getattr("aiter")?,
-                                (host.bind(py).clone(),),
+                                (host.bind(py)?,),
                                 None,
                             )
                             .map(::pyo3::Bound::unbind)
@@ -957,7 +977,7 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
         cx: &::lk_agents_abi::telemetry::Cx,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostSentenceStream.aclose",
@@ -966,7 +986,11 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("aclose")?, ::pyo3::types::PyTuple::new(py, args)?, None))
+                Ok((
+                    host.bind(py)?.getattr("aclose")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -991,7 +1015,7 @@ impl ::lk_agents_abi::tts::stream_pacer::HostSentenceStream for HostSentenceStre
 /// [`::lk_agents_abi::Tts`] over a host `livekit.agents.tts.TTS`.
 #[derive(Clone)]
 pub struct TtsProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
     /// The host's running loop and a copy of its context, captured when it was taken;
     /// none when taken with no running loop: each call then runs in its driving operation's.
     context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
@@ -1016,10 +1040,10 @@ impl TtsProxy {
         if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Tts>(obj)? {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -1027,7 +1051,7 @@ impl TtsProxy {
         if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Tts>(obj)? {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -1037,13 +1061,18 @@ impl TtsProxy {
                 "a native `Tts` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let context = match context {
             Some(context) => Some(::std::clone::Clone::clone(context)),
             None => crate::py_calls::proxy_context(obj.py()),
@@ -1097,7 +1126,7 @@ impl TtsProxy {
             }?
         };
         Ok(TtsProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            host,
             context,
             notifier: ::std::default::Default::default(),
             instance_id,
@@ -1129,7 +1158,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         &self,
     ) -> ::std::result::Result<::lk_agents_abi::ProviderId, ::lk_agents_abi::errors::HostError>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(
             &crate::py_calls::calling_context(&self.context),
         )
@@ -1139,7 +1168,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_id")?,
+                    host.bind(py)?.getattr("_core_id")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1172,7 +1201,10 @@ impl ::lk_agents_abi::Tts for TtsProxy {
     }
 
     fn prewarm(&self, _cx: &::lk_agents_abi::telemetry::Cx) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "Tts._core_prewarm",
@@ -1182,7 +1214,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_prewarm")?,
+                    host.bind(py)?.getattr("_core_prewarm")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1191,13 +1223,13 @@ impl ::lk_agents_abi::Tts for TtsProxy {
     }
 
     fn sample_rate(&self) -> ::std::result::Result<u32, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_sample_rate")?,
+                    host.bind(py)?.getattr("_core_sample_rate")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1231,13 +1263,13 @@ impl ::lk_agents_abi::Tts for TtsProxy {
     fn read_markup_provider(
         &self,
     ) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_markup_provider")?,
+                    host.bind(py)?.getattr("_core_markup_provider")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1284,7 +1316,10 @@ impl ::lk_agents_abi::Tts for TtsProxy {
     }
 
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
-        let host = ::std::sync::Arc::clone(&self.host);
+        if self.host.gone() {
+            return;
+        }
+        let host = ::std::clone::Clone::clone(&self.host);
         let error_arg = error;
         let error_arg = match ::pyo3::Python::attach(
             |py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
@@ -1310,7 +1345,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_failed")?,
+                    host.bind(py)?.getattr("_core_failed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1331,7 +1366,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let chunk_arg = ::std::clone::Clone::clone(chunk);
         let bound = ::std::clone::Clone::clone(&self.conn);
         let started = ::lk_agents_runtime::host::call(
@@ -1350,7 +1385,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                     )?);
                 }
                 Ok((
-                    host.bind(py).getattr("_core_synthesize")?,
+                    host.bind(py)?.getattr("_core_synthesize")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1395,7 +1430,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let bound = ::std::clone::Clone::clone(&self.conn);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_streams::StreamCall,
@@ -1412,7 +1447,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                     )?);
                 }
                 Ok((
-                    host.bind(py).getattr("_core_stream")?,
+                    host.bind(py)?.getattr("_core_stream")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

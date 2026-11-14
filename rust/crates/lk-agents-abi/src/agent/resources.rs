@@ -23,14 +23,14 @@ pub enum ResourceError {
 
 /// Releases only language objects cached by an owned context adapter. Native code has already
 /// ended its activation; this callback performs no storage or framework lifetime decisions.
-#[crate::host(proxy(host = "livekit.agents.storage.context.ContextStore"))]
+#[crate::host(proxy(host = "livekit.agents.storage.context.ContextStore", owns))]
 pub trait ContextHydration: Send + Sync {
     #[host(call, name = "_core_release_hydration")]
     fn release(&self) -> Result<(), HostError>;
 }
 
 /// Release the host's invocation-local binding after native execution cleanup.
-#[crate::host(proxy(host = "livekit.agents.storage.context._SessionBinding"))]
+#[crate::host(proxy(host = "livekit.agents.storage.context._SessionBinding", owns))]
 pub trait BindingCleanup: Send + Sync {
     #[host(call, name = "_core_release_hydration")]
     fn release(&self) -> Result<(), HostError>;

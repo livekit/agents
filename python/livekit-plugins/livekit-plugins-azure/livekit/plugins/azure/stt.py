@@ -12,61 +12,71 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
+import json
 import os
+import struct
+import uuid
 import weakref
-from collections.abc import Callable
-from copy import deepcopy
-from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from typing import Annotated, Literal, NotRequired, TypedDict
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import azure.cognitiveservices.speech as speechsdk  # type: ignore
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError
+
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
+    APIError,
     LanguageCode,
+    http,
     stt,
-    utils,
 )
-from livekit.agents.types import (
-    NOT_GIVEN,
-    ErrorKind,
-    NotGivenOr,
-)
+from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
 
+ProfanityOption = Literal["masked", "removed", "raw"]
 
-class _EventSignal(Protocol):
-    def connect(self, callback: Callable[..., None]) -> None: ...
-
-
-def _connect_signal(signal: speechsdk.EventSignal, callback: Callable[..., None]) -> None:
-    cast(_EventSignal, signal).connect(callback)
+# what speech.config tells the service about the client, as the JS Speech SDK sends it
+_SPEECH_CONFIG = {
+    "context": {
+        "system": {
+            "name": "SpeechSDK",
+            "version": "1.44.0",
+            "build": "JavaScript",
+            "lang": "JavaScript",
+        }
+    }
+}
+# speech.phrase statuses that recognized nothing; any other one but Success cancels
+_NO_MATCH = {"NoMatch", "InitialSilenceTimeout", "BabbleTimeout", "EndOfDictation"}
+_CANCEL_KINDS: dict[str, ErrorKind] = {
+    "BadRequest": "invalid_request",
+    "Forbidden": "auth",
+    "TooManyRequests": "rate_limit",
+}
+_TICKS = 10**7  # offsets and durations are in 100 ns ticks
 
 
 @dataclass
 class STTOptions:
     speech_key: NotGivenOr[str]
     speech_region: NotGivenOr[str]
-    # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-container-stt?tabs=container#use-the-container
+    # a speech container's host, ws://host:port
     speech_host: NotGivenOr[str]
-    # for using Microsoft Entra auth (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?tabs=portal&pivots=programming-language-python)
+    # a Microsoft Entra token
     speech_auth_token: NotGivenOr[str]
     sample_rate: int
     num_channels: int
     segmentation_silence_timeout_ms: NotGivenOr[int]
     segmentation_max_time_ms: NotGivenOr[int]
     segmentation_strategy: NotGivenOr[str]
-    language: list[
-        str
-    ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
+    language: list[str]
     speech_endpoint: NotGivenOr[str] = NOT_GIVEN
-    profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
+    profanity: NotGivenOr[ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
     explicit_punctuation: bool = False
     true_text_post_processing: bool = False
@@ -87,7 +97,7 @@ class STT(stt.STT):
         segmentation_strategy: NotGivenOr[str] = NOT_GIVEN,
         # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.  # noqa: E501
         language: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
-        profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
+        profanity: NotGivenOr[ProfanityOption] = NOT_GIVEN,
         speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
         explicit_punctuation: bool = False,
@@ -105,13 +115,14 @@ class STT(stt.STT):
         ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
 
         Args:
+            profanity: How profanity is returned: masked, removed or raw.
             phrase_list: List of words or phrases to boost recognition accuracy.
                         Azure will give higher priority to these phrases during recognition.
             explicit_punctuation: Controls punctuation behavior. If True, enables explicit punctuation mode
                         where punctuation marks are added explicitly. If False (default), uses Azure's
                         default punctuation behavior.
             true_text_post_processing: Enables Azure "TrueText" post-processing in the recognition result.
-        """
+        """  # noqa: E501
 
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -194,7 +205,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        config = deepcopy(self._config)
+        config = replace(self._config, language=list(self._config.language))
         if is_given(language):
             config.language = [LanguageCode(language)]
         stream = SpeechStream(stt=self, opts=config, conn_options=conn_options)
@@ -231,18 +242,57 @@ class STT(stt.STT):
             )
 
 
-class SpeechStream(stt.RecognizeStream):
+class _Language(TypedDict):
+    Language: str
+
+
+class _Hypothesis(TypedDict):
+    path: Literal["speech.hypothesis", "speech.fragment"]
+    request_id: str
+    Text: str
+    Offset: int
+    Duration: int
+    PrimaryLanguage: NotRequired[_Language]
+
+
+class _Phrase(TypedDict):
+    path: Literal["speech.phrase"]
+    request_id: str
+    RecognitionStatus: str
+    DisplayText: NotRequired[str]
+    Offset: NotRequired[int]
+    Duration: NotRequired[int]
+    PrimaryLanguage: NotRequired[_Language]
+
+
+class _TurnEnd(TypedDict):
+    path: Literal["turn.end"]
+    request_id: str
+
+
+_Message = Annotated[_Hypothesis | _Phrase | _TurnEnd, Field(discriminator="path")]
+_MESSAGE: TypeAdapter[_Hypothesis | _Phrase | _TurnEnd] = TypeAdapter(_Message)
+_PATHS = {"speech.hypothesis", "speech.fragment", "speech.phrase", "turn.end"}
+_BODY = TypeAdapter(dict[str, JsonValue])
+
+
+class SpeechStream(stt.SocketStream[_Message, str]):
+    """Continuous recognition over the Speech service's websocket: each connection sends
+    speech.config, then one turn's speech.context and wave header, then the audio; a turn the
+    service ends while audio still flows is followed by a new one."""
+
+    frame_ms = 50
+
     def __init__(self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
-        self._speaking = False
-
-        self._session_stopped_event = asyncio.Event()
-        self._session_started_event = asyncio.Event()
-
-        self._loop = asyncio.get_running_loop()
-        self._reconnect_event = asyncio.Event()
-        self._cancellation_error: speechsdk.CancellationDetails | None = None
+        self._request_id = ""
+        # the turns this stream ended: a message of one is late
+        self._ended_turns: set[str] = set()
+        self._audio_ended = False
+        # seconds of audio sent on this connection, and where the current turn started
+        self._sent = 0.0
+        self._turn_start = 0.0
 
     def update_options(
         self,
@@ -260,255 +310,252 @@ class SpeechStream(stt.RecognizeStream):
             self._opts.segmentation_max_time_ms = segmentation_max_time_ms
         if is_given(segmentation_strategy):
             self._opts.segmentation_strategy = segmentation_strategy
-        self._reconnect_event.set()
+        # the options are read at each connection
+        self.reconnect("options changed")
 
-    async def _run(self) -> None:
-        while True:
-            self._session_started_event.clear()
-            self._session_stopped_event.clear()
-            self._cancellation_error = None
-            if self._speaking:  # a new session starts outside any speech
-                self._speaking = False
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+    @property
+    def _identifies_language(self) -> bool:
+        return len(self._opts.language) > 1
 
-            self._stream = speechsdk.audio.PushAudioInputStream(
-                stream_format=speechsdk.audio.AudioStreamFormat(
-                    samples_per_second=self._opts.sample_rate,
-                    bits_per_sample=16,
-                    channels=self._opts.num_channels,
-                )
+    @property
+    def _universal(self) -> bool:
+        # containers have no /stt/speech/universal/v2 route
+        return not is_given(self._opts.speech_host) or is_given(self._opts.speech_endpoint)
+
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        opts = self._opts
+        if is_given(opts.speech_endpoint):
+            url = opts.speech_endpoint
+            if urlsplit(url).path in ("", "/"):
+                url = url.rstrip("/") + "/stt/speech/universal/v2"
+        elif is_given(opts.speech_host):
+            url = (
+                opts.speech_host.rstrip("/")
+                + "/speech/recognition/conversation/cognitiveservices/v1"
             )
-            self._recognizer = _create_speech_recognizer(config=self._opts, stream=self._stream)
-            _connect_signal(self._recognizer.recognizing, self._on_recognizing)
-            _connect_signal(self._recognizer.recognized, self._on_recognized)
-            _connect_signal(self._recognizer.speech_start_detected, self._on_speech_start)
-            _connect_signal(self._recognizer.speech_end_detected, self._on_speech_end)
-            _connect_signal(self._recognizer.session_started, self._on_session_started)
-            _connect_signal(self._recognizer.session_stopped, self._on_session_stopped)
-            _connect_signal(self._recognizer.canceled, self._on_canceled)
-            self._recognizer.start_continuous_recognition()
+        else:
+            region = str(opts.speech_region)
+            suffix = (
+                ".azure.cn"
+                if region.lower().startswith("china")
+                else ".azure.us"
+                if region.lower().startswith("usgov")
+                else ".microsoft.com"
+            )
+            url = f"wss://{region}.stt.speech{suffix}/stt/speech/universal/v2"
 
-            try:
-                await asyncio.wait_for(
-                    self._session_started_event.wait(), self._conn_options.connect_timeout
-                )
+        parts = urlsplit(url)
+        params = dict(parse_qsl(parts.query))
+        if not self._identifies_language:
+            params.setdefault("language", opts.language[0])
+        params.setdefault("format", "simple")
+        if self._identifies_language:
+            params["lidEnabled"] = "true"
+        if is_given(opts.segmentation_silence_timeout_ms):
+            params.setdefault(
+                "segmentationSilenceTimeoutMs", str(opts.segmentation_silence_timeout_ms)
+            )
+        if is_given(opts.profanity):
+            params.setdefault("profanity", opts.profanity)
+        if opts.explicit_punctuation:
+            params["punctuation"] = "explicit"
+        scheme = {"https": "wss", "http": "ws"}.get(parts.scheme, parts.scheme)
 
-                async def process_input() -> None:
-                    async for input in self.input:
-                        if isinstance(input, rtc.AudioFrame):
-                            self._stream.write(input.data.tobytes())
-
-                async with utils.aio.TaskSet() as tasks:
-                    wait_reconnect_task = tasks.spawn(self._reconnect_event.wait())
-                    wait_stopped_task = tasks.spawn(self._session_stopped_event.wait())
-                    first = await tasks.first_completed(
-                        process_input(), wait_reconnect_task, wait_stopped_task
-                    )
-
-                if first is wait_stopped_task:
-                    if self._cancellation_error is not None:
-                        details = self._cancellation_error
-                        raise APIConnectionError(
-                            f"Azure STT canceled: {details.reason} ({details.code})",
-                            kind=_CANCELLATION_KINDS.get(details.code, "connection"),
-                            detail=details.error_details,
-                        )
-                    raise APIConnectionError("SpeechRecognition session stopped")
-
-                # the wait unblocked either because input ended (process_input drained) or a
-                # reconnect was requested; reset the event in the latter case
-                input_ended = first is not wait_reconnect_task
-                if not input_ended:
-                    self._reconnect_event.clear()
-
-                # close the push stream to flush finals for buffered audio before
-                # teardown, otherwise ending input truncates the transcript; bounded, as Azure
-                # does not always report the stop
-                self._stream.close()
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(
-                        self._session_stopped_event.wait(), self._conn_options.read_timeout
-                    )
-
-                if input_ended:
-                    break
-            finally:
-
-                def _cleanup() -> None:
-                    self._recognizer.stop_continuous_recognition()
-                    del self._recognizer
-
-                await asyncio.to_thread(_cleanup)
-
-    def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
-        detected_lg = LanguageCode(res.language or "")
-        text = evt.result.text.strip()
-        if not text:
-            return
-
-        if not detected_lg and self._opts.language:
-            detected_lg = LanguageCode(self._opts.language[0])
-
-        # TODO: @chenghao-mou get confidence from NBest with `detailed` output format
-        final_data = stt.SpeechData(
-            language=detected_lg,
-            confidence=1.0,
-            text=evt.result.text,
-            start_time=evt.result.offset / 10**7 + self.start_time_offset,
-            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
+        connection_id = uuid.uuid4().hex.upper()
+        headers = {"X-ConnectionId": connection_id}
+        if is_given(opts.speech_auth_token):
+            headers["Authorization"] = f"Bearer {opts.speech_auth_token}"
+        elif is_given(opts.speech_key):
+            headers["Ocp-Apim-Subscription-Key"] = opts.speech_key
+        return http.SocketTarget(
+            urlunsplit((scheme, parts.netloc, parts.path, urlencode(params), "")),
+            headers=headers,
+            request_id_header="X-RequestId",
         )
 
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self.send,
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
-                ),
+    def setup(self) -> list[str | bytes]:
+        self._sent = self._turn_start = 0.0
+        self._ended_turns.clear()
+        self._request_id = uuid.uuid4().hex.upper()
+        return [
+            _text("speech.config", self._request_id, json.dumps(_SPEECH_CONFIG)),
+            *self._turn(),
+        ]
+
+    def _turn(self) -> list[str | bytes]:
+        """A turn's speech.context and wave header, under the current request id."""
+        rate, channels = self._opts.sample_rate, self._opts.num_channels
+        wave = struct.pack(
+            "<4sI8sIHHIIHH4sI",
+            b"RIFF",
+            0,
+            b"WAVEfmt ",
+            16,
+            1,
+            channels,
+            rate,
+            rate * channels * 2,
+            channels * 2,
+            16,
+            b"data",
+            0,
+        )
+        return [
+            _text("speech.context", self._request_id, json.dumps(self._speech_context())),
+            _audio(self._request_id, wave, "audio/x-wav"),
+        ]
+
+    def _speech_context(self) -> dict[str, JsonValue]:
+        opts = self._opts
+        detection: dict[str, JsonValue] = {}
+        if self._universal:
+            detection["mode"] = "Conversation"
+        context: dict[str, JsonValue] = {"phraseDetection": detection}
+        if self._identifies_language:
+            context["languageId"] = {
+                "languages": list(opts.language),
+                "mode": "DetectContinuous",
+                "onSuccess": {"action": "Recognize"},
+                "onUnknown": {"action": "None"},
+                "priority": "PrioritizeLatency",
+            }
+            context["phraseOutput"] = {
+                "interimResults": {"resultType": "Auto"},
+                "phraseResults": {"resultType": "Always"},
+            }
+        else:
+            detection["language"] = opts.language[0]
+
+        segmentation: dict[str, JsonValue] = {}
+        if is_given(opts.segmentation_strategy):
+            strategy = opts.segmentation_strategy.lower()
+            segmentation["mode"] = {"time": "Custom", "semantic": "Semantic"}.get(
+                strategy, "Normal"
             )
+        if is_given(opts.segmentation_silence_timeout_ms):
+            segmentation["mode"] = "Custom"
+            segmentation["segmentationSilenceTimeoutMs"] = opts.segmentation_silence_timeout_ms
+        if is_given(opts.segmentation_max_time_ms):
+            segmentation["mode"] = "Custom"
+            segmentation["segmentationForcedTimeoutMs"] = opts.segmentation_max_time_ms
+        if segmentation:
+            detection["mode"] = "Conversation"
+            detection["conversation"] = {"segmentation": segmentation}
 
-    def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
-        detected_lg = LanguageCode(res.language or "")
-        text = evt.result.text.strip()
-        if not text:
-            return
+        enrichment: dict[str, JsonValue] = {}
+        if is_given(opts.profanity):
+            enrichment["profanity"] = opts.profanity.capitalize()
+        if opts.true_text_post_processing:
+            enrichment["conversation"] = {
+                "punctuationMode": "Implicit",
+                "disfluencyMode": "Removed",
+                "intermediatePunctuationMode": "Implicit",
+                "intermediatedisfluencymode": "Removed",
+            }
+        if enrichment:
+            detection["enrichment"] = enrichment
 
-        if not detected_lg and self._opts.language:
-            detected_lg = LanguageCode(self._opts.language[0])
+        if is_given(opts.phrase_list) and opts.phrase_list:
+            context["dgi"] = {
+                "groups": [{"type": "Generic", "items": [{"text": p} for p in opts.phrase_list]}],
+                "bias": 1.0,
+            }
+        return context
 
-        interim_data = stt.SpeechData(
-            language=detected_lg,
-            confidence=0.0,
-            text=evt.result.text,
-            start_time=evt.result.offset / 10**7 + self.start_time_offset,
-            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[str]:
+        if isinstance(item, rtc.AudioFrame):
+            self._sent += item.duration
+            return _audio(self._request_id, bytes(item.data))
+        if isinstance(item, http.EndOfInput):
+            # an empty audio message ends the audio: the service sends its last phrases, then
+            # turn.end
+            self._audio_ended = True
+            return _audio(self._request_id, b"")
+        return None
+
+    def decode(self, frame: bytes | str) -> _Hypothesis | _Phrase | _TurnEnd | None:
+        if isinstance(frame, bytes):
+            return None
+        head, separator, body = frame.partition("\r\n\r\n")
+        if not separator:
+            raise http.protocol_error(self, f"a message without a header block: {frame}")
+        headers = {
+            name.strip().lower(): value.strip()
+            for name, _, value in (line.partition(":") for line in head.split("\r\n") if line)
+        }
+        path = headers.get("path", "").lower()
+        if path not in _PATHS:
+            return None
+        try:
+            fields = _BODY.validate_json(body) if body.strip() else {}
+            return _MESSAGE.validate_python(
+                {**fields, "path": path, "request_id": headers.get("x-requestid", "")}
+            )
+        except ValidationError as e:
+            raise http.protocol_error(self, f"{e}; frame: {frame}") from e
+
+    def on_message(
+        self, message: _Hypothesis | _Phrase | _TurnEnd
+    ) -> stt.Transcript | http.Done | None:
+        if message["request_id"].upper() in self._ended_turns:
+            return None
+        if message["path"] == "turn.end":
+            if self._audio_ended:
+                return http.DONE
+            # the service ended the turn while audio still flows: the next turn starts here
+            self._ended_turns.add(self._request_id)
+            self._request_id = uuid.uuid4().hex.upper()
+            self._turn_start = self._sent
+            for frame in self._turn():
+                self.send_command(frame)
+            return None
+        if message["path"] == "speech.phrase":
+            status = message["RecognitionStatus"]
+            if status != "Success" and status not in _NO_MATCH:
+                raise APIError(
+                    f"Azure STT canceled the recognition: {status}",
+                    kind=_CANCEL_KINDS.get(status, "server"),
+                )
+            # a phrase that recognized nothing retracts the interim it follows
+            text = message.get("DisplayText", "") if status == "Success" else ""
+            return self._transcript(message, text, final=True)
+        if not message["Text"].strip():
+            return None
+        return self._transcript(message, message["Text"], final=False)
+
+    def _transcript(
+        self, message: _Hypothesis | _Phrase, text: str, *, final: bool
+    ) -> stt.Transcript:
+        start = self.start_time_offset + self._turn_start + message.get("Offset", 0) / _TICKS
+        detected = message.get("PrimaryLanguage", {"Language": ""})["Language"]
+        return stt.Transcript(
+            text if text.strip() else "",
+            LanguageCode(detected or self._opts.language[0]),
+            final=final,
+            request_id=self._request_id,
+            start_time=start,
+            end_time=start + message.get("Duration", 0) / _TICKS,
+            confidence=1.0 if final else 0.0,
         )
 
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self.send,
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[interim_data],
-                ),
-            )
 
-    def _on_speech_start(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        if self._speaking:
-            return
-
-        self._speaking = True
-
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self.send,
-                stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
-            )
-
-    def _on_speech_end(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        if not self._speaking:
-            return
-
-        self._speaking = False
-
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self.send,
-                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
-            )
-
-    def _on_session_started(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(self._session_started_event.set)
-
-    def _on_session_stopped(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(self._session_stopped_event.set)
-
-    def _on_canceled(self, evt: speechsdk.SpeechRecognitionCanceledEventArgs) -> None:
-        if evt.cancellation_details.reason == speechsdk.CancellationReason.Error:
-            # Azure does not always emit session_stopped after an error cancellation, so
-            # surface it here to wake _run; the base class then retries and can fall back.
-            self._cancellation_error = evt.cancellation_details
-            with contextlib.suppress(RuntimeError):
-                self._loop.call_soon_threadsafe(self._session_stopped_event.set)
+def _timestamp() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-# what a cancellation code says failed; any other code is a lost connection
-_CANCELLATION_KINDS: dict[speechsdk.CancellationErrorCode, ErrorKind] = {
-    speechsdk.CancellationErrorCode.AuthenticationFailure: "auth",
-    speechsdk.CancellationErrorCode.Forbidden: "auth",
-    speechsdk.CancellationErrorCode.BadRequest: "invalid_request",
-    speechsdk.CancellationErrorCode.TooManyRequests: "rate_limit",
-    speechsdk.CancellationErrorCode.ServiceError: "server",
-    speechsdk.CancellationErrorCode.ServiceUnavailable: "server",
-    speechsdk.CancellationErrorCode.ServiceTimeout: "timeout",
-}
-
-
-def _create_speech_recognizer(
-    *, config: STTOptions, stream: speechsdk.audio.AudioInputStream
-) -> speechsdk.SpeechRecognizer:
-    # let the SpeechConfig constructor to validate the arguments
-    speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key if is_given(config.speech_key) else None,
-        region=config.speech_region if is_given(config.speech_region) else None,
-        endpoint=config.speech_endpoint if is_given(config.speech_endpoint) else None,
-        host=config.speech_host if is_given(config.speech_host) else None,
-        auth_token=config.speech_auth_token if is_given(config.speech_auth_token) else None,
+def _text(path: str, request_id: str, body: str) -> str:
+    return (
+        f"Path: {path}\r\nX-RequestId: {request_id}\r\nX-Timestamp: {_timestamp()}\r\n"
+        f"Content-Type: application/json\r\n\r\n{body}"
     )
 
-    if config.segmentation_silence_timeout_ms:
-        speech_config.set_property(
-            speechsdk.enums.PropertyId.Speech_SegmentationSilenceTimeoutMs,
-            str(config.segmentation_silence_timeout_ms),
-        )
-    if config.segmentation_max_time_ms:
-        speech_config.set_property(
-            speechsdk.enums.PropertyId.Speech_SegmentationMaximumTimeMs,
-            str(config.segmentation_max_time_ms),
-        )
-    if config.segmentation_strategy:
-        speech_config.set_property(
-            speechsdk.enums.PropertyId.Speech_SegmentationStrategy,
-            str(config.segmentation_strategy),
-        )
-    if is_given(config.profanity):
-        speech_config.set_profanity(config.profanity)
 
-    # Set punctuation behavior if specified
-    if config.explicit_punctuation:
-        speech_config.set_service_property(
-            "punctuation", "explicit", speechsdk.ServicePropertyChannel.UriQueryParameter
-        )
-    if config.true_text_post_processing:
-        speech_config.set_property(
-            speechsdk.enums.PropertyId.SpeechServiceResponse_PostProcessingOption, "TrueText"
-        )
-
-    kwargs: dict[str, Any] = {}
-    if config.language and len(config.language) > 1:
-        # Enable Continuous LanguageCode ID for multiple languages
-        # This ensures language detection updates throughout the streaming session
-        speech_config.set_property(
-            speechsdk.PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous"
-        )
-        kwargs["auto_detect_source_language_config"] = (
-            speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=config.language)
-        )
-    elif config.language and len(config.language) == 1:
-        kwargs["language"] = config.language[0]
-
-    audio_config = speechsdk.audio.AudioConfig(stream=stream)
-    speech_recognizer = speechsdk.SpeechRecognizer(
-        speech_config=speech_config, audio_config=audio_config, **kwargs
-    )
-
-    # Add phrase list for keyword boosting if provided
-    if is_given(config.phrase_list) and isinstance(config.phrase_list, list) and config.phrase_list:
-        phrase_list_grammar = speechsdk.PhraseListGrammar.from_recognizer(speech_recognizer)
-        for phrase in config.phrase_list:
-            phrase_list_grammar.addPhrase(phrase)
-
-    return speech_recognizer
+def _audio(request_id: str, body: bytes, content_type: str | None = None) -> bytes:
+    """An audio message: a 2-byte header length, the header block, then the audio."""
+    headers = f"Path: audio\r\nX-RequestId: {request_id}\r\nX-Timestamp: {_timestamp()}\r\n"
+    if content_type is not None:
+        headers += f"Content-Type: {content_type}\r\n"
+    encoded = headers.encode("ascii")
+    return len(encoded).to_bytes(2, "big") + encoded + body

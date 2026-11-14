@@ -997,7 +997,7 @@ pub fn normalize_handler_output<'py>(
 /// [`::lk_agents_abi::a2a::remote::DelegationHost`] over a host `livekit.agents.a2a._Delegation`.
 #[derive(Clone)]
 pub struct DelegationHostProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl DelegationHostProxy {
@@ -1010,10 +1010,10 @@ impl DelegationHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -1023,7 +1023,7 @@ impl DelegationHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -1037,15 +1037,20 @@ impl DelegationHostProxy {
                 "a native `DelegationHost` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(DelegationHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(DelegationHostProxy { host })
     }
 }
 
@@ -1058,7 +1063,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
         extra: ::serde_json::Map<::std::string::String, ::serde_json::Value>,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let text_arg = text;
         let extra_arg = extra;
         let started = ::lk_agents_runtime::host::call(
@@ -1073,7 +1078,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
                     crate::py_values::extra_to_py(py, &extra_arg)?.into_any(),
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_progress")?,
+                    host.bind(py)?.getattr("_core_progress")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1101,7 +1106,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
         context: &::lk_agents_abi::invoke::CallContext,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DelegationHost._core_delegated",
@@ -1111,7 +1116,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_delegated")?,
+                    host.bind(py)?.getattr("_core_delegated")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1143,7 +1148,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
         'a,
         ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let question_arg = question;
         let verbatim_arg = verbatim;
         let started = ::lk_agents_runtime::host::call(
@@ -1158,7 +1163,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim_arg, py)?,
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_ask")?,
+                    host.bind(py)?.getattr("_core_ask")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1186,7 +1191,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
 /// [`::lk_agents_abi::a2a::turn::TurnHost`] over a host `livekit.agents.storage.session._TurnHost`.
 #[derive(Clone)]
 pub struct TurnHostProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
+    host: crate::py_objects::HostObject,
 }
 
 impl TurnHostProxy {
@@ -1199,10 +1204,10 @@ impl TurnHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
     pub fn in_context(
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
@@ -1212,7 +1217,7 @@ impl TurnHostProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
@@ -1224,15 +1229,20 @@ impl TurnHostProxy {
                 "a native `TurnHost` is shared, never handed over to be owned",
             ));
         }
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
     }
 
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
     ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
         let _ = context;
-        Ok(TurnHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(TurnHostProxy { host })
     }
 }
 
@@ -1250,7 +1260,7 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
-        let host = ::std::sync::Arc::clone(&self.host);
+        let host = ::std::clone::Clone::clone(&self.host);
         let ctx_arg = ::std::clone::Clone::clone(ctx);
         let turn_arg = turn;
         let started = ::lk_agents_runtime::host::call_cancellable(
@@ -1268,7 +1278,7 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
                     )?,
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_handle")?,
+                    host.bind(py)?.getattr("_core_handle")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

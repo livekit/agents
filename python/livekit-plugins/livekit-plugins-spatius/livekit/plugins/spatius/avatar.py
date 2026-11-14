@@ -17,7 +17,14 @@ from __future__ import annotations
 import json
 import math
 import os
+import secrets
+import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from typing import TypedDict
+
+from pydantic import TypeAdapter
 
 import livekit.rtc as rtc
 from livekit import api
@@ -27,32 +34,30 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     NotGivenOr,
-    create_api_error_from_http,
+    http,
     utils,
 )
 from livekit.agents.types import ErrorKind
 from livekit.agents.voice.avatar import AudioSegmentEnd, AvatarStart, ForwardingAvatarSession
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
-from spatius import (
-    AudioFormat,
-    AvatarSession as SpatiusSDKSession,
-    LiveKitEgressConfig,
-    OggOpusEncoderConfig,
-    new_avatar_session,
-)
-from spatius.errors import AvatarSDKError, AvatarSDKErrorCode
 
+from . import _ogg_opus, _proto
 from .log import logger
+from .version import __version__
 
 # "auto" resolves the ingress region via the Spatius bootstrap API, falling back
 # to us-west if resolution fails; set region/SPATIUS_REGION to pin a concrete region
 DEFAULT_REGION = "auto"
+_FALLBACK_REGION = "us-west"
+_BOOTSTRAP_URL = "https://global.spatialwalk.top/bootstrap"
+_REGION_TTL = 300.0
 DEFAULT_SAMPLE_RATE = 24000
-DEFAULT_AUDIO_FORMAT = AudioFormat.OGG_OPUS
 DEFAULT_OPUS_FRAME_DURATION_MS = 20
 DEFAULT_OPUS_APPLICATION = "audio"
-SUPPORTED_OPUS_SAMPLE_RATES = {8000, 12000, 16000, 24000, 48000}
+SUPPORTED_OPUS_SAMPLE_RATES = _ogg_opus.SAMPLE_RATES
 DEFAULT_SESSION_TTL = timedelta(hours=1)
+# a prefetched session token is reused until this long before it expires
+_TOKEN_MARGIN = timedelta(minutes=1)
 
 # the backend egress consumes this participant attribute to route the playback
 # lifecycle RPCs back to the dispatched LiveKit Agents participant
@@ -60,35 +65,144 @@ _LIVEKIT_AGENT_IDENTITY_ATTRIBUTE = "livekit_agent_identity"
 _RPC_PLAYBACK_STARTED = "lk.playback_started"
 _RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 
-_KINDS: dict[AvatarSDKErrorCode, ErrorKind] = {
-    AvatarSDKErrorCode.sessionTokenExpired: "auth",
-    AvatarSDKErrorCode.sessionTokenInvalid: "auth",
-    AvatarSDKErrorCode.appIDUnrecognized: "auth",
-    AvatarSDKErrorCode.appIDMismatch: "auth",
-    AvatarSDKErrorCode.avatarNotFound: "invalid_request",
-    AvatarSDKErrorCode.billingRequired: "quota",
-    AvatarSDKErrorCode.creditsExhausted: "quota",
-    AvatarSDKErrorCode.sessionDurationExceeded: "quota",
-    AvatarSDKErrorCode.unsupportedSampleRate: "invalid_request",
-    AvatarSDKErrorCode.invalidEgressConfig: "invalid_request",
-    AvatarSDKErrorCode.invalidRequest: "invalid_request",
-    AvatarSDKErrorCode.connectionFailed: "connection",
-    AvatarSDKErrorCode.connectionClosed: "connection",
-    AvatarSDKErrorCode.protocolError: "protocol",
+# what a server error code says failed: gRPC codes and Spatius' own
+_ERROR_KINDS: dict[int, ErrorKind] = {
+    3: "invalid_request",
+    16: "auth",
+    14: "server",
+    4001: "quota",
+    4002: "quota",
 }
 
 
-def _api_error(e: AvatarSDKError) -> APIError:
-    """The SDK's failure by its kind: an HTTP answer's status, else its code."""
-    if e.http_status is not None:
-        return create_api_error_from_http(
-            e.message, status=e.http_status, body=e.raw_body, kind=_KINDS.get(e.code)
-        )
-    return APIError(e.message, kind=_KINDS.get(e.code, "server"), detail=e.server_detail)
+class AudioFormat(StrEnum):
+    """The audio the avatar service receives."""
+
+    PCM_S16LE = "pcm_s16le"
+    """Raw mono 16-bit little-endian PCM."""
+    OGG_OPUS = "ogg_opus"
+    """One mono Ogg Opus stream per request, encoded by the plugin."""
+
+
+_PROTO_FORMATS = {AudioFormat.PCM_S16LE: 0, AudioFormat.OGG_OPUS: 1}
 
 
 class SpatiusException(Exception):
     """Exception raised for Spatius avatar integration errors."""
+
+
+class _Token(TypedDict):
+    sessionToken: str
+
+
+class _Region(TypedDict):
+    current: str
+
+
+class _Bootstrap(TypedDict):
+    region: _Region
+
+
+_TOKEN = TypeAdapter(_Token)
+_BOOTSTRAP = TypeAdapter(_Bootstrap)
+
+
+@dataclass
+class _CachedToken:
+    token: str
+    expire_at: datetime
+
+
+# process-wide, so a prewarm() at process start serves the jobs that follow
+_regions: dict[str, tuple[str, float]] = {}
+_tokens: dict[tuple[str, str, str], _CachedToken] = {}
+
+
+async def _endpoints(
+    *, app_id: str, region: str, console_url: str, ingress_url: str, conn_options: APIConnectOptions
+) -> tuple[str, str]:
+    """The console and ingress URLs: the explicit ones, else those of the region. Both explicit
+    need no region; one explicit composes the other from us-west."""
+    if console_url and ingress_url:
+        return console_url, ingress_url
+    if console_url or ingress_url:
+        region = _FALLBACK_REGION
+    else:
+        region = await _resolve_region(app_id, region, conn_options)
+    domain = "spatialwalk.top" if region.startswith("cn-") else "spatius.ai"
+    return (
+        console_url or f"https://console.{region}.{domain}/v1/console",
+        ingress_url or f"wss://api.{region}.{domain}/v2/driveningress",
+    )
+
+
+async def _resolve_region(app_id: str, region: str, conn_options: APIConnectOptions) -> str:
+    """A concrete region: ``auto`` asks the bootstrap API, cached for a while; a failure falls
+    back to the last region resolved, else us-west, and never raises."""
+    if region != DEFAULT_REGION:
+        return region
+    cached = _regions.get(app_id)
+    if cached is not None and time.monotonic() - cached[1] < _REGION_TTL:
+        return cached[0]
+    try:
+        async with http.http_session().post(
+            _BOOTSTRAP_URL,
+            json={
+                "app_id": app_id,
+                "sdk_version": __version__,
+                "region": DEFAULT_REGION,
+                "platform": "python",
+            },
+            conn_options=conn_options,
+        ) as response:
+            await response.raise_for_status()
+            current = _BOOTSTRAP.validate_json(await response.read())["region"]["current"]
+        if not current:
+            raise ValueError("the bootstrap answer names no region")
+    except (APIError, ValueError) as e:
+        fallback = cached[0] if cached is not None else _FALLBACK_REGION
+        logger.warning(f"Spatius region resolution failed, using {fallback}: {e}")
+        return fallback
+    _regions[app_id] = (current, time.monotonic())
+    return current
+
+
+async def _session_token(
+    *,
+    api_key: str,
+    app_id: str,
+    console_url: str,
+    conn_options: APIConnectOptions,
+    prefetch: bool = False,
+) -> str:
+    """A session token for the console's credentials: one prefetched and still fresh, else a
+    new one. A ``prefetch`` fetches one and keeps it for the sessions that follow."""
+    key = (api_key, app_id, console_url)
+    cached = _tokens.get(key)
+    if not prefetch and cached is not None:
+        if datetime.now(UTC) < cached.expire_at - _TOKEN_MARGIN:
+            return cached.token
+        del _tokens[key]
+    expire_at = datetime.now(UTC) + DEFAULT_SESSION_TTL
+    async with http.http_session().post(
+        console_url.rstrip("/") + "/session-tokens",
+        headers={"X-Api-Key": api_key},
+        json={"expireAt": int(expire_at.timestamp())},
+        conn_options=conn_options,
+    ) as response:
+        await response.raise_for_status()
+        token = _TOKEN.validate_json(await response.read())["sessionToken"]
+    if prefetch:
+        _tokens[key] = _CachedToken(token, expire_at)
+    return token
+
+
+def _server_error(message: _proto.ServerError) -> APIError:
+    return APIError(
+        f"Spatius avatar session error (server code {message['code']})",
+        kind=_ERROR_KINDS.get(message["code"], "server"),
+        detail=message["message"] or None,
+    )
 
 
 class AvatarSession(ForwardingAvatarSession):
@@ -138,7 +252,7 @@ class AvatarSession(ForwardingAvatarSession):
         self._api_key = _require(api_key, "SPATIUS_API_KEY", "api_key")
         self._app_id = _require(app_id, "SPATIUS_APP_ID", "app_id")
         self._avatar_id = _require(avatar_id, "SPATIUS_AVATAR_ID", "avatar_id")
-        self._region = str(_optional(region, "SPATIUS_REGION", DEFAULT_REGION))
+        self._region = str(_optional(region, "SPATIUS_REGION", DEFAULT_REGION)).strip()
         self._console_endpoint_url = str(
             _optional(console_endpoint_url, "SPATIUS_CONSOLE_ENDPOINT", "")
         )
@@ -153,27 +267,30 @@ class AvatarSession(ForwardingAvatarSession):
         if bitrate < 0:
             raise SpatiusException("bitrate must be greater than or equal to 0")
 
-        audio_format_value = _optional(audio_format, "SPATIUS_AUDIO_FORMAT", DEFAULT_AUDIO_FORMAT)
+        audio_format_value = _optional(audio_format, "SPATIUS_AUDIO_FORMAT", AudioFormat.OGG_OPUS)
         try:
             self._audio_format = AudioFormat(audio_format_value)
         except ValueError as e:
             raise SpatiusException(f"unsupported audio_format: {audio_format_value}") from e
+        if self._audio_format == AudioFormat.OGG_OPUS:
+            if opus_frame_duration_ms not in _ogg_opus.FRAME_DURATIONS_MS:
+                raise SpatiusException(
+                    f"unsupported opus_frame_duration_ms: {opus_frame_duration_ms}"
+                )
+            if opus_application not in _ogg_opus.APPLICATIONS:
+                raise SpatiusException(f"unsupported opus_application: {opus_application}")
 
         self._idle_timeout_seconds = idle_timeout_seconds
         self._sample_rate = int(sample_rate) if utils.is_given(sample_rate) else None
         self._bitrate = bitrate
         self._extra_params = dict(extra_params or {})
-        self._opus_encoder = (
-            OggOpusEncoderConfig(
-                frame_duration_ms=opus_frame_duration_ms,
-                application=opus_application,
-            )
-            if self._audio_format == AudioFormat.OGG_OPUS
-            else None
-        )
-        self._spatius_session: SpatiusSDKSession | None = None
-        # the SDK interrupts the last request it was sent
-        self._sent = False
+        self._opus_frame_duration_ms = opus_frame_duration_ms
+        self._opus_application = opus_application
+        self._ws: http.WebSocket | None = None
+        # the request being sent, its encoder, and the last request, which a clear interrupts
+        self._request: str | None = None
+        self._encoder: _ogg_opus.OggOpusEncoder | None = None
+        self._last_request: str | None = None
 
     @property
     def provider(self) -> str:
@@ -195,6 +312,20 @@ class AvatarSession(ForwardingAvatarSession):
             )
         self.sample_rate = sample_rate
 
+        console_url, ingress_url = await _endpoints(
+            app_id=self._app_id,
+            region=self._region,
+            console_url=self._console_endpoint_url,
+            ingress_url=self._ingress_endpoint_url,
+            conn_options=ctx.conn_options,
+        )
+        token = await _session_token(
+            api_key=self._api_key,
+            app_id=self._app_id,
+            console_url=console_url,
+            conn_options=ctx.conn_options,
+        )
+
         # the egress token joins the room as an agent, publishes the avatar tracks, and
         # publishes data so the worker can send the playback lifecycle RPCs
         egress_token = ctx.livekit_token(
@@ -208,73 +339,107 @@ class AvatarSession(ForwardingAvatarSession):
                 can_publish_sources=["camera", "microphone"],
             ),
         )
-        sdk = new_avatar_session(
-            api_key=self._api_key,
-            app_id=self._app_id,
-            avatar_id=self._avatar_id,
-            region=self._region,
-            console_endpoint_url=self._console_endpoint_url,
-            ingress_endpoint_url=self._ingress_endpoint_url,
-            expire_at=datetime.now(UTC) + DEFAULT_SESSION_TTL,
-            livekit_egress=LiveKitEgressConfig(
-                url=ctx.livekit_url,
-                api_token=egress_token,
-                room_name=ctx.room.name,
-                publisher_id=ctx.avatar_identity,
-                extra_attributes={
-                    ATTRIBUTE_PUBLISH_ON_BEHALF: ctx.agent_identity,
-                    _LIVEKIT_AGENT_IDENTITY_ATTRIBUTE: ctx.agent_identity,
-                },
-                idle_timeout=self._idle_timeout_seconds,
-            ),
-            sample_rate=sample_rate,
-            bitrate=self._bitrate,
-            audio_format=self._audio_format,
-            ogg_opus_encoder=self._opus_encoder,
-            extra_params=self._extra_params,
-            on_error=lambda e: logger.warning("Spatius avatar session error", exc_info=e),
+        scheme, _, rest = ingress_url.rstrip("/").partition("://")
+        scheme = {"http": "ws", "https": "wss"}.get(scheme, scheme)
+        ws = await http.http_session().ws_connect(
+            f"{scheme}://{rest}/websocket",
+            params={"id": self._avatar_id},
+            headers={"X-App-ID": self._app_id, "X-Session-Key": token},
+            conn_options=ctx.conn_options,
         )
         try:
-            await sdk.init()
-            connection_id = await sdk.start()
-        except AvatarSDKError as e:
-            await sdk.close()
-            raise _api_error(e) from e
+            await ws.send_bytes(
+                _proto.configure_session(
+                    sample_rate=sample_rate,
+                    bitrate=self._bitrate,
+                    audio_format=_PROTO_FORMATS[self._audio_format],
+                    extra_params=self._extra_params,
+                    url=ctx.livekit_url,
+                    api_token=egress_token,
+                    room_name=ctx.room.name,
+                    publisher_id=ctx.avatar_identity,
+                    extra_attributes={
+                        ATTRIBUTE_PUBLISH_ON_BEHALF: ctx.agent_identity,
+                        _LIVEKIT_AGENT_IDENTITY_ATTRIBUTE: ctx.agent_identity,
+                    },
+                    idle_timeout=self._idle_timeout_seconds,
+                )
+            )
+            confirmed = await self._read(ws, ctx.conn_options.read_timeout)
+            if confirmed["type"] == "error":
+                raise _server_error(confirmed)
+            if not confirmed["connection_id"]:
+                raise APIError("Spatius confirmed a session without its id", kind="protocol")
         except BaseException:
-            await sdk.close()
+            await ws.close()
             raise
-        self._spatius_session, self._sent = sdk, False
+        self._ws, self._request, self._encoder, self._last_request = ws, None, None, None
         participant = ctx.room.local_participant
         participant.register_rpc_method(_RPC_PLAYBACK_STARTED, self._on_playback_started_rpc)
         participant.register_rpc_method(_RPC_PLAYBACK_FINISHED, self._on_playback_finished_rpc)
-        return connection_id
+        return confirmed["connection_id"]
 
     async def end_session(self, session_id: str) -> None:
-        sdk, self._spatius_session = self._spatius_session, None
+        ws, self._ws = self._ws, None
         if self._room is not None:
             self._room.local_participant.unregister_rpc_method(_RPC_PLAYBACK_STARTED)
             self._room.local_participant.unregister_rpc_method(_RPC_PLAYBACK_FINISHED)
-        if sdk is not None:
-            await sdk.close()
+        if ws is not None:
+            await ws.close()
+
+    async def receive(self) -> None:
+        assert self._ws is not None
+        while True:
+            message = await self._read(self._ws, None)
+            if message["type"] == "error":
+                raise _server_error(message)
+
+    async def _read(
+        self, ws: http.WebSocket, timeout: float | None
+    ) -> _proto.ConfirmSession | _proto.ServerError:
+        """The next server message the plugin reads; a close fails by its code."""
+        while True:
+            msg = await ws.receive(timeout)
+            if msg.type is http.WebSocketMessageType.CLOSE:
+                raise ws.close_error("Spatius closed the avatar session")
+            if msg.type is not http.WebSocketMessageType.BINARY:
+                raise APIError("Spatius sent a text frame", kind="protocol", detail=msg.text)
+            try:
+                message = _proto.decode(msg.binary)
+            except ValueError as e:
+                raise APIError(
+                    "Spatius sent a malformed message", kind="protocol", detail=str(e)
+                ) from e
+            if message is not None:
+                return message
 
     async def forward(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
-        assert self._spatius_session is not None
-        try:
-            if isinstance(frame, rtc.AudioFrame):
-                await self._spatius_session.send_audio(audio=bytes(frame.data), end=False)
-            else:
-                await self._spatius_session.send_audio(audio=b"", end=True)
-        except AvatarSDKError as e:
-            raise _api_error(e) from e
-        self._sent = True
+        assert self._ws is not None
+        end = isinstance(frame, AudioSegmentEnd)
+        pcm = b"" if isinstance(frame, AudioSegmentEnd) else bytes(frame.data)
+        if self._request is None:
+            self._request = f"{datetime.now(UTC):%Y%m%d%H%M%S}_{secrets.token_urlsafe(9)}"
+            self._last_request = self._request
+        if self._audio_format == AudioFormat.OGG_OPUS:
+            if self._encoder is None:
+                self._encoder = _ogg_opus.OggOpusEncoder(
+                    sample_rate=self.sample_rate,
+                    bitrate=self._bitrate,
+                    frame_duration_ms=self._opus_frame_duration_ms,
+                    application=self._opus_application,
+                )
+            pcm = self._encoder.encode(pcm, end=end)
+            if not pcm and not end:
+                return
+        await self._ws.send_bytes(_proto.audio_input(self._request, pcm, end=end))
+        if end:
+            self._request = self._encoder = None
 
     async def clear(self) -> None:
-        if self._spatius_session is None or not self._sent:
+        if self._ws is None or self._last_request is None:
             return
-        try:
-            await self._spatius_session.interrupt()
-        except AvatarSDKError as e:
-            raise _api_error(e) from e
+        await self._ws.send_bytes(_proto.interrupt(self._last_request))
+        self._request = self._encoder = None
 
     def _on_playback_started_rpc(self, data: rtc.RpcInvocationData) -> str:
         if not self._is_avatar_caller(data, "playback-started"):

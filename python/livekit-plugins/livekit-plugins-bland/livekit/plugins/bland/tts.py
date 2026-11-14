@@ -220,8 +220,8 @@ class TTS(tts.TTS):
         if ws.closed:
             return
         try:
+            # the close handshake then waits for Bland to settle and close
             await ws.send_str(json.dumps({"type": "close"}))
-            await ws.receive(timeout=1.0)
         except Exception as e:
             logger.debug("Bland TTS close handshake skipped", extra={"error": str(e)})
         finally:

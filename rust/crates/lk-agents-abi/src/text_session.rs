@@ -314,6 +314,7 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
         max_depth: usize,
     ) -> Result<Self, Invalid>;
 
+    /// Runs the one request a runner serves; a second is refused.
     #[host(call)]
     fn run(&self, request: TextSessionRequest) -> Result<Self::Updates, Invalid>;
 

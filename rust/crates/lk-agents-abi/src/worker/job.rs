@@ -24,7 +24,7 @@ pub struct StartJob {
 /// the room connected beside the opening, before the remote session host starts on it. An avatar
 /// started for the job closes on its shutdown and removes its participant with the job's API
 /// credentials.
-#[crate::host(proxy(host = "livekit.agents.job.JobContext"))]
+#[crate::host(proxy(host = "livekit.agents.job.JobContext", owns))]
 pub trait SessionJob: Send + Sync {
     /// `JobContext.connect()`: the room connected, once however many callers; its `room_connect`
     /// opens under `trace` (the session's `session_start`).

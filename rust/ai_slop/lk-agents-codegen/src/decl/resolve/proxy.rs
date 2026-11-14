@@ -16,9 +16,10 @@ impl Resolver<'_> {
         voc::only(
             at,
             &proxy.nested,
-            &["host", "view", "base", "generic", "sdk", "events", "weak"],
+            &["host", "view", "base", "generic", "sdk", "events", "self_events", "owns"],
         )?;
-        let weak = voc::find(&proxy.nested, "weak").is_some();
+        let self_events = voc::find(&proxy.nested, "self_events").is_some();
+        let owns = voc::find(&proxy.nested, "owns").is_some();
         let host = voc::text(at, &proxy.nested, "host")?.ok_or_else(|| {
             format!("{at}: proxy(host = \"module.Class\") names the class it calls")
         })?;
@@ -67,8 +68,13 @@ impl Resolver<'_> {
         if methods.iter().filter(|m| m.kind == ProxyCall::Bind).count() > 1 {
             return Err(format!("{at}: a proxy binds one value"));
         }
-        if weak && methods.iter().any(|m| m.kind != ProxyCall::Notify) {
-            return Err(format!("{at}: a weak proxy carries events: every method is a `notify`"));
+        if self_events && (owns || methods.iter().any(|m| m.kind != ProxyCall::Notify)) {
+            return Err(format!(
+                "{at}: `self_events` are an object's own events: every method is a `notify`, never owned"
+            ));
+        }
+        if !owns && view.is_some() {
+            return Err(format!("{at}: a proxy calling a view `owns` the view it builds"));
         }
         let async_trait = tr
             .attrs
@@ -102,7 +108,8 @@ impl Resolver<'_> {
             methods,
             returned_context: false,
             returned_owned: false,
-            weak,
+            self_events,
+            owns,
         })
     }
 

@@ -14,9 +14,9 @@
 
 """Process warm-up helpers for the Spatius plugin.
 
-At session start the Spatius SDK resolves the ingress region through the global
+At session start the plugin resolves the ingress region through the global
 bootstrap API (when ``region="auto"``, the default) and exchanges the API key
-for a session token — two sequential HTTPS round trips on the room-join critical
+for a session token: two sequential HTTPS round trips on the room-join critical
 path. Calling ``prewarm`` at the module level of the agent file moves that work to process
 start, before a job is dispatched:
 
@@ -27,8 +27,8 @@ from livekit.plugins import spatius
 spatius.prewarm()
 ```
 
-The spatius SDK caches the resolved region and the session token process-wide,
-so ``AvatarSession.start()`` in the dispatched job reuses them. Warm-up is
+The resolved region and the session token are cached process-wide, so
+``AvatarSession.start()`` in the dispatched job reuses them. Warm-up is
 best-effort: failures are logged and never raised, so process initialization and
 the dispatch-time behavior are unaffected.
 """
@@ -38,28 +38,22 @@ from __future__ import annotations
 import asyncio
 import os
 
+from livekit.agents import APIConnectOptions, http
+
+from .avatar import DEFAULT_REGION, _endpoints, _session_token
 from .log import logger
 
-# keep in sync with the environment variables read by AvatarSession
-_ENV_API_KEY = "SPATIUS_API_KEY"
-_ENV_APP_ID = "SPATIUS_APP_ID"
-_ENV_REGION = "SPATIUS_REGION"
-_ENV_CONSOLE_ENDPOINT = "SPATIUS_CONSOLE_ENDPOINT"
-_ENV_INGRESS_ENDPOINT = "SPATIUS_INGRESS_ENDPOINT"
-
-# "auto" sentinel, mirrors spatius.session_config.DEFAULT_REGION_REQUEST
-_AUTO_REGION = "auto"
+# bounded below the worker's default 10-second process initialization timeout
+_OPTIONS = APIConnectOptions(max_retry=0, connect_timeout=2.0, read_timeout=2.0)
 
 
 def prewarm(*, prefetch_session_token: bool = True) -> None:
     """Warm Spatius connection state for this process.
 
     Call it at the module level of the agent file. Reads the same SPATIUS_*
-    environment variables as ``AvatarSession`` and delegates to
-    ``spatius.prewarm()``, which resolves and caches the ``auto`` region, warms
-    TLS to the console and ingress endpoints, and (by default) prefetches a
-    session token so the first ``AvatarSession.start()`` in this process skips
-    both HTTPS round trips.
+    environment variables as ``AvatarSession``, resolves and caches the ``auto``
+    region and (by default) prefetches a session token, so the first
+    ``AvatarSession.start()`` in this process skips both HTTPS round trips.
 
     Args:
         prefetch_session_token: Prefetch and cache a session token. Assumes the
@@ -69,41 +63,36 @@ def prewarm(*, prefetch_session_token: bool = True) -> None:
     Never raises; a failed warm-up just means the dispatch-time path resolves
     and fetches inline as usual.
     """
-    app_id = os.getenv(_ENV_APP_ID, "")
+    app_id = os.getenv("SPATIUS_APP_ID", "")
     if not app_id:
         return  # misconfiguration surfaces in the entrypoint instead
 
-    api_key = os.getenv(_ENV_API_KEY, "")
+    api_key = os.getenv("SPATIUS_API_KEY", "")
     if prefetch_session_token and not api_key:
         logger.warning("SPATIUS_API_KEY not set; skipping Spatius session-token prefetch")
         prefetch_session_token = False
 
-    import spatius
-
     try:
-        result = asyncio.run(
-            spatius.prewarm(
-                app_id=app_id,
-                api_key=api_key or None,
-                region=os.getenv(_ENV_REGION, _AUTO_REGION),
-                console_endpoint_url=os.getenv(_ENV_CONSOLE_ENDPOINT, ""),
-                ingress_endpoint_url=os.getenv(_ENV_INGRESS_ENDPOINT, ""),
-                prefetch_session_token=prefetch_session_token,
-                # Bound region resolution and token prefetch below the worker's
-                # default 10-second process initialization timeout.
-                timeout=4.0,
-            )
-        )
+        asyncio.run(_prewarm(app_id, api_key if prefetch_session_token else None))
     except Exception:
         # warm-up must never fail process initialization
         logger.warning("Spatius warm-up failed", exc_info=True)
-        return
 
-    logger.debug(
-        "Spatius warm-up finished",
-        extra={
-            "region": result.region,
-            "tls_warmed": result.tls_warmed,
-            "session_token_prefetched": result.session_token_prefetched,
-        },
-    )
+
+async def _prewarm(app_id: str, api_key: str | None) -> None:
+    async with http.open():
+        console_url, _ = await _endpoints(
+            app_id=app_id,
+            region=os.getenv("SPATIUS_REGION", DEFAULT_REGION).strip(),
+            console_url=os.getenv("SPATIUS_CONSOLE_ENDPOINT", ""),
+            ingress_url=os.getenv("SPATIUS_INGRESS_ENDPOINT", ""),
+            conn_options=_OPTIONS,
+        )
+        if api_key is not None:
+            await _session_token(
+                api_key=api_key,
+                app_id=app_id,
+                console_url=console_url,
+                conn_options=_OPTIONS,
+                prefetch=True,
+            )

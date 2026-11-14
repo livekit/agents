@@ -5,7 +5,7 @@ use crate::tts::types::Tts;
 
 /// A host `tokenize.SentenceTokenizer`: each synthesis splits its text by a fresh stream of it,
 /// opened on the host loop.
-#[crate::host(proxy(host = "livekit.agents.tokenize.SentenceTokenizer"))]
+#[crate::host(proxy(host = "livekit.agents.tokenize.SentenceTokenizer", owns))]
 pub trait HostSentenceTokenizer: Send + Sync {
     #[host(await)]
     fn stream(

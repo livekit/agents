@@ -32,12 +32,11 @@ the deployment; without them the server ignores the request.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import os
-from collections.abc import Callable
 from dataclasses import dataclass, replace
+from typing import Literal, TypedDict
 
 from pydantic import JsonValue
 
@@ -49,17 +48,14 @@ from livekit.agents import (
     LanguageCode,
     http,
     stt as stt_module,
-    utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from livekit.agents.utils import is_given
 
 from ._endpoint import resolve_endpoint
-from ._stt_response import TranscriptResponse, decode_transcript
+from ._stt_response import TranscriptResponse
 
 SAMPLE_RATE = 16000
-NUM_CHANNELS = 1
-_SAMPLES_PER_CHUNK = SAMPLE_RATE // 10  # 100 ms, matching the reference client
 
 # LanguageCode already maps most language *names* to codes ("English" -> "en");
 # these are the Qwen3-ASR languages it leaves untouched.
@@ -178,11 +174,6 @@ class Qwen3Backend:
             word_timestamps=word_timestamps,
         )
 
-    def _ensure_session(self) -> http.HttpSession:
-        if not self._session:
-            self._session = http.http_session()
-        return self._session
-
     def update_options(
         self,
         *,
@@ -217,7 +208,6 @@ class Qwen3Backend:
             opts.audio_language = language
         return Qwen3SpeechStream(
             stt=owner,
-            ensure_session=self._ensure_session,
             model_endpoint=self._model_endpoint,
             api_key=self._api_key,
             opts=opts,
@@ -255,165 +245,112 @@ class Qwen3Backend:
         )
 
 
-class Qwen3SpeechStream(stt_module.RecognizeStream):
+class _Append(TypedDict):
+    type: Literal["input_audio_buffer.append"]
+    audio: str
+
+
+class _Commit(TypedDict):
+    type: Literal["input_audio_buffer.commit"]
+
+
+class Qwen3SpeechStream(stt_module.SocketStream[TranscriptResponse, _Append | _Commit]):
     """A single recognition session: audio frames in, speech events out."""
+
+    # LiveKit resamples to SAMPLE_RATE; this only re-chunks into the ~100ms frames the server
+    # expects
+    frame_ms = 100
 
     def __init__(
         self,
         *,
         stt: stt_module.STT,
-        ensure_session: Callable[[], http.HttpSession],
         model_endpoint: str,
         api_key: str,
         opts: _STTOptions,
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
-        self._ensure_session = ensure_session
         self._model_endpoint = model_endpoint
         self._api_key = api_key
         self._opts = opts
+        # `end_input()` flushes *and then* ends the input: a commit right before the end makes
+        # the end's own commit a duplicate, which the server answers with an extra, empty turn
+        self._committed = False
 
-    async def _run(self) -> None:
-        ws = await self._ensure_session().ws_connect(
-            self._model_endpoint,
-            headers={"Authorization": f"Api-Key {self._api_key}"},
-            conn_options=self._conn_options,
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        return http.SocketTarget(
+            self._model_endpoint, headers={"Authorization": f"Api-Key {self._api_key}"}
         )
 
-        input_ended = asyncio.Event()
+    def setup(self) -> http.Encoded[_Append | _Commit]:
+        return json.dumps(self._opts.handshake())
 
-        async def _send() -> None:
-            # LiveKit resamples to SAMPLE_RATE for us; this only re-chunks into
-            # the ~100ms frames the server expects.
-            chunker = utils.media.AudioByteStream(
-                sample_rate=SAMPLE_RATE,
-                num_channels=NUM_CHANNELS,
-                samples_per_channel=_SAMPLES_PER_CHUNK,
+    def encode(
+        self, item: rtc.AudioFrame | stt_module.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_Append | _Commit]:
+        if isinstance(item, rtc.AudioFrame):
+            self._committed = False
+            return _Append(
+                type="input_audio_buffer.append", audio=base64.b64encode(item.data).decode()
             )
+        if isinstance(item, http.EndOfInput) and self._committed:
+            return None
+        self._committed = True
+        return _Commit(type="input_audio_buffer.commit")
 
-            async def append(frames: list[rtc.AudioFrame]) -> None:
-                for frame in frames:
-                    await ws.send_str(
-                        json.dumps(
-                            {
-                                "type": "input_audio_buffer.append",
-                                "audio": base64.b64encode(frame.data.tobytes()).decode(),
-                            }
-                        )
-                    )
+    def on_message(self, message: TranscriptResponse) -> stt_module.Transcript | http.Done | None:
+        msg_type = message.get("type", "transcription")
+        if msg_type == "error":
+            raise APIError(
+                "Baseten STT error",
+                kind="invalid_request",
+                body=dict(message),
+                detail=message.get("message", "unknown STT error"),
+            )
+        if msg_type != "transcription":
+            return None
 
-            # `end_input()` pushes a flush sentinel *and then* closes the channel,
-            # so this has to remember whether the last thing it did was commit —
-            # otherwise the trailing commit below doubles it and the server
-            # answers an extra, empty turn.
-            committed = False
-            try:
-                async for data in self.input:
-                    if isinstance(data, self.Flush):
-                        await append(chunker.flush())
-                        await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
-                        committed = True
-                    else:
-                        await append(chunker.push(data.data.tobytes()))
-                        committed = False
-                if not committed:
-                    await append(chunker.flush())
-                    await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
-            finally:
-                input_ended.set()
+        segments = message.get("segments") or []
+        text = " ".join(s.get("text", "") for s in segments).strip()
+        is_final = bool(message.get("is_final"))
+        # Only real words open a turn: an empty final (VAD closed on noise, the recognizer
+        # returned nothing) only ends the turn they opened.
+        if text or is_final:
+            self.report(self._transcript(message, text, final=is_final))
+        # Only the commit-triggered final ends the session; VAD finals just close a turn and
+        # the stream keeps going.
+        if is_final and message.get("is_end_of_audio_flush", False) and self.input.closed:
+            return http.DONE
+        return None
 
-        async def _recv() -> None:
-            speaking = False
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    if input_ended.is_set():
-                        return
-                    raise ws.close_error("Baseten closed the STT websocket")
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    continue
-
-                event = decode_transcript(msg.text)
-                if event.type == "error":
-                    raise APIError(
-                        "Baseten STT error",
-                        kind="invalid_request",
-                        body=msg.text,
-                        detail=event.message,
-                    )
-                if event.type != "transcription":
-                    continue
-
-                segments = event.segments or []
-                text = " ".join(s.text for s in segments).strip()
-                is_final = bool(event.is_final)
-
-                # Only real words open a turn. An empty final (VAD closed on
-                # noise, recognizer returned nothing) would otherwise emit
-                # START/END_OF_SPEECH and, under turn_detection="stt", commit
-                # the user's turn so the agent answers silence.
-                if not speaking and text:
-                    speaking = True
-                    self.send(
-                        stt_module.SpeechEvent(type=stt_module.SpeechEventType.START_OF_SPEECH)
-                    )
-
-                if text:
-                    self.send(
-                        stt_module.SpeechEvent(
-                            type=stt_module.SpeechEventType.FINAL_TRANSCRIPT
-                            if is_final
-                            else stt_module.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[self._speech_data(event, text)],
-                        )
-                    )
-
-                if is_final:
-                    if speaking:
-                        self.send(
-                            stt_module.SpeechEvent(type=stt_module.SpeechEventType.END_OF_SPEECH)
-                        )
-                        speaking = False
-                    # Only the commit-triggered final ends the session; VAD
-                    # finals just close a turn and the stream keeps going.
-                    if event.is_end_of_audio_flush and input_ended.is_set():
-                        return
-
-        try:
-            await ws.send_str(json.dumps(self._opts.handshake()))
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(
-                    tasks.spawn(_send(), name="qwen3-stt-send"),
-                    tasks.spawn(_recv(), name="qwen3-stt-recv"),
-                )
-        finally:
-            await ws.close()
-
-    def _speech_data(self, event: TranscriptResponse, text: str) -> stt_module.SpeechData:
-        segments = event.segments or []
+    def _transcript(
+        self, event: TranscriptResponse, text: str, *, final: bool
+    ) -> stt_module.Transcript:
+        segments = event.get("segments") or []
+        offset = self.start_time_offset
         words = None
         if self._opts.word_timestamps:
             words = [
                 TranscriptChunk(
-                    text=w.word,
-                    start_time=float(w.start_time) + self.start_time_offset,
-                    end_time=float(w.end_time) + self.start_time_offset,
-                    confidence=float(w.prob),
-                    start_time_offset=self.start_time_offset,
+                    text=w.get("word", ""),
+                    start_time=w.get("start_time", 0.0) + offset,
+                    end_time=w.get("end_time", 0.0) + offset,
+                    confidence=w.get("prob", 0.0),
+                    start_time_offset=offset,
                 )
                 for s in segments
-                for w in (s.word_timestamps or [])
+                for w in (s.get("word_timestamps") or [])
             ] or None
 
-        return stt_module.SpeechData(
-            language=_language_code(event.language_code),
-            text=text,
-            # Server times are socket-relative; the framework grows
-            # start_time_offset on every reconnect so consumers see one timeline.
-            start_time=(float(segments[0].start_time) if segments else 0.0)
-            + self.start_time_offset,
-            end_time=(float(segments[-1].end_time) if segments else 0.0) + self.start_time_offset,
+        return stt_module.Transcript(
+            text,
+            _language_code(event.get("language_code")),
+            final=final,
+            # Server times are socket-relative; the framework grows start_time_offset on every
+            # reconnect so consumers see one timeline.
+            start_time=(segments[0].get("start_time", 0.0) if segments else 0.0) + offset,
+            end_time=(segments[-1].get("end_time", 0.0) if segments else 0.0) + offset,
             confidence=1.0,
             words=words,
         )

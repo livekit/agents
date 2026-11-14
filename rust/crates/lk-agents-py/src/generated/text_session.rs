@@ -65,6 +65,7 @@ impl TextSessionRunner {
         ::pyo3::PyResult::Ok(TextSessionRunner(::std::sync::Arc::new(out)))
     }
 
+    /// Runs the one request a runner serves; a second is refused.
     #[pyo3(signature = (request))]
     fn run(&self, py: Python<'_>, request: Bound<'_, PyAny>) -> PyResult<TextSessionUpdates> {
         crate::py_calls::check_pid()?;

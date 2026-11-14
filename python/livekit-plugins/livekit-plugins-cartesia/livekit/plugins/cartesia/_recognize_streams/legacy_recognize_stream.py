@@ -14,117 +14,63 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
-from typing import TYPE_CHECKING
+from typing import Annotated, Literal, NotRequired, TypedDict
 from urllib.parse import urlencode
 
+from pydantic import Field
+
 from livekit import rtc
-from livekit.agents import (
-    APIConnectionError,
-    APIStatusError,
-    LanguageCode,
-    http,
-    stt,
-    utils,
-)
-from livekit.agents.types import NOT_GIVEN, TranscriptChunk
+from livekit.agents import APIConnectOptions, APIStatusError, LanguageCode, http, stt, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 
-from ..constants import (
-    API_AUTH_HEADER,
-    API_VERSION,
-    API_VERSION_HEADER,
-    AUDIO_ENCODING,
-    REQUEST_ID_HEADER,
-    USER_AGENT,
-)
+from ..constants import API_AUTH_HEADER, API_VERSION, API_VERSION_HEADER, AUDIO_ENCODING, USER_AGENT
 from ..log import logger
-from .cartesia_recognize_stream import CartesiaRecognizeStream
+from ..models import STTLanguages, STTModels
 
-if TYPE_CHECKING:
-    from typing import Literal, NotRequired
 
-    from typing_extensions import TypedDict
+class STTWord(TypedDict):
+    """Word-level timestamp from Cartesia STT, in seconds."""
 
-    from livekit.agents import APIConnectOptions
-    from livekit.agents.types import NotGivenOr
+    word: NotRequired[str]
+    start: NotRequired[float]
+    end: NotRequired[float]
 
-    from ..models import STTLanguages, STTModels
 
-    class STTWord(TypedDict):
-        """Word-level timestamp from Cartesia STT.
+class STTTranscriptEvent(TypedDict):
+    """Transcript chunk for the current connection.
 
-        Attributes:
-            word: The transcribed word.
-            start: Start time in seconds.
-            end: End time in seconds.
-        """
+    Each event is a delta from the last chunk with ``is_final=True``, not the
+    cumulative transcript.
+    """
 
-        word: str
-        start: float
-        end: float
+    type: Literal["transcript"]
+    is_final: bool
+    text: str
+    request_id: NotRequired[str]
+    duration: NotRequired[float]
+    words: NotRequired[list[STTWord]]
 
-    class STTTranscriptEvent(TypedDict):
-        """Transcript chunk for the current connection.
 
-        Each event is a delta from the last chunk with ``is_final=True``, not the
-        cumulative transcript.
+class STTAckEvent(TypedDict):
+    """Acknowledgment of ``finalize`` (``flush_done``) or ``close`` (``done``)."""
 
-        Attributes:
-            type: Event discriminator.
-            is_final: Whether ``text`` is finalized.
-            request_id: Unique identifier for this WebSocket connection.
-            text: Transcribed text delta.
-            duration: Duration of the audio in seconds.
-            words: Optional word-level timestamps.
-        """
+    type: Literal["flush_done", "done"]
+    request_id: NotRequired[str]
 
-        type: Literal["transcript"]
-        is_final: bool
-        request_id: str
-        text: str
-        duration: NotRequired[float]
-        words: NotRequired[list[STTWord]]
 
-    class STTFlushDoneEvent(TypedDict):
-        """Acknowledgment for the ``finalize`` command.
+class STTErrorEvent(TypedDict):
+    """Error event sent by the server; ``code`` is HTTP-style."""
 
-        Attributes:
-            type: Event discriminator.
-            request_id: Unique identifier for this WebSocket connection.
-        """
+    type: Literal["error"]
+    code: NotRequired[int]
+    message: NotRequired[str]
+    request_id: NotRequired[str]
 
-        type: Literal["flush_done"]
-        request_id: str
 
-    class STTDoneEvent(TypedDict):
-        """Acknowledgment for the ``close`` command; session is closing.
-
-        Attributes:
-            type: Event discriminator.
-            request_id: Unique identifier for this WebSocket connection.
-        """
-
-        type: Literal["done"]
-        request_id: str
-
-    class STTErrorEvent(TypedDict):
-        """Error event sent by the server.
-
-        Attributes:
-            type: Event discriminator.
-            code: HTTP-style status code; values >= 500 are treated as retryable.
-            message: Human-readable error message.
-            request_id: Unique identifier for this WebSocket connection.
-        """
-
-        type: Literal["error"]
-        code: NotRequired[int]
-        message: NotRequired[str]
-        request_id: NotRequired[str]
-
-    STTEventMessage = STTTranscriptEvent | STTFlushDoneEvent | STTDoneEvent | STTErrorEvent
-    """Server-sent message on the ``/stt/websocket`` endpoint."""
+STTEventMessage = Annotated[
+    STTTranscriptEvent | STTAckEvent | STTErrorEvent, Field(discriminator="type")
+]
+"""Server-sent message on the ``/stt/websocket`` endpoint."""
 
 
 def _get_api_language_param_from_language_code(language_code: LanguageCode) -> str:
@@ -132,12 +78,14 @@ def _get_api_language_param_from_language_code(language_code: LanguageCode) -> s
     return language_code.language
 
 
-class LegacyRecognizeStream(CartesiaRecognizeStream):
+class LegacyRecognizeStream(stt.SocketStream[STTEventMessage, None]):
     """Cartesia STT stream implementation for ``ink-whisper``.
 
     See also:
         https://docs.cartesia.ai/api-reference/stt/stt
     """
+
+    goodbye = "close"
 
     def __init__(
         self,
@@ -149,102 +97,20 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         model: STTModels | str,
         api_key: str,
         ws_base_url: str,
-        session: http.HttpSession,
         language: LanguageCode | None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
+        self.frame_ms = audio_chunk_duration_ms
         self._sample_rate = sample_rate
-        self._audio_chunk_duration_ms = audio_chunk_duration_ms
         self._model = model
         self._api_key = api_key
         self._ws_base_url = ws_base_url
-        self._session = session
         self._language = language
         self._request_id = ""
-        self._reconnect_event = asyncio.Event()
-        self._speaking = False
         self._last_speech_end_time: float = 0
 
-    async def _run(self) -> None:
-        if self.input.closed:
-            return
-
-        closing_ws = False
-        # Reset per-connection state so a transport-error retry (a new _run
-        # invocation by the base class) starts fresh.
-        self._speaking = False
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
         self._last_speech_end_time = 0
-
-        async def send_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-
-            samples_per_chunk = self._sample_rate * self._audio_chunk_duration_ms // 1000
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_per_chunk,
-            )
-
-            try:
-                async for data in self.input:
-                    frames: list[rtc.AudioFrame | LegacyRecognizeStream.Flush] = []
-                    if isinstance(data, rtc.AudioFrame):
-                        frames.extend(audio_bstream.push(data.data.tobytes()))
-                    else:
-                        frames.extend(audio_bstream.flush())
-                        frames.append(data)
-
-                    for frame in frames:
-                        if isinstance(frame, self.Flush):
-                            await ws.send_str("finalize")
-                        else:
-                            await ws.send_bytes(frame.data.tobytes())
-
-                for frame in audio_bstream.flush():
-                    await ws.send_bytes(frame.data.tobytes())
-
-                closing_ws = True
-                await ws.send_str("close")
-            except APIConnectionError as e:
-                if closing_ws or self._session.closed:
-                    return
-                raise APIConnectionError(
-                    message="Cartesia STT connection closed unexpectedly"
-                ) from e
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    if closing_ws or self._session.closed:
-                        return
-                    raise ws.close_error("Cartesia STT connection closed unexpectedly")
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected Cartesia STT message type %s", msg.type)
-                    continue
-
-                data: STTEventMessage = json.loads(msg.data)
-                self._process_stream_event(data)
-
-        ws: http.WebSocket | None = None
-
-        while True:
-            try:
-                ws = await self._connect_ws()
-                async with utils.aio.TaskSet() as tasks:
-                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-                    reconnect = tasks.spawn(self._reconnect_event.wait())
-                    if await tasks.first_completed(io, reconnect) is not reconnect:
-                        break
-
-                    self._reconnect_event.clear()
-            finally:
-                if ws is not None:
-                    await ws.close()
-
-    async def _connect_ws(self) -> http.WebSocket:
         params = {
             "model": self._model,
             "sample_rate": str(self._sample_rate),
@@ -256,113 +122,72 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 language_code=self._language
             )
 
-        ws_url = f"{self._ws_base_url}/stt/websocket?{urlencode(params)}"
-
-        ws = await self._session.ws_connect(
-            ws_url,
+        return http.SocketTarget(
+            f"{self._ws_base_url}/stt/websocket?{urlencode(params)}",
             headers={
                 API_VERSION_HEADER: API_VERSION,
                 API_AUTH_HEADER: self._api_key,
                 "User-Agent": USER_AGENT,
             },
-            conn_options=self._conn_options,
-            heartbeat=30,
         )
-        self._request_id = ws.headers.get(REQUEST_ID_HEADER) or ""
-        logger.debug(
-            "Established new Cartesia STT WebSocket connection",
-            extra={"cartesia_request_id": self._request_id},
-        )
-        return ws
 
-    def _process_stream_event(self, data: STTEventMessage) -> None:
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[None]:
+        if isinstance(item, rtc.AudioFrame):
+            return bytes(item.data)
+        if isinstance(item, stt.RecognizeStream.Flush):
+            return "finalize"
+        return None
+
+    def on_message(self, message: STTEventMessage) -> stt.Report | None:
         """Process incoming WebSocket messages.
 
         See https://docs.cartesia.ai/api-reference/stt/stt.
         """
-        if request_id := data.get("request_id"):
+        if request_id := message.get("request_id"):
             self._request_id = request_id
 
-        if data["type"] == "transcript":
-            if self.closed:
-                return
-
-            text = data["text"]
-            words = data.get("words", [])
-            timed_words: list[TranscriptChunk] = [
-                TranscriptChunk(
-                    text=word.get("word", ""),
-                    start_time=word.get("start", 0) + self.start_time_offset,
-                    end_time=word.get("end", 0) + self.start_time_offset,
-                    start_time_offset=self.start_time_offset,
-                )
-                for word in words
-            ]
-            # word timestamps are often within the audio window, so we track time separately
-            if self._last_speech_end_time == 0.0:
-                self._last_speech_end_time = self.start_time_offset
-            start_time = self._last_speech_end_time
-            end_time = start_time + data.get("duration", 0)
-            self._last_speech_end_time = end_time
-            is_final = data["is_final"]
-
-            if not text and not is_final:
-                return
-
-            # we don't have a super accurate way of detecting when speech started.
-            # this is typically the job of the VAD, but perfoming it here just in case something's
-            # relying on STT to perform this task.
-            if not self._speaking:
-                self._speaking = True
-                start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                self.send(start_event)
-
-            speech_data = stt.SpeechData(
-                language=self._language or LanguageCode("en"),
-                start_time=start_time,
-                end_time=end_time,
-                text=text,
-                words=timed_words,
-            )
-
-            if is_final:
-                event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=self._request_id,
-                    alternatives=[speech_data],
-                )
-                self.send(event)
-
-                if self._speaking:
-                    self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    self.send(end_event)
-            else:
-                event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    request_id=self._request_id,
-                    alternatives=[speech_data],
-                )
-                self.send(event)
-
-        elif data["type"] == "flush_done":
+        if message["type"] == "flush_done":
             logger.debug("Received flush_done acknowledgment from Cartesia STT")
-
-        elif data["type"] == "done":
+            return None
+        if message["type"] == "done":
             logger.debug("Received done acknowledgment from Cartesia STT - session closing")
-
-        elif data["type"] == "error":
+            return None
+        if message["type"] == "error":
             # an HTTP-style status: a 5xx is retried, a rejected request is not
             raise APIStatusError(
                 "Cartesia STT returned an error",
-                status_code=data.get("code") or 500,
-                body=data,
-                detail=data.get("message"),
+                status_code=message.get("code") or 500,
+                body=dict(message),
+                detail=message.get("message"),
             )
-        else:
-            logger.warning(
-                "received unexpected message from Cartesia STT", extra={"lk.pii.data": data}
-            )
+
+        offset = self.start_time_offset
+        # word timestamps are often within the audio window, so we track time separately
+        if self._last_speech_end_time == 0.0:
+            self._last_speech_end_time = offset
+        start_time = self._last_speech_end_time
+        end_time = start_time + message.get("duration", 0)
+        self._last_speech_end_time = end_time
+
+        return stt.Transcript(
+            message["text"],
+            self._language or LanguageCode("en"),
+            final=message["is_final"],
+            request_id=self._request_id,
+            start_time=start_time,
+            end_time=end_time,
+            words=[
+                TranscriptChunk(
+                    text=word.get("word", ""),
+                    start_time=word.get("start", 0) + offset,
+                    end_time=word.get("end", 0) + offset,
+                    start_time_offset=offset,
+                )
+                for word in message.get("words", [])
+            ],
+        )
 
     def update_options(
         self,
@@ -389,4 +214,4 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             self._language = language_code
 
             if current_api_language_param != api_language_param:
-                self._reconnect_event.set()
+                self.reconnect("language changed")

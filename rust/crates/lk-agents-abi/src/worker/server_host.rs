@@ -87,7 +87,7 @@ pub struct EndpointRoute {
 
 /// What the server runtime asks of the host, on the host's loop: the job processes' launcher and
 /// the user's callbacks. The runtime owns the process pool and every job decision.
-#[crate::host(proxy(host = "livekit.agents.worker._ServerCallbacks"))]
+#[crate::host(proxy(host = "livekit.agents.worker._ServerCallbacks", owns))]
 pub trait ServerHost: Send + Sync {
     /// The user's `load_fnc`, asked only when there is one.
     #[host(await, name = "_core_load")]

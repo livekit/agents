@@ -6,7 +6,6 @@ import base64
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
 
 import pytest
 from aiohttp import web
@@ -33,8 +32,8 @@ class Respeecher:
 
 
 @pytest.fixture
-async def respeecher(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Respeecher]:
-    """A local Respeecher behind a TLS terminator: answers each sentence with audio, then done.
+async def respeecher() -> AsyncIterator[Respeecher]:
+    """A local Respeecher: answers each sentence with audio, then done.
 
     ``opened``/``closed`` list the model path of each socket; ``requests`` the path and headers.
     """
@@ -55,15 +54,8 @@ async def respeecher(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Respeeche
 
     app = web.Application()
     app.router.add_get("/{model:.*}/tts/websocket", speak)
-    async with TestServer(app) as server, http.open() as session:
-        connect = session.ws_connect
-
-        # Any: ws_connect's keyword options, forwarded untouched
-        async def local_tls_terminator(url: str, **kwargs: Any) -> http.WebSocket:
-            return await connect(url.replace("wss://", "ws://", 1), **kwargs)
-
-        monkeypatch.setattr(session, "ws_connect", local_tls_terminator)
-        peer.base_url = str(server.make_url("")).replace("http://", "https://").rstrip("/")
+    async with TestServer(app) as server, http.open():
+        peer.base_url = str(server.make_url("")).rstrip("/")
         yield peer
 
 

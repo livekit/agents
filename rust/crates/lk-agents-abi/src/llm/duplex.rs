@@ -6,7 +6,7 @@ use crate::llm::realtime::Event;
 use crate::{AudioFrame, ChatItem, ToolChoice};
 
 /// Decides which frames of the model's output carry speech worth playing.
-#[crate::host(proxy(host = "livekit.agents.llm.AudioGate"))]
+#[crate::host(proxy(host = "livekit.agents.llm.AudioGate", owns))]
 pub trait AudioGate: Send + Sync {
     /// True while the frame belongs to an open burst of output.
     #[host(call)]
@@ -202,7 +202,7 @@ pub trait DuplexInput: Send + Sync + Sized + 'static {
 }
 
 /// A plugin's `DuplexModel`, as the engine opens sessions on it.
-#[crate::host(proxy(host = "livekit.agents.llm.duplex.DuplexModel"))]
+#[crate::host(proxy(host = "livekit.agents.llm.duplex.DuplexModel", owns))]
 pub trait DuplexHost: Send + Sync {
     #[host(call, getter = "label")]
     fn label(&self) -> Result<String, HostError>;
@@ -226,7 +226,7 @@ pub trait DuplexHost: Send + Sync {
 /// A plugin's `DuplexSession`: the engine feeds its input, applies the updates one after the other
 /// and pulls the output audio and the events. `_bindings._DuplexSession` holds the plugin's session
 /// as `plugin` and the events its callbacks report as `events`.
-#[crate::host(proxy(host = "livekit.agents._bindings._DuplexSession"))]
+#[crate::host(proxy(host = "livekit.agents._bindings._DuplexSession", owns))]
 pub trait DuplexSession: Send + Sync {
     /// The input the plugin pulls the caller's audio from.
     #[host(read_once, getter = "plugin._input")]
@@ -299,7 +299,7 @@ pub trait DuplexSession: Send + Sync {
 }
 
 /// The adapter's own gate (`gate=`): called once per session, in place of the model's.
-#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait AudioGateFactory: Send + Sync {
     #[host(call, name = "__call__")]
     fn create(&self) -> Result<Arc<dyn AudioGate>, HostError>;

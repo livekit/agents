@@ -86,6 +86,8 @@ if TYPE_CHECKING:
     from ..storage import Thread
     from ..storage.context import ContextStore, _SessionBinding
     from ..storage.session_state import BoundContext
+    from ._session_bindings import SessionHost
+    from ._session_callbacks import _AgentHooks
     from .amd import AMD
     from .io import TurnHandlingOptions
 
@@ -102,6 +104,9 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     _conn_options: SessionConnectOptions
     _options: _core.SessionOptions
     _native: _core._core_SessionOwner
+    # the native owner holds these weakly: they reach the session, which owns it
+    _host: SessionHost | None
+    _hooks: _AgentHooks | None
     _stt_context: STTContextOptions | None
     _llm: llm.LLM | llm.RealtimeModel | None
     _tools: list[llm.Tool | llm.Toolset]
@@ -324,7 +329,10 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         from ..telemetry import _context
         from ._session_bindings import SessionHost
 
-        host = SessionHost(self, agent, room, room_options, chat_ctx)
+        # a start joining one already under way runs on that start's host
+        if self._host is None:
+            self._host = SessionHost(self, agent, room, room_options, chat_ctx)
+        host = self._host
         ctx = get_job_context(required=False)
         job = (
             SessionJobInfo(

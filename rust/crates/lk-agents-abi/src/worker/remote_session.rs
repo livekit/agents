@@ -142,7 +142,7 @@ pub enum WireEvent {
 /// `AgentSession` become (`voice/remote_session.py`'s `RemoteSessionAccess`). An `Err` is a host
 /// failure (answered `"internal error"`), except input and simulation errors, which become the
 /// response's `error` verbatim. Its `session` is the `VoiceSession`, read on the session's loop.
-#[crate::host(proxy(host = "livekit.agents.voice._session_bindings.RemoteSessionAccess"))]
+#[crate::host(proxy(host = "livekit.agents.voice._session_bindings.RemoteSessionAccess", owns))]
 pub trait SessionPort: Send + Sync {
     /// `session.history.items`.
     #[host(await, getter = "session.history.items")]

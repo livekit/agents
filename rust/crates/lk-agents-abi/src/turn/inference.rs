@@ -8,14 +8,14 @@ use crate::{ApiConnectOptions, AudioFrame, EotPrediction};
 
 /// The host's mini model factory (`livekit.local_inference.EOT`), called when a stream mounts the
 /// mini model. Never called when the model is native.
-#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait EotModelFactory: Send + Sync {
     #[host(call, name = "__call__")]
     fn create(&self) -> Result<Arc<dyn EotModel>, HostError>;
 }
 
 /// One host mini model, called from a blocking thread.
-#[crate::host(proxy(host = "livekit.local_inference.EOT"))]
+#[crate::host(proxy(host = "livekit.local_inference.EOT", owns))]
 pub trait EotModel: Send + Sync {
     /// The end-of-turn probability of 16 kHz mono samples.
     #[host(call)]
@@ -23,7 +23,7 @@ pub trait EotModel: Send + Sync {
 }
 
 /// Hears each prediction's metrics (`TurnDetector.emit("metrics_collected", ..)`).
-#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait EotMetricsObserver: Send + Sync {
     #[host(call, name = "__call__")]
     fn collected(&self, metrics: EotInferenceMetrics) -> Result<(), HostError>;

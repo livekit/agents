@@ -14,44 +14,60 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
-from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Annotated, Literal, NotRequired, TypedDict
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field
 
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    APIError,
-    http,
-    redacted_cause,
-    tts,
-    utils,
-)
+from livekit.agents import APIConnectOptions, APIError, http, tts
 from livekit.agents.voice.io import TranscriptChunk
 
-from ._pool_manager import PoolManager
 from ._stream_tts import StreamTTS
-from .log import logger
 
-NUM_CHANNELS = 1
-
-_Pool = utils.ConnectionPool[http.WebSocket]
+# Rime's WS3 socket: each segment is one context, ended by a flush. Each message declares only
+# the fields read.
 
 
-class WordTimestamps(BaseModel):
-    words: list[str] = Field(default_factory=list[str])
-    start: list[float] = Field(default_factory=list[float])
-    end: list[float] = Field(default_factory=list[float])
+class _WordTimestamps(TypedDict):
+    words: list[str]
+    start: list[float]
+    end: list[float]
 
 
-class Response(BaseModel):
-    type: str
-    data: str = ""
-    word_timestamps: WordTimestamps | None = None
+class _Chunk(TypedDict):
+    type: Literal["chunk"]
+    contextId: str
+    data: str
+
+
+class _Timestamps(TypedDict):
+    type: Literal["timestamps"]
+    contextId: str
+    word_timestamps: NotRequired[_WordTimestamps | None]
+
+
+class _Done(TypedDict):
+    type: Literal["done"]
+    contextId: str
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    contextId: NotRequired[str]
+
+
+_Message = Annotated[_Chunk | _Timestamps | _Done | _Error, Field(discriminator="type")]
+
+
+class _Text(TypedDict):
+    text: str
+    contextId: str
+
+
+class _Flush(TypedDict):
+    operation: Literal["flush"]
+    contextId: str
 
 
 @dataclass(frozen=True)
@@ -61,53 +77,26 @@ class LegacySynthesisOptions:
     sample_rate: int
 
 
-class LegacyWebSocketAdapter:
-    """Own endpoint-bound pools and immutable options for legacy WS3 streams."""
+class LegacyWebSocketAdapter(http.Multiplexer[_Message, _Text | _Flush]):
+    """Rime WS3 sockets bound to one endpoint, one stream at a time each."""
 
-    def __init__(
-        self,
-        *,
-        websocket_url: str,
-        api_key: str,
-        ensure_session: Callable[[], http.HttpSession],
-    ) -> None:
+    max_session_duration = 300
+    max_contexts = 1
+
+    def __init__(self, *, websocket_url: str, api_key: str) -> None:
         self._websocket_url = websocket_url
         self._api_key = api_key
-        self._ensure_session = ensure_session
-        self._pools = PoolManager(self._new_pool())
 
-    def _new_pool(self) -> _Pool:
-        websocket_url = self._websocket_url
-
-        async def _connect(conn_options: APIConnectOptions) -> http.WebSocket:
-            return await self._connect(websocket_url=websocket_url, conn_options=conn_options)
-
-        return utils.ConnectionPool[http.WebSocket](
-            connect_cb=_connect,
-            close_cb=self._close,
-            max_session_duration=300,
-            mark_refreshed_on_get=True,
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        return http.SocketTarget(
+            self._websocket_url, headers={"Authorization": f"Bearer {self._api_key}"}
         )
 
-    async def _connect(
-        self, *, websocket_url: str, conn_options: APIConnectOptions
-    ) -> http.WebSocket:
-        return await self._ensure_session().ws_connect(
-            websocket_url,
-            headers={"Authorization": f"Bearer {self._api_key}"},
-            conn_options=conn_options,
-        )
-
-    async def _close(self, websocket: http.WebSocket) -> None:
-        try:
-            await websocket.send_str(json.dumps({"operation": "eos"}))
-        except Exception as error:
-            logger.warning(
-                "error during Rime WebSocket close sequence",
-                extra={"exception_type": type(error).__name__},
-            )
-        finally:
-            await websocket.close()
+    def route(self, message: _Chunk | _Timestamps | _Done | _Error) -> str:
+        if "contextId" not in message:
+            # an error naming no context fails every stream on the socket
+            raise _error()
+        return message["contextId"]
 
     def stream(
         self,
@@ -118,133 +107,60 @@ class LegacyWebSocketAdapter:
     ) -> _LegacyWebSocketSynthesizeStream:
         if options.websocket_url != self._websocket_url:
             raise RuntimeError("Rime WS3 stream options do not match the active endpoint")
-
-        pool = self._pools.current
-        stream = _LegacyWebSocketSynthesizeStream(
-            tts_instance=tts_instance,
-            pool=pool,
-            pool_manager=self._pools,
-            options=options,
-            conn_options=conn_options,
+        return _LegacyWebSocketSynthesizeStream(
+            tts_instance=tts_instance, mux=self, options=options, conn_options=conn_options
         )
-        return stream
-
-    def prewarm(self) -> None:
-        self._pools.current.prewarm()
 
     def update_endpoint(self, websocket_url: str) -> None:
-        if websocket_url == self._websocket_url:
-            return
-
-        self._websocket_url = websocket_url
-        self._pools.replace(self._new_pool())
-
-    async def aclose(self) -> None:
-        await self._pools.aclose()
+        if websocket_url != self._websocket_url:
+            self._websocket_url = websocket_url
+            self.invalidate()
 
 
-class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
-    """Run one LiveKit stream as one legacy Rime WS3 synthesis request."""
+class _LegacyWebSocketSynthesizeStream(tts.SocketStream[_Message, _Text | _Flush]):
+    """One LiveKit stream on a Rime WS3 socket, each segment its own context."""
 
     def __init__(
         self,
         *,
         tts_instance: tts.TTS,
-        pool: _Pool,
-        pool_manager: PoolManager[http.WebSocket],
+        mux: LegacyWebSocketAdapter,
         options: LegacySynthesisOptions,
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(
             tts=StreamTTS(tts_instance, model=options.model), conn_options=conn_options
         )
-        self._pool = pool
-        self._options = options
-        pool_manager.track_stream(pool, self._task)
+        self.multiplexer = mux
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        context_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._options.sample_rate,
-            num_channels=NUM_CHANNELS,
-            mime_type="audio/pcm",
-            stream=True,
-        )
-        output_emitter.start_segment(segment_id=context_id)
+    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Text | _Flush | None:
+        if isinstance(item, tts.SegmentText):
+            return {"text": item.chunk.text + " ", "contextId": item.segment_id}
+        if isinstance(item, tts.SegmentEnd):
+            return {"operation": "flush", "contextId": item.segment_id}
+        return None
 
-        input_sent_event = asyncio.Event()
-        empty_input = False
-
-        async def _send_task(websocket: http.WebSocket) -> None:
-            nonlocal empty_input
-            sent_count = 0
-            async for chunk in self.input:
-                if not isinstance(chunk, tts.SpeechChunk):
-                    continue
-                packet = {"text": chunk.text + " ", "contextId": context_id}
-                self.mark_started()
-                await websocket.send_str(json.dumps(packet))
-                input_sent_event.set()
-                sent_count += 1
-            if sent_count == 0:
-                empty_input = True
-                input_sent_event.set()
-                output_emitter.end_input()
-                return
-            await websocket.send_str(json.dumps({"operation": "flush", "contextId": context_id}))
-            # the read deadline runs only from here: before, a pause in the text owes nothing
-            self._core_attempts.expect_response(final=True)
-
-        async def _recv_task(websocket: http.WebSocket) -> None:
-            await input_sent_event.wait()
-            if empty_input:
-                return
-            while True:
-                message = await websocket.receive()
-                if message.type is http.WebSocketMessageType.CLOSE:
-                    raise websocket.close_error("Rime ws closed unexpectedly")
-                if message.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected Rime ws message type %s", message.type)
-                    continue
-                try:
-                    data = Response.model_validate_json(message.data)
-                except ValidationError as cause:
-                    raise APIError(
-                        "Rime WebSocket sent an invalid response",
-                        kind="protocol",
-                        detail=str(message.data),
-                    ) from redacted_cause(cause)
-                message_type = data.type
-                if message_type == "chunk":
-                    self._core_attempts.audio_received()
-                    output_emitter.push(base64.b64decode(data.data))
-                elif message_type == "timestamps" and data.word_timestamps is not None:
-                    timestamps = data.word_timestamps
+    def on_message(self, message: _Chunk | _Timestamps | _Done | _Error) -> tts.SegmentOutput:
+        if message["type"] == "chunk":
+            return tts.SegmentAudio(message["contextId"], base64.b64decode(message["data"]))
+        if message["type"] == "timestamps":
+            timestamps = message.get("word_timestamps")
+            words = (
+                [
+                    TranscriptChunk(text=word + " ", start_time=start, end_time=end)
                     for word, start, end in zip(
-                        timestamps.words, timestamps.start, timestamps.end, strict=False
-                    ):
-                        output_emitter.push_timed_transcript(
-                            TranscriptChunk(text=word + " ", start_time=start, end_time=end)
-                        )
-                elif message_type == "done":
-                    output_emitter.end_input()
-                    break
-                elif message_type == "error":
-                    # auth fails the handshake, so an in-band error rejects the request itself
-                    raise APIError("Rime WebSocket request failed", kind="invalid_request")
+                        timestamps["words"], timestamps["start"], timestamps["end"], strict=False
+                    )
+                ]
+                if timestamps
+                else []
+            )
+            return tts.SegmentWords(message["contextId"], words)
+        if message["type"] == "done":
+            return tts.SegmentDone(message["contextId"])
+        raise _error()
 
-        try:
-            async with self._pool.connection(conn_options=self._conn_options) as websocket:
-                async with utils.aio.TaskSet() as tasks:
-                    try:
-                        await asyncio.gather(
-                            tasks.spawn(_send_task(websocket)), tasks.spawn(_recv_task(websocket))
-                        )
-                    finally:
-                        input_sent_event.set()
-        except APIError:
-            raise
-        except Exception as cause:
-            raise APIConnectionError("Rime WebSocket request failed") from redacted_cause(cause)
+
+def _error() -> APIError:
+    # auth fails the handshake, so an in-band error rejects the request itself
+    return APIError("Rime WebSocket request failed", kind="invalid_request")

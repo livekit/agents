@@ -514,9 +514,14 @@ pub struct Proxy {
     pub returned_context: bool,
     /// Some host call returns it for the core to own (`Box<dyn ..>`), run in that call's context.
     pub returned_owned: bool,
-    /// `weak`: an object's events, held through a weak reference so the object it is filled from
-    /// owns the implementation without a cycle; a call once the object is gone does nothing.
-    pub weak: bool,
+    /// `self_events`: the events of the object an `init` constructor builds, filled from it; a
+    /// notice once the object is gone does nothing.
+    pub self_events: bool,
+    /// `owns`: the core owns a host object taken from the host's argument. Otherwise the core
+    /// retains it as a back-reference, weakly: the object owns what holds the proxy, so a strong
+    /// hold would be a cycle the collector cannot see. Once it is gone a call fails with
+    /// `ReferenceError` and a notice does nothing. A host object a host call returns is owned.
+    pub owns: bool,
 }
 
 impl RecordDecl {
@@ -661,7 +666,8 @@ pub struct Class {
     pub subclass: bool,
     /// Its constructor is `#[host(init)]`: an empty object (`__new__`) whose `__init__` builds the
     /// implementation once, so a host class extends it (`class TTS(_core.InferenceTts, tts.TTS)`).
-    /// Its events reach the host object through a weak proxy and its label is its host class's.
+    /// Its events reach the host object through a `self_events` proxy and its label is its host
+    /// class's.
     pub init: bool,
     /// `class(.., implements = "module.Class")`: the host interface the class satisfies; its stub
     /// subclasses it so type checkers accept it where the host expects one.
@@ -886,9 +892,9 @@ pub enum Ty {
         /// `Box<dyn Trait>`: an object the host hands over for the core to own (and consume, as a
         /// writer's `self: Box<Self>` close does); always behind the declared proxy.
         boxed: bool,
-        /// `proxy(.., weak)`: the events an `init` constructor's object emits, through a weak
+        /// `proxy(.., self_events)`: the events an `init` constructor's object emits, through a weak
         /// reference to it, filled by the binding and never crossing.
-        weak: bool,
+        self_events: bool,
     },
     /// `Arc<dyn Trait>` of a `#[host(native)]` trait: an instance of one of the registered host
     /// `classes` (dotted) implementing it, as itself; any other host object is refused with
@@ -1053,7 +1059,7 @@ impl Ty {
                 | Ty::Cancellation
                 | Ty::Env
                 | Ty::ClassLabel
-                | Ty::Proxy { weak: true, .. }
+                | Ty::Proxy { self_events: true, .. }
         )
     }
 

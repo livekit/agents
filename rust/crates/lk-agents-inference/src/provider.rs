@@ -435,7 +435,7 @@ impl Port for ProviderAttempts {
     }
 
     async fn settled(&self) {
-        let inflight = self.state.lock().inflight.clone();
+        let inflight = self.state.lock().inflight.take();
         if let Some(outcome) = inflight {
             let cleanup = std::time::Duration::from_secs_f64(self.cleanup_timeout());
             let settled = outcome.wait_map(|outcome| outcome.as_ref().map(drop));
@@ -586,7 +586,11 @@ impl ProviderAttempts {
                 biased;
                 result = attempt.as_mut() => {
                     let now = self.now();
-                    self.state.lock().machine.ready(now)?;
+                    let mut state = self.state.lock();
+                    // Settled: its outcome, a host error reaching the host object, is not kept.
+                    state.inflight = None;
+                    state.machine.ready(now)?;
+                    drop(state);
                     return joined(result);
                 }
                 () = self.changed.wait_until(|n| (*n != seen).then_some(())) => {}
@@ -622,6 +626,7 @@ impl ProviderAttempts {
                 None
             }
         };
+        self.state.lock().inflight = None;
         match interrupted {
             Some(error) => Err(error.into()),
             None => ended.unwrap_or(Ok(None)),

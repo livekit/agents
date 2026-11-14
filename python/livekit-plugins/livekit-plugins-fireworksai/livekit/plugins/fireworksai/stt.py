@@ -14,53 +14,46 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
-import json
 import os
 import weakref
 from dataclasses import dataclass
+from typing import NotRequired, TypedDict
 from urllib.parse import urlencode
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import JsonValue
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
-    APIError,
     LanguageCode,
     http,
     stt,
-    utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
-
 _STREAMING_PATH = "/audio/transcriptions/streaming"
 
 
-class _Word(BaseModel):
-    model_config = ConfigDict(strict=True)
-
-    word: str = ""
-    is_final: bool = False
+class _Word(TypedDict, total=False):
+    word: str
+    is_final: bool
 
 
-class _Segment(BaseModel):
-    model_config = ConfigDict(strict=True)
-
+class _Segment(TypedDict):
     id: int
     text: str
-    words: list[_Word] = Field(default_factory=list[_Word])
+    words: NotRequired[list[_Word]]
 
 
-class _StreamEvent(BaseModel):
-    model_config = ConfigDict(strict=True)
+class _StreamEvent(TypedDict, total=False):
+    segments: list[_Segment]
 
-    segments: list[_Segment] = Field(default_factory=list[_Segment])
+
+class _Checkpoint(TypedDict):
+    checkpoint_id: str
 
 
 @dataclass
@@ -191,12 +184,10 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = dataclasses.replace(self._opts)
+        if is_given(language):
+            config.language = LanguageCode(language)
         stream = SpeechStream(
-            stt=self,
-            opts=config,
-            conn_options=conn_options,
-            api_key=self._api_key,
-            http_session=self.session,
+            stt=self, opts=config, conn_options=conn_options, api_key=self._api_key
         )
         self._streams.add(stream)
         return stream
@@ -245,8 +236,9 @@ class STT(stt.STT):
             )
 
 
-class SpeechStream(stt.RecognizeStream):
-    _CLOSE_MSG: str = json.dumps({"checkpoint_id": "final"})
+class SpeechStream(stt.SocketStream[_StreamEvent, _Checkpoint]):
+    goodbye = _Checkpoint(checkpoint_id="final")
+    frame_ms = 50
 
     def __init__(
         self,
@@ -255,16 +247,12 @@ class SpeechStream(stt.RecognizeStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         self._opts = opts
         self._api_key = api_key
-        self._session = http_session
         self._transcript_state: dict[int, str] = {}
-        self._reconnect_event = asyncio.Event()
-        self._speaking = False
         self._final_segments_length: dict[int, int] = {}
         self._last_final_segment_id = -1
 
@@ -297,88 +285,14 @@ class SpeechStream(stt.RecognizeStream):
         if is_given(timestamp_granularities):
             self._opts.timestamp_granularities = timestamp_granularities
 
-        self._reconnect_event.set()
+        # the options are read at each connection
+        self.reconnect("options changed")
 
-    async def _run(self) -> None:
-        """
-        Run a single websocket connection to Fireworks and make sure to reconnect
-        when something went wrong.
-        """
-
-        closing_ws = False
-
-        async def send_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-
-            samples_per_buffer = self._opts.sample_rate // 20  # 50ms chunk
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_per_buffer,
-            )
-
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.push(data.data.tobytes())
-
-                for frame in frames:
-                    await ws.send_bytes(frame.data.tobytes())
-
-            closing_ws = True
-            await ws.send_str(self._CLOSE_MSG)
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            while True:
-                try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
-                except TimeoutError:
-                    if closing_ws:
-                        break
-                    continue
-
-                if msg.type == http.WebSocketMessageType.CLOSE:
-                    if closing_ws:
-                        return
-
-                    raise ws.close_error("Fireworks connection closed unexpectedly")
-
-                if msg.type != http.WebSocketMessageType.TEXT:
-                    logger.error("unexpected FireworksAI message type %s", msg.type)
-                    continue
-
-                try:
-                    data = json.loads(msg.data)
-                    self._process_stream_event(data)
-                except ValueError as e:  # unparseable, or a field it reads is wrong
-                    raise APIError(
-                        "Fireworks sent a malformed message", kind="protocol", detail=str(msg.data)
-                    ) from e
-
-        ws: http.WebSocket | None = None
-
-        while True:
-            try:
-                ws = await self._connect_ws()
-                async with utils.aio.TaskSet() as tasks:
-                    io = asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-                    reconnect = tasks.spawn(self._reconnect_event.wait())
-                    if await tasks.first_completed(io, reconnect) is not reconnect:
-                        break
-
-                    self._reconnect_event.clear()
-            finally:
-                if self._speaking:
-                    self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    self.send(end_event)
-
-                if ws is not None:
-                    await ws.close()
-
-    async def _connect_ws(self) -> http.WebSocket:
+    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+        # segment ids restart with each connection
+        self._transcript_state.clear()
+        self._final_segments_length.clear()
+        self._last_final_segment_id = -1
         live_config = {
             "model": self._opts.model if is_given(self._opts.model) else None,
             "language": self._opts.language if is_given(self._opts.language) else None,
@@ -394,90 +308,59 @@ class SpeechStream(stt.RecognizeStream):
                 else None
             ),
         }
-
-        headers = {
-            "User-Agent": "LiveKit Agents",
-            "Authorization": self._api_key,
-        }
-
         ws_url = str(self._opts.base_url).rstrip("/") + _STREAMING_PATH
         filtered_config = {k: v for k, v in live_config.items() if v is not None}
-        url = f"{ws_url}?{urlencode(filtered_config, doseq=True)}"
-        ws = await self._session.ws_connect(url, headers=headers, conn_options=self._conn_options)
-        logger.info("connected to Fireworks AI STT")
-        return ws
+        return http.SocketTarget(
+            f"{ws_url}?{urlencode(filtered_config, doseq=True)}",
+            headers={"User-Agent": "LiveKit Agents", "Authorization": self._api_key},
+        )
 
-    def _process_stream_event(self, data: object) -> None:
-        event = _StreamEvent.model_validate(data)
-        if event.segments:
-            latest_segment = max(event.segments, key=lambda segment: segment.id)
-            max_segment_id = latest_segment.id
+    def encode(
+        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
+    ) -> http.Encoded[_Checkpoint]:
+        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
 
-            for segment in event.segments:
-                segment_id = segment.id
-                if segment_id < self._last_final_segment_id:
-                    continue
+    def on_message(self, message: _StreamEvent) -> stt.Transcript | None:
+        segments = message.get("segments", [])
+        if not segments:
+            return None
+        latest_segment = max(segments, key=lambda segment: segment["id"])
+        max_segment_id = latest_segment["id"]
 
-                if segment_id == self._last_final_segment_id:
-                    finalized_word_count = self._final_segments_length.get(segment_id, 0)
-                    words = segment.words
-                    if finalized_word_count < len(words):
-                        new_words = words[finalized_word_count:]
-                        new_text = " ".join(word.word for word in new_words).strip()
-                        self._transcript_state[segment_id] = new_text
-                    elif segment_id in self._transcript_state:
-                        del self._transcript_state[segment_id]
-                else:
-                    self._transcript_state[segment.id] = segment.text
+        for segment in segments:
+            segment_id = segment["id"]
+            if segment_id < self._last_final_segment_id:
+                continue
 
-            for local_segment_id in list(self._transcript_state.keys()):
-                if local_segment_id > max_segment_id:
-                    del self._transcript_state[local_segment_id]
-
-            # The state dictionary may not be sorted, so we must sort it by the segment ID
-            # before joining the text.
-            sorted_segments = sorted(self._transcript_state.items(), key=lambda item: item[0])
-            full_transcript = " ".join([text for _, text in sorted_segments])
-
-            if not full_transcript:
-                return
-
-            if not self._speaking:
-                self._speaking = True
-                start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                self.send(start_event)
-
-            is_final = False
-            words = latest_segment.words
-            if words:
-                last_word = words[-1]
-                if last_word.is_final:
-                    is_final = True
-
-            if is_final:
-                final_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=LanguageCode(self._opts.language or ""), text=full_transcript
-                        )
-                    ],
-                )
-                self.send(final_event)
-                self._transcript_state.clear()
-                self._last_final_segment_id = max_segment_id
-                words = latest_segment.words
-                self._final_segments_length[max_segment_id] = len(words)
-                # a final ends the speech: turn_detection="stt" commits on END_OF_SPEECH
-                self._speaking = False
-                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            if segment_id == self._last_final_segment_id:
+                finalized_word_count = self._final_segments_length.get(segment_id, 0)
+                words = segment.get("words", [])
+                if finalized_word_count < len(words):
+                    new_words = words[finalized_word_count:]
+                    new_text = " ".join(word.get("word", "") for word in new_words).strip()
+                    self._transcript_state[segment_id] = new_text
+                elif segment_id in self._transcript_state:
+                    del self._transcript_state[segment_id]
             else:
-                interim_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=LanguageCode(self._opts.language or ""), text=full_transcript
-                        )
-                    ],
-                )
-                self.send(interim_event)
+                self._transcript_state[segment_id] = segment["text"]
+
+        for local_segment_id in list(self._transcript_state.keys()):
+            if local_segment_id > max_segment_id:
+                del self._transcript_state[local_segment_id]
+
+        # the state is not sorted: join the text by segment id
+        sorted_segments = sorted(self._transcript_state.items(), key=lambda item: item[0])
+        full_transcript = " ".join([text for _, text in sorted_segments])
+        if not full_transcript:
+            return None
+
+        words = latest_segment.get("words", [])
+        is_final = bool(words) and words[-1].get("is_final", False)
+        if is_final:
+            self._transcript_state.clear()
+            self._last_final_segment_id = max_segment_id
+            self._final_segments_length[max_segment_id] = len(words)
+        # a final ends the speech: turn_detection="stt" commits on END_OF_SPEECH
+        return stt.Transcript(
+            full_transcript, LanguageCode(self._opts.language or ""), final=is_final
+        )
