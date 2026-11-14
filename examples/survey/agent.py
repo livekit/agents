@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from typing import Annotated
@@ -324,11 +325,20 @@ class SurveyAgent(Agent):
             description="Gathers a holistic view of the candidate, including their strengths, weaknesses, and work style",
         )
 
-        results = await task_group
-        results = results.task_results
-        # TaskGroup returns a TaskGroupResult object. The task_results field holds a dictionary with Task IDs as the keys and the results as the values
-        summary = self.chat_ctx.items[-1]
-        evaluation = await evaluate_candidate(llm_model=self.session.llm, summary=summary)
+        group_result = await task_group
+        results = group_result.task_results
+        if group_result.summarize_error is None:
+            summary = self.chat_ctx.items[-1]
+            evaluation = await evaluate_candidate(llm_model=self.session.llm, summary=summary)
+        else:
+            summary = llm.ChatMessage(
+                role="assistant",
+                content=[
+                    "Summary unavailable. Full conversation:\n"
+                    + json.dumps(self.chat_ctx.to_dict(), ensure_ascii=False)
+                ],
+            )
+            evaluation = "Not evaluated: conversation summary unavailable."
         results["name"] = self.session.userdata.candidate_name
         results["summary"] = summary.content
         results["evaluation"] = evaluation
