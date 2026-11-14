@@ -77,6 +77,23 @@ async def test_interval() -> None:
 
 @pytest.mark.virtual_time
 @pytest.mark.no_concurrent
+async def test_interval_reset_between_ticks_waits_a_full_interval() -> None:
+    loop = asyncio.get_running_loop()
+    await asyncio.sleep(1)  # move the clock off 0.0, which Interval reads as "never ticked"
+    interval = aio.interval(0.2)
+    await interval.tick()
+
+    await asyncio.sleep(0.05)
+    interval.reset()
+    reset_at = loop.time()
+    i = await interval.tick()
+
+    assert loop.time() - reset_at == pytest.approx(0.2)
+    assert i == 1
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
 async def test_sleep_reset() -> None:
     loop = asyncio.get_running_loop()
     started = loop.time()

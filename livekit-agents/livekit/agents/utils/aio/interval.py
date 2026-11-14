@@ -25,7 +25,8 @@ class Interval:
             loop = asyncio.get_event_loop()
             self._handler = loop.call_later(self._interval, _finish_fut, self._fut)
         else:
-            self._last_sleep = 0
+            # not waiting on a tick: the next one is still a full interval away
+            self._last_sleep = asyncio.get_event_loop().time()
 
     async def tick(self) -> int:
         loop = asyncio.get_event_loop()
