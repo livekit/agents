@@ -53,6 +53,11 @@ from .log import logger
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 EOS_FALLBACK_TIMEOUT = 1.0
+# How long a reconnect waits for the old connection to transcribe an open utterance.
+RECONNECT_SETTLE_TIMEOUT = 2.0
+# How much recent audio an idle reconnect replays, so speech Sarvam's VAD hadn't reported
+# yet isn't lost with the old connection.
+RECONNECT_REPLAY_S = 0.5
 
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
@@ -920,6 +925,21 @@ class SpeechStream(stt.SpeechStream):
         self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
+        # set once the open utterance has its final transcript or END_OF_SPEECH
+        self._utterance_resolved = asyncio.Event()
+        # samples short of a full chunk; kept on the stream so a reconnect doesn't drop them
+        self._audio_buffer: list[Any] = []
+        # samples sent on the current connection, which is Sarvam's clock for it
+        self._sent_samples = 0
+        # _sent_samples when an END_SPEECH no transcript has used yet arrived
+        self._end_speech_sample: int | None = None
+        # a transcript with no usable speech_end came before its END_SPEECH
+        self._release_at_end_speech = False
+        # PCM sent that no finished utterance covers, up to RECONNECT_REPLAY_S
+        self._recent_audio = bytearray()
+        # stream-timeline position of the current connection's first sample when it opened
+        # with carried audio; None leaves it to the base class's anchor
+        self._connection_offset: float | None = None
 
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
@@ -980,7 +1000,12 @@ class SpeechStream(stt.SpeechStream):
         if value <= 0:
             return None
         # Map connection-relative timestamps onto the caller's audio timeline.
-        return float(value) + self.start_time_offset
+        return float(value) + self._timeline_offset()
+
+    def _timeline_offset(self) -> float:
+        if self._connection_offset is not None:
+            return self._connection_offset
+        return self.start_time_offset
 
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
@@ -989,6 +1014,7 @@ class SpeechStream(stt.SpeechStream):
         self._utterance_speech_start_wall = time.time()
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
+        self._utterance_resolved.clear()
 
     def _cancel_eos_fallback(self) -> asyncio.Task[None] | None:
         current_task = asyncio.current_task()
@@ -1052,6 +1078,7 @@ class SpeechStream(stt.SpeechStream):
         )
         self._eos_emitted_for_utterance = True
         self._pending_eos = False
+        self._utterance_resolved.set()
 
     async def _emit_pending_eos_after_timeout(self) -> None:
         try:
@@ -1174,7 +1201,15 @@ class SpeechStream(stt.SpeechStream):
         self._client_request_id = request_id
         self._server_request_id = None
         try:
-            await self._run_connection()
+            # a retry after an error starts here too, with the base class's clock restarted
+            self._carry_audio_into_next_connection()
+            # update_options() ends a connection to reopen it with the new options;
+            # the input channel carries on into the next connection
+            while await self._run_connection():
+                # Sarvam times each connection from zero, so re-anchor on its first audio
+                self._input_ch.restart_provider_clock()
+                self._carry_audio_into_next_connection()
+                self.start_time = time.time()
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED
@@ -1195,8 +1230,12 @@ class SpeechStream(stt.SpeechStream):
             )
             raise APIStatusError(f"STT WebSocket session failed: {e}") from e
 
-    async def _run_connection(self) -> None:
-        """Run a single WebSocket connection attempt."""
+    async def _run_connection(self) -> bool:
+        """Run a single WebSocket connection attempt.
+
+        Returns:
+            ``True`` when the connection closed for a requested reconnect.
+        """
         # Check if session is still valid
         if self._session.closed:
             raise APIConnectionError("Session is closed, cannot establish WebSocket connection")
@@ -1262,7 +1301,8 @@ class SpeechStream(stt.SpeechStream):
                     extra=self._build_log_context(),
                 )
                 self._reconnect_event.clear()
-                return
+                await self._settle_utterance_for_reconnect(ws)
+                return True
 
             # Keep listening for server-side terminal errors when audio finishes first.
             if self._audio_task in done and self._message_task in pending:
@@ -1284,7 +1324,8 @@ class SpeechStream(stt.SpeechStream):
                         extra=self._build_log_context(),
                     )
                     self._reconnect_event.clear()
-                    return
+                    await self._settle_utterance_for_reconnect(ws)
+                    return True
 
                 if not done2:
                     raise APITimeoutError(
@@ -1322,6 +1363,82 @@ class SpeechStream(stt.SpeechStream):
                     f"Error closing WebSocket: {e}",
                     extra=self._build_log_context(),
                 )
+        return False
+
+    async def _settle_utterance_for_reconnect(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Close an open utterance on the old connection before it is replaced.
+
+        Only the old connection can transcribe speech it has started on, so its buffered
+        audio and a flush go there, and the turn ends with END_OF_SPEECH either way. With no
+        utterance open, unsent audio carries into the new connection instead.
+        """
+        if not self._speaking:
+            return
+
+        import base64
+
+        import numpy as np
+
+        if self._audio_task is not None:
+            await utils.aio.cancel_and_wait(self._audio_task)
+        try:
+            if self._audio_buffer:
+                tail = np.array(self._audio_buffer, dtype=np.int16).tobytes()
+                self._audio_buffer.clear()
+                await ws.send_str(
+                    json.dumps(
+                        {
+                            "audio": {
+                                "data": base64.b64encode(tail).decode("utf-8"),
+                                "encoding": self._audio_encoding,
+                                "sample_rate": self._opts.sample_rate,
+                            }
+                        }
+                    )
+                )
+            # a transcript from earlier in the utterance doesn't cover the flushed audio
+            self._utterance_resolved.clear()
+            await ws.send_str(json.dumps({"type": "flush"}))
+            await asyncio.wait_for(self._utterance_resolved.wait(), RECONNECT_SETTLE_TIMEOUT)
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            self._logger.warning(
+                f"Open utterance not transcribed before reconnect: {e!r}",
+                extra=self._build_log_context(),
+            )
+
+        self._speaking = False
+        # the flush closed the utterance on the old connection, so nothing needs replaying
+        self._recent_audio.clear()
+        self._try_commit_utterance()
+        self._emit_end_of_speech()
+
+    def _carry_audio_into_next_connection(self) -> None:
+        """Queue audio the previous connection may not have transcribed for the next one.
+
+        That is the sent audio no finished utterance covers (speech may have started in it
+        before Sarvam's VAD reported it) plus samples never sent. It continues the previous
+        connection's timeline, so the new connection is anchored where it starts there
+        rather than on the next frame read, which may come later or not at all.
+        """
+        replay_samples = len(self._recent_audio) // 2
+        if replay_samples or self._audio_buffer:
+            start = self._sent_samples - replay_samples
+            self._connection_offset = self._timeline_offset() + start / self._opts.sample_rate
+            self._audio_buffer[:0] = memoryview(bytes(self._recent_audio)).cast("h").tolist()
+            self._recent_audio.clear()
+        else:
+            self._connection_offset = None
+        self._sent_samples = 0
+        self._end_speech_sample = None
+        self._release_at_end_speech = False
+
+    def _remember_sent_audio(self, pcm: bytes) -> None:
+        """Count sent PCM and keep the latest of it for replay after a reconnect."""
+        self._sent_samples += len(pcm) // 2
+        self._recent_audio += pcm
+        excess = len(self._recent_audio) - int(RECONNECT_REPLAY_S * self._opts.sample_rate) * 2
+        if excess > 0:
+            del self._recent_audio[:excess]
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -1331,7 +1448,7 @@ class SpeechStream(stt.SpeechStream):
         import numpy as np
 
         # Audio buffering for chunked sending
-        audio_buffer: list[np.int16] = []
+        audio_buffer = self._audio_buffer
         chunk_size = self._chunk_size  # Derived from selected sample rate
         chunks_sent = 0
 
@@ -1340,7 +1457,39 @@ class SpeechStream(stt.SpeechStream):
             extra={**self._build_log_context(), "chunk_size": chunk_size},
         )
 
+        async def send_full_chunks() -> None:
+            nonlocal chunks_sent
+            while len(audio_buffer) >= chunk_size:
+                # Convert to Int16Array
+                chunk_bytes = np.array(audio_buffer[:chunk_size], dtype=np.int16).tobytes()
+
+                # Send audio in the required format
+                audio_message = {
+                    "audio": {
+                        "data": base64.b64encode(chunk_bytes).decode("utf-8"),
+                        "encoding": self._audio_encoding,
+                        "sample_rate": self._opts.sample_rate,
+                    }
+                }
+
+                await ws.send_str(json.dumps(audio_message))
+                chunks_sent += 1
+                self._remember_sent_audio(chunk_bytes)
+
+                # Remove sent data from buffer
+                del audio_buffer[:chunk_size]
+
+                # Log progress periodically
+                if chunks_sent % 100 == 0:
+                    self._logger.debug(
+                        f"Sent {chunks_sent} audio chunks",
+                        extra=self._build_log_context(),
+                    )
+
         try:
+            # audio carried over from the previous connection goes out first
+            await send_full_chunks()
+
             async for frame in self._input_ch:
                 if isinstance(frame, rtc.AudioFrame):
                     try:
@@ -1350,34 +1499,7 @@ class SpeechStream(stt.SpeechStream):
                         audio_buffer.extend(audio_array)
 
                         # Check if we have enough data for a chunk
-                        while len(audio_buffer) >= chunk_size:
-                            # Convert to Int16Array
-                            chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
-
-                            # Convert to base64
-                            base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
-
-                            # Send audio in the required format
-                            audio_message = {
-                                "audio": {
-                                    "data": base64_audio,
-                                    "encoding": self._audio_encoding,
-                                    "sample_rate": self._opts.sample_rate,
-                                }
-                            }
-
-                            await ws.send_str(json.dumps(audio_message))
-                            chunks_sent += 1
-
-                            # Remove sent data from buffer
-                            audio_buffer = audio_buffer[chunk_size:]
-
-                            # Log progress periodically
-                            if chunks_sent % 100 == 0:
-                                self._logger.debug(
-                                    f"Sent {chunks_sent} audio chunks",
-                                    extra=self._build_log_context(),
-                                )
+                        await send_full_chunks()
 
                     except Exception as e:
                         self._logger.error(
@@ -1401,9 +1523,12 @@ class SpeechStream(stt.SpeechStream):
                                 }
                             )
                         )
+                        self._remember_sent_audio(tail)
                         audio_buffer.clear()
                     if self._opts.flush_signal:
                         await ws.send_str(json.dumps({"type": "flush"}))
+                        # the flush closes whatever was open, so none of it needs replaying
+                        self._recent_audio.clear()
 
             await ws.send_str(self._end_of_stream_msg)
 
@@ -1581,9 +1706,38 @@ class SpeechStream(stt.SpeechStream):
             )
             raise APIStatusError(f"Message processing error: {e}") from e
 
+    def _release_claimed_audio(self, speech_end: object) -> None:
+        """Drop replay audio up to where a finished utterance ended; what follows stays."""
+        if (
+            not isinstance(speech_end, bool)
+            and isinstance(speech_end, (int, float))
+            and speech_end > 0
+        ):
+            boundary = int(speech_end * self._opts.sample_rate)
+            # a real boundary beats waiting for END_SPEECH, which may come after more audio
+            self._release_at_end_speech = False
+        elif self._end_speech_sample is not None:
+            # no usable speech_end (Sarvam sends 0 when it has none), so go by what had
+            # been sent when END_SPEECH arrived
+            boundary = self._end_speech_sample
+        else:
+            # nothing marks where it ended yet, so wait for END_SPEECH rather than guess
+            self._release_at_end_speech = True
+            return
+        self._end_speech_sample = None
+        self._release_up_to(boundary)
+
+    def _release_up_to(self, boundary: int) -> None:
+        """Drop replay audio before ``boundary``, a sample position on this connection."""
+        start = self._sent_samples - len(self._recent_audio) // 2
+        covered = boundary - start
+        if covered > 0:
+            del self._recent_audio[: covered * 2]
+
     async def _handle_transcript_data(self, data: dict) -> None:
         """Handle transcription result messages."""
         transcript_data = data.get("data", {})
+        self._release_claimed_audio(transcript_data.get("speech_end"))
         transcript_text = transcript_data.get("transcript", "")
         self._maybe_set_server_request_id(transcript_data)
         # Prefer the per-message request_id from the server; fall back to the
@@ -1613,10 +1767,12 @@ class SpeechStream(stt.SpeechStream):
             if self._pending_eos:
                 self._pending_final_data = transcript_data
                 self._final_received_for_utterance = True
+                self._utterance_resolved.set()
                 self._try_commit_utterance()
             else:
                 if self._send_final_transcript(transcript_data):
                     self._final_received_for_utterance = True
+                    self._utterance_resolved.set()
 
             self._logger.debug(
                 "Transcript processed successfully",
@@ -1670,6 +1826,11 @@ class SpeechStream(stt.SpeechStream):
                     self._logger.debug("Speech started", extra=self._build_log_context())
 
             elif signal_type == "END_SPEECH":
+                if self._release_at_end_speech:
+                    self._release_at_end_speech = False
+                    self._release_up_to(self._sent_samples)
+                else:
+                    self._end_speech_sample = self._sent_samples
                 if self._speaking:
                     self._speaking = False
                     self._pending_eos = True
