@@ -19,7 +19,7 @@ import contextlib
 import json
 import weakref
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast, get_args
 from urllib.parse import urlencode
 
 import aiohttp
@@ -46,8 +46,8 @@ from .log import logger
 from .models import STTLanguages, STTModels, STTModes, STTSampleRates, STTStyles
 
 DEFAULT_MODEL: STTModels = "chariot-1-asr-realtime"
-SUPPORTED_LANGUAGES = frozenset(STTLanguages.__args__)  # type: ignore[attr-defined]
-SUPPORTED_SAMPLE_RATES = frozenset(STTSampleRates.__args__)  # type: ignore[attr-defined]
+SUPPORTED_LANGUAGES: frozenset[str] = frozenset(get_args(STTLanguages))
+SUPPORTED_SAMPLE_RATES: frozenset[int] = frozenset(get_args(STTSampleRates))
 # Audio is sent in chunks of this length
 CHUNK_MS = 100
 # The server closes a session that has heard nothing for 60 seconds
@@ -257,8 +257,8 @@ class STT(stt.STT):
     ) -> None:
         """Update STT options. Omitted options keep their current values.
 
-        The options are fixed for a session, so open streams reconnect, which can discard a
-        transcript in progress. Change them between turns.
+        The options are fixed for a session, so open streams reconnect, which finalizes a
+        transcript in progress early. Change them between turns.
         """
         if is_given(language):
             self._opts.language = _language(language)
@@ -314,6 +314,7 @@ class SpeechStream(stt.SpeechStream):
         self._unreported_audio = 0.0
         self._pending_commits = 0  # commits the server has not answered yet
         self._committed_until = 0.0  # session audio clock at the end of the last commit
+        self._audio_sent = 0.0  # seconds of audio sent on this session
 
     def update_options(
         self,
@@ -363,6 +364,7 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     frames = audio_bstream.flush()
                 for frame in frames:
+                    self._audio_sent += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
                     uncommitted = True
                     self._report_usage(frame.duration)
@@ -378,7 +380,7 @@ class SpeechStream(stt.SpeechStream):
                     elif not self._pending_commits:
                         # nothing new to transcribe, so the server would not answer a commit;
                         # with a commit still pending, its answer covers this flush too
-                        self._emit_final("", None, 0.0, 0.0)
+                        self._emit_final("", None, self._audio_sent, self._audio_sent)
 
             closing = True
             self._report_usage(0.0, flush=True)
@@ -441,14 +443,18 @@ class SpeechStream(stt.SpeechStream):
 
     def _start_session(self) -> None:
         """Reset per-session state for a new connection."""
-        if self._pending_commits:
-            # the old connection never answered a commit; an agent waiting on that flush gets
-            # what was heard so far rather than waiting out its timeout
-            self._emit_final(self._partial_text.strip(), None, 0.0, 0.0)
+        partial = self._partial_text.strip()
+        if self._pending_commits or partial:
+            # the old connection ended before it finalized what it heard: the words are kept,
+            # and an agent waiting on a flush gets them instead of waiting out its timeout
+            words = self._partial_words or None
+            self._emit_final(partial, words, self._committed_until, self._audio_sent)
+        self._end_speech()  # the next utterance starts with its own START_OF_SPEECH
         self._partial_text = ""
         self._partial_words = []
         self._pending_commits = 0
         self._committed_until = 0.0
+        self._audio_sent = 0.0
 
     async def _connect_ws(self) -> _WebSocket:
         params: dict[str, Any] = {
@@ -563,7 +569,12 @@ class SpeechStream(stt.SpeechStream):
                     stt.SpeechEvent(
                         type=SpeechEventType.INTERIM_TRANSCRIPT,
                         alternatives=[
-                            self._speech_data(self._partial_text.strip(), words_so_far, 0.0, 0.0)
+                            self._speech_data(
+                                self._partial_text.strip(),
+                                words_so_far,
+                                self._committed_until,
+                                self._audio_sent,
+                            )
                         ],
                     )
                 )
