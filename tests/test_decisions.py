@@ -6,6 +6,7 @@ from collections.abc import Mapping
 import pytest
 from pydantic import ValidationError
 
+from livekit import rtc
 from livekit.agents import APIError, APIStatusError, APITimeoutError
 from livekit.agents.llm import (
     AgentConfigUpdate,
@@ -291,6 +292,70 @@ async def test_invalid_definitions_fail_before_provider_request(
 def test_probabilities_must_be_finite_and_bounded(value: float) -> None:
     with pytest.raises(ValidationError):
         decisions.ProbabilityResult(value=value)
+
+
+class AudioModel(StaticModel):
+    """Records the audio requests it receives."""
+
+    def __init__(self, *outcomes: DecisionResponse | Exception) -> None:
+        super().__init__(*outcomes)
+        self._capabilities = decisions.DecisionCapabilities(
+            decision_kinds=["probability", "choice", "score"], audio_input=True
+        )
+        self.audio_requests: list[tuple[str, rtc.AudioFrame]] = []
+
+    async def _evaluate_audio_impl(
+        self,
+        *,
+        input: str,
+        audio: rtc.AudioFrame,
+        decisions: Mapping[str, decisions.Decision],
+        conn_options: APIConnectOptions,
+    ) -> DecisionResponse:
+        self.audio_requests.append((input, audio))
+        return await self._evaluate_impl(
+            input=input, decisions=decisions, conn_options=conn_options
+        )
+
+
+def audio_frames(count: int) -> list[rtc.AudioFrame]:
+    return [
+        rtc.AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=1600)
+        for _ in range(count)
+    ]
+
+
+def test_audio_input_is_off_by_default() -> None:
+    assert not decisions.DecisionCapabilities(decision_kinds=["probability"]).audio_input
+
+
+async def test_audio_fails_before_provider_request_without_audio_input() -> None:
+    model = StaticModel(DecisionResponse(results=valid_results()))
+    with pytest.raises(ValueError, match="does not support audio"):
+        await evaluate(model, audio=audio_frames(1))
+    assert model.requests == []
+
+
+async def test_audio_is_combined_and_routed_to_the_audio_hook() -> None:
+    model = AudioModel(DecisionResponse(results=valid_results()))
+    response = await evaluate(model, input="A support call.", audio=audio_frames(3))
+    [(sent, audio)] = model.audio_requests
+    assert sent == "A support call."
+    assert audio.samples_per_channel == 4800
+    assert response.results.keys() == QUESTIONS.keys()
+
+
+async def test_audio_model_without_audio_uses_the_text_hook() -> None:
+    model = AudioModel(DecisionResponse(results=valid_results()))
+    await evaluate(model)
+    assert model.audio_requests == []
+    assert [sent for sent, _ in model.requests] == ["The caller asked for a table."]
+
+
+async def test_empty_audio_is_rejected() -> None:
+    model = AudioModel()
+    with pytest.raises(ValueError, match="at least one frame"):
+        await evaluate(model, audio=[])
 
 
 async def test_string_input_is_sent_as_is() -> None:
