@@ -1143,7 +1143,9 @@ async def test_final_before_input_end_uses_shorter_inactivity_window() -> None:
 
 
 @pytest.mark.parametrize("error_code", [2006, 2007], ids=["connection", "inactivity"])
-async def test_error_before_input_end_reconnects(error_code: int) -> None:
+async def test_error_before_input_end_reconnects(
+    error_code: int, caplog: pytest.LogCaptureFixture
+) -> None:
     async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
         if ws.index == 0 and event["type"] == "session.create":
             ws.reply("error", code=error_code, message="customer content must not leak")
@@ -1157,11 +1159,12 @@ async def test_error_before_input_end_reconnects(error_code: int) -> None:
     stt.on("error", lambda event: errors.append(event.error))
     stream = stt.stream(conn_options=_one_retry())
     try:
-        while len(gateway.sockets) < 2:
-            await asyncio.sleep(0.01)
-        stream.push_frame(_silence(16000, 0.05))
-        stream.end_input()
-        assert await _finals(stream) == ["hello"]
+        with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+            while len(gateway.sockets) < 2:
+                await asyncio.sleep(0.01)
+            stream.push_frame(_silence(16000, 0.05))
+            stream.end_input()
+            assert await _finals(stream) == ["hello"]
     finally:
         await stream.aclose()
 
@@ -1172,9 +1175,41 @@ async def test_error_before_input_end_reconnects(error_code: int) -> None:
     assert error.body == {"code": error_code}
     assert error.retryable is True
 
+    recv_records = [record for record in caplog.records if "recv_task" in record.message]
+    assert [record.levelno for record in recv_records] == [logging.DEBUG]
+
+
+@pytest.mark.parametrize("max_retry", [0, 1])
+async def test_terminal_recv_error_logs_once_at_error(
+    max_retry: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "session.create":
+            ws.reply("error", code=2006, message="customer content must not leak")
+
+    gateway = _Gateway(handler)
+    stt = _gateway_stt(gateway)
+    stream = stt.stream(
+        conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.001, timeout=1.0)
+    )
+    try:
+        with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+            with pytest.raises(APIError):
+                await _finals(stream)
+    finally:
+        await stream.aclose()
+
+    recv_records = [record for record in caplog.records if "recv_task" in record.message]
+    assert [record.levelno for record in recv_records] == [
+        *([logging.DEBUG] * max_retry),
+        logging.ERROR,
+    ]
+
 
 @pytest.mark.parametrize("error_code", [2006, 2007], ids=["connection", "inactivity"])
-async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
+async def test_error_after_input_end_is_not_retried(
+    error_code: int, caplog: pytest.LogCaptureFixture
+) -> None:
     async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
         if event["type"] == "session.finalize":
             ws.reply("error", code=error_code, message="customer content must not leak")
@@ -1185,9 +1220,10 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     stt.on("error", lambda event: errors.append(event.error))
     stream = stt.stream(conn_options=APIConnectOptions(max_retry=3, retry_interval=0.001))
     try:
-        stream.end_input()
-        with pytest.raises(APIError) as exc_info:
-            await _finals(stream)
+        with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+            stream.end_input()
+            with pytest.raises(APIError) as exc_info:
+                await _finals(stream)
     finally:
         await stream.aclose()
 
@@ -1195,6 +1231,9 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     assert errors == [exc_info.value]
     assert exc_info.value.body == {"code": error_code}
     assert exc_info.value.retryable is False
+
+    recv_records = [record for record in caplog.records if "recv_task" in record.message]
+    assert [record.levelno for record in recv_records] == [logging.ERROR]
 
 
 async def test_half_open_socket_raises_retryable_error() -> None:
