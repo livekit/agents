@@ -103,6 +103,13 @@ from .generation import (
     update_expressive_instructions,
     update_instructions,
 )
+from .guardrail import (
+    Block,
+    Steer,
+    gate_agent_sentences,
+    has_sentence_checks,
+    run_user_turn_checks,
+)
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, InterruptionSource, SpeechHandle
 from .tool_executor import (
     _reply_tool_choice,
@@ -3048,6 +3055,31 @@ class AgentActivity(RecognitionHooks):
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
+        steer_instructions: NotGivenOr[str] = NOT_GIVEN
+        if (guardrail := self._session._guardrail) is not None:
+            verdict = await run_user_turn_checks(
+                guardrail,
+                chat_ctx=temp_mutable_chat_ctx,
+                user_message=user_message,
+            )
+            if isinstance(verdict, Block):
+                # nothing is generated for this turn, but the turn stays in the history
+                self._cancel_preemptive_generation()
+                if not isinstance(self.llm, llm.RealtimeModel):
+                    self._agent._chat_ctx.insert(user_message)
+                    self._session._conversation_item_added(user_message)
+                if verdict.say:
+                    self._session.say(verdict.say)
+                return
+            if isinstance(verdict, Steer):
+                if isinstance(self.llm, llm.RealtimeModel):
+                    # a realtime reply ignores the chat context: pass the instructions as
+                    # generate_reply(instructions=...) does
+                    steer_instructions = verdict.instructions
+                else:
+                    # changes the context, so a preemptive reply is regenerated below
+                    temp_mutable_chat_ctx.add_message(role="system", content=[verdict.instructions])
+
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
@@ -3106,6 +3138,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle = self._generate_reply(
                 user_message=user_message,
                 chat_ctx=temp_mutable_chat_ctx,
+                instructions=steer_instructions,
                 input_details=InputDetails(modality="audio"),
             )
             # the invalidated preemptive attempt answered this same turn: one agent_turn
@@ -3857,8 +3890,21 @@ class AgentActivity(RecognitionHooks):
                     tts_text.close()  # let this segment's TTS inference finish
                 current, tts_text = None, None
 
+            text_source: AsyncIterable[str | FlushSentinel] = llm_gen_data.text_ch
+            sentence_gate: AsyncGenerator[str | FlushSentinel, None] | None = None
+            guardrail = self._session._guardrail
+            if guardrail is not None and has_sentence_checks(guardrail):
+                # sentences reach the TTS and the transcript only once the guardrail allows them
+                text_source = sentence_gate = gate_agent_sentences(
+                    guardrail,
+                    llm_gen_data.text_ch,
+                    chat_ctx=chat_ctx,
+                    speech_id=speech_handle.id,
+                    on_block=_on_sentence_blocked,
+                )
+
             try:
-                async for chunk in llm_gen_data.text_ch:
+                async for chunk in text_source:
                     if isinstance(chunk, FlushSentinel):
                         _end_segment()
                         continue
@@ -3871,8 +3917,26 @@ class AgentActivity(RecognitionHooks):
                     if tts_text is not None:
                         tts_text.send_nowait(text)
             finally:
+                if sentence_gate is not None:
+                    await sentence_gate.aclose()
                 _end_segment()
                 segment_ch.close()
+
+        async def _on_sentence_blocked(block: Block) -> None:
+            # stop generating: no more text, and no tool calls after the blocked sentence.
+            # the sentences already allowed still play, and only they reach the history
+            llm_task.cancel()
+            if (say := block.say) is None:
+                return
+
+            def _say_replacement(handle: SpeechHandle) -> None:
+                # skipped if the reply never played (a discarded preemptive reply) or the
+                # user cut in; the agent answers the user instead
+                if handle.interrupted or self._session._closing:
+                    return
+                self._session.say(say)
+
+            speech_handle.add_done_callback(_say_replacement)
 
         # start synthesis preemptively (before the speech is scheduled) when enabled;
         # otherwise it starts right after scheduling below

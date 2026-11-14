@@ -24,6 +24,10 @@ session = AgentSession(
 
 - [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with STT, turn detection, preemptive generation, and metrics collection; switch its LLM to `inference.responses.LLM` for OpenAI models over the Responses API
 
+### Guardrails
+
+- [`decision_guardrail.py`](./decision_guardrail.py) - Check user turns and agent sentences with a decision model, then block or steer the agent's replies
+
 ### MCP & External Integrations
 
 - [`mcp/`](./mcp/) - Model Context Protocol (MCP) integration examples
