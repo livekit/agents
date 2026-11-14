@@ -123,6 +123,85 @@ async def test_phone_is_read_digit_by_digit_once_a_confirmation_is_refused() -> 
     assert " ".join("4155550626") in second
 
 
+async def test_dtmf_spoken_task_runs_without_job_context() -> None:
+    from unittest.mock import MagicMock, PropertyMock, patch
+
+    task = beta.workflows.GetDtmfTask(num_digits=3)
+    session = SimpleNamespace(
+        _room_io=None, on=MagicMock(), off=MagicMock(), generate_reply=MagicMock()
+    )
+
+    with patch.object(type(task), "session", new_callable=PropertyMock, return_value=session):
+        await task.on_enter()
+        await task.on_exit()
+
+    session.generate_reply.assert_called_once_with(tool_choice="none")
+    session.on.assert_any_call("user_state_changed", task._on_user_state_changed)
+    session.off.assert_any_call("user_state_changed", task._on_user_state_changed)
+    session.on.assert_any_call("agent_state_changed", task._on_agent_state_changed)
+    session.off.assert_any_call("agent_state_changed", task._on_agent_state_changed)
+
+
+@pytest.mark.parametrize("ask_for_confirmation", [False, True])
+async def test_dtmf_headless_session_collects_spoken_digits(ask_for_confirmation: bool) -> None:
+    from livekit.agents import AgentSession, llm
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+
+    arguments = '{"inputs": ["0", "1", "2"]}'
+    tool_name = "confirm_inputs" if ask_for_confirmation else "record_inputs"
+    tool_call = llm.FunctionToolCall(name=tool_name, call_id="digits", arguments=arguments)
+    responses = [
+        FakeLLMResponse(
+            input="The code is 0 1 2",
+            content="Is your code zero one two?" if ask_for_confirmation else "",
+            ttft=0,
+            duration=0,
+            tool_calls=[] if ask_for_confirmation else [tool_call],
+        ),
+        FakeLLMResponse(input="Yes", content="", ttft=0, duration=0, tool_calls=[tool_call]),
+    ]
+
+    async with FakeLLM(fake_responses=responses) as model, AgentSession(llm=model) as session:
+        await session.start(
+            beta.workflows.GetDtmfTask(num_digits=3, ask_for_confirmation=ask_for_confirmation)
+        )
+        if ask_for_confirmation:
+            await session.run(user_input="The code is 0 1 2")
+            user_input = "Yes"
+        else:
+            user_input = "The code is 0 1 2"
+        result = await session.run(user_input=user_input, output_type=beta.workflows.GetDtmfResult)
+
+        assert result.final_output.user_input == "0 1 2"
+        result.expect.contains_function_call(name=tool_name)
+
+
+@pytest.mark.parametrize("detach_before_exit", [False, True])
+async def test_dtmf_task_subscribes_and_unsubscribes_its_session_room(
+    detach_before_exit: bool,
+) -> None:
+    from unittest.mock import MagicMock, PropertyMock, patch
+
+    task = beta.workflows.GetDtmfTask(num_digits=3)
+    room = MagicMock()
+    session = SimpleNamespace(
+        _room_io=SimpleNamespace(room=room),
+        on=MagicMock(),
+        off=MagicMock(),
+        generate_reply=MagicMock(),
+    )
+
+    with patch.object(type(task), "session", new_callable=PropertyMock, return_value=session):
+        await task.on_enter()
+        room.on.assert_called_once_with("sip_dtmf_received", task._on_sip_dtmf_received)
+        if detach_before_exit:
+            session._room_io = None
+        await task.on_exit()
+
+    room.off.assert_called_once_with("sip_dtmf_received", task._on_sip_dtmf_received)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("street", "unit", "locality", "country"),
