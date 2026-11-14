@@ -73,6 +73,60 @@ async def test_email_with_verify_spelling_requires_confirmation(
     assert "confirm_email_address" in (instructions.text or "")
 
 
+@pytest.mark.parametrize("digit", ["1", "#"])
+@pytest.mark.parametrize(
+    ("linked_identity", "source_identity", "accepted"),
+    [
+        ("caller", "caller", True),
+        ("caller", "other", False),
+        ("caller", None, False),
+        (None, "caller", False),
+    ],
+)
+async def test_dtmf_task_accepts_only_linked_participant(
+    digit: str, linked_identity: str | None, source_identity: str | None, accepted: bool
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, PropertyMock, patch
+
+    from livekit.agents.beta.workflows.utils import DtmfEvent
+
+    task = beta.workflows.GetDtmfTask(num_digits=3)
+    task._curr_dtmf_inputs.append(DtmfEvent.ZERO)
+    reply = MagicMock()
+    task._generate_dtmf_reply = reply
+    linked = SimpleNamespace(identity=linked_identity) if linked_identity else None
+    participant = SimpleNamespace(identity=source_identity) if source_identity else None
+    session = SimpleNamespace(_room_io=SimpleNamespace(linked_participant=linked))
+
+    with patch.object(type(task), "session", new_callable=PropertyMock, return_value=session):
+        task._on_sip_dtmf_received(SimpleNamespace(digit=digit, participant=participant))
+
+    expected = [DtmfEvent.ZERO, DtmfEvent.ONE] if accepted and digit == "1" else [DtmfEvent.ZERO]
+    assert task._curr_dtmf_inputs == expected
+    assert reply.call_count == int(accepted and digit == "#")
+    assert reply.schedule.call_count == int(accepted and digit == "1")
+
+
+@pytest.mark.parametrize("digit", ["1", "#"])
+async def test_dtmf_task_ignores_room_events_without_room_io(digit: str) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, PropertyMock, patch
+
+    task = beta.workflows.GetDtmfTask(num_digits=3)
+    reply = MagicMock()
+    task._generate_dtmf_reply = reply
+    session = SimpleNamespace(_room_io=None)
+    participant = SimpleNamespace(identity="caller")
+
+    with patch.object(type(task), "session", new_callable=PropertyMock, return_value=session):
+        task._on_sip_dtmf_received(SimpleNamespace(digit=digit, participant=participant))
+
+    assert task._curr_dtmf_inputs == []
+    reply.assert_not_called()
+    reply.schedule.assert_not_called()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("first_name", "last_name"),
