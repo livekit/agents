@@ -646,6 +646,7 @@ class RecognizeStream(ABC):
                 self._resampler = rtc.AudioResampler(
                     frame.sample_rate,
                     self._needed_sr,
+                    num_channels=frame.num_channels,
                     quality=rtc.AudioResamplerQuality.HIGH,
                 )
 
