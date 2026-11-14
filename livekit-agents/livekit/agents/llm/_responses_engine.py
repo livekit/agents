@@ -17,6 +17,7 @@ from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseIncompleteEvent,
     ResponseInputParam,
+    ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
     ResponseTextDeltaEvent,
@@ -255,9 +256,12 @@ class ResponsesLLMStream(llm.LLMStream):
         extra_kwargs: dict[str, Any],
         prev_resp: tuple[str, list[dict[str, Any]]] | None,
         prompt_cache_breakpoints: bool,
+        emit_phase_on_item_start: bool = False,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._prompt_cache_breakpoints = prompt_cache_breakpoints
+        self._emit_phase_on_item_start = emit_phase_on_item_start
+        self._message_phases: dict[str, str] = {}
         self._model = model
         self._strict_tool_schema = strict_tool_schema
         self._response_id: str = ""
@@ -293,6 +297,7 @@ class ResponsesLLMStream(llm.LLMStream):
 
     async def _run_impl(self) -> None:
         self._response_completed = False
+        self._message_phases.clear()
         chat_ctx, _ = self._chat_ctx.to_provider_format(
             format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
         )
@@ -417,6 +422,15 @@ class ResponsesLLMStream(llm.LLMStream):
             return ResponseErrorEvent.model_validate(merged)
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)
+        elif event_type == "response.output_item.added" and self._emit_phase_on_item_start:
+            # Ignore unrelated start events, which may carry partially populated items.
+            item = event.get("item")
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "message"
+                and item.get("phase") is not None
+            ):
+                return ResponseOutputItemAddedEvent.model_validate(event)
         elif event_type == "response.output_item.done":
             return ResponseOutputItemDoneEvent.model_validate(event)
         elif event_type == "response.output_text.delta":
@@ -438,6 +452,12 @@ class ResponsesLLMStream(llm.LLMStream):
             self._handle_error(event)
         if isinstance(event, ResponseCreatedEvent):
             self._handle_response_created(event)
+        if (
+            isinstance(event, ResponseOutputItemAddedEvent)
+            and self._emit_phase_on_item_start
+            and isinstance(event.item, ResponseOutputMessage)
+        ):
+            chunk = self._handle_output_message_phase(event.item)
         if isinstance(event, ResponseOutputItemDoneEvent):
             chunk = self._handle_output_items_done(event)
         if isinstance(event, ResponseTextDeltaEvent):
@@ -478,6 +498,7 @@ class ResponsesLLMStream(llm.LLMStream):
         )
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
+        self._message_phases.clear()
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
@@ -564,23 +585,41 @@ class ResponsesLLMStream(llm.LLMStream):
                     ],
                 ),
             )
-        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
-            # Models like gpt-5.3-codex label assistant messages as intermediate
-            # `commentary` or the `final_answer`
-            chunk = llm.ChatChunk(
-                id=self._response_id,
-                delta=llm.ChoiceDelta(
-                    role="assistant",
-                    content=None,
-                    extra={"openai": {"phase": event.item.phase}},
-                ),
-            )
+        elif isinstance(event.item, ResponseOutputMessage):
+            chunk = self._handle_output_message_phase(event.item)
         return chunk
+
+    def _handle_output_message_phase(self, item: ResponseOutputMessage) -> llm.ChatChunk | None:
+        """Emit a known phase, suppressing repeats for this item in early-phase mode."""
+        if item.phase is None:
+            return None
+        extra: dict[str, dict[str, str]] = {"openai": {"phase": item.phase}}
+        if self._emit_phase_on_item_start:
+            if self._message_phases.get(item.id) == item.phase:
+                return None
+            self._message_phases[item.id] = item.phase
+            extra["openai_item"] = {"item_id": item.id, "phase": item.phase}
+        return llm.ChatChunk(
+            id=self._response_id,
+            delta=llm.ChoiceDelta(
+                role="assistant",
+                content=None,
+                extra=extra,
+            ),
+        )
 
     def _handle_response_output_text_delta(
         self, event: ResponseTextDeltaEvent
     ) -> llm.ChatChunk | None:
+        """Return text with its own item's phase metadata when opted in."""
+        extra = None
+        if self._emit_phase_on_item_start:
+            metadata = {"item_id": event.item_id}
+            if (phase := self._message_phases.get(event.item_id)) is not None:
+                metadata["phase"] = phase
+            # Keep per-item data separate from the phase retained in chat history.
+            extra = {"openai_item": metadata}
         return llm.ChatChunk(
             id=self._response_id,
-            delta=llm.ChoiceDelta(content=event.delta, role="assistant"),
+            delta=llm.ChoiceDelta(content=event.delta, role="assistant", extra=extra),
         )

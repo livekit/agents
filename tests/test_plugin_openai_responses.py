@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import AsyncIterator, Sequence
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,9 +11,19 @@ import aiohttp
 import httpx2 as httpx
 import pytest
 from openai.types import Reasoning
-from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseIncompleteEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+    ResponseTextDeltaEvent,
+)
+from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm as agents_llm
+from livekit.agents.voice import generation
+from livekit.agents.voice.io import ModelSettings
 from livekit.plugins.openai.responses.llm import (
     _WS_HEARTBEAT,
     LLM as ResponsesLLM,
@@ -415,7 +426,7 @@ class _ReplayResponsesWS:
 class _ReplayHTTPStream:
     """Minimal OpenAI AsyncStream stand-in for the HTTP Responses path."""
 
-    def __init__(self, events: list[ResponseCreatedEvent | ResponseIncompleteEvent]) -> None:
+    def __init__(self, events: Sequence[ResponseStreamEvent]) -> None:
         self._events = events
 
     async def __aenter__(self) -> _ReplayHTTPStream:
@@ -785,6 +796,244 @@ def _output_message(text: str) -> dict:
         "status": "completed",
         "content": [{"type": "output_text", "text": text, "annotations": []}],
     }
+
+
+def _phase_message_events(
+    item_id: str,
+    text: str,
+    output_index: int,
+    added_fields: dict[str, str | None],
+    done_fields: dict[str, str | None],
+) -> tuple[dict, dict, dict]:
+    message = {**_output_message(text), "id": item_id}
+    return (
+        {
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": {**message, "status": "in_progress", "content": [], **added_fields},
+        },
+        {**_TEXT_DELTA, "item_id": item_id, "output_index": output_index, "delta": text},
+        {
+            "type": "response.output_item.done",
+            "output_index": output_index,
+            "item": {**message, **done_fields},
+        },
+    )
+
+
+def _phase_stream_model(
+    transport_kind: str, events: list[dict], early: bool | None = True
+) -> ResponsesLLM:
+    options = {} if early is None else {"emit_phase_on_item_start": early}
+    completed = {
+        "type": "response.completed",
+        "response": {
+            **_RESPONSE_CREATED["response"],
+            "status": "completed",
+            "output": [
+                event["item"] for event in events if event["type"] == "response.output_item.done"
+            ],
+        },
+    }
+    frames = [
+        {**event, "sequence_number": sequence}
+        for sequence, event in enumerate([_RESPONSE_CREATED, *events, completed])
+    ]
+    if transport_kind == "websocket":
+        llm_model = ResponsesLLM(api_key="test-key", **options)
+        llm_model._ws = _ReplayResponsesWS(frames)  # type: ignore[assignment]
+    else:
+        client = MagicMock()
+        client._base_url = httpx.URL("https://api.openai.com/v1")
+        event_classes = {
+            "response.created": ResponseCreatedEvent,
+            "response.output_item.added": ResponseOutputItemAddedEvent,
+            "response.output_text.delta": ResponseTextDeltaEvent,
+            "response.output_item.done": ResponseOutputItemDoneEvent,
+            "response.completed": ResponseCompletedEvent,
+        }
+        client.responses.create = AsyncMock(
+            return_value=_ReplayHTTPStream(
+                [event_classes[frame["type"]].model_validate(frame) for frame in frames]
+            )
+        )
+        llm_model = ResponsesLLM(client=client, use_websocket=False, **options)
+
+    return llm_model
+
+
+async def _phase_stream_deltas(
+    transport_kind: str, events: list[dict], early: bool | None = True
+) -> list[agents_llm.ChoiceDelta]:
+    llm_model = _phase_stream_model(transport_kind, events, early)
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0)
+        ) as stream:
+            return [chunk.delta async for chunk in stream if chunk.delta is not None]
+    finally:
+        await llm_model.aclose()
+
+
+def _phase_delta(
+    item_id: str, phase: str | None = None, *, content: str | None = None
+) -> agents_llm.ChoiceDelta:
+    metadata = {"item_id": item_id}
+    if phase is not None:
+        metadata["phase"] = phase
+    extra = {"openai_item": metadata}
+    if content is None and phase is not None:
+        extra["openai"] = {"phase": phase}
+    return agents_llm.ChoiceDelta(role="assistant", content=content, extra=extra)
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+@pytest.mark.parametrize("early", [None, False])
+async def test_output_message_phase_defaults_to_completion(
+    transport_kind: str, early: bool | None
+) -> None:
+    events = _phase_message_events(
+        "msg_1", "hello", 0, {"phase": "commentary"}, {"phase": "final_answer"}
+    )
+
+    assert await _phase_stream_deltas(transport_kind, list(events), early) == [
+        agents_llm.ChoiceDelta(role="assistant", content="hello"),
+        agents_llm.ChoiceDelta(role="assistant", extra={"openai": {"phase": "final_answer"}}),
+    ]
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+@pytest.mark.parametrize(
+    "added_fields, done_fields, expected",
+    [
+        pytest.param(
+            {"phase": "commentary"},
+            {"phase": "commentary"},
+            [
+                _phase_delta("msg_1", "commentary"),
+                _phase_delta("msg_1", "commentary", content="hello"),
+            ],
+            id="same-phase",
+        ),
+        pytest.param(
+            {"phase": "final_answer"},
+            {},
+            [
+                _phase_delta("msg_1", "final_answer"),
+                _phase_delta("msg_1", "final_answer", content="hello"),
+            ],
+            id="phase-only-at-start",
+        ),
+        pytest.param(
+            {"phase": None},
+            {"phase": "final_answer"},
+            [_phase_delta("msg_1", content="hello"), _phase_delta("msg_1", "final_answer")],
+            id="late-phase",
+        ),
+        pytest.param(
+            {"phase": "commentary"},
+            {"phase": "final_answer"},
+            [
+                _phase_delta("msg_1", "commentary"),
+                _phase_delta("msg_1", "commentary", content="hello"),
+                _phase_delta("msg_1", "final_answer"),
+            ],
+            id="changed-phase",
+        ),
+        pytest.param({}, {"phase": None}, [_phase_delta("msg_1", content="hello")], id="no-phase"),
+    ],
+)
+async def test_output_message_phase_order(
+    transport_kind: str,
+    added_fields: dict[str, str | None],
+    done_fields: dict[str, str | None],
+    expected: list[agents_llm.ChoiceDelta],
+) -> None:
+    events = _phase_message_events("msg_1", "hello", 0, added_fields, done_fields)
+    assert await _phase_stream_deltas(transport_kind, list(events)) == expected
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_output_message_phase_is_scoped_to_its_item(transport_kind: str) -> None:
+    commentary = {"phase": "commentary"}
+    add_a, text_a, done_a = _phase_message_events("msg_a", "working", 0, commentary, commentary)
+    add_b, text_b, done_b = _phase_message_events("msg_b", "unknown", 1, {}, {})
+    add_c, text_c, done_c = _phase_message_events("msg_c", "more", 2, commentary, commentary)
+
+    assert await _phase_stream_deltas(
+        transport_kind, [add_a, add_a, add_b, text_b, text_a, done_b, done_a, add_c, text_c, done_c]
+    ) == [
+        _phase_delta("msg_a", "commentary"),
+        _phase_delta("msg_b", content="unknown"),
+        _phase_delta("msg_a", "commentary", content="working"),
+        _phase_delta("msg_c", "commentary"),
+        _phase_delta("msg_c", "commentary", content="more"),
+    ]
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_output_message_phase_resets_on_response_created(transport_kind: str) -> None:
+    add_old, _, _ = _phase_message_events("msg_1", "old", 0, {"phase": "commentary"}, {})
+    add_new, text_new, done_new = _phase_message_events(
+        "msg_1", "new", 0, {}, {"phase": "commentary"}
+    )
+    created = {
+        **_RESPONSE_CREATED,
+        "response": {**_RESPONSE_CREATED["response"], "id": "resp_next"},
+    }
+
+    assert await _phase_stream_deltas(
+        transport_kind, [add_old, created, add_new, text_new, done_new]
+    ) == [
+        _phase_delta("msg_1", "commentary"),
+        _phase_delta("msg_1", content="new"),
+        _phase_delta("msg_1", "commentary"),
+    ]
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+@pytest.mark.parametrize("consumer", ["collect", "voice"])
+async def test_unphased_output_preserves_aggregated_phase(
+    transport_kind: str, consumer: str
+) -> None:
+    phase = {"phase": "commentary"}
+    phased = _phase_message_events("msg_a", "Working", 0, phase, phase)
+    unphased = _phase_message_events("msg_b", " more", 1, {}, {})
+    llm_model = _phase_stream_model(transport_kind, [*phased, *unphased])
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+    stream = llm_model.chat(chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0))
+
+    async def node(
+        _chat_ctx: agents_llm.ChatContext, _tools: list[agents_llm.Tool], _settings: ModelSettings
+    ) -> AsyncIterator[agents_llm.ChatChunk]:
+        async with stream:
+            async for chunk in stream:
+                yield chunk
+
+    try:
+        if consumer == "collect":
+            response = await stream.collect()
+            text, extra = response.text, response.extra
+        else:
+            task, data = generation.perform_llm_inference(
+                node=node,
+                chat_ctx=chat_ctx,
+                tool_ctx=agents_llm.ToolContext([]),
+                model_settings=ModelSettings(),
+            )
+            assert await task
+            text, extra = data.generated_text, data.generated_extra
+    finally:
+        await llm_model.aclose()
+
+    assert text == "Working more"
+    assert extra.get("openai") == phase
+    chat_ctx.add_message(role="assistant", content=text, extra=extra)
+    items, _ = chat_ctx.to_provider_format(format="openai.responses")
+    assert items[-1]["phase"] == "commentary"
 
 
 def _output_function_call(call_id: str, name: str) -> dict:
