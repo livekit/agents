@@ -12,6 +12,40 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("ask_for_confirmation", [False, True])
+@pytest.mark.parametrize("count", [0, 1, 2, 4])
+async def test_dtmf_tool_rejects_wrong_number_of_digits(
+    ask_for_confirmation: bool, count: int
+) -> None:
+    from livekit.agents.beta.workflows.utils import DtmfEvent
+    from livekit.agents.llm.tool_context import ToolError
+
+    task = beta.workflows.GetDtmfTask(num_digits=3, ask_for_confirmation=ask_for_confirmation)
+    tool = task.tools[0]
+
+    with pytest.raises(ToolError, match=f"Expect 3 digits, got {count}"):
+        await tool([DtmfEvent.ONE] * count)
+
+    assert not task.done()
+    await tool([DtmfEvent.ZERO, DtmfEvent.ONE, DtmfEvent.TWO])
+    assert task.done()
+
+
+@pytest.mark.parametrize("ask_for_confirmation", [False, True])
+async def test_dtmf_tool_accepts_exact_number_of_digits(ask_for_confirmation: bool) -> None:
+    from unittest.mock import patch
+
+    from livekit.agents.beta.workflows.utils import DtmfEvent
+
+    task = beta.workflows.GetDtmfTask(num_digits=3, ask_for_confirmation=ask_for_confirmation)
+    tool = task.tools[0]
+    with patch.object(task, "complete", wraps=task.complete) as complete:
+        await tool([DtmfEvent.ZERO, DtmfEvent.ONE, DtmfEvent.TWO])
+
+    assert task.done()
+    complete.assert_called_once_with(beta.workflows.GetDtmfResult(user_input="0 1 2"))
+
+
 def _audio_ctx() -> Any:
     return SimpleNamespace(
         speech_handle=SimpleNamespace(input_details=SimpleNamespace(modality="audio"))
