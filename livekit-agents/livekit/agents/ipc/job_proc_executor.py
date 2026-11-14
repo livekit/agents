@@ -42,6 +42,8 @@ class ProcJobExecutor(SupervisedProc):
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
         on_join_timing: Callable[[agent.JobJoinTiming], None] | None = None,
+        create_job_token: Callable[[str, str], Awaitable[agent.CreateJobTokenResponse]]
+        | None = None,
     ) -> None:
         super().__init__(
             initialize_timeout=initialize_timeout,
@@ -67,6 +69,8 @@ class ProcJobExecutor(SupervisedProc):
         self._inference_executor = inference_executor
         self._on_join_timing = on_join_timing
         self._inference_tasks: set[asyncio.Task[None]] = set()
+        self._create_job_token = create_job_token
+        self._job_token_tasks: set[asyncio.Task[None]] = set()
         self._id = shortuuid("PCEXEC_")
 
     @property
@@ -131,8 +135,12 @@ class ProcJobExecutor(SupervisedProc):
                     task.add_done_callback(self._inference_tasks.discard)
                 if isinstance(msg, proto.JoinTiming) and self._on_join_timing:
                     self._on_join_timing(msg.timing)
+                if isinstance(msg, proto.CreateJobTokenRequest):
+                    token_task = asyncio.create_task(self._do_create_job_token(msg))
+                    self._job_token_tasks.add(token_task)
+                    token_task.add_done_callback(self._job_token_tasks.discard)
         finally:
-            await aio.cancel_and_wait(*self._inference_tasks)
+            await aio.cancel_and_wait(*self._inference_tasks, *self._job_token_tasks)
 
     @log_exceptions(logger=logger)
     async def _supervise_task(self) -> None:
@@ -165,6 +173,19 @@ class ProcJobExecutor(SupervisedProc):
                 self._pch,
                 proto.InferenceResponse(request_id=inf_req.request_id, error=str(e)),
             )
+
+    async def _do_create_job_token(self, req: proto.CreateJobTokenRequest) -> None:
+        resp = proto.CreateJobTokenResponse(request_id=req.request_id)
+        try:
+            if self._create_job_token is None or self._running_job is None:
+                raise RuntimeError("cannot create a job token: no running job")
+
+            res = await self._create_job_token(self._running_job.job.id, req.claims)
+            resp.token, resp.expires_at = res.token, res.expires_at
+        except Exception as e:
+            resp.error = str(e)
+
+        await channel.asend_message(self._pch, resp)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
         """start/assign a job to the process"""

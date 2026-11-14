@@ -37,6 +37,7 @@ from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
+from ._token_mode import token_mode_token
 from .log import logger
 from .observability import Tagger
 from .telemetry import (
@@ -86,6 +87,7 @@ def _observability_url(livekit_url: str) -> str | None:
 
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
+    from .ipc.job_proc_lazy_main import _JobTokenClient
     from .simulation import SimulationContext
     from .voice.agent_session import AgentSession, RecordingOptions
     from .voice.remote_session import SessionHost
@@ -224,6 +226,7 @@ class JobContext:
         on_connect: Callable[[], None],
         on_shutdown: Callable[[str], None],
         inference_executor: InferenceExecutor,
+        job_token_client: _JobTokenClient | None = None,
     ) -> None:
         self._proc = proc
         self._info = info
@@ -243,6 +246,7 @@ class JobContext:
         self._pending_tasks = list[asyncio.Task[Any]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
+        self._job_token_client = job_token_client
 
         self._log_fields: dict[str, Any] = {}
         self._log_filter = _ContextLogFieldsFilter(self)
@@ -505,7 +509,16 @@ class JobContext:
         When starting via the worker, values passed in `WorkerOptions` are exported to
         LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET so this API is always
         usable inside job entrypoints.
+
+        In token mode (LIVEKIT_TOKEN without an API key and secret), each call gets a
+        token with the grants it needs from the server, through the worker.
         """
+        if self._job_token_client is not None and token_mode_token() is not None:
+            return api.LiveKitAPI(
+                token_source=self._job_token_client.token_source,
+                session=http_context.http_session(),
+            )
+
         return api.LiveKitAPI(session=http_context.http_session())
 
     @property

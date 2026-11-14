@@ -9,6 +9,7 @@ from opentelemetry import trace
 
 from livekit import rtc
 
+from ..._token_mode import token_mode_token
 from ...inference import LLM as _InferenceLLM, STT as _InferenceSTT, LLMModels
 from ...job import get_job_context
 from ...llm import LLM as _LLM
@@ -186,8 +187,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             api_secret = os.getenv("LIVEKIT_INFERENCE_API_SECRET") or os.getenv(
                 "LIVEKIT_API_SECRET"
             )
-            auto_select = (
-                is_cloud(os.getenv("LIVEKIT_URL", "")) and bool(api_key) and bool(api_secret)
+            auto_select = is_cloud(os.getenv("LIVEKIT_URL", "")) and (
+                (bool(api_key) and bool(api_secret)) or token_mode_token() is not None
             )
             if not is_given(llm):
                 llm = self._DEFAULT_LLM_MODEL if auto_select else None

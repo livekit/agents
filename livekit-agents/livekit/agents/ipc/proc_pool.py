@@ -48,6 +48,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         memory_limit_mb: float,
         http_proxy: str | None,
         loop: asyncio.AbstractEventLoop,
+        create_job_token: Callable[[str, str], Awaitable[agent.CreateJobTokenResponse]]
+        | None = None,
     ) -> None:
         super().__init__()
         self._job_executor_type = job_executor_type
@@ -66,6 +68,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._default_num_idle_processes = num_idle_processes
         self._http_proxy = http_proxy
         self._target_idle_processes = num_idle_processes
+        self._create_job_token = create_job_token
 
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
         self._warmed_proc_queue = asyncio.Queue[JobExecutor]()
@@ -230,6 +233,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 http_proxy=self._http_proxy,
                 loop=self._loop,
                 on_join_timing=_on_join_timing,
+                create_job_token=self._create_job_token,
             )
         elif self._job_executor_type == JobExecutorType.PROCESS:
             proc = job_proc_executor.ProcJobExecutor(
@@ -250,6 +254,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 memory_limit_mb=self._memory_limit_mb,
                 http_proxy=self._http_proxy,
                 on_join_timing=_on_join_timing,
+                create_job_token=self._create_job_token,
             )
         else:
             raise ValueError(f"unsupported job executor: {self._job_executor_type}")

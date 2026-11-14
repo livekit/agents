@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import datetime
 import inspect
+import json
 import math
 import multiprocessing as mp
 import os
@@ -66,6 +67,10 @@ HEARTBEAT_INTERVAL = 30
 HEALTH_RECONNECT_GRACE_PERIOD = 30.0
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
+CREATE_JOB_TOKEN_TIMEOUT = 10.0
+# the first ServerInfo.agent_protocol that handles CreateJobTokenRequest; an older server
+# closes the worker connection on it
+JOB_TOKEN_AGENT_PROTOCOL = 2
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -240,6 +245,11 @@ class ServerOptions:
     """API secret to authenticate with LiveKit.
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
+    token: str | None = field(repr=False, default=None)
+    """Worker token to authenticate with LiveKit, in place of an API key and secret.
+
+    Used only when no API key and secret are set. Jobs then ask the server for the
+    tokens they need. By default it uses ``LIVEKIT_TOKEN`` from environment"""
 
     log_level: str | ServerEnvOption[str] = _default_log_level
     """Log level for the worker.
@@ -300,6 +310,10 @@ class WorkerInfo:
 EventTypes = Literal["worker_started", "worker_registered"]
 
 
+class _TokenModeUnsupportedError(RuntimeError):
+    """The server cannot create job tokens, which token mode needs."""
+
+
 class AgentServer(utils.EventEmitter[EventTypes]):
     _default_num_idle_processes = ServerEnvOption(
         dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
@@ -323,6 +337,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         ws_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
+        token: str | None = None,
         host: str = "",  # default to all interfaces
         port: int | ServerEnvOption[int] = _default_port,
         http_proxy: NotGivenOr[str | None] = NOT_GIVEN,
@@ -340,6 +355,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
         self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
+        # token mode: a worker token in place of the key and secret, see _token_mode
+        self._token = token or os.environ.get("LIVEKIT_TOKEN") or ""
 
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
         self._deployment = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT") or ""  # hosted agents
@@ -393,6 +410,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         )
         # monotonic time when a registered connection was lost, cleared on re-register
         self._disconnected_at: float | None = None
+        # set while the worker is registered on a connection
+        self._registered = asyncio.Event()
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
@@ -438,6 +457,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             ws_url=options.ws_url,
             api_key=options.api_key,
             api_secret=options.api_secret,
+            token=options.token,
             host=options.host,
             port=options.port,
             http_proxy=options.http_proxy,
@@ -538,6 +558,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return decorator
 
     @property
+    def _token_mode(self) -> bool:
+        """The worker holds a worker token and no API key or secret: it registers with
+        the token and its jobs ask the server for theirs (CreateJobTokenRequest)."""
+        return bool(self._token) and not self._api_key and not self._api_secret
+
+    @property
     def worker_info(self) -> WorkerInfo:
         return WorkerInfo(
             http_port=self._http_server.port if self._http_server else 0,
@@ -606,6 +632,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._devmode = devmode
             self._job_lifecycle_tasks = set[asyncio.Task[Any]]()
             self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
+            self._job_token_requests: dict[str, asyncio.Future[agent.CreateJobTokenResponse]] = {}
             self._close_future: asyncio.Future[None] | None = None
             self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
 
@@ -643,6 +670,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 memory_warn_mb=self._job_memory_warn_mb,
                 memory_limit_mb=self._job_memory_limit_mb,
                 http_proxy=self._http_proxy or None,
+                create_job_token=self._create_job_token,
             )
 
             self._previous_status = agent.WorkerStatus.WS_AVAILABLE
@@ -705,12 +733,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 if not self._ws_url:
                     raise ValueError("ws_url is required, or set LIVEKIT_URL environment variable")
 
-                if not self._api_key:
+                if not self._api_key and not self._token_mode:
                     raise ValueError(
                         "api_key is required, or set LIVEKIT_API_KEY environment variable"
                     )
 
-                if not self._api_secret:
+                if not self._api_secret and not self._token_mode:
                     raise ValueError(
                         "api_secret is required, or set LIVEKIT_API_SECRET environment variable"
                     )
@@ -748,6 +776,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 os.environ["LIVEKIT_API_KEY"] = self._api_key
             if self._api_secret:
                 os.environ["LIVEKIT_API_SECRET"] = self._api_secret
+            if self._token_mode:
+                os.environ["LIVEKIT_TOKEN"] = self._token
             if self._worker_token:
                 os.environ["LIVEKIT_WORKER_TOKEN"] = self._worker_token
             if self._deployment:
@@ -898,6 +928,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         ws_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
+        token: NotGivenOr[str] = NOT_GIVEN,
         max_retry: NotGivenOr[int] = NOT_GIVEN,
         job_executor_type: NotGivenOr[JobExecutorType] = NOT_GIVEN,
         load_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -920,6 +951,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         if is_given(api_secret):
             self._api_secret = api_secret
+
+        if is_given(token):
+            self._token = token
 
         if is_given(max_retry):
             self._max_retry = max_retry
@@ -1032,6 +1066,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if not token:
                 if fake_job and (not self._api_key or not self._api_secret):
                     token = ""
+                elif self._token_mode:
+                    raise RuntimeError(
+                        "simulate_job needs a token, or an API key and secret to sign one; "
+                        "token mode (LIVEKIT_TOKEN) cannot sign it"
+                    )
                 else:
                     token = (
                         api.AccessToken(self._api_key, self._api_secret)
@@ -1117,11 +1156,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         while not self._closed:
             try:
                 self._connecting = True
-                join_jwt = (
-                    api.AccessToken(self._api_key, self._api_secret)
-                    .with_grants(api.VideoGrants(agent=True))
-                    .to_jwt()
-                )
+                if self._token_mode:
+                    join_jwt = self._token
+                else:
+                    join_jwt = (
+                        api.AccessToken(self._api_key, self._api_secret)
+                        .with_grants(api.VideoGrants(agent=True))
+                        .to_jwt()
+                    )
 
                 headers = {"Authorization": f"Bearer {join_jwt}"}
 
@@ -1175,9 +1217,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 if not msg.HasField("register"):
                     raise Exception("expected register response as first message")
 
+                agent_protocol = msg.register.server_info.agent_protocol
+                if self._token_mode and agent_protocol < JOB_TOKEN_AGENT_PROTOCOL:
+                    raise _TokenModeUnsupportedError(
+                        f"the LiveKit server does not support token mode (LIVEKIT_TOKEN): it "
+                        f"reports agent protocol {agent_protocol}, token mode needs "
+                        f"{JOB_TOKEN_AGENT_PROTOCOL}. Upgrade the server, or set "
+                        "LIVEKIT_API_KEY and LIVEKIT_API_SECRET in place of LIVEKIT_TOKEN"
+                    )
+
                 self._handle_register(msg.register)
                 self._connecting = False
                 self._disconnected_at = None
+                self._registered.set()
 
                 # report all active jobs to the server after registration
                 await self._report_active_jobs()
@@ -1188,6 +1240,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     # registered connection lost: start the health check grace period
                     if self._disconnected_at is None:
                         self._disconnected_at = time.monotonic()
+                    self._registered.clear()
+                    # their responses, if any, would come on this connection only
+                    for fut in self._job_token_requests.values():
+                        if not fut.done():
+                            fut.set_exception(
+                                ConnectionError(
+                                    "the connection to the LiveKit server was lost before it "
+                                    "answered the job token request"
+                                )
+                            )
+            except _TokenModeUnsupportedError:
+                # retrying would get the same answer
+                self._connection_failed = True
+                raise
             except Exception as e:
                 if self._closed:
                     break
@@ -1270,6 +1336,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._handle_availability(server_msg.availability)
                 elif which == "assignment":
                     self._handle_assignment(server_msg.assignment)
+                elif which == "create_job_token":
+                    fut = self._job_token_requests.get(server_msg.create_job_token.request_id)
+                    if fut is not None and not fut.done():
+                        fut.set_result(server_msg.create_job_token)
                 elif which == "termination":
                     user_task = self._loop.create_task(
                         self._handle_termination(server_msg.termination),
@@ -1288,7 +1358,72 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         finally:
             await utils.aio.cancel_and_wait(*tasks)
 
+    async def _create_job_token(self, job_id: str, claims: str) -> agent.CreateJobTokenResponse:
+        """Asks the server for a token with ``claims`` (JSON) for job ``job_id``, which
+        must run on this worker. Raises when the server refuses it or does not answer."""
+        if not self._registered.is_set():
+            raise ConnectionError(
+                "cannot request a job token: the worker is not connected to the LiveKit server"
+            )
+
+        request_id = utils.shortuuid("job_token_")
+        fut = asyncio.Future[agent.CreateJobTokenResponse]()
+        self._job_token_requests[request_id] = fut
+        try:
+            req = agent.CreateJobTokenRequest(request_id=request_id, job_id=job_id, claims=claims)
+            await self._queue_msg(agent.WorkerMessage(create_job_token=req))
+            resp = await asyncio.wait_for(fut, CREATE_JOB_TOKEN_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"the LiveKit server did not answer the job token request within "
+                f"{CREATE_JOB_TOKEN_TIMEOUT}s"
+            ) from None
+        finally:
+            self._job_token_requests.pop(request_id, None)
+
+        if resp.error:
+            raise RuntimeError(f"the LiveKit server refused the job token: {resp.error}")
+
+        return resp
+
+    async def _reload_jobs_token_mode(self, jobs: list[RunningJobInfo]) -> None:
+        # the server creates tokens only for jobs it knows run on this worker: tell it, in
+        # MigrateJobRequest.jobs, on the connection the token requests use
+        await self._registered.wait()
+        await self._report_active_jobs(jobs)
+
+        for aj in jobs:
+            logger.log(
+                DEV_LEVEL,
+                "reloading job",
+                extra={"job_id": aj.job.id, "agent_name": aj.job.agent_name},
+            )
+
+            # no secret to extend the original join token with: ask the server for a new
+            # one with the same claims. The server refuses video.agent, and the claims it
+            # does not know (iss, exp, ...) it drops.
+            claims = jwt.decode(aj.token, options={"verify_signature": False})
+            if sub := claims.pop("sub", ""):
+                claims.setdefault("identity", sub)
+            if isinstance(video := claims.get("video"), dict):
+                video.pop("agent", None)
+
+            resp = await self._create_job_token(aj.job.id, json.dumps(claims))
+            running_info = RunningJobInfo(
+                accept_arguments=aj.accept_arguments,
+                job=aj.job,
+                url=self._ws_url,
+                token=resp.token,
+                worker_id=aj.worker_id,
+                fake_job=aj.fake_job,
+            )
+            await self._proc_pool.launch_job(running_info)
+
     async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
+        if self._token_mode:
+            await self._reload_jobs_token_mode(jobs)
+            return
+
         if not self._api_secret:
             raise RuntimeError("api_secret is required to reload jobs")
 
@@ -1603,8 +1738,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         msg = agent.WorkerMessage(update_job=update)
         await self._queue_msg(msg)
 
-    async def _report_active_jobs(self) -> None:
-        active_jobs = self.active_jobs
+    async def _report_active_jobs(self, active_jobs: list[RunningJobInfo] | None = None) -> None:
+        active_jobs = self.active_jobs if active_jobs is None else active_jobs
         if not active_jobs:
             return
 

@@ -11,9 +11,11 @@ import pytest
 
 import livekit.agents.inference._utils as inference_utils
 import livekit.agents.job as job_module
+from livekit import api
 from livekit.agents import inference
 from livekit.agents.inference._utils import (
     HEADER_SESSION_ID,
+    create_access_token,
     create_inference_request_id,
     extract_quota_usage,
     get_inference_headers,
@@ -187,3 +189,40 @@ def test_llm_stream_logs_429_without_quota_headers(caplog: pytest.LogCaptureFixt
     assert record.model == "openai/gpt-4o"
     assert not hasattr(record, "rpm_limit")
     assert not hasattr(record, "rpm_used")
+
+
+@pytest.fixture
+def token_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LIVEKIT_TOKEN without an API key and secret."""
+    for name in (
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "LIVEKIT_INFERENCE_API_KEY",
+        "LIVEKIT_INFERENCE_API_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+
+
+@pytest.mark.usefixtures("token_mode")
+def test_inference_sends_the_worker_token_in_token_mode() -> None:
+    assert inference_utils.resolve_credentials(None, None) == ("", "")
+    assert create_access_token("", "") == "worker-token"
+
+    stt = inference.STT("deepgram/nova-3")
+    assert create_access_token(stt._opts.api_key, stt._opts.api_secret) == "worker-token"
+
+
+def test_inference_signs_with_key_and_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+    token = create_access_token("devkey", "secret" * 6)
+
+    claims = api.TokenVerifier("devkey", "secret" * 6).verify(token)
+    assert claims.inference is not None and claims.inference.perform
+
+
+def test_inference_without_credentials_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("LIVEKIT_API_KEY", "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(ValueError, match="api_key is required"):
+        inference_utils.resolve_credentials(None, None)
