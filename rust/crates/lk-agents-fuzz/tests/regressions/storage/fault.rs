@@ -29,11 +29,36 @@ fn reply(seed: u64, end: Reply) -> Recording {
             Input::Advance { ms: Millis(2000) },
             Input::LlmText { chat: Ref::new(0), text: AgentText("Hello.".into()) },
             finish,
-            Input::Advance { ms: Millis(3000) },
         ] {
             run.apply(&input).await;
         }
-        run.record
+        // A save asked is answered on storage's own clock, resent until its deadline at most: each
+        // round moves the clock to the furthest deadline the driver or the store waits on.
+        let owed = |record: &Recording| {
+            let storage = record.host_view().storage();
+            let save = |op: &StorageOperation| {
+                matches!(op, StorageOperation::Settle | StorageOperation::Abandon)
+            };
+            let count = |answered: bool| {
+                storage
+                    .iter()
+                    .filter(|(_, step)| match step {
+                        StorageStep::Requested { operation, .. } => !answered && save(operation),
+                        StorageStep::Answered { operation, .. } => answered && save(operation),
+                        _ => false,
+                    })
+                    .count()
+            };
+            count(false) > count(true)
+        };
+        for _ in 0..16 {
+            let round = run.release_advance();
+            run.apply(&round).await;
+            if !owed(&run.record) {
+                return run.record;
+            }
+        }
+        panic!("seed {seed}: the turn's save was never answered");
     })
 }
 
@@ -75,17 +100,20 @@ fn bound_storage_faults_close_the_call_and_successful_receipts_finish_the_speech
                     }
                 } else {
                     let requested = host.storage().iter().find_map(|(at, step)| {
-                        matches!(step, StorageStep::Requested { speech: id, operation: op } if id == speech && op == operation).then_some(at.at_ms)
+                        matches!(step, StorageStep::Requested { speech: id, operation: op } if id == speech && op == operation).then_some(*at)
                     }).unwrap();
-                    slow |= at.at_ms - requested >= 250;
+                    slow |= at.at_ms - requested.at_ms >= 250;
+                    // A commit resent through an outage may outlast the lease: its loss closes the
+                    // call before the failure is answered.
+                    let closed = recording.internal_view().error_close_requested_after(requested);
                     if *operation == StorageOperation::Settle && result.is_err() {
                         assert!(
-                            recording.internal_view().error_close_requested_after(*at),
+                            closed,
                             "seed {seed}: a failed durable commit did not close the call"
                         );
                     }
                     assert!(
-                        recording.internal_view().error_close_requested_after(*at)
+                        closed
                             || host
                                 .speech(*speech)
                                 .done_announcements()
