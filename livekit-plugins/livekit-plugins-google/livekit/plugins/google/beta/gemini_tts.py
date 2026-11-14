@@ -40,6 +40,14 @@ def _styles_per_part(model: str) -> bool:
     return any(family in model for family in _STYLE_METADATA_MODELS)
 
 
+def _validate_speaker(speaker: str, speakers: dict[str, str]) -> None:
+    if speaker not in speakers:
+        raise ValueError(
+            f"speaker {speaker!r} is not one of the configured speakers: "
+            f"{', '.join(sorted(speakers))}"
+        )
+
+
 # Headerless PCM, asked for explicitly: the emitter is initialized for raw audio/pcm, and
 # the docs only guarantee a headerless stream when response_format names it. The docs
 # spell it "audio/l16"; on the wire it is an enum (AUDIO_MULAW and AUDIO_ALAW are the
@@ -184,11 +192,7 @@ class TTS(tts.TTS):
             # so there is no useful default to fall back to here
             if current_speaker is None:
                 raise ValueError("`speaker` is required when `speakers` is set")
-            if current_speaker not in speaker_map:
-                raise ValueError(
-                    f"speaker {current_speaker!r} is not one of the configured speakers: "
-                    f"{', '.join(sorted(speaker_map))}"
-                )
+            _validate_speaker(current_speaker, speaker_map)
             if not _styles_per_part(model):
                 raise ValueError(
                     f"multi-speaker needs a model that takes per-part speech_metadata; "
@@ -254,16 +258,16 @@ class TTS(tts.TTS):
             voice_name (str, optional): The voice to use for synthesis.
             speaker (str, optional): Which configured speaker to voice from now on.
         """
-        if is_given(voice_name):
-            self._opts.voice_name = voice_name
+        # check the speaker before changing anything, so a rejected update leaves the
+        # current voice as it was
         if is_given(speaker):
             if not self._opts.speakers:
                 raise ValueError("`speaker` needs a TTS constructed with `speakers`")
-            if speaker not in self._opts.speakers:
-                raise ValueError(
-                    f"speaker {speaker!r} is not one of the configured speakers: "
-                    f"{', '.join(sorted(self._opts.speakers))}"
-                )
+            _validate_speaker(speaker, self._opts.speakers)
+
+        if is_given(voice_name):
+            self._opts.voice_name = voice_name
+        if is_given(speaker):
             self._opts.speaker = speaker
 
     async def aclose(self) -> None:
