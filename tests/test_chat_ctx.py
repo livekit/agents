@@ -900,3 +900,39 @@ def test_compute_chat_ctx_diff_on_a_long_context_does_not_build_an_n_by_m_table(
     assert diff.to_update == []
     # the O(n*m) table for 2000 x 2001 items takes about 32 MB
     assert peak < 1_000_000
+
+
+def test_to_dict_encodes_bytes_in_extra_and_hash() -> None:
+    """extra (provider-specific data) may hold non-UTF-8 bytes (e.g. a Google
+    thought signature); to_dict() must not crash and must JSON-encode them."""
+    import json
+
+    ctx = ChatContext(
+        [
+            ChatMessage(
+                role="assistant",
+                content=["ok"],
+                extra={"google": {"thought_signature": b"\x00\x01\xff"}},
+                hash=b"\x00\x01",
+            )
+        ]
+    )
+    data = ctx.to_dict()
+    assert data["items"][0]["extra"]["google"]["thought_signature"] == base64.b64encode(
+        b"\x00\x01\xff"
+    ).decode("ascii")
+    assert data["items"][0]["hash"] == base64.b64encode(b"\x00\x01").decode("ascii")
+    # The whole dict must be JSON-serializable (no bytes remain).
+    json.dumps(data)
+
+
+def test_to_dict_encodes_bytes_in_function_call_extra() -> None:
+    """FunctionCall.extra bytes must also be base64-encoded, not crash."""
+    import json
+
+    ctx = ChatContext(
+        [FunctionCall(call_id="c1", arguments="{}", name="tool", extra={"sig": b"\xff\xfe"})]
+    )
+    data = ctx.to_dict()
+    assert data["items"][0]["extra"]["sig"] == base64.b64encode(b"\xff\xfe").decode("ascii")
+    json.dumps(data)
