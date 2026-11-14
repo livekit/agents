@@ -113,12 +113,12 @@ def _resize_image(image: "Image.Image", options: EncodeOptions) -> "Image.Image"
 
         # Start with assuming the new image is narrower than the original
         new_width = resize_opts.width
-        new_height = int(image.height * (resize_opts.width / image.width))
+        new_height = max(1, int(image.height * (resize_opts.width / image.width)))
 
         # If the new image is wider than the original
         if resize_opts.width / resize_opts.height > image.width / image.height:
             new_height = resize_opts.height
-            new_width = int(image.width * (resize_opts.height / image.height))
+            new_width = max(1, int(image.width * (resize_opts.height / image.height)))
 
         resized = image.resize((new_width, new_height))
 
@@ -167,12 +167,12 @@ def _resize_image(image: "Image.Image", options: EncodeOptions) -> "Image.Image"
     elif resize_opts.strategy == "scale_aspect_fit":
         # Start with assuming width is the limiting dimension
         new_width = resize_opts.width
-        new_height = int(image.height * (resize_opts.width / image.width))
+        new_height = max(1, int(image.height * (resize_opts.width / image.width)))
 
         # If height would exceed the limit, scale based on height instead
         if new_height > resize_opts.height:
             new_height = resize_opts.height
-            new_width = int(image.width * (resize_opts.height / image.height))
+            new_width = max(1, int(image.width * (resize_opts.height / image.height)))
 
         return image.resize((new_width, new_height))
 
