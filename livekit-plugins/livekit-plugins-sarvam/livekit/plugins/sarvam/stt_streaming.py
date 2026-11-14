@@ -67,6 +67,10 @@ SUPPORTED_MODES = {"transcribe", "translate", "verbatim", "translit", "codemix"}
 # not a send cadence, and the contract sets no client chunk size. Matches the
 # non-realtime Sarvam websocket plugin so audio reaches server VAD promptly.
 AUDIO_CHUNK_MS = 50
+# Sarvam closes a stream that receives no audio for 60 s (`inactivity_timeout`), and this
+# stream never reconnects. When the caller stops pushing audio (muted or gated input), a
+# short chunk of silence is sent after this many idle seconds to keep the session open.
+KEEPALIVE_INTERVAL_S = 30.0
 
 
 def _encode_pcm_for_wire(encoding: RealtimeEncoding | str, pcm: bytes) -> bytes:
@@ -529,6 +533,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
             callback=self._on_audio_duration_report,
             duration=5.0,
         )
+        self._last_audio_sent_at = time.monotonic()
+        self._input_ended = False
         self._logger = logger
 
     @property
@@ -785,14 +791,16 @@ class RealtimeSpeechStream(stt.SpeechStream):
         try:
             ws = await self._connect_ws()
             self._ws = ws
+            self._last_audio_sent_at = time.monotonic()
             tasks = [
                 asyncio.create_task(self._process_audio(ws)),
                 asyncio.create_task(self._process_messages(ws)),
             ]
+            keepalive_task = asyncio.create_task(self._keepalive(ws))
             try:
                 await asyncio.gather(*tasks)
             finally:
-                await utils.aio.gracefully_cancel(*tasks)
+                await utils.aio.gracefully_cancel(*tasks, keepalive_task)
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Timed out connecting to Sarvam realtime STT") from e
         except aiohttp.ClientResponseError as e:
@@ -869,6 +877,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if ws.closed:
             return
 
+        self._last_audio_sent_at = time.monotonic()
+
         try:
             await ws.send_bytes(payload)
         except (aiohttp.ClientConnectionResetError, ConnectionError):
@@ -932,6 +942,34 @@ class RealtimeSpeechStream(stt.SpeechStream):
         return ws
 
     @utils.log_exceptions(logger=logger)
+    async def _keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Send a chunk of silence whenever no audio has gone out for ``KEEPALIVE_INTERVAL_S``.
+
+        Sarvam's inactivity timeout counts audio only, so pings alone don't keep the stream
+        open. The silence is real audio on Sarvam's clock: it advances the audio position
+        and is metered like any other audio.
+        """
+        samples_per_channel = max(int(self._opts.sample_rate * AUDIO_CHUNK_MS / 1000), 1)
+        chunk = np.zeros(samples_per_channel, dtype=np.int16).tobytes()
+        duration = samples_per_channel / self._opts.sample_rate
+
+        while True:
+            idle = time.monotonic() - self._last_audio_sent_at
+            if idle < KEEPALIVE_INTERVAL_S:
+                await asyncio.sleep(KEEPALIVE_INTERVAL_S - idle)
+                continue
+            if self._session_ended or self._input_ended or ws.closed:
+                return
+
+            self._logger.debug(
+                "No audio for a while, sending silence to keep the Sarvam stream open",
+                extra=self._build_log_context(),
+            )
+            self._audio_duration_collector.push(duration)
+            self._audio_position += duration
+            await self._safe_send_bytes(ws, _encode_pcm_for_wire(self._opts.encoding, chunk))
+
+    @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         samples_per_channel = max(int(self._opts.sample_rate * AUDIO_CHUNK_MS / 1000), 1)
         audio_bstream = utils.audio.AudioByteStream(
@@ -974,6 +1012,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     self._end_manual_utterance()
                     await self._safe_send_str(ws, {"event": "speech_end"})
 
+        self._input_ended = True
         self._emit_local_usage_fallback()
         if not self._session_ended:
             await self._safe_send_str(ws, {"event": "end"})
